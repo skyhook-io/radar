@@ -125,8 +125,13 @@ live diagnostics. It does not simulate hooks, validate all eventual writes, insp
 live finalizers, or enumerate resources
 created by controllers or chart CRDs outside the release manifest. It returns
 identities rather than manifest bodies or values. A malformed manifest or a stored
-list document that cannot be fully enumerated refuses confirmation. All execution
-uses the caller's Kubernetes identity; actual writes can still fail or partially
+list document that cannot be fully enumerated refuses confirmation. Resource
+scope is resolved through the Helm action configuration's REST mapper using each
+manifest's API version and kind. Cluster-scoped resources have no namespace;
+namespaced resources without an explicit namespace use the release's recorded
+target namespace. An unresolved scope in either the current or rollback target
+manifest refuses confirmation instead of assuming the resource is namespaced.
+All execution uses the caller's Kubernetes identity; actual writes can still fail or partially
 complete.
 
 - `uninstall`: `no_hooks=true` skips pre/post-delete hooks; this can leave external
@@ -159,7 +164,9 @@ REST `DELETE /api/helm/releases/{namespace}/{name}` also accepts `no_hooks`,
 default remains a real uninstall with hooks and history purge. `dry_run=true`
 returns the same stored-manifest preview without a mutation; REST uses its existing
 UI confirmation flow and does not require an MCP confirmation token. Missing
-releases return 404; preview refusals return 409. Release objects and hooks use the
+releases return 404; stored-manifest validation refusals (incomplete or malformed
+manifests and unresolved resource scopes) return 422; in-progress and
+already-uninstalled conflicts return 409. Release objects and hooks use the
 recorded target namespace while release history stays in the storage namespace.
 When known, the preview names the owning Flux HelmRelease and warns it may
 reconcile direct actions back. Both surfaces audit previews and actions with

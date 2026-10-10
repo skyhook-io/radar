@@ -250,6 +250,26 @@ func TestUninstallHandlerDryRunAndRefusalStatuses(t *testing.T) {
 			json.NewEncoder(w).Encode(authv1.SubjectAccessReview{TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"}, Status: authv1.SubjectAccessReviewStatus{Allowed: true}})
 			return
 		}
+		switch r.URL.Path {
+		case "/api":
+			json.NewEncoder(w).Encode(metav1.APIVersions{Versions: []string{"v1"}})
+			return
+		case "/apis":
+			json.NewEncoder(w).Encode(metav1.APIGroupList{Groups: []metav1.APIGroup{{
+				Name: "custom.example", Versions: []metav1.GroupVersionForDiscovery{{GroupVersion: "custom.example/v1", Version: "v1"}},
+				PreferredVersion: metav1.GroupVersionForDiscovery{GroupVersion: "custom.example/v1", Version: "v1"},
+			}}})
+			return
+		case "/apis/custom.example/v1":
+			json.NewEncoder(w).Encode(metav1.APIResourceList{GroupVersion: "custom.example/v1", APIResources: []metav1.APIResource{{Name: "clusterwidgets", Kind: "ClusterWidget", Namespaced: false}}})
+			return
+		case "/api/v1":
+			json.NewEncoder(w).Encode(metav1.APIResourceList{GroupVersion: "v1", APIResources: []metav1.APIResource{
+				{Name: "configmaps", Kind: "ConfigMap", Namespaced: true},
+				{Name: "secrets", Kind: "Secret", Namespaced: true},
+			}})
+			return
+		}
 		if r.Method != "GET" {
 			writes++
 			writeK8sStatus(t, w, 500, "InternalError", "unexpected write")
@@ -293,6 +313,22 @@ func TestUninstallHandlerDryRunAndRefusalStatuses(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"dry_run":true`) || !strings.Contains(audit.String(), `outcome="preview"`) || !strings.Contains(audit.String(), "revision=1 no_hooks=true keep_history=true") {
 		t.Fatalf("preview/audit: %s %s", rec.Body, audit.String())
 	}
+	manifest := rel.Manifest
+	rel.Manifest = "apiVersion: custom.example/v1\nkind: ClusterWidget\nmetadata:\n  name: unfamiliar\n"
+	secret = helmReleaseSecret(t, "store", rel, true)
+	rec = request("dry_run=true")
+	if rec.Code != 200 || writes != 0 || !strings.Contains(rec.Body.String(), `"name":"unfamiliar","namespace":""`) {
+		t.Fatalf("cluster resource preview: %d %s writes %d", rec.Code, rec.Body, writes)
+	}
+	for _, invalid := range []string{"not: [valid yaml", "apiVersion: v1\nkind: List\nitems: []", "kind: ConfigMap\nmetadata:\n  name: missing-version", "apiVersion: unknown.example/v1\nkind: ClusterWidget\nmetadata:\n  name: unknown-scope"} {
+		rel.Manifest = invalid
+		secret = helmReleaseSecret(t, "store", rel, true)
+		rec = request("dry_run=true")
+		if rec.Code != 422 || writes != 0 || !strings.Contains(rec.Body.String(), "no confirmation issued") {
+			t.Fatalf("incomplete manifest: %d %s writes %d", rec.Code, rec.Body, writes)
+		}
+	}
+	rel.Manifest = manifest
 	rel.Info.Status = release.StatusUninstalled
 	secret = helmReleaseSecret(t, "store", rel, true)
 	rec = request("dry_run=true&keep_history=true")
@@ -321,6 +357,7 @@ func TestReleaseExecutionErrors(t *testing.T) {
 			{"missing", fmt.Errorf("read release: %w", driver.ErrReleaseNotFound), 404},
 			{"overlap", ErrReleaseActionInProgress, 409},
 			{"refused", ErrReleaseActionRefused, 409},
+			{"incomplete manifest", fmt.Errorf("stored release: %w", ErrReleaseActionInvalidManifest), 422},
 			{"execution failure", errors.New("hook failed"), 500},
 		} {
 			t.Run(action+"/"+tc.name, func(t *testing.T) {

@@ -96,7 +96,7 @@ func PreviewReleaseAction(cfg *action.Configuration, name string, options Releas
 		return nil, fmt.Errorf("read current Helm release: %w", err)
 	}
 	if current.Info == nil {
-		return nil, fmt.Errorf("%w: current Helm release has no status", ErrReleaseActionRefused)
+		return nil, fmt.Errorf("%w: current Helm release has no status", ErrReleaseActionInvalidManifest)
 	}
 	target := current
 	if options.Action == "rollback" {
@@ -109,7 +109,7 @@ func PreviewReleaseAction(cfg *action.Configuration, name string, options Releas
 		}
 	}
 	if target.Info == nil {
-		return nil, fmt.Errorf("%w: target Helm release has no status", ErrReleaseActionRefused)
+		return nil, fmt.Errorf("%w: target Helm release has no status", ErrReleaseActionInvalidManifest)
 	}
 	raw, err := json.Marshal(struct {
 		Current *release.Release
@@ -157,13 +157,13 @@ func PreviewReleaseAction(cfg *action.Configuration, name string, options Releas
 			preview.Warnings = append(preview.Warnings, "Release is already uninstalled: only its stored Helm history will be purged; resources and hooks will not be processed again.")
 		}
 	}
-	rendered, err := enumerableReleaseResources(target.Manifest, current.Namespace)
+	rendered, err := enumerableReleaseResources(cfg, target.Manifest, current.Namespace)
 	if err != nil {
 		return nil, err
 	}
 	currentRendered := rendered
 	if options.Action == "rollback" {
-		currentRendered, err = enumerableReleaseResources(current.Manifest, current.Namespace)
+		currentRendered, err = enumerableReleaseResources(cfg, current.Manifest, current.Namespace)
 		if err != nil {
 			return nil, err
 		}
@@ -261,6 +261,7 @@ func uninstallWithOptions(cfg *action.Configuration, name string, options Uninst
 }
 
 var ErrReleaseActionRefused = errors.New("Helm action refused")
+var ErrReleaseActionInvalidManifest = errors.New("Helm action refused: stored release cannot be fully enumerated")
 var ErrReleaseActionInProgress = errors.New("a Helm action is already running for this release; wait for it to finish")
 var releaseActionsInFlight sync.Map
 
@@ -284,8 +285,8 @@ func useReleaseTargetNamespace(cfg *action.Configuration, name string) error {
 	return nil
 }
 
-func enumerableReleaseResources(manifest, namespace string) ([]renderedResource, error) {
-	resources, parseErrors := parseManifestResourceObjects(manifest, namespace)
+func enumerableReleaseResources(cfg *action.Configuration, manifest, namespace string) ([]renderedResource, error) {
+	resources, parseErrors := parseManifestResourceObjects(manifest, "")
 	documents := 0
 	for _, doc := range releaseutil.SplitManifests(manifest) {
 		raw, err := yaml.YAMLToJSON([]byte(doc))
@@ -294,7 +295,36 @@ func enumerableReleaseResources(manifest, namespace string) ([]renderedResource,
 		}
 	}
 	if parseErrors > 0 || len(resources) != documents {
-		return nil, fmt.Errorf("%w: release manifest cannot be fully enumerated; no confirmation issued", ErrReleaseActionRefused)
+		return nil, fmt.Errorf("%w: release manifest cannot be fully enumerated; no confirmation issued", ErrReleaseActionInvalidManifest)
+	}
+	if len(resources) == 0 {
+		return resources, nil
+	}
+	mapper, err := cfg.RESTClientGetter.ToRESTMapper()
+	if err != nil {
+		return nil, fmt.Errorf("%w: cannot resolve resource scopes: %v; no confirmation issued", ErrReleaseActionInvalidManifest, err)
+	}
+	for i := range resources {
+		r := &resources[i]
+		gvk := r.Object.GroupVersionKind()
+		if gvk.Version == "" {
+			return nil, fmt.Errorf("%w: resource %s/%s has no apiVersion; no confirmation issued", ErrReleaseActionInvalidManifest, r.Ref.Kind, r.Ref.Name)
+		}
+		mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+		if err != nil {
+			return nil, fmt.Errorf("%w: cannot resolve scope of %s %s/%s: %v; no confirmation issued", ErrReleaseActionInvalidManifest, r.Ref.APIVersion, r.Ref.Kind, r.Ref.Name, err)
+		}
+		switch mapping.Scope.Name() {
+		case meta.RESTScopeNameRoot:
+			r.Object.SetNamespace("")
+		case meta.RESTScopeNameNamespace:
+			if r.Object.GetNamespace() == "" {
+				r.Object.SetNamespace(namespace)
+			}
+		default:
+			return nil, fmt.Errorf("%w: unknown scope of %s %s/%s; no confirmation issued", ErrReleaseActionInvalidManifest, r.Ref.APIVersion, r.Ref.Kind, r.Ref.Name)
+		}
+		r.Ref.Namespace = r.Object.GetNamespace()
 	}
 	return resources, nil
 }
@@ -331,7 +361,7 @@ func EnrichReleaseActionPreview(ctx context.Context, cfg *action.Configuration, 
 			return fmt.Errorf("read rollback resource %s/%s: %w", r.Namespace, r.Name, err)
 		}
 		if len(infos) != 1 {
-			return fmt.Errorf("%w: rollback resource %s/%s did not resolve to one object", ErrReleaseActionRefused, r.Namespace, r.Name)
+			return fmt.Errorf("%w: rollback resource %s/%s did not resolve to one object", ErrReleaseActionInvalidManifest, r.Namespace, r.Name)
 		}
 		err = infos[0].Get()
 		if apierrors.IsNotFound(err) {
@@ -362,6 +392,8 @@ func EnrichReleaseActionPreview(ctx context.Context, cfg *action.Configuration, 
 
 func writeReleaseActionError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, ErrReleaseActionInvalidManifest):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, driver.ErrReleaseNotFound), apierrors.IsNotFound(err):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrReleaseActionRefused), errors.Is(err, ErrReleaseActionInProgress):
@@ -373,6 +405,8 @@ func writeReleaseActionError(w http.ResponseWriter, err error) {
 
 func writeReleaseExecutionError(w http.ResponseWriter, action, namespace, name string, err error) {
 	switch {
+	case errors.Is(err, ErrReleaseActionInvalidManifest):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, driver.ErrReleaseNotFound), apierrors.IsNotFound(err):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrReleaseActionRefused), errors.Is(err, ErrReleaseActionInProgress):

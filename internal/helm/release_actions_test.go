@@ -14,6 +14,8 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	kubefake "helm.sh/helm/v3/pkg/kube/fake"
 	"helm.sh/helm/v3/pkg/release"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 )
 
@@ -48,6 +50,13 @@ data:
 		t.Fatal(err)
 	}
 	cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
+	getter := newRESTConfigGetter(&rest.Config{Host: "http://unused.invalid"}, "default", "", nil)
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Version: "v1"}})
+	for _, kind := range []string{"ConfigMap", "Secret"} {
+		mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: kind}, meta.RESTScopeNamespace)
+	}
+	getter.mapper = mapper
+	cfg.RESTClientGetter = getter
 	return rel
 }
 
