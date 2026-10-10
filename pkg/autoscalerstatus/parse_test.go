@@ -486,14 +486,14 @@ func TestParseScaleDownCandidates(t *testing.T) {
 			value string
 			want  *int
 		}{
-			{"missing", "", nil},
+			{"missing CandidatesPresent", "", nil},
 			{"zero", "0", func() *int { n := 0; return &n }()},
 			{"positive", "2", func() *int { n := 2; return &n }()},
 		} {
 			t.Run(fixture+"/"+test.name, func(t *testing.T) {
 				raw := loadFixture(t, fixture)
 				if strings.HasSuffix(fixture, ".yaml") {
-					if test.value != "" {
+					if test.value != "" && test.value != "0" {
 						raw = strings.ReplaceAll(raw, "scaleDown:\n", "scaleDown:\n    candidates: "+test.value+"\n")
 					}
 				} else {
@@ -504,7 +504,7 @@ func TestParseScaleDownCandidates(t *testing.T) {
 					raw = strings.ReplaceAll(raw, " (candidates=0)", replacement)
 				}
 				wantStatus := "NoCandidates"
-				if test.name == "positive" {
+				if test.name == "positive" || test.want == nil {
 					wantStatus = "CandidatesPresent"
 					raw = strings.ReplaceAll(raw, "NoCandidates", wantStatus)
 				}
@@ -534,12 +534,45 @@ func TestParseScaleDownCandidates(t *testing.T) {
 }
 
 func TestParseScaleDownNullCandidatesAndTransition(t *testing.T) {
-	raw := "autoscalerStatus: Running\nnodeGroups:\n- name: idle\n  scaleDown:\n    candidates: null\n    lastTransitionTime: null\n    status: NoCandidates\n"
+	raw := "autoscalerStatus: Running\nnodeGroups:\n- name: idle\n  scaleDown:\n    candidates: null\n    lastTransitionTime: null\n    status: CandidatesPresent\n"
 	st, err := Parse(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if st.NodeGroups[0].ScaleDown.Candidates != nil || st.NodeGroups[0].ScaleDown.LastTransition != nil {
 		t.Fatalf("null fields must stay unpublished: %+v", st.NodeGroups[0].ScaleDown)
+	}
+}
+
+func TestStructuredNoCandidatesOmitsZero(t *testing.T) {
+	st, err := Parse(loadFixture(t, "gke-zonal-single-pool.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conditions := []Condition{st.ClusterWide.ScaleDown}
+	for _, group := range st.NodeGroups {
+		conditions = append(conditions, group.ScaleDown)
+	}
+	for _, condition := range conditions {
+		if condition.Status != "NoCandidates" || mustInt(t, condition.Candidates, "candidates") != 0 {
+			t.Fatalf("omitted zero lost: %+v", condition)
+		}
+	}
+}
+
+func TestLegacyNoCandidatesWithoutCountStaysUnknown(t *testing.T) {
+	raw := strings.ReplaceAll(loadFixture(t, "legacy-text.txt"), " (candidates=0)", "")
+	st, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conditions := []Condition{st.ClusterWide.ScaleDown}
+	for _, group := range st.NodeGroups {
+		conditions = append(conditions, group.ScaleDown)
+	}
+	for _, condition := range conditions {
+		if condition.Status != "NoCandidates" || condition.Candidates != nil {
+			t.Fatalf("legacy status must not infer a count: %+v", condition)
+		}
 	}
 }

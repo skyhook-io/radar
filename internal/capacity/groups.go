@@ -441,9 +441,16 @@ func scalingFacts(b *groupBuilder, detection AutoscalerDetection) []capacityapi.
 		allBounds := true
 		allTarget := true
 		allMin := true
+		allCandidates := true
+		sumCandidates := 0
 		belowMin := false
 		var sumMin, sumMax, sumTarget int
 		for _, child := range b.children {
+			if child.ScaleDown == nil || child.ScaleDown.Candidates == nil {
+				allCandidates = false
+			} else {
+				sumCandidates += *child.ScaleDown.Candidates
+			}
 			if child.MinSize == nil || child.MaxSize == nil {
 				allBounds = false
 			}
@@ -469,14 +476,26 @@ func scalingFacts(b *groupBuilder, detection AutoscalerDetection) []capacityapi.
 		facts := []capacityapi.ScalingFact{}
 		if allBounds {
 			facts = append(facts, capacityapi.ScalingFact{Code: "bounds", Summary: fmt.Sprintf("%d–%d nodes", sumMin, sumMax)})
+		} else if allMin {
+			facts = append(facts, capacityapi.ScalingFact{Code: "bounds_not_published", Summary: "maximum not published"})
 		} else {
-			facts = append(facts, capacityapi.ScalingFact{Code: "bounds_not_published", Summary: "bounds not published in-cluster"})
+			return []capacityapi.ScalingFact{{Code: "bounds_not_published", Summary: "bounds not published in-cluster"}}
 		}
 		if allTarget {
 			facts = append(facts, capacityapi.ScalingFact{Code: "target", Summary: fmt.Sprintf("target %d", sumTarget)})
 		}
 		if allMin && allTarget && !belowMin && sumTarget == sumMin {
-			facts = append(facts, capacityapi.ScalingFact{Code: "at_min_size", Summary: "at minimum size — observed autoscaler groups can't scale down further"})
+			facts = append(facts, capacityapi.ScalingFact{Code: "at_min_size", Summary: "at minimum size — can't scale down"})
+		}
+		if sumCandidates > 0 {
+			summary := fmt.Sprintf("%d scale-down candidates", sumCandidates)
+			if sumCandidates == 1 {
+				summary = "1 scale-down candidate"
+			}
+			if !allCandidates {
+				summary = "at least " + summary
+			}
+			facts = append(facts, capacityapi.ScalingFact{Code: "scale_down_candidates", Summary: summary})
 		}
 		return facts
 	}

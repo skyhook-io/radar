@@ -1348,8 +1348,7 @@ describe("Capacity scale-down observations", () => {
             scaling: [
               {
                 code: "at_min_size",
-                summary:
-                  "at minimum size — observed autoscaler groups can't scale down further",
+                summary: "at minimum size — can't scale down",
               },
             ],
             children: [child],
@@ -1362,6 +1361,7 @@ describe("Capacity scale-down observations", () => {
   }
 
   it("explains the floor and keeps published zero candidates", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(generatedAt) + 6 * 60 * 1000);
     const html = renderScaleDown({
       ...gkeChild,
       scaleDown: {
@@ -1371,12 +1371,15 @@ describe("Capacity scale-down observations", () => {
         asOf: generatedAt,
       },
     });
+    clock.mockRestore();
     expect(html).toContain("at minimum size");
     expect(html).toContain("No scale-down candidates");
-    expect(html).toMatch(/Candidates:(?:<!-- -->|\s)*0/);
+    expect(html).toContain("Candidate count published by the autoscaler: 0.");
+    expect(html).not.toContain("Candidates:");
     expect(html).toContain("Status since");
-    expect(html).toContain("As of");
-    expect(html).toContain("not guaranteed removals");
+    expect(html).toContain("(for 6m)");
+    expect(html).not.toContain("As of");
+    expect(html).not.toContain("PodDisruptionBudgets");
     expect(html).not.toContain("ETA");
   });
 
@@ -1387,14 +1390,75 @@ describe("Capacity scale-down observations", () => {
     });
     expect(html).toMatch(/Candidates:(?:<!-- -->|\s)*not published/);
     expect(html).toContain("Candidate count not published by the autoscaler.");
-    expect(html).toContain("Probe time not published");
+    expect(html).not.toContain("Probe time not published");
     expect(html).not.toContain("Status since");
     expect(html).not.toMatch(/Candidates:(?:<!-- -->|\s)*0/);
-    expect(renderScaleDown(gkeChild)).toContain("Not published");
+    const older = renderScaleDown(gkeChild);
+    expect(older).not.toContain("Scale-down</th>");
+    expect(older).not.toContain("Not published");
+    expect(older).not.toContain("PodDisruptionBudgets");
+  });
+
+  it("keeps a status-only CandidatesPresent count unknown", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "CandidatesPresent" },
+    });
+    expect(html).toContain("Scale-down candidates present");
+    expect(html).toContain("Candidates: not published");
+    expect(html).not.toContain("0 nodes unneeded");
+  });
+
+  it.each(["joined", "orphan"])(
+    "shows both tables when only a %s child has scale-down data",
+    (source) => {
+      const withScaleDown = {
+        ...gkeChild,
+        scaleDown: { status: "NoCandidates", candidates: 0 },
+      };
+      const html = renderCapacity("/capacity", (client) =>
+        client.setQueryData(["capacity", "overview"], {
+          ...comprehensiveOverview(),
+          groups: [
+            {
+              ...gkeGroup,
+              children: [source === "joined" ? withScaleDown : gkeChild],
+            },
+          ],
+          orphanAutoscalerGroups: [
+            source === "orphan" ? withScaleDown : gkeChild,
+          ],
+        }),
+      );
+      expect(html.match(/Scale-down<\/th>/g)).toHaveLength(2);
+      expect(html).toContain("Not published");
+      expect(html).toContain("No scale-down candidates");
+    },
+  );
+
+  it("renders the server candidate fact on the collapsed pool", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [
+          {
+            ...gkeGroup,
+            scaling: [
+              {
+                code: "scale_down_candidates",
+                summary: "3 scale-down candidates",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("3 scale-down candidates");
+    expect(html).toContain('aria-expanded="false"');
   });
 
   it.each([
-    ["CandidatesPresent", "Scale-down candidates present"],
+    ["CandidatesPresent", "2 nodes unneeded"],
     ["InProgress", "Scale-down in progress"],
     ["NewControllerStatus", "NewControllerStatus"],
     ["constructor", "constructor"],
@@ -1404,7 +1468,8 @@ describe("Capacity scale-down observations", () => {
       scaleDown: { status, candidates: 2 },
     });
     expect(html).toContain(label);
-    expect(html).toMatch(/Candidates:(?:<!-- -->|\s)*2/);
+    expect(html).toContain("2 nodes unneeded");
+    expect(html).not.toContain("Candidates:");
     expect(html).not.toContain("Status since");
   });
 });
