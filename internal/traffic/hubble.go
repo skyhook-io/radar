@@ -791,7 +791,6 @@ func (h *HubbleSource) connectGRPCLocked(ctx context.Context, grpcAddr string) e
 	return lastErr
 }
 
-// hubbleStatusTimeout bounds the whole connection test.
 var hubbleStatusTimeout = 3 * time.Second
 
 // hubbleObserverHealthService is the name Relay reports the Observer's health

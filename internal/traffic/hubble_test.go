@@ -547,8 +547,6 @@ func startRelayServer(t *testing.T, creds credentials.TransportCredentials, regi
 	return lis.Addr().(*net.TCPAddr).Port
 }
 
-// slowStatusRelayWithHealth registers the Relay above and a health service
-// reporting the given status for the Observer.
 func slowStatusRelayWithHealth(st healthpb.HealthCheckResponse_ServingStatus) func(*grpc.Server) {
 	return func(srv *grpc.Server) {
 		observerpb.RegisterObserverServer(srv, &slowStatusRelay{})
