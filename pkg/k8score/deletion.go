@@ -9,6 +9,8 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
+// DeleteResourceResult observes cleanup after an accepted DELETE; observation
+// errors describe the follow-up read, not a failed deletion.
 type DeleteResourceResult struct {
 	DeletionTimestamp *metav1.Time `json:"deletionTimestamp,omitempty"`
 	PendingFinalizers []string     `json:"pendingFinalizers,omitempty"`

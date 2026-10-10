@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -27,7 +28,18 @@ type deleteResourceInput struct {
 	Name        string `json:"name" jsonschema:"one resource name; batch deletion is not supported"`
 	Propagation string `json:"propagation,omitempty" jsonschema:"background (default), foreground, or orphan; namespace contents and CRD instances are deleted even with orphan"`
 	DryRun      *bool  `json:"dry_run,omitempty" jsonschema:"default true: validate deletion on the API server and return a mandatory preview; false requires confirm from that preview"`
-	Confirm     string `json:"confirm,omitempty" jsonschema:"token returned by a reviewed preview; valid for 5 minutes and bound to object UID/resourceVersion, caller, context, and propagation"`
+	Confirm     string `json:"confirm,omitempty" jsonschema:"token returned by a reviewed preview; valid for 5 minutes and bound to object UID, generation/finalizers (resourceVersion when generation is absent), caller, context, and propagation"`
+}
+
+type deleteConfirmation struct {
+	Resource        string
+	Namespace       string
+	Name            string
+	UID             string
+	Generation      int64
+	Finalizers      []string
+	ResourceVersion string `json:",omitempty"`
+	Propagation     metav1.DeletionPropagation
 }
 
 func handleDeleteResource(ctx context.Context, req *mcp.CallToolRequest, input deleteResourceInput) (*mcp.CallToolResult, any, error) {
@@ -57,6 +69,12 @@ func handleDeleteResource(ctx context.Context, req *mcp.CallToolRequest, input d
 		return nil, nil, fmt.Errorf("propagation must be background, foreground, or orphan")
 	}
 	dryRun := input.DryRun == nil || *input.DryRun
+	auditRequest := (&http.Request{Method: http.MethodDelete, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
+	audit := auth.AuditActionDetails{Action: "delete_resource", Kind: kind, Group: gvr.Group, Namespace: namespace, Name: name, Source: "mcp", Outcome: "failed"}
+	if dryRun {
+		audit.Outcome = "preview_failed"
+	}
+	defer func() { auth.AuditLogAction(auditRequest, audit) }()
 	if !dryRun && input.Confirm == "" {
 		return nil, nil, fmt.Errorf("confirm is required; run dry_run=true and review the preview first")
 	}
@@ -68,57 +86,77 @@ func handleDeleteResource(ctx context.Context, req *mcp.CallToolRequest, input d
 	if namespaced {
 		client = dyn.Resource(gvr).Namespace(namespace)
 	}
+	var approved deleteConfirmation
+	if !dryRun {
+		target, err := verifyMutationConfirmation(ctx, "delete_resource", input.Confirm)
+		if err != nil {
+			return nil, nil, err
+		}
+		if json.Unmarshal([]byte(target), &approved) != nil || approved.UID == "" || (approved.Generation == 0 && approved.ResourceVersion == "") {
+			return nil, nil, fmt.Errorf("confirm is malformed; run dry_run=true again and review the new preview")
+		}
+		if approved.Resource != gvr.String() || approved.Namespace != namespace || approved.Name != name || approved.Propagation != propagation {
+			return nil, nil, fmt.Errorf("deletion target or propagation changed since preview; run dry_run=true again and review the new preview")
+		}
+	}
+	// Read as the caller immediately before DELETE. Status writes do not change
+	// generation; a resourceVersion precondition would reject ordinary reconciliation.
 	obj, err := client.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read deletion target: %w", err)
 	}
+	audit.Kind = obj.GetKind()
 	uid, rv := obj.GetUID(), obj.GetResourceVersion()
-	if uid == "" || rv == "" {
-		return nil, nil, fmt.Errorf("deletion target is missing UID or resourceVersion; no deletion attempted")
+	if uid == "" || (obj.GetGeneration() == 0 && rv == "") {
+		return nil, nil, fmt.Errorf("deletion target is missing UID or fallback resourceVersion; no deletion attempted")
 	}
-	targetBytes, err := json.Marshal(struct {
-		Resource        string
-		Namespace       string
-		Name            string
-		UID             string
-		ResourceVersion string
-		Propagation     metav1.DeletionPropagation
-	}{gvr.String(), namespace, name, string(uid), rv, propagation})
+	current := deleteConfirmation{Resource: gvr.String(), Namespace: namespace, Name: name, UID: string(uid), Generation: obj.GetGeneration(), Finalizers: slices.Clone(obj.GetFinalizers()), Propagation: propagation}
+	slices.Sort(current.Finalizers)
+	if current.Generation == 0 {
+		current.ResourceVersion = rv
+	}
+	if !dryRun {
+		if approved.UID != current.UID {
+			return nil, nil, fmt.Errorf("deletion object replaced since preview (UID differs); run dry_run=true again and review the replacement")
+		}
+		if approved.Generation != current.Generation || !slices.Equal(approved.Finalizers, current.Finalizers) || approved.ResourceVersion != current.ResourceVersion {
+			return nil, nil, fmt.Errorf("deletion object changed since preview (generation, finalizers, or fallback resourceVersion differs); run dry_run=true again and review the new preview")
+		}
+	}
+	targetBytes, err := json.Marshal(current)
 	if err != nil {
 		return nil, nil, err
 	}
 	target := string(targetBytes)
-	if !dryRun {
-		if err := verifyMutationConfirmation(ctx, "delete_resource", target, input.Confirm); err != nil {
+	token := ""
+	if dryRun {
+		token, err = issueMutationConfirmation(ctx, "delete_resource", target)
+		if err != nil {
 			return nil, nil, err
 		}
 	}
-	opts := metav1.DeleteOptions{PropagationPolicy: &propagation, Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}}
+	opts := metav1.DeleteOptions{PropagationPolicy: &propagation, Preconditions: &metav1.Preconditions{UID: &uid}}
+	if current.Generation == 0 {
+		opts.Preconditions.ResourceVersion = &rv
+	}
 	if dryRun {
 		opts.DryRun = []string{metav1.DryRunAll}
 	}
-	auditRequest := (&http.Request{Method: http.MethodDelete, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
-	outcome := "accepted"
-	if dryRun {
-		outcome = "preview"
-	}
 	err = client.Delete(ctx, name, opts)
-	if err != nil {
-		outcome = "failed"
+	if err == nil {
+		audit.Outcome = "accepted"
+		if dryRun {
+			audit.Outcome = "preview"
+		}
 	}
-	auth.AuditLogAction(auditRequest, auth.AuditActionDetails{Action: "delete_resource", Namespace: namespace, Name: name, Source: "mcp", Outcome: outcome})
 	if err != nil {
 		if apierrors.IsConflict(err) {
 			return nil, nil, fmt.Errorf("failed to delete resource: %w; the object changed, run dry_run=true again", err)
 		}
 		return nil, nil, fmt.Errorf("failed to delete resource: %w", err)
 	}
-	result := map[string]any{"status": "ok", "dry_run": dryRun, "kind": obj.GetKind(), "group": gvr.Group, "namespace": namespace, "name": name, "uid": uid, "resourceVersion": rv, "propagation": propagation}
+	result := map[string]any{"status": "ok", "dry_run": dryRun, "kind": obj.GetKind(), "group": gvr.Group, "namespace": namespace, "name": name, "uid": uid, "resourceVersion": rv, "generation": obj.GetGeneration(), "propagation": propagation}
 	if dryRun {
-		token, err := issueMutationConfirmation(ctx, "delete_resource", target)
-		if err != nil {
-			return nil, nil, err
-		}
 		result["confirm"] = token
 		result["finalizers"] = obj.GetFinalizers()
 		result["cascade"] = deleteCascadePreview(ctx, obj, propagation)
@@ -160,6 +198,7 @@ func deleteCascadePreview(ctx context.Context, obj *unstructured.Unstructured, p
 	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 	opts := topology.DefaultBuildOptions()
 	opts.IncludeReplicaSets = true
+	opts.IncludeSecrets = true
 	opts.ForRelationshipCache = true
 	topo, err := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).WithDynamic(dp).Build(opts)
 	if err != nil {

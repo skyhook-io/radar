@@ -4328,7 +4328,7 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
-	result, err := k8s.DeleteResourceWithResultAndClient(r.Context(), k8s.DeleteResourceOptions{
+	result, err := k8s.DeleteResourceWithClient(r.Context(), k8s.DeleteResourceOptions{
 		Kind:      kind,
 		Group:     group,
 		Namespace: namespace,

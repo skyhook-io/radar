@@ -581,7 +581,7 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 	return err
 }
 
-// DeleteResource deletes a Kubernetes resource.
+// DeleteResourceWithResult deletes a resource and observes asynchronous cleanup.
 func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts DeleteResourceOptions) (*DeleteResourceResult, error) {
 	if m.discovery == nil {
 		return nil, fmt.Errorf("resource discovery not initialized")
@@ -634,6 +634,7 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 	if opts.Namespace != "" {
 		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
 	}
+	// This path has no pre-delete UID; replacement isolation requires a known UID.
 	return ObserveResourceDeletion(ctx, client, opts.Name, ""), nil
 }
 

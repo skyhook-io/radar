@@ -4257,14 +4257,43 @@ export function useCascadeDeletePreview(
 
 // Delete a resource
 interface DeleteResourceResult {
+  legacyPendingFinalizers?: boolean;
   deletionTimestamp?: string;
   pendingFinalizers?: string[];
   observationError?: string;
 }
 
 async function readDeleteResult(response: Response): Promise<DeleteResourceResult> {
-  // Radar Hub can embed this UI against a Radar that returns 204 for deletes.
-  return response.status === 204 ? {} : response.json();
+  if (!response.ok) {
+    const error = await readErrorBody(response);
+    // Older Radars reported this only after Kubernetes accepted DELETE.
+    if (response.status === 409 && error.error === "resource is stuck in Terminating state due to finalizers — use force delete to remove it") {
+      return { legacyPendingFinalizers: true };
+    }
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  if (response.status === 204) return {};
+  const body = await response.text();
+  if (!body.trim()) return {};
+  try {
+    return JSON.parse(body) as DeleteResourceResult;
+  } catch {
+    return {};
+  }
+}
+
+function deleteResourceNotification(result: DeleteResourceResult): { message: string; type: "info" | "success"; detail?: string } {
+  if (result.observationError) {
+    return { message: "Deleted; couldn't read the current state", type: "success", detail: result.observationError };
+  }
+  if (result.pendingFinalizers?.length) {
+    return { message: `Deleting — waiting on finalizers: ${result.pendingFinalizers.join(", ")}`, type: "info" };
+  }
+  if (result.legacyPendingFinalizers) {
+    return { message: "Deleting — waiting on finalizers", type: "info" };
+  }
+  if (result.deletionTimestamp) return { message: "Deleting…", type: "info" };
+  return { message: "Resource deleted", type: "success" };
 }
 
 export function useDeleteResource() {
@@ -4298,21 +4327,14 @@ export function useDeleteResource() {
       const response = await apiFetch(url.toString(), {
         method: "DELETE",
       });
-      if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
-      }
       return readDeleteResult(response);
     },
     meta: {
       errorMessage: "Failed to delete resource",
     },
     onSuccess: (result, variables) => {
-      if (result.pendingFinalizers?.length) {
-        showToast(`Deleting — waiting on finalizers: ${result.pendingFinalizers.join(", ")}`, { type: "info" });
-      } else {
-        showToast("Deletion requested", { type: "info", detail: result.observationError });
-      }
+      const { message, ...options } = deleteResourceNotification(result);
+      showToast(message, options);
       queryClient.invalidateQueries({
         queryKey: ["resources", variables.kind],
       });
@@ -4347,34 +4369,43 @@ export function useBulkDeleteResources() {
           if (group) url.searchParams.set("group", group);
           if (force) url.searchParams.set("force", "true");
           const response = await apiFetch(url.toString(), { method: "DELETE" });
-          if (!response.ok) {
-            const error = await readErrorBody(response);
-            throw new Error(
-              error.error || `Failed to delete ${namespace}/${name}`,
-            );
-          }
           return { kind, namespace, name, result: await readDeleteResult(response) };
         }),
       );
       const failed = results.filter((r) => r.status === "rejected");
       if (failed.length > 0) {
         throw new Error(
-          `Failed to delete ${failed.length} of ${items.length} resources`,
+          `Failed to delete ${failed.length} of ${items.length} ${items.length === 1 ? "resource" : "resources"}`,
         );
       }
-      const pending = results.flatMap((r) => r.status === "fulfilled" && r.value.result.pendingFinalizers?.length
-        ? [`${r.value.namespace}/${r.value.name}: ${r.value.result.pendingFinalizers.join(", ")}`]
-        : []);
-      return { requested: items.length, pending };
+      return results.flatMap((r) => r.status === "fulfilled" ? [r.value] : []);
     },
     meta: {
       errorMessage: "Failed to delete some resources",
     },
-    onSuccess: ({ requested, pending }) => {
-      showToast(pending.length ? `Deleting — ${pending.length} waiting on finalizers` : `Deletion requested for ${requested} resources`, {
-        type: "info",
-        detail: pending.length ? listWithOverflow(pending) : undefined,
+    onSuccess: (deleted) => {
+      const pending = deleted.filter(({ result }) => result.pendingFinalizers?.length || result.legacyPendingFinalizers);
+      const unobserved = deleted.filter(({ result }) => result.observationError);
+      const deleting = deleted.filter(({ result }) => result.deletionTimestamp);
+      const resources = `${deleted.length} ${deleted.length === 1 ? "resource" : "resources"}`;
+      let message = `${resources} deleted`;
+      let type: "info" | "success" = "success";
+      if (unobserved.length) {
+        message = `${resources} deleted; couldn't read the current state of ${unobserved.length}`;
+      } else if (pending.length) {
+        message = `Deleting — ${pending.length} ${pending.length === 1 ? "resource" : "resources"} waiting on finalizers`;
+        type = "info";
+      } else if (deleting.length) {
+        message = `Deleting ${deleting.length} ${deleting.length === 1 ? "resource" : "resources"}…`;
+        type = "info";
+      }
+      const details = deleted.flatMap(({ namespace, name, result }) => {
+        const notification = deleteResourceNotification(result);
+        return result.observationError || result.pendingFinalizers?.length || result.legacyPendingFinalizers || result.deletionTimestamp
+          ? [`${namespace}/${name}: ${notification.message}${notification.detail ? `: ${notification.detail}` : ""}`]
+          : [];
       });
+      showToast(message, { type, detail: details.length ? listWithOverflow(details) : undefined });
     },
     // onSettled, not onSuccess — a partial failure still deleted some
     // resources, and the table must refetch to drop them.
