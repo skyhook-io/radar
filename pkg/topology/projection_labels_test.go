@@ -207,3 +207,21 @@ func TestProjectionMachineHealthChecks(t *testing.T) {
 		t.Fatalf("MHC Cluster dependency = %+v", mr)
 	}
 }
+
+func TestWorkloadsSeeEventSourcesBehindTheirService(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "pingsource/team/tick", Kind: "PingSource", Name: "tick", Data: map[string]any{"namespace": "team", "apiVersion": "sources.knative.dev/v1"}},
+			{ID: "service/team/receiver", Kind: KindService, Name: "receiver", Data: map[string]any{"namespace": "team", "apiVersion": "v1"}},
+			{ID: "deployment/team/receiver", Kind: KindDeployment, Name: "receiver", Data: map[string]any{"namespace": "team", "apiVersion": "apps/v1"}},
+		},
+		Edges: []Edge{
+			{ID: "sink", Source: "pingsource/team/tick", Target: "service/team/receiver", Type: EdgeExposes},
+			{ID: "select", Source: "service/team/receiver", Target: "deployment/team/receiver", Type: EdgeExposes},
+		},
+	}
+	rel := GetRelationshipsWithObject("Deployment", "team", "receiver", nil, topo, nil, nil, IndexByResource(topo))
+	if rel == nil || len(rel.RoutedFrom) != 1 || rel.RoutedFrom[0].Kind != "PingSource" {
+		t.Fatalf("Deployment routedFrom = %+v, want the PingSource sending to its Service", rel)
+	}
+}
