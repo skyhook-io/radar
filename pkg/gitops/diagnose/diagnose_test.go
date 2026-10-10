@@ -298,3 +298,26 @@ func TestActionForFluxReason(t *testing.T) {
 		t.Error("unknown flux reason should fall back to generic guidance, got empty")
 	}
 }
+
+func TestParseArgoOperationError_EmptyAutoSync(t *testing.T) {
+	got := ParseArgoOperationError("Skipping sync attempt to [abc123]: auto-sync will wipe out all resources")
+	if !strings.Contains(got.Cause, "desired state is empty") || !strings.Contains(got.Cause, "prune") {
+		t.Fatalf("missing empty-state cause: %+v", got)
+	}
+	if got.RemediationKind != "" {
+		t.Fatalf("must not disable the empty-state guard: %+v", got)
+	}
+}
+
+func TestParseArgoOperationError_EmptyAutoSyncPrecision(t *testing.T) {
+	for _, message := range []string{"Skipping auto-sync: most recent sync already to [abc123]", "Skipping auto-sync: another operation is in progress", "Failed last sync attempt to [abc123]: application path does not exist"} {
+		parsed := ParseArgoOperationError(message)
+		if parsed.Reason != "" || parsed.Action != "" {
+			t.Errorf("ordinary skip/failure must not suggest allowEmpty: %+v", parsed)
+		}
+	}
+	action := ActionForCondition("RepeatedResourceWarning")
+	if strings.Contains(action, "multiple Argo Applications") || !strings.Contains(action, "sources") || !strings.Contains(action, "unintended") {
+		t.Fatalf("repeated-resource guidance must distinguish intentional source overrides: %q", action)
+	}
+}

@@ -28,6 +28,8 @@ import (
 // than a typed struct so this package stays vocabulary-neutral; the caller
 // maps RemediationKind onto its own remediation type.
 type ParsedFailure struct {
+	Reason       string
+	Action       string
 	Cause        string // plain-English root cause; empty if unrecognized
 	AffectedKind string
 	AffectedName string
@@ -118,8 +120,13 @@ func ParseArgoOperationError(msg string) ParsedFailure {
 		return ParsedFailure{}
 	}
 	out := ParsedFailure{}
+	if strings.Contains(msg, "auto-sync will wipe out all resources") {
+		out.Reason = "AutoSyncBlockedEmpty"
+		out.Cause = "The rendered desired state is empty. Argo CD refuses to auto-sync because it would prune every managed resource."
+		out.Action = "First confirm that removing every managed resource is intended. If it is, set syncPolicy.automated.allowEmpty: true in the Application (or its ApplicationSet template), or delete the Application/ApplicationSet after reviewing its deletion policy. Otherwise, fix the source path or Helm values so the expected resources render."
+	}
 	for _, p := range argoErrorPatterns {
-		if p.match.MatchString(msg) {
+		if out.Cause == "" && p.match.MatchString(msg) {
 			out.Cause = p.cause
 			break
 		}
@@ -245,7 +252,7 @@ func ActionForCondition(condType string) string {
 	case "OrphanedResourceWarning":
 		return "Resources exist in the destination namespace that aren't part of any application. Add to an app or label them as ignored."
 	case "RepeatedResourceWarning":
-		return "The same resource is declared by multiple Argo Applications. Remove the duplicate declaration."
+		return "The same resource is rendered more than once by this Application's sources. Review source order (the last source wins), and remove the duplicate if the override is unintended."
 	case "ExcludedResourceWarning":
 		return "A managed resource is excluded by the Argo controller's resource.exclusions. Adjust controller config or remove the resource."
 	case "SharedResourceWarning":

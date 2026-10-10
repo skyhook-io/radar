@@ -1,0 +1,55 @@
+{
+  "apiVersion": "argoproj.io/v1alpha1",
+  "kind": "Application",
+  "metadata": {
+    "name": "empty-addons",
+    "namespace": "gaps-r3-gitops",
+    "uid": "empty-addons-fixture",
+    "creationTimestamp": "2026-10-09T00:00:00Z"
+  },
+  "spec": {
+    "project": "default",
+    "destination": {
+      "server": "https://kubernetes.default.svc",
+      "namespace": "gaps-r3-gitops"
+    },
+    "source": {
+      "repoURL": "https://example.com/addons.git",
+      "path": "charts/addons",
+      "targetRevision": "main"
+    },
+    "syncPolicy": {
+      "automated": {
+        "prune": true,
+        "selfHeal": true
+      }
+    }
+  },
+  "status": {
+    "health": {
+      "status": "Progressing"
+    },
+    "sync": {
+      "status": "OutOfSync",
+      "revision": "abc123"
+    },
+    "conditions": [
+      {
+        "type": "SyncError",
+        "message": "Skipping sync attempt to [abc123]: auto-sync will wipe out all resources"
+      },
+      {
+        "type": "SharedResourceWarning",
+        "message": "ApplicationSet/prometheus is part of applications gaps-r3-gitops/empty-addons and other-addons"
+      },
+      {
+        "type": "RepeatedResourceWarning",
+        "message": "Resource /ConfigMap/gaps-r3-gitops/config appeared 2 times among application resources."
+      },
+      {
+        "type": "OrphanedResourceWarning",
+        "message": "Application has 1 orphaned resource"
+      }
+    ]
+  }
+}

@@ -1886,3 +1886,23 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 		t.Error("an Application with no destination is invalid, not deploying elsewhere")
 	}
 }
+
+func TestBuildIssuesArgoEmptyAutoSyncAdvice(t *testing.T) {
+	message := "Skipping sync attempt to [abc123]: auto-sync will wipe out all resources"
+	for _, phase := range []string{"", "Failed", "Error"} {
+		for _, opMessage := range []string{message, ""} {
+			root := argoApp(map[string]any{"conditions": []any{map[string]any{"type": "SyncError", "message": message}}})
+			if phase != "" {
+				_ = unstructured.SetNestedMap(root.Object, map[string]any{"phase": phase, "message": opMessage}, "status", "operationState")
+			}
+			got := buildIssues(root, nil, "argocd", nil)
+			if len(got) != 1 {
+				t.Fatalf("want one issue, got %+v", got)
+			}
+			d := got[0]
+			if !strings.Contains(d.Cause, "desired state is empty") || !strings.Contains(d.Action, "confirm") || !strings.Contains(d.Action, "allowEmpty") || strings.Contains(d.Action, "retry") || d.Remediation != nil {
+				t.Fatalf("expected explanation-only safe advice, got %+v", d)
+			}
+		}
+	}
+}

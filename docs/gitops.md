@@ -58,12 +58,16 @@ Operation history with deploy timestamps, the git revision deployed, who initiat
 
 The Issues band at the top of the detail page surfaces six classes of problems:
 
-- **Operation failures** (Argo) — the parser recognizes 11 patterns (annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.) and rewrites each into a plain-English cause
+- **Operation failures** (Argo) — the parser recognizes known controller failures (annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.) and rewrites each into a plain-English cause
 - **Stuck-drift loop** — when sync succeeded but the app is *still* OutOfSync with auto-sync on and a recent reconcile, something is mutating resources after each apply. The Issue calls out likely culprits (mutating webhook, sibling controller, schema migration)
 - **Manual drift without auto-sync** — drift exists but auto-sync is disabled. The Issue tells you "nothing will reconcile until you click Sync" so you stop waiting
 - **Argo Application conditions** — `ComparisonError` (verify repo creds), `OrphanedResourceWarning`, `InvalidSpecError`, etc. extracted into typed-severity Issues
 - **Per-resource health** — Degraded / Missing children get a critical Issue each, deduped against any operation failure that already named the same resource (no triplicate rendering). See [Per-resource health](#per-resource-health) for where that health comes from
 - **Pending deletion** (lifecycle) — see [Lifecycle awareness](#lifecycle-awareness) below
+
+**Blocked empty auto-sync** — when Argo reports "auto-sync will wipe out all resources", the rendered desired state is empty and Argo refuses to prune every managed resource. Radar explains the guard rather than suggesting a retry. Confirm that removing everything is intended before setting `syncPolicy.automated.allowEmpty: true` (in the ApplicationSet template for generated Applications) or deleting the Application/ApplicationSet after reviewing its deletion policy. If the empty result is unintended, fix the source path or Helm values. Radar offers no automatic fix for this guard.
+
+The cluster-wide **Issues** view also reports Application error conditions, ahead of Progressing or Degraded health rollups. Running operations and non-failed suspended Applications stay suppressed; a failed operation takes precedence over its parallel error condition. `SharedResourceWarning`, `RepeatedResourceWarning`, and `OrphanedResourceWarning` appear as independent warnings with the controller's resource and owner messages. A repeated resource can be an intentional override between sources within one Application; the guidance asks you to review source order before removing it.
 
 **Structured remediation** — when the diagnosis pipeline recognizes a fixable failure (e.g. Argo operation error "namespace X not found"), the Issue carries a primary-blue action button that performs the fix in one click. Duplicate per-resource Missing issues + SyncError condition rows are then suppressed so the user sees one clear "create the namespace and retry" path instead of three.
 

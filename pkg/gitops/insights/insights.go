@@ -543,8 +543,16 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			operationFailed = true
 			opMessage, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
+			if msg == "" {
+				for _, condition := range argoApplicationConditions(root) {
+					if condition.Reason == argoSyncErrorConditionType && diagnose.ParseArgoOperationError(condition.Message).Reason == "AutoSyncBlockedEmpty" {
+						msg, rawMsg = condition.Message, condition.RawMessage
+						break
+					}
+				}
+			}
 			parsed := diagnose.ParseArgoOperationError(msg)
-			action := "Open Activity for operation details."
+			action := fallback(parsed.Action, "Open Activity for operation details.")
 			if !gitops.IsInClusterDestination(root) {
 				var remoteAction string
 				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed); remoteAction != "" {
@@ -2114,13 +2122,25 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 		case "warning":
 			severity = SeverityWarning
 		}
+		cause := ""
+		action := diagnose.ActionForCondition(typ)
+		if typ == argoSyncErrorConditionType {
+			parsed := diagnose.ParseArgoOperationError(msg)
+			if parsed.Reason != "" {
+				cause = parsed.Cause
+			}
+			if parsed.Action != "" {
+				action = parsed.Action
+			}
+		}
 		out = append(out, Issue{
 			Severity:   severity,
 			Scope:      ScopeCondition,
+			Cause:      cause,
 			Reason:     fallback(typ, "Condition"),
 			Message:    fallback(msg, typ),
 			RawMessage: rawMsg,
-			Action:     diagnose.ActionForCondition(typ),
+			Action:     action,
 		})
 	}
 	return out
