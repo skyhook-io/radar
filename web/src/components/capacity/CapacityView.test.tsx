@@ -1337,6 +1337,78 @@ describe("CapacityView overview", () => {
   });
 });
 
+describe("Capacity scale-down observations", () => {
+  function renderScaleDown(child: CapacityAutoscalerChildObservation) {
+    return renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [
+          {
+            ...gkeGroup,
+            scaling: [
+              {
+                code: "at_min_size",
+                summary:
+                  "at minimum size — observed autoscaler groups can't scale down further",
+              },
+            ],
+            children: [child],
+            childrenMeta: boundedMeta(1),
+          },
+        ],
+        orphanAutoscalerGroups: [child],
+      }),
+    );
+  }
+
+  it("explains the floor and keeps published zero candidates", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: {
+        status: "NoCandidates",
+        candidates: 0,
+        lastTransitionTime: generatedAt,
+        asOf: generatedAt,
+      },
+    });
+    expect(html).toContain("at minimum size");
+    expect(html).toContain("No scale-down candidates");
+    expect(html).toMatch(/Candidates:(?:<!-- -->|\s)*0/);
+    expect(html).toContain("Status since");
+    expect(html).toContain("As of");
+    expect(html).toContain("not guaranteed removals");
+    expect(html).not.toContain("ETA");
+  });
+
+  it("never invents a zero count from NoCandidates or missing observations", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "NoCandidates" },
+    });
+    expect(html).toMatch(/Candidates:(?:<!-- -->|\s)*not published/);
+    expect(html).toContain("Candidate count not published by the autoscaler.");
+    expect(html).toContain("Probe time not published");
+    expect(html).not.toContain("Status since");
+    expect(html).not.toMatch(/Candidates:(?:<!-- -->|\s)*0/);
+    expect(renderScaleDown(gkeChild)).toContain("Not published");
+  });
+
+  it.each([
+    ["CandidatesPresent", "Scale-down candidates present"],
+    ["InProgress", "Scale-down in progress"],
+    ["NewControllerStatus", "NewControllerStatus"],
+    ["constructor", "constructor"],
+  ])("renders %s without promising a removal time", (status, label) => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status, candidates: 2 },
+    });
+    expect(html).toContain(label);
+    expect(html).toMatch(/Candidates:(?:<!-- -->|\s)*2/);
+    expect(html).not.toContain("Status since");
+  });
+});
+
 describe("CapacityView pool detail", () => {
   it("renders the capacity ledger with headers and a certainty legend", () => {
     const html = renderCapacity("/capacity/pools/default", (client) =>

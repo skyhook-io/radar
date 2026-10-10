@@ -408,6 +408,14 @@ export interface CapacityScalingFact {
   summary: string;
 }
 
+/** Published scale-down observations; candidates do not imply a removal ETA. */
+export interface CapacityAutoscalerScaleDown {
+  status?: string;
+  candidates?: number;
+  lastTransitionTime?: string;
+  asOf?: string;
+}
+
 export interface CapacityAutoscalerBackoff {
   errorClass?: string;
   errorCode?: string;
@@ -430,6 +438,7 @@ export interface CapacityAutoscalerChildObservation {
   readyNodes?: number;
   totalNodes?: number;
   backoff?: CapacityAutoscalerBackoff;
+  scaleDown?: CapacityAutoscalerScaleDown;
   asOf?: string;
 }
 
