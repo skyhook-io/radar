@@ -750,20 +750,19 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 			if ref == nil {
 				continue
 			}
-			kind := strings.ToLower(ref.Kind)
-			switch kind {
-			case "ingress":
-				if ref.Group == "networking.k8s.io" {
-					rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
-				}
-			case "gateway":
-				if ref.Group == "gateway.networking.k8s.io" {
-					rel.Gateways = appendResourceRef(rel.Gateways, *ref)
-				}
+			switch {
+			case ref.Kind == "Ingress" && ref.Group == "networking.k8s.io":
+				rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
+			case ref.Kind == "Gateway" && ref.Group == "gateway.networking.k8s.io":
+				rel.Gateways = appendResourceRef(rel.Gateways, *ref)
+			case isServiceEntrypointRoute(ref):
+				rel.Routes = appendResourceRef(rel.Routes, *ref)
+			case ref.Kind == "Service" && ref.Group == "":
+				// A Service in front of the Service adds no entrypoint.
 			default:
-				if isServiceEntrypointRoute(ref) {
-					rel.Routes = appendResourceRef(rel.Routes, *ref)
-				}
+				// Event sources, Brokers and other upstream routers reach the
+				// workload through its Service too.
+				rel.RoutedFrom = appendResourceRef(rel.RoutedFrom, *ref)
 			}
 		}
 	}
