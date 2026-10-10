@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -206,7 +207,7 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 		return argoAppForTest("argocd", "demo", func(obj map[string]any) {
 			status, _ := obj["status"].(map[string]any)
 			status["history"] = []any{
-				map[string]any{"id": historyID, "revision": "abc123"},
+				map[string]any{"id": historyID, "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo", "path": "app"}},
 			}
 		})
 	}
@@ -218,12 +219,8 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 			t.Fatalf("expected success for int64 id=7, got %v", err)
 		}
 		body := captureLastPatch(t, client)
-		rb := nestedMap(body, "operation", "rollback")
-		// Patch encodes the id as int64; JSON marshal produces a number that
-		// Unmarshal into map[string]any yields as float64. Assert via
-		// numeric comparison rather than type-strict equality.
-		if got, _ := rb["id"].(float64); got != 7 {
-			t.Fatalf("rollback id in patch = %#v, want 7", rb["id"])
+		if got := nestedMap(body, "operation", "sync")["revision"]; got != "abc123" {
+			t.Fatalf("operation.sync.revision = %#v, want abc123", got)
 		}
 	})
 
@@ -232,6 +229,14 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 42})
 		if err != nil {
 			t.Fatalf("expected success for float64 id=42, got %v", err)
+		}
+	})
+
+	// Argo's controller numbers history from 0, so the first deploy is id 0.
+	t.Run("id 0 is the first history entry", func(t *testing.T) {
+		client := newFakeArgo(makeAppWithHistory(int64(0)))
+		if _, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 0}); err != nil {
+			t.Fatalf("expected success for id=0, got %v", err)
 		}
 	})
 
@@ -244,20 +249,14 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 		if !errors.Is(err, ErrHistoryEntryNotFound) {
 			t.Fatalf("expected ErrHistoryEntryNotFound, got %v", err)
 		}
-		// Verify no patch was issued — the whole point of the verify-first
-		// design is that we don't touch the cluster on bad input.
-		for _, action := range client.Actions() {
-			if _, ok := action.(clienttesting.PatchAction); ok {
-				t.Fatalf("rollback issued a patch despite invalid id; actions=%v", client.Actions())
-			}
-		}
+		assertNoPatch(t, client)
 	})
 
-	t.Run("non-positive id rejected upfront", func(t *testing.T) {
+	t.Run("negative id rejected upfront", func(t *testing.T) {
 		client := newFakeArgo(makeAppWithHistory(int64(7)))
-		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 0})
+		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: -1})
 		if err == nil {
-			t.Fatal("expected error for id=0")
+			t.Fatal("expected error for id=-1")
 		}
 	})
 
@@ -276,6 +275,175 @@ func TestRollbackArgoAppHistoryIDVerification(t *testing.T) {
 			t.Fatalf("expected ErrOperationInProgress, got %v", err)
 		}
 	})
+
+	t.Run("pending operation rejects rollback with sentinel error", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["operation"] = map[string]any{"sync": map[string]any{"revision": "abc123"}}
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{map[string]any{"id": int64(1), "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo"}}}
+		}))
+		_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+		if !errors.Is(err, ErrOperationInProgress) {
+			t.Fatalf("expected ErrOperationInProgress, got %v", err)
+		}
+		assertNoPatch(t, client)
+	})
+}
+
+func assertNoPatch(t *testing.T, client *fake.FakeDynamicClient) {
+	t.Helper()
+	for _, action := range client.Actions() {
+		if _, ok := action.(clienttesting.PatchAction); ok {
+			t.Fatalf("expected no patch; actions=%v", client.Actions())
+		}
+	}
+}
+
+// The Application CRD has no operation.rollback: the API server prunes it and
+// Argo's controller fails the empty operation. Rollback must be written the
+// way argocd-server writes it — a sync pinned to the history entry.
+func TestRollbackArgoAppWritesSyncOperation(t *testing.T) {
+	ctx := context.Background()
+	trueValue := true
+
+	t.Run("single source", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["spec"] = map[string]any{
+				"project":    "default",
+				"source":     map[string]any{"repoURL": "https://example.com/repo", "path": "current", "targetRevision": "main"},
+				"syncPolicy": map[string]any{"syncOptions": []any{"CreateNamespace=true"}},
+			}
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{
+				map[string]any{"id": int64(0), "revision": "rev-old", "source": map[string]any{"repoURL": "https://example.com/repo", "path": "old", "targetRevision": "main"}},
+				map[string]any{"id": int64(1), "revision": "rev-new", "source": map[string]any{"repoURL": "https://example.com/repo", "path": "current", "targetRevision": "main"}},
+			}
+		}))
+		if _, err := RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 0}); err != nil {
+			t.Fatalf("RollbackArgoApp: %v", err)
+		}
+		body := captureLastPatch(t, client)
+		operation := nestedMap(body, "operation")
+		if _, ok := operation["rollback"]; ok {
+			t.Fatalf("patch still writes operation.rollback: %v", operation)
+		}
+		if got := nestedMap(operation, "initiatedBy")["username"]; got != "radar" {
+			t.Fatalf("initiatedBy.username = %#v, want radar", got)
+		}
+		want := map[string]any{
+			"revision":     "rev-old",
+			"source":       map[string]any{"repoURL": "https://example.com/repo", "path": "old", "targetRevision": "main"},
+			"prune":        false,
+			"syncStrategy": map[string]any{"apply": map[string]any{}},
+			"syncOptions":  []any{"CreateNamespace=true"},
+		}
+		if got := nestedMap(operation, "sync"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("operation.sync = %#v\nwant %#v", got, want)
+		}
+	})
+
+	t.Run("multi source", func(t *testing.T) {
+		sources := []any{
+			map[string]any{"repoURL": "https://example.com/a", "path": "app", "targetRevision": "main"},
+			map[string]any{"repoURL": "https://example.com/b", "path": "values", "targetRevision": "v2", "ref": "values"},
+		}
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{map[string]any{
+				"id":        int64(3),
+				"revisions": []any{"rev-a", "rev-b"},
+				"sources":   sources,
+				// Argo serializes the unused single source of a multi-source
+				// entry as an all-empty object.
+				"source": map[string]any{"repoURL": ""},
+			}}
+		}))
+		if _, err := RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 3, Prune: &trueValue, DryRun: &trueValue}); err != nil {
+			t.Fatalf("RollbackArgoApp: %v", err)
+		}
+		want := map[string]any{
+			"revisions":    []any{"rev-a", "rev-b"},
+			"sources":      sources,
+			"prune":        true,
+			"dryRun":       true,
+			"syncStrategy": map[string]any{"apply": map[string]any{}},
+		}
+		if got := nestedMap(captureLastPatch(t, client), "operation", "sync"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("operation.sync = %#v\nwant %#v", got, want)
+		}
+	})
+
+	t.Run("entry without a source is refused", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{map[string]any{"id": int64(1), "revision": "abc123"}}
+		}))
+		_, err := RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+		if !errors.Is(err, ErrHistoryEntryNotRollbackable) {
+			t.Fatalf("expected ErrHistoryEntryNotRollbackable, got %v", err)
+		}
+		assertNoPatch(t, client)
+	})
+}
+
+// Argo CD refuses a rollback while automated sync is on; Argo CD 3.x can keep
+// the automated block with enabled: false, which is off.
+func TestRollbackArgoAppAutoSync(t *testing.T) {
+	cases := []struct {
+		name      string
+		automated map[string]any
+		wantErr   bool
+	}{
+		{name: "automated block present", automated: map[string]any{"prune": true, "selfHeal": true}, wantErr: true},
+		{name: "empty automated block", automated: map[string]any{}, wantErr: true},
+		{name: "enabled: true", automated: map[string]any{"enabled": true}, wantErr: true},
+		{name: "enabled: false", automated: map[string]any{"enabled": false, "prune": true}, wantErr: false},
+		{name: "no automated block", automated: nil, wantErr: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+				spec, _ := obj["spec"].(map[string]any)
+				if tc.automated != nil {
+					spec["syncPolicy"] = map[string]any{"automated": tc.automated}
+				}
+				status, _ := obj["status"].(map[string]any)
+				status["history"] = []any{map[string]any{"id": int64(0), "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo"}}}
+			}))
+			_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 0})
+			if tc.wantErr {
+				if !errors.Is(err, ErrAutoSyncEnabled) {
+					t.Fatalf("expected ErrAutoSyncEnabled, got %v", err)
+				}
+				assertNoPatch(t, client)
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected rollback to start, got %v", err)
+			}
+		})
+	}
+}
+
+func TestArgoHistoryEntryRollbackable(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry map[string]any
+		want  bool
+	}{
+		{name: "single source", entry: map[string]any{"id": int64(0), "source": map[string]any{"repoURL": "https://example.com/repo"}}, want: true},
+		{name: "multi source", entry: map[string]any{"id": float64(2), "sources": []any{map[string]any{"repoURL": "https://example.com/repo"}}, "source": map[string]any{"repoURL": ""}}, want: true},
+		{name: "empty source object", entry: map[string]any{"id": int64(1), "revision": "abc", "source": map[string]any{"repoURL": ""}}, want: false},
+		{name: "no source at all", entry: map[string]any{"id": int64(1), "revision": "abc"}, want: false},
+		{name: "no id", entry: map[string]any{"source": map[string]any{"repoURL": "https://example.com/repo"}}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ArgoHistoryEntryRollbackable(tc.entry); got != tc.want {
+				t.Fatalf("ArgoHistoryEntryRollbackable = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 // Sanity: the rollback-collision sentinel maps the same way in tests as it
@@ -527,7 +695,7 @@ func TestArgoOperationPatchesUseResourceVersion(t *testing.T) {
 		metadata, _ := obj["metadata"].(map[string]any)
 		metadata["resourceVersion"] = "17"
 		status, _ := obj["status"].(map[string]any)
-		status["history"] = []any{map[string]any{"id": int64(1)}}
+		status["history"] = []any{map[string]any{"id": int64(1), "source": map[string]any{"repoURL": "https://example.com/repo"}}}
 	})
 
 	t.Run("sync", func(t *testing.T) {
@@ -556,7 +724,7 @@ func TestArgoOperationPatchesUseResourceVersion(t *testing.T) {
 func TestArgoOperationPatchConflictMapsToOperationInProgress(t *testing.T) {
 	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
 		status, _ := obj["status"].(map[string]any)
-		status["history"] = []any{map[string]any{"id": int64(1)}}
+		status["history"] = []any{map[string]any{"id": int64(1), "source": map[string]any{"repoURL": "https://example.com/repo"}}}
 	})
 	cases := []struct {
 		name string
@@ -771,6 +939,30 @@ func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Argo CD 3.x can switch automation off in place with automated.enabled:
+// false. Resume must clear that flag, or Argo stays manual while Radar reports
+// auto-sync resumed, and it keeps the block's own prune/selfHeal settings.
+func TestSetArgoAutoSyncResumeClearsEnabledFalse(t *testing.T) {
+	client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		spec, _ := obj["spec"].(map[string]any)
+		spec["syncPolicy"] = map[string]any{"automated": map[string]any{"enabled": false, "prune": false, "selfHeal": true}}
+	}))
+	if _, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", true); err != nil {
+		t.Fatalf("SetArgoAutoSync(resume): %v", err)
+	}
+	app, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if !ArgoAutoSyncEnabled(app) {
+		t.Fatalf("auto-sync still off after resume: %#v", app.Object["spec"])
+	}
+	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	if automated["prune"] != false || automated["selfHeal"] != true {
+		t.Fatalf("resume changed the block's settings: %#v", automated)
 	}
 }
 

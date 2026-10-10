@@ -49,6 +49,13 @@ var (
 	// ErrHistoryEntryNotFound: the requested rollback target id isn't in
 	// status.history. HTTP 404.
 	ErrHistoryEntryNotFound = errors.New("history entry not found")
+	// ErrHistoryEntryNotRollbackable: the history entry records no source to
+	// sync back to, so Argo CD itself refuses to roll back to it. HTTP 400.
+	ErrHistoryEntryNotRollbackable = errors.New("history entry records no source")
+	// ErrAutoSyncEnabled: a rollback was refused because the Application's
+	// automated sync is on. Argo CD refuses the same request: the controller
+	// would sync straight back to the target revision. HTTP 409.
+	ErrAutoSyncEnabled = errors.New("auto-sync is enabled")
 	// ErrResourceTerminating: the target resource has metadata.deletionTimestamp
 	// set, so any mutating operation against it is futile — the resource is
 	// being torn down and reconcile/sync/rollback will either no-op or be
@@ -85,6 +92,69 @@ func assertNotTerminating(obj *unstructured.Unstructured, kind, namespace, name 
 		suffix = fmt.Sprintf(" (finalizers: %s)", strings.Join(finalizers, ", "))
 	}
 	return fmt.Errorf("%s %s/%s is being deleted%s: %w", kind, namespace, name, suffix, ErrResourceTerminating)
+}
+
+// ArgoAutoSyncEnabled reports whether an Argo CD Application's automated sync
+// is on. Argo CD 3.x can keep spec.syncPolicy.automated (with its prune and
+// selfHeal settings) while switching automation off via `enabled: false`, so
+// the block being present is not enough: only an absent or true `enabled`
+// counts, matching Argo's SyncPolicy.IsAutomatedSyncEnabled.
+func ArgoAutoSyncEnabled(app *unstructured.Unstructured) bool {
+	automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	if !found {
+		return false
+	}
+	enabled, ok := automated["enabled"].(bool)
+	return !ok || enabled
+}
+
+// ArgoHistoryEntryRollbackable reports whether a status.history entry can be
+// rolled back to: it needs an id and the source(s) it was deployed from,
+// which the rollback syncs back to. Argo CD refuses entries without a source.
+func ArgoHistoryEntryRollbackable(entry map[string]any) bool {
+	if _, ok := argoHistoryEntryID(entry); !ok {
+		return false
+	}
+	sources, _ := entry["sources"].([]any)
+	return len(sources) > 0 || !jsonValueIsZero(entry["source"])
+}
+
+func argoHistoryEntryID(entry map[string]any) (int64, bool) {
+	switch v := entry["id"].(type) {
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	}
+	return 0, false
+}
+
+// jsonValueIsZero reports whether a decoded JSON value carries no data. Argo
+// writes a multi-source history entry's unused `source` as {"repoURL": ""},
+// so an empty map is not the only zero shape.
+func jsonValueIsZero(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return t == ""
+	case bool:
+		return !t
+	case int64:
+		return t == 0
+	case float64:
+		return t == 0
+	case map[string]any:
+		for _, field := range t {
+			if !jsonValueIsZero(field) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		return len(t) == 0
+	}
+	return false
 }
 
 func argoOperationInProgress(app *unstructured.Unstructured) bool {
@@ -203,8 +273,8 @@ type ArgoResourceValidationTarget struct {
 
 // ArgoRollbackOptions controls an ArgoCD rollback operation. ID is the
 // history entry to roll back to (matches HistoryItem.ID surfaced by the
-// insights builder). Argo's rollback uses the same operation slot as sync
-// — only one is in flight at a time.
+// insights builder); Argo numbers history from 0, so 0 is a valid target.
+// Prune and DryRun default to false, as in Argo CD's own rollback.
 type ArgoRollbackOptions struct {
 	ID     int64 `json:"id"`
 	Prune  *bool `json:"prune,omitempty"`
@@ -487,6 +557,13 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 				selfHeal = v == "true"
 			}
 		}
+		// Automation switched off in place with `enabled: false` keeps its
+		// prune/selfHeal settings in the block; resume those. The patch
+		// drops `enabled`, which a merge patch would otherwise leave false.
+		if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found && !ArgoAutoSyncEnabled(app) {
+			prune, _ = automated["prune"].(bool)
+			selfHeal, _ = automated["selfHeal"].(bool)
+		}
 
 		patch = map[string]any{
 			"metadata": map[string]any{
@@ -502,6 +579,7 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 					"automated": map[string]any{
 						"prune":    prune,
 						"selfHeal": selfHeal,
+						"enabled":  nil,
 					},
 				},
 			},
@@ -647,12 +725,18 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	}, nil
 }
 
-// RollbackArgoApp rolls an ArgoCD Application back to a prior revision
-// by ID (matches HistoryItem.ID surfaced by the insights builder). Like
-// sync, rollback uses the operation slot — fails if a sync is in flight.
+// RollbackArgoApp rolls an ArgoCD Application back to a prior history entry
+// by ID (matches HistoryItem.ID surfaced by the insights builder).
+//
+// The Application CRD has no rollback operation — the API server prunes an
+// `operation.rollback` and the controller then fails with "no operation
+// specified". Argo CD's own API server implements rollback as a sync pinned
+// to the history entry's revision(s) and source(s), with the apply strategy
+// and the app's sync options, and refuses it while automated sync is on.
+// This writes that same operation.
 func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoRollbackOptions) (OperationResult, error) {
-	if opts.ID <= 0 {
-		return OperationResult{}, fmt.Errorf("rollback requires a positive history id")
+	if opts.ID < 0 {
+		return OperationResult{}, fmt.Errorf("rollback requires a non-negative history id")
 	}
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -666,49 +750,28 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 		return OperationResult{}, err
 	}
 
+	if ArgoAutoSyncEnabled(app) {
+		return OperationResult{}, fmt.Errorf("cannot roll back %s/%s: %w, so Argo CD would sync it forward again; disable auto-sync first", namespace, name, ErrAutoSyncEnabled)
+	}
+
 	if argoOperationInProgress(app) {
 		return OperationResult{}, fmt.Errorf("cannot rollback while another operation is in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
 	}
 
-	// Verify the requested history ID actually exists, otherwise Argo silently
-	// accepts the operation and never executes — confusing failure mode.
-	history, _, _ := unstructured.NestedSlice(app.Object, "status", "history")
-	matched := false
-	for _, item := range history {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		switch v := m["id"].(type) {
-		case int64:
-			if v == opts.ID {
-				matched = true
-			}
-		case float64:
-			if int64(v) == opts.ID {
-				matched = true
-			}
-		}
-	}
-	if !matched {
+	entry := argoHistoryEntry(app, opts.ID)
+	if entry == nil {
 		return OperationResult{}, fmt.Errorf("history entry id=%d not found on Application %s/%s: %w", opts.ID, namespace, name, ErrHistoryEntryNotFound)
+	}
+	if !ArgoHistoryEntryRollbackable(entry) {
+		return OperationResult{}, fmt.Errorf("cannot roll back %s/%s to history entry id=%d: %w (written by Argo CD v0.11 or older); sync to its revision instead", namespace, name, opts.ID, ErrHistoryEntryNotRollbackable)
 	}
 
 	timestamp := time.Now().Format(time.RFC3339Nano)
-	rollback := map[string]any{
-		"id": opts.ID,
-	}
-	if opts.Prune != nil {
-		rollback["prune"] = *opts.Prune
-	}
-	if opts.DryRun != nil {
-		rollback["dryRun"] = *opts.DryRun
-	}
 	patch := map[string]any{
 		"metadata": map[string]any{"resourceVersion": app.GetResourceVersion()},
 		"operation": map[string]any{
 			"initiatedBy": map[string]any{"username": "radar"},
-			"rollback":    rollback,
+			"sync":        argoRollbackSyncOperation(app, entry, opts),
 		},
 	}
 
@@ -728,6 +791,50 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 		Name:        name,
 		RequestedAt: timestamp,
 	}, nil
+}
+
+func argoHistoryEntry(app *unstructured.Unstructured, id int64) map[string]any {
+	history, _, _ := unstructured.NestedSlice(app.Object, "status", "history")
+	for _, item := range history {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if entryID, ok := argoHistoryEntryID(entry); ok && entryID == id {
+			return entry
+		}
+	}
+	return nil
+}
+
+// argoRollbackSyncOperation builds the operation.sync Argo CD's API server
+// writes for a rollback: the entry's revision and source for a single-source
+// deploy, or its revisions and sources for a multi-source one. The apply
+// strategy means sync hooks don't run, as in Argo's own rollback.
+func argoRollbackSyncOperation(app *unstructured.Unstructured, entry map[string]any, opts ArgoRollbackOptions) map[string]any {
+	sync := map[string]any{
+		"prune":        opts.Prune != nil && *opts.Prune,
+		"syncStrategy": map[string]any{"apply": map[string]any{}},
+	}
+	if opts.DryRun != nil && *opts.DryRun {
+		sync["dryRun"] = true
+	}
+	if revision := StringValue(entry["revision"]); revision != "" {
+		sync["revision"] = revision
+	}
+	if revisions, _ := entry["revisions"].([]any); len(revisions) > 0 {
+		sync["revisions"] = revisions
+	}
+	if !jsonValueIsZero(entry["source"]) {
+		sync["source"] = entry["source"]
+	}
+	if sources, _ := entry["sources"].([]any); len(sources) > 0 {
+		sync["sources"] = sources
+	}
+	if syncOptions, found, _ := unstructured.NestedSlice(app.Object, "spec", "syncPolicy", "syncOptions"); found && len(syncOptions) > 0 {
+		sync["syncOptions"] = syncOptions
+	}
+	return sync
 }
 
 // --- FluxCD operations ---

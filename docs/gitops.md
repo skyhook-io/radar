@@ -106,8 +106,8 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 | **Refresh** | Re-fetches the source repo |
 | **Hard refresh** | Sets `RefreshType=hard` to bypass repo-cache |
 | **Terminate** | Cancels an in-flight operation |
-| **Suspend / Enable auto-sync** | Toggles automated sync; remembers the prior `prune` / `selfHeal` settings on suspend so resume restores them |
-| **Rollback** | Pick a prior history entry by ID. Force / DryRun flags honored |
+| **Suspend / Enable auto-sync** | Toggles automated sync; remembers the prior `prune` / `selfHeal` settings on suspend so resume restores them. Resuming an app switched off in place with `automated.enabled: false` clears the flag and keeps that block's settings |
+| **Rollback** | Pick a prior history entry by ID (Argo numbers history from 0). Written the way argocd-server writes it: a sync operation pinned to that entry's revision(s) and source(s), apply strategy (hooks don't run), the app's sync options, Prune / DryRun off unless chosen. Refused with 409 while auto-sync is enabled (`automated.enabled: false` counts as off), as Argo CD refuses it |
 | **Selective sync** | From the Topology tab, mark individual resources and sync only those |
 
 ### Flux

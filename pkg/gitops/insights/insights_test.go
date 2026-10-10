@@ -227,6 +227,9 @@ func TestDescribeArgoAutoSync(t *testing.T) {
 		// failing safely, we'd report "Auto · prune" for "prune": "true".
 		{name: "string 'true' for prune treated as not-set → Auto", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"prune": "true"}}}, want: "Auto"},
 		{name: "false flags → Auto", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"prune": false, "selfHeal": false}}}, want: "Auto"},
+		// Argo CD 3.x keeps the block but switches automation off.
+		{name: "enabled false → Manual", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"enabled": false, "prune": true, "selfHeal": true}}}, want: "Manual"},
+		{name: "enabled true → Auto · prune", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"enabled": true, "prune": true}}}, want: "Auto · prune"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,6 +268,33 @@ func TestDescribeArgoAutoSyncApplicationSet(t *testing.T) {
 			}}
 			if got := describeArgoAutoSync(root); got != "" {
 				t.Fatalf("describeArgoAutoSync = %q, want empty for an ApplicationSet", got)
+			}
+		})
+	}
+}
+
+// Rollback is offered only when a history entry records the source(s) a
+// rollback syncs back to; multi-source entries carry `revisions`, not
+// `revision`.
+func TestBuildCapabilitiesArgoRollback(t *testing.T) {
+	cases := []struct {
+		name    string
+		history []any
+		want    bool
+	}{
+		{name: "no history", history: nil, want: false},
+		{name: "single-source entry", history: []any{map[string]any{"id": int64(0), "revision": "abc", "source": map[string]any{"repoURL": "https://example.com/repo"}}}, want: true},
+		{name: "multi-source entry", history: []any{map[string]any{"id": int64(0), "revisions": []any{"a", "b"}, "sources": []any{map[string]any{"repoURL": "https://example.com/a"}, map[string]any{"repoURL": "https://example.com/b"}}, "source": map[string]any{"repoURL": ""}}}, want: true},
+		{name: "entry without a source", history: []any{map[string]any{"id": int64(0), "revision": "abc"}}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := &unstructured.Unstructured{Object: map[string]any{
+				"kind":   "Application",
+				"status": map[string]any{"history": tc.history},
+			}}
+			if got := buildCapabilities(root, "argocd").Rollback; got != tc.want {
+				t.Fatalf("Rollback capability = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -647,6 +677,14 @@ func TestDetectAutoDriftSelfHealOff(t *testing.T) {
 			wantFire: false,
 		},
 		{
+			name: "OutOfSync + automated block with enabled false → no fire (ManualDrift owns it)",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "selfHeal")
+				_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "enabled")
+			},
+			wantFire: false,
+		},
+		{
 			name: "Synced + auto-sync + self-heal off → no fire",
 			mut: func(u *unstructured.Unstructured) {
 				_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "selfHeal")
@@ -793,6 +831,44 @@ func TestBuildHistoryArgo_AutomatedBoolBecomesInitiator(t *testing.T) {
 	}
 	if hist[0].InitiatedBy != "automated" {
 		t.Errorf("InitiatedBy = %q, want %q", hist[0].InitiatedBy, "automated")
+	}
+}
+
+// A multi-source deploy records `revisions` and `sources`, with an empty
+// placeholder `source`; its history row and the rollback dialog need those,
+// not the empty singular fields.
+func TestBuildHistoryArgo_MultiSourceEntry(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":      "Succeeded",
+			"finishedAt": "2026-05-03T13:00:00Z",
+			"syncResult": map[string]any{"revisions": []any{"aaa111", "bbb222"}},
+		},
+		"history": []any{
+			map[string]any{
+				"id":         int64(0),
+				"deployedAt": "2026-05-03T12:00:00Z",
+				"revisions":  []any{"aaa111", "bbb222"},
+				"source":     map[string]any{"repoURL": ""},
+				"sources": []any{
+					map[string]any{"repoURL": "https://github.com/org/app", "path": "guestbook"},
+					map[string]any{"repoURL": "https://github.com/org/app", "path": "kustomize-guestbook"},
+				},
+			},
+		},
+	})
+	hist := BuildHistory(root)
+	if len(hist) != 2 {
+		t.Fatalf("expected the entry and the operation row, got %d", len(hist))
+	}
+	for _, item := range hist {
+		if item.Revision != "aaa111, bbb222" {
+			t.Errorf("Revision = %q, want %q (item %+v)", item.Revision, "aaa111, bbb222", item)
+		}
+	}
+	entry := hist[1]
+	if entry.ID != "0" || entry.Source != "https://github.com/org/app · guestbook (+1 more)" {
+		t.Errorf("entry = %+v, want id 0 and the first source plus a count", entry)
 	}
 }
 

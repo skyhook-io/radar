@@ -228,7 +228,9 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			return fallback
 		}
 
-		automated := argoIsAutomated(app)
+		// An automated app is expected to self-heal, so OutOfSync/Missing is a
+		// real failure rather than an operator who hasn't synced a manual app yet.
+		automated := gitops.ArgoAutoSyncEnabled(app)
 		outOfSync := strings.EqualFold(sync, "OutOfSync")
 		// Track drift continuity for every app before any gate short-circuits the
 		// loop, so a suspended-then-resumed or mid-degraded app that stays
@@ -446,23 +448,6 @@ func isArgoStuckDriftLoop(app *unstructured.Unstructured, now time.Time) bool {
 	// slow-converging resource to settle, short enough that "stale for an hour"
 	// (a different problem — controller down) doesn't trip the stuck signal.
 	return now.Sub(t) <= 30*time.Minute
-}
-
-// argoIsAutomated reports whether spec.syncPolicy.automated is present — i.e. the
-// app is expected to self-heal, so OutOfSync/Missing is a real failure rather
-// than an operator who simply hasn't synced a manual app yet.
-func argoIsAutomated(app *unstructured.Unstructured) bool {
-	automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
-	if !found {
-		return false
-	}
-	// Newer Argo CD can disable auto-sync without removing the block, via
-	// spec.syncPolicy.automated.enabled: false — treat that as manual so an
-	// intentionally-unsynced app isn't flagged for OutOfSync/Missing.
-	if enabled, ok, _ := unstructured.NestedBool(automated, "enabled"); ok && !enabled {
-		return false
-	}
-	return true
 }
 
 // argoErrorCondition returns the first status.conditions entry whose type names

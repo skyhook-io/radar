@@ -29,7 +29,7 @@ type manageGitOpsInput struct {
 	SyncOptions []string `json:"sync_options,omitempty" jsonschema:"sync only — Argo SyncOption strings, e.g. Replace=true, ServerSideApply=true."`
 
 	// ArgoCD rollback options (rollback only).
-	HistoryID int64 `json:"history_id,omitempty" jsonschema:"rollback only — history entry ID to roll back to (from get_resource Application status.history)."`
+	HistoryID *int64 `json:"history_id,omitempty" jsonschema:"rollback only — history entry ID to roll back to (from get_resource Application status.history; the first entry is 0). Auto-sync must be off."`
 }
 
 // GitOps tool handler
@@ -70,11 +70,11 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		case "terminate":
 			result, err = gitops.TerminateArgoSync(ctx, dynClient, input.Namespace, input.Name)
 		case "rollback":
-			if input.HistoryID <= 0 {
-				return nil, nil, fmt.Errorf("rollback requires history_id (positive integer from Application status.history[].id)")
+			if input.HistoryID == nil || *input.HistoryID < 0 {
+				return nil, nil, fmt.Errorf("rollback requires history_id (non-negative integer from Application status.history[].id)")
 			}
 			result, err = gitops.RollbackArgoApp(ctx, dynClient, input.Namespace, input.Name, gitops.ArgoRollbackOptions{
-				ID:     input.HistoryID,
+				ID:     *input.HistoryID,
 				Prune:  input.Prune,
 				DryRun: input.DryRun,
 			})
@@ -167,7 +167,7 @@ func validateGitOpsActionInput(action string, in manageGitOpsInput) error {
 	if !u.syncOptions && len(in.SyncOptions) > 0 {
 		rejected = append(rejected, "sync_options")
 	}
-	if !u.historyID && in.HistoryID != 0 {
+	if !u.historyID && in.HistoryID != nil {
 		rejected = append(rejected, "history_id")
 	}
 	if len(rejected) > 0 {
