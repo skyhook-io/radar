@@ -13,8 +13,12 @@ beforeEach(async () => {
   document.body.append(host)
   root = createRoot(host)
   function Probe() {
-    const { showError } = useToast()
-    return <button onClick={() => showError('Permission denied', undefined, 'opaque raw error')}>Show</button>
+    const { showError, showToast } = useToast()
+    return <>
+      <button onClick={() => showError('Permission denied', undefined, 'opaque raw error')}>Show</button>
+      <button onClick={() => showToast("Your role can't patch Argo CD Applications in gaps-r4-demo.", { type: 'info', id: 'gitops-denied:patch' })}>Denied shortcut</button>
+      <button onClick={() => showToast('Another denial', { type: 'info', id: 'gitops-denied:get' })}>Other shortcut</button>
+    </>
   }
   await act(async () => root.render(<ToastProvider><Probe /></ToastProvider>))
   await act(async () => host.querySelector('button')!.click())
@@ -43,9 +47,26 @@ it('keeps expanded error details, uses the toast tint, and copies the raw error'
   await advance(60000)
   expect(toast()).not.toBeNull()
   expect(host.querySelector('.bg-black\\/25')).not.toBeNull()
+  const chevron = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Error details'))!.querySelector('svg')!
+  expect(chevron.classList.contains('text-theme-text-tertiary')).toBe(false)
   await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Copy raw error')!.click())
   expect(clipboard.writeText).toHaveBeenCalledWith('opaque raw error')
   await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Dismiss notification"]')!.click())
   await advance(1000)
   expect(toast()).toBeNull()
+})
+it('reuses a toast id on repeated denied shortcuts and can show it again after dismissal', async () => {
+  const denied = () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Denied shortcut')!
+  await act(async () => { denied().click(); denied().click(); denied().click() })
+  expect(host.querySelectorAll('.backdrop-blur-sm')).toHaveLength(2)
+  const info = [...host.querySelectorAll<HTMLElement>('.backdrop-blur-sm')].find(item => item.textContent?.includes('gaps-r4-demo'))!
+  expect(info.querySelector('.whitespace-nowrap:last-child')!.textContent).toBe('gaps-r4-demo.')
+  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Other shortcut')!.click())
+  expect(host.querySelectorAll('.backdrop-blur-sm')).toHaveLength(3)
+  await act(async () => info.querySelector<HTMLButtonElement>('[aria-label="Dismiss notification"]')!.click())
+  await act(async () => denied().click())
+  expect(host.querySelectorAll('.backdrop-blur-sm')).toHaveLength(3)
+  await advance(1000)
+  await act(async () => denied().click())
+  expect(host.querySelectorAll('.backdrop-blur-sm')).toHaveLength(3)
 })

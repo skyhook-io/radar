@@ -58,6 +58,7 @@ import {
   fetchJSON,
   buildArgoResourceSyncVars,
   useApplyResource,
+  useCapabilities,
   useArgoRefresh,
   useArgoResourceValidation,
   useArgoResume,
@@ -441,7 +442,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [graphFullscreen, setGraphFullscreen] = useState(false)
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
-  const { disabledReasons: actionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
+  const { data: capabilities } = useCapabilities()
+  const { data: actionPermissions, disabledReasons: actionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
   const argoSync = useArgoSync()
   const argoResourceValidation = useArgoResourceValidation()
   const argoRefresh = useArgoRefresh()
@@ -569,7 +571,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     scope: 'gitops',
     handler: () => {
       const reason = actionDisabledReasons[isArgoApp ? 'sync' : 'reconcile']
-      if (reason) { showToast(reason, { type: 'info' }); return }
+      if (reason) { showToast(reason, { type: 'info', id: `gitops-denied:${reason}` }); return }
       if (effectiveSuspended || terminating || operationInProgress) return
       if (isArgoApp) openArgoSyncDialog({ scope: 'application' })
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
@@ -584,7 +586,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     scope: 'gitops',
     handler: () => {
       if (!isArgoApp) return
-      if (actionDisabledReasons.refresh) { showToast(actionDisabledReasons.refresh, { type: 'info' }); return }
+      if (actionDisabledReasons.refresh) { showToast(actionDisabledReasons.refresh, { type: 'info', id: `gitops-denied:${actionDisabledReasons.refresh}` }); return }
       setRefreshKind('normal')
       argoRefresh.mutate({ namespace, name, hard: false })
     },
@@ -598,7 +600,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     scope: 'gitops',
     handler: () => {
       if (!isArgoApp) return
-      if (actionDisabledReasons.refresh) { showToast(actionDisabledReasons.refresh, { type: 'info' }); return }
+      if (actionDisabledReasons.refresh) { showToast(actionDisabledReasons.refresh, { type: 'info', id: `gitops-denied:${actionDisabledReasons.refresh}` }); return }
       setRefreshKind('hard')
       argoRefresh.mutate({ namespace, name, hard: true })
     },
@@ -611,7 +613,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     category: 'GitOps',
     scope: 'gitops',
     handler: () => {
-      if (actionDisabledReasons.terminate) { showToast(actionDisabledReasons.terminate, { type: 'info' }); return }
+      if (actionDisabledReasons.terminate) { showToast(actionDisabledReasons.terminate, { type: 'info', id: `gitops-denied:${actionDisabledReasons.terminate}` }); return }
       if (isArgoApp && isRunning) argoTerminate.mutate({ namespace, name })
     },
     enabled: shortcutsEnabled && isArgoApp && isRunning,
@@ -756,6 +758,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       isFlux={isFlux}
       isFluxWorkload={isFluxWorkload}
       actionDisabledReasons={actionDisabledReasons}
+      actionPermissions={actionPermissions?.actions}
+      isCloudDeployment={capabilities?.deployment?.mode === 'cloud'}
       argo={argoHandlers}
       flux={fluxHandlers}
       activeTab={appView}

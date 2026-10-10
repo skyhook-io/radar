@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react'
+import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef, Fragment } from 'react'
 import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { DURATION_TOAST_EXIT } from '../../utils/animation'
 import { Check, Terminal, X, AlertTriangle, Info } from 'lucide-react'
@@ -19,6 +19,7 @@ interface Toast {
 
 interface ToastContextType {
   showToast: (message: string, options?: {
+    id?: string
     rawDetail?: string
     detail?: string
     command?: string
@@ -95,6 +96,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const showToast = useCallback((message: string, options?: {
+    id?: string
     rawDetail?: string
     detail?: string
     command?: string
@@ -103,10 +105,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     action?: Toast['action']
     onDetailClick?: () => void
   }) => {
-    const id = Math.random().toString(36).slice(2)
-    const toast: Toast = { id, message, ...options }
+    const id = options?.id ?? Math.random().toString(36).slice(2)
+    const toast: Toast = { message, ...options, id }
 
-    setToasts(prev => [...prev, toast])
+    setToasts(prev => prev.some(existing => existing.id === id) ? prev : [...prev, toast])
   }, [])
 
   const showCopied = useCallback((command: string, label?: string, event?: React.MouseEvent) => {
@@ -230,7 +232,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary')}>
-            {toast.message}
+            {toast.message.split(' ').map((word, index) => <Fragment key={index}><span className="whitespace-nowrap">{word}</span>{' '}</Fragment>)}
           </span>
           {!isError && !isNotice && !toast.action && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-400' : 'text-green-400')} />}
         </div>
@@ -248,18 +250,18 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               )}
               title="Click to open file"
             >
-              {toast.detail}
+              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="whitespace-nowrap">{word}</span>{' '}</Fragment>)}
             </button>
           ) : (
             <p className={clsx('mt-1 text-xs break-words', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
-              {toast.detail}
+              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="whitespace-nowrap">{word}</span>{' '}</Fragment>)}
             </p>
           )
         )}
         {toast.rawDetail && (
           <div className={clsx('mt-2 rounded p-2', isError ? 'bg-black/25 text-red-100' : 'bg-theme-surface text-theme-text-secondary')}>
             <button type="button" onClick={() => { setDetailsOpen(value => !value); setPersistent(true) }} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
-              <CollapseChevron open={detailsOpen} /> Error details
+              <CollapseChevron open={detailsOpen} inheritColor /> Error details
             </button>
             <Collapse open={detailsOpen} id={disclosure.panelId}>
               <button type="button" onClick={async () => { await navigator.clipboard.writeText(toast.rawDetail!); setCopied(true) }} className="mt-2 rounded border border-current px-2 py-1 text-xs">{copied ? 'Copied' : 'Copy raw error'}</button>

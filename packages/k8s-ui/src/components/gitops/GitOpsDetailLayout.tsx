@@ -155,6 +155,14 @@ export interface GitOpsDetailLayoutProps {
   isFluxWorkload: boolean  // Kustomization | HelmRelease — gates the
                             // "Sync with source" button
   actionDisabledReasons?: Record<string, string | undefined>
+  actionPermissions?: Record<string, {
+    allowed?: boolean
+    verb?: string
+    group?: string
+    resource?: string
+    namespace?: string
+  }>
+  isCloudDeployment?: boolean
   argo?: ArgoActionHandlers
   flux?: FluxActionHandlers
 
@@ -268,6 +276,9 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
   const [permissionsOpen, setPermissionsOpen] = useState(false)
   const permissionsDisclosure = useDisclosure(permissionsOpen)
   const denialReasons = [...new Set(Object.values(props.actionDisabledReasons || {}).filter((reason): reason is string => !!reason))]
+  const deniedGrants = [...new Set(Object.values(props.actionPermissions || {})
+    .filter(permission => permission.allowed === false)
+    .map(permission => `${permission.verb} ${permission.resource}${permission.group ? `.${permission.group}` : ''} in ${permission.namespace}`))]
 
   // Document title side effect — opt-in so hub-web can take ownership of
   // its own title format.
@@ -355,17 +366,21 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
               </div>
               {denialReasons.length > 0 && (
                 <div className="mt-2 text-xs text-theme-text-secondary">
-                  <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 hover:text-theme-text-primary">
+                  <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-primary">
                     Some actions restricted for your role · <span className="text-accent-text">Why?</span>
                     <CollapseChevron open={permissionsOpen} />
                   </button>
                   <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
                     <div className="mt-2 max-w-xl space-y-2 rounded border border-theme-border bg-theme-surface p-3">
                       {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
-                      <p>An admin can grant access with the chart's <code>cloud.defaultRbac.gitopsActions</code> setting or a RoleBinding allowing {isArgoApp ? 'get/patch on applications.argoproj.io' : `get/patch on ${identity.kind}.${identity.group}`} in <span className="whitespace-nowrap">{identity.namespace}</span>.{isFluxWorkload && ' Sync with source also needs get/patch on its source in the source namespace.'}</p>
+                      <p>An admin can grant access with {props.isCloudDeployment && <>the chart's <code>cloud.defaultRbac.gitopsActions</code> setting or </>}a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
+                      {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
+                        {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="whitespace-nowrap">{word}</span>{' '}</span>)}</li>)}
+                        {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
+                      </ul>}
                       <div className="flex flex-wrap gap-3">
                         <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
-                        <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#optional-cloud-owner-gitops-actions" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>
+                        {props.isCloudDeployment && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#optional-cloud-owner-gitops-actions" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
                       </div>
                     </div>
                   </Collapse>
