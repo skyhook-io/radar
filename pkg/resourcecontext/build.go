@@ -229,6 +229,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		exposes = append(exposes, rel.Ingresses...)
 		exposes = append(exposes, rel.Gateways...)
 		exposes = append(exposes, rel.Routes...)
+		exposes = append(exposes, rel.Backends...)
 		rc.Exposes = filterRefs(ctx, opts.AccessChecker,
 			toContextRefs(exposes),
 			"exposes", omitted)

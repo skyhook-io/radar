@@ -443,13 +443,16 @@ type Relationships struct {
 	ScaleTarget     *ResourceRef  `json:"scaleTarget,omitempty"`     // For HPA/ScaledObject: what it scales
 	PDBs            []ResourceRef `json:"pdbs,omitempty"`            // PodDisruptionBudgets protecting this workload
 	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload
-	Pods            []ResourceRef `json:"pods,omitempty"`            // For Service: pods it routes to
+	Pods            []ResourceRef `json:"pods,omitempty"`            // Core Pods routed to, or reached through Deployment/Node shortcuts
 
 	// Monitors are Prometheus Operator resources scraping this target.
 	Monitors []ResourceRef `json:"monitors,omitempty"`
 
 	// MonitorTargets are the resources this Prometheus Operator monitor scrapes.
 	MonitorTargets []ResourceRef `json:"monitorTargets,omitempty"`
+
+	// Backends are non-Pod targets this resource routes to or exposes.
+	Backends []ResourceRef `json:"backends,omitempty"`
 
 	// ServiceAccount is the ServiceAccount selected by this Pod or workload.
 	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`

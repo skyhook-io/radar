@@ -353,26 +353,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case EdgeManages:
 			// This resource manages/owns the target
 			rel.Children = append(rel.Children, *ref)
-		case EdgeExposes:
-			// This is a Service exposing something
-			rel.Pods = append(rel.Pods, *ref)
-		case EdgeRoutesTo:
-			// This is an Ingress, Gateway, route, or Service routing to something
-			targetKindLower := strings.ToLower(ref.Kind)
-			if kindLower == "gateway" || kindLower == "gateways" {
-				// Gateway routes to routes or services
-				if isRouteKind(targetKindLower) {
-					rel.Routes = append(rel.Routes, *ref)
-				} else {
-					rel.Services = append(rel.Services, *ref)
-				}
-			} else if kindLower == "ingress" || kindLower == "ingresses" ||
-				isRouteKind(kindLower) {
-				// Ingress/Route routes to Service
-				rel.Services = append(rel.Services, *ref)
-			} else {
-				// Service routes to Pod
+		case EdgeExposes, EdgeRoutesTo:
+			if ref.Kind == "Pod" && ref.Group == "" {
 				rel.Pods = append(rel.Pods, *ref)
+			} else {
+				rel.Backends = append(rel.Backends, *ref)
 			}
 		case EdgeUses:
 			source := refForNodeID(edge.Source)
@@ -698,7 +683,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// Return nil if no relationships found
 	// Collected without per-append checks: a PVC shared by thousands of
 	// workloads would make a linear duplicate scan quadratic.
-	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
 		*refs = uniqueResourceRefs(*refs)
 	}
 
@@ -707,7 +692,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
-		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
+		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && len(rel.Backends) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
 		return nil
 	}

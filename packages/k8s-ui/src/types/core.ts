@@ -658,6 +658,7 @@ export interface Relationships {
   dependents?: ResourceRef[]
   monitors?: ResourceRef[]
   monitorTargets?: ResourceRef[]
+  backends?: ResourceRef[]
   scaleTarget?: ResourceRef
   pdbs?: ResourceRef[]              // PodDisruptionBudgets protecting this workload
   networkPolicies?: ResourceRef[]   // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy variants selecting this workload
