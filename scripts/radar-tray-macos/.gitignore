@@ -1,0 +1,3 @@
+# Python bytecode caches (never commit: they embed machine-local absolute paths)
+__pycache__/
+*.pyc
