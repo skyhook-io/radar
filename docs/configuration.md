@@ -718,6 +718,41 @@ freshness; the existing scan memo can lag evidence changes by up to five seconds
 The per-resource audit endpoint remains a findings array and has no completeness
 metadata. Use the scan response or AI resource context when that distinction matters.
 
+### Storage review checks
+
+Cluster Audit includes three snapshot checks in **Efficiency**, at **Medium**
+posture priority (`warning` in the raw scan):
+
+| Check ID | Observation |
+|---|---|
+| `pvcNoConsumer` | A Bound PVC has no consumer observed among readable Pods and built-in workload templates. Findings include requested size, storage class, PVC age, bound PV and reclaim policy. |
+| `pvcLongPending` | A PVC created more than 24 hours ago is currently Pending. WaitForFirstConsumer claims are reported only when no Pod or built-in workload template references them. Creation age is not proof of time continuously spent Pending. |
+| `releasedPV` | A Released PV with Retain is kept after its claim was deleted. A Released PV with Delete is reported only when a Warning `VolumeFailedDelete` event for that PV's UID occurred within the last 24 hours; its latest message is included. |
+
+Consumer evidence includes Deployments, ReplicaSets, StatefulSets, DaemonSets,
+Jobs and CronJobs. Templates count at zero replicas, and retained StatefulSet
+claim-template ordinals count even after scaling down. Terminal Pods and Jobs
+also count conservatively while their objects exist. CRD consumers (including
+virtual machines) and external consumers can still need a claim: **no consumer
+observed is not a statement that storage is safe to delete**. The scan provides
+no deletion action, cost estimate, or history of nonuse.
+
+Unreadable or initially unsynced consumer inventories prevent absence findings
+and passing counts for that namespace (`pvc-consumers` in `missingInputs`).
+Bound claims also need readable PV inventory for the no-consumer check. PVs and
+StorageClasses require the caller's exact cluster-scoped list grant; unavailable
+inventories appear as `persistentvolumes` or `storageclasses`. If a referenced
+Pending claim's binding mode is unknown, that evaluation is excluded and
+`pvc-binding-mode` is reported.
+
+The namespace picker selects PVC subjects. Released PVs remain cluster-scoped
+and require their own grant. Events are drawn only from namespaces the caller
+may see. A visible warning proves a deletion failure even with partial Event
+coverage; absent evidence from an unreadable, partial or unsynced Event inventory
+contributes no passing count and reports `pv-deletion-events`. PV findings show
+time in Released when `status.lastPhaseTransitionTime` is present, otherwise
+explicitly show **PV age**. Neither is a history of how long the data was unneeded.
+
 ## Radar Cloud
 
 Radar is free and fully functional without an account. A Cloud button in the

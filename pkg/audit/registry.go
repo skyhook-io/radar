@@ -49,6 +49,8 @@ var (
 	refArgoCD          = Reference{Label: "Argo CD: Declarative GitOps", URL: "https://argo-cd.readthedocs.io/en/stable/"}
 	refHelm            = Reference{Label: "Helm: Charts", URL: "https://helm.sh/docs/topics/charts/"}
 	refCNPGBackup      = Reference{Label: "CloudNativePG: Backup", URL: "https://cloudnative-pg.io/documentation/current/backup/"}
+	refPV              = Reference{Label: "K8s: Persistent Volumes", URL: "https://kubernetes.io/docs/concepts/storage/persistent-volumes/"}
+	refStorageClass    = Reference{Label: "K8s: Storage Classes", URL: "https://kubernetes.io/docs/concepts/storage/storage-classes/"}
 )
 
 // CheckRegistry maps checkID → metadata for all built-in checks.
@@ -305,6 +307,30 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "No workload, Ingress, or supported controller configuration references this ConfigMap or Secret. Radar checks the reference kinds it understands; a consumer that reads it by name from code or from an unsupported controller would not be seen.",
 		Remediation: "Confirm nothing outside Radar's view still uses it, then either add the missing reference from the workload, Ingress, or controller that should consume it, or delete it. Keep a copy of a Secret before deleting it - its contents cannot be recovered.",
 		References:  []Reference{refConfigMaps, refSecrets},
+	},
+	"pvcNoConsumer": {
+		ID:          "pvcNoConsumer",
+		Title:       "PVC with no consumer observed",
+		Category:    CategoryEfficiency,
+		Description: "A Bound claim has no reference from the Pods or built-in workload templates Radar can see. StatefulSet generated claims count even at zero replicas. CRD consumers and intentional retained data may still need this storage.",
+		Remediation: "Confirm whether an operator, virtual machine, external consumer, or recovery plan still needs the data. Check the bound volume's reclaim policy and backups before deciding what to retain.",
+		References:  []Reference{refPV},
+	},
+	"pvcLongPending": {
+		ID:          "pvcLongPending",
+		Title:       "Long-Pending PVC",
+		Category:    CategoryEfficiency,
+		Description: "A claim created more than 24 hours ago is still Pending. WaitForFirstConsumer claims are reported only when no Pod or built-in workload template references them. This snapshot does not establish the duration of the Pending phase.",
+		Remediation: "Check whether a workload still needs the claim. For WaitForFirstConsumer, provisioning waits for a consuming Pod to be scheduled; otherwise inspect provisioning events, the StorageClass, and storage quota.",
+		References:  []Reference{refPV, refStorageClass},
+	},
+	"releasedPV": {
+		ID:          "releasedPV",
+		Title:       "Released persistent volume",
+		Category:    CategoryEfficiency,
+		Description: "A Released volume is retained after its claim was deleted, or a recent VolumeFailedDelete warning shows that deletion is failing. Capacity is provisioned storage, not a cost estimate.",
+		Remediation: "For Retain, confirm the data retention and recovery plan before reclaiming storage. For Delete failures, inspect the latest warning, storage controller, and provider permissions. Do not remove finalizers without understanding the cleanup they protect.",
+		References:  []Reference{refPV},
 	},
 
 	// ── Cross-resource / lifecycle (emit under Reliability) ────────────

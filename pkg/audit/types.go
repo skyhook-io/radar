@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -37,6 +38,17 @@ type CheckInput struct {
 	// ServiceAccounts is non-nil).
 	ServiceAccountsNamespace string
 	LimitRanges              []*corev1.LimitRange
+	PersistentVolumeClaims   []*corev1.PersistentVolumeClaim
+	PersistentVolumes        []*corev1.PersistentVolume
+	StorageClasses           []*storagev1.StorageClass
+	Events                   []*corev1.Event
+	// PVCConsumerNamespaces names namespaces with initially synced Pod and
+	// built-in workload inventories. Omitted namespaces cannot prove absence;
+	// CRD consumers are outside this check's coverage.
+	PVCConsumerNamespaces []string
+	// PVDeletionEventsComplete requires cluster-wide, initially synced Event
+	// coverage. Visible warnings establish failure even with partial coverage.
+	PVDeletionEventsComplete bool
 	// ClusterVersion is the K8s server version (e.g. "1.30"). Used for deprecated API checks.
 	ClusterVersion string
 	// ServedAPIs lists API group/versions the cluster still serves (e.g. ["apps/v1", "batch/v1beta1"]).

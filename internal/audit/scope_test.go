@@ -20,7 +20,7 @@ import (
 )
 
 func TestReadScopeSeparatesSubjectsAndSecretGrants(t *testing.T) {
-	scope := resolveReadScope([]string{"b", "a"}, []string{"b"}, nil, nil)
+	scope := resolveReadScope([]string{"b", "a"}, []string{"b"}, nil, func(string, string, string) bool { return false })
 	for _, tc := range []struct{ selected, want []string }{
 		{nil, []string{"a", "b"}}, {[]string{}, []string{"a", "b"}}, {[]string{"b", "outside"}, []string{"b"}}, {[]string{"outside"}, []string{}},
 	} {
@@ -38,7 +38,7 @@ func TestReadScopeSeparatesSubjectsAndSecretGrants(t *testing.T) {
 	if !scope.allows(schema.GroupVersionResource{Resource: "pods"}, "a") {
 		t.Fatal("namespace policy changed")
 	}
-	all := resolveReadScope(nil, nil, nil, nil)
+	all := resolveReadScope(nil, nil, nil, func(string, string, string) bool { return false })
 	none := resolveReadScope([]string{}, []string{}, nil, nil)
 	a, _ := json.Marshal(all)
 	n, _ := json.Marshal(none)
@@ -54,12 +54,15 @@ func TestReadScopeWatchedGrantsWithoutDiscovery(t *testing.T) {
 	other.Version = "v2"
 	scope := resolveReadScope([]string{"app"}, nil, []schema.GroupVersionResource{gvr, other, {Group: "pkg.crossplane.io", Resource: "providers"}}, func(group, resource, ns string) bool {
 		calls.Add(1)
+		if resource == "persistentvolumes" || resource == "storageclasses" {
+			return false
+		}
 		if group != gvr.Group || resource != gvr.Resource || ns != "" {
 			t.Errorf("unexpected SAR: %s/%s/%s", group, resource, ns)
 		}
 		return true
 	})
-	if calls.Load() != 1 || !scope.allows(gvr, "") {
+	if calls.Load() != 3 || !scope.allows(gvr, "") {
 		t.Fatal("watched grant lost or duplicated without discovery")
 	}
 	empty := resolveReadScope([]string{}, nil, []schema.GroupVersionResource{gvr}, func(string, string, string) bool {

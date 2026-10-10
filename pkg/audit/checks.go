@@ -160,6 +160,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// and on ScheduledBackup absence-authority — records nothing rather than
 	// reporting a missing input.
 	findings = append(findings, checkCNPGDeclarativeBackup(tr, input)...)
+	findings = append(findings, checkStorage(tr, input, time.Now())...)
 
 	return buildResults(findings, tr, missingInputs)
 }
