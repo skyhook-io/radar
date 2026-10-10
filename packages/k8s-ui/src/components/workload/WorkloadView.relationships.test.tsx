@@ -16,3 +16,12 @@ describe('workload monitoring projection', () => {
     expect(html).toContain('scraper')
   })
 })
+
+
+describe('workload upstream projection', () => {
+  it('keeps other routing sources visible as entrypoints', () => {
+    const html = renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload} relationships={{ routedFrom: [{ kind: 'Broker', group: 'eventing.knative.dev', namespace: 'demo', name: 'messages' }] }} />)
+    expect(html).toContain('Entry point resources')
+    expect(html).toContain('messages')
+  })
+})

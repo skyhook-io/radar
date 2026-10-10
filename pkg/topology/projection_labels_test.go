@@ -101,3 +101,37 @@ func TestProjectionBackendsAreNotPods(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectionIncomingExposesGroups(t *testing.T) {
+	for _, source := range []struct{ kind, group, field string }{
+		{"Service", "", "services"}, {"Service", "serving.knative.dev", "routedFrom"},
+		{"TraefikService", "traefik.io", "routedFrom"}, {"Broker", "eventing.knative.dev", "routedFrom"},
+		{"Gateway", "networking.istio.io", "routedFrom"}, {"IngressRoute", "traefik.io", "routes"},
+		{"HTTPProxy", "projectcontour.io", "routes"}, {"VirtualService", "networking.istio.io", "routes"},
+		{"Route", "serving.knative.dev", "routes"}, {"IngressRoute", "foreign.example", "routedFrom"},
+	} {
+		t.Run(source.group+"/"+source.kind, func(t *testing.T) {
+			topo := &Topology{Nodes: []Node{
+				{ID: "source/demo/upstream", Kind: NodeKind(source.kind), Name: "upstream", Data: map[string]any{"namespace": "demo", "apiVersion": source.group + "/v1"}},
+				{ID: "service/demo/web", Kind: KindService, Name: "web", Data: map[string]any{"namespace": "demo"}},
+			}, Edges: []Edge{{Source: "source/demo/upstream", Target: "service/demo/web", Type: EdgeExposes}}}
+			if source.group == "" {
+				topo.Nodes[0].Data["apiVersion"] = "v1"
+			}
+			rel := GetRelationships("Service", "demo", "web", topo, nil, nil)
+			if rel == nil {
+				t.Fatal("missing incoming exposes")
+			}
+			groups := map[string][]ResourceRef{"services": rel.Services, "routes": rel.Routes, "routedFrom": rel.RoutedFrom}
+			for field, refs := range groups {
+				want := 0
+				if field == source.field {
+					want = 1
+				}
+				if len(refs) != want {
+					t.Errorf("%s = %+v, want %d", field, refs, want)
+				}
+			}
+		})
+	}
+}

@@ -245,13 +245,21 @@ func isRouteKind(kindLower string) bool {
 	return false
 }
 
-func isServiceEntrypointRouteKind(kindLower string) bool {
-	if isRouteKind(kindLower) {
-		return true
+func isServiceEntrypointRoute(ref *ResourceRef) bool {
+	if ref == nil {
+		return false
 	}
-	switch kindLower {
-	case "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
-		return true
+	switch ref.Group {
+	case "gateway.networking.k8s.io":
+		return isRouteKind(strings.ToLower(ref.Kind))
+	case "serving.knative.dev":
+		return ref.Kind == "Route"
+	case "traefik.io", "traefik.containo.us":
+		return ref.Kind == "IngressRoute" || ref.Kind == "IngressRouteTCP" || ref.Kind == "IngressRouteUDP"
+	case "networking.istio.io":
+		return ref.Kind == "VirtualService"
+	case "projectcontour.io":
+		return ref.Kind == "HTTPProxy"
 	}
 	return false
 }
@@ -415,10 +423,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// Something manages/owns this resource
 			rel.Owner = ref
 		case EdgeExposes:
-			if isServiceEntrypointRouteKind(strings.ToLower(ref.Kind)) {
+			if isServiceEntrypointRoute(ref) {
 				rel.Routes = appendResourceRef(rel.Routes, *ref)
-			} else {
+			} else if ref.Kind == "Service" && ref.Group == "" {
 				rel.Services = appendResourceRef(rel.Services, *ref)
+			} else {
+				rel.RoutedFrom = appendResourceRef(rel.RoutedFrom, *ref)
 			}
 		case EdgeRoutesTo:
 			// An Ingress, Gateway, route, or Service routes to this resource
@@ -683,7 +693,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// Return nil if no relationships found
 	// Collected without per-append checks: a PVC shared by thousands of
 	// workloads would make a linear duplicate scan quadratic.
-	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.RoutedFrom, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
 		*refs = uniqueResourceRefs(*refs)
 	}
 
@@ -692,7 +702,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
-		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && len(rel.Backends) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
+		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && len(rel.Backends) == 0 && len(rel.RoutedFrom) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
 		return nil
 	}
@@ -725,7 +735,7 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 			case "gateway":
 				rel.Gateways = appendResourceRef(rel.Gateways, *ref)
 			default:
-				if isServiceEntrypointRouteKind(kind) {
+				if isServiceEntrypointRoute(ref) {
 					rel.Routes = appendResourceRef(rel.Routes, *ref)
 				}
 			}
