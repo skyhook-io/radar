@@ -110,27 +110,31 @@ func FindPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return "", fmt.Errorf("no pods found matching selector for service %s", serviceName)
 	}
 
-	// A pod being deleted, or one on a node that stopped reporting, can still
-	// read Running, and a forward to it hangs until it times out. A ready pod
-	// is taken first; a running one that is not ready only when none is.
-	var notReady string
-	for i := range pods.Items {
-		pod := &pods.Items[i]
+	if pods := ServingPods(pods.Items); len(pods) > 0 {
+		return pods[0].Name, nil
+	}
+	return "", fmt.Errorf("no running pod found for service %s", serviceName)
+}
+
+// ServingPods returns the pods a forward can be pointed at, best first: ready
+// pods, then running pods that are not ready. A pod being deleted can still
+// read Running, and a forward to it can hang until it times out, so none is
+// returned. A pod that is not ready is kept because readiness can fail for a
+// reason unrelated to the forwarded port.
+func ServingPods(pods []corev1.Pod) []*corev1.Pod {
+	var ready, notReady []*corev1.Pod
+	for i := range pods {
+		pod := &pods[i]
 		if pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
 			continue
 		}
 		if podReady(pod) {
-			return pod.Name, nil
-		}
-		if notReady == "" {
-			notReady = pod.Name
+			ready = append(ready, pod)
+		} else {
+			notReady = append(notReady, pod)
 		}
 	}
-	if notReady != "" {
-		return notReady, nil
-	}
-
-	return "", fmt.Errorf("no running pod found for service %s", serviceName)
+	return append(ready, notReady...)
 }
 
 func podReady(pod *corev1.Pod) bool {
