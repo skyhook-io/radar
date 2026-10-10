@@ -2342,6 +2342,6 @@ describe("Node lifecycle in Capacity", () => {
     expect(html).toMatch(/>2<\/div><div[^>]*>Ready<\/div>/);
     expect(html).toMatch(/>1<\/div><div[^>]*>Not ready<\/div>/);
     expect(html).toMatch(/>2<\/div><div[^>]*>Removing<\/div>/);
-    expect(html).toContain("1 removing node has critical pressure or prolonged removal.");
+    expect(html.replace(/<!-- -->/g, "")).toContain("1 removing node has critical pressure or prolonged removal.");
   });
 });
