@@ -72,11 +72,26 @@ type MatchSnippet struct {
 	Snippet string `json:"snippet"`
 }
 
+type UnsearchedKind struct {
+	Kind   string `json:"kind"`
+	Group  string `json:"group"`
+	Reason string `json:"reason"`
+}
+
+type FailedObject struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
 // Result is the full response shape for a search request.
 type Result struct {
-	Hits     []Hit `json:"hits"`
-	Total    int   `json:"total"`    // number of hits returned (after limit)
-	Searched int   `json:"searched"` // approx. number of objects scanned
+	Partial             bool             `json:"partial"`
+	Unsearched          []UnsearchedKind `json:"unsearched"`
+	FilterFailedObjects []FailedObject   `json:"filter_failed_objects,omitempty"`
+	Hits                []Hit            `json:"hits"`
+	Total               int              `json:"total"`    // number of hits returned (after limit)
+	Searched            int              `json:"searched"` // approx. number of objects scanned
 	// TotalMatched is the count of hits BEFORE truncation by Limit.
 	// Equals Total when no truncation occurred. Surfaced so callers
 	// (the hub's fleet aggregator, agents, the frontend) can report honest

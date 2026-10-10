@@ -1,6 +1,10 @@
 package search
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+)
 
 // Site scoring weights. Tuned by intuition; revisit when telemetry exists.
 const (
@@ -230,6 +234,9 @@ func kindMatches(kind string, filters []string) bool {
 	plural := low + "s"
 	for _, f := range filters {
 		fLow := strings.ToLower(f)
+		if gvr, ok := k8s.BuiltinGVRAnyGroup(kind); ok && fLow == gvr.Resource {
+			return true
+		}
 		if fLow == low || fLow == plural || fLow+"s" == plural || fLow == strings.TrimSuffix(low, "s") {
 			return true
 		}

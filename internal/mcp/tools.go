@@ -437,8 +437,9 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
-			"summaryContext. Use CEL filter for structural predicates. Searches typed kinds " +
-			"plus warmed CRDs; cold CRDs need list_resources first.",
+			"summaryContext, partial and unsearched coverage. Explicit kind: queries warm cold CRDs; " +
+			"broad scans report them. CEL examples: has(object.subjects); \"app\" in labels; " +
+			"kind == \"Application\" && has(spec.sources) && spec.sources.exists(s, has(s.repoURL)).",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -702,7 +703,7 @@ type searchInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace to scope the search; equivalent to an inline ns: modifier. When set, overrides all inline namespace modifiers"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations. Guard fields with has(object.subjects) or has(spec.sources); check map keys with '\"app\" in labels'. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
 	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare hits"`
 }
 
@@ -3167,7 +3168,7 @@ func intersectAllowedNamespaces(allowed, requested []string) []string {
 
 // mcpSensitiveSearchKinds is the MCP mirror of the REST sensitiveSearchKinds —
 // cluster-scoped kinds that need their own list-SAR per user. Secrets are
-// namespaced and handled by mcpSearchSecretsRBAC instead, which supports
+// namespaced and handled by mcpSearchKindRBAC instead, which supports
 // per-namespace permission.
 var mcpSensitiveSearchKinds = []struct {
 	Kind     string
@@ -3219,20 +3220,14 @@ func mcpSearchSkipKinds(ctx context.Context) map[string]bool {
 	return out
 }
 
-// mcpSearchSecretsRBAC mirrors Server.computeSearchSecretsRBAC for MCP. See
-// that function for the three-case semantics. scanNamespaces is the
-// effective scan scope (intersection of the user's RBAC-allowed namespaces
-// and any `ns:` modifier in the query) — nil means a true cluster-wide scan.
-//
-// Cached canI hits short-circuit before the live-client path, so a seeded
-// test cache authorizes without needing a real K8s client.
-func mcpSearchSecretsRBAC(ctx context.Context, scanNamespaces []string) (decision string, scopedNamespaces []string) {
+// mcpSearchKindRBAC mirrors the REST exact-kind gate for namespaced searches.
+func mcpSearchKindRBAC(ctx context.Context, scanNamespaces []string, group, resource string) (decision string, scopedNamespaces []string) {
 	if user, _ := resolveUserPerms(ctx); user == nil {
 		return "", nil
 	}
 
 	if scanNamespaces == nil {
-		if canReadInNamespace(ctx, "", "secrets", "", "list") {
+		if canReadInNamespace(ctx, group, resource, "", "list") {
 			return "", nil
 		}
 		return "skip", nil
@@ -3242,7 +3237,7 @@ func mcpSearchSecretsRBAC(ctx context.Context, scanNamespaces []string) (decisio
 	}
 	scoped := make([]string, 0, len(scanNamespaces))
 	for _, ns := range scanNamespaces {
-		if canReadInNamespace(ctx, "", "secrets", ns, "list") {
+		if canReadInNamespace(ctx, group, resource, ns, "list") {
 			scoped = append(scoped, ns)
 		}
 	}
@@ -3266,14 +3261,13 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		parsed.NSFilter = []string{input.Namespace}
 	}
 	allowed := filterNamespacesForUser(ctx, nil)
-	if allowed != nil && len(allowed) == 0 {
-		return toJSONResult(search.Result{Hits: []search.Hit{}})
-	}
 	scanNamespaces := intersectAllowedNamespaces(allowed, parsed.NSFilter)
-	if allowed != nil && len(scanNamespaces) == 0 {
-		return toJSONResult(search.Result{Hits: []search.Hit{}})
+	namespacePartial := len(parsed.NSFilter) > 0 && len(scanNamespaces) < len(parsed.NSFilter)
+	namespaceExcluded := allowed != nil && len(scanNamespaces) == 0
+	if !namespaceExcluded {
+		parsed.NSFilter = scanNamespaces
 	}
-	parsed.NSFilter = scanNamespaces
+
 	var include search.IncludeMode
 	switch input.Include {
 	case "", "summary":
@@ -3287,26 +3281,25 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	}
 
 	skipKinds := mcpSearchSkipKinds(ctx)
-	// Secrets: per-namespace SAR fanout. See REST handleSearch for rationale.
-	// scanNamespaces (not allowed) is the SAR-fanout input — a user with
-	// AllowedNamespaces==nil (cluster-wide-pods sentinel) who constrains
-	// with `ns:team-a` should fanout over team-a, not run a cluster-scope
-	// `list secrets` SAR they may not have.
-	var namespacesByKind map[string][]string
-	switch decision, scoped := mcpSearchSecretsRBAC(ctx, scanNamespaces); decision {
-	case "skip":
-		if skipKinds == nil {
-			skipKinds = make(map[string]bool)
+	namespacesByKind := make(map[string][]string)
+	for _, kind := range search.NamespacedSearchKinds {
+		switch decision, scoped := mcpSearchKindRBAC(ctx, scanNamespaces, kind.Group, kind.Resource); decision {
+		case "skip":
+			if skipKinds == nil {
+				skipKinds = make(map[string]bool)
+			}
+			skipKinds[kind.Kind] = true
+		case "override":
+			namespacesByKind[kind.Kind] = scoped
 		}
-		skipKinds["Secret"] = true
-	case "override":
-		// scoped ⊆ scanNamespaces ⊆ parsed.NSFilter already (the SAR fanout
-		// iterates scanNamespaces, which is the upstream intersection of
-		// allowed and parsed.NSFilter). Use the SAR result directly.
-		namespacesByKind = map[string][]string{"Secret": scoped}
 	}
 
 	opts := search.Options{
+		NamespaceExcluded: namespaceExcluded,
+		NamespacePartial:  namespacePartial,
+		CanReadNamespaced: func(kind, group, resource, namespace string) bool {
+			return canReadInNamespace(ctx, group, resource, namespace, "list")
+		},
 		Limit:            input.Limit,
 		Include:          include,
 		Namespaces:       scanNamespaces,

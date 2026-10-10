@@ -16,12 +16,12 @@ import (
 // namespace doesn't imply read access to Node, PersistentVolume,
 // StorageClass, or Namespace metadata — these need their own cluster-scope
 // SAR. Secrets are namespaced and handled separately by
-// computeSearchSecretsRBAC, which supports per-namespace permission.
+// computeSearchKindRBAC, which supports per-namespace permission.
 //
 // The walker in internal/search consults Options.SkipKinds, populated by SAR
 // per (user, kind) at cluster scope. Users without `list X` at cluster scope
 // have X dropped from the scan — including for explicit `kind:X` queries,
-// which return zero hits silently.
+// which report the omitted kinds as coverage gaps.
 var sensitiveSearchKinds = []struct {
 	Kind     string // singular Kind for SkipKinds map
 	Resource string // plural for SAR ResourceAttributes
@@ -95,33 +95,15 @@ func (s *Server) computeSearchSkipKinds(r *http.Request) map[string]bool {
 	return skip
 }
 
-// computeSearchSecretsRBAC decides how /api/search should treat Secrets for
-// the calling user. scanNamespaces is the effective set of namespaces the
-// walker would scan absent per-kind RBAC — the intersection of the user's
-// RBAC-allowed namespaces and any `ns:` modifier in the query. Three cases:
-//
-//   - Auth disabled (no user on context): returns ("", nil). SA RBAC at the
-//     cache layer is the only gate.
-//   - Cluster-wide scan (scanNamespaces == nil): the user is reading at
-//     cluster scope (cluster-wide-namespace sentinel from DiscoverNamespaces
-//     stage 1 — list-pods cluster-wide — AND no `ns:` modifier narrowed it).
-//     Cluster-wide list-pods does NOT imply cluster-wide list-secrets, so
-//     gate via a `list secrets` SAR at cluster scope. Returns ("skip", nil)
-//     when denied; ("", nil) when allowed (cluster-wide informer scan runs).
-//   - Namespace-scoped scan (scanNamespaces != nil): per-namespace SAR
-//     fanout. Returns ("skip", nil) when the user can't list secrets in any
-//     scan namespace; ("override", subset) when they can in a subset (walker
-//     uses NamespacesByKind for Secrets only).
-//
-// Fail-closed on SAR API errors at any step — a transient apiserver hiccup
-// drops Secret rather than leaking through.
-func (s *Server) computeSearchSecretsRBAC(r *http.Request, scanNamespaces []string) (decision string, scopedNamespaces []string) {
+// computeSearchKindRBAC narrows namespaced scans using the caller's exact
+// list permission; namespace visibility alone does not authorize these kinds.
+func (s *Server) computeSearchKindRBAC(r *http.Request, scanNamespaces []string, group, resource string) (decision string, scopedNamespaces []string) {
 	if auth.UserFromContext(r.Context()) == nil {
 		return "", nil
 	}
 
 	if scanNamespaces == nil {
-		if s.canRead(r, "", "secrets", "", "list") {
+		if s.canRead(r, group, resource, "", "list") {
 			return "", nil
 		}
 		return "skip", nil
@@ -133,7 +115,7 @@ func (s *Server) computeSearchSecretsRBAC(r *http.Request, scanNamespaces []stri
 
 	scoped := make([]string, 0, len(scanNamespaces))
 	for _, ns := range scanNamespaces {
-		if s.canRead(r, "", "secrets", ns, "list") {
+		if s.canRead(r, group, resource, ns, "list") {
 			scoped = append(scoped, ns)
 		}
 	}

@@ -12,7 +12,7 @@
 // Two compile entry points:
 //
 //	CompileObjectFilter — bindings shaped to a K8s object:
-//	  kind, apiVersion, metadata, spec, status, labels, annotations
+//	  object, kind, apiVersion, metadata, spec, status, labels, annotations
 //
 //	CompileIssueFilter — bindings shaped to an issues.Issue:
 //	  severity, source, category, category_group, kind, group, ns,
@@ -82,6 +82,7 @@ func (f *Filter) Match(activation map[string]any) (bool, error) {
 // drift. Hub's TestCelEnv_ObjectDeclarations exercises the bindings
 // from its side; radar's filter_test.go does the same here.
 var envObject = mustNewEnv(
+	cel.Variable("object", cel.DynType),
 	cel.Variable("kind", cel.StringType),
 	cel.Variable("apiVersion", cel.StringType),
 	cel.Variable("metadata", cel.DynType),

@@ -51,18 +51,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	} else {
 		allowed = s.parseNamespacesForUser(r)
 	}
-	if noNamespaceAccess(allowed) {
-		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
-		return
-	}
+	namespaceExcluded := noNamespaceAccess(allowed)
 	scanNamespaces := intersectNamespaces(allowed, parsed.NSFilter)
-	if allowed != nil && len(scanNamespaces) == 0 {
-		// User is namespace-restricted but their `ns:` filter doesn't
-		// intersect — empty result without scanning.
-		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
-		return
+	namespacePartial := len(parsed.NSFilter) > 0 && len(scanNamespaces) < len(parsed.NSFilter)
+	namespaceExcluded = namespaceExcluded || (allowed != nil && len(scanNamespaces) == 0)
+	if !namespaceExcluded {
+		parsed.NSFilter = scanNamespaces
 	}
-	parsed.NSFilter = scanNamespaces
 
 	include, err := parseInclude(r.URL.Query().Get("include"))
 	if err != nil {
@@ -70,30 +65,25 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skipKinds := s.computeSearchSkipKinds(r)
-	// Secrets are namespaced and get per-namespace RBAC treatment so a user
-	// with per-namespace Secret access (e.g. a Role-bound viewer) sees those
-	// rows in search instead of having Secret dropped at cluster scope.
-	// scanNamespaces (not allowed) is the right input: a user with
-	// AllowedNamespaces==nil (cluster-wide-pods sentinel) who queries
-	// `ns:team-a` should get per-namespace fanout over team-a, not a
-	// cluster-scope `list secrets` SAR — they may have list-secrets in
-	// team-a but not cluster-wide. nil scanNamespaces (truly cluster-wide
-	// query) still routes to the cluster-scope SAR branch.
-	var namespacesByKind map[string][]string
-	switch decision, scoped := s.computeSearchSecretsRBAC(r, scanNamespaces); decision {
-	case "skip":
-		if skipKinds == nil {
-			skipKinds = make(map[string]bool)
+	namespacesByKind := make(map[string][]string)
+	for _, kind := range search.NamespacedSearchKinds {
+		switch decision, scoped := s.computeSearchKindRBAC(r, scanNamespaces, kind.Group, kind.Resource); decision {
+		case "skip":
+			if skipKinds == nil {
+				skipKinds = make(map[string]bool)
+			}
+			skipKinds[kind.Kind] = true
+		case "override":
+			namespacesByKind[kind.Kind] = scoped
 		}
-		skipKinds["Secret"] = true
-	case "override":
-		// scoped ⊆ scanNamespaces ⊆ parsed.NSFilter already (the SAR fanout
-		// iterates scanNamespaces, which is the upstream intersection of
-		// allowed and parsed.NSFilter). Use the SAR result directly.
-		namespacesByKind = map[string][]string{"Secret": scoped}
 	}
 
 	opts := search.Options{
+		NamespaceExcluded: namespaceExcluded,
+		NamespacePartial:  namespacePartial,
+		CanReadNamespaced: func(kind, group, resource, namespace string) bool {
+			return auth.UserFromContext(r.Context()) == nil || s.canRead(r, group, resource, namespace, "list")
+		},
 		Limit:      parseLimit(r.URL.Query().Get("limit")),
 		Include:    include,
 		Namespaces: scanNamespaces,

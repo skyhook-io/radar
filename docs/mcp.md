@@ -491,6 +491,47 @@ API group is part of a resource's identity. Radar infers the canonical group for
 
 This selects the Argo Rollout workload path; it does not imply that `diagnose` supports arbitrary custom resource shapes.
 
+### Search coverage and CEL object filters
+
+`search` scans typed resources (including RBAC, ServiceAccounts, NetworkPolicies,
+IngressClasses, LimitRanges and ResourceQuotas) and discovered dynamic kinds,
+including admission webhook configurations. Broad searches report unwatched kinds
+as `cold`; an explicit `kind:` query starts the existing bounded on-demand watch
+and waits briefly for initial sync. If it remains incomplete, retry after `syncing`.
+Search results never imply absence for an omitted kind.
+
+Every response includes `partial` and an `unsearched` array of
+`{kind, group, reason}`. Core resources use `group: ""`. Reasons distinguish
+caller `rbac_denied` (including failed permission checks), collector `sa_forbidden`,
+`cold`, `syncing`, `sync_failed`, `not_indexed`, `list_error`, `namespace_scope`
+(collector coverage), and `namespace_excluded` (caller scope/selection). An entry
+can describe an incompletely searched kind: authorized namespaces still contribute
+hits. Unavailable discovery is represented by `kind: "*"`, `group: ""`.
+Coverage is bounded by the discovered catalog; it cannot describe undiscovered APIs.
+Search applies exact caller list checks to the added namespaced kinds and dynamic
+kinds before scanning or warming; cluster-scoped kinds have their own list gate.
+
+CEL exposes `object` (the sanitized detail object) alongside the existing `kind`,
+`apiVersion`, `metadata`, `spec`, `status`, `labels` and `annotations` shortcuts.
+Shortcuts project from that same object; detail minification removes noise and
+redacts sensitive values. Core Secret `data`/`stringData` are structurally absent.
+`metadata.namespace` is `""` for cluster-scoped objects. Other missing fields retain
+CEL's normal error semantics; no optional-type extensions are enabled.
+
+Examples:
+
+- RBAC top-level fields: `has(object.subjects) && object.subjects.exists(s, s.kind == "ServiceAccount")`
+- Label membership: `"app" in labels && labels["app"] == "cart"`
+- Multi-source Argo: `kind == "Application" && has(spec.sources) && spec.sources.exists(s, has(s.repoURL) && s.repoURL.contains("github.com"))`
+
+`has()` takes a field selection (`has(object.subjects)`), not a bare variable
+(`has(subjects)`). Use map membership for label keys. Evaluation/activation errors
+set `partial: true`, preserve `filter_errors` and `filter_error_sample`, and return
+`filter_failed_objects`: the first 20 `{kind, namespace, name}` refs, with empty
+namespace at cluster scope. Surviving hits remain available. A valid false predicate
+is an ordinary non-match. Hit-limit truncation uses `total_matched`, independently
+of coverage partiality.
+
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
 Resource context distinguishes observed dependency references (`dependencies` and
