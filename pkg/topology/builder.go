@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -8074,16 +8075,18 @@ func matchesHelmRelease(labels map[string]string, hrName, hrNamespace string) bo
 	return false
 }
 
-// parseIstioHost parses an Istio service host reference into service name and namespace.
-// Istio hosts can be: "reviews", "reviews.default", "reviews.default.svc.cluster.local"
-// Returns (serviceName, namespace). If no namespace is found, defaultNs is used.
+// Istio expands only hosts without dots. Radar has no discovered cluster domain,
+// so dotted hosts are joined only for the default Kubernetes service domain.
 func parseIstioHost(host, defaultNs string) (string, string) {
 	parts := strings.Split(host, ".")
-	if len(parts) == 1 {
-		return parts[0], defaultNs
+	if len(parts) == 1 && len(validation.IsDNS1123Label(host)) == 0 {
+		return host, defaultNs
 	}
-	// "reviews.default" or "reviews.default.svc.cluster.local"
-	return parts[0], parts[1]
+	if len(parts) == 5 && parts[2] == "svc" && parts[3] == "cluster" && parts[4] == "local" &&
+		len(validation.IsDNS1123Label(parts[0])) == 0 && len(validation.IsDNS1123Label(parts[1])) == 0 {
+		return parts[0], parts[1]
+	}
+	return "", ""
 }
 
 func resolveKnativeRef(apiVersion, kind, ns, name string, serviceIDs, knativeServiceIDs, brokerIDs, channelIDs map[string]string) string {
