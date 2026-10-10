@@ -857,9 +857,20 @@ func TestGroupApplications_EntrypointRefsDeduplicateAndClassify(t *testing.T) {
 }
 
 func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
+	// Route kinds are custom resources; the builder records their apiVersion.
+	apiVersions := map[string]string{
+		"HTTPRoute":      "gateway.networking.k8s.io/v1",
+		"IngressRoute":   "traefik.io/v1alpha1",
+		"VirtualService": "networking.istio.io/v1",
+		"HTTPProxy":      "projectcontour.io/v1",
+	}
 	node := func(kind, ns, name string) topology.Node {
 		id := strings.ToLower(kind) + "/" + ns + "/" + name
-		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: map[string]any{"namespace": ns}}
+		data := map[string]any{"namespace": ns}
+		if apiVersion := apiVersions[kind]; apiVersion != "" {
+			data["apiVersion"] = apiVersion
+		}
+		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: data}
 	}
 	edge := func(src, dst string, typ topology.EdgeType) topology.Edge {
 		return topology.Edge{ID: src + "->" + dst, Source: src, Target: dst, Type: typ}
