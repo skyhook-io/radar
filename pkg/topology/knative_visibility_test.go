@@ -20,7 +20,8 @@ func TestTrafficInternetReachesOnlyPublicKnativeServices(t *testing.T) {
 		kinds:   map[schema.GroupVersionResource]string{ksvcGVR: "Service"},
 		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{ksvcGVR: {
 			ksvc("web", "https://web.team.example.com", nil),
-			ksvc("billing", "http://billing.team.svc.cluster.local", map[string]string{"networking.knative.dev/visibility": "cluster-local"}),
+			// The label alone decides, even before the Route publishes a private URL.
+			ksvc("billing", "https://billing.team.example.com", map[string]string{"networking.knative.dev/visibility": "cluster-local"}),
 			// Made private through its Route: only the published URL says so.
 			ksvc("jobs", "http://jobs.team.svc.cluster.local", nil),
 		}},
