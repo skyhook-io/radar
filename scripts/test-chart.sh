@@ -62,6 +62,29 @@ assert_contains 'MY_DEPLOYMENT_NAME'                "identity ships for read-onl
 assert_not_contains '--opencost-currency='          "default OpenCost currency flag omitted"
 echo
 
+render "VictoriaMetrics defaults — no collection of credential-bearing objects"
+assert_not_contains 'operator.victoriametrics.com'    "VictoriaMetrics collector grant is opt-in"
+echo
+
+render "VictoriaMetrics enabled — only reviewed workload resources" --set rbac.crdGroups.victoriaMetrics=true
+assert_contains 'apiGroups: \["operator.victoriametrics.com"\]' "VictoriaMetrics operator group"
+assert_contains 'resources: \["vmagents", "vmclusters", "vmsingles"\]' "finite workload allowlist"
+assert_not_contains 'resources:.*(vmusers|vmauths|vmalerts|vmalertmanagers|vmrules|vmscrapeconfigs)' "no credential/configuration kinds"
+echo
+
+render "VictoriaMetrics disabled — no operator grant" --set rbac.crdGroups.victoriaMetrics=false
+assert_not_contains 'operator.victoriametrics.com'    "explicit false preserved"
+echo
+
+render "VictoriaMetrics absent — no operator grant" --set rbac.crdGroups.victoriaMetrics=null
+assert_not_contains 'operator.victoriametrics.com'    "absent key stays off"
+echo
+
+render "Wildcard collection overrides VictoriaMetrics opt-out" --set rbac.crdGroups.all=true --set rbac.crdGroups.victoriaMetrics=false
+assert_contains 'apiGroups: \["\*"\]'               "wildcard includes every API group"
+assert_contains 'resources: \["\*"\]'               "wildcard includes core Secrets and excluded CRDs"
+echo
+
 render "cost.currency — explicit OpenCost currency label" --set cost.currency=GBP
 assert_contains '--opencost-currency=GBP'           "OpenCost currency flag rendered"
 echo

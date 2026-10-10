@@ -233,7 +233,7 @@ rules:
 
   # CRD access
   {{- if .Values.rbac.crdGroups.all }}
-  # Wildcard access to all CRDs (rbac.crdGroups.all=true)
+  # Wildcard reads include core Secrets and credential-bearing CRDs.
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
@@ -534,6 +534,11 @@ rules:
   {{- if .Values.rbac.crdGroups.verticalPodAutoscaler }}
   - apiGroups: ["autoscaling.k8s.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.victoriaMetrics }}
+  - apiGroups: ["operator.victoriametrics.com"]
+    resources: ["vmagents", "vmclusters", "vmsingles"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- end }}

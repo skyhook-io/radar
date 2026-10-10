@@ -1,0 +1,54 @@
+suite: VictoriaMetrics collector RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: does not collect credential-bearing VictoriaMetrics objects by default
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+
+  - it: grants only the three reviewed workload kinds when explicitly enabled
+    set:
+      rbac.crdGroups.victoriaMetrics: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["operator.victoriametrics.com"]
+            resources: ["vmagents", "vmclusters", "vmsingles"]
+            verbs: ["get", "list", "watch"]
+      - equal:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")].resources
+          value: ["vmagents", "vmclusters", "vmsingles"]
+      - notContains:
+          path: rules[*].apiGroups
+          content: "*"
+
+  - it: respects an explicit opt-out
+    set:
+      rbac.crdGroups.victoriaMetrics: false
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+
+  - it: creates no collector role when chart RBAC is disabled
+    set:
+      rbac.create: false
+      rbac.crdGroups.victoriaMetrics: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: retains the explicit wildcard override including excluded resources
+    set:
+      rbac.crdGroups.all: true
+      rbac.crdGroups.victoriaMetrics: false
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
