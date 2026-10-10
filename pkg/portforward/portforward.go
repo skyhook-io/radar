@@ -110,13 +110,40 @@ func FindPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return "", fmt.Errorf("no pods found matching selector for service %s", serviceName)
 	}
 
-	for _, pod := range pods.Items {
-		if pod.Status.Phase == corev1.PodRunning {
-			return pod.Name, nil
+	if pods := ServingPods(pods.Items); len(pods) > 0 {
+		return pods[0].Name, nil
+	}
+	return "", fmt.Errorf("no running pod found for service %s", serviceName)
+}
+
+// ServingPods returns the pods a forward can be pointed at, best first: ready
+// pods, then running pods that are not ready. A pod being deleted can still
+// read Running, and a forward to it can hang until it times out, so none is
+// returned. A pod that is not ready is kept because readiness can fail for a
+// reason unrelated to the forwarded port.
+func ServingPods(pods []corev1.Pod) []*corev1.Pod {
+	var ready, notReady []*corev1.Pod
+	for i := range pods {
+		pod := &pods[i]
+		if pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
+			continue
+		}
+		if podReady(pod) {
+			ready = append(ready, pod)
+		} else {
+			notReady = append(notReady, pod)
 		}
 	}
+	return append(ready, notReady...)
+}
 
-	return "", fmt.Errorf("no running pod found for service %s", serviceName)
+func podReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // FindFreePort finds an available local TCP port.

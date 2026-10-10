@@ -16,9 +16,13 @@ import (
 	"testing"
 	"time"
 
+	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -501,4 +505,135 @@ func reserveClosedPort(t *testing.T) int {
 	port := lis.Addr().(*net.TCPAddr).Port
 	lis.Close()
 	return port
+}
+
+// slowStatusRelay is a Relay with one node it cannot reach: ServerStatus
+// waits on that node until the caller gives up, while the health service and
+// flows from the other nodes answer at once.
+type slowStatusRelay struct {
+	observerpb.UnimplementedObserverServer
+}
+
+func (s *slowStatusRelay) ServerStatus(ctx context.Context, req *observerpb.ServerStatusRequest) (*observerpb.ServerStatusResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (s *slowStatusRelay) GetFlows(req *observerpb.GetFlowsRequest, stream grpc.ServerStreamingServer[observerpb.GetFlowsResponse]) error {
+	return stream.Send(&observerpb.GetFlowsResponse{ResponseTypes: &observerpb.GetFlowsResponse_Flow{Flow: &flowpb.Flow{
+		Time:        timestamppb.Now(),
+		Source:      &flowpb.Endpoint{Namespace: "shop", PodName: "frontend-1"},
+		Destination: &flowpb.Endpoint{Namespace: "shop", PodName: "cart-1"},
+		L4:          &flowpb.Layer4{Protocol: &flowpb.Layer4_TCP{TCP: &flowpb.TCP{DestinationPort: 7070}}},
+	}}})
+}
+
+// startRelayServer serves srv's registrations on 127.0.0.1 and returns the
+// port. Pass nil creds for plaintext.
+func startRelayServer(t *testing.T, creds credentials.TransportCredentials, register func(*grpc.Server), extra ...grpc.ServerOption) int {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	opts := extra
+	if creds != nil {
+		opts = append(opts, grpc.Creds(creds))
+	}
+	srv := grpc.NewServer(opts...)
+	register(srv)
+	go srv.Serve(lis)
+	t.Cleanup(srv.Stop)
+	return lis.Addr().(*net.TCPAddr).Port
+}
+
+func slowStatusRelayWithHealth(st healthpb.HealthCheckResponse_ServingStatus) func(*grpc.Server) {
+	return func(srv *grpc.Server) {
+		observerpb.RegisterObserverServer(srv, &slowStatusRelay{})
+		hs := health.NewServer()
+		hs.SetServingStatus(hubbleObserverHealthService, st)
+		healthpb.RegisterHealthServer(srv, hs)
+	}
+}
+
+func shortStatusTimeout(t *testing.T) {
+	t.Helper()
+	prev := hubbleStatusTimeout
+	hubbleStatusTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { hubbleStatusTimeout = prev })
+}
+
+func connectTo(t *testing.T, port int, tlsCfg *tls.Config) (*HubbleSource, *portforward.ConnectionInfo) {
+	t.Helper()
+	h := NewHubbleSource(fake.NewSimpleClientset(relayService(port, intstr.FromInt(4245))))
+	h.relayNamespace = "kube-system"
+	if tlsCfg != nil {
+		h.useTLS = true
+		h.tlsConfig = tlsCfg
+	}
+	info, err := h.Connect(context.Background(), "test-ctx")
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	return h, info
+}
+
+func TestConnectRelayWithSlowStatusStillConnects(t *testing.T) {
+	shortStatusTimeout(t)
+	port := startRelayServer(t, nil, slowStatusRelayWithHealth(healthpb.HealthCheckResponse_SERVING))
+
+	h, info := connectTo(t, port, nil)
+	if !info.Connected {
+		t.Fatalf("a Relay whose ServerStatus is slow must still connect, got error: %s", info.Error)
+	}
+	// The reuse check runs the same test and must not drop the connection.
+	if info2, err := h.Connect(context.Background(), "test-ctx"); err != nil || !info2.Connected {
+		t.Fatalf("repeat Connect = %+v, %v; want connected", info2, err)
+	}
+	resp, err := h.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("GetFlows: %v", err)
+	}
+	if len(resp.Flows) != 1 {
+		t.Fatalf("GetFlows returned %d flows, want the 1 the Relay sent", len(resp.Flows))
+	}
+}
+
+func TestConnectRelayWithNoNodesYetConnects(t *testing.T) {
+	shortStatusTimeout(t)
+	port := startRelayServer(t, nil, slowStatusRelayWithHealth(healthpb.HealthCheckResponse_NOT_SERVING))
+	if _, info := connectTo(t, port, nil); !info.Connected {
+		t.Fatalf("NOT_SERVING is an answer from Relay and must connect, got error: %s", info.Error)
+	}
+}
+
+func TestConnectHungEndpointIsNotARelay(t *testing.T) {
+	shortStatusTimeout(t)
+	// Completes the HTTP/2 handshake but never answers a call.
+	hang := grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		<-stream.Context().Done()
+		return stream.Context().Err()
+	})
+	port := startRelayServer(t, nil, func(*grpc.Server) {}, hang)
+	if _, info := connectTo(t, port, nil); info.Connected {
+		t.Fatal("an endpoint that never answers must not count as a Relay")
+	}
+}
+
+func TestConnectSlowTLSRelayNotMistakenForPlaintext(t *testing.T) {
+	shortStatusTimeout(t)
+	cert, pool := selfSignedCert(t, "hubble-relay.kube-system.svc.cluster.local")
+	port := startRelayServer(t, credentials.NewTLS(&tls.Config{Certificates: []tls.Certificate{cert}}),
+		slowStatusRelayWithHealth(healthpb.HealthCheckResponse_SERVING))
+
+	// Without TLS credentials the only attempt is plaintext, which a TLS Relay
+	// never answers: that must stay a failure.
+	if _, info := connectTo(t, port, nil); info.Connected {
+		t.Fatal("plaintext against a TLS Relay must not count as connected")
+	}
+	// With credentials, plaintext fails and TLS connects despite the slow status.
+	_, info := connectTo(t, port, &tls.Config{RootCAs: pool, ServerName: "hubble-relay.kube-system.svc.cluster.local", MinVersion: tls.VersionTLS12})
+	if !info.Connected {
+		t.Fatalf("expected TLS connect to a slow Relay, got error: %s", info.Error)
+	}
 }

@@ -18,8 +18,11 @@ import (
 	observerpb "github.com/cilium/cilium/api/v1/observer"
 	relaypb "github.com/cilium/cilium/api/v1/relay"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -788,16 +791,41 @@ func (h *HubbleSource) connectGRPCLocked(ctx context.Context, grpcAddr string) e
 	return lastErr
 }
 
-// testConnection tests the gRPC connection by calling ServerStatus
+var hubbleStatusTimeout = 3 * time.Second
+
+// hubbleObserverHealthService is the name Relay reports the Observer's health
+// under (Cilium's v1.ObserverServiceName).
+const hubbleObserverHealthService = "hubble.server.Observer"
+
+// testConnection reports whether a Hubble Relay answers on the connection. It
+// asks Relay's gRPC health service first: Relay answers that from the peer
+// state it already holds. ServerStatus, the fallback for a Relay without the
+// health service, asks every node Relay reads from, so a single node that is
+// down holds the answer past the timeout while Relay still serves flows from
+// all the others. NOT_SERVING is still an answer from Relay: the connection is
+// right, and the flow fetch says what is missing.
 func (h *HubbleSource) testConnection(ctx context.Context) bool {
-	if h.observerClient == nil {
+	if h.observerClient == nil || h.grpcConn == nil {
 		return false
 	}
 
-	testCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	testCtx, cancel := context.WithTimeout(ctx, hubbleStatusTimeout)
 	defer cancel()
 
-	_, err := h.observerClient.ServerStatus(testCtx, &observerpb.ServerStatusRequest{})
+	health, err := healthpb.NewHealthClient(h.grpcConn).Check(testCtx,
+		&healthpb.HealthCheckRequest{Service: hubbleObserverHealthService})
+	switch {
+	case err == nil:
+		if health.GetStatus() != healthpb.HealthCheckResponse_SERVING {
+			log.Printf("[hubble] Relay health is %s", health.GetStatus())
+		}
+		return true
+	case status.Code(err) != codes.Unimplemented && status.Code(err) != codes.NotFound:
+		log.Printf("[hubble] Connection test failed: %v", err)
+		return false
+	}
+
+	_, err = h.observerClient.ServerStatus(testCtx, &observerpb.ServerStatusRequest{})
 	if err != nil {
 		log.Printf("[hubble] Connection test failed: %v", err)
 		return false

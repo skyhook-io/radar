@@ -431,20 +431,16 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 
 	// Headless services (ClusterIP=None) skip targetPort resolution (matches kubectl behavior)
 	if svc.Spec.ClusterIP == corev1.ClusterIPNone {
-		for _, pod := range pods.Items {
-			if pod.Status.Phase == corev1.PodRunning {
-				return pod.Name, servicePort, scheme, nil
-			}
+		if serving := pfpkg.ServingPods(pods.Items); len(serving) > 0 {
+			return serving[0].Name, servicePort, scheme, nil
 		}
 		return "", 0, "", fmt.Errorf("no running pod found")
 	}
 
 	if servicePortSpec.TargetPort.Type == intstr.String && servicePortSpec.TargetPort.StrVal != "" {
-		for _, pod := range pods.Items {
-			if pod.Status.Phase == corev1.PodRunning {
-				if resolved, ok := k8score.ResolveServiceTargetPort(servicePortSpec, pod.Spec.Containers); ok {
-					return pod.Name, resolved, scheme, nil
-				}
+		for _, pod := range pfpkg.ServingPods(pods.Items) {
+			if resolved, ok := k8score.ResolveServiceTargetPort(servicePortSpec, pod.Spec.Containers); ok {
+				return pod.Name, resolved, scheme, nil
 			}
 		}
 		return "", 0, "", fmt.Errorf("no running pod found with named port %q", servicePortSpec.TargetPort.StrVal)
@@ -452,12 +448,10 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 
 	containerPort, _ := k8score.ResolveServiceTargetPort(servicePortSpec, nil)
 
-	// Return the first running pod — the service spec is authoritative for the port,
-	// and containers can listen on ports without declaring them in the pod spec.
-	for _, pod := range pods.Items {
-		if pod.Status.Phase == corev1.PodRunning {
-			return pod.Name, containerPort, scheme, nil
-		}
+	// The service spec is authoritative for the port, and containers can listen
+	// on ports without declaring them in the pod spec.
+	if serving := pfpkg.ServingPods(pods.Items); len(serving) > 0 {
+		return serving[0].Name, containerPort, scheme, nil
 	}
 
 	return "", 0, "", fmt.Errorf("no running pod found")
