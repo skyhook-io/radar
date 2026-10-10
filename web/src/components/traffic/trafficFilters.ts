@@ -299,7 +299,12 @@ export function dedupeHTTPPairs(flows: TrafficFlow[], callerOriented: boolean): 
 export type GraphFlow = AggregatedFlow & { rawPairs?: TrafficEndpointPair[] }
 
 export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
-  const ref = (e: AggregatedFlow['source']) => ({ namespace: e.namespace || undefined, name: e.name, kind: e.kind })
+  const ref = (e: AggregatedFlow['source']) => ({
+    namespace: e.namespace || undefined,
+    name: e.name,
+    kind: e.kind,
+    ...(e.workloadKind && { workloadKind: e.workloadKind }),
+  })
   return {
     source: ref(flow.source),
     destination: ref(flow.destination),
@@ -321,6 +326,17 @@ export function mergeRawPairs(into: GraphFlow, from: GraphFlow): void {
 function selectableId(e: { namespace?: string; name: string; kind?: string }): string {
   if (e.kind === 'AddonGroupTarget' || e.kind === 'AddonGroupSource') return 'addon-group'
   return graphEndpointId(e)
+}
+
+/**
+ * A record's endpoint as the graph names it: a pod with a known workload is
+ * drawn as that workload. Mirrors the server's GraphEndpoint (pkg/traffic),
+ * which builds the aggregation the graph is drawn from — the two have to agree
+ * for a record to be found under its node.
+ */
+export function graphEndpoint(e: TrafficFlow['source']): { namespace?: string; name: string } {
+  if (e.kind === 'Pod' && e.workload && e.namespace && e.workload !== e.name) return { namespace: e.namespace, name: e.workload }
+  return e
 }
 
 export function graphEndpointId(e: { namespace?: string; name: string }): string {
@@ -367,3 +383,24 @@ export function selectionRawPairs(
   if (pairs.size === 0) return null
   return Array.from(pairs.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, pair]) => pair)
 }
+
+/**
+ * How costly the graph is to draw. The layout runs on the main thread and its
+ * cost grows faster than linearly, edges more than nodes, so edges count
+ * double, as Weave Scope weighs them. Laying out whole namespaces of a dense
+ * service graph took 0.55s at a score of 493, 2s at 728, 4.5s at 1,433, 13s
+ * at 1,883 and 32s at 2,329; larger graphs overflowed ELK's stack.
+ */
+export function graphSize(flows: AggregatedFlow[]): { nodes: number; edges: number; score: number } {
+  const nodes = new Set<string>()
+  for (const flow of flows) {
+    nodes.add(graphEndpointId(flow.source))
+    nodes.add(graphEndpointId(flow.destination))
+  }
+  return { nodes: nodes.size, edges: flows.length, score: nodes.size + 2 * flows.length }
+}
+
+/** Above this the graph is not drawn until the view is narrowed (about 1.5s of layout). */
+export const GRAPH_DRAW_BUDGET = 600
+/** Above this it is not drawn at all (about 5s of layout, freezing the tab). */
+export const GRAPH_DRAW_CEILING = 1500

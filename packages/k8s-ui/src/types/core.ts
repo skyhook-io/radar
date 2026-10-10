@@ -1288,10 +1288,12 @@ export interface MetricsDataPoint {
 export interface TrafficEndpoint {
   name: string
   namespace: string
-  kind: string // Pod, Service, External, Host, Unknown
+  kind: string // Pod, Workload, Service, External, Host, Unknown
   ip?: string
   labels?: Record<string, string>
   workload?: string
+  /** Deployment, StatefulSet, CronJob, … when resolved from the pod's owners. */
+  workloadKind?: string
   port?: number
 }
 

@@ -976,8 +976,8 @@ func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsReque
 var hubbleFlowFields = []string{
 	"time", "node_name", "verdict", "drop_reason", "drop_reason_desc",
 	"IP", "l4", "l7", "is_reply", "traffic_direction",
-	"source.namespace", "source.pod_name", "source.labels",
-	"destination.namespace", "destination.pod_name", "destination.labels",
+	"source.namespace", "source.pod_name", "source.labels", "source.workloads",
+	"destination.namespace", "destination.pod_name", "destination.labels", "destination.workloads",
 	"source_service.name", "destination_service.name",
 	"ingress_allowed_by", "egress_allowed_by", "ingress_denied_by", "egress_denied_by",
 }
@@ -993,6 +993,37 @@ func hubbleNamespaces(opts FlowOptions) []string {
 		return []string{opts.Namespace}
 	}
 	return nil
+}
+
+// hubbleGeneratedPodOwners are the workload kinds whose pods are named from
+// the workload's name: the controller names its pods, or its ReplicaSets or
+// Jobs, by appending a suffix to it.
+var hubbleGeneratedPodOwners = map[string]bool{
+	"Deployment": true, "ReplicaSet": true, "StatefulSet": true, "DaemonSet": true,
+	"Job": true, "CronJob": true, "Rollout": true,
+}
+
+// hubbleWorkloadPrefixLen is how much of a workload's name its pods are sure
+// to start with. Generated names are cut to 58 characters before the random
+// suffix, so anything shorter than that survives intact.
+const hubbleWorkloadPrefixLen = 40
+
+// hubblePodPrefix is the pod-name prefix that covers every pod of a
+// reference: the pod itself, or each pod a workload generated.
+func hubblePodPrefix(r EndpointRef) (string, bool) {
+	if r.Namespace == "" || r.Name == "" {
+		return "", false
+	}
+	switch {
+	case r.Kind == EndpointKindPod:
+		return r.Namespace + "/" + r.Name, true
+	case r.Kind == EndpointKindWorkload && hubbleGeneratedPodOwners[r.WorkloadKind]:
+		if len(r.Name) > hubbleWorkloadPrefixLen {
+			return r.Namespace + "/" + r.Name[:hubbleWorkloadPrefixLen], true
+		}
+		return r.Namespace + "/" + r.Name + "-", true
+	}
+	return "", false
 }
 
 // hubbleMaxMatchPods bounds the pod prefixes a selection sends to every
@@ -1074,14 +1105,6 @@ func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
 
 // hubbleMaxMatchPairs is the largest selection sent pair by pair.
 const hubbleMaxMatchPairs = 50
-
-// hubblePodPrefix is the pod-name prefix that covers a reference's pod.
-func hubblePodPrefix(r EndpointRef) (string, bool) {
-	if r.Kind != EndpointKindPod || r.Namespace == "" || r.Name == "" {
-		return "", false
-	}
-	return r.Namespace + "/" + r.Name, true
-}
 
 // Cilium's monitor message types (pkg/monitor/api MessageType*), kept local
 // rather than importing that package for three numbers.
@@ -1493,30 +1516,17 @@ func convertEndpoint(ep *flowpb.Endpoint, ip string) Endpoint {
 		endpoint.Kind, endpoint.Name = classifyNonPodIdentity(ep.GetLabels(), ip)
 	}
 
-	// Extract workload name from labels
-	endpoint.Workload = extractWorkloadFromHubbleLabels(ep.GetLabels())
+	// Cilium resolves a pod's owning workload itself; the server prefers its
+	// own resolution from the pod cache and falls back to this one for pods it
+	// cannot see, such as those already gone.
+	if endpoint.Kind == EndpointKindPod {
+		if wl := ep.GetWorkloads(); len(wl) > 0 && wl[0].GetName() != "" {
+			endpoint.Workload = wl[0].GetName()
+			endpoint.WorkloadKind = wl[0].GetKind()
+		}
+	}
 
 	return endpoint
-}
-
-// extractWorkloadFromHubbleLabels extracts workload name from Hubble labels
-func extractWorkloadFromHubbleLabels(labels []string) string {
-	labelMap := make(map[string]string)
-	for _, l := range labels {
-		parts := strings.SplitN(l, "=", 2)
-		if len(parts) == 2 {
-			labelMap[parts[0]] = parts[1]
-		}
-	}
-
-	// Common workload labels in order of preference
-	for _, key := range []string{"app", "app.kubernetes.io/name", "k8s-app", "name"} {
-		if name, ok := labelMap[key]; ok {
-			return name
-		}
-	}
-
-	return ""
 }
 
 // StreamFlows returns a channel of flows for real-time updates

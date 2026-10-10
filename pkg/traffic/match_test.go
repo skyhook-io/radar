@@ -1,6 +1,9 @@
 package traffic
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestFlowMatch(t *testing.T) {
 	ep := func(ns, name string) Endpoint { return Endpoint{Namespace: ns, Name: name, Kind: EndpointKindPod} }
@@ -62,5 +65,74 @@ func TestFlowOptionsExcludes(t *testing.T) {
 	}
 	if (FlowOptions{}).Excludes(Flow{Source: Endpoint{Namespace: "kube-system", Kind: EndpointKindHost}}) {
 		t.Error("nothing is excluded unless asked")
+	}
+}
+
+func TestGraphEndpoint(t *testing.T) {
+	pod := Endpoint{Namespace: "shop", Name: "web-7d9f-x2k4q", Kind: EndpointKindPod, IP: "10.0.0.1", Workload: "web", WorkloadKind: "Deployment"}
+	g := GraphEndpoint(pod)
+	if g.Name != "web" || g.Kind != EndpointKindWorkload || g.WorkloadKind != "Deployment" || g.IP != "" {
+		t.Errorf("GraphEndpoint = %+v, want the Deployment, with nothing pod-specific", g)
+	}
+	for _, e := range []Endpoint{
+		{Namespace: "shop", Name: "standalone", Kind: EndpointKindPod},                          // nothing owns it
+		{Name: "world", Kind: EndpointKindExternal, Workload: "x"},                              // not a pod
+		{Namespace: "shop", Name: "checkout", Kind: EndpointKindWorkload, Workload: "checkout"}, // already a workload
+		{Namespace: "shop", Name: "reviews", Kind: EndpointKindPod, Workload: "reviews"},        // a source that reports workloads as pods (Istio, Beyla)
+	} {
+		if got := GraphEndpoint(e); !reflect.DeepEqual(got, e) {
+			t.Errorf("GraphEndpoint(%+v) = %+v, want it unchanged", e, got)
+		}
+	}
+
+	flows := []Flow{
+		{Source: pod, Destination: Endpoint{Namespace: "shop", Name: "db-0", Kind: EndpointKindPod, Workload: "db", WorkloadKind: "StatefulSet"}, Connections: 1},
+		{Source: Endpoint{Namespace: "shop", Name: "web-7d9f-zz9", Kind: EndpointKindPod, Workload: "web", WorkloadKind: "Deployment"}, Destination: Endpoint{Namespace: "shop", Name: "db-1", Kind: EndpointKindPod, Workload: "db", WorkloadKind: "StatefulSet"}, Connections: 1},
+	}
+	agg := AggregateFlows(GraphFlows(flows))
+	if len(agg) != 1 || agg[0].Connections != 2 || agg[0].Source.Name != "web" || agg[0].Destination.Name != "db" {
+		t.Errorf("aggregation = %+v, want one web→db edge carrying both pod pairs", agg)
+	}
+	if flows[0].Source.Name != "web-7d9f-x2k4q" {
+		t.Error("GraphFlows must not rewrite the records it was given")
+	}
+}
+
+func TestFlowMatchWorkloadReference(t *testing.T) {
+	web := EndpointRef{Namespace: "shop", Name: "web", Kind: EndpointKindWorkload, WorkloadKind: "Deployment"}
+	db := EndpointRef{Namespace: "shop", Name: "db-0", Kind: EndpointKindPod}
+	podFlow := Flow{
+		Source:      Endpoint{Namespace: "shop", Name: "web-7d9f-x2k4q", Kind: EndpointKindPod, Workload: "web"},
+		Destination: Endpoint{Namespace: "shop", Name: "db-0", Kind: EndpointKindPod},
+	}
+	match := &FlowMatch{Pairs: []EndpointPair{{Source: web, Destination: db}}}
+	if !match.Matches(podFlow) {
+		t.Error("a workload→pod pair matches the records of the workload's pods")
+	}
+	other := podFlow
+	other.Source.Workload = "web-canary"
+	if match.Matches(other) {
+		t.Error("a pod of another workload must not match, however its name starts")
+	}
+}
+
+func TestFlowMatchPodReference(t *testing.T) {
+	pod := EndpointRef{Namespace: "shop", Name: "web-7d9f-x2k4q", Kind: EndpointKindPod}
+	db := EndpointRef{Namespace: "shop", Name: "db-0", Kind: EndpointKindPod}
+	flow := Flow{
+		Source:      Endpoint{Namespace: "shop", Name: "web-7d9f-x2k4q", Kind: EndpointKindPod, Workload: "web"},
+		Destination: Endpoint{Namespace: "shop", Name: "db-0", Kind: EndpointKindPod},
+	}
+	if !(&FlowMatch{Pairs: []EndpointPair{{Source: pod, Destination: db}}}).Matches(flow) {
+		t.Error("with pods drawn one by one, a pod reference matches its own records")
+	}
+	other := flow
+	other.Source.Name = "web-7d9f-zz9"
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: pod, Destination: db}}}).Matches(other) {
+		t.Error("a pod reference must not match its sibling pods")
+	}
+	bare := EndpointRef{Namespace: "shop", Name: "web", Kind: EndpointKindPod}
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: bare, Destination: db}}}).Matches(flow) {
+		t.Error("a pod named like a workload must not match that workload's pods")
 	}
 }

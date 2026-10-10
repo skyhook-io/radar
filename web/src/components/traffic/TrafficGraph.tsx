@@ -148,6 +148,7 @@ interface TrafficNodeData extends Record<string, unknown> {
   namespace?: string
   kind: string
   workload?: string
+  workloadKind?: string
   connections?: number
   totalConnections?: number // Total connections for this node
   namespaceColor?: string // Background color for namespace grouping
@@ -571,7 +572,7 @@ function DetailsPanel({
                       : isExternalKind(nodeData.kind)
                         ? 'bg-yellow-500/20 text-yellow-400'
                         : 'bg-blue-500/20 text-blue-400'
-                )}>{nodeData.kind === 'Addon' ? 'Cluster Addons' : nodeData.kind}</span>
+                )}>{nodeData.kind === 'Addon' ? 'Cluster Addons' : nodeData.workloadKind || nodeData.kind}</span>
               </div>
               {nodeData.workload && nodeData.workload !== nodeData.label && (
                 <div className="text-xs text-theme-text-secondary">
@@ -1219,6 +1220,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             namespace: flow.source.namespace,
             kind: isAddonInternet ? 'AddonInternet' : flow.source.kind, // Keep AddonInternet kind for styling
             workload: flow.source.workload,
+            workloadKind: flow.source.workloadKind,
             connections: connectionCounts.get(sourceId),
             totalConnections: totalConnections.get(sourceId),
             namespaceColor: showNamespaceGroups && !sourceIsAddon ? getNamespaceColor(flow.source.namespace) : undefined,
@@ -1251,6 +1253,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
               namespace: flow.destination.namespace,
               kind: flow.destination.kind,
               workload: flow.destination.workload,
+              workloadKind: flow.destination.workloadKind,
               connections: connectionCounts.get(destId),
               totalConnections: totalConnections.get(destId),
               namespaceColor: showNamespaceGroups ? getNamespaceColor(flow.destination.namespace) : undefined,
@@ -1281,6 +1284,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             namespace: flow.destination.namespace,
             kind: flow.destination.kind,
             workload: flow.destination.workload,
+            workloadKind: flow.destination.workloadKind,
             connections: connectionCounts.get(destId),
             totalConnections: totalConnections.get(destId),
             namespaceColor: showNamespaceGroups && !destIsAddon ? getNamespaceColor(flow.destination.namespace) : undefined,

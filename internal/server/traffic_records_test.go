@@ -49,7 +49,7 @@ func TestTrafficFlowsPayloadCapsTheRecordSample(t *testing.T) {
 			LastSeen:    now.Add(-time.Duration(i) * time.Second),
 		})
 	}
-	payload := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble", FlowLimit: 50000}, flows)
+	payload := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble", FlowLimit: 50000}, flows, false)
 
 	sample := payload["flows"].([]traffic.Flow)
 	if len(sample) != trafficFlowSample || payload["flowsTotal"] != len(flows) {
@@ -112,5 +112,19 @@ func TestHandleGetTrafficRecordsRejectsBadSelections(t *testing.T) {
 		if w.Code != tc.want {
 			t.Errorf("%s: status %d, want %d (%s)", tc.name, w.Code, tc.want, w.Body.String())
 		}
+	}
+}
+
+func TestTrafficFlowsPayloadByPod(t *testing.T) {
+	pod := func(name string) traffic.Endpoint {
+		return traffic.Endpoint{Namespace: "a", Name: name, Kind: traffic.EndpointKindPod, Workload: "web", WorkloadKind: "Deployment"}
+	}
+	db := traffic.Endpoint{Namespace: "a", Name: "db-0", Kind: traffic.EndpointKindPod}
+	flows := []traffic.Flow{{Source: pod("web-1"), Destination: db, Connections: 1}, {Source: pod("web-2"), Destination: db, Connections: 1}}
+	if n := len(trafficFlowsPayload(&traffic.FlowsResponse{}, flows, false)["aggregated"].([]traffic.AggregatedFlow)); n != 1 {
+		t.Errorf("grouped: %d edges, want the workload's one", n)
+	}
+	if n := len(trafficFlowsPayload(&traffic.FlowsResponse{}, flows, true)["aggregated"].([]traffic.AggregatedFlow)); n != 2 {
+		t.Errorf("by pod: %d edges, want one per pod", n)
 	}
 }
