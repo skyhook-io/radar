@@ -2648,6 +2648,10 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 	// Create upgrade action — don't use Wait=true because Radar already
 	// shows real-time resource status via SSE. Waiting blocks the dialog
 	// for minutes with zero feedback; users can monitor the rollout in the UI.
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return err
+	}
+
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
@@ -2681,6 +2685,10 @@ func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, tar
 
 	targetChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
+		return err
+	}
+
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
 		return err
 	}
 
@@ -3336,6 +3344,10 @@ func (c *Client) previewValuesChangeWith(actionConfig *action.Configuration, nam
 	}
 
 	// Perform a dry-run upgrade with the new values
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return nil, err
+	}
+
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.DryRun = true
@@ -3391,6 +3403,10 @@ func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string
 	}
 
 	// Create upgrade action — no Wait, Radar shows resource status in real-time
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return err
+	}
+
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second

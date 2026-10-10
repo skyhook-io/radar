@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -220,7 +221,7 @@ func PreviewReleaseAction(cfg *action.Configuration, name string, options Releas
 		}
 		preview.Hooks = append(preview.Hooks, ReleaseActionHook{HelmHook: hook, Effect: effect, StatusMeaning: "last recorded phase; Running can persist after hook creation or waiting failed"})
 	}
-	if current.Info.Status == release.StatusUninstalling {
+	if current.Info.Status == release.StatusUninstalling && !options.NoHooks {
 		for _, hook := range preview.Hooks {
 			if len(hook.DeletePolicies) > 0 && !slices.Contains(hook.DeletePolicies, "before-hook-creation") {
 				preview.Warnings = append(preview.Warnings, fmt.Sprintf("Hook %s/%s has no before-hook-creation delete policy. A surviving failed Job or Pod can make retry fail with AlreadyExists. Inspect get_helm_release hook diagnostics; explicitly approve deleting that hook object after inspecting it, or use no_hooks after reviewing skipped cleanup.", hook.Namespace, hook.Name))
@@ -242,14 +243,6 @@ func RunReleaseAction(cfg *action.Configuration, name string, options ReleaseAct
 		return uninstallWithOptions(cfg, name, UninstallOptions{NoHooks: options.NoHooks, KeepHistory: options.KeepHistory})
 	}
 	return rollbackWith(cfg, name, options.Revision, options.NoHooks)
-}
-
-func (c *Client) UninstallWithOptionsAsUser(namespace, name, username string, groups []string, options UninstallOptions) error {
-	cfg, err := c.getActionConfigForUser(namespace, username, groups)
-	if err != nil {
-		return err
-	}
-	return uninstallWithOptions(cfg, name, options)
 }
 
 func uninstallWithOptions(cfg *action.Configuration, name string, options UninstallOptions) error {
@@ -314,6 +307,8 @@ func EnrichReleaseActionPreview(ctx context.Context, cfg *action.Configuration, 
 	preview.ManagedByFluxHelmRelease = applyFluxOwnership(preview.Name, storageNamespace, fluxHelmReleaseMap(ctx))
 	if preview.ManagedByFluxHelmRelease != "" {
 		preview.Warnings = append(preview.Warnings, fmt.Sprintf("Flux HelmRelease %s owns this release and may reconcile it back. Change its source of truth before managing it directly.", preview.ManagedByFluxHelmRelease))
+	} else {
+		preview.Warnings = append(preview.Warnings, "A GitOps controller may reconcile this release back. Check its source of truth before managing it directly.")
 	}
 	hooks := make([]HelmHook, 0, len(preview.Hooks))
 	for _, h := range preview.Hooks {
@@ -373,5 +368,19 @@ func writeReleaseActionError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeReleaseReadError(w, err)
+	}
+}
+
+func writeReleaseExecutionError(w http.ResponseWriter, action, namespace, name string, err error) {
+	switch {
+	case errors.Is(err, driver.ErrReleaseNotFound), apierrors.IsNotFound(err):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrReleaseActionRefused), errors.Is(err, ErrReleaseActionInProgress):
+		writeError(w, http.StatusConflict, err.Error())
+	case isReleaseReadForbidden(err):
+		writeError(w, http.StatusForbidden, "insufficient permissions to "+action+" this Helm release: "+err.Error())
+	default:
+		log.Printf("[helm] Failed to %s %s/%s: %v", action, namespace, name, err)
+		writeError(w, http.StatusInternalServerError, err.Error())
 	}
 }

@@ -21,9 +21,11 @@ import (
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/kube"
 	"helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v3/pkg/storage/driver"
 	helmtime "helm.sh/helm/v3/pkg/time"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -69,6 +71,13 @@ func TestReleaseActionRetryAndPendingGuidance(t *testing.T) {
 	}
 	if len(preview.HookDiagnostics) != 1 {
 		t.Fatalf("diagnostics not reused: %+v", preview)
+	}
+	skipped, err := PreviewReleaseAction(cfg, "demo", ReleaseActionOptions{Action: "uninstall", NoHooks: true})
+	if err != nil || strings.Contains(strings.Join(skipped.Warnings, " "), "AlreadyExists") {
+		t.Fatalf("skipped hook retry guidance: %+v %v", skipped, err)
+	}
+	if !strings.Contains(strings.Join(preview.Warnings, " "), "A GitOps controller may reconcile this release back") {
+		t.Fatalf("missing generic GitOps guidance: %+v", preview)
 	}
 	rel.Info.Status = release.StatusPendingUpgrade
 	cfg.Releases.Update(rel)
@@ -297,5 +306,188 @@ func TestUninstallHandlerDryRunAndRefusalStatuses(t *testing.T) {
 	}
 	if !strings.Contains(audit.String(), `outcome="preview_failed"`) {
 		t.Fatalf("failed preview audit: %s", audit.String())
+	}
+}
+
+func TestReleaseExecutionErrors(t *testing.T) {
+	for _, action := range []string{"uninstall", "rollback"} {
+		for _, tc := range []struct {
+			name   string
+			err    error
+			status int
+		}{
+			{"typed denial", apierrors.NewForbidden(schema.GroupResource{Resource: "configmaps"}, "demo", errors.New("denied")), 403},
+			{"partial uninstall denial", errors.New(`uninstall failed: uninstallation completed with 1 error(s): configmaps "demo" is forbidden: User "alice" cannot delete resource "configmaps"`), 403},
+			{"missing", fmt.Errorf("read release: %w", driver.ErrReleaseNotFound), 404},
+			{"overlap", ErrReleaseActionInProgress, 409},
+			{"refused", ErrReleaseActionRefused, 409},
+			{"execution failure", errors.New("hook failed"), 500},
+		} {
+			t.Run(action+"/"+tc.name, func(t *testing.T) {
+				var logs bytes.Buffer
+				previous := log.Writer()
+				log.SetOutput(&logs)
+				t.Cleanup(func() { log.SetOutput(previous) })
+				rec := httptest.NewRecorder()
+				writeReleaseExecutionError(rec, action, "store", "demo", tc.err)
+				if rec.Code != tc.status || strings.Contains(rec.Body.String(), "permissions to read") {
+					t.Fatalf("execution response: %d %s", rec.Code, rec.Body)
+				}
+				if tc.status == 403 && !strings.Contains(rec.Body.String(), "insufficient permissions to "+action) {
+					t.Fatalf("wrong denial: %s", rec.Body)
+				}
+				if tc.status == 500 && !strings.Contains(logs.String(), "[helm] Failed to "+action+" store/demo: hook failed") {
+					t.Fatalf("missing execution log: %s", &logs)
+				}
+			})
+		}
+	}
+}
+
+func TestRollbackAuditsGateDenialsAndConflicts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var review authv1.SubjectAccessReview
+		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(authv1.SubjectAccessReview{TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"}, Status: authv1.SubjectAccessReviewStatus{Allowed: review.Spec.User == "rollback-allowed"}})
+	}))
+	defer srv.Close()
+	previousClient := k8s.SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}}))
+	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
+	previousStatus := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	previousHelm := globalClient
+	globalClient = &Client{}
+	t.Cleanup(func() { globalClient = previousHelm })
+	done, err := BeginReleaseAction("audit-store", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	router := chi.NewRouter()
+	NewHandlers(nil).RegisterRoutes(router)
+	for _, route := range []string{"rollback", "rollback-stream"} {
+		for _, tc := range []struct {
+			user   string
+			status int
+		}{{"rollback-denied", 403}, {"rollback-allowed", 409}} {
+			t.Run(route+"/"+tc.user, func(t *testing.T) {
+				var logs bytes.Buffer
+				previous := log.Writer()
+				log.SetOutput(&logs)
+				t.Cleanup(func() { log.SetOutput(previous) })
+				req := httptest.NewRequest("POST", "/helm/releases/audit-store/demo/"+route+"?revision=2", nil)
+				req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: tc.user}))
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+				if rec.Code != tc.status {
+					t.Fatalf("response: %d %s", rec.Code, rec.Body)
+				}
+				for _, want := range []string{`action="helm_rollback"`, `source="rest" outcome="failed" revision=2 no_hooks=false keep_history=false`, `ns="audit-store" name="demo"`} {
+					if !strings.Contains(logs.String(), want) {
+						t.Fatalf("missing %s: %s", want, &logs)
+					}
+				}
+				if strings.Count(logs.String(), "[audit]") != 1 {
+					t.Fatalf("duplicate audit: %s", &logs)
+				}
+				if tc.status == 403 && !strings.Contains(logs.String(), "[helm] Helm write denied") {
+					t.Fatalf("missing gate log: %s", &logs)
+				}
+			})
+		}
+	}
+}
+
+func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
+	for _, operation := range []string{"upgrade", "upgrade with values", "apply values", "preview values"} {
+		t.Run(operation, func(t *testing.T) {
+			cfg := memoryActionConfig(t)
+			rel := actionTestRelease(t, cfg, 1, release.StatusDeployed)
+			rel.Namespace = "app"
+			rel.Config = map[string]any{"message": "old"}
+			rel.Hooks = nil
+			rel.Manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\ndata:\n  message: old\n"
+			rel.Chart = &chart.Chart{Metadata: &chart.Metadata{Name: "demo", Version: "1.0.0"}, Templates: []*chart.File{{Name: "templates/configmap.yaml", Data: []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n  labels:\n    upgraded: \"true\"\ndata:\n  message: {{ .Values.message }}\n")}}}
+			if err := cfg.Releases.Create(rel); err != nil {
+				t.Fatal(err)
+			}
+			obj := corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "app"}, Data: map[string]string{"message": "old"}}
+			var writes []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/openapi/v3" {
+					w.Write([]byte(`{"paths":{"api/v1":{"serverRelativeURL":"/openapi/v3/api/v1"}}}`))
+					return
+				}
+				if r.URL.Path == "/openapi/v3/api/v1" {
+					w.Write([]byte(`{"openapi":"3.0.0","info":{"title":"fixture","version":"v1"},"paths":{"/api/v1/namespaces/{namespace}/configmaps/{name}":{"patch":{"x-kubernetes-group-version-kind":{"group":"","version":"v1","kind":"ConfigMap"},"parameters":[{"name":"fieldValidation","in":"query","schema":{"type":"string"}}],"responses":{"200":{"description":"ok"}}}}}}`))
+					return
+				}
+				if r.URL.Path == "/version" {
+					json.NewEncoder(w).Encode(map[string]string{"gitVersion": "v1.37.0"})
+					return
+				}
+				if r.URL.Path != "/api/v1/namespaces/app/configmaps/demo" {
+					t.Errorf("wrong target: %s %s", r.Method, r.URL.Path)
+					writeK8sStatus(t, w, 404, "NotFound", "unexpected target")
+					return
+				}
+				if r.Method == "PATCH" {
+					writes = append(writes, r.Method+" "+r.URL.Path)
+				}
+				json.NewEncoder(w).Encode(obj)
+			}))
+			defer srv.Close()
+			getter := newRESTConfigGetter(&rest.Config{Host: srv.URL}, "store", "", nil)
+			mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Version: "v1"}})
+			mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
+			getter.mapper = mapper
+			cfg.KubeClient = kube.New(getter)
+			cfg.KubeClient.(*kube.Client).Log = func(string, ...any) {}
+			cfg.RESTClientGetter = getter
+			client := &Client{}
+			var err error
+			values := map[string]any{"message": "new"}
+			noop := func(string, string, string) {}
+			switch operation {
+			case "upgrade":
+				err = client.upgradeWith(cfg, "demo", "1.0.0", "", noop)
+			case "upgrade with values":
+				err = client.upgradeWithValues(cfg, "demo", "1.0.0", "", values, noop)
+			case "apply values":
+				err = client.applyValuesWith(cfg, "demo", values)
+			case "preview values":
+				_, err = client.previewValuesChangeWith(cfg, "demo", values, "", "")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.KubeClient.(*kube.Client).Namespace != "app" {
+				t.Fatal("object builder does not target app")
+			}
+			if operation == "preview values" {
+				if len(writes) != 0 {
+					t.Fatalf("preview wrote: %v", writes)
+				}
+			} else if len(writes) != 1 {
+				t.Fatalf("upgrade writes: %v", writes)
+			}
+			ns, _, _ := getter.ToRawKubeConfigLoader().Namespace()
+			if ns != "store" {
+				t.Fatalf("storage moved: %s", ns)
+			}
+			stored, err := cfg.Releases.Last("demo")
+			wantRevision := 2
+			if operation == "preview values" {
+				wantRevision = 1
+			}
+			if err != nil || stored.Version != wantRevision || stored.Namespace != "app" {
+				t.Fatalf("release: %+v %v", stored, err)
+			}
+		})
 	}
 }

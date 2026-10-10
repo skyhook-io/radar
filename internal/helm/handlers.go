@@ -504,7 +504,13 @@ func (h *Handlers) handleBatchUpgradeCheck(w http.ResponseWriter, r *http.Reques
 
 // handleRollback rolls back a release to a previous revision
 func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
-	if !requireHelmWrite(w, r, chi.URLParam(r, "namespace")) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	requestedRevision, _ := strconv.Atoi(r.URL.Query().Get("revision"))
+	noHooks, keepHistory := false, false
+	audit := auth.AuditActionDetails{Action: "helm_rollback", Namespace: namespace, Name: name, Source: "rest", Outcome: "failed", Revision: requestedRevision, NoHooks: &noHooks, KeepHistory: &keepHistory}
+	defer func() { auth.AuditLogAction(r, audit) }()
+	if !requireHelmWrite(w, r, namespace) {
 		return
 	}
 
@@ -513,9 +519,6 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
 	}
-
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
 
 	revStr := r.URL.Query().Get("revision")
 	if revStr == "" {
@@ -535,9 +538,6 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer done()
-	noHooks, keepHistory := false, false
-	audit := auth.AuditActionDetails{Action: "helm_rollback", Namespace: namespace, Name: name, Source: "rest", Outcome: "failed", Revision: revision, NoHooks: &noHooks, KeepHistory: &keepHistory}
-	defer func() { auth.AuditLogAction(r, audit) }()
 	var rollbackErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		rollbackErr = client.RollbackAsUser(namespace, name, revision, user.Username, user.Groups)
@@ -545,11 +545,7 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		rollbackErr = client.Rollback(namespace, name, revision)
 	}
 	if err := rollbackErr; err != nil {
-		if IsForbiddenError(err) {
-			writeError(w, http.StatusForbidden, "insufficient permissions to rollback Helm release")
-			return
-		}
-		writeReleaseActionError(w, err)
+		writeReleaseExecutionError(w, "rollback", namespace, name, err)
 		return
 	}
 
@@ -559,7 +555,18 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 
 // handleRollbackStream rolls back a release with SSE progress streaming
 func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) {
-	if !requireHelmWrite(w, r, chi.URLParam(r, "namespace")) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	requestedRevision, _ := strconv.Atoi(r.URL.Query().Get("revision"))
+	noHooks, keepHistory := false, false
+	audit := auth.AuditActionDetails{Action: "helm_rollback", Namespace: namespace, Name: name, Source: "rest", Outcome: "failed", Revision: requestedRevision, NoHooks: &noHooks, KeepHistory: &keepHistory}
+	auditInBackground := false
+	defer func() {
+		if !auditInBackground {
+			auth.AuditLogAction(r, audit)
+		}
+	}()
+	if !requireHelmWrite(w, r, namespace) {
 		return
 	}
 
@@ -568,9 +575,6 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
 	}
-
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
 
 	revStr := r.URL.Query().Get("revision")
 	if revStr == "" {
@@ -598,17 +602,17 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		done()
+		log.Printf("[helm] Failed to rollback %s/%s: streaming not supported", namespace, name)
 		writeError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
 	progressCh := make(chan InstallProgress, 10)
 
-	noHooks, keepHistory := false, false
-	audit := auth.AuditActionDetails{Action: "helm_rollback", Namespace: namespace, Name: name, Source: "rest", Outcome: "failed", Revision: revision, NoHooks: &noHooks, KeepHistory: &keepHistory}
 	user := auth.UserFromContext(r.Context())
 	resultCh := make(chan error, 1)
-	go func() {
+	auditInBackground = true
+	go func(audit auth.AuditActionDetails) {
 		defer done()
 		var err error
 		if user != nil {
@@ -618,10 +622,12 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 		}
 		if err == nil {
 			audit.Outcome = "accepted"
+		} else {
+			log.Printf("[helm] Failed to rollback %s/%s: %v", namespace, name, err)
 		}
 		auth.AuditLogAction(r, audit)
 		resultCh <- err
-	}()
+	}(audit)
 
 	for {
 		select {
@@ -722,7 +728,7 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := uninstallWithOptions(cfg, name, options); err != nil {
-		writeReleaseActionError(w, err)
+		writeReleaseExecutionError(w, "uninstall", namespace, name, err)
 		return
 	}
 	audit.Outcome = "accepted"
@@ -1309,6 +1315,7 @@ type installResult struct {
 // secrets/create is the sentinel for that grant.
 func requireHelmWrite(w http.ResponseWriter, r *http.Request, namespace string) bool {
 	if err := CheckHelmWrite(r.Context(), namespace); err != nil {
+		log.Printf("[helm] Helm write denied in namespace %q: %v", namespace, err)
 		var gate *helmWriteError
 		if errors.As(err, &gate) {
 			writeError(w, gate.status, gate.Error())

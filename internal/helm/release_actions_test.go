@@ -212,7 +212,7 @@ func TestReleaseActionsImpersonateStorageReadsAndUninstall(t *testing.T) {
 	if _, err := PreviewReleaseAction(cfg, "demo", ReleaseActionOptions{Action: "uninstall"}); err == nil {
 		t.Fatal("preview ignored forbidden read")
 	}
-	if err := client.UninstallWithOptionsAsUser("default", "demo", "alice", []string{"team"}, UninstallOptions{NoHooks: true}); err == nil {
+	if err := uninstallWithOptions(cfg, "demo", UninstallOptions{NoHooks: true}); err == nil {
 		t.Fatal("uninstall ignored forbidden server")
 	}
 	if calls < 2 {
