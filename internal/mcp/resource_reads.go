@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
@@ -15,7 +18,9 @@ import (
 
 func resourcePermissionError(checked bool, verb, group, resource, namespace string) error {
 	scope := "at cluster scope"
-	if namespace != "" {
+	if strings.Contains(namespace, ",") {
+		scope = fmt.Sprintf("in namespaces %q", namespace)
+	} else if namespace != "" {
 		scope = fmt.Sprintf("in namespace %q", namespace)
 	}
 	if !checked {
@@ -24,21 +29,24 @@ func resourcePermissionError(checked bool, verb, group, resource, namespace stri
 	return fmt.Errorf("forbidden: your role cannot %s resource %q in API group %q %s; ask a cluster administrator to grant access", verb, resource, group, scope)
 }
 
-func resourceReadNamespaces(ctx context.Context, requested []string, verb, kind, group string) ([]string, error) {
+func resourceReadNamespaces(ctx context.Context, requested []string) ([]string, error) {
 	clamped, ok := clampToNamespacePin(requested)
 	if !ok {
 		return nil, fmt.Errorf("%s: requested namespace %q is excluded by Radar's --namespace-scope selection", ReasonOutsideNamespaceScope, namespaceForError(requested))
 	}
-	if gvr, builtin := k8s.BuiltinGVRAnyGroup(kind); builtin && (group == "" || group == gvr.Group) {
-		group = gvr.Group
-	}
 	user, perms, checked := resolveUserPermsDecision(ctx)
 	if !checked {
-		return nil, resourcePermissionError(false, verb, group, kind, namespaceForError(requested))
+		return nil, fmt.Errorf("permission_check_failed: could not discover your Radar namespace access; retry when the permission check is available")
 	}
 	allowed := pkgauth.FilterNamespacesForUser(clamped, user, perms)
 	if allowed != nil && len(allowed) == 0 {
-		return nil, fmt.Errorf("%w; no namespace access for the requested scope", resourcePermissionError(true, verb, group, kind, namespaceForError(requested)))
+		scope := "any namespace in the requested scope"
+		if len(clamped) == 1 {
+			scope = fmt.Sprintf("namespace %q", clamped[0])
+		} else if len(clamped) > 0 {
+			scope = fmt.Sprintf("namespaces %q", clamped)
+		}
+		return nil, fmt.Errorf("forbidden: no Radar access to %s (Radar grants namespace access when your role can list pods or deployments there; re-checked every ~2 minutes)", scope)
 	}
 	return allowed, nil
 }
@@ -47,7 +55,7 @@ func namespaceForError(namespaces []string) string {
 	if len(namespaces) == 1 {
 		return namespaces[0]
 	}
-	return ""
+	return strings.Join(namespaces, ",")
 }
 
 func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCache, error) {
@@ -58,6 +66,7 @@ func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCa
 		if cache == nil {
 			return nil, errNotConnected()
 		}
+
 		return cache, nil
 	}
 	cache, readiness := k8s.ReadableCacheForKind(gvr.Resource)
@@ -70,14 +79,19 @@ func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCa
 	case k8s.KindFailed:
 		return nil, fmt.Errorf("kind_sync_failed: %s failed to load within the sync deadline; check Radar's collector connection and list/watch permissions", gvr.Resource)
 	case k8s.KindUnavailable:
+		if result := k8s.GetCachedPermissionResult(); result != nil {
+			if scope, probed := result.Scopes[gvr.Resource]; probed && !scope.Enabled {
+				if apierrors.IsUnauthorized(result.ProbeErrors[gvr.Resource]) {
+					return nil, fmt.Errorf("collector_unauthorized: Radar's credentials were rejected; the kubeconfig token may have expired: %w", result.ProbeErrors[gvr.Resource])
+				}
+				return nil, fmt.Errorf("collector_forbidden: Radar's service account / kubeconfig identity can't list/watch %s in API group %q", gvr.Resource, gvr.Group)
+			}
+		}
 		return nil, fmt.Errorf("kind_not_watched: Radar is not watching resource %q in API group %q; check Radar's collector list/watch permissions and collection configuration", gvr.Resource, gvr.Group)
-	}
-	if len(namespaces) == 0 && len(cache.KindNamespaces(gvr.Resource)) > 0 {
-		return nil, fmt.Errorf("kind_not_watched: Radar's %s cache covers only selected namespaces; specify a namespace within the collector's scope", gvr.Resource)
 	}
 	for _, ns := range namespaces {
 		if !cache.KindCoversNamespace(gvr.Resource, ns) {
-			return nil, fmt.Errorf("kind_not_watched: Radar does not watch %s in namespace %q; this namespace is outside the collector's scope", gvr.Resource, ns)
+			return nil, fmt.Errorf("kind_not_watched: Radar does not watch %s in namespace %q; this namespace is outside the collector's scope; covered namespaces: %q", gvr.Resource, ns, cache.KindNamespaces(gvr.Resource))
 		}
 	}
 	return cache, nil
@@ -92,7 +106,10 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		return false, fmt.Errorf("unknown_kind: %w", readErr)
 	}
 	if errors.Is(readErr, k8s.ErrDynamicNotReady) {
-		return false, fmt.Errorf("kind_not_watched: %w", readErr)
+		if k8s.GetConnectionStatus().State == k8s.StateConnecting {
+			return false, fmt.Errorf("kind_sync_pending: %s: %w; cluster connection is still loading, please retry shortly", kind, readErr)
+		}
+		return false, fmt.Errorf("kind_not_watched: %s: %w", kind, readErr)
 	}
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
@@ -114,7 +131,17 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		(gvr.Group == "coordination.k8s.io" && gvr.Resource == "leases") ||
 		(verb == "get" && ((gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions") ||
 			(gvr.Group == "apiregistration.k8s.io" && gvr.Resource == "apiservices"))))
-	if apierrors.IsForbidden(readErr) || apierrors.IsUnauthorized(readErr) {
+	if apierrors.IsUnauthorized(readErr) {
+		return false, fmt.Errorf("collector_unauthorized: Radar's credentials were rejected; the kubeconfig token may have expired: %w", readErr)
+	}
+	if apierrors.IsForbidden(readErr) {
+		if ok && dynamicCache != nil && namespace != "" {
+			observation := dynamicCache.Observation(gvr)
+			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && !slices.Contains(observation.Namespaces, namespace) {
+				return false, fmt.Errorf("kind_not_watched: Radar does not watch %s in namespace %q; covered namespaces: %q: %w", kind, namespace, observation.Namespaces, readErr)
+			}
+		}
+
 		collector := "Radar's service account"
 		if !k8s.IsInCluster() {
 			collector = "Radar's kubeconfig identity"
@@ -132,6 +159,14 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 	if !ok || dynamicCache == nil || direct {
 		return false, readErr
 	}
+	if readErr == nil || apierrors.IsNotFound(readErr) || errors.Is(readErr, k8score.ErrResourceNotFound) {
+		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
+			_, waitErr := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
+			if waitErr != nil {
+				return checkDynamicResourceRead(kind, group, namespace, verb, waitErr)
+			}
+		}
+	}
 	observation := dynamicCache.Observation(gvr)
 	switch observation.State {
 	case k8score.DynamicObservationSyncing:
@@ -145,14 +180,13 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		if namespace != "" && !dynamicCache.IsNamespaceSynced(gvr, namespace) {
 			return false, fmt.Errorf("kind_not_watched: Radar does not watch %s in namespace %q", kind, namespace)
 		}
-		if namespace == "" && (observation.Truncated || observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces) {
-			return false, fmt.Errorf("kind_not_watched: Radar's %s cache covers only selected namespaces; specify a namespace within the collector's scope", kind)
-		}
 	case k8score.DynamicObservationUnsupported:
 		return false, fmt.Errorf("kind_not_watched: %s does not support list/watch", kind)
 	}
 	return dynamicCache.IsNamespaceSynced(gvr, namespace), readErr
 }
+
+const dynamicSyncWait = 3 * time.Second
 
 func resourceSecretNamespaces(ctx context.Context, allowed []string, verb string) ([]string, error) {
 	if allowed == nil {
@@ -183,14 +217,18 @@ func resourceGetError(ctx context.Context, err error, kind, namespace, name stri
 	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 		return notFoundError(ctx, err, kind, namespace, name)
 	}
-	return fmt.Errorf("failed to get %s: %w", kind, err)
+	return err
 }
 
 func fetchMCPDynamicResource(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace, name string) (*unstructured.Unstructured, error) {
 	obj, err := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 	cachedReady, err := checkDynamicResourceRead(kind, group, namespace, "get", err)
 	if cachedReady && (err == nil || apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)) {
-		return cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+		obj, err = cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+		if err != nil {
+			_, err = checkDynamicResourceRead(kind, group, namespace, "get", err)
+		}
+		return obj, err
 	}
 	return obj, err
 }

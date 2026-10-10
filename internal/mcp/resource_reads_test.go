@@ -8,6 +8,7 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -198,15 +199,15 @@ func TestResourceReadsPermissionAndScopeFailures(t *testing.T) {
 			} else {
 				_, _, err = handleGetResource(ctx, nil, getResourceInput{Kind: kind, Namespace: ns, Name: "hidden"})
 			}
-			if err == nil || !strings.Contains(err.Error(), "forbidden") || !strings.Contains(err.Error(), ns) || !strings.Contains(err.Error(), verb) {
+			if err == nil || !strings.Contains(err.Error(), "forbidden") || !strings.Contains(err.Error(), ns) || (kind == "secrets" && !strings.Contains(err.Error(), verb)) {
 				t.Fatalf("%s/%s: expected namespace caller denial, got %v", kind, verb, err)
 			}
 		}
 	}
 	noAccess := withRestrictedUser(t, "no-access", []string{})
 	_, _, err := handleListResources(noAccess, nil, listResourcesInput{Kind: "pods"})
-	if err == nil || !strings.Contains(err.Error(), "no namespace access") {
-		t.Fatalf("expected no namespace access, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no Radar access") {
+		t.Fatalf("expected Radar namespace access denial, got %v", err)
 	}
 	unchecked := withClusterAdmin(t, "unchecked")
 	for _, kind := range []string{"nodes", "secrets"} {
@@ -268,12 +269,17 @@ func TestResourceReadsReportFailedAndDisabledTypedKinds(t *testing.T) {
 	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(), map[string]k8score.ResourceScope{"services": {Enabled: true, Namespace: "alpha"}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, input := range []listResourcesInput{{Kind: "nodes"}, {Kind: "services", Namespace: "beta"}, {Kind: "services"}} {
+	for _, input := range []listResourcesInput{{Kind: "nodes"}, {Kind: "services", Namespace: "beta"}} {
 		_, _, err := handleListResources(context.Background(), nil, input)
 		if err == nil || !strings.Contains(err.Error(), "kind_not_watched") {
 			t.Fatalf("expected unwatched kind/scope, got %v", err)
 		}
 	}
+	result, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "services", Context: "none"})
+	if err != nil || extractText(t, result) != "[]" {
+		t.Fatalf("unscoped collector-covered list: %v, %v", result, err)
+	}
+
 }
 
 func TestResourceReadsDynamicPendingAndCollectorDenial(t *testing.T) {
@@ -339,7 +345,7 @@ func TestResourceReadsDynamicPendingAndCollectorDenial(t *testing.T) {
 						} else if b.Kind == "CustomResourceDefinition" && verb == "get" {
 							want = "resource not found"
 						}
-						if err == nil || !strings.Contains(err.Error(), want) || (want != "resource not found" && strings.Contains(err.Error(), "resource not found")) {
+						if err == nil || !(strings.HasPrefix(err.Error(), want+":") || (want == "resource not found" && strings.Contains(err.Error(), want))) || (want != "resource not found" && strings.Contains(err.Error(), "resource not found")) {
 							t.Fatalf("%s: expected %s, got %v", verb, want, err)
 						}
 						if denied && (!strings.Contains(err.Error(), "Radar's") || !strings.Contains(err.Error(), "can't ")) {
@@ -430,5 +436,297 @@ func TestResourceReadsFailedSARCanRecover(t *testing.T) {
 				t.Fatalf("failed SAR must not be cached: got %d checks", calls)
 			}
 		}
+	}
+}
+
+func TestResourceReadsNamespacesIgnoreNamespacePin(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	oldPin, oldTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("alpha")
+	t.Cleanup(func() { k8s.ForceNamespaceScope = oldPin; k8s.SetNamespaceScopeOverride(oldTarget) })
+	for _, allowed := range [][]string{{"alpha"}, {}} {
+		ctx := withRestrictedUser(t, "namespace-reader", allowed)
+		getPermCache().Get("namespace-reader", nil).SetCanI("list", "", "namespaces", "", true)
+		result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "namespaces", Namespace: "beta", Context: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ns := range []string{"alpha", "beta", "gamma"} {
+			if !containsName(extractText(t, result), ns) {
+				t.Fatalf("Namespace list must ignore pin/namespace membership: %s", extractText(t, result))
+			}
+		}
+	}
+}
+
+func TestResourceReadsScopedCollectorIntersection(t *testing.T) {
+	client := fake.NewClientset(
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "alpha-service", Namespace: "alpha"}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "beta-service", Namespace: "beta"}},
+	)
+	if err := k8s.InitScopedTestResourceCache(client, map[string]k8score.ResourceScope{"services": {Enabled: true, Namespace: "alpha"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	for _, allowed := range [][]string{nil, {"alpha", "beta"}, {"beta"}} {
+		ctx := withRestrictedUser(t, "scoped-reader", allowed)
+		result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "services", Context: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := extractText(t, result)
+		if len(allowed) == 1 {
+			if body != "[]" {
+				t.Fatalf("empty intersection: %s", body)
+			}
+		} else if !containsName(body, "alpha-service") || containsName(body, "beta-service") {
+			t.Fatalf("incorrect covered intersection: %s", body)
+		}
+	}
+	_, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "services", Namespace: "beta"})
+	if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces: ["alpha"]`) {
+		t.Fatalf("explicit uncovered scope: %v", err)
+	}
+}
+
+func TestResourceReadsColdDynamicKinds(t *testing.T) {
+	kinds := []resourceid.Builtin{{Kind: "Widget", Resource: "widgets", Group: "example.test", Version: "v1", Namespaced: true}}
+	for _, b := range resourceid.Builtins {
+		if _, _, cluster := k8s.ClusterOnlyKindGVR(b.Resource); cluster && !k8s.TypedKindOwnsGroup(b.Kind, b.Group) {
+			kinds = append(kinds, b)
+		}
+	}
+	for _, b := range kinds {
+		for _, verb := range []string{"list", "get"} {
+			t.Run(b.Kind+"/"+verb, func(t *testing.T) {
+				if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(k8s.ResetTestState)
+				version := b.Version
+				if version == "" {
+					version = "v1"
+				}
+				gvr := schema.GroupVersionResource{Group: b.Group, Version: version, Resource: b.Resource}
+				obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": gvr.GroupVersion().String(), "kind": b.Kind, "metadata": map[string]any{"name": "present"}}}
+				ns := ""
+				if b.Namespaced {
+					ns = "alpha"
+					obj.SetNamespace(ns)
+				}
+				dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: b.Kind + "List"}, obj)
+				if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: b.Group, Version: version, Kind: b.Kind, Name: b.Resource, Namespaced: b.Namespaced, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(k8s.ResetTestDynamicState)
+				if len(k8s.GetDynamicResourceCache().GetWatchedResources()) != 0 {
+					t.Fatal("fixture must not prewarm informers")
+				}
+				var result *mcpsdk.CallToolResult
+				var err error
+				if verb == "list" {
+					result, _, err = handleListResources(context.Background(), nil, listResourcesInput{Kind: b.Kind, Group: b.Group, Namespace: ns, Context: "none"})
+				} else {
+					result, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: b.Kind, Group: b.Group, Namespace: ns, Name: "present", Context: "none"})
+				}
+				if err != nil {
+					t.Fatalf("cold first %s: %v", verb, err)
+				}
+				if !containsName(extractText(t, result), "present") {
+					t.Fatalf("cold read lost present object: %s", extractText(t, result))
+				}
+			})
+		}
+	}
+}
+
+func TestResourceReadsCollectorReasons(t *testing.T) {
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(), map[string]k8score.ResourceScope{"nodes": {}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	for _, unauthorized := range []bool{false, true} {
+		probeErrors := map[string]error{}
+		want := "collector_forbidden:"
+		if unauthorized {
+			probeErrors["nodes"] = apierrors.NewUnauthorized("expired token")
+			want = "collector_unauthorized:"
+		}
+		restore := k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{"nodes": {}}, ProbeErrors: probeErrors})
+		for _, verb := range []string{"list", "get"} {
+			var err error
+			if verb == "list" {
+				_, _, err = handleListResources(context.Background(), nil, listResourcesInput{Kind: "nodes"})
+			} else {
+				_, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: "nodes", Name: "x"})
+			}
+			if err == nil || !strings.HasPrefix(err.Error(), want) {
+				t.Fatalf("%s: %v", verb, err)
+			}
+		}
+		restore()
+	}
+	old := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting})
+	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
+	_, err := checkDynamicResourceRead("widgets", "example.test", "alpha", "list", k8s.ErrDynamicNotReady)
+	if err == nil || !strings.HasPrefix(err.Error(), "kind_sync_pending:") {
+		t.Fatalf("connecting dynamic: %v", err)
+	}
+	_, err = checkDynamicResourceRead("widgets", "example.test", "alpha", "list", apierrors.NewUnauthorized("expired token"))
+	if err == nil || !strings.HasPrefix(err.Error(), "collector_unauthorized:") || strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("collector credentials: %v", err)
+	}
+	for _, kind := range []string{"pods", "widgets"} {
+		_, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: kind, Name: "x"})
+		want := "namespace_required:"
+		if kind == "widgets" {
+			want = "unknown_kind:"
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Fatalf("%s: %v", kind, err)
+		}
+	}
+}
+
+func TestResourceReadsNamespaceDenialAttribution(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "attribution-reader", []string{"alpha"})
+	for _, kind := range []string{"pods", "widgets"} {
+		_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: kind, Namespace: "beta"})
+		for _, text := range []string{"no Radar access", "beta", "list pods or deployments", "~2 minutes"} {
+			if err == nil || !strings.Contains(err.Error(), text) {
+				t.Fatalf("missing %s: %v", text, err)
+			}
+		}
+		if strings.Contains(err.Error(), "your role cannot list") || strings.Contains(err.Error(), "API group") {
+			t.Fatalf("namespace membership cannot claim exact SAR: %v", err)
+		}
+	}
+	err := resourcePermissionError(true, "list", "", "secrets", namespaceForError([]string{"alpha", "beta"}))
+	if strings.Contains(err.Error(), "at cluster scope") || !strings.Contains(err.Error(), "beta") {
+		t.Fatal(err)
+	}
+}
+
+func TestResourceReadsDynamicCollectorIntersection(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	restore := k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}, NamespaceScoped: true, Namespace: "alpha", ScopeCandidates: []string{"alpha", "beta"}})
+	t.Cleanup(restore)
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"name": "alpha-widget", "namespace": "alpha"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, obj)
+	dyn.PrependReactor("list", "widgets", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() != "alpha" {
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("collector denied"))
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, allowed := range [][]string{nil, {"alpha", "beta"}, {"beta"}} {
+		ctx := withRestrictedUser(t, "dynamic-scoped-reader", allowed)
+		result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "widgets", Context: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := extractText(t, result)
+		if len(allowed) == 1 {
+			if body != "[]" {
+				t.Fatalf("empty intersection: %s", body)
+			}
+		} else if !containsName(body, "alpha-widget") {
+			t.Fatalf("missing covered widget: %s", body)
+		}
+	}
+	for _, verb := range []string{"list", "get"} {
+		var err error
+		if verb == "list" {
+			_, _, err = handleListResources(context.Background(), nil, listResourcesInput{Kind: "widgets", Namespace: "beta"})
+		} else {
+			_, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: "widgets", Namespace: "beta", Name: "x"})
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces: ["alpha"]`) {
+			t.Fatalf("%s explicit uncovered scope: %v", verb, err)
+		}
+	}
+}
+
+func TestResourceReadsDynamicUnauthorizedPrefix(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	dyn.PrependReactor("list", "widgets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewUnauthorized("expired token")
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, verb := range []string{"list", "get"} {
+		var err error
+		if verb == "list" {
+			_, _, err = handleListResources(context.Background(), nil, listResourcesInput{Kind: "widgets", Namespace: "alpha"})
+		} else {
+			_, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: "widgets", Namespace: "alpha", Name: "x"})
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), "collector_unauthorized:") || !strings.Contains(err.Error(), "expired token") {
+			t.Fatalf("%s credentials rejection: %v", verb, err)
+		}
+	}
+}
+
+func TestResourceReadsCollectorCoverageRespectsGroupCollision(t *testing.T) {
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(), map[string]k8score.ResourceScope{"services": {Enabled: true, Namespace: "alpha"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "services"}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "serving.knative.dev/v1", "kind": "Service", "metadata": map[string]any{"name": "beta-knative", "namespace": "beta"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ServiceList"}, obj)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Service", Name: gvr.Resource, Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	result, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "services", Group: gvr.Group, Context: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsName(extractText(t, result), "beta-knative") {
+		t.Fatalf("core Service coverage incorrectly narrowed Knative list: %s", extractText(t, result))
+	}
+}
+
+func TestResourceReadsColdDynamicUnderNamespacePin(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	oldPin, oldTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("alpha")
+	t.Cleanup(func() { k8s.ForceNamespaceScope = oldPin; k8s.SetNamespaceScopeOverride(oldTarget) })
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"name": "alpha-widget", "namespace": "alpha"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, obj)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	result, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "widgets", Context: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsName(extractText(t, result), "alpha-widget") {
+		t.Fatalf("cold pinned list lost widget: %s", extractText(t, result))
 	}
 }

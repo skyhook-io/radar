@@ -567,3 +567,21 @@ func TestProbeResourceAccess_ClusterOnlyKindsNoNsFallback(t *testing.T) {
 		t.Errorf("cluster-scoped kinds were probed namespace-scoped (would 404 in real cluster): %v", nsProbedClusterOnly)
 	}
 }
+
+func TestProbeResourceAccessRetainsUnauthorized(t *testing.T) {
+	dyn := fakeDyn(t, func(schema.GroupVersionResource, string) bool { return true }).(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("list", "*", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewUnauthorized("expired token")
+	})
+	for _, forced := range []bool{false, true} {
+		result, hadErrors := probeResourceAccess(context.Background(), dyn, []string{"alpha"}, forced)
+		if !hadErrors {
+			t.Fatal("credential rejection should shorten probe cache TTL")
+		}
+		for _, kind := range []string{"pods", "nodes", "services"} {
+			if result.Scopes[kind].Enabled || !apierrors.IsUnauthorized(result.ProbeErrors[kind]) {
+				t.Fatalf("%s: scope=%+v error=%v", kind, result.Scopes[kind], result.ProbeErrors[kind])
+			}
+		}
+	}
+}

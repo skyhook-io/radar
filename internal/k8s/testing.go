@@ -547,3 +547,17 @@ func allTestResourceTypes() map[string]bool {
 		"limitranges":              true,
 	}
 }
+
+// Test caches bypass startup probes; collector-denial tests need retained probe evidence.
+func SetTestPermissionResult(result *PermissionCheckResult) func() {
+	resourcePermsMu.Lock()
+	previous, expiry := cachedPermResult, resourcePermsExpiry
+	cachedPermResult = result
+	resourcePermsExpiry = time.Now().Add(time.Hour)
+	resourcePermsMu.Unlock()
+	return func() {
+		resourcePermsMu.Lock()
+		cachedPermResult, resourcePermsExpiry = previous, expiry
+		resourcePermsMu.Unlock()
+	}
+}

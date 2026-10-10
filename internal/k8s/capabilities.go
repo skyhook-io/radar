@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -70,8 +71,9 @@ type ResourcePermissions struct {
 //     be readable in several explicitly named namespaces.
 type PermissionCheckResult struct {
 	Perms                    *ResourcePermissions
-	NamespaceScoped          bool   // True if at least one resource type ended up namespace-scoped
-	Namespace                string // The fallback namespace used for namespace-scoped probes
+	NamespaceScoped          bool             // True if at least one resource type ended up namespace-scoped
+	Namespace                string           // The fallback namespace used for namespace-scoped probes
+	ProbeErrors              map[string]error // Retained credential rejection from per-kind list probes
 	Scopes                   map[string]k8score.ResourceScope
 	ScopeNamespaces          map[string][]string // Per-kind namespace-scoped informer fanout; nil/empty means use Scopes[key].Namespace
 	ScopeCandidates          []string            // The candidate namespaces the probe walked — the dynamic CRD cache probes these per-GVR as its namespace fallbacks
@@ -819,7 +821,8 @@ func SanitizeForLog(s string) string {
 // probeListAccessWith attempts a list?limit=1 against the GVR using the
 // given dynamic client. Returns:
 //   - allowed=true: list succeeded — informer can run.
-//   - allowed=false, forbidden=true: explicit 403/401 — gate the informer.
+//   - allowed=false, forbidden=true: explicit 403/401 — gate the informer;
+//     401 is also retained in the error result so credentials can be diagnosed.
 //   - allowed=true, transient!=nil: non-auth error (network, 503, NotFound for
 //     missing CRD, etc.). Treated as "allow optimistically" so a transient API
 //     hiccup doesn't permanently disable the resource for the session — the
@@ -845,7 +848,10 @@ func probeListAccessWith(ctx context.Context, dyn dynamic.Interface, gvr schema.
 	if err == nil {
 		return true, false, nil
 	}
-	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+	if apierrors.IsUnauthorized(err) {
+		return false, true, err
+	}
+	if apierrors.IsForbidden(err) {
 		return false, true, nil
 	}
 	return true, false, err
@@ -871,6 +877,9 @@ func probeKindAccess(ctx context.Context, dyn dynamic.Interface, p resourceProbe
 		a, f, t := probeListAccessWith(ctx, dyn, gvr, namespace)
 		if a && t == nil {
 			return true, false, nil
+		}
+		if apierrors.IsUnauthorized(t) {
+			return false, true, t
 		}
 		if f {
 			// Native K8s RBAC is version-agnostic (apiGroups stanza names
@@ -961,6 +970,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 			NamespaceScoped:          cachedPermResult.NamespaceScoped,
 			Namespace:                cachedPermResult.Namespace,
 			Scopes:                   scopesCopy,
+			ProbeErrors:              maps.Clone(cachedPermResult.ProbeErrors),
 			ScopeNamespaces:          scopeNamespacesCopy,
 			ScopeCandidates:          append([]string(nil), cachedPermResult.ScopeCandidates...),
 			ScopeCandidatesTruncated: cachedPermResult.ScopeCandidatesTruncated,
@@ -1158,6 +1168,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	type probeOutcome struct {
 		scope      k8score.ResourceScope
 		namespaces []string
+		probeError error
 	}
 	outcomes := make([]probeOutcome, len(probes))
 
@@ -1195,6 +1206,9 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 				// sees Node counts, Namespace lists, and node metrics.
 				if p.clusterOnly {
 					allowed, _, transient := probeKindAccess(ctx, dyn, p, "")
+					if apierrors.IsUnauthorized(transient) {
+						outcomes[i].probeError = transient
+					}
 					if transient != nil {
 						hadErrors.Store(true)
 					}
@@ -1207,6 +1221,9 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 					return
 				}
 				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, forcedNs)
+				if apierrors.IsUnauthorized(nsTransient) {
+					outcomes[i].probeError = nsTransient
+				}
 				if nsTransient != nil {
 					hadErrors.Store(true)
 				}
@@ -1217,6 +1234,11 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 			}
 
 			allowed, forbidden, transient := probeKindAccess(ctx, dyn, p, "")
+			if apierrors.IsUnauthorized(transient) {
+				outcomes[i].probeError = transient
+				hadErrors.Store(true)
+				return
+			}
 			if transient != nil {
 				hadErrors.Store(true)
 			}
@@ -1249,6 +1271,9 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 					break
 				}
 				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, ns)
+				if apierrors.IsUnauthorized(nsTransient) {
+					outcomes[i].probeError = nsTransient
+				}
 				if nsTransient != nil {
 					hadErrors.Store(true)
 				}
@@ -1284,6 +1309,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 
 	// Apply outcomes to perms (boolean projection) and build the scope map.
 	scopes := make(map[string]k8score.ResourceScope, len(probes))
+	probeErrors := make(map[string]error)
 	scopeNamespacesByKind := make(map[string][]string)
 	namespaceScoped := false
 	var (
@@ -1293,6 +1319,9 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	for i, p := range probes {
 		r := outcomes[i]
 		scopes[p.key] = r.scope
+		if !r.scope.Enabled && r.probeError != nil {
+			probeErrors[p.key] = r.probeError
+		}
 		if r.scope.Enabled {
 			*p.field = true
 			if r.scope.Namespace != "" {
@@ -1364,6 +1393,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 		NamespaceScoped: namespaceScoped,
 		Namespace:       primaryNs,
 		Scopes:          scopes,
+		ProbeErrors:     probeErrors,
 		ScopeNamespaces: scopeNamespacesByKind,
 		ScopeCandidates: append([]string(nil), scopeNamespaces...),
 	}, hadErrors.Load()
@@ -1393,6 +1423,7 @@ func GetCachedPermissionResult() *PermissionCheckResult {
 		NamespaceScoped:          cachedPermResult.NamespaceScoped,
 		Namespace:                cachedPermResult.Namespace,
 		Scopes:                   scopesCopy,
+		ProbeErrors:              maps.Clone(cachedPermResult.ProbeErrors),
 		ScopeNamespaces:          scopeNamespacesCopy,
 		ScopeCandidates:          append([]string(nil), cachedPermResult.ScopeCandidates...),
 		ScopeCandidatesTruncated: cachedPermResult.ScopeCandidatesTruncated,

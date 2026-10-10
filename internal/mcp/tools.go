@@ -843,7 +843,6 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
-	isNamespacesKind := kind == "namespaces"
 	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
 	if clusterScoped {
 		granted, checked := canReadClusterScopedKindDecision(ctx, kind, group, "list")
@@ -853,8 +852,8 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	}
 	var allowed []string
 	var err error
-	if !clusterScoped || isNamespacesKind {
-		allowed, err = resourceReadNamespaces(ctx, requested, "list", kind, group)
+	if !clusterScoped {
+		allowed, err = resourceReadNamespaces(ctx, requested)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -865,9 +864,22 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 			return nil, nil, err
 		}
 	}
-	cache, err := resourceReadCache(kind, group, allowed)
+	var cacheScope []string
+	if input.Namespace != "" && !clusterScoped {
+		cacheScope = allowed
+	}
+	cache, err := resourceReadCache(kind, group, cacheScope)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if gvr, builtin := k8s.BuiltinGVRAnyGroup(kind); !clusterScoped && builtin && (group == "" || group == gvr.Group) && k8s.TypedKindOwnsGroup(kind, gvr.Group) {
+		if covered := cache.KindNamespaces(gvr.Resource); len(covered) > 0 {
+			allowed = intersectAllowedNamespaces(allowed, covered)
+			if len(allowed) == 0 {
+				return toJSONResult([]any{})
+			}
+		}
 	}
 
 	// For cluster-scoped reads, force a cluster-wide list (don't iterate
@@ -886,7 +898,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	// informer for built-ins — so only true CRDs / plural collisions go dynamic.
 	// Mirrors the group-aware dispatch in the REST handlers.
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
-		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
+		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Namespace != "", input.Context)
 	}
 
 	// Try typed cache first (group=="" → core/built-in lookup).
@@ -898,20 +910,13 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		// issue index drops the namespace filter for cluster-scoped
 		// CRDs — those issues live at namespace="" and would otherwise
 		// be filtered out by the user's namespaced-access set.
-		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
+		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Namespace != "", input.Context)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 	}
 
-	// Cluster-scoped kinds (FetchResourceList ignores `allowed` for them) and
-	// "namespaces" need post-filtering for namespace-restricted users.
-	// Skip post-filter when the user is cluster-scoped-authorized for a
-	// non-namespaces kind (clusterScoped && !allowed-restricted) — they
-	// should see the full cluster-scoped result. For "namespaces" the
-	// per-user filter ALWAYS applies even though it's cluster-scoped at
-	// the API.
-	if allowed != nil && (!clusterScoped || isNamespacesKind) {
+	if allowed != nil && !clusterScoped {
 		objs = retainAllowedObjects(objs, allowed, kind)
 	}
 
@@ -942,7 +947,37 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	return toJSONResult(results)
 }
 
-func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped bool, contextMode string) (*mcp.CallToolResult, any, error) {
+func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped, explicitNamespace bool, contextMode string) (*mcp.CallToolResult, any, error) {
+	discovery := k8s.GetResourceDiscovery()
+	dynamicCache := k8s.GetDynamicResourceCache()
+	if !clusterScoped && discovery != nil && dynamicCache != nil {
+		var gvr schema.GroupVersionResource
+		var found bool
+		if group != "" {
+			gvr, found = discovery.GetGVRWithGroup(kind, group)
+		} else {
+			gvr, found = discovery.GetGVR(kind)
+		}
+		if found {
+			if !explicitNamespace && !k8s.ForceNamespaceScope {
+				_, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
+				if err != nil {
+					_, err = checkDynamicResourceRead(kind, group, "", "list", err)
+					return nil, nil, err
+				}
+			}
+			observation := dynamicCache.Observation(gvr)
+			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
+				if !explicitNamespace {
+					namespaces = intersectAllowedNamespaces(namespaces, observation.Namespaces)
+					if len(namespaces) == 0 {
+						return toJSONResult([]any{})
+					}
+				}
+			}
+		}
+	}
+
 	var rawItems []*unstructured.Unstructured
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {
@@ -950,9 +985,12 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			cachedReady, err := checkDynamicResourceRead(kind, group, ns, "list", err)
 			if cachedReady && err == nil {
 				items, err = cache.ListDynamicWithGroup(ctx, kind, ns, group)
+				if err != nil {
+					_, err = checkDynamicResourceRead(kind, group, ns, "list", err)
+				}
 			}
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
+				return nil, nil, err
 			}
 			rawItems = append(rawItems, items...)
 		}
@@ -961,9 +999,12 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		cachedReady, err := checkDynamicResourceRead(kind, group, "", "list", err)
 		if cachedReady && err == nil {
 			items, err = cache.ListDynamicWithGroup(ctx, kind, "", group)
+			if err != nil {
+				_, err = checkDynamicResourceRead(kind, group, "", "list", err)
+			}
 		}
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
+			return nil, nil, err
 		}
 		rawItems = items
 	}
@@ -1003,9 +1044,23 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		}
 	} else {
 		if namespace == "" {
+			builtinGVR, builtin := k8s.BuiltinGVRAnyGroup(kind)
+			builtin = builtin && (group == "" || group == builtinGVR.Group)
+			discovery := k8s.GetResourceDiscovery()
+			known := builtin
+			if discovery != nil {
+				if group != "" {
+					_, known = discovery.GetGVRWithGroup(kind, group)
+				} else if !builtin {
+					_, known = discovery.GetGVR(kind)
+				}
+			}
+			if !known {
+				return nil, nil, fmt.Errorf("unknown_kind: %s", kind)
+			}
 			return nil, nil, fmt.Errorf("namespace_required: specify a namespace for %s", kind)
 		}
-		if _, err := resourceReadNamespaces(ctx, []string{namespace}, "get", kind, group); err != nil {
+		if _, err := resourceReadNamespaces(ctx, []string{namespace}); err != nil {
 			return nil, nil, err
 		}
 		if kind == "secrets" {

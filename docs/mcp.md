@@ -457,9 +457,11 @@ context shapes are unchanged.
 
 Errors distinguish the calling user's permissions from Radar's collection access:
 
-- `forbidden`: your role cannot perform the named verb on the API group/resource
-  in the named namespace or at cluster scope. A request with no accessible
-  namespaces explicitly reports no namespace access.
+- `forbidden`: exact permission checks (Secrets and cluster-scoped kinds) name
+  the verb, API group/resource and scope. Namespace-membership denials instead
+  say "no Radar access" and explain that Radar grants namespace access when your
+  role can list Pods or Deployments there, re-checked every approximately two
+  minutes; this is not an exact check of the requested namespaced kind.
 - `permission_check_failed`: Radar could not verify access; this is not proof
   that your role is forbidden. Retry after the permission check is available.
 - `outside_namespace_scope`: the requested namespace is excluded by Radar's
@@ -469,16 +471,27 @@ Errors distinguish the calling user's permissions from Radar's collection access
 - `collector_forbidden`: Radar's service account (or local kubeconfig identity)
   cannot collect or directly read the resource. Granting the caller access alone does not repair
   collection.
+- `collector_unauthorized`: Kubernetes rejected Radar's credentials; refresh its
+  service-account credentials or local kubeconfig token. This is distinct from
+  RBAC denial.
+- `namespace_required`: a known namespaced kind needs an explicit namespace for
+  `get_resource`.
 - `kind_sync_pending`: initial cache synchronization is still in progress; retry
   shortly. `kind_sync_failed` means the typed sync deadline elapsed or a dynamic
   sync stalled; inspect Radar's connection and collector list/watch permissions.
 - `kind_not_watched`: collection is unavailable or does not cover the requested
   namespace scope. `unknown_kind` means discovery does not recognize the kind.
 
-Dynamic resources are watched on demand; the first call can report loading.
+Dynamic resources are watched on demand. A bounded three-second initial-sync
+wait gives cold informers time to load before reporting loading; cached GETs
+can also use the cache's existing two-second missing-object wait. Namespace lists use the full
+collector list after the caller passes the list-namespaces permission check;
+namespace membership and `--namespace-scope` do not narrow them.
 Ordinary namespaced resources retain namespace-level authorization; Secrets and
 cluster-scoped kinds retain their additional per-kind permission checks. Lists
-may cover only the caller's readable namespaces; Secret lists additionally omit
+without an explicit namespace cover the intersection of the collector's covered
+namespaces and the caller's readable namespaces. Explicit requests outside
+collector coverage fail and name the covered namespaces. Secret lists additionally omit
 namespaces where the caller's Secret list permission is denied. A failed Secret
 permission check returns an error rather than silently omitting that namespace.
 
