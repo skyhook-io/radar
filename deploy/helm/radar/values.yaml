@@ -388,6 +388,11 @@ auth:
     # Key within the existingSecret that holds the client secret value
     clientSecretKey: "client-secret"
     redirectURL: ""
+    # ID token claim used as the Kubernetes username. Set it to the claim your
+    # kube-apiserver maps (--oidc-username-claim / claimMappings.username.claim)
+    # so RBAC bindings resolve the same in Radar and kubectl. Empty uses email,
+    # falling back to sub. When set, a token without that claim is refused.
+    usernameClaim: ""
     groupsClaim: "groups"
     # OAuth2 scopes requested at authorization. Defaults to
     # ["openid", "profile", "email", "groups"] inside the binary when empty.
