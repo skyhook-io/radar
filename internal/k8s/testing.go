@@ -119,7 +119,7 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 //
 // This is intended for integration tests only.
 func InitTestResourceCache(client kubernetes.Interface) error {
-	return initTestResourceCache(client, nil)
+	return initTestResourceCache(client, nil, nil)
 }
 
 // InitScopedTestResourceCache is InitTestResourceCache with per-kind scopes,
@@ -127,10 +127,16 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 // cluster-wide. It is what lets a test reach the paths that must refuse to
 // read an informer covering other namespaces.
 func InitScopedTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope) error {
-	return initTestResourceCache(client, scopes)
+	return initTestResourceCache(client, scopes, nil)
 }
 
-func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope) error {
+// InitScopedTestResourceCacheNamespaces is InitScopedTestResourceCache for
+// kinds the probe found listable in several namespaces.
+func InitScopedTestResourceCacheNamespaces(client kubernetes.Interface, scopes map[string]k8score.ResourceScope, namespaces map[string][]string) error {
+	return initTestResourceCache(client, scopes, namespaces)
+}
+
+func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope, scopeNamespaces map[string][]string) error {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 
@@ -150,8 +156,9 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		Client:        client,
 		ResourceTypes: enabled,
 		// No deferred types for tests — all sync immediately
-		DeferredTypes:  map[string]bool{},
-		ResourceScopes: scopes,
+		DeferredTypes:           map[string]bool{},
+		ResourceScopes:          scopes,
+		ResourceScopeNamespaces: scopeNamespaces,
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
@@ -545,5 +552,19 @@ func allTestResourceTypes() map[string]bool {
 		"ingressclasses":           true,
 		"networkpolicies":          true,
 		"limitranges":              true,
+	}
+}
+
+// Test caches bypass startup probes; collector-denial tests need retained probe evidence.
+func SetTestPermissionResult(result *PermissionCheckResult) func() {
+	resourcePermsMu.Lock()
+	previous, expiry := cachedPermResult, resourcePermsExpiry
+	cachedPermResult = result
+	resourcePermsExpiry = time.Now().Add(time.Hour)
+	resourcePermsMu.Unlock()
+	return func() {
+		resourcePermsMu.Lock()
+		cachedPermResult, resourcePermsExpiry = previous, expiry
+		resourcePermsMu.Unlock()
 	}
 }

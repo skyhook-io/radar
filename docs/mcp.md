@@ -447,6 +447,97 @@ Only the highest-spending namespaces get individual `type: namespace` series, ea
 
 Both tools return `guidance` as an array of interpretation notes; read notes about missing evidence and scope before reporting a conclusion.
 
+## Resource read errors
+
+`list_resources` and `get_resource` return MCP tool errors (`isError: true`) when
+Radar cannot establish a readable, synchronized view. A successful empty list
+remains `[]`; it means no objects were found within the readable requested scope,
+not that every namespace in the cluster was inspected. Successful resource and
+context shapes are unchanged.
+
+Errors distinguish the calling user's permissions from Radar's collection access:
+
+- `forbidden`: exact permission checks (Secrets and cluster-scoped kinds) name
+  the verb, API group/resource and scope.
+- `no_namespace_access`: namespace-membership denials say "no Radar access" and
+  explain that Radar grants namespace access when your
+  role can list Pods or Deployments there, re-checked every approximately two
+  minutes; this is not an exact check of the requested namespaced kind.
+- `permission_check_failed`: Radar could not verify access; this is not proof
+  that your role is forbidden. Retry after the permission check is available.
+- `outside_namespace_scope`: the requested namespace is excluded by Radar's
+  `--namespace-scope` selection. Changing caller permissions does not remove this
+  scope limit. The browser's namespace picker does not scope MCP requests;
+  specify `namespace` to narrow a tool call.
+- `collector_forbidden`: Radar's service account (or local kubeconfig identity)
+  cannot collect or directly read the resource. Granting the caller access alone does not repair
+  collection.
+- `collector_unauthorized`: Kubernetes rejected Radar's credentials; refresh its
+  service-account credentials or local kubeconfig token. This is distinct from
+  RBAC denial.
+- `namespace_required`: a known namespaced kind needs an explicit namespace for
+  `get_resource`.
+- `kind_sync_pending`: initial cache synchronization is still in progress; retry
+  shortly. `kind_sync_failed` means the typed sync deadline elapsed or a dynamic
+  sync stalled; inspect Radar's connection and collector list/watch permissions.
+- `kind_not_watched`: collection is unavailable, or a requested namespace is
+  outside the collector's coverage (see the coverage rule below); the error names
+  the uncovered namespaces and the covered namespaces you can read. `unknown_kind`
+  means neither the built-in catalog nor discovery recognizes the kind.
+  Unavailable discovery reports `kind_sync_pending` rather than claiming a kind is unknown.
+- `list_error` / `get_error`: an unexpected resource-read failure; the error
+  retains the requested kind and the underlying cause.
+
+Dynamic resources are watched on demand. An initial-sync wait of approximately
+three seconds per informer gives cold lists time to load before reporting loading.
+GETs of absent objects can also use the cache's existing approximately two-second
+missing-object wait before the three-second sync check. Namespace lists use the full
+collector list after the caller passes the list-namespaces permission check;
+namespace membership and `--namespace-scope` do not narrow them.
+Ordinary namespaced resources retain namespace-level authorization; Secrets and
+cluster-scoped kinds retain their additional per-kind permission checks.
+
+When Radar's collector covers only some namespaces, every kind follows one rule,
+which depends on whether the request is restricted. A request is **restricted**
+when it resolves to a finite namespace list: the caller's Radar namespace access
+is a list (auth is enabled and the namespace-membership check found no
+cluster-wide Pods or Deployments list access), the call names a `namespace`, or
+`--namespace-scope` pins Radar to one namespace. It is **unrestricted** when auth
+is disabled or the caller has cluster-wide namespace access, and no namespace is
+named or pinned.
+
+- A restricted request needs every namespace in its list covered. If any is
+  not, the read fails with `kind_not_watched`, even when other namespaces have
+  objects; a partial answer would read as the caller's whole scope. The error
+  names the uncovered namespaces and the covered namespaces the caller can read,
+  and suggests retrying with one of the covered namespaces as `namespace`.
+- An unrestricted request reads the namespaces the collector covers and omits
+  the rest, so unscoped lists keep working on a namespace-scoped collector. The
+  success shape has no field naming what was omitted.
+- A covered namespace with no objects returns `[]` either way.
+
+For example, on a collector that covers `alpha` and `gamma`, a caller allowed in
+`alpha` and `beta` gets `kind_not_watched` naming `beta` and offering `alpha`; a
+caller allowed only in `gamma`, covered but empty, gets `[]`; a cluster-wide
+caller gets `alpha`'s objects.
+
+Tool errors name only namespaces the caller may read or named in the request.
+Covered namespaces outside the caller's access are left out; when none remain,
+the error says the collector's coverage does not include any namespace the
+caller can read. Kinds Radar caches at startup know their coverage from the startup probe. Kinds watched
+on demand (custom resources) find theirs by reading: each requested namespace is
+read directly, including grants outside the collector's initial fallback
+candidates, and its informer sync is verified. Such a kind that the collector has
+not read in any namespace yet reports `collector_forbidden` for the denied
+namespace, since there is no covered namespace to name.
+Endpoints, EndpointSlices and Leases use direct API reads in the caller's allowed
+namespaces without an extra cluster-wide list or an informer. Rejected collector
+credentials are never treated as missing coverage: `collector_unauthorized` fails
+the read even when collection succeeds in a different namespace.
+Secret lists additionally omit
+namespaces where the caller's Secret list permission is denied. A failed Secret
+permission check returns an error rather than silently omitting that namespace.
+
 ## Available Tools
 
 ### Read Tools

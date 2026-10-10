@@ -567,3 +567,45 @@ func TestProbeResourceAccess_ClusterOnlyKindsNoNsFallback(t *testing.T) {
 		t.Errorf("cluster-scoped kinds were probed namespace-scoped (would 404 in real cluster): %v", nsProbedClusterOnly)
 	}
 }
+
+func TestProbeResourceAccessRetainsUnauthorized(t *testing.T) {
+	dyn := fakeDyn(t, func(schema.GroupVersionResource, string) bool { return true }).(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("list", "*", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewUnauthorized("expired token")
+	})
+	for _, forced := range []bool{false, true} {
+		result, hadErrors := probeResourceAccess(context.Background(), dyn, []string{"alpha"}, forced)
+		if !hadErrors {
+			t.Fatal("credential rejection should shorten probe cache TTL")
+		}
+		for _, kind := range []string{"pods", "nodes", "services"} {
+			if result.Scopes[kind].Enabled || !apierrors.IsUnauthorized(result.ProbeErrors[kind]) {
+				t.Fatalf("%s: scope=%+v error=%v", kind, result.Scopes[kind], result.ProbeErrors[kind])
+			}
+		}
+	}
+}
+
+func TestProbeResourceAccessRetainsNamespaceUnauthorizedAfterGrant(t *testing.T) {
+	dyn := fakeDyn(t, func(_ schema.GroupVersionResource, ns string) bool { return ns == "beta" }).(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("list", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "alpha" {
+			return true, nil, apierrors.NewUnauthorized("alpha rejected token")
+		}
+		return false, nil, nil
+	})
+	result, hadErrors := probeResourceAccess(context.Background(), dyn, []string{"alpha", "beta"}, false)
+	if !hadErrors || !result.Scopes["pods"].Enabled || result.Scopes["pods"].Namespace != "beta" {
+		t.Fatalf("later grant lost: %+v, errors=%v", result, hadErrors)
+	}
+	if !apierrors.IsUnauthorized(result.NamespaceProbeErrors["pods"]["alpha"]) || result.NamespaceProbeErrors["pods"]["beta"] != nil || result.ProbeErrors["pods"] != nil {
+		t.Fatalf("credential rejection must remain namespace-specific: %+v", result)
+	}
+	t.Cleanup(SetTestPermissionResult(result))
+	for _, copyResult := range []*PermissionCheckResult{CheckResourcePermissions(context.Background()), GetCachedPermissionResult()} {
+		delete(copyResult.NamespaceProbeErrors["pods"], "alpha")
+		if !apierrors.IsUnauthorized(GetCachedPermissionResult().NamespaceProbeErrors["pods"]["alpha"]) {
+			t.Fatal("caller mutated cached namespace error evidence")
+		}
+	}
+}
