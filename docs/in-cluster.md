@@ -662,7 +662,11 @@ Fix it either way:
 
   Outside Helm, set `RADAR_TRUSTED_ORIGINS` or pass `--trusted-origins`. Use the scheme and host exactly as they appear in your browser's address bar, with the port if there is one. Separate several with commas.
 
-  A trusted origin can do everything Radar's own page can: make changes and open pod terminals (and, on a local install, the local terminal). List only addresses that serve Radar. This setting does not cover the MCP endpoint at `/mcp`, which has its own `RADAR_MCP_TRUSTED_ORIGINS`.
+  A trusted origin can do everything Radar's own page can: read, make changes and open pod terminals (and, on a local install, the local terminal). List only addresses that serve Radar. This setting does not cover the MCP endpoint at `/mcp`, which has its own `RADAR_MCP_TRUSTED_ORIGINS`.
+
+A page served from any other address cannot call Radar's API at all, reads included. That covers another port on `localhost`, because browsers treat all ports on a host as one site. If you run your own browser tool that calls Radar's API, for example a dashboard on `http://localhost:3000`, add its address to trusted origins the same way. curl, scripts and MCP clients are not affected.
+
+This read check relies on the `Sec-Fetch-Site` header, which browsers send only to HTTPS addresses and to `localhost`. If you open Radar over plain HTTP at any other address, a page on another site can still make Radar answer a read, though it cannot see the answer. Changes stay protected either way. Serve Radar over HTTPS to close that gap.
 
 Radar logs each refusal with the headers it received:
 

@@ -185,7 +185,7 @@ The table below covers common startup flags. See the [full CLI reference](https:
 | `--port` | `9280` | Server port |
 | `--listen-address` | `127.0.0.1` | HTTP listen IP address (IPv4 or IPv6), or `localhost`. Bind a specific local IP or use `0.0.0.0` for all interfaces. Non-loopback access needs authentication and network controls. |
 | `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
-| `--trusted-origins` | | Comma-separated origins, besides the address Radar is opened at, that may make changes and open terminals, e.g. `http://radar.internal`. Set this when a proxy in front of Radar rewrites the `Host` header and changes fail with "Radar refused this request". Exact origins, no wildcards. Does not apply to `/mcp` (see `RADAR_MCP_TRUSTED_ORIGINS`). Env: `RADAR_TRUSTED_ORIGINS` |
+| `--trusted-origins` | | Comma-separated origins, besides the address Radar is opened at, that may use Radar's API, including changes and terminals, e.g. `http://radar.internal`. Set this when a proxy in front of Radar rewrites the `Host` header and changes fail with "Radar refused this request". Exact origins, no wildcards. Does not apply to `/mcp` (see `RADAR_MCP_TRUSTED_ORIGINS`). Env: `RADAR_TRUSTED_ORIGINS` |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |

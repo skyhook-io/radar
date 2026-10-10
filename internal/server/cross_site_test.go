@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -42,7 +43,17 @@ func TestRequireSameOriginRefusesCrossSiteWrites(t *testing.T) {
 		{"script or AI client, no Origin at all", "POST", map[string]string{}, 200},
 		{"cross-site DELETE", "DELETE",
 			map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}, 403},
-		{"read with a hostile Origin is untouched", "GET",
+		{"cross-site fetch GET", "GET",
+			map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}, 403},
+		{"cross-site <img> GET, which carries no Origin", "GET",
+			map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"}, 403},
+		{"cross-site HEAD", "HEAD", map[string]string{"Sec-Fetch-Site": "cross-site"}, 403},
+		{"GET from another localhost port is same-site", "GET",
+			map[string]string{"Origin": "http://localhost:3000", "Sec-Fetch-Site": "same-site"}, 403},
+		{"same-origin GET from Radar's own page", "GET", map[string]string{"Sec-Fetch-Site": "same-origin"}, 200},
+		{"GET typed into the address bar", "GET", map[string]string{"Sec-Fetch-Site": "none"}, 200},
+		{"GET from curl, no fetch metadata", "GET", map[string]string{}, 200},
+		{"cross-site CORS preflight is still answered", "OPTIONS",
 			map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -89,19 +100,54 @@ func TestRequireSameOriginTrustsTheAuthenticatedTunnel(t *testing.T) {
 	}
 }
 
+// A cross-site GET is still allowed over the Hub tunnel and from an origin the
+// operator listed in trusted origins, the same two ways a write is.
+func TestRequireSameOriginAllowsCrossSiteReadsFromTunnelAndTrustedOrigins(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	newReq := func(origin string) *http.Request {
+		r := httptest.NewRequest("GET", "http://localhost:9280/api/resources/pods", nil)
+		r.Host = "localhost:9280"
+		r.Header.Set("Sec-Fetch-Site", "cross-site")
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+
+	s := &Server{trustedOrigins: trustedOriginSet(t, "https://portal.example.com")}
+	for _, tc := range []struct {
+		name   string
+		h      http.Handler
+		origin string
+		want   int
+	}{
+		{"untrusted origin", s.requireSameOrigin(next), "https://evil.example", 403},
+		{"trusted origin", s.requireSameOrigin(next), "https://portal.example.com", 200},
+		{"over the authenticated tunnel", cloud.AuthenticatedTunnelHandler(s.requireSameOrigin(next)), "https://app.skyhook.io", 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tc.h.ServeHTTP(w, newReq(tc.origin))
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
+	}
+}
+
 // The guard is worthless if it stops being mounted. This walks the real route
-// table and sends a cross-site request to every state-changing route, so a new
-// route registered outside the /api group, or a reordered r.Use, fails here
-// instead of silently going unprotected. It runs with and without a base path,
+// table and sends a cross-site request to every /api route, writes and reads,
+// so a new route registered outside the /api group, or a reordered r.Use,
+// fails here instead of silently going unprotected. It runs with and without a base path,
 // because the base path mounts the same routes under a prefix.
 //
-// Routes outside /api that accept a state-changing method must be listed in
-// writesOutsideAPI with the reason they are safe without this guard. The MCP
+// Routes outside /api must be listed in writesOutsideAPI or readsOutsideAPI
+// with the reason they are safe without this guard. The MCP
 // mounts are stubs here (internal/mcp imports this package); their own
 // cross-origin check is pinned in internal/mcp. OIDC routes are not mounted
 // in this config: /auth/backchannel-logout is called server to server by the
 // identity provider and carries a signed token.
-func TestAPIWritesAreGuardedOnTheRealRouter(t *testing.T) {
+func TestAPIRoutesAreGuardedOnTheRealRouter(t *testing.T) {
 	writesOutsideAPI := map[string]string{
 		"/*":                               "frontend static files, read only for every method",
 		"/.well-known/*":                   "always 404",
@@ -112,6 +158,33 @@ func TestAPIWritesAreGuardedOnTheRealRouter(t *testing.T) {
 		"/mcp-readonly/*":                  "MCP, guarded by its own http.CrossOriginProtection",
 		"/mcp-investigation/*":             "MCP, guarded by its own http.CrossOriginProtection",
 	}
+	readsOutsideAPI := map[string]string{
+		"/*":                               "frontend static files",
+		"/.well-known/*":                   "always 404",
+		"/mcp/.well-known/*":               "always 404",
+		"/mcp-readonly/.well-known/*":      "always 404",
+		"/mcp-investigation/.well-known/*": "always 404",
+		"/mcp/*":                           "MCP, answers GET with nothing a page can use",
+		"/mcp-readonly/*":                  "MCP, answers GET with nothing a page can use",
+		"/mcp-investigation/*":             "MCP, answers GET with nothing a page can use",
+		"/metrics":                         "Prometheus scrape, no side effects",
+		"/.well-known/oauth-authorization-server": "OAuth metadata for MCP clients, static",
+		"/.well-known/oauth-protected-resource":   "OAuth metadata for MCP clients, static",
+		"/debug/pprof/":                           "local profiling, not mounted in cloud mode",
+	}
+	// A key ending in "/" covers every route under it.
+	listed := func(m map[string]string, route string) bool {
+		if _, ok := m[route]; ok {
+			return true
+		}
+		for k := range m {
+			if strings.HasSuffix(k, "/") && strings.HasPrefix(route, k) {
+				return true
+			}
+		}
+		return false
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
 	stub := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	param := regexp.MustCompile(`\{[^}]*\}`)
 
@@ -124,39 +197,68 @@ func TestAPIWritesAreGuardedOnTheRealRouter(t *testing.T) {
 		routes := chi.NewRouter()
 		srv.setupAppRoutes(routes)
 
-		guarded := 0
+		guarded, guardedReads := 0, 0
 		err := chi.Walk(routes, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+			read := false
 			switch method {
-			case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodConnect, http.MethodTrace:
+			case http.MethodOptions, http.MethodConnect, http.MethodTrace:
 				return nil
+			case http.MethodGet, http.MethodHead:
+				read = true
 			}
 			if !strings.HasPrefix(route, "/api/") {
-				if _, ok := writesOutsideAPI[route]; !ok {
+				if !read && !listed(writesOutsideAPI, route) {
 					t.Errorf("%s %s accepts writes outside /api, so requireSameOrigin does not cover it; move it under /api or list it in writesOutsideAPI with a reason", method, route)
+				}
+				if read && !listed(readsOutsideAPI, route) {
+					t.Errorf("%s %s is a read outside /api, so requireSameOrigin does not cover it; move it under /api or list it in readsOutsideAPI with a reason", method, route)
 				}
 				return nil
 			}
 			url := ts.URL + basePath + param.ReplaceAllString(strings.ReplaceAll(route, "*", "x"), "x")
-			req, err := http.NewRequest(method, url, strings.NewReader("{}"))
+			var reqBody io.Reader
+			if !read {
+				reqBody = strings.NewReader("{}")
+			}
+			req, err := http.NewRequest(method, url, reqBody)
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Origin", "https://evil.example")
 			req.Header.Set("Sec-Fetch-Site", "cross-site")
-			req.Header.Set("Content-Type", "text/plain")
-			resp, err := http.DefaultClient.Do(req)
+			if read {
+				// As an <img> or link on another site sends it: no Origin.
+				req.Header.Set("Sec-Fetch-Mode", "no-cors")
+			} else {
+				req.Header.Set("Origin", "https://evil.example")
+				req.Header.Set("Content-Type", "text/plain")
+			}
+			// A refusal answers at once. Without the guard, a GET reaches the
+			// real handler, and the streaming ones never finish, so a broken
+			// guard must fail here instead of hanging the test.
+			resp, err := client.Do(req)
 			if err != nil {
-				return err
+				t.Errorf("base path %q: cross-site %s %s: %v, want the cross-origin refusal", basePath, method, route, err)
+				return nil
 			}
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "cross_origin_refused") {
 				t.Errorf("base path %q: cross-site %s %s got %d %s, want the cross-origin refusal", basePath, method, route, resp.StatusCode, body)
 			}
-			guarded++
+			if read {
+				guardedReads++
+			} else {
+				guarded++
+			}
 			return nil
 		})
-		ts.Close()
+		// When the guard is broken, some handlers that were reached keep
+		// running after their client gave up, and Close would wait for them
+		// forever. Report the failures instead.
+		ts.CloseClientConnections()
+		if !t.Failed() {
+			ts.Close()
+		}
 		srv.Stop()
 		if err != nil {
 			t.Fatalf("base path %q: walk: %v", basePath, err)
@@ -165,6 +267,9 @@ func TestAPIWritesAreGuardedOnTheRealRouter(t *testing.T) {
 		// by checking nothing.
 		if guarded < 80 {
 			t.Errorf("base path %q: only %d state-changing /api routes found, want at least 80", basePath, guarded)
+		}
+		if guardedReads < 150 {
+			t.Errorf("base path %q: only %d read /api routes found, want at least 150", basePath, guardedReads)
 		}
 	}
 }

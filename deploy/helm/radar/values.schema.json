@@ -144,7 +144,7 @@
         "type": "string",
         "pattern": "^https?://(\\[[0-9A-Fa-f:.]+\\]|[^/*?#@,:\\[\\]\\s]+)(:(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3}))?/?$"
       },
-      "description": "Origins besides Radar's own address that may make changes and open pod terminals, e.g. http://radar.internal. Needed only when a proxy rewrites the Host header. Exact scheme://host[:port], no wildcards or paths. An entry the server cannot use is logged at startup and ignored."
+      "description": "Origins besides Radar's own address that may use Radar's API, including changes and pod terminals, e.g. http://radar.internal. Needed only when a proxy rewrites the Host header. Exact scheme://host[:port], no wildcards or paths. An entry the server cannot use is logged at startup and ignored."
     },
     "ingress": {
       "type": "object",

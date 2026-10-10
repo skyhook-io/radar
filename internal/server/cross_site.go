@@ -40,6 +40,26 @@ func (s *Server) browserOriginAllowed(r *http.Request) bool {
 	return sameAuthorityOriginOK(r) || s.viteDevProxyOriginOK(r)
 }
 
+// browserReadAllowed decides whether a GET or HEAD under /api may run. It
+// refuses only what the browser itself labels as coming from another site, so
+// curl, scripts and browsers that send no Sec-Fetch-Site are unaffected, and
+// a proxy that rewrites Host is too: the browser compares the page with the
+// address it sent the request to, both of which are Radar's public address.
+//
+// "same-site" is refused as well. A site ignores the port, so any other page
+// served from localhost is same-site with a local Radar.
+//
+// Browsers send Sec-Fetch-Site only to HTTPS and localhost addresses. Over
+// plain HTTP at any other address a cross-site read carries nothing to tell it
+// apart, so it passes. Writes do not depend on this: they also check Origin.
+func (s *Server) browserReadAllowed(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "cross-site", "same-site":
+		return cloud.IsAuthenticatedTunnelRequest(r.Context()) || s.originTrusted(r.Header.Get("Origin"))
+	}
+	return true
+}
+
 // sameAuthorityOriginOK compares the Origin with the Host the request arrived
 // with. An HTTPS request (TLS here, or X-Forwarded-Proto from a terminating
 // proxy) never accepts a plaintext origin.
@@ -146,28 +166,35 @@ func crossSiteExempt(r *http.Request) bool {
 	return false
 }
 
-// requireSameOrigin rejects state-changing requests that a browser initiated from
+// requireSameOrigin rejects /api requests that a browser initiated from
 // another site.
 //
-// A page can send a POST with no preflight when the content type is one a form
-// could produce, so CORS never gets consulted before the handler runs. CORS only
-// decides whether the page may read the response; the write has already
-// happened.
+// Writes: a page can send a POST with no preflight when the content type is one
+// a form could produce, so CORS never gets consulted before the handler runs.
+// CORS only decides whether the page may read the response; the write has
+// already happened.
 //
-// GET, HEAD and OPTIONS pass through. That is not a claim that every such route
-// is side-effect free: the pod exec and local-terminal WebSockets are GET, and a
-// WebSocket upgrade gets no preflight at all. Those routes check
-// browserOriginAllowed during the upgrade and must keep doing so. This
-// middleware cannot stand in for it, because refusing cross-site GET wholesale
-// would break ordinary top-level navigation to the UI.
+// Reads: an <img> or link on another site sends a GET with no preflight either.
+// The page cannot read the answer, but some GETs do work on the server before
+// answering, such as a trace with probe=true calling in-cluster backends or an
+// image lookup pulling from a registry. See browserReadAllowed.
+//
+// OPTIONS passes through so the CORS preflight is still answered. The pod exec
+// and local-terminal WebSocket upgrades also check browserOriginAllowed
+// themselves and must keep doing so: they are GET, and a trusted origin may
+// open them.
 func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		allowed := false
 		switch r.Method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions:
-			next.ServeHTTP(w, r)
-			return
+		case http.MethodOptions:
+			allowed = true
+		case http.MethodGet, http.MethodHead:
+			allowed = s.browserReadAllowed(r)
+		default:
+			allowed = crossSiteExempt(r) || s.browserOriginAllowed(r)
 		}
-		if crossSiteExempt(r) || s.browserOriginAllowed(r) {
+		if allowed {
 			next.ServeHTTP(w, r)
 			return
 		}
