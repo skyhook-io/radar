@@ -408,8 +408,8 @@ func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
 			{ID: "service/demo/web", Kind: KindService, Name: "web"},
 			{ID: "ingress/demo/web", Kind: KindIngress, Name: "web"},
-			{ID: "httproute/demo/web", Kind: KindHTTPRoute, Name: "web"},
-			{ID: "ingressroute/demo/web", Kind: KindIngressRoute, Name: "web"},
+			{ID: "httproute/demo/web", Kind: KindHTTPRoute, Name: "web", Data: map[string]any{"apiVersion": "gateway.networking.k8s.io/v1"}},
+			{ID: "ingressroute/demo/web", Kind: KindIngressRoute, Name: "web", Data: map[string]any{"apiVersion": "traefik.io/v1alpha1"}},
 		},
 		Edges: []Edge{
 			{ID: "service-to-workload", Source: "service/demo/web", Target: "deployment/demo/web", Type: EdgeExposes},
@@ -470,7 +470,7 @@ func TestGetRelationships_ServiceEntrypointsUseExactAPIGroup(t *testing.T) {
 		t.Fatalf("core workload borrowed custom Service entrypoints: %+v", core)
 	}
 	custom := GetRelationshipsWithIndex("Deployment", "demo", "custom", topo, nil, nil, idx)
-	if custom == nil || len(custom.Services) != 1 || custom.Services[0].Group != "platform.example.io" || len(custom.Routes) != 0 || len(custom.Ingresses) != 0 {
+	if custom == nil || len(custom.Services) != 0 || len(custom.RoutedFrom) != 1 || custom.RoutedFrom[0].Group != "platform.example.io" || len(custom.Routes) != 0 || len(custom.Ingresses) != 0 {
 		t.Fatalf("custom Service kind was given core Service entrypoint semantics: %+v", custom)
 	}
 }

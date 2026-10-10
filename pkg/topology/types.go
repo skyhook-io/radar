@@ -430,7 +430,7 @@ type Relationships struct {
 	Owner           *ResourceRef  `json:"owner,omitempty"`      // Parent via ownerReference (manages edge)
 	Deployment      *ResourceRef  `json:"deployment,omitempty"` // Grandparent Deployment (for Pods owned by ReplicaSets)
 	Children        []ResourceRef `json:"children,omitempty"`   // Resources this owns (manages edge)
-	Services        []ResourceRef `json:"services,omitempty"`   // Services selecting/exposing this
+	Services        []ResourceRef `json:"services,omitempty"`   // Core Services selecting/exposing this
 	Ingresses       []ResourceRef `json:"ingresses,omitempty"`  // Ingresses routing to this
 	Gateways        []ResourceRef `json:"gateways,omitempty"`   // Gateways routing to this (via routes)
 	Routes          []ResourceRef `json:"routes,omitempty"`     // Routes attached to this Gateway
@@ -453,6 +453,9 @@ type Relationships struct {
 
 	// Backends are non-Pod targets this resource routes to or exposes.
 	Backends []ResourceRef `json:"backends,omitempty"`
+
+	// RoutedFrom are upstream exposing resources other than core Services and recognized routes.
+	RoutedFrom []ResourceRef `json:"routedFrom,omitempty"`
 
 	// ServiceAccount is the ServiceAccount selected by this Pod or workload.
 	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`

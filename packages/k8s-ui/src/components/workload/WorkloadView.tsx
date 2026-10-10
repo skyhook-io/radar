@@ -3886,6 +3886,7 @@ function buildServingRelationshipGroups(relationships: Relationships | undefined
     ...(relationships.ingresses ?? []),
     ...(relationships.gateways ?? []),
     ...(relationships.routes ?? []),
+    ...(relationships.routedFrom ?? []),
   ])
   return [
     { label: 'Services', refs: dedupeResourceRefs(relationships.services ?? []) },
