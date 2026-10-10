@@ -19,4 +19,15 @@ describe('IngressRenderer default backend', () => {
     const html = renderToString(<IngressRenderer data={{ metadata: { name: 'empty', namespace: 'team' }, spec: { ingressClassName: 'nginx' } }} />)
     expect(html).toContain('Traffic will not be routed')
   })
+
+  it('shows a resource default backend', () => {
+    const html = renderToString(
+      <IngressRenderer data={{
+        metadata: { name: 'static', namespace: 'team' },
+        spec: { ingressClassName: 'nginx', defaultBackend: { resource: { apiGroup: 'k8s.example.com', kind: 'StorageBucket', name: 'static-assets' } } },
+      }} />,
+    )
+    expect(html).toContain('Default Backend')
+    expect(html).toContain('StorageBucket/static-assets')
+  })
 })

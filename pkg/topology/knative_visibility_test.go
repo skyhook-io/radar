@@ -24,6 +24,8 @@ func TestTrafficInternetReachesOnlyPublicKnativeServices(t *testing.T) {
 			ksvc("billing", "https://billing.team.example.com", map[string]string{"networking.knative.dev/visibility": "cluster-local"}),
 			// Made private through its Route: only the published URL says so.
 			ksvc("jobs", "http://jobs.team.svc.cluster.local", nil),
+			// A public domain that happens to start with "svc." stays public.
+			ksvc("shop", "https://shop.team.svc.example.com", nil),
 		}},
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
@@ -39,8 +41,10 @@ func TestTrafficInternetReachesOnlyPublicKnativeServices(t *testing.T) {
 			internet[edge.Target] = true
 		}
 	}
-	if !internet["knativeservice/team/web"] {
-		t.Errorf("public Knative Service lost its Internet edge: %v", internet)
+	for _, public := range []string{"knativeservice/team/web", "knativeservice/team/shop"} {
+		if !internet[public] {
+			t.Errorf("public %s lost its Internet edge: %v", public, internet)
+		}
 	}
 	for _, private := range []string{"knativeservice/team/billing", "knativeservice/team/jobs"} {
 		if internet[private] {

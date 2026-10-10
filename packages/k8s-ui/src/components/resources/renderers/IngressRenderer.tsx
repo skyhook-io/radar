@@ -1,6 +1,7 @@
 import { Globe, Shield, Clock } from 'lucide-react'
 import type { ResourceRef } from '../../../types'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { kindToPluralWithGroup } from '../../../utils/navigation'
 
 interface IngressRendererProps {
   data: any
@@ -17,6 +18,7 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
   const hasNoAddress = lbIngress.length === 0
   const hasNoClass = !spec.ingressClassName && !data.metadata?.annotations?.['kubernetes.io/ingress.class']
   const defaultService = spec.defaultBackend?.service
+  const defaultResource = spec.defaultBackend?.resource
   // An Ingress with only a default backend still routes everything to it.
   const hasNoRules = rules.length === 0 && !spec.defaultBackend
 
@@ -59,6 +61,18 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
                 kind="services"
                 namespace={data.metadata?.namespace || ''}
                 label={<span className="text-blue-400">{defaultService.name}:{defaultService.port?.number || defaultService.port?.name}</span>}
+                onNavigate={onNavigate}
+              />
+            } />
+          )}
+          {defaultResource?.name && (
+            <Property label="Default Backend" value={
+              <ResourceLink
+                name={defaultResource.name}
+                kind={kindToPluralWithGroup(defaultResource.kind, defaultResource.apiGroup || '')}
+                group={defaultResource.apiGroup || ''}
+                namespace={data.metadata?.namespace || ''}
+                label={<span className="text-blue-400">{`${defaultResource.kind}/${defaultResource.name}`}</span>}
                 onNavigate={onNavigate}
               />
             } />

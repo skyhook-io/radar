@@ -9108,8 +9108,8 @@ var _ = strings.Contains
 
 // knativeServiceIsClusterLocal reports whether a Knative Service is reachable
 // only inside the cluster: labelled networking.knative.dev/visibility=
-// cluster-local, or published at its <name>.<namespace>.svc cluster domain
-// (the label may sit on the Route instead, and the URL reflects either).
+// cluster-local, or published at its cluster-local URL (the label may sit on
+// the Route instead, and the URL reflects either).
 func knativeServiceIsClusterLocal(ksvc *unstructured.Unstructured, statusURL string) bool {
 	if ksvc.GetLabels()["networking.knative.dev/visibility"] == "cluster-local" {
 		return true
@@ -9118,7 +9118,7 @@ func knativeServiceIsClusterLocal(ksvc *unstructured.Unstructured, statusURL str
 	if err != nil {
 		return false
 	}
-	local := ksvc.GetName() + "." + ksvc.GetNamespace() + ".svc"
-	host := parsed.Hostname()
-	return host == local || strings.HasPrefix(host, local+".")
+	// Only the default cluster domain: a public domain may itself begin with
+	// "svc.", and the label covers Services on other cluster domains.
+	return parsed.Hostname() == ksvc.GetName()+"."+ksvc.GetNamespace()+".svc.cluster.local"
 }
