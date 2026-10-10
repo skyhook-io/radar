@@ -48,7 +48,18 @@ Flux-owned Helm releases defer to Flux. Radar shows the owning `HelmRelease` and
 
 Active native Helm failures and stuck pending operations also appear in the global Issues stream as `kind=HelmRelease`, `group=helm.sh`. Recovered rollbacks are deployment history, not live issues; use Helm detail or `get_changes` for those.
 
-Finding them means listing and decoding every Helm release Secret the caller can read, which is slow on clusters with many or large releases. `/api/issues` waits for that read, and the read stops as soon as the caller disconnects.
+Finding them means listing and decoding every Helm release Secret the caller can read, which is slow on clusters with many or large releases. By default `/api/issues` waits for that read, and the read stops as soon as the caller disconnects.
+
+With `partial=true`, `/api/issues` reads Helm through a background read instead, and the response's `helm_issues` says what it covers:
+
+- At most one read runs per identity and namespace scope, capped at 60 seconds, independent of any request. At most eight run at once; a read that is due while all eight are busy is reported as `waiting_for_slot`.
+- A response with an earlier result returns it at once and starts a refresh when that result is more than 10 seconds old. A request waits only when its scope has no result yet, and then only until five seconds after it arrived.
+- `state` is `current` (the newest finished read succeeded), `not_checked_yet` (none has finished; `reading` or `waiting_for_slot` says why), `failed`, or `unavailable` (Helm couldn't be read for this request at all). A partial response always carries `helm_issues`. On `failed`, `error` is `timeout`, `forbidden` or `error`, with `failed_at`. `checked_at` and `age_seconds` (server clock) say when the Helm issues in the response were read.
+- After a failed read the scope waits five minutes before trying again, so a cluster that needs more than 60 seconds doesn't rescan on every poll. A 403 also drops any earlier result.
+- A caller that leaves neither cancels nor restarts the read. A cluster whose Helm read finishes within 60 seconds therefore gets checked even when every request gives up first; one that needs longer reports `failed`.
+- Results are dropped, and running reads stopped, on a context switch. After Radar's server stops, no new read starts.
+
+The Issues page uses `partial=true` and says when Helm releases haven't been checked yet, when the latest check failed, and how old a result is once it's more than ten minutes old.
 
 ## Failed Upgrades And Rollback Inference
 
