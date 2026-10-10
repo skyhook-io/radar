@@ -105,3 +105,88 @@ describe('versioned dependency projections', () => {
     expect(html.match(/<button/g)).toHaveLength(3)
   })
 })
+
+
+describe('monitors projection', () => {
+  it('renders Monitored By alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ monitors: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Monitored By')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('monitorTargets projection', () => {
+  it('renders Monitors alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ monitorTargets: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Monitors')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('backends projection', () => {
+  it('renders Routes To alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ backends: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Routes To')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('routedFrom projection', () => {
+  it('renders Routed From alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ routedFrom: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Routed From')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('protects projection', () => {
+  it('renders Selects alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ protects: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Selects')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('healthChecks projection', () => {
+  it('renders Health Checks alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ healthChecks: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Health Checks')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('stagedPolicies projection', () => {
+  it('renders Staged Policies alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ stagedPolicies: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Staged Policies')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('routing version skew', () => {
+  it('keeps older Services, Gateways, Routes and Pods fields visible', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ services: [{kind: 'Service', namespace: 'demo', name: 'web'}], gateways: [{kind: 'HTTPRoute', group: 'gateway.networking.k8s.io', namespace: 'demo', name: 'old-route'}], routes: [{kind: 'IngressRoute', group: 'traefik.io', namespace: 'demo', name: 'route'}], pods: [{kind: 'Deployment', group: 'apps', namespace: 'demo', name: 'old-target'}] }} />)
+    for (const label of ['Services', 'Gateways', 'Routes', 'Pods', 'old-route', 'old-target']) expect(html).toContain(label)
+  })
+})

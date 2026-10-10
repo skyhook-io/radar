@@ -746,6 +746,25 @@ func TestBuildResourcesTopology_PrometheusMonitors(t *testing.T) {
 		t.Fatalf("Build returned error: %v", err)
 	}
 
+	for _, pair := range [][2]string{{"servicemonitor/monitoring/api", "service/prod/api"}, {"podmonitor/monitoring/workers", "deployment/prod/worker"}} {
+		monitor := resourceRefForNode(nodeByID(topo.Nodes, pair[0]), dynamic)
+		target := resourceRefForNode(nodeByID(topo.Nodes, pair[1]), dynamic)
+		for _, indexed := range []bool{false, true} {
+			var idx *RelationshipsIndex
+			if indexed {
+				idx = IndexByResource(topo)
+			}
+			mr := GetRelationshipsWithIndex(monitor.Kind, monitor.Namespace, monitor.Name, topo, provider, dynamic, idx)
+			tr := GetRelationshipsWithIndex(target.Kind, target.Namespace, target.Name, topo, provider, dynamic, idx)
+			if mr == nil || len(mr.MonitorTargets) != 1 || mr.MonitorTargets[0] != *target || len(mr.Consumers) != 0 {
+				t.Fatalf("monitor relationships = %+v", mr)
+			}
+			if tr == nil || len(tr.Monitors) == 0 || len(tr.ConfigRefs) != 0 {
+				t.Fatalf("target relationships = %+v", tr)
+			}
+		}
+	}
+
 	wantEdges := map[string]bool{
 		"servicemonitor/monitoring/api-to-service/prod/api":       false,
 		"servicemonitor/prod/local-to-service/prod/api":           false,

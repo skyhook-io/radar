@@ -239,19 +239,27 @@ func enrichRef(ref *ResourceRef, dp DynamicProvider) {
 func isRouteKind(kindLower string) bool {
 	switch kindLower {
 	case "httproute", "httproutes", "grpcroute", "grpcroutes",
-		"tcproute", "tcproutes", "tlsroute", "tlsroutes":
+		"tcproute", "tcproutes", "tlsroute", "tlsroutes", "udproute", "udproutes":
 		return true
 	}
 	return false
 }
 
-func isServiceEntrypointRouteKind(kindLower string) bool {
-	if isRouteKind(kindLower) {
-		return true
+func isServiceEntrypointRoute(ref *ResourceRef) bool {
+	if ref == nil {
+		return false
 	}
-	switch kindLower {
-	case "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
-		return true
+	switch ref.Group {
+	case "gateway.networking.k8s.io":
+		return isRouteKind(strings.ToLower(ref.Kind))
+	case "serving.knative.dev":
+		return ref.Kind == "Route"
+	case "traefik.io", "traefik.containo.us":
+		return ref.Kind == "IngressRoute" || ref.Kind == "IngressRouteTCP" || ref.Kind == "IngressRouteUDP"
+	case "networking.istio.io":
+		return ref.Kind == "VirtualService"
+	case "projectcontour.io":
+		return ref.Kind == "HTTPProxy"
 	}
 	return false
 }
@@ -353,26 +361,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case EdgeManages:
 			// This resource manages/owns the target
 			rel.Children = append(rel.Children, *ref)
-		case EdgeExposes:
-			// This is a Service exposing something
-			rel.Pods = append(rel.Pods, *ref)
-		case EdgeRoutesTo:
-			// This is an Ingress, Gateway, route, or Service routing to something
-			targetKindLower := strings.ToLower(ref.Kind)
-			if kindLower == "gateway" || kindLower == "gateways" {
-				// Gateway routes to routes or services
-				if isRouteKind(targetKindLower) {
-					rel.Routes = append(rel.Routes, *ref)
-				} else {
-					rel.Services = append(rel.Services, *ref)
-				}
-			} else if kindLower == "ingress" || kindLower == "ingresses" ||
-				isRouteKind(kindLower) {
-				// Ingress/Route routes to Service
-				rel.Services = append(rel.Services, *ref)
-			} else {
-				// Service routes to Pod
+		case EdgeExposes, EdgeRoutesTo:
+			if ref.Kind == "Pod" && ref.Group == "" {
 				rel.Pods = append(rel.Pods, *ref)
+			} else {
+				rel.Backends = append(rel.Backends, *ref)
 			}
 		case EdgeUses:
 			source := refForNodeID(edge.Source)
@@ -387,23 +380,19 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		case EdgeProtects:
-			// Outgoing EdgeProtects fires when the queried resource IS a
-			// PDB, NetworkPolicy, CiliumNetworkPolicy, or MachineHealthCheck —
-			// each of these emits a "protects/selects target workload" edge.
-			//
-			// Intentionally NOT surfaced today. The existing per-resource
-			// relationship fields (PDBs, NetworkPolicies, Scalers, etc.)
-			// describe "things that act on me," not "things I act on" —
-			// so there's no semantically correct field to land outgoing
-			// protects refs in.
-			//
-			// TODO: when we introduce a target-side "Protects []ResourceRef"
-			// field on Relationships, surface these refs there with their
-			// source kind preserved. Until then, leave the outgoing direction
-			// of EdgeProtects unsurfaced. The topology graph itself still
-			// carries these edges; only the per-resource projection skips them.
+			source := refForNodeID(edge.Source)
+			if source != nil && source.Kind == "MachineHealthCheck" && source.Group == "cluster.x-k8s.io" {
+				if ref.Kind == "Cluster" && ref.Group == "cluster.x-k8s.io" {
+					rel.Dependencies = append(rel.Dependencies, *ref)
+				}
+			} else {
+				rel.Protects = append(rel.Protects, *ref)
+			}
 		case EdgeConfigures:
-			// ConfigMap/Secret is used by a workload (outgoing from config)
+			if source := refForNodeID(edge.Source); source != nil && source.Group == "monitoring.coreos.com" && (source.Kind == "ServiceMonitor" || source.Kind == "PodMonitor") {
+				rel.MonitorTargets = append(rel.MonitorTargets, *ref)
+				continue
+			}
 			rel.Consumers = append(rel.Consumers, *ref)
 			if reflectionEdge(edge, nodeByID) {
 				if rel.Reflection == nil {
@@ -427,21 +416,24 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// Something manages/owns this resource
 			rel.Owner = ref
 		case EdgeExposes:
-			if isServiceEntrypointRouteKind(strings.ToLower(ref.Kind)) {
+			if isServiceEntrypointRoute(ref) {
 				rel.Routes = appendResourceRef(rel.Routes, *ref)
-			} else {
+			} else if ref.Kind == "Service" && ref.Group == "" {
 				rel.Services = appendResourceRef(rel.Services, *ref)
+			} else {
+				rel.RoutedFrom = appendResourceRef(rel.RoutedFrom, *ref)
 			}
 		case EdgeRoutesTo:
-			// An Ingress, Gateway, route, or Service routes to this resource
-			sourceKind := strings.ToLower(ref.Kind)
-			if sourceKind == "ingress" {
-				rel.Ingresses = append(rel.Ingresses, *ref)
-			} else if sourceKind == "gateway" || sourceKind == "httproute" ||
-				sourceKind == "grpcroute" || sourceKind == "tcproute" || sourceKind == "tlsroute" {
-				rel.Gateways = append(rel.Gateways, *ref)
-			} else if sourceKind == "service" {
-				rel.Services = append(rel.Services, *ref)
+			if ref.Kind == "Ingress" && ref.Group == "networking.k8s.io" {
+				rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
+			} else if ref.Kind == "Gateway" && ref.Group == "gateway.networking.k8s.io" {
+				rel.Gateways = appendResourceRef(rel.Gateways, *ref)
+			} else if isServiceEntrypointRoute(ref) {
+				rel.Routes = appendResourceRef(rel.Routes, *ref)
+			} else if ref.Kind == "Service" && ref.Group == "" {
+				rel.Services = appendResourceRef(rel.Services, *ref)
+			} else {
+				rel.RoutedFrom = appendResourceRef(rel.RoutedFrom, *ref)
 			}
 		case EdgeUses:
 			if isStorageResourceRef(ref) {
@@ -455,14 +447,36 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		case EdgeProtects:
-			// Incoming EdgeProtects: dispatch on source kind so PDBs and
-			// NetworkPolicies land in distinct fields.
-			switch ref.Kind {
-			case "PodDisruptionBudget":
-				rel.PDBs = append(rel.PDBs, *ref)
-			case "NetworkPolicy", "GlobalNetworkPolicy", "StagedNetworkPolicy", "StagedGlobalNetworkPolicy", "StagedKubernetesNetworkPolicy",
-				"CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy":
-				rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+			switch ref.Group {
+			case "policy":
+				if ref.Kind == "PodDisruptionBudget" {
+					rel.PDBs = append(rel.PDBs, *ref)
+				}
+			case "networking.k8s.io":
+				if ref.Kind == "NetworkPolicy" {
+					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+				}
+			case "cilium.io":
+				if ref.Kind == "CiliumNetworkPolicy" || ref.Kind == "CiliumClusterwideNetworkPolicy" {
+					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+				}
+			case "policy.networking.k8s.io":
+				if ref.Kind == "ClusterNetworkPolicy" {
+					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+				}
+			case "projectcalico.org", "crd.projectcalico.org":
+				switch ref.Kind {
+				case "NetworkPolicy", "GlobalNetworkPolicy", "StagedNetworkPolicy", "StagedGlobalNetworkPolicy", "StagedKubernetesNetworkPolicy":
+					if edge.Partial {
+						rel.StagedPolicies = append(rel.StagedPolicies, *ref)
+					} else if ref.Kind == "NetworkPolicy" || ref.Kind == "GlobalNetworkPolicy" {
+						rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+					}
+				}
+			case "cluster.x-k8s.io":
+				if target := refForNodeID(edge.Target); ref.Kind == "MachineHealthCheck" && target != nil && target.Kind == "Cluster" && target.Group == "cluster.x-k8s.io" {
+					rel.HealthChecks = append(rel.HealthChecks, *ref)
+				}
 			}
 		case EdgeConfigures:
 			if reflectionEdge(edge, nodeByID) {
@@ -476,15 +490,18 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			case "ServiceAccount":
 				rel.ServiceAccount = ref
 			case "ServiceMonitor", "PodMonitor":
-				// Monitor resources observe their targets; topology carries the edge,
-				// but Relationships has no observability group to project it into yet.
+				if ref.Group == "monitoring.coreos.com" {
+					rel.Monitors = append(rel.Monitors, *ref)
+				} else {
+					rel.ConfigRefs = append(rel.ConfigRefs, *ref)
+				}
 			default:
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
 			}
 		}
 	}
 
-	addServiceEntrypoints(rel, topo, lookupIndex)
+	addServiceEntrypoints(rel, topo, lookupIndex, nodeID)
 
 	// Convenience shortcuts: bridge the Deployment↔ReplicaSet↔Pod gap
 	// so users see Pods directly under Deployments and vice versa.
@@ -692,7 +709,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// Return nil if no relationships found
 	// Collected without per-append checks: a PVC shared by thousands of
 	// workloads would make a linear duplicate scan quadratic.
-	for _, refs := range []*[]ResourceRef{&rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.RoutedFrom, &rel.Protects, &rel.HealthChecks, &rel.StagedPolicies, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
 		*refs = uniqueResourceRefs(*refs)
 	}
 
@@ -701,7 +718,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
-		rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
+		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && len(rel.Backends) == 0 && len(rel.RoutedFrom) == 0 && len(rel.Protects) == 0 && len(rel.HealthChecks) == 0 && len(rel.StagedPolicies) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
 		return nil
 	}
@@ -709,7 +726,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	return rel
 }
 
-func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *RelationshipsIndex) {
+func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *RelationshipsIndex, rootID string) {
+	_, outgoing := edgesForNode(topo, idx, rootID)
+	for _, edge := range outgoing {
+		if edge.Type == EdgeExposes || edge.Type == EdgeRoutesTo {
+			return
+		}
+	}
 	for _, service := range rel.Services {
 		if service.Group != "" {
 			continue
@@ -720,23 +743,26 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 		}
 		incoming, _ := edgesForNode(topo, idx, serviceNode.ID)
 		for _, edge := range incoming {
-			if edge.Type != EdgeRoutesTo && edge.Type != EdgeExposes {
+			if edge.Source == rootID || edge.Type != EdgeRoutesTo && edge.Type != EdgeExposes {
 				continue
 			}
 			ref := resourceRefForNode(idx.nodesByID[edge.Source], nil)
 			if ref == nil {
 				continue
 			}
-			kind := strings.ToLower(ref.Kind)
-			switch kind {
-			case "ingress":
+			switch {
+			case ref.Kind == "Ingress" && ref.Group == "networking.k8s.io":
 				rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
-			case "gateway":
+			case ref.Kind == "Gateway" && ref.Group == "gateway.networking.k8s.io":
 				rel.Gateways = appendResourceRef(rel.Gateways, *ref)
+			case isServiceEntrypointRoute(ref):
+				rel.Routes = appendResourceRef(rel.Routes, *ref)
+			case ref.Kind == "Service" && ref.Group == "":
+				// A Service in front of the Service adds no entrypoint.
 			default:
-				if isServiceEntrypointRouteKind(kind) {
-					rel.Routes = appendResourceRef(rel.Routes, *ref)
-				}
+				// Event sources, Brokers and other upstream routers reach the
+				// workload through its Service too.
+				rel.RoutedFrom = appendResourceRef(rel.RoutedFrom, *ref)
 			}
 		}
 	}

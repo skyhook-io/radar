@@ -1427,13 +1427,14 @@ export function WorkloadView({
   )
 }
 
-function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
+export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
   if (!relationships) return []
   return dedupeResourceRefs([
     ...(relationships.services ?? []),
     ...(relationships.ingresses ?? []),
     ...(relationships.gateways ?? []),
     ...(relationships.routes ?? []),
+    ...(relationships.routedFrom ?? []),
   ])
 }
 

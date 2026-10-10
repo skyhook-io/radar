@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -1958,4 +1959,47 @@ func TestBuildDependencyReferencesAreAuthorized(t *testing.T) {
 		}
 	}
 	t.Fatalf("denied dependency did not disclose omission: %+v", denied.Omitted)
+}
+
+func TestProjectionDirectionalRoutingContext(t *testing.T) {
+	obj := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}}
+	upstream := topology.ResourceRef{Kind: "Ingress", Group: "networking.k8s.io", Namespace: "demo", Name: "public"}
+	backend := topology.ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "demo", Name: "web"}
+	pod := topology.ResourceRef{Kind: "Pod", Namespace: "demo", Name: "web-pod"}
+	rel := &topology.Relationships{Ingresses: []topology.ResourceRef{upstream}, Backends: []topology.ResourceRef{backend}, Pods: []topology.ResourceRef{pod}}
+	rc := Build(context.Background(), obj, Options{Relationships: rel})
+	if len(rc.ExposedBy) != 1 || rc.ExposedBy[0].Kind != "Ingress" || len(rc.Backends) != 2 || len(rc.Exposes) != 3 {
+		t.Fatalf("directional routing context = %+v", rc)
+	}
+	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "apps", kind: "Deployment", namespace: "demo"}})
+	if len(denied.ExposedBy) != 1 || len(denied.Backends) != 1 || len(denied.Exposes) != 2 {
+		t.Fatalf("routing refs ignored permissions: %+v", denied)
+	}
+	fields := map[string]bool{}
+	for _, omitted := range denied.Omitted {
+		fields[omitted.Field] = true
+	}
+	if !fields["backends"] || !fields["exposes"] {
+		t.Fatalf("missing routing omissions: %+v", denied.Omitted)
+	}
+	for _, obj := range []runtime.Object{&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}}, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}} {
+		rc := Build(context.Background(), obj, Options{Relationships: &topology.Relationships{Pods: []topology.ResourceRef{pod}}})
+		if len(rc.Backends) != 0 {
+			t.Fatalf("containment Pods became backends: %+v", rc.Backends)
+		}
+	}
+}
+
+func TestProjectionContextMonitoringAndPolicyPermissions(t *testing.T) {
+	obj := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}}
+	ref := topology.ResourceRef{Kind: "Widget", Group: "example.io", Namespace: "demo", Name: "subject"}
+	rel := &topology.Relationships{Monitors: []topology.ResourceRef{ref}, MonitorTargets: []topology.ResourceRef{ref}, Protects: []topology.ResourceRef{ref}, HealthChecks: []topology.ResourceRef{ref}, StagedPolicies: []topology.ResourceRef{ref}, RoutedFrom: []topology.ResourceRef{ref}}
+	rc := Build(context.Background(), obj, Options{Relationships: rel})
+	if len(rc.Monitors) != 1 || len(rc.MonitorTargets) != 1 || len(rc.Protects) != 1 || len(rc.HealthChecks) != 1 || len(rc.StagedPolicies) != 1 || len(rc.ExposedBy) != 1 || len(rc.SelectedBy) != 0 {
+		t.Fatalf("context projection = %+v", rc)
+	}
+	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "example.io", kind: "Widget", namespace: "demo"}})
+	if len(denied.Monitors)+len(denied.MonitorTargets)+len(denied.Protects)+len(denied.HealthChecks)+len(denied.StagedPolicies)+len(denied.ExposedBy) != 0 {
+		t.Fatalf("new context refs ignored permissions: %+v", denied)
+	}
 }
