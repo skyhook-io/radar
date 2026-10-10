@@ -44,10 +44,17 @@ func getWatched(dp DynamicProvider, gvr schema.GroupVersionResource, namespace, 
 	return obj
 }
 
-const (
-	argoResourcesFinalizer = "resources-finalizer.argocd.argoproj.io"
-	fluxFinalizer          = "finalizers.fluxcd.io"
-)
+// The finalizers through which each controller tears down on deletion,
+// matching gitops/insights' finalizer catalog: Argo CD's current key (with or
+// without a /background or /foreground suffix) and its deprecated
+// foreground-cascade key; Flux's shared key and its per-controller keys.
+const argoResourcesFinalizer = "resources-finalizer.argocd.argoproj.io"
+
+var fluxTeardownFinalizers = map[string]bool{
+	"finalizers.fluxcd.io":                   true,
+	"finalizers.kustomize.toolkit.fluxcd.io": true,
+	"finalizers.helm.toolkit.fluxcd.io":      true,
+}
 
 // controllerTeardown reports the teardown root's controller performs on
 // deletion, or nil when it leaves its resources in place.
@@ -98,10 +105,8 @@ func controllerTeardown(root *Node, topo *Topology, dp DynamicProvider) *Control
 func tearsDown(obj *unstructured.Unstructured, controller, action string) bool {
 	switch controller {
 	case "Argo CD":
-		// The finalizer, with or without its /background or /foreground
-		// suffix, is what makes deleting an Application delete its resources.
 		for _, f := range obj.GetFinalizers() {
-			if f == argoResourcesFinalizer || strings.HasPrefix(f, argoResourcesFinalizer+"/") {
+			if f == argoResourcesFinalizer || strings.HasPrefix(f, argoResourcesFinalizer+"/") || f == "foreground-cascade.argocd.argoproj.io" {
 				return true
 			}
 		}
@@ -109,7 +114,7 @@ func tearsDown(obj *unstructured.Unstructured, controller, action string) bool {
 	case "Flux":
 		hasFinalizer := false
 		for _, f := range obj.GetFinalizers() {
-			hasFinalizer = hasFinalizer || f == fluxFinalizer
+			hasFinalizer = hasFinalizer || fluxTeardownFinalizers[f]
 		}
 		// Both controllers skip teardown for a suspended object and only
 		// release the finalizer.

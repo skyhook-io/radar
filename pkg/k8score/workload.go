@@ -589,14 +589,23 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}
 
-	if opts.Force {
-		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
-		var patchErr error
-		if opts.Namespace != "" {
-			_, patchErr = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
-		} else {
-			_, patchErr = m.dynClient.Resource(gvr).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
+	var resource dynamic.ResourceInterface = m.dynClient.Resource(gvr)
+	if opts.Namespace != "" {
+		resource = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	}
+
+	// Strip finalizers only from an object that has some: a patch an
+	// admission policy rejects shouldn't block force-deleting, say, a Pod
+	// stuck terminating on a dead node. If the read fails, try the patch.
+	needsStrip := opts.Force
+	if needsStrip {
+		if current, err := resource.Get(ctx, opts.Name, metav1.GetOptions{}); err == nil && len(current.GetFinalizers()) == 0 {
+			needsStrip = false
 		}
+	}
+	if needsStrip {
+		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
+		_, patchErr := resource.Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
 		if patchErr != nil && !apierrors.IsNotFound(patchErr) {
 			if apierrors.IsForbidden(patchErr) {
 				return fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)

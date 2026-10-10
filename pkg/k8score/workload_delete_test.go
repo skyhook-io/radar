@@ -72,3 +72,21 @@ func TestForceDeleteStopsWhenFinalizersCannotBeStripped(t *testing.T) {
 		t.Fatalf("err=%v deleted=%v; want an error and no delete", err, deleted)
 	}
 }
+
+func TestForceDeleteSkipsTheFinalizerPatchWhenThereAreNone(t *testing.T) {
+	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	pod := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"namespace": "team", "name": "stuck"},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{pods: "PodList"}, pod)
+	client.PrependReactor("patch", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("admission webhook denied the request"))
+	})
+	discovery := &ResourceDiscovery{resourceMap: make(map[string]APIResource), gvrMap: make(map[string]schema.GroupVersionResource)}
+	discovery.AddAPIResource(APIResource{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"delete", "patch", "get"}})
+
+	if err := NewWorkloadManager(client, discovery).DeleteResource(context.Background(), DeleteResourceOptions{Kind: "Pod", Namespace: "team", Name: "stuck", Force: true}); err != nil {
+		t.Fatalf("force delete of a Pod without finalizers failed on a rejected patch: %v", err)
+	}
+}

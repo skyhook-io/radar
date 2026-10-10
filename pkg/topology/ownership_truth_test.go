@@ -319,3 +319,40 @@ func TestTopologyBuildNeverStartsAnAnalysisRunWatch(t *testing.T) {
 		t.Errorf("topology build read unwatched AnalysisRuns through Get: %v", dynamic.startedOn)
 	}
 }
+
+// A dependent shared by two owners that both go with the root is deleted,
+// whichever owner the walk reaches first.
+func TestCascadePreviewRevisitsSharedDependents(t *testing.T) {
+	ctrl, owner := true, false
+	n := func(id, kind, name string, uid types.UID, owners ...metav1.OwnerReference) Node {
+		return Node{ID: id, Kind: NodeKind(kind), Name: name, uid: uid, observed: true, ownerReferences: owners, Data: map[string]any{"namespace": "team", "apiVersion": "example.io/v1"}}
+	}
+	ref := func(kind, name string, uid types.UID, controller bool) metav1.OwnerReference {
+		return metav1.OwnerReference{APIVersion: "example.io/v1", Kind: kind, Name: name, UID: uid, Controller: &controller}
+	}
+	edge := func(src, dst string, controller *bool) Edge {
+		return Edge{ID: src + "-" + dst, Source: src, Target: dst, Type: EdgeManages, OwnerController: controller}
+	}
+	for _, order := range [][2]string{{"a", "b"}, {"b", "a"}} {
+		topo := &Topology{
+			Nodes: []Node{
+				n("root/team/root", "Root", "root", "root"),
+				n("a/team/a", "A", "a", "a", ref("Root", "root", "root", true)),
+				n("b/team/b", "B", "b", "b", ref("Root", "root", "root", true)),
+				n("x/team/x", "X", "x", "x", ref("A", "a", "a", true), ref("B", "b", "b", false)),
+			},
+		}
+		// Edge order decides which owner's walk reaches the dependent first.
+		first, second := order[0]+"/team/"+order[0], order[1]+"/team/"+order[1]
+		topo.Edges = []Edge{
+			edge("root/team/root", first, &ctrl),
+			edge(first, "x/team/x", &ctrl),
+			edge("root/team/root", second, &ctrl),
+			edge(second, "x/team/x", &owner),
+		}
+		p := GetCascadeDeletePreview(ResourceRef{Kind: "Root", Namespace: "team", Name: "root", Group: ""}, topo, nil)
+		if got := refNames(p.Dependents); fmt.Sprint(got) != "[A/a B/b X/x]" {
+			t.Errorf("order %v: dependents %v (possible %v)", order, got, refNames(p.PossibleDependents))
+		}
+	}
+}
