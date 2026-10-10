@@ -27,7 +27,7 @@ var ReadOnlyTools = []string{
 // the user explicitly confirmed. Never on the read-only investigation path.
 var WriteTools = []string{
 	"apply_resource", "patch_resource", "delete_resource", "manage_workload",
-	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops",
+	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops", "manage_helm_release",
 }
 
 // IsReadOnlyTool reports whether tool (bare, or prefixed the way an agent host
