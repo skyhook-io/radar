@@ -508,21 +508,27 @@ func setupCoverageRuleFixture(t *testing.T, typed bool) (kind string, prewarm fu
 }
 
 func TestResourceReadsCollectorCoverageRule(t *testing.T) {
+	const anyHidden = "the collector's coverage does not include any namespace you can read"
 	cases := []struct {
 		name      string
+		caller    string // "" = auth disabled, "admin" = cluster-wide access, "restricted" = allowed
 		allowed   []string
 		namespace string
 		rows      []string
 		wantErr   []string
+		hidden    []string
 	}{
-		{name: "unrestricted reads the covered namespaces", rows: []string{"alpha-object"}},
-		{name: "partial overlap omits the uncovered namespace", allowed: []string{"alpha", "beta"}, rows: []string{"alpha-object"}},
-		{name: "partial overlap with an empty covered namespace", allowed: []string{"gamma", "beta"}, rows: []string{}},
-		{name: "covered and empty", allowed: []string{"gamma"}, rows: []string{}},
+		{name: "auth disabled reads the covered namespaces", rows: []string{"alpha-object"}},
+		{name: "cluster-wide caller reads the covered namespaces", caller: "admin", rows: []string{"alpha-object"}},
+		{name: "restricted caller fully covered", caller: "restricted", allowed: []string{"alpha", "gamma"}, rows: []string{"alpha-object"}},
+		{name: "restricted caller covered and empty", caller: "restricted", allowed: []string{"gamma"}, rows: []string{}},
 		{name: "explicit covered and empty", namespace: "gamma", rows: []string{}},
-		{name: "no overlap", allowed: []string{"beta"}, wantErr: []string{`namespace "beta"`, `covered namespaces: ["alpha" "gamma"]`}},
-		{name: "no overlap across namespaces", allowed: []string{"beta", "delta"}, wantErr: []string{`namespaces "beta,delta"`, `covered namespaces: ["alpha" "gamma"]`}},
-		{name: "explicit uncovered", namespace: "beta", wantErr: []string{`namespace "beta"`, `covered namespaces: ["alpha" "gamma"]`}},
+		{name: "restricted partial overlap", caller: "restricted", allowed: []string{"alpha", "beta"}, wantErr: []string{`namespace "beta"`, `covered namespaces you can read: "alpha"`, "retry with one of them as the namespace"}, hidden: []string{"gamma"}},
+		{name: "restricted partial overlap with an empty covered namespace", caller: "restricted", allowed: []string{"gamma", "beta"}, wantErr: []string{`namespace "beta"`, `covered namespaces you can read: "gamma"`}, hidden: []string{"alpha"}},
+		{name: "no overlap", caller: "restricted", allowed: []string{"beta"}, wantErr: []string{`namespace "beta"`, anyHidden}, hidden: []string{"alpha", "gamma"}},
+		{name: "no overlap across namespaces", caller: "restricted", allowed: []string{"beta", "delta"}, wantErr: []string{`namespaces "beta,delta"`, anyHidden}, hidden: []string{"alpha", "gamma"}},
+		{name: "explicit uncovered", namespace: "beta", wantErr: []string{`namespace "beta"`, `covered namespaces you can read: "alpha,gamma"`}},
+		{name: "restricted explicit uncovered", caller: "restricted", allowed: []string{"alpha", "beta"}, namespace: "beta", wantErr: []string{`namespace "beta"`, `covered namespaces you can read: "alpha"`}, hidden: []string{"gamma"}},
 	}
 	for _, typed := range []bool{true, false} {
 		for _, tc := range cases {
@@ -530,7 +536,10 @@ func TestResourceReadsCollectorCoverageRule(t *testing.T) {
 				kind, prewarm := setupCoverageRuleFixture(t, typed)
 				prewarm()
 				ctx := context.Background()
-				if tc.allowed != nil {
+				switch tc.caller {
+				case "admin":
+					ctx = withClusterAdmin(t, "coverage-admin")
+				case "restricted":
 					ctx = withRestrictedUser(t, "coverage-reader", tc.allowed)
 				}
 				result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: kind, Namespace: tc.namespace, Context: "none"})
@@ -541,6 +550,11 @@ func TestResourceReadsCollectorCoverageRule(t *testing.T) {
 					for _, text := range tc.wantErr {
 						if !strings.Contains(err.Error(), text) {
 							t.Fatalf("missing %s: %v", text, err)
+						}
+					}
+					for _, ns := range tc.hidden {
+						if strings.Contains(err.Error(), ns) {
+							t.Fatalf("error names namespace %q the caller cannot read: %v", ns, err)
 						}
 					}
 					return
@@ -567,8 +581,9 @@ func TestResourceReadsCollectorCoverageRule(t *testing.T) {
 		t.Run(fmt.Sprintf("typed=%v/get uncovered", typed), func(t *testing.T) {
 			kind, prewarm := setupCoverageRuleFixture(t, typed)
 			prewarm()
-			_, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: kind, Namespace: "beta", Name: "beta-object"})
-			if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces: ["alpha" "gamma"]`) {
+			ctx := withRestrictedUser(t, "coverage-getter", []string{"alpha", "beta"})
+			_, _, err := handleGetResource(ctx, nil, getResourceInput{Kind: kind, Namespace: "beta", Name: "beta-object"})
+			if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces you can read: "alpha"`) || strings.Contains(err.Error(), "gamma") {
 				t.Fatalf("uncovered get: %v", err)
 			}
 		})
@@ -579,6 +594,18 @@ func TestResourceReadsCollectorCoverageRule(t *testing.T) {
 		_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: kind, Context: "none"})
 		if err == nil || !strings.HasPrefix(err.Error(), "collector_forbidden:") || !strings.Contains(err.Error(), `"beta"`) {
 			t.Fatalf("uncovered cold scope must name the collector denial, got %v", err)
+		}
+	})
+	t.Run("pinned scope is not named to a caller who cannot read it", func(t *testing.T) {
+		setupFakeCacheForFilterTests(t)
+		oldPin, oldTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+		k8s.ForceNamespaceScope = true
+		k8s.SetNamespaceScopeOverride("alpha")
+		t.Cleanup(func() { k8s.ForceNamespaceScope = oldPin; k8s.SetNamespaceScopeOverride(oldTarget) })
+		ctx := withRestrictedUser(t, "pin-outsider", []string{"beta"})
+		_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "pods"})
+		if err == nil || !strings.HasPrefix(err.Error(), "no_namespace_access:") || strings.Contains(err.Error(), "alpha") {
+			t.Fatalf("unscoped denial must not name the pinned namespace: %v", err)
 		}
 	})
 }
@@ -663,11 +690,11 @@ func TestResourceReadsCollectorReasons(t *testing.T) {
 	old := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting})
 	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
-	_, err := checkDynamicResourceRead("widgets", "example.test", "alpha", "list", k8s.ErrDynamicNotReady)
+	_, err := checkDynamicResourceRead(context.Background(), "widgets", "example.test", "alpha", "list", k8s.ErrDynamicNotReady)
 	if err == nil || !strings.HasPrefix(err.Error(), "kind_sync_pending:") {
 		t.Fatalf("connecting dynamic: %v", err)
 	}
-	_, err = checkDynamicResourceRead("widgets", "example.test", "alpha", "list", apierrors.NewUnauthorized("expired token"))
+	_, err = checkDynamicResourceRead(context.Background(), "widgets", "example.test", "alpha", "list", apierrors.NewUnauthorized("expired token"))
 	if err == nil || !strings.HasPrefix(err.Error(), "collector_unauthorized:") || strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("collector credentials: %v", err)
 	}
@@ -746,7 +773,7 @@ func TestResourceReadsDynamicCollectorIntersection(t *testing.T) {
 		} else {
 			_, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: "widgets", Namespace: "beta", Name: "x"})
 		}
-		if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces: ["alpha"]`) {
+		if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces you can read: "alpha"`) {
 			t.Fatalf("%s explicit uncovered scope: %v", verb, err)
 		}
 	}
@@ -953,7 +980,7 @@ func TestReadDynamicScopeRereadsOnlyBeforeSync(t *testing.T) {
 		reads int
 	}{{"cold", 2}, {"synced", 1}} {
 		reads := 0
-		items, err := readDynamicScope("widgets", gvr.Group, "alpha", "list", func() ([]*unstructured.Unstructured, error) {
+		items, err := readDynamicScope(context.Background(), "widgets", gvr.Group, "alpha", "list", func() ([]*unstructured.Unstructured, error) {
 			reads++
 			return cache.ListDynamicWithGroup(context.Background(), "widgets", "alpha", gvr.Group)
 		})
@@ -984,7 +1011,7 @@ func TestResourceReadErrorDetails(t *testing.T) {
 		restore()
 	}
 	for _, verb := range []string{"list", "get"} {
-		_, err := checkDynamicResourceRead("widgets", "example.test", "alpha", verb, fmt.Errorf("transport unavailable"))
+		_, err := checkDynamicResourceRead(context.Background(), "widgets", "example.test", "alpha", verb, fmt.Errorf("transport unavailable"))
 		if err == nil || !strings.HasPrefix(err.Error(), verb+"_error:") || !strings.Contains(err.Error(), "widgets") {
 			t.Fatalf("%s: %v", verb, err)
 		}

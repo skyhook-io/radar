@@ -480,10 +480,10 @@ Errors distinguish the calling user's permissions from Radar's collection access
 - `kind_sync_pending`: initial cache synchronization is still in progress; retry
   shortly. `kind_sync_failed` means the typed sync deadline elapsed or a dynamic
   sync stalled; inspect Radar's connection and collector list/watch permissions.
-- `kind_not_watched`: collection is unavailable or covers none of the requested
-  namespaces; the error names the uncovered namespaces and the ones Radar's
-  collector does cover. `unknown_kind` means neither the built-in catalog nor
-  discovery recognizes the kind.
+- `kind_not_watched`: collection is unavailable, or a requested namespace is
+  outside the collector's coverage (see the coverage rule below); the error names
+  the uncovered namespaces and the covered namespaces you can read. `unknown_kind`
+  means neither the built-in catalog nor discovery recognizes the kind.
   Unavailable discovery reports `kind_sync_pending` rather than claiming a kind is unknown.
 - `list_error` / `get_error`: an unexpected resource-read failure; the error
   retains the requested kind and the underlying cause.
@@ -497,21 +497,39 @@ namespace membership and `--namespace-scope` do not narrow them.
 Ordinary namespaced resources retain namespace-level authorization; Secrets and
 cluster-scoped kinds retain their additional per-kind permission checks.
 
-When Radar's collector covers only some namespaces, every kind follows one rule.
-A read answers from the requested namespaces the collector covers and omits the
-others; the success shape has no field naming what was omitted. The requested
-namespaces are the explicit `namespace`, or else every namespace the caller may
-read, which for an unrestricted caller means the collector's covered namespaces.
-When the collector covers none of them, the read fails with `kind_not_watched`
-instead of returning `[]`. A covered namespace with no objects still returns `[]`.
-So a caller allowed in `alpha` and `beta`, on a collector that covers `alpha`,
-gets `alpha`'s objects; a caller allowed only in `beta` gets the error. Kinds
-Radar caches at startup know their coverage from the startup probe. Kinds watched
+When Radar's collector covers only some namespaces, every kind follows one rule,
+which depends on whether the request is restricted. A request is **restricted**
+when it resolves to a finite namespace list: the caller's Radar namespace access
+is a list (auth is enabled and the namespace-membership check found no
+cluster-wide Pods or Deployments list access), the call names a `namespace`, or
+`--namespace-scope` pins Radar to one namespace. It is **unrestricted** when auth
+is disabled or the caller has cluster-wide namespace access, and no namespace is
+named or pinned.
+
+- A restricted request needs every namespace in its list covered. If any is
+  not, the read fails with `kind_not_watched`, even when other namespaces have
+  objects; a partial answer would read as the caller's whole scope. The error
+  names the uncovered namespaces and the covered namespaces the caller can read,
+  and suggests retrying with one of the covered namespaces as `namespace`.
+- An unrestricted request reads the namespaces the collector covers and omits
+  the rest, so unscoped lists keep working on a namespace-scoped collector. The
+  success shape has no field naming what was omitted.
+- A covered namespace with no objects returns `[]` either way.
+
+For example, on a collector that covers `alpha` and `gamma`, a caller allowed in
+`alpha` and `beta` gets `kind_not_watched` naming `beta` and offering `alpha`; a
+caller allowed only in `gamma`, covered but empty, gets `[]`; a cluster-wide
+caller gets `alpha`'s objects.
+
+Tool errors name only namespaces the caller may read or named in the request.
+Covered namespaces outside the caller's access are left out; when none remain,
+the error says the collector's coverage does not include any namespace the
+caller can read. Kinds Radar caches at startup know their coverage from the startup probe. Kinds watched
 on demand (custom resources) find theirs by reading: each requested namespace is
 read directly, including grants outside the collector's initial fallback
 candidates, and its informer sync is verified. Such a kind that the collector has
 not read in any namespace yet reports `collector_forbidden` for the denied
-namespace instead of naming covered namespaces.
+namespace, since there is no covered namespace to name.
 Endpoints, EndpointSlices and Leases use direct API reads in the caller's allowed
 namespaces without an extra cluster-wide list or an informer. Rejected collector
 credentials are never treated as missing coverage: `collector_unauthorized` fails

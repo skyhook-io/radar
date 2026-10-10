@@ -40,10 +40,12 @@ func resourceReadNamespaces(ctx context.Context, requested []string) ([]string, 
 	}
 	allowed := pkgauth.FilterNamespacesForUser(clamped, user, perms)
 	if allowed != nil && len(allowed) == 0 {
+		// Name only what the caller asked for: unscoped, clamped is the
+		// --namespace-scope target, which this caller cannot read.
 		scope := "any namespace in the requested scope"
-		if len(clamped) == 1 {
+		if len(requested) == 1 {
 			scope = fmt.Sprintf("namespace %q", clamped[0])
-		} else if len(clamped) > 0 {
+		} else if len(requested) > 1 {
 			scope = fmt.Sprintf("namespaces %q", clamped)
 		}
 		return nil, fmt.Errorf("no_namespace_access: no Radar access to %s (Radar grants namespace access when your role can list pods or deployments there; re-checked every ~2 minutes)", scope)
@@ -62,10 +64,11 @@ func namespaceForError(namespaces []string) string {
 }
 
 // resourceReadCache returns the cache to read kind from and the namespaces to
-// read: requested (nil = every namespace the caller may read) narrowed to the
-// typed collector's coverage under namespaceCoverageError's rule. Dynamic
-// kinds learn their coverage by reading, so their namespaces pass through.
-func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCache, []string, error) {
+// read under namespaceCoverageError's rule: nil (an unrestricted caller) reads
+// the typed collector's covered namespaces, and a finite list must be covered
+// in full. Dynamic kinds learn their coverage by reading, so their namespaces
+// pass through.
+func resourceReadCache(ctx context.Context, kind, group string, namespaces []string) (*k8s.ResourceCache, []string, error) {
 	gvr, builtin := k8s.BuiltinGVRAnyGroup(kind)
 	typed := builtin && (group == "" || group == gvr.Group) && k8s.TypedKindOwnsGroup(kind, gvr.Group)
 	if !typed {
@@ -111,47 +114,79 @@ func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCa
 	if namespaces == nil {
 		return cache, covered, nil
 	}
-	var readable, uncovered []string
+	var uncovered []string
 	for _, ns := range namespaces {
-		if cache.KindCoversNamespace(gvr.Resource, ns) {
-			readable = append(readable, ns)
-		} else {
+		if !cache.KindCoversNamespace(gvr.Resource, ns) {
 			uncovered = append(uncovered, ns)
 		}
 	}
-	if err := namespaceCoverageError(gvr.Resource, len(readable), uncovered, covered, nil); err != nil {
+	if err := namespaceCoverageError(ctx, gvr.Resource, false, 0, uncovered, covered, nil); err != nil {
 		return nil, nil, err
 	}
-	return cache, readable, nil
+	return cache, namespaces, nil
 }
 
-// namespaceCoverageError is the one rule typed and dynamic reads share when
-// Radar's collector covers only some namespaces: answer from the covered
-// requested namespaces and omit the rest (the partial view an unrestricted
-// caller already gets), but fail when none is covered, so an uncovered scope
-// never reads as empty. firstErr, the read error of the first uncovered
-// namespace when reads were attempted, is kept when it is the only one or when
-// no covered namespace is known to name instead.
-func namespaceCoverageError(resource string, read int, uncovered, covered []string, firstErr error) error {
-	if read > 0 || len(uncovered) == 0 {
+// namespaceCoverageError is the one coverage rule typed and dynamic reads
+// share. A restricted caller (a finite namespace list — Radar's namespace
+// access for the caller, an explicit namespace, or the --namespace-scope pin)
+// needs every requested namespace covered: a partial answer would read as the
+// whole of its scope. An unrestricted caller's unscoped read asks for whatever
+// the collector covers (unrestrictedAll), so a namespace missing from that is
+// omitted, and only a read that covered nothing fails. firstErr, the read
+// error of the first uncovered namespace when reads were attempted, is kept
+// for a read that got nothing when it is the only uncovered namespace or no
+// covered namespace is known.
+func namespaceCoverageError(ctx context.Context, resource string, unrestrictedAll bool, read int, uncovered, covered []string, firstErr error) error {
+	if len(uncovered) == 0 || (unrestrictedAll && read > 0) {
 		return nil
 	}
-	if firstErr != nil && (len(uncovered) == 1 || len(covered) == 0) {
+	if firstErr != nil && read == 0 && (len(uncovered) == 1 || len(covered) == 0) {
 		return firstErr
 	}
-	return outsideCoverageError(resource, uncovered, covered, nil)
+	return outsideCoverageError(ctx, resource, uncovered, covered, nil)
 }
 
-func outsideCoverageError(resource string, uncovered, covered []string, cause error) error {
-	scope := fmt.Sprintf("namespace %q; this namespace is", uncovered[0])
-	if len(uncovered) > 1 {
-		scope = fmt.Sprintf("namespaces %q; these namespaces are", namespaceForError(uncovered))
+// outsideCoverageError names only namespaces the caller may read, so the
+// collector's coverage never discloses other tenants' namespaces.
+func outsideCoverageError(ctx context.Context, resource string, uncovered, covered []string, cause error) error {
+	uncovered = callerVisibleNamespaces(ctx, uncovered)
+	covered = callerVisibleNamespaces(ctx, covered)
+	where := "the requested namespaces, which are"
+	switch len(uncovered) {
+	case 0:
+	case 1:
+		where = fmt.Sprintf("namespace %q, which is", uncovered[0])
+	default:
+		where = fmt.Sprintf("namespaces %q, which are", namespaceForError(uncovered))
 	}
-	msg := fmt.Sprintf("kind_not_watched: Radar does not watch %s in %s outside the collector's scope; covered namespaces: %q", resource, scope, covered)
+	coverage := "the collector's coverage does not include any namespace you can read"
+	if len(covered) > 0 {
+		coverage = fmt.Sprintf("covered namespaces you can read: %q; retry with one of them as the namespace", namespaceForError(covered))
+	}
+	msg := fmt.Sprintf("kind_not_watched: Radar does not watch %s in %s outside the collector's scope; %s", resource, where, coverage)
 	if cause != nil {
 		return fmt.Errorf("%s: %w", msg, cause)
 	}
 	return errors.New(msg)
+}
+
+// callerVisibleNamespaces keeps the namespaces the caller may read. It fails
+// closed: when the caller's access cannot be resolved, nothing is kept.
+func callerVisibleNamespaces(ctx context.Context, namespaces []string) []string {
+	visible, err := resourceReadNamespaces(ctx, nil)
+	if err != nil {
+		return nil
+	}
+	if visible == nil {
+		return namespaces
+	}
+	var out []string
+	for _, ns := range namespaces {
+		if slices.Contains(visible, ns) {
+			out = append(out, ns)
+		}
+	}
+	return out
 }
 
 // Dynamic reads start informers on demand. Check their scope after the read so
@@ -159,7 +194,7 @@ func outsideCoverageError(resource string, uncovered, covered []string, cause er
 // the scope is now synced, so a read that may have preceded the sync can be
 // repeated. Direct API reads need no informer and remain authoritative without
 // one.
-func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error) (bool, error) {
+func checkDynamicResourceRead(ctx context.Context, kind, group, namespace, verb string, readErr error) (bool, error) {
 	if errors.Is(readErr, k8s.ErrUnknownDynamicKind) {
 		return false, fmt.Errorf("unknown_kind: %w", readErr)
 	}
@@ -181,7 +216,7 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		if ok && dynamicCache != nil && !direct && namespace != "" {
 			observation := dynamicCache.Observation(gvr)
 			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && !slices.Contains(observation.Namespaces, namespace) {
-				return false, outsideCoverageError(kind, []string{namespace}, observation.Namespaces, readErr)
+				return false, outsideCoverageError(ctx, kind, []string{namespace}, observation.Namespaces, readErr)
 			}
 		}
 
@@ -209,7 +244,7 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
 			_, waitErr := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
 			if waitErr != nil {
-				return checkDynamicResourceRead(kind, group, namespace, verb, waitErr)
+				return checkDynamicResourceRead(ctx, kind, group, namespace, verb, waitErr)
 			}
 		}
 	}
@@ -264,15 +299,15 @@ func dynamicScopeSynced(kind, group, namespace string) bool {
 // sync can have served a partial store, so it is repeated once sync is proven.
 // A scope already synced before and after the read was answered by that read;
 // repeating it would only deep-copy the store a second time.
-func readDynamicScope[T any](kind, group, namespace, verb string, read func() (T, error)) (T, error) {
+func readDynamicScope[T any](ctx context.Context, kind, group, namespace, verb string, read func() (T, error)) (T, error) {
 	syncedBefore := dynamicScopeSynced(kind, group, namespace)
 	out, err := read()
 	settled := syncedBefore && dynamicScopeSynced(kind, group, namespace)
-	ready, err := checkDynamicResourceRead(kind, group, namespace, verb, err)
+	ready, err := checkDynamicResourceRead(ctx, kind, group, namespace, verb, err)
 	if ready && !settled && (err == nil || isObjectNotFound(err)) {
 		out, err = read()
 		if err != nil {
-			_, err = checkDynamicResourceRead(kind, group, namespace, verb, err)
+			_, err = checkDynamicResourceRead(ctx, kind, group, namespace, verb, err)
 		}
 	}
 	return out, err
@@ -315,7 +350,7 @@ func resourceGetError(ctx context.Context, err error, kind, namespace, name stri
 }
 
 func fetchMCPDynamicResource(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace, name string) (*unstructured.Unstructured, error) {
-	obj, err := readDynamicScope(kind, group, namespace, "get", func() (*unstructured.Unstructured, error) {
+	obj, err := readDynamicScope(ctx, kind, group, namespace, "get", func() (*unstructured.Unstructured, error) {
 		return cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 	})
 	if isObjectNotFound(err) {
