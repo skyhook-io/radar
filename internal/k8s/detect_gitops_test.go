@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +87,7 @@ func TestDetectGitOpsProblems(t *testing.T) {
 		argoApp("missing-auto", "argocd", "Missing", "OutOfSync", "", true, nil),                // high HealthMissing
 		argoApp("drift-auto", "argocd", "Healthy", "OutOfSync", "", true, nil),                  // high OutOfSync
 		argoApp("comparison", "argocd", "Healthy", "Unknown", "", false, comparisonErr),         // high ComparisonError (even manual)
-		argoApp("degraded-and-error", "argocd", "Degraded", "Unknown", "", true, comparisonErr), // critical: Degraded outranks the error condition
+		argoApp("degraded-and-error", "argocd", "Degraded", "Unknown", "", true, comparisonErr), // critical health and comparison failures
 		// Argo — should NOT flag.
 		argoApp("missing-manual", "argocd", "Missing", "OutOfSync", "", false, nil), // manual app: expected un-synced
 		argoApp("suspended", "argocd", "Suspended", "OutOfSync", "", true, nil),     // intentionally paused
@@ -156,6 +157,16 @@ func TestDetectGitOpsProblems(t *testing.T) {
 		if p.Severity != want.severity || p.Reason != want.reason {
 			t.Errorf("%q: got severity=%q reason=%q, want %q/%q", name, p.Severity, p.Reason, want.severity, want.reason)
 		}
+	}
+
+	var comparisonFound bool
+	for _, d := range problems {
+		if d.Name == "degraded-and-error" && d.Reason == "ComparisonError" {
+			comparisonFound = true
+		}
+	}
+	if !comparisonFound {
+		t.Fatal("Degraded must retain the ComparisonError row too")
 	}
 
 	// The ComparisonError condition branch must attach its condition-specific
@@ -297,7 +308,7 @@ func TestDetectArgoAppProblems_OperationFailedParsesCause(t *testing.T) {
 			// Argo writes a SyncError condition that parallel-encodes the same
 			// failure; the operation branch must supersede it (one row, not two).
 			"conditions": []any{
-				map[string]any{"type": "SyncError", "message": `namespaces "demo-broken-sync" not found`},
+				map[string]any{"type": "SyncError", "message": `Failed last sync attempt to [old-revision]: namespaces "demo-broken-sync" not found`},
 			},
 		},
 	}}
@@ -890,5 +901,329 @@ func TestDetectArgoAppProblems_RemoteDestinationOffersNoLocalRemediation(t *test
 	}
 	if d.Cause == "" {
 		t.Error("the diagnosis itself must survive; only the local fix is dropped")
+	}
+}
+
+func TestDetectArgoAppProblems_EmptyAutoSyncCondition(t *testing.T) {
+	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	message := "Skipping sync attempt to [abc123]: auto-sync will wipe out all resources"
+	for _, tc := range []struct{ health, phase, opMessage, wantReason string }{
+		{"Progressing", "", "", "AutoSyncBlockedEmpty"},
+		{"Degraded", "", "", "AutoSyncBlockedEmpty"},
+		{"Healthy", "Succeeded", "", "AutoSyncBlockedEmpty"},
+		{"Progressing", "Failed", "", "AutoSyncBlockedEmpty"},
+		{"Healthy", "Error", "", "AutoSyncBlockedEmpty"},
+		{"Suspended", "Failed", "sync failed", "AutoSyncBlockedEmpty"},
+		{"Suspended", "", "", ""},
+		{"Progressing", "Running", "", ""},
+		{"Degraded", "Failed", "admission webhook denied the request", "AutoSyncBlockedEmpty"},
+	} {
+		t.Run(tc.health+"/"+tc.phase+"/"+tc.opMessage, func(t *testing.T) {
+			app := argoApp("blocked", "argocd", tc.health, "OutOfSync", tc.phase, true, []any{
+				map[string]any{"type": "SyncError", "message": message, "lastTransitionTime": now.Add(-2 * time.Minute).Format(time.RFC3339)},
+			})
+			_ = unstructured.SetNestedSlice(app.Object, argoPrunedResources(), "status", "resources")
+			if tc.opMessage != "" {
+				_ = unstructured.SetNestedField(app.Object, tc.opMessage, "status", "operationState", "message")
+			}
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
+			if tc.wantReason == "" {
+				if len(got) != 0 {
+					t.Fatalf("expected suppression, got %+v", got)
+				}
+				return
+			}
+			wantCount := 1
+			if tc.health == "Degraded" {
+				wantCount++
+			}
+			if tc.opMessage != "" {
+				wantCount++
+			}
+			var diagnosis Detection
+			for _, d := range got {
+				if d.Reason == tc.wantReason {
+					diagnosis = d
+				}
+			}
+			if len(got) != wantCount || diagnosis.Reason != tc.wantReason {
+				t.Fatalf("want %d rows including %s, got %+v", wantCount, tc.wantReason, got)
+			}
+			if tc.wantReason != "AutoSyncBlockedEmpty" {
+				return
+			}
+			d := diagnosis
+			if d.RawMessage != message || d.Severity != "critical" || d.DurationSeconds != 120 {
+				t.Errorf("lost condition evidence: %+v", d)
+			}
+			// Issue lists truncate the message; the revision SHA must not lead it.
+			if !strings.HasPrefix(d.Message, "Auto-sync blocked: the rendered desired state is empty") {
+				t.Errorf("message must lead with the meaning: %q", d.Message)
+			}
+			if !strings.Contains(d.Cause, "empty desired state") || !strings.Contains(d.Action, "confirm") || !strings.Contains(d.Action, "syncPolicy.automated.allowEmpty: true") || !strings.Contains(d.Action, "ApplicationSet") || !strings.Contains(d.Action, "source path") || strings.Contains(d.Action, "retry") {
+				t.Errorf("missing safe, specific advice: %+v", d)
+			}
+			if d.RemediationKind != "" || d.RemediationTarget != "" {
+				t.Errorf("must not offer automatic remediation: %+v", d)
+			}
+		})
+	}
+}
+
+func TestDetectArgoAppProblems_ResourceWarnings(t *testing.T) {
+	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	conditions := []any{
+		map[string]any{"type": "SharedResourceWarning", "message": "ApplicationSet/prometheus is part of applications argocd/addons and other-addons", "lastTransitionTime": now.Add(-3 * time.Minute).Format(time.RFC3339)},
+		map[string]any{"type": "RepeatedResourceWarning", "message": "Resource /ConfigMap/default/config appeared 2 times among application resources.", "lastTransitionTime": now.Add(-3 * time.Minute).Format(time.RFC3339)},
+		map[string]any{"type": "OrphanedResourceWarning", "message": "Application has 1 orphaned resources", "lastTransitionTime": now.Add(-3 * time.Minute).Format(time.RFC3339)},
+	}
+	for _, tc := range []struct {
+		health, sync, phase, primary string
+		warnings                     int
+	}{
+		{"Healthy", "Synced", "", "", 3},
+		{"Progressing", "OutOfSync", "", "", 3},
+		{"Degraded", "OutOfSync", "", "HealthDegraded", 3},
+		{"Healthy", "OutOfSync", "", "OutOfSync", 3},
+		{"Healthy", "OutOfSync", "Failed", "OperationFailed", 3},
+		{"Suspended", "OutOfSync", "", "", 0},
+		{"Degraded", "OutOfSync", "Running", "", 0},
+	} {
+		t.Run(tc.health+"/"+tc.sync+"/"+tc.phase, func(t *testing.T) {
+			app := argoApp("warnings", "argocd", tc.health, tc.sync, tc.phase, true, append(append([]any{}, conditions...), conditions[0]))
+			if tc.phase == "Failed" {
+				_ = unstructured.SetNestedField(app.Object, "sync failed", "status", "operationState", "message")
+			}
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
+			want := tc.warnings
+			if tc.primary != "" {
+				want++
+			}
+			if len(got) != want {
+				t.Fatalf("want %d rows, got %+v", want, got)
+			}
+			for _, d := range got {
+				if d.Reason == tc.primary {
+					continue
+				}
+				if d.Severity != "warning" || d.Action == "" || d.Message == "" {
+					t.Errorf("lost warning guidance: %+v", d)
+				}
+				if d.Reason == "SharedResourceWarning" && (!strings.Contains(d.Message, conditions[0].(map[string]any)["message"].(string)) || d.DurationSeconds != 180) {
+					t.Errorf("lost owner or transition evidence: %+v", d)
+				}
+			}
+		})
+	}
+}
+
+func TestDetectArgoAppProblems_ErrorConditionsCoexistWithHealth(t *testing.T) {
+	for _, typ := range []string{"ComparisonError", "InvalidSpecError", "SyncError"} {
+		for _, health := range []string{"Progressing", "Degraded"} {
+			t.Run(typ+"/"+health, func(t *testing.T) {
+				app := argoApp("broken", "argocd", health, "Unknown", "", false, []any{map[string]any{"type": typ, "message": "source failure", "lastTransitionTime": "2026-10-09T23:58:00Z"}})
+				_ = unstructured.SetNestedField(app.Object, "Deployment api has 0/3 replicas", "status", "health", "message")
+				got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
+				want := 1
+				if health == "Degraded" {
+					want++
+				}
+				if len(got) != want || got[0].Reason != typ || got[0].Severity != "critical" {
+					t.Fatalf("condition must surface alongside degraded health, got %+v", got)
+				}
+				if health == "Degraded" && (got[1].Reason != "HealthDegraded" || got[1].Message != "Deployment api has 0/3 replicas") {
+					t.Fatalf("missing health: %+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestDetectArgoAppProblems_StableResourceWarnings(t *testing.T) {
+	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	for _, typ := range []string{"SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning"} {
+		t.Run(typ, func(t *testing.T) {
+			condition := func(msg string, at time.Time) any {
+				return map[string]any{"type": typ, "message": msg, "lastTransitionTime": at.Format(time.RFC3339)}
+			}
+			app := argoApp("owners", "argocd", "Healthy", "Synced", "", false, []any{
+				condition("first resource", now.Add(-10*time.Minute)), condition("second resource", now), condition("first resource", now),
+			})
+			rows := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
+			if len(rows) != 1 || rows[0].Fingerprint != typ || rows[0].DurationSeconds != 600 || !strings.Contains(rows[0].Message, "second resource") {
+				t.Fatalf("one stable aggregate with earliest onset required: %+v", rows)
+			}
+			_ = unstructured.SetNestedSlice(app.Object, []any{condition("Application has 20 orphaned resources", now.Add(3*time.Minute)), condition("changed resource", now.Add(3*time.Minute))}, "status", "conditions")
+			next := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now.Add(3*time.Minute))
+			if len(next) != 1 || next[0].Fingerprint != rows[0].Fingerprint || next[0].DurationSeconds != 0 || !next[0].OnsetAt.Equal(now.Add(3*time.Minute)) {
+				t.Fatalf("identity must stay stable while changed messages reset onset: %+v -> %+v", rows, next)
+			}
+			many := []any{}
+			for i := 0; i < 100; i++ {
+				many = append(many, condition(fmt.Sprintf("resource-%03d", i), now))
+			}
+			_ = unstructured.SetNestedSlice(app.Object, many, "status", "conditions")
+			bounded := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now)
+			if len(bounded) != 1 || !strings.Contains(bounded[0].Message, "(+97 more)") || len(bounded[0].Message) > 300 {
+				t.Fatalf("unbounded output: %+v", bounded)
+			}
+		})
+	}
+}
+
+// argoPrunedResources is status.resources as Argo reports it while the
+// empty-render guard holds: every managed resource requires pruning.
+func argoPrunedResources() []any {
+	return []any{
+		map[string]any{"version": "v1", "kind": "Service", "namespace": "demo", "name": "web", "status": "OutOfSync", "requiresPruning": true},
+		map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "demo", "name": "web", "status": "OutOfSync", "requiresPruning": true},
+	}
+}
+
+func TestDetectArgoAppProblems_StaleEmptyGuard(t *testing.T) {
+	guard := []any{map[string]any{"type": "SyncError", "message": "Skipping sync attempt to [old]: auto-sync will wipe out all resources", "lastTransitionTime": "2026-10-09T00:00:00Z"}}
+	for _, sync := range []string{"Synced", "Unknown", ""} {
+		app := argoApp("stale", "argocd", "Healthy", sync, "", true, guard)
+		_ = unstructured.SetNestedSlice(app.Object, argoPrunedResources(), "status", "resources")
+		if got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now()); len(got) != 0 {
+			t.Fatalf("%s: stale guard must not alert: %+v", sync, got)
+		}
+	}
+	// Recorded on Argo CD 3.5.2: the guard condition outlives the empty render
+	// while a sync window blocks auto-sync. Drifting the live Deployment makes
+	// the app OutOfSync again, but no resource requires pruning.
+	staleWithDrift := []any{
+		map[string]any{"version": "v1", "kind": "Service", "namespace": "demo", "name": "web", "status": "Synced", "requiresPruning": nil},
+		map[string]any{"group": "apps", "version": "v1", "kind": "Deployment", "namespace": "demo", "name": "web", "status": "OutOfSync", "requiresPruning": nil},
+	}
+	partlyRendered := argoPrunedResources()
+	partlyRendered[1].(map[string]any)["requiresPruning"] = false
+	for name, resources := range map[string][]any{"stale guard plus drift": staleWithDrift, "one resource still rendered": partlyRendered, "no resources": nil} {
+		t.Run(name, func(t *testing.T) {
+			app := argoApp("stale", "argocd", "Healthy", "OutOfSync", "Succeeded", true, guard)
+			if resources != nil {
+				_ = unstructured.SetNestedSlice(app.Object, resources, "status", "resources")
+			}
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
+			if hasDetectionReason(got, "AutoSyncBlockedEmpty") || hasDetectionReason(got, "SyncError") {
+				t.Fatalf("stale guard must not alert: %+v", got)
+			}
+			if !hasDetectionReason(got, "OutOfSync") {
+				t.Fatalf("the real drift must still surface: %+v", got)
+			}
+		})
+	}
+}
+
+func TestDetectArgoAppProblems_ManualDriftAdviceRespectsSyncHazards(t *testing.T) {
+	base := time.Now()
+	for _, tc := range []struct {
+		name, want string
+		mutate     func(*unstructured.Unstructured)
+	}{
+		{"plain drift", "then Sync the application", func(*unstructured.Unstructured) {}},
+		{"shared resources", "also tracked by Application payments", func(app *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(app.Object, []any{map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"}}, "status", "conditions")
+		}},
+		{"empty render", "delete them all", func(app *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(app.Object, argoPrunedResources(), "status", "resources")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := argoApp("billing", "argocd", "Healthy", "OutOfSync", "", false, nil)
+			app.SetUID(types.UID(tc.name))
+			tc.mutate(app)
+			tr := newArgoDriftTracker()
+			detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base)
+			d, ok := findDetectionReason(detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base.Add(25*time.Hour)), "OutOfSyncManual")
+			if !ok {
+				t.Fatal("missing OutOfSyncManual")
+			}
+			if !strings.Contains(d.Action, tc.want) {
+				t.Errorf("action %q, want %q", d.Action, tc.want)
+			}
+		})
+	}
+}
+
+func TestDetectArgoAppProblems_WarningMessagesJoinCleanly(t *testing.T) {
+	app := argoApp("repeat", "argocd", "Healthy", "Synced", "", false, []any{
+		map[string]any{"type": "RepeatedResourceWarning", "message": "Resource apps/Deployment/demo/web appeared 2 times among application resources."},
+		map[string]any{"type": "RepeatedResourceWarning", "message": "Resource /Service/demo/web appeared 2 times among application resources."},
+	})
+	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
+	if len(got) != 1 || strings.Contains(got[0].Message, ".;") || !strings.Contains(got[0].Message, "application resources; Resource") {
+		t.Fatalf("joined warning reads badly: %+v", got)
+	}
+}
+
+func TestDetectArgoAppProblems_FailedAttemptConditionDedup(t *testing.T) {
+	for _, phase := range []string{"Failed", "Error"} {
+		for _, msg := range []string{"Failed sync attempt to [old]: denied", "Failed last sync attempt to [old]: denied", "a different sync error"} {
+			app := argoApp("broken", "argocd", "Healthy", "OutOfSync", phase, true, []any{map[string]any{"type": "SyncError", "message": msg, "lastTransitionTime": "2026-10-09T23:58:00Z"}})
+			_ = unstructured.SetNestedField(app.Object, "denied", "status", "operationState", "message")
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
+			want := 2
+			if msg != "a different sync error" {
+				want = 1
+			}
+			if len(got) != want {
+				t.Fatalf("%s/%s: want %d got %+v", phase, msg, want, got)
+			}
+		}
+	}
+}
+
+func TestDetectArgoAppProblems_FailedAttemptWithoutOperationMessage(t *testing.T) {
+	for _, phase := range []string{"Failed", "Error"} {
+		for _, prefix := range []string{"Failed sync attempt", "Failed last sync attempt"} {
+			app := argoApp("broken", "argocd", "Healthy", "OutOfSync", phase, true, []any{map[string]any{"type": "SyncError", "message": prefix + ` to x: namespaces "foo" not found`}})
+			_ = unstructured.SetNestedField(app.Object, "https://kubernetes.default.svc", "spec", "destination", "server")
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
+			if len(got) != 1 || got[0].Reason != "SyncError" || got[0].Cause == "" || got[0].RemediationKind != diagnose.RemediationCreateNamespace || got[0].RemediationTarget != "foo" {
+				t.Fatalf("%s/%s: lost actionable condition: %+v", phase, prefix, got)
+			}
+		}
+	}
+}
+
+func TestDetectArgoAppProblems_SyncHazardDisarmsRetryAdvice(t *testing.T) {
+	shared := map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"}
+	for _, tc := range []struct {
+		name, opMessage string
+		pruned          bool
+		conditions      []any
+		want            string
+	}{
+		{"failed namespace sync, then an empty render", `namespaces "demo" not found`, true,
+			[]any{map[string]any{"type": "SyncError", "message": "Skipping sync attempt to [new]: auto-sync will wipe out all resources"}}, "delete them all"},
+		{"failed namespace sync with shared resources", `namespaces "demo" not found`, false, []any{shared}, "also tracked by Application payments"},
+		{"failed-attempt condition carrying the namespace fix, shared", "", false,
+			[]any{map[string]any{"type": "SyncError", "message": `Failed sync attempt to x: namespaces "demo" not found`}, shared}, "also tracked by Application payments"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := argoApp("billing", "argocd", "Healthy", "OutOfSync", "Failed", true, tc.conditions)
+			_ = unstructured.SetNestedField(app.Object, tc.opMessage, "status", "operationState", "message")
+			_ = unstructured.SetNestedField(app.Object, "https://kubernetes.default.svc", "spec", "destination", "server")
+			if tc.pruned {
+				_ = unstructured.SetNestedSlice(app.Object, argoPrunedResources(), "status", "resources")
+			}
+			var checked int
+			for _, d := range detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now()) {
+				if d.Reason == "AutoSyncBlockedEmpty" || d.Reason == "SharedResourceWarning" {
+					continue
+				}
+				checked++
+				if d.RemediationKind != "" {
+					t.Errorf("%s still offers a fix that syncs: %+v", d.Reason, d)
+				}
+				if !strings.Contains(d.Action, tc.want) {
+					t.Errorf("%s action %q, want %q", d.Reason, d.Action, tc.want)
+				}
+			}
+			if checked == 0 {
+				t.Fatal("no failure row to check")
+			}
+		})
 	}
 }
