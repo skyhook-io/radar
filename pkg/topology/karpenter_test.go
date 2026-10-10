@@ -202,8 +202,8 @@ func TestBuildKarpenterTopologyUsesReferencedNodeClassTypes(t *testing.T) {
 		"nodepool//custom-pool": customID,
 		"nodepool//legacy-pool": legacyID,
 	} {
-		if !hasKarpenterTopologyEdge(topo, source, target, EdgeConfigures) {
-			t.Fatalf("missing %s -> %s NodeClass edge; edges=%+v", source, target, topo.Edges)
+		if !hasKarpenterTopologyEdge(topo, target, source, EdgeConfigures) {
+			t.Fatalf("missing %s -> %s NodeClass edge; edges=%+v", target, source, topo.Edges)
 		}
 	}
 	if !hasKarpenterTopologyEdge(topo, "nodepool//eks-pool", "nodeclaim//claim-matching", EdgeManages) {
