@@ -9,7 +9,7 @@ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 let cleanup: (() => void) | undefined
 afterEach(() => cleanup?.())
 
-async function render(detail: CascadeDetail | undefined) {
+async function render(detail: CascadeDetail | undefined, namespaceName = 'flux-system') {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -21,7 +21,7 @@ async function render(detail: CascadeDetail | undefined) {
         onConfirm={() => {}}
         resourceName="apps"
         resourceKind="Kustomization"
-        namespaceName="flux-system"
+        namespaceName={namespaceName}
         isLoading={false}
         cascadeDependents={[{ kind: 'ReplicaSet', namespace: 'prod', name: 'web-abc' }]}
         cascadeDetail={detail}
@@ -53,5 +53,11 @@ describe('ForceDeleteConfirmDialog', () => {
     await act(async () => checkbox.click())
     expect(text()).toContain("Force delete removes Argo CD's finalizer")
     expect(text()).not.toContain('Argo CD will also delete')
+  })
+
+  it('describes a cluster-scoped resource without an empty namespace', async () => {
+    const text = await render(undefined, '')
+    expect(text()).toContain('cluster-scoped Kustomization "apps"')
+    expect(text()).not.toContain('"" namespace')
   })
 })

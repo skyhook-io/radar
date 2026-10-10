@@ -70,7 +70,9 @@ export function ForceDeleteConfirmDialog({
       onConfirm={handleConfirm}
       title="Delete Resource"
       message={`Are you sure you want to delete "${resourceName}"?`}
-      details={`This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`}
+      details={namespaceName
+        ? `This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`
+        : `This will permanently delete the cluster-scoped ${resourceKind} "${resourceName}".`}
       confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
       variant="danger"
       isLoading={isLoading}
