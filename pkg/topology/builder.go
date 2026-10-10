@@ -3,6 +3,7 @@ package topology
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -6656,7 +6657,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Step 3d: Build KNative Serving nodes/edges for traffic view
 	// KNative traffic flow: Internet → KnativeService → K8s Service → Pods
 	// KnativeRoute shown as subtitle data on KnativeService (URL comes from Route)
-	trafficKnativeServiceIDs := make([]string, 0)
+	publicKnativeServiceIDs := make([]string, 0)
 	for _, ksvc := range trafficKnativeServices {
 		ns := ksvc.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -6664,10 +6665,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 		name := ksvc.GetName()
 		ksvcID := fmt.Sprintf("knativeservice/%s/%s", ns, name)
-		trafficKnativeServiceIDs = append(trafficKnativeServiceIDs, ksvcID)
 
 		// Get URL from status (set by KNative Route)
 		url, _, _ := unstructured.NestedString(ksvc.Object, "status", "url")
+		if !knativeServiceIsClusterLocal(ksvc, url) {
+			publicKnativeServiceIDs = append(publicKnativeServiceIDs, ksvcID)
+		}
 		latestRevision, _, _ := unstructured.NestedString(ksvc.Object, "status", "latestReadyRevisionName")
 
 		// Get traffic splits from status
@@ -7260,7 +7263,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// Step 4: Add Internet node if we have ingresses, gateways, Istio gateways, or KNative services with URLs
-	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(trafficKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 || len(trafficHTTPProxyIDs) > 0 {
+	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(publicKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 || len(trafficHTTPProxyIDs) > 0 {
 		nodes = append([]Node{{
 			ID:     "internet",
 			Kind:   KindInternet,
@@ -7293,7 +7296,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				Type:   EdgeRoutesTo,
 			})
 		}
-		for _, ksvcID := range trafficKnativeServiceIDs {
+		for _, ksvcID := range publicKnativeServiceIDs {
 			edges = append(edges, Edge{
 				ID:     fmt.Sprintf("internet-to-%s", ksvcID),
 				Source: "internet",
@@ -9105,3 +9108,20 @@ func matchesStringMap(labels map[string]string, selector map[string]any) bool {
 var _ = appsv1.Deployment{}
 var _ = networkingv1.Ingress{}
 var _ = strings.Contains
+
+// knativeServiceIsClusterLocal reports whether a Knative Service is reachable
+// only inside the cluster: labelled networking.knative.dev/visibility=
+// cluster-local, or published at its <name>.<namespace>.svc cluster domain
+// (the label may sit on the Route instead, and the URL reflects either).
+func knativeServiceIsClusterLocal(ksvc *unstructured.Unstructured, statusURL string) bool {
+	if ksvc.GetLabels()["networking.knative.dev/visibility"] == "cluster-local" {
+		return true
+	}
+	parsed, err := url.Parse(statusURL)
+	if err != nil {
+		return false
+	}
+	local := ksvc.GetName() + "." + ksvc.GetNamespace() + ".svc"
+	host := parsed.Hostname()
+	return host == local || strings.HasPrefix(host, local+".")
+}
