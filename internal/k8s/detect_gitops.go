@@ -263,12 +263,21 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			}
 			d.RawMessage = rawMsg
 			applyArgoOperationDiagnosis(&d, app, msg)
+			// The suggested fix retries the sync, which would now prune
+			// everything or take over shared resources.
+			hazard := argoSyncHazardAction(app)
+			if hazard != "" {
+				d.RemediationKind, d.RemediationTarget = "", ""
+			}
 			// When there's a structured remediation, that one-click fix IS the
 			// next step. Otherwise (RBAC / webhook / immutable field, or an
 			// unrecognized message) point the operator at the operation details
 			// so every failure has a next step, not just a diagnosis.
 			if d.RemediationKind == "" && d.Action == "" {
 				d.Action = "Open the application's sync operation details for the full error and history."
+			}
+			if hazard != "" {
+				d.Action += " " + hazard
 			}
 			out = append(out, d)
 		}
@@ -285,6 +294,11 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			d.Fingerprint = "argo-condition:" + ct
 			if ct == "SyncError" {
 				applyArgoOperationDiagnosis(&d, app, cmsg)
+				// A failed sync's advice is to retry, and its one-click fix syncs.
+				if hazard := argoSyncHazardAction(app); hazard != "" && d.Reason != diagnose.ReasonAutoSyncBlockedEmpty {
+					d.Action = hazard
+					d.RemediationKind, d.RemediationTarget = "", ""
+				}
 			}
 			if d.RemediationKind == "" && d.Action == "" {
 				d.Action = diagnose.ActionForCondition(ct)
@@ -315,6 +329,9 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			dd := gitopsProblem(now, "Application", argoGroup, ns, name, "critical",
 				"HealthMissing", orMsg("auto-synced Application's managed resources are missing from the cluster"), createdAt)
 			dd.Action = "Sync the Application to recreate its managed resources."
+			if hazard := argoSyncHazardAction(app); hazard != "" {
+				dd.Action = hazard
+			}
 			out = append(out, dd)
 			continue
 		}
@@ -351,6 +368,9 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", FormatAge(manualDriftFor)), createdAt)
 			setDetectionOnset(&dd, now, outOfSyncAt)
 			dd.Action = "Review the drift in Changes, then Sync the application (or enable auto-sync) if the drift is unintended."
+			if hazard := argoSyncHazardAction(app); hazard != "" {
+				dd.Action = hazard
+			}
 			out = append(out, dd)
 		}
 	}
@@ -406,14 +426,16 @@ func argoResourceWarningProblems(app *unstructured.Unstructured, now time.Time) 
 		}
 		sort.Strings(messages)
 		count := len(messages)
-		if count > 3 {
-			messages = messages[:3]
+		shown := make([]string, 0, min(count, 3))
+		for _, m := range messages[:min(count, 3)] {
+			// Argo ends some warning messages with a period; joined as-is they read ".;".
+			shown = append(shown, strings.TrimRight(m, ". "))
 		}
-		message := strings.Join(messages, "; ")
+		message := strings.Join(shown, "; ")
 		switch typ {
 		case "SharedResourceWarning":
 			if count == 1 {
-				message = "1 resource is also tracked by other Applications: " + message
+				message = "1 resource is also tracked by another Application: " + message
 			} else {
 				message = fmt.Sprintf("%d resources are also tracked by other Applications: %s", count, message)
 			}
@@ -424,8 +446,8 @@ func argoResourceWarningProblems(app *unstructured.Unstructured, now time.Time) 
 				message = fmt.Sprintf("%d resources are rendered more than once: %s", count, message)
 			}
 		}
-		if count > len(messages) {
-			message += fmt.Sprintf(" (+%d more)", count-len(messages))
+		if count > len(shown) {
+			message += fmt.Sprintf(" (+%d more)", count-len(shown))
 		}
 		if count == 0 {
 			message = typ
@@ -443,7 +465,7 @@ func argoResourceWarningProblems(app *unstructured.Unstructured, now time.Time) 
 		d.RawMessage = strings.Join(rawMessages, "; ")
 		// Counts and resource messages change each comparison; the warning episode does not.
 		d.Fingerprint = typ
-		d.Action = diagnose.ActionForCondition(typ)
+		d.Action = diagnose.ArgoConditionAction(typ, gitops.ArgoCLIName(app), messages)
 		if !w.onset.IsZero() {
 			setDetectionOnset(&d, now, w.onset)
 		}
@@ -452,10 +474,23 @@ func argoResourceWarningProblems(app *unstructured.Unstructured, now time.Time) 
 	return out
 }
 
+// argoSyncHazardAction is the guidance that replaces sync or retry advice when
+// a sync would prune every managed resource or take resources over from
+// another Application; empty when a sync is a plain reconcile.
+func argoSyncHazardAction(app *unstructured.Unstructured) string {
+	return diagnose.ArgoSyncHazardAction(gitops.ArgoSyncPrunesEverything(app), gitops.ArgoConditionMessages(app, "SharedResourceWarning"))
+}
+
 func applyArgoOperationDiagnosis(d *Detection, app *unstructured.Unstructured, msg string) {
 	parsed := diagnose.ParseArgoOperationError(msg)
 	if parsed.Reason != "" {
 		d.Reason = parsed.Reason
+	}
+	if parsed.Summary != "" {
+		if d.RawMessage == "" {
+			d.RawMessage = d.Message
+		}
+		d.Message = parsed.Summary
 	}
 	d.Action = parsed.Action
 	if !gitops.IsInClusterDestination(app) {
@@ -570,8 +605,7 @@ func argoErrorCondition(app *unstructured.Unstructured, now time.Time) (condType
 				if (strings.EqualFold(phase, "Failed") || strings.EqualFold(phase, "Error")) && diagnose.IsArgoFailedAttemptCondition(msg, opMsg) {
 					continue
 				}
-				sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
-				if diagnose.ParseArgoOperationError(msg).Reason == "AutoSyncBlockedEmpty" && !strings.EqualFold(sync, "OutOfSync") {
+				if diagnose.ParseArgoOperationError(msg).Reason == diagnose.ReasonAutoSyncBlockedEmpty && !gitops.ArgoEmptyRenderGuardHolds(app) {
 					continue
 				}
 			}

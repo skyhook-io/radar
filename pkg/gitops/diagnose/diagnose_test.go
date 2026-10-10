@@ -301,8 +301,16 @@ func TestActionForFluxReason(t *testing.T) {
 
 func TestParseArgoOperationError_EmptyAutoSync(t *testing.T) {
 	got := ParseArgoOperationError("Skipping sync attempt to [abc123]: auto-sync will wipe out all resources")
-	if !strings.Contains(got.Cause, "desired state is empty") || !strings.Contains(got.Cause, "prune") {
+	if !strings.Contains(got.Cause, "empty desired state") || !strings.Contains(got.Cause, "prune") {
 		t.Fatalf("missing empty-state cause: %+v", got)
+	}
+	// The list row shows the summary; a leading revision SHA would push the
+	// meaning past the truncation point.
+	if got.Reason != ReasonAutoSyncBlockedEmpty || !strings.HasPrefix(got.Summary, "Auto-sync blocked") || strings.Contains(got.Summary, "abc123") {
+		t.Fatalf("summary must lead with the meaning: %+v", got)
+	}
+	if !strings.Contains(got.Action, "manual sync with pruning would delete every managed resource") {
+		t.Fatalf("guard advice must warn against a manual sync: %q", got.Action)
 	}
 	if got.RemediationKind != "" {
 		t.Fatalf("must not disable the empty-state guard: %+v", got)
@@ -358,7 +366,64 @@ func TestIsArgoFailedAttemptCondition(t *testing.T) {
 }
 
 func TestSharedResourceWarningAction(t *testing.T) {
-	if got := ActionForCondition("SharedResourceWarning"); !strings.Contains(got, "These resources are also tracked by other Applications") || !strings.Contains(got, "each resource") {
-		t.Fatalf("expected plural-aware ownership guidance: %q", got)
+	// One condition row names one resource; generic advice must read right for
+	// one resource or many.
+	if got := ActionForCondition("SharedResourceWarning"); strings.Contains(got, "These resources") || !strings.Contains(got, "each shared resource") {
+		t.Fatalf("expected number-neutral ownership guidance: %q", got)
+	}
+	one := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{"Deployment/guestbook-ui is part of applications argocd/live-shared-b and live-shared-a"})
+	if !strings.HasPrefix(one, "Also tracked by Application live-shared-a. ") || !strings.Contains(one, "each shared resource") {
+		t.Fatalf("expected the other owner named: %q", one)
+	}
+	many := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{
+		"Service/a is part of applications argocd/b and owner-2",
+		"Service/b is part of applications argocd/b and owner-1",
+		"Service/c is part of applications argocd/b and owner-2",
+		"Service/d is part of applications argocd/b and owner-3",
+		"Service/e is part of applications argocd/b and owner-4",
+		"a message in some other shape",
+	})
+	if !strings.HasPrefix(many, "Also tracked by Applications owner-1, owner-2, owner-3 and 1 more. ") {
+		t.Fatalf("expected deduplicated, bounded owners: %q", many)
+	}
+	if got := ArgoConditionAction("SharedResourceWarning", "argocd/b", []string{"unparseable"}); got != ActionForCondition("SharedResourceWarning") {
+		t.Fatalf("unparseable message must fall back to generic advice: %q", got)
+	}
+}
+
+func TestOrphanedResourceWarningActionSaysWhereToLook(t *testing.T) {
+	got := ArgoConditionAction("OrphanedResourceWarning", "argocd/live-orphan", []string{"Application has 3 orphaned resources"})
+	if !strings.Contains(got, `"argocd app resources argocd/live-orphan --orphaned"`) || !strings.Contains(got, "Argo CD UI") || !strings.Contains(got, "spec.orphanedResources.ignore") {
+		t.Fatalf("orphan guidance must say where to see which resources: %q", got)
+	}
+	if generic := ActionForCondition("OrphanedResourceWarning"); strings.Contains(generic, "argocd app") || strings.Contains(generic, "  ") || !strings.Contains(generic, "Argo CD UI") {
+		t.Fatalf("generic orphan guidance without an app name: %q", generic)
+	}
+}
+
+func TestArgoSyncHazardAction(t *testing.T) {
+	shared := []string{"Deployment/web is part of applications argocd/b and live-shared-a"}
+	for _, tc := range []struct {
+		name     string
+		prunes   bool
+		shared   []string
+		contains string
+	}{
+		{"plain drift", false, nil, ""},
+		{"empty render", true, nil, "delete them all"},
+		{"empty render outranks shared", true, shared, "delete them all"},
+		{"shared", false, shared, "also tracked by Application live-shared-a"},
+		{"shared, owner unknown", false, []string{"unparseable"}, "also tracked by another Application"},
+	} {
+		got := ArgoSyncHazardAction(tc.prunes, tc.shared)
+		if tc.contains == "" {
+			if got != "" {
+				t.Errorf("%s: want no hazard, got %q", tc.name, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, tc.contains) || strings.Contains(got, "click Sync") {
+			t.Errorf("%s: got %q, want %q and no click-Sync advice", tc.name, got, tc.contains)
+		}
 	}
 }

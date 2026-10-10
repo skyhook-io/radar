@@ -556,6 +556,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				Stuck:       parsed.Stuck,
 				Remediation: remediationFromParsed(parsed),
 			}
+			// The one-click fix retries the sync, which would now prune
+			// everything or take over shared resources.
+			if hazard := argoSyncHazardAction(root); hazard != "" {
+				issue.Action = action + " " + hazard
+				issue.Remediation = nil
+			}
 			if parsed.AffectedKind != "" && parsed.AffectedName != "" {
 				ref := Ref{Kind: parsed.AffectedKind, Name: parsed.AffectedName}
 				issue.Refs = []Ref{ref}
@@ -575,6 +581,10 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			out = append(out, issue)
 		} else if phase == "Running" {
 			out = append(out, Issue{Severity: SeverityInfo, Scope: ScopeOperation, Reason: "Running", Message: "A sync operation is currently running.", Action: "Wait for completion or terminate if it is stuck."})
+		} else if argoEmptyRenderGuardActive(root) {
+			// The guard condition below already explains why the app stays
+			// OutOfSync; a drift row would misread it and suggest a sync that
+			// prunes everything.
 		} else if stuck := detectStuckDriftLoop(root); stuck != nil {
 			// Stuck-drift-loop detector: the user's "this is stuck forever and
 			// nothing tells me why" case. Argo reports the last sync as
@@ -2015,13 +2025,40 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
 	if describeArgoAutoSync(root) != "Manual" {
 		return nil
 	}
-	return &Issue{
+	issue := &Issue{
 		Severity: SeverityWarning,
 		Scope:    ScopeOperation,
 		Reason:   "ManualDrift",
 		Message:  "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync.",
 		Action:   "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.",
 	}
+	if hazard := argoSyncHazardAction(root); hazard != "" {
+		issue.Message = "Application is OutOfSync and auto-sync is disabled, so nothing reconciles it automatically."
+		issue.Action = hazard
+	}
+	return issue
+}
+
+// argoSyncHazardAction is the guidance that replaces "click Sync" when a sync
+// would prune every managed resource or take resources over from another
+// Application; empty when a sync is a plain reconcile.
+func argoSyncHazardAction(root *unstructured.Unstructured) string {
+	return diagnose.ArgoSyncHazardAction(gitops.ArgoSyncPrunesEverything(root), gitops.ArgoConditionMessages(root, "SharedResourceWarning"))
+}
+
+// argoEmptyRenderGuardActive reports whether Argo's empty-render auto-sync
+// guard currently holds: the condition is present and Argo's own test for it
+// still passes.
+func argoEmptyRenderGuardActive(root *unstructured.Unstructured) bool {
+	if !gitops.ArgoEmptyRenderGuardHolds(root) {
+		return false
+	}
+	for _, msg := range gitops.ArgoConditionMessages(root, argoSyncErrorConditionType) {
+		if diagnose.ParseArgoOperationError(msg).Reason == diagnose.ReasonAutoSyncBlockedEmpty {
+			return true
+		}
+	}
+	return false
 }
 
 // argoAutoSync reports whether spec.syncPolicy.automated is present and, if so,
@@ -2055,13 +2092,18 @@ func detectAutoDriftSelfHealOff(root *unstructured.Unstructured) *Issue {
 	if !automated || selfHeal {
 		return nil
 	}
-	return &Issue{
+	issue := &Issue{
 		Severity: SeverityWarning,
 		Scope:    ScopeOperation,
 		Reason:   "SelfHealDisabled",
 		Message:  "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster, so it will stay OutOfSync until you sync.",
 		Action:   "Open Changes to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
 	}
+	if hazard := argoSyncHazardAction(root); hazard != "" {
+		issue.Message = "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster."
+		issue.Action = hazard
+	}
+	return issue
 }
 
 // argoSyncErrorConditionType also covers blocked auto-sync, where no operation ran.
@@ -2103,15 +2145,18 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 		}
 		cause := ""
 		var remediation *Remediation
-		action := diagnose.ActionForCondition(typ)
+		action := diagnose.ArgoConditionAction(typ, gitops.ArgoCLIName(root), []string{msg})
 		if typ == argoSyncErrorConditionType {
 			parsed := diagnose.ParseArgoOperationError(msg)
 			if parsed.Reason != "" {
-				sync, _, _ := unstructured.NestedString(root.Object, "status", "sync", "status")
-				if parsed.Reason == "AutoSyncBlockedEmpty" && !strings.EqualFold(sync, "OutOfSync") {
+				if parsed.Reason == diagnose.ReasonAutoSyncBlockedEmpty && !gitops.ArgoEmptyRenderGuardHolds(root) {
 					continue
 				}
 				typ = parsed.Reason
+			}
+			if parsed.Summary != "" {
+				rawMsg = fallback(rawMsg, msg)
+				msg = parsed.Summary
 			}
 			if !gitops.IsInClusterDestination(root) {
 				var remoteAction string
@@ -2124,6 +2169,11 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 			remediation = remediationFromParsed(parsed)
 			if parsed.Action != "" {
 				action = parsed.Action
+			}
+			// A failed sync's advice is to retry, and its one-click fix syncs.
+			if hazard := argoSyncHazardAction(root); hazard != "" && parsed.Reason != diagnose.ReasonAutoSyncBlockedEmpty {
+				action = hazard
+				remediation = nil
 			}
 		}
 		out = append(out, Issue{

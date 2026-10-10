@@ -33,6 +33,25 @@
       "status": "OutOfSync",
       "revision": "abc123"
     },
+    "resources": [
+      {
+        "group": "monitoring.coreos.com",
+        "version": "v1",
+        "kind": "PrometheusRule",
+        "namespace": "gaps-r3-gitops",
+        "name": "addons",
+        "status": "OutOfSync",
+        "requiresPruning": true
+      },
+      {
+        "version": "v1",
+        "kind": "ConfigMap",
+        "namespace": "gaps-r3-gitops",
+        "name": "config",
+        "status": "OutOfSync",
+        "requiresPruning": true
+      }
+    ],
     "conditions": [
       {
         "type": "SyncError",

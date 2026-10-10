@@ -635,6 +635,11 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
         {headline.cause && (
           <p className="truncate pl-[22px] text-[11px] text-theme-text-tertiary">{headline.cause}</p>
         )}
+        {/* Wrapped, unlike the cause: a next step often ends in the caveat
+            that makes it safe (what not to sync), which truncation would cut. */}
+        {headline.action && (
+          <p className="pl-[22px] text-[11px] text-theme-text-tertiary">{headline.action}</p>
+        )}
       </button>
       {canExpand && (
         <Collapse open={expanded}>
