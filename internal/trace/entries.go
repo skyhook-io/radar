@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/probe"
 )
@@ -1272,16 +1273,11 @@ func routeReferencesService(route *unstructured.Unstructured, svcNS, svcName str
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kindf, _ := refm["kind"].(string)
-			if group != "" || (kindf != "" && kindf != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			name, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			if name == svcName && ns == svcNS {
 				return true
 			}
@@ -1782,16 +1778,11 @@ func routeBackendPorts(route *unstructured.Unstructured, namespace, name string)
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kind, _ := refm["kind"].(string)
-			if group != "" || (kind != "" && kind != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			refName, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			if refName != name || ns != namespace {
 				continue
 			}
@@ -1831,16 +1822,11 @@ func routeBackendDrained(route *unstructured.Unstructured, namespace, name strin
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kind, _ := refm["kind"].(string)
-			if group != "" || (kind != "" && kind != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			refName, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			w, hasW := backendRefWeight(refm)
 			if refName == name && ns == namespace {
 				if !hasW {
@@ -1901,16 +1887,11 @@ func routeBackends(route *unstructured.Unstructured) []ResourceRef {
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kind, _ := refm["kind"].(string)
-			if group != "" || (kind != "" && kind != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			name, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			key := ns + "/" + name
 			if name == "" || seen[key] {
 				continue
@@ -1945,16 +1926,11 @@ func routeParentGateways(deps Deps, route *unstructured.Unstructured) []Hop {
 		if !ok {
 			continue
 		}
-		group, _ := pm["group"].(string)
-		kind, _ := pm["kind"].(string)
-		if (group != "" && group != "gateway.networking.k8s.io") || (kind != "" && kind != "Gateway") {
+		if !configrefs.GatewayParentIsGateway(pm) {
 			continue
 		}
 		name, _ := pm["name"].(string)
-		ns, _ := pm["namespace"].(string)
-		if ns == "" {
-			ns = route.GetNamespace()
-		}
+		ns := configrefs.GatewayRefNamespace(pm, route.GetNamespace())
 		key := ns + "/" + name
 		if name == "" || seen[key] {
 			continue
@@ -2242,23 +2218,11 @@ func routeAttachedToGateway(route *unstructured.Unstructured, gwNS, gwName strin
 		if !ok {
 			continue
 		}
-		// parentRef.kind defaults to "Gateway" per the Gateway API spec.
-		// parentRef.group defaults to "gateway.networking.k8s.io". A Route
-		// that points at a same-named non-Gateway parent (e.g. another
-		// Route in a tree) must not appear on a Gateway trace.
-		kind, _ := pm["kind"].(string)
-		if kind != "" && kind != "Gateway" {
-			continue
-		}
-		group, _ := pm["group"].(string)
-		if group != "" && group != "gateway.networking.k8s.io" {
+		if !configrefs.GatewayParentIsGateway(pm) {
 			continue
 		}
 		name, _ := pm["name"].(string)
-		ns, _ := pm["namespace"].(string)
-		if ns == "" {
-			ns = route.GetNamespace()
-		}
+		ns := configrefs.GatewayRefNamespace(pm, route.GetNamespace())
 		if name == gwName && ns == gwNS {
 			return true
 		}

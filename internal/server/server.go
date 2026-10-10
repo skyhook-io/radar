@@ -173,12 +173,22 @@ type Server struct {
 	yamlSchemaCacheBytes  int
 	yamlSchemaFetchGroup  singleflight.Group
 
-	// aiDiagnoser drives a local agent CLI for AI investigations (nil when no
-	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
+	// aiMu guards aiDiagnoser and aiRuns: refreshAIEngine turns the engine on
+	// when an agent CLI is installed while Radar runs. Read them through
+	// aiEngine / aiRunManager.
+	aiMu sync.RWMutex
+	// aiDiagnoser drives a local agent CLI for AI investigations (nil until a
+	// CLI is found; the endpoints then 501).
 	aiDiagnoser *ai.Diagnoser
 	// aiRuns owns investigations as durable server-side jobs (survive panel close
 	// / navigation / refresh). nil exactly when aiDiagnoser is.
 	aiRuns *ai.RunManager
+	// aiInvestigationRefs and aiHistoryDB are what the engine is built with,
+	// kept so it can be built after startup.
+	aiInvestigationRefs *investigationrefs.Registry
+	aiHistoryDB         string
+	// aiChecked is set after the first refreshAIEngine, at startup.
+	aiChecked bool
 }
 
 // Config holds server configuration
@@ -258,49 +268,11 @@ func New(cfg Config) *Server {
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.cloudInstall.sharedListener = s.sharedListener
 
-	// Resolve a local agent CLI for AI investigations (keyless, on the user's own
-	// subscription). nil when none is found — the feature stays disabled.
-	//
-	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
-	// against this server's own investigation MCP mount with no
-	// credentials, which only works when MCP is unauthenticated. Under proxy/OIDC
-	// auth (team / cloud deployments) the MCP requires identity headers the local
-	// CLI can't supply, and AI investigations are the embedding host's job (e.g.
-	// Radar Hub) anyway.
-	// Also requires /mcp to be mounted — the agent reaches the cluster only
-	// through it, so with --no-mcp the feature can't work.
-	if s.configManagement() != "operator" && !s.authConfig.Enabled() && s.mcpHandler != nil &&
-		s.mcpInvestigationHandler != nil && cfg.InvestigationRefs != nil {
-		if d, err := ai.NewDetected(context.Background(), cfg.InvestigationRefs); err == nil {
-			s.aiDiagnoser = d
-			// History store opens only when the engine actually enables, so a
-			// disabled feature never creates the DB. Open failure degrades to
-			// memory-only runs (the historical behavior), never blocks startup.
-			var store ai.RunStore
-			historyBroken := false
-			if cfg.AIHistoryDB != "" {
-				if st, err := ai.OpenRunStore(cfg.AIHistoryDB); err != nil {
-					log.Printf("[ai] run history disabled — could not open %s: %v", cfg.AIHistoryDB, err)
-					historyBroken = true
-				} else {
-					store = st
-				}
-			}
-			s.aiRuns = ai.NewRunManager(d, s.ActualAddr, s.basePath, k8s.GetContextName, store)
-			s.aiRuns.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
-				state := prometheuspkg.Availability(ctx)
-				return ai.MetricsAvailability{
-					Connected: state.State == prometheuspkg.AvailabilityConnected,
-					Address:   state.Address,
-				}
-			}
-			if historyBroken {
-				// Persistence was requested but isn't working — the UI must say
-				// history won't survive a restart, not just a log line.
-				s.aiRuns.MarkHistoryUnavailable(cfg.AIHistoryDB)
-			}
-		}
-	}
+	// Turn on AI investigations if an agent CLI is installed. Later installs are
+	// picked up by refreshAIEngine when a client asks for the agent list.
+	s.aiInvestigationRefs = cfg.InvestigationRefs
+	s.aiHistoryDB = cfg.AIHistoryDB
+	s.refreshAIEngine(context.Background())
 
 	// Register a single context-switch callback so every PerformContextSwitch
 	// path (REST switch, CAPI connect, periodic re-auth, …) gets per-user
@@ -317,8 +289,8 @@ func New(cfg Config) *Server {
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
 	// cluster, so an in-flight agent (especially an apply) can't write to it.
 	k8s.OnBeforeContextSwitch(func(_ string) {
-		if s.aiRuns != nil {
-			s.aiRuns.OnContextSwitch()
+		if runs := s.aiRunManager(); runs != nil {
+			runs.OnContextSwitch()
 		}
 		// Runtime auth-loss demotion fires ONLY this callback (quiesce in
 		// place, no switch follows), and Argo CD's private port-forward lives
@@ -686,6 +658,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
 			r.Get("/pods/{namespace}/{name}/environment", s.handlePodEnvironment)
 			r.Post("/pods/{namespace}/{name}/environment/reveal", s.handleRevealPodEnvironment)
+
+			r.Get("/services/{namespace}/{name}/endpointslices", s.handleServiceEndpointSlices)
 
 			// Pod debug (ephemeral container)
 			r.Post("/pods/{namespace}/{name}/debug", s.handleCreateDebugContainer)
@@ -1262,8 +1236,8 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) Stop() {
 	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
-	if s.aiRuns != nil {
-		s.aiRuns.Shutdown() // cancel investigations so agent children don't outlive us
+	if runs := s.aiRunManager(); runs != nil {
+		runs.Shutdown() // cancel investigations so agent children don't outlive us
 	}
 	s.broadcaster.Stop()
 	if s.stopUsageData != nil {
@@ -1366,14 +1340,15 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
-		YAMLReview:      true,
-		YAMLSchemas:     true,
-		WorkloadImages:  true,
-		ResourceIssues:  true,
-		PodEnvironment:  true,
-		PolicyResource:  true,
-		WorkloadHistory: true,
-		TrafficRecords:  true,
+		YAMLReview:            true,
+		YAMLSchemas:           true,
+		WorkloadImages:        true,
+		ResourceIssues:        true,
+		PodEnvironment:        true,
+		PolicyResource:        true,
+		WorkloadHistory:       true,
+		ServiceEndpointSlices: true,
+		TrafficRecords:        true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
