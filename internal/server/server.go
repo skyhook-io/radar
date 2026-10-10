@@ -5057,10 +5057,17 @@ func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	}
 }
 
-func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
+func (s *Server) writeError(w http.ResponseWriter, status int, message string, fields ...map[string]string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+	payload := map[string]string{}
+	for _, extra := range fields {
+		for key, value := range extra {
+			payload[key] = value
+		}
+	}
+	payload["error"] = message
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		log.Printf("Failed to encode error response: %v", err)
 	}
 }
@@ -5088,11 +5095,7 @@ func (s *Server) writeApplyResourceError(w http.ResponseWriter, status int, mess
 // the frontend branches on (e.g. cloud_role_insufficient → "your role can't do
 // this" instead of a generic auth failure).
 func (s *Server) writeErrorCode(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message, "error_code": code}); err != nil {
-		log.Printf("Failed to encode error response: %v", err)
-	}
+	s.writeError(w, status, message, map[string]string{"error_code": code})
 }
 
 // requireCloudRole gates a handler for one of Radar's own features (config,

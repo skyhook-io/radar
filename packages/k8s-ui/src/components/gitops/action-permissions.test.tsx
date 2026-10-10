@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { GitOpsDetailLayout, type GitOpsDetailLayoutProps } from './GitOpsDetailLayout'
@@ -20,7 +21,8 @@ const base: GitOpsDetailLayoutProps = {
 }
 
 function actionButton(html: string, label: string): string {
-  return [...html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(match => match[0]).find(button => button.includes(label)) || ''
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return [...doc.querySelectorAll('button')].find(button => button.textContent?.includes(label))?.outerHTML || ''
 }
 
 describe('GitOps permission gates on rendered controls', () => {
@@ -52,7 +54,7 @@ describe('GitOps permission gates on rendered controls', () => {
         allowed: false, verb: 'patch', resource: 'gitrepositories', group: 'source.toolkit.fluxcd.io', namespace: 'gaps-r4-source',
       } }}
     />)
-    const grants = html.match(/<ul\b[^>]*>[\s\S]*?<\/ul>/)![0].replace(/<[^>]+>/g, '')
+    const grants = new DOMParser().parseFromString(html, 'text/html').querySelector('ul')!.textContent!
     expect(grants).toContain('patch gitrepositories.source.toolkit.fluxcd.io in gaps-r4-source')
     expect(grants).not.toContain('kustomizations')
     expect(grants).not.toContain('gaps-r4-demo')
@@ -67,9 +69,9 @@ describe('GitOps permission gates on rendered controls', () => {
       validate: { ...argoDenial, resource: 'otherresources' },
       reconcile: { allowed: true }, unknown: {},
     }} />)
-    const list = html.match(/<ul\b[^>]*>[\s\S]*?<\/ul>/)![0]
-    expect(list.match(/<li\b/g)).toHaveLength(5)
-    const text = list.replace(/<[^>]+>/g, '')
+    const list = new DOMParser().parseFromString(html, 'text/html').querySelector('ul')!
+    expect(list.querySelectorAll('li')).toHaveLength(5)
+    const text = list.textContent!
     expect(text.match(/patch applications.argoproj.io in argocd/g)).toHaveLength(1)
     expect(text).toContain('get applications.argoproj.io in argocd')
     expect(text).toContain('patch applications.argoproj.io in other')

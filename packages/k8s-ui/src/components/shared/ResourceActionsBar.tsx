@@ -810,7 +810,7 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
             })}
             disabled={isSyncing || isSuspended}
             aria-disabled={isSyncing || isSuspended || !!disabledReasons?.['sync-with-source']}
-            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors disabled:opacity-50"
+            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
             {isSyncing ? 'Syncing...' : 'Sync with Source'}
@@ -829,7 +829,7 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
               })}
               disabled={isResuming}
               aria-disabled={isResuming || !!disabledReasons?.resume}
-              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Play className="w-3.5 h-3.5" />
               {isResuming ? 'Resuming...' : 'Resume'}
@@ -937,7 +937,7 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
               })}
               disabled={isResuming}
               aria-disabled={isResuming || !!disabledReasons?.resume}
-              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Play className="w-3.5 h-3.5" />
               {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}

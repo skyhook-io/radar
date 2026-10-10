@@ -150,6 +150,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const fluxResume = useFluxResume()
 
   const [syncDialogRow, setSyncDialogRow] = useState<GitOpsRow | null>(null)
+  const { disabledReasons: syncDialogDisabledReasons } = useGitOpsActionCapabilities(
+    syncDialogRow?.kindName ?? '', syncDialogRow?.group, syncDialogRow?.namespace ?? '', syncDialogRow?.name ?? '', !!syncDialogRow,
+  )
   const [pendingActions, setPendingActions] = useState<Map<string, Set<GitOpsRowAction>>>(new Map())
 
   // Mark an action as in-flight (or done) for a given row. Cloning the
@@ -341,11 +344,12 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
       />
       <SyncOptionsDialog
         open={!!syncDialogRow}
+        disabledReason={syncDialogDisabledReasons.sync}
         appLabel={syncDialogRow ? `${syncDialogRow.namespace}/${syncDialogRow.name}` : ''}
         pending={argoSync.isPending}
         onCancel={() => setSyncDialogRow(null)}
         onConfirm={(opts) => {
-          if (!syncDialogRow) return
+          if (!syncDialogRow || syncDialogDisabledReasons.sync) return
           const { namespace, name } = syncDialogRow
           argoSync.mutate(
             { namespace, name, ...opts },

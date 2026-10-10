@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -254,5 +257,29 @@ func TestGitOpsCapabilitiesMissingSourceIsUnknown(t *testing.T) {
 		if !allowed && (capability.Allowed == nil || *capability.Allowed) {
 			t.Fatalf("lost definite patch denial: %+v", capability)
 		}
+	}
+}
+
+func TestWriteGitOpsUnexpectedErrorLogsFailure(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	w := httptest.NewRecorder()
+	(&Server{}).writeGitOpsError(w, errors.New("cluster read failed"), "gitops", "capabilities", "apps", "demo")
+	if w.Code != http.StatusInternalServerError || !strings.Contains(output.String(), "[gitops] Failed to capabilities apps/demo: cluster read failed") {
+		t.Fatalf("response=%d log=%s", w.Code, output.String())
+	}
+}
+
+func TestWriteErrorStructuredFieldsPreserveMessage(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&Server{}).writeError(w, http.StatusForbidden, "permission denied", map[string]string{"error": "overridden", "error_code": "rbac_denied", "verb": "patch"})
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusForbidden || w.Header().Get("Content-Type") != "application/json" || body["error"] != "permission denied" || body["error_code"] != "rbac_denied" || body["verb"] != "patch" {
+		t.Fatalf("response=%d %v %v", w.Code, w.Header(), body)
 	}
 }

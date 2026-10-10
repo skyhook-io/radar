@@ -270,12 +270,14 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 	default:
 		status = http.StatusInternalServerError
 	}
-	log.Printf("[%s] %s %s/%s -> %d: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), status, err)
+	if status == http.StatusInternalServerError {
+		log.Printf("[%s] Failed to %s %s/%s: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), err)
+	} else {
+		log.Printf("[%s] %s %s/%s -> %d: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), status, err)
+	}
 	var denied *gitops.PermissionDenied
 	if errors.As(err, &denied) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		s.writeJSON(w, map[string]any{"error": msg, "error_code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind})
+		s.writeError(w, status, msg, map[string]string{"error_code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind})
 		return
 	}
 	var admission *gitops.AdmissionDenied

@@ -159,18 +159,17 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   const disclosure = useDisclosure(detailsOpen)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
-  const [persistent, setPersistent] = useState(false)
   const [copied, setCopied] = useState(false)
   const remaining = useRef(toast.type === 'error' ? 10000 : 7000)
   useEffect(() => {
-    if (hovered || focused || persistent || toast.dismissing) return
+    if (hovered || focused || detailsOpen || toast.dismissing) return
     const started = Date.now()
     const timer = setTimeout(onDismiss, remaining.current)
     return () => {
       clearTimeout(timer)
       remaining.current = Math.max(0, remaining.current - (Date.now() - started))
     }
-  }, [hovered, focused, persistent, toast.dismissing, onDismiss])
+  }, [hovered, focused, detailsOpen, toast.dismissing, onDismiss])
   // Calculate position - either near button or default to bottom-right
   const style: React.CSSProperties = toast.position
     ? {
@@ -231,8 +230,8 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary')}>
-            {toast.message.split(' ').map((word, index) => <Fragment key={index}><span className="whitespace-nowrap">{word}</span>{' '}</Fragment>)}
+          <span className={clsx('min-w-0 text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary')}>
+            {toast.message.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)}
           </span>
           {!isError && !isNotice && !toast.action && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-400' : 'text-green-400')} />}
         </div>
@@ -250,17 +249,17 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               )}
               title="Click to open file"
             >
-              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="whitespace-nowrap">{word}</span>{' '}</Fragment>)}
+              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)}
             </button>
           ) : (
             <p className={clsx('mt-1 text-xs break-words', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
-              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="whitespace-nowrap">{word}</span>{' '}</Fragment>)}
+              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)}
             </p>
           )
         )}
         {toast.rawDetail && (
-          <div className={clsx('mt-2 rounded p-2', isError ? 'bg-black/25 text-red-100' : 'bg-theme-surface text-theme-text-secondary')}>
-            <button type="button" onClick={() => { setDetailsOpen(value => !value); setPersistent(true) }} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
+          <div className="mt-2 rounded bg-theme-surface p-2 text-theme-text-primary">
+            <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
               <CollapseChevron open={detailsOpen} inheritColor /> Error details
             </button>
             <Collapse open={detailsOpen} id={disclosure.panelId}>
