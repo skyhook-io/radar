@@ -5195,6 +5195,28 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 				svcKind, _ := svcMap["kind"].(string)
 
+				// The route uses its transport whether or not the backend exists.
+				// ServersTransport is resolved relative to the IngressRoute's
+				// namespace, not the service's.
+				if stName, _ := svcMap["serversTransport"].(string); stName != "" {
+					stPrefix := "serverstransport"
+					if def.kind == "IngressRouteTCP" {
+						stPrefix = "serverstransporttcp"
+					}
+					if stID := traefikConfigIDs[stPrefix+":"+routeNs+"/"+stName]; stID != "" {
+						dedupeKey := stID + "|" + routeID
+						if !traefikEdgeSeen[dedupeKey] {
+							traefikEdgeSeen[dedupeKey] = true
+							edges = append(edges, Edge{
+								ID:     fmt.Sprintf("%s-to-%s", stID, routeID),
+								Source: stID,
+								Target: routeID,
+								Type:   EdgeConfigures,
+							})
+						}
+					}
+				}
+
 				var targetID string
 				if svcKind == "TraefikService" {
 					targetID = traefikServiceIDs[svcNs+"/"+svcName]
@@ -5204,31 +5226,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 				if targetID == "" {
 					continue
-				}
-
-				// Check for ServersTransport reference
-				stName, _ := svcMap["serversTransport"].(string)
-				var stID string
-				if stName != "" {
-					stPrefix := "serverstransport"
-					if def.kind == "IngressRouteTCP" {
-						stPrefix = "serverstransporttcp"
-					}
-					// ServersTransport is resolved relative to the IngressRoute's namespace, not the service's
-					stID = traefikConfigIDs[stPrefix+":"+routeNs+"/"+stName]
-				}
-
-				if stID != "" {
-					dedupeKey := stID + "|" + routeID
-					if !traefikEdgeSeen[dedupeKey] {
-						traefikEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", stID, routeID),
-							Source: stID,
-							Target: routeID,
-							Type:   EdgeConfigures,
-						})
-					}
 				}
 				dedupeKey := routeID + "|" + targetID
 				if traefikEdgeSeen[dedupeKey] {

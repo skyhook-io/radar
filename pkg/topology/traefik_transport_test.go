@@ -24,7 +24,7 @@ func TestServersTransportConfiguresRoutesWithoutReplacingTheirBackends(t *testin
 		watched: []schema.GroupVersionResource{routeGVR, transportGVR},
 		kinds:   map[schema.GroupVersionResource]string{routeGVR: "IngressRoute", transportGVR: "ServersTransport"},
 		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
-			routeGVR:     {route("web", "web"), route("api", "api")},
+			routeGVR:     {route("web", "web"), route("api", "api"), route("orphan", "missing")},
 			transportGVR: {genericIdentityObject(transportGVR, "ServersTransport", "team", "mtls")},
 		},
 		listCalls: map[schema.GroupVersionResource]int{},
@@ -46,6 +46,8 @@ func TestServersTransportConfiguresRoutesWithoutReplacingTheirBackends(t *testin
 		"ingressroute/team/api -> service/team/api":           EdgeExposes,
 		"serverstransport/team/mtls -> ingressroute/team/web": EdgeConfigures,
 		"serverstransport/team/mtls -> ingressroute/team/api": EdgeConfigures,
+		// The transport configures the route even with its backend missing.
+		"serverstransport/team/mtls -> ingressroute/team/orphan": EdgeConfigures,
 	}
 	for edge, typ := range want {
 		if edges[edge] != typ {
