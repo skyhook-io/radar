@@ -105,3 +105,25 @@ describe('versioned dependency projections', () => {
     expect(html.match(/<button/g)).toHaveLength(3)
   })
 })
+
+
+describe('monitors projection', () => {
+  it('renders Monitored By alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ monitors: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Monitored By')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('monitorTargets projection', () => {
+  it('renders Monitors alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ monitorTargets: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Monitors')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})

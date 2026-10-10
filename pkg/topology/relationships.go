@@ -403,7 +403,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// of EdgeProtects unsurfaced. The topology graph itself still
 			// carries these edges; only the per-resource projection skips them.
 		case EdgeConfigures:
-			// ConfigMap/Secret is used by a workload (outgoing from config)
+			if source := refForNodeID(edge.Source); source != nil && source.Group == "monitoring.coreos.com" && (source.Kind == "ServiceMonitor" || source.Kind == "PodMonitor") {
+				rel.MonitorTargets = append(rel.MonitorTargets, *ref)
+				continue
+			}
 			rel.Consumers = append(rel.Consumers, *ref)
 			if reflectionEdge(edge, nodeByID) {
 				if rel.Reflection == nil {
@@ -476,8 +479,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			case "ServiceAccount":
 				rel.ServiceAccount = ref
 			case "ServiceMonitor", "PodMonitor":
-				// Monitor resources observe their targets; topology carries the edge,
-				// but Relationships has no observability group to project it into yet.
+				if ref.Group == "monitoring.coreos.com" {
+					rel.Monitors = append(rel.Monitors, *ref)
+				} else {
+					rel.ConfigRefs = append(rel.ConfigRefs, *ref)
+				}
 			default:
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
 			}
@@ -692,7 +698,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// Return nil if no relationships found
 	// Collected without per-append checks: a PVC shared by thousands of
 	// workloads would make a linear duplicate scan quadratic.
-	for _, refs := range []*[]ResourceRef{&rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
 		*refs = uniqueResourceRefs(*refs)
 	}
 
@@ -701,7 +707,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
-		rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
+		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
 		return nil
 	}

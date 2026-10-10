@@ -240,6 +240,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			toContextRefs(selected),
 			"selectedBy", omitted)
 
+		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
+		rc.MonitorTargets = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
+
 		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
 			toContextRefs(rel.Dependencies), "dependencies", omitted)
 		rc.Dependents = filterRefs(ctx, opts.AccessChecker,

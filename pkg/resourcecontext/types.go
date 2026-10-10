@@ -35,6 +35,8 @@ type ResourceContext struct {
 	Owner           *ContextRef        `json:"owner,omitempty"`
 	ManagedBy       []ContextRef       `json:"managedBy,omitempty"`
 	Exposes         []ContextRef       `json:"exposes,omitempty"`
+	Monitors        []ContextRef       `json:"monitors,omitempty"`       // Prometheus Operator monitors scraping this resource.
+	MonitorTargets  []ContextRef       `json:"monitorTargets,omitempty"` // Targets scraped by this monitor.
 	SelectedBy      []ContextRef       `json:"selectedBy,omitempty"`
 	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
 	Uses            *UsesBlock         `json:"uses,omitempty"`

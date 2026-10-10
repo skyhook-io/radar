@@ -2082,6 +2082,7 @@ function WorkloadOverviewTab({
   const relationshipGroups = buildRelationshipGroups(relationships)
   const servingRelationshipGroups = buildServingRelationshipGroups(relationships)
   const dependencyRelationshipGroups = buildDependencyRelationshipGroups(relationships)
+  const observationGroups = dependencyRelationshipGroups.filter((group) => group.label === 'Monitored By')
   const showServingPath = servingRelationshipGroups.length > 0 && overviewShape !== 'job' && overviewShape !== 'cronjob'
   const secondaryRelationshipGroups = showServingPath ? dependencyRelationshipGroups : relationshipGroups
   const relationshipCardTitle =
@@ -2160,6 +2161,14 @@ function WorkloadOverviewTab({
                     onNavigate={onNavigate}
                     onSwitchToTopology={onSwitchToTopology}
                   />
+                  {observationGroups.length > 0 && (
+                    <ServingDependenciesCard
+                      title="Related resources"
+                      groups={observationGroups}
+                      onNavigate={onNavigate}
+                      onSwitchToTopology={onSwitchToTopology}
+                    />
+                  )}
                   {extraContent}
                 </div>
               </div>
@@ -3863,6 +3872,7 @@ function buildDependencyRelationshipGroups(relationships: Relationships | undefi
     { label: 'Autoscalers', refs: dedupeResourceRefs(relationships.scalers ?? []) },
     { label: 'Disruption budgets', refs: dedupeResourceRefs(relationships.pdbs ?? []) },
     { label: 'Network policies', refs: dedupeResourceRefs(relationships.networkPolicies ?? []) },
+    { label: 'Monitored By', refs: dedupeResourceRefs(relationships.monitors ?? []) },
     { label: 'Storage claims', refs: dedupeResourceRefs(relationships.resourceClaims ?? []) },
   ].filter((group) => group.refs.length > 0)
 }

@@ -445,6 +445,12 @@ type Relationships struct {
 	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload
 	Pods            []ResourceRef `json:"pods,omitempty"`            // For Service: pods it routes to
 
+	// Monitors are Prometheus Operator resources scraping this target.
+	Monitors []ResourceRef `json:"monitors,omitempty"`
+
+	// MonitorTargets are the resources this Prometheus Operator monitor scrapes.
+	MonitorTargets []ResourceRef `json:"monitorTargets,omitempty"`
+
 	// ServiceAccount is the ServiceAccount selected by this Pod or workload.
 	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`
 	// Node is the Node associated through Pod.spec.nodeName or a resource-specific node reference.

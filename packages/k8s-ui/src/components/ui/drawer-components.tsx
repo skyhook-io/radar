@@ -816,6 +816,8 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.resourceClaims && relationships.resourceClaims.length > 0) ||
     (relationships.dependencies && relationships.dependencies.length > 0) ||
     (relationships.dependents && relationships.dependents.length > 0) ||
+    (relationships.monitors && relationships.monitors.length > 0) ||
+    (relationships.monitorTargets && relationships.monitorTargets.length > 0) ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -876,6 +878,12 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         )}
         {relationships.dependents && relationships.dependents.length > 0 && (
           <RelationshipGroup label="Required By" refs={dedupeResourceRefs(relationships.dependents)} onNavigate={onNavigate} />
+        )}
+        {relationships.monitors && relationships.monitors.length > 0 && (
+          <RelationshipGroup label="Monitored By" refs={dedupeResourceRefs(relationships.monitors)} onNavigate={onNavigate} />
+        )}
+        {relationships.monitorTargets && relationships.monitorTargets.length > 0 && (
+          <RelationshipGroup label="Monitors" refs={dedupeResourceRefs(relationships.monitorTargets)} onNavigate={onNavigate} />
         )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />
