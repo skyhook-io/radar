@@ -484,7 +484,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const {
     data: sourcesData,
     isLoading: sourcesLoading,
-    refetch: refetchSources,
+    detectAgain: detectSourcesAgain,
   } = useTrafficSources()
 
   const {
@@ -1334,7 +1334,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
         setState={setWizardState}
         sourcesData={sourcesData}
         sourcesLoading={sourcesLoading}
-        onRefetch={refetchSources}
+        onRefetch={detectSourcesAgain}
       />
     )
   }

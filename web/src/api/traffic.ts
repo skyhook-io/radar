@@ -1,3 +1,4 @@
+import { useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { TrafficSourcesResponse, TrafficFlowsResponse, TrafficRecordsResponse } from '../types'
 import { fetchJSON as fetchApiJSON, useRadarFeature } from './client'
@@ -28,20 +29,30 @@ export interface TrafficConnectionInfo {
   error?: string
 }
 
-// Get available traffic sources and recommendations
+// Get available traffic sources and recommendations. A detection up to a
+// couple of minutes old is reused: a full one probes every source in turn and
+// takes seconds, and the page that linked here has usually just made one.
+// detectAgain asks for a fresh detection, for a user waiting on a source they
+// are installing.
 export function useTrafficSources() {
   const queryClient = useQueryClient()
-  return useQuery<TrafficSourcesResponse>({
+  const fetchSources = useCallback(async (fresh: boolean) => {
+    const sources = await fetchJSON<TrafficSourcesResponse>(fresh ? '/traffic/sources' : '/traffic/sources?recent=1')
+    // A detection is also the newest answer to "is traffic available".
+    queryClient.setQueryData(['traffic-sources', 'recent'], sources)
+    return sources
+  }, [queryClient])
+  const query = useQuery<TrafficSourcesResponse>({
     queryKey: ['traffic-sources'],
-    queryFn: async () => {
-      const sources = await fetchJSON<TrafficSourcesResponse>('/traffic/sources')
-      // A fresh detection is also the newest answer to "is traffic available".
-      queryClient.setQueryData(['traffic-sources', 'recent'], sources)
-      return sources
-    },
+    queryFn: () => fetchSources(false),
     staleTime: 30000, // 30 seconds
     retry: 1,
   })
+  const detectAgain = useCallback(() => {
+    queryClient.fetchQuery({ queryKey: ['traffic-sources'], queryFn: () => fetchSources(true), staleTime: 0 })
+      .catch(() => {})
+  }, [queryClient, fetchSources])
+  return { ...query, detectAgain }
 }
 
 // Whether this cluster has a traffic source: true only once one is detected
