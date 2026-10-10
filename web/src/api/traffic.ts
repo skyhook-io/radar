@@ -1,14 +1,16 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useCallback } from 'react'
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { TrafficSourcesResponse, TrafficFlowsResponse, TrafficRecordsResponse } from '../types'
 import { fetchJSON as fetchApiJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
 import { readErrorBody } from './httpErrors'
 
-async function fetchJSON<T>(path: string): Promise<T> {
+async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(apiUrl(path), {
     credentials: getCredentialsMode(),
     headers: getAuthHeaders(),
+    signal,
   })
   if (!response.ok) {
     const error = await readErrorBody(response)
@@ -28,14 +30,60 @@ export interface TrafficConnectionInfo {
   error?: string
 }
 
-// Get available traffic sources and recommendations
-export function useTrafficSources() {
-  return useQuery<TrafficSourcesResponse>({
+// Get available traffic sources and recommendations. A detection up to a
+// couple of minutes old is reused when it found a source: a full one probes
+// every source in turn and takes seconds, and the page that linked here has
+// usually just made one. One that found none is redone, since it is about to
+// be shown as setup advice. detectAgain always detects afresh.
+export async function fetchTrafficSources(queryClient: QueryClient, fresh: boolean, signal?: AbortSignal): Promise<TrafficSourcesResponse> {
+  let sources = await fetchJSON<TrafficSourcesResponse>(fresh ? '/traffic/sources' : '/traffic/sources?recent=1', signal)
+  if (!fresh && !sources.detected.some(s => s.status === 'available')) {
+    sources = await fetchJSON<TrafficSourcesResponse>('/traffic/sources', signal)
+  }
+  // A detection is also the newest answer to "is traffic available".
+  queryClient.setQueryData(['traffic-sources', 'recent'], sources)
+  return sources
+}
+
+export async function detectTrafficSourcesAgain(queryClient: QueryClient): Promise<TrafficSourcesResponse> {
+  // A pending fetch of the same key would otherwise be returned in its place.
+  await queryClient.cancelQueries({ queryKey: ['traffic-sources'], exact: true })
+  return queryClient.fetchQuery({
     queryKey: ['traffic-sources'],
-    queryFn: () => fetchJSON('/traffic/sources'),
+    queryFn: ({ signal }) => fetchTrafficSources(queryClient, true, signal),
+    staleTime: 0,
+  })
+}
+
+export function useTrafficSources() {
+  const queryClient = useQueryClient()
+  const query = useQuery<TrafficSourcesResponse>({
+    queryKey: ['traffic-sources'],
+    queryFn: ({ signal }) => fetchTrafficSources(queryClient, false, signal),
     staleTime: 30000, // 30 seconds
     retry: 1,
   })
+  const detectAgain = useCallback(() => detectTrafficSourcesAgain(queryClient), [queryClient])
+  return { ...query, detectAgain }
+}
+
+// Whether this cluster has a traffic source: true only once one is detected
+// as available, so a page offering traffic never offers it on a guess. Accepts
+// a detection up to a couple of minutes old (?recent=1), so browsing workloads
+// does not probe every source on each page.
+export function useTrafficAvailable(enabled = true): boolean {
+  // A workload focus needs the server to name each pod's workload, which
+  // shipped with flow records. An older Radar leaves Hubble pods unnamed, so
+  // the focus it opened would match nothing.
+  const resolvesWorkloads = useRadarFeature('trafficRecords').support === 'supported'
+  const { data } = useQuery<TrafficSourcesResponse>({
+    queryKey: ['traffic-sources', 'recent'],
+    queryFn: () => fetchJSON('/traffic/sources?recent=1'),
+    staleTime: 2 * 60_000,
+    retry: false,
+    enabled: enabled && resolvesWorkloads,
+  })
+  return resolvesWorkloads && !!data?.detected?.some(s => s.status === 'available')
 }
 
 // What the flows and records queries share: the namespaces in view, the
@@ -106,9 +154,13 @@ export interface TrafficEndpointPair {
  *  so a larger selection is not sent at all. */
 export const MAX_TRAFFIC_MATCH_CHARS = 6_000
 
+/** A selection as the server matches it: its edges, or a node as the one
+ *  endpoint it is, which every one of its edges has at an end. */
+export type TrafficMatch = { pairs: TrafficEndpointPair[] } | { endpoints: TrafficEndpointRef[] }
+
 export interface UseTrafficRecordsOptions extends TrafficScope {
-  /** The selection as raw edges, or null for no selection. */
-  pairs: TrafficEndpointPair[] | null
+  /** The selection, or null for no selection. */
+  match: TrafficMatch | null
   enabled?: boolean
 }
 
@@ -116,9 +168,9 @@ export interface UseTrafficRecordsOptions extends TrafficScope {
 // a capped sample of records, so a selected edge is looked up on its own —
 // otherwise a quiet edge on a busy cluster would show nothing.
 export function useTrafficRecords(options: UseTrafficRecordsOptions) {
-  const { pairs, enabled = true } = options
+  const { enabled = true } = options
   const { guard, gatedKey, support } = useRadarFeature('trafficRecords')
-  const match = pairs && pairs.length > 0 ? JSON.stringify({ pairs }) : null
+  const match = options.match ? JSON.stringify(options.match) : null
   const tooLarge = match !== null && encodeURIComponent(match).length > MAX_TRAFFIC_MATCH_CHARS
   const params = trafficScopeParams(options)
   if (match && !tooLarge) params.set('match', match)

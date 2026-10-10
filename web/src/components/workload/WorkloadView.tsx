@@ -98,6 +98,7 @@ import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
+import { useTrafficAvailable } from '../../api/traffic'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
@@ -305,6 +306,10 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     />
   )
 }
+
+// The kinds the traffic map draws as a node of their own: those that own
+// pods, which it groups under them.
+const TRAFFIC_WORKLOAD_PLURALS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts', 'cronjobs', 'jobs'])
 
 // ============================================================================
 // WORKLOAD VIEW WRAPPER — injects data fetching hooks
@@ -990,6 +995,23 @@ export function WorkloadView({
     (path: string) => navigateRouter(path),
     [navigateRouter],
   )
+  // Offered for the kinds the traffic map draws as one node, and only once a
+  // traffic source is known to be available on this cluster. A Job something
+  // controls (a CronJob, a JobSet) is not one: the map groups its pods under
+  // that owner, so it is offered only once the Job is known to have none.
+  const isJob = apiKind.toLowerCase() === 'jobs'
+  const controlledJob = isJob && (!resource ||
+    (resource.metadata?.ownerReferences ?? []).some((ref: { controller?: boolean }) => ref.controller))
+  const trafficKind = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(apiKind.toLowerCase()) && !controlledJob
+  const trafficAvailable = useTrafficAvailable(trafficKind)
+  const openLiveTraffic = useCallback(() => {
+    const params = new URLSearchParams()
+    const namespaces = searchParams.get('namespaces')
+    if (namespaces) params.set('namespaces', namespaces)
+    params.set('focus', `${namespace}/${name}`)
+    navigateRouter({ pathname: '/traffic', search: params.toString() })
+  }, [navigateRouter, searchParams, namespace, name])
+  const offerLiveTraffic = trafficKind && trafficAvailable
   // Drawer TraceSummary CTA → open the full resource view ON the Reachability tab.
   // The generic onExpand navigates to the workload path but drops the query, so we
   // navigate directly to that path WITH ?tab=reachability - the deeplink the
@@ -1406,6 +1428,7 @@ export function WorkloadView({
         helmOwnerSource={helmOwnerSource}
         onOpenHelmRelease={handleOpenHelmRelease}
         onNavigateGitOpsPath={handleNavigateGitOpsPath}
+        onOpenLiveTraffic={offerLiveTraffic ? openLiveTraffic : undefined}
       />
       <CreateResourceDialog
         open={duplicateDialogOpen}

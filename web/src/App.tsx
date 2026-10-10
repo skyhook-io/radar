@@ -2320,7 +2320,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Traffic view */}
         {!viewsSyncGated && mainView === 'traffic' && (
-          <TrafficView namespaces={namespaces} />
+          <TrafficView namespaces={namespaces} onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }} />
         )}
 
         {/* Cost detail view */}

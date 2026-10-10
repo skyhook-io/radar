@@ -392,7 +392,8 @@ Visualize live network traffic between services using Hubble, Caretta, Istio, or
 - Animated flow graph showing requests per second between services
 - Filter by namespace, protocol, or status code
 - Built for large clusters: hidden traffic is filtered at the source, each refresh keeps a bounded number of the newest flows and says how much of the window it covers, and the flow list fetches the records behind a selected node or edge
-- Hubble traffic is drawn per workload (Deployment, StatefulSet, …) rather than per pod; the flow list keeps the pods. A map too large to lay out is held back until the view is narrowed
+- Hubble traffic is drawn per workload (Deployment, StatefulSet, …) rather than per pod; the flow list keeps the pods. A map too large to lay out is listed as its connections, failures first, with ways to narrow it
+- Focus on a workload (`/`, a node's details, or **Live traffic** on its page once a traffic source is detected) to see only it and what it talks to; the focus is in the URL, so it can be shared
 - Setup wizard to install a traffic source if none is detected
 
 ### Workload Metrics

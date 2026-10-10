@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+func TestFlowMatchEndpoints(t *testing.T) {
+	pod := func(ns, name, workload string) Endpoint {
+		return Endpoint{Namespace: ns, Name: name, Kind: EndpointKindPod, Workload: workload, WorkloadKind: "Deployment"}
+	}
+	gw := EndpointRef{Namespace: "edge", Name: "gateway", Kind: EndpointKindWorkload}
+	m := &FlowMatch{Endpoints: []EndpointRef{gw}}
+	if !m.Matches(Flow{Source: pod("edge", "gateway-abc", "gateway"), Destination: pod("a", "db-0", "db")}) {
+		t.Error("an endpoint matches flows it sends")
+	}
+	if !m.Matches(Flow{Source: pod("a", "web-0", "web"), Destination: pod("edge", "gateway-abc", "gateway"), Port: 9}) {
+		t.Error("an endpoint matches flows it receives, on any port")
+	}
+	if m.Matches(Flow{Source: pod("other", "gateway-abc", "gateway"), Destination: pod("a", "db-0", "db")}) {
+		t.Error("the namespace is part of the identity")
+	}
+	if m.Size() != 1 {
+		t.Errorf("Size = %d, want 1", m.Size())
+	}
+}
+
 func TestFlowMatch(t *testing.T) {
 	ep := func(ns, name string) Endpoint { return Endpoint{Namespace: ns, Name: name, Kind: EndpointKindPod} }
 	ref := func(ns, name string) EndpointRef {

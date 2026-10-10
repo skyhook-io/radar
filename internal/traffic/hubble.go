@@ -1042,14 +1042,37 @@ const hubbleMaxMatchPods = 200
 // A small selection is sent pair by pair, each with its port, so traffic
 // between other combinations of the same pods, or on other ports, cannot use
 // up a node's limit before the selected traffic. A large one is sent as two
-// sets of pods, which is coarser but keeps the filter list short.
+// sets of pods, which is coarser but keeps the filter list short. An endpoint
+// is sent as its pods on either side.
 func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
-	if m == nil || len(m.Pairs) == 0 {
+	if m == nil || m.Size() == 0 {
 		return nil
 	}
-	if len(m.Pairs) <= hubbleMaxMatchPairs {
-		filters := make([]*flowpb.FlowFilter, 0, 2*len(m.Pairs))
-		for _, p := range m.Pairs {
+	var filters []*flowpb.FlowFilter
+	if len(m.Pairs) > 0 {
+		pairs := hubblePairsWhitelist(m.Pairs)
+		if pairs == nil {
+			return nil
+		}
+		filters = append(filters, pairs...)
+	}
+	if len(m.Endpoints) > hubbleMaxMatchPods {
+		return nil
+	}
+	for _, e := range m.Endpoints {
+		pod, ok := hubblePodPrefix(e)
+		if !ok {
+			return nil
+		}
+		filters = append(filters, &flowpb.FlowFilter{SourcePod: []string{pod}}, &flowpb.FlowFilter{DestinationPod: []string{pod}})
+	}
+	return filters
+}
+
+func hubblePairsWhitelist(pairs []EndpointPair) []*flowpb.FlowFilter {
+	if len(pairs) <= hubbleMaxMatchPairs {
+		filters := make([]*flowpb.FlowFilter, 0, 2*len(pairs))
+		for _, p := range pairs {
 			src, srcOK := hubblePodPrefix(p.Source)
 			dst, dstOK := hubblePodPrefix(p.Destination)
 			if !srcOK && !dstOK {
@@ -1088,9 +1111,9 @@ func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
 		}
 		return out
 	}
-	srcs := make([]EndpointRef, len(m.Pairs))
-	dsts := make([]EndpointRef, len(m.Pairs))
-	for i, pair := range m.Pairs {
+	srcs := make([]EndpointRef, len(pairs))
+	dsts := make([]EndpointRef, len(pairs))
+	for i, pair := range pairs {
 		srcs[i], dsts[i] = pair.Source, pair.Destination
 	}
 	sp, dp := pods(srcs), pods(dsts)

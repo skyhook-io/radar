@@ -18,12 +18,12 @@ import '@xyflow/react/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
-import { X, ArrowRight, Globe, Server, Activity, Puzzle } from 'lucide-react'
+import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf } from './trafficFilters'
+import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, type TrafficFocus } from './trafficFilters'
 
 const elk = new ELK()
 
@@ -59,7 +59,13 @@ interface TrafficGraphProps {
   serviceCategories?: Map<string, string>
   addonMode?: AddonMode
   trafficSource?: string
+  /** The selection, owned by the view: the graph shows it and reports clicks. */
+  selection?: TrafficGraphSelection | null
   onSelectionChange?: (selection: TrafficGraphSelection | null) => void
+  /** Narrows the view to a node and its neighbors. */
+  onFocus?: (focus: TrafficFocus) => void
+  /** The focused node, which is not offered as a focus again. */
+  focusedId?: string
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
@@ -153,6 +159,7 @@ interface TrafficNodeData extends Record<string, unknown> {
   totalConnections?: number // Total connections for this node
   namespaceColor?: string // Background color for namespace grouping
   isHotPath?: boolean // Whether this node is on a hot path
+  isFocused?: boolean // The endpoint the view is focused on
   isAddonNode?: boolean // Whether this is a cluster addon node
   serviceCategory?: string // For external nodes: database, cloud, etc.
   ports?: PortInfo[] // All inbound ports sorted by connection count
@@ -208,7 +215,7 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
                   : hasNamespaceColor
                     ? 'border-white/20'
                     : 'bg-theme-surface border-theme-border',
-        data.isHotPath && 'ring-2 ring-orange-500/50'
+        data.isFocused ? 'ring-2 ring-skyhook-500' : data.isHotPath && 'ring-2 ring-orange-500/50'
       )}
       style={{
         width: NODE_WIDTH,
@@ -429,11 +436,13 @@ function formatBytes(bytes: number): string {
 function DetailsPanel({
   selection,
   onClose,
+  onFocus,
   flows,
   isRateBased,
 }: {
   selection: Selection
   onClose: () => void
+  onFocus?: () => void
   flows: AggregatedFlow[]
   // True for sources that measure a rate rather than counting connections —
   // Istio and Beyla both do. Changes the wording and the /s suffix.
@@ -542,12 +551,26 @@ function DetailsPanel({
             {isNode ? (nodeData?.kind === 'Internet' ? 'Internet Traffic' : nodeData?.kind === 'Addon' ? 'Cluster Addons' : 'Service Details') : 'Connection Details'}
           </span>
         </div>
-        <button
-          onClick={onClose}
-          className="p-1 rounded hover:bg-theme-hover text-theme-text-secondary"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {onFocus && (
+            <Tooltip content="Show only this and what it talks to">
+              <button
+                type="button"
+                onClick={onFocus}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
+              >
+                <Crosshair className="h-3.5 w-3.5" /> Focus
+              </button>
+            </Tooltip>
+          )}
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded hover:bg-theme-hover text-theme-text-secondary"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -1088,6 +1111,26 @@ function FitViewOnChange({
   return null
 }
 
+function edgeSelection(edge: Edge, flow: AggregatedFlow | undefined): Selection {
+  return {
+    type: 'edge',
+    id: edge.id,
+    data: {
+      source: edge.source,
+      target: edge.target,
+      port: flow?.port || 0,
+      connections: flow?.connections || 0,
+      protocol: flow?.protocol || 'tcp',
+      flow,
+    },
+  }
+}
+
+// The Internet node and the addon group stand for many endpoints at once.
+function isFocusable(id: string, data: TrafficNodeData | undefined): boolean {
+  return id !== 'addon-group' && !!data?.kind && data.kind !== 'Internet' && data.kind !== 'Addon' && data.kind !== 'AddonInternet'
+}
+
 // A pair can carry both oriented and unoriented traffic at the same port, and the
 // backend keeps those as separate aggregates because no single answer about the
 // direction is right for both. Without the suffix they would share an edge id and
@@ -1097,7 +1140,7 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', onSelectionChange }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
   const isRateBased = isRateBasedSource(trafficSource)
@@ -1605,6 +1648,45 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   const shouldFitViewRef = useRef(false)
   const prevFlowCountRef = useRef(flows.length)
 
+  // Drawn per pod, a focused workload is each of its pods.
+  const displayNodes = useMemo(() => {
+    if (!focusedId) return nodes
+    const isFocus = (n: Node<TrafficNodeData>) => n.id === focusedId ||
+      (n.data.kind === 'Pod' && !!n.data.workload && `${n.data.namespace ?? ''}/${n.data.workload}` === focusedId)
+    return nodes.map(n => (isFocus(n) ? { ...n, data: { ...n.data, isFocused: true } } : n))
+  }, [nodes, focusedId])
+
+  // A new focus is a different graph even when it has as many edges.
+  const prevFocusRef = useRef(focusedId)
+  if (prevFocusRef.current !== focusedId) {
+    prevFocusRef.current = focusedId
+    shouldFitViewRef.current = true
+  }
+
+  // The view owns the selection: it is set from outside the graph too (the
+  // connections table selects an edge). The details are read
+  // from the current layout, so a refresh updates them and a node that is no
+  // longer drawn closes them.
+  useEffect(() => {
+    if (viewSelection === undefined) return
+    if (!viewSelection) {
+      setSelection(null)
+      return
+    }
+    if (viewSelection.type === 'node' && viewSelection.nodeId) {
+      const node = layoutedNodes.find(n => n.id === viewSelection.nodeId)
+      setSelection(node ? { type: 'node', id: node.id, data: node.data } : null)
+      return
+    }
+    const edge = layoutedEdges.find(e => {
+      const flow = flowByEdgeId.get(e.id)
+      return e.source === viewSelection.sourceId && e.target === viewSelection.destId &&
+        (viewSelection.port === undefined || flow?.port === viewSelection.port) &&
+        !!flow?.directionUnknown === !!viewSelection.directionUnknown
+    })
+    setSelection(edge ? edgeSelection(edge, flowByEdgeId.get(edge.id)) : null)
+  }, [viewSelection, layoutedNodes, layoutedEdges, flowByEdgeId])
+
   // Update nodes and edges when layout changes
   useEffect(() => {
     // Check if flow count changed (filter/namespace change)
@@ -1628,18 +1710,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
   const onEdgeClick: EdgeMouseHandler<Edge> = useCallback((_event, edge) => {
     const flow = flowByEdgeId.get(edge.id)
-    setSelection({
-      type: 'edge',
-      id: edge.id,
-      data: {
-        source: edge.source,
-        target: edge.target,
-        port: flow?.port || 0,
-        connections: flow?.connections || 0,
-        protocol: flow?.protocol || 'tcp',
-        flow,
-      },
-    })
+    setSelection(edgeSelection(edge, flow))
     onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port, directionUnknown: !!flow?.directionUnknown })
   }, [flowByEdgeId, onSelectionChange])
 
@@ -1651,7 +1722,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   return (
     <div className="w-full h-full relative">
       <ReactFlow
-        nodes={nodes}
+        nodes={displayNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -1683,7 +1754,15 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       {selection && (
         <DetailsPanel
           selection={selection}
-          onClose={() => setSelection(null)}
+          onClose={onPaneClick}
+          onFocus={onFocus && selection.type === 'node' && selection.id !== focusedId && isFocusable(selection.id, selection.data as TrafficNodeData)
+            ? () => {
+                // The id is "ns/name"; an endpoint with no namespace is its
+                // name alone, which may hold a slash of its own.
+                const ns = (selection.data as TrafficNodeData).namespace || undefined
+                onFocus({ namespace: ns, name: ns ? selection.id.slice(ns.length + 1) : selection.id })
+              }
+            : undefined}
           flows={flows}
           isRateBased={isRateBased}
         />
