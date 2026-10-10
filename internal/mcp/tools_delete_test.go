@@ -162,6 +162,9 @@ func TestDeleteCascadeScopeWarnings(t *testing.T) {
 }
 
 func TestDeleteCascadeWithholdsUnreadableDependents(t *testing.T) {
+	previousMemo := summaryCtxTopoMemo
+	summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
+	t.Cleanup(func() { summaryCtxTopoMemo = previousMemo })
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo", UID: "dep"}}
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-rs", Namespace: "demo", UID: "rs", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "dep"}}}}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-pod", Namespace: "demo", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-rs", UID: "rs"}}}}
@@ -177,12 +180,17 @@ func TestDeleteCascadeWithholdsUnreadableDependents(t *testing.T) {
 	setupMCPDynamicResource(t, schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "DeploymentList", k8s.APIResource{Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true}, obj)
 	result := deleteCascadePreview(ctx, obj, metav1.DeletePropagationBackground)
 	refs := result["dependents"].([]topology.ResourceRef)
-	if len(refs) != 1 || refs[0].Name != "web-pod" || result["withheld"] != 1 {
+	if len(refs) != 1 || refs[0].Name != "web-pod" || result["withheld"] != nil || result["visibilityNote"] != "Dependents you can't read are not listed." {
 		t.Fatalf("caller visibility: %+v", result)
+	}
+	perms.SetCanI("get", "apps", "replicasets", "demo", true)
+	readable := deleteCascadePreview(ctx, obj, metav1.DeletePropagationBackground)
+	if len(readable["dependents"].([]topology.ResourceRef)) != 2 || readable["withheld"] != nil || readable["visibilityNote"] != result["visibilityNote"] {
+		t.Fatalf("readable dependents changed coverage disclosure: %+v", readable)
 	}
 	obj.SetName("not-in-topology")
 	missing := deleteCascadePreview(ctx, obj, metav1.DeletePropagationBackground)
-	if missing["rootResolved"] != false || missing["coverage"] != "unknown" {
+	if missing["rootResolved"] != false || missing["coverage"] != "unknown" || missing["visibilityNote"] != result["visibilityNote"] {
 		t.Fatalf("unresolved root was not unknown: %+v", missing)
 	}
 }
@@ -290,6 +298,9 @@ func TestDeleteResourceAudit(t *testing.T) {
 }
 
 func TestDeleteCascadeIncludesCallerReadableCertificateSecret(t *testing.T) {
+	previousMemo := summaryCtxTopoMemo
+	summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
+	t.Cleanup(func() { summaryCtxTopoMemo = previousMemo })
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "web-tls"}}}}}}}}
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "web-tls", Namespace: "demo", OwnerReferences: []metav1.OwnerReference{{APIVersion: "cert-manager.io/v1", Kind: "Certificate", Name: "web-cert", UID: "cert-uid"}}}}
 	if err := k8s.InitTestResourceCache(kubefake.NewClientset(deployment, secret)); err != nil {
@@ -310,13 +321,45 @@ func TestDeleteCascadeIncludesCallerReadableCertificateSecret(t *testing.T) {
 	perms := getPermCache().Get("certificate-preview-reader", nil)
 	perms.SetCanI("get", "", "secrets", "demo", false)
 	hidden := deleteCascadePreview(ctx, certificate, metav1.DeletePropagationBackground)
-	if len(hidden["dependents"].([]topology.ResourceRef)) != 0 || hidden["withheld"] != 1 {
+	if len(hidden["dependents"].([]topology.ResourceRef)) != 0 || hidden["withheld"] != nil {
 		t.Fatalf("unreadable Secret disclosed: %+v", hidden)
 	}
 	perms.SetCanI("get", "", "secrets", "demo", true)
 	visible := deleteCascadePreview(ctx, certificate, metav1.DeletePropagationBackground)
 	refs := visible["dependents"].([]topology.ResourceRef)
-	if len(refs) != 1 || refs[0].Kind != "Secret" || refs[0].Name != "web-tls" {
+	if len(refs) != 1 || refs[0].Kind != "Secret" || refs[0].Name != "web-tls" || visible["withheld"] != nil {
 		t.Fatalf("owned Secret missing: %+v", visible)
+	}
+	if hidden["visibilityNote"] != "Dependents you can't read are not listed." || visible["visibilityNote"] != hidden["visibilityNote"] {
+		t.Fatalf("visibility note depends on withheld objects: hidden=%+v visible=%+v", hidden, visible)
+	}
+}
+
+func TestDeleteCascadeLargeClusterSkipsGraphBuild(t *testing.T) {
+	previousMemo := summaryCtxTopoMemo
+	summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
+	t.Cleanup(func() { summaryCtxTopoMemo = previousMemo })
+	objects := make([]runtime.Object, 0, topology.LargeClusterThreshold)
+	for i := 0; i < topology.LargeClusterThreshold; i++ {
+		objects = append(objects, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("web-%d", i), Namespace: "demo"}})
+	}
+	if err := k8s.InitTestResourceCache(kubefake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "web-0", "namespace": "demo"}}}
+	result := deleteCascadePreview(context.Background(), obj, metav1.DeletePropagationBackground)
+	if result["coverage"] != "unknown" || len(result["dependents"].([]topology.ResourceRef)) != 0 || result["visibilityNote"] != nil || !strings.Contains(result["reason"].(string), "too large") {
+		t.Fatalf("large cluster cascade overclaimed: %+v", result)
+	}
+	opts := topology.DefaultBuildOptions()
+	opts.IncludeReplicaSets = true
+	opts.IncludeSecrets = true
+	guarded, err := summaryCtxTopoMemo.Get(opts, func() (*topology.Topology, error) {
+		t.Fatal("preview did not memoize the guarded topology")
+		return nil, nil
+	})
+	if err != nil || !guarded.RequiresNamespaceFilter || len(guarded.Nodes) != 0 || len(guarded.Edges) != 0 {
+		t.Fatalf("large cluster built a graph: %+v, %v", guarded, err)
 	}
 }

@@ -31,7 +31,7 @@ func TestDeleteResourceHandler(t *testing.T) {
 		{name: "not found", deleteErr: apierrors.NewNotFound(gvr.GroupResource(), "held"), status: http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "held", "namespace": "demo"}}}
+			obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "held", "namespace": "demo", "uid": "original"}}}
 			now := metav1.Now()
 			obj.SetDeletionTimestamp(&now)
 			obj.SetFinalizers([]string{"example.com/cleanup"})

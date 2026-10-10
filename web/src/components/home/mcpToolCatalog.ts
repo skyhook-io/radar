@@ -358,7 +358,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'delete_resource',
     write: true,
-    desc: 'Delete one object after a mandatory server-side preview. Confirm is bound to its UID/resourceVersion and propagation. Finalizers are preserved; cascade enumeration is approximate.',
+    desc: 'Delete one object after a mandatory server-side preview. Confirm is bound to its UID, generation and finalizers (resourceVersion when generation is absent), and propagation. Finalizers are preserved; cascade enumeration is approximate.',
     params: [
       { arg: 'kind', required: true, desc: 'Resource kind or plural' },
       { arg: 'name', required: true, desc: 'One object name' },

@@ -595,6 +595,18 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 		return nil, fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}
 
+	var client dynamic.ResourceInterface = m.dynClient.Resource(gvr)
+	if opts.Namespace != "" {
+		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	}
+	// A caller may have delete permission without get permission. Only observe
+	// cleanup when a pre-delete read identifies the object by UID.
+	var uid types.UID
+	obj, readErr := client.Get(ctx, opts.Name, metav1.GetOptions{})
+	if readErr == nil {
+		uid = obj.GetUID()
+	}
+
 	if opts.Force {
 		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
 		var patchErr error
@@ -630,12 +642,16 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 		return nil, fmt.Errorf("failed to delete resource: %w", err)
 	}
 
-	var client dynamic.ResourceInterface = m.dynClient.Resource(gvr)
-	if opts.Namespace != "" {
-		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	if uid == "" {
+		result := &DeleteResourceResult{}
+		if readErr != nil && !apierrors.IsNotFound(readErr) {
+			result.ObservationError = readErr.Error()
+		} else if readErr == nil {
+			result.ObservationError = "Deletion target UID is unavailable; cleanup was not observed."
+		}
+		return result, nil
 	}
-	// This path has no pre-delete UID; replacement isolation requires a known UID.
-	return ObserveResourceDeletion(ctx, client, opts.Name, ""), nil
+	return ObserveResourceDeletion(ctx, client, opts.Name, uid), nil
 }
 
 // TriggerCronJob creates a Job from a CronJob.

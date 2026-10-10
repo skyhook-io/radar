@@ -16,7 +16,7 @@ afterEach(() => {
 })
 
 async function remove(responses: Response[], bulk: boolean) {
-  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => responses.shift()!)
+  const fetchMock = vi.fn<typeof fetch>(async () => responses.shift()!)
   vi.stubGlobal('fetch', fetchMock)
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   let run: (() => Promise<unknown>) | undefined

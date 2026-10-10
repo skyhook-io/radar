@@ -181,6 +181,9 @@ func handleDeleteResource(ctx context.Context, req *mcp.CallToolRequest, input d
 func deleteCascadePreview(ctx context.Context, obj *unstructured.Unstructured, propagation metav1.DeletionPropagation) map[string]any {
 	dependents := []topology.ResourceRef{}
 	result := map[string]any{"approximation": true, "dependents": dependents, "coverage": "unknown", "notEnumerated": []string{"namespace contents", "CRD instances", "controller-finalizer cleanup"}}
+	if auth.UserFromContext(ctx) != nil {
+		result["visibilityNote"] = "Dependents you can't read are not listed."
+	}
 	switch {
 	case obj.GetKind() == "Namespace" && obj.GetAPIVersion() == "v1":
 		result["scopeWarning"] = "Deleting this Namespace deletes ALL namespace contents, including resources not shown here. Contents are not enumerated; their count is unknown. Orphan propagation does not prevent namespace cleanup."
@@ -199,10 +202,15 @@ func deleteCascadePreview(ctx context.Context, obj *unstructured.Unstructured, p
 	opts := topology.DefaultBuildOptions()
 	opts.IncludeReplicaSets = true
 	opts.IncludeSecrets = true
-	opts.ForRelationshipCache = true
-	topo, err := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).WithDynamic(dp).Build(opts)
+	topo, err := summaryCtxTopoMemo.Get(opts, func() (*topology.Topology, error) {
+		return topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).WithDynamic(dp).Build(opts)
+	})
 	if err != nil {
 		result["reason"] = "Topology could not be built; no dependents were enumerated."
+		return result
+	}
+	if topo.RequiresNamespaceFilter {
+		result["reason"] = "Cluster is too large for bounded cascade enumeration; no dependents were enumerated."
 		return result
 	}
 	preview := topology.GetCascadeDeletePreview(topology.ResourceRef{Kind: obj.GetKind(), Group: resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), Namespace: obj.GetNamespace(), Name: obj.GetName()}, topo, dp)
@@ -213,11 +221,9 @@ func deleteCascadePreview(ctx context.Context, obj *unstructured.Unstructured, p
 	}
 	result["coverage"] = "partial"
 	result["reason"] = "Cached topology management edges approximate possible dependents; absence from this list does not prove no cascade."
-	withheld := 0
 	for _, ref := range preview.Dependents {
 		gvr, _, err := resolveMutationGVR(ref.Kind, ref.Group)
 		if err != nil || !canReadInNamespace(ctx, gvr.Group, gvr.Resource, ref.Namespace, "get") {
-			withheld++
 			continue
 		}
 		if len(dependents) < 100 {
@@ -227,8 +233,5 @@ func deleteCascadePreview(ctx context.Context, obj *unstructured.Unstructured, p
 		}
 	}
 	result["dependents"] = dependents
-	if withheld > 0 {
-		result["withheld"] = withheld
-	}
 	return result
 }
