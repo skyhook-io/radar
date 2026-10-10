@@ -3,13 +3,16 @@ package insights
 import (
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // FinalizerOwner identifies the controller responsible for processing a
 // finalizer key during deletion. The mapping is best-effort: the K8s API
 // doesn't expose finalizer ownership, so we rely on a static catalog of
-// known controllers (Argo, Flux). The catalog is documented inline so
+// known controllers. The catalog is documented inline so
 // future Flux/Argo releases that introduce new finalizer keys are easy
 // to add — see the pattern below.
 //
@@ -24,7 +27,8 @@ type FinalizerOwner struct {
 	// Issue messages ("argocd-application-controller is CrashLoopBackOff").
 	Controller string
 	// Namespace is the typical install namespace. We don't dynamically
-	// discover this — operators do customize it (e.g. argocd-system,
+	// discover this here; empty means no conventional install namespace.
+	// Operators do customize it (e.g. argocd-system,
 	// custom flux namespaces) but the conventional defaults cover the
 	// vast majority of installs.
 	Namespace string
@@ -45,6 +49,12 @@ type FinalizerOwner struct {
 // rest of the Issue intact).
 func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *FinalizerOwner {
 	switch finalizer {
+	case "apps.victoriametrics.com/finalizer":
+		if resourceid.GroupFromAPIVersion(root.GetAPIVersion()) != "operator.victoriametrics.com" {
+			return nil
+		}
+		return &FinalizerOwner{Controller: "victoria-metrics-operator", SelectorKey: "app.kubernetes.io/name", SelectorValue: "victoria-metrics-operator"}
+
 	// Argo CD: a single Application controller owns all Argo-side
 	// finalizers, including the deprecated "foreground-cascade" key
 	// retained for installs that pre-date the rename.
@@ -137,3 +147,31 @@ var (
 		SelectorValue: "image-reflector-controller",
 	}
 )
+
+// MatchesFinalizerController accepts explicit catalog identity, or a matching
+// finalizer/API domain together with an operator-named workload. Domain alone
+// never identifies a controller.
+func MatchesFinalizerController(finalizer string, root *unstructured.Unstructured, workload metav1.Object) bool {
+	if owner := ResolveFinalizerOwner(finalizer, root); owner != nil {
+		return workload.GetLabels()[owner.SelectorKey] == owner.SelectorValue || controllerNameMatches(workload.GetName(), owner.Controller)
+	}
+	domain, _, qualified := strings.Cut(finalizer, "/")
+	group := resourceid.GroupFromAPIVersion(root.GetAPIVersion())
+	if !qualified || domain != group || group == "k8s.io" || group == "kubernetes.io" || strings.HasSuffix(group, ".k8s.io") || strings.HasSuffix(group, ".kubernetes.io") {
+		return false
+	}
+	token, _, _ := strings.Cut(group, ".")
+	if token == "" || token == "operator" || token == "operators" || token == "apps" {
+		return false
+	}
+	for _, value := range []string{workload.GetName(), workload.GetLabels()["app.kubernetes.io/name"], workload.GetLabels()["app.kubernetes.io/part-of"]} {
+		if controllerNameMatches(value, token+"-operator") || controllerNameMatches(value, "operator-"+token) {
+			return true
+		}
+	}
+	return false
+}
+
+func controllerNameMatches(name, controller string) bool {
+	return name == controller || strings.HasPrefix(name, controller+"-") || strings.HasSuffix(name, "-"+controller) || strings.Contains(name, "-"+controller+"-")
+}

@@ -491,6 +491,28 @@ API group is part of a resource's identity. Radar infers the canonical group for
 
 This selects the Argo Rollout workload path; it does not imply that `diagnose` supports arbitrary custom resource shapes.
 
+Watched custom resources that remain present after deletion started appear in
+`issues` as `termination_stuck`: warning after 10 minutes, critical at 30 minutes,
+with deletion time as the onset. Radar only reads already watched CRD caches;
+absence of an issue does not establish that unwatched kinds are healthy. Namespace
+and cluster-resource authorization apply as for other operational issues.
+
+The cause names the finalizers and elapsed deletion age. Controller observations
+reuse the Argo/Flux catalog, include VictoriaMetrics, and conservatively match an
+exact finalizer domain/API group to operator workload names or labels. A matching
+Running pod is an observation, not proof that cleanup works. A missing match says
+which namespace or watched cluster was searched, never that the controller is
+certainly gone. Incomplete or unreadable controller evidence, or no confident
+mapping, reads **controller unknown**.
+
+Rescue guidance is text only. First check the controller's logs and permissions.
+If it was intentionally removed, removing its finalizer skips its cleanup and can
+leave external resources behind. Each `patch_resource` example previews one
+indexed finalizer removal using JSON Patch `test` operations for the object UID
+and finalizer value, followed by `remove`. Review with `dry_run=true` before an
+explicit apply. Re-read the object after each removal: the next finalizer's index
+may change. Garbage-collection finalizers are not given rescue patches.
+
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
 Resource context distinguishes observed dependency references (`dependencies` and

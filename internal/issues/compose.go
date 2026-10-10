@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"fmt"
 	"log"
 	"sort"
 	"time"
@@ -141,6 +142,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		}
 		return correlationAllowed
 	}
+	finalizerObservations := map[string]string{}
 	emit := func(ps []k8s.Detection, source Source) {
 		for _, pr := range ps {
 			if pr.Severity == "info" {
@@ -153,6 +155,22 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 				gv, err := schema.ParseGroupVersion(ref.APIVersion)
 				if err != nil || !f.CanReadRelated(Ref{Group: gv.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}) {
 					pr.Cause, pr.Action = "", ""
+				}
+			}
+			if len(pr.TerminatingFinalizers) > 0 {
+				resolver, available := p.(finalizerOwnerProvider)
+				for _, finalizer := range pr.TerminatingFinalizers {
+					observation := "controller unknown"
+					if available {
+						key := pr.Group + "/" + pr.Kind + "/" + finalizer
+						var cached bool
+						observation, cached = finalizerObservations[key]
+						if !cached {
+							observation = resolver.FinalizerOwnerStatus(finalizer, Ref{Group: pr.Group, Kind: pr.Kind, Namespace: pr.Namespace, Name: pr.Name}, f.CanReadRelated)
+							finalizerObservations[key] = observation
+						}
+					}
+					pr.Cause += fmt.Sprintf(" Finalizer %q: %s.", finalizer, observation)
 				}
 			}
 			out = append(out, fromProblem(pr, now, source))

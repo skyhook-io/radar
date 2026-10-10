@@ -79,6 +79,7 @@ type NodeStartupCorroboration struct {
 // successor to the v0 standalone "problems" feature, NOT a parallel surface to
 // issues.
 type Detection struct {
+	TerminatingFinalizers      []string                  `json:"-"`
 	NodeStartupCorroboration   *NodeStartupCorroboration `json:"-"`
 	MessageBeforeCorroboration string                    `json:"-"`
 	Kind                       string
@@ -204,6 +205,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 	var problems []Detection
 	now := time.Now()
 	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
+	problems = append(problems, detectDynamicTerminatingProblems(GetDynamicResourceCache(), GetResourceDiscovery(), namespace, now)...)
 
 	if namespace == "" {
 		if nsLister := cache.Namespaces(); nsLister != nil {
