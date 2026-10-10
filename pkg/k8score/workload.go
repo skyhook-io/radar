@@ -605,7 +605,10 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		}
 	}
 
-	deleteOpts := metav1.DeleteOptions{}
+	// Cascade like kubectl. Left unset, the API server's per-kind default
+	// applies, and batch/v1 Jobs default to orphaning their Pods.
+	propagation := metav1.DeletePropagationBackground
+	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &propagation}
 	if opts.Force {
 		gracePeriod := int64(0)
 		deleteOpts.GracePeriodSeconds = &gracePeriod
