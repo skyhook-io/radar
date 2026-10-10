@@ -1159,6 +1159,7 @@ function GroupRow({
               )}
             </span>
           ))}
+          {group.scaling.length === 0 && <span className="text-theme-text-tertiary">—</span>}
         </td>
       </tr>
       {hasChildren && (
