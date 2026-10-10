@@ -188,6 +188,10 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   const isError = toast.type === 'error'
   const isSuccess = toast.type === 'success'
   const isNotice = toast.type === 'info' || toast.type === 'warning'
+  // Error and success toasts keep a dark surface in both themes, so nested
+  // panels tint from the toast's text tone; theme surfaces turn near-white in
+  // light mode.
+  const textTone = isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary'
 
   return (
     <div
@@ -230,7 +234,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className={clsx('min-w-0 text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary')}>
+          <span className={clsx('min-w-0 text-sm font-medium', textTone)}>
             {toast.message.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)}
           </span>
           {!isError && !isNotice && !toast.action && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-400' : 'text-green-400')} />}
@@ -258,7 +262,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
           )
         )}
         {toast.rawDetail && (
-          <div className="mt-2 rounded bg-theme-surface p-2 text-theme-text-primary">
+          <div className={clsx('mt-2 rounded bg-current/10 p-2', textTone)}>
             <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
               <CollapseChevron open={detailsOpen} inheritColor /> Error details
             </button>

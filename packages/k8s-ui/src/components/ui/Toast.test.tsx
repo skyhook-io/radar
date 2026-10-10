@@ -42,15 +42,18 @@ it('pauses dismissal while hovered and resumes the remaining time', async () => 
   await advance(1000)
   expect(toast()).toBeNull()
 })
-it('keeps expanded error details, uses theme contrast, and copies the raw error', async () => {
+it('keeps expanded error details, tints them from the error tone, and copies the raw error', async () => {
   const clipboard = { writeText: vi.fn(async () => {}) }
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard })
   await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Error details'))!.click())
   await advance(60000)
   expect(toast()).not.toBeNull()
-  const panel = host.querySelector('pre')!.closest('.bg-theme-surface')!
-  expect(panel).not.toBeNull()
-  expect(panel.classList.contains('text-theme-text-primary')).toBe(true)
+  // The error toast is dark in both themes; a theme surface would render the
+  // panel near-white in light mode.
+  const panel = host.querySelector('pre')!.closest('.rounded.p-2')!
+  expect(panel.classList.contains('bg-theme-surface')).toBe(false)
+  expect(panel.classList.contains('bg-current/10')).toBe(true)
+  expect(panel.classList.contains('text-red-200')).toBe(true)
   const chevron = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Error details'))!.querySelector('svg')!
   expect(chevron.classList.contains('text-theme-text-tertiary')).toBe(false)
   await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Copy raw error')!.click())
