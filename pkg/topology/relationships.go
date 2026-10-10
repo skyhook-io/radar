@@ -653,9 +653,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			pvcs, _ := provider.PersistentVolumeClaims()
 			for _, pvc := range pvcs {
 				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
+					// Bound, not owned: the claim's storage is the volume.
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
 					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
+					rel.StorageRefs = append(rel.StorageRefs, pvRef)
 					break
 				}
 			}
@@ -680,9 +681,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			pvs, _ := provider.PersistentVolumes()
 			for _, pv := range pvs {
 				if pv.Spec.StorageClassName == name {
+					// The reverse of a volume's Configuration: volumes name
+					// their class; the class owns none of them.
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
+					rel.Consumers = append(rel.Consumers, pvRef)
 				}
 			}
 		case "node", "nodes":

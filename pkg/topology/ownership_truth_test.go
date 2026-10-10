@@ -192,3 +192,26 @@ func TestCascadePreviewHoldsBackDependentsWithUnseenOwners(t *testing.T) {
 		t.Errorf("possible dependents = %v, want the Pod with an unseen owner", got)
 	}
 }
+
+func TestStorageBindingsAreNotOwnership(t *testing.T) {
+	provider := &mockProvider{
+		pvcs: []*corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pv-1"}}},
+		pvs: []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "pv-1"}, Spec: corev1.PersistentVolumeSpec{
+			StorageClassName: "fast",
+			ClaimRef:         &corev1.ObjectReference{Namespace: "team", Name: "data"},
+		}}},
+	}
+	topo := &Topology{Nodes: []Node{
+		{ID: "persistentvolumeclaim/team/data", Kind: KindPVC, Name: "data", Data: map[string]any{"namespace": "team"}},
+		{ID: "persistentvolume//pv-1", Kind: KindPV, Name: "pv-1", Data: map[string]any{}},
+		{ID: "storageclass//fast", Kind: KindStorageClass, Name: "fast", Data: map[string]any{}},
+	}}
+	claim := GetRelationshipsWithObject("PersistentVolumeClaim", "team", "data", nil, topo, provider, nil, nil)
+	if claim == nil || len(claim.Children) != 0 || len(claim.StorageRefs) != 1 || claim.StorageRefs[0].Name != "pv-1" {
+		t.Errorf("claim relationships = %+v, want its bound volume as storage, not a child", claim)
+	}
+	class := GetRelationshipsWithObject("StorageClass", "", "fast", nil, topo, provider, nil, nil)
+	if class == nil || len(class.Children) != 0 || len(class.Consumers) != 1 || class.Consumers[0].Name != "pv-1" {
+		t.Errorf("class relationships = %+v, want its volumes under Used By, not children", class)
+	}
+}
