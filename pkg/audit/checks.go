@@ -160,6 +160,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// and on ScheduledBackup absence-authority — records nothing rather than
 	// reporting a missing input.
 	findings = append(findings, checkCNPGDeclarativeBackup(tr, input)...)
+	findings = append(findings, checkStorage(tr, input, time.Now())...)
 
 	return buildResults(findings, tr, missingInputs)
 }
@@ -200,6 +201,16 @@ func (t *evalTracker) record(checkID, namespace string) {
 func (t *evalTracker) recordAll(ids []string, namespace string) {
 	for _, id := range ids {
 		t.record(id, namespace)
+	}
+}
+
+// skip reports input as missing because its absence left a subject
+// unevaluated. An evidence gap that still lets the check emit its finding
+// belongs in that finding's message, not here: consumers read every missing
+// input as checks that could not run.
+func (t *evalTracker) skip(input string) {
+	if !slices.Contains(t.missingInputs, input) {
+		t.missingInputs = append(t.missingInputs, input)
 	}
 }
 
@@ -991,9 +1002,7 @@ func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.D
 		}
 		if incomplete[d.Namespace] {
 			// An unresolved ReplicaSet may own another replica of this Deployment.
-			if !slices.Contains(tr.missingInputs, "replicaset-ownership") {
-				tr.missingInputs = append(tr.missingInputs, "replicaset-ownership")
-			}
+			tr.skip("replicaset-ownership")
 			continue
 		}
 		count := 0
@@ -1057,10 +1066,7 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 			complete = evidence.ReflectionsComplete[kind]
 		}
 		if !complete {
-			missing := strings.ToLower(kind) + "-references"
-			if !slices.Contains(tr.missingInputs, missing) {
-				tr.missingInputs = append(tr.missingInputs, missing)
-			}
+			tr.skip(strings.ToLower(kind) + "-references")
 			return false
 		}
 		tr.record("orphanConfigMapSecret", ns)

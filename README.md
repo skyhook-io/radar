@@ -438,11 +438,11 @@ convert them.
 
 ### Cluster Audit
 
-Proactive best-practices scanner with 31 checks across security, reliability, and efficiency — inspired by Polaris, Kubescape, Trivy, and NSA/CISA guidelines. Runs instantly against cached data with zero cluster-side installation.
+Proactive best-practices scanner across security, reliability, and efficiency — inspired by Polaris, Kubescape, Trivy, and NSA/CISA guidelines. Runs instantly against cached data with zero cluster-side installation.
 
 - Security: privileged containers, privilege escalation, dangerous/insecure capabilities, host namespaces, container runtime socket mounts, sensitive host paths, secrets in ConfigMaps, auto-mounted service account tokens
 - Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, pod HA risk (all replicas on same node), orphan services/ingresses, deprecated API versions
-- Efficiency: missing CPU/memory requests and limits, orphan ConfigMaps/Secrets
+- Efficiency: missing CPU/memory requests and limits, orphan ConfigMaps/Secrets, PVCs with no consumer observed, long-Pending PVCs, retained Released PVs and recent volume deletion failures
 - Check-grouped remediation queue with search and category, severity, and framework filters; expand a check to see affected resources
 - Each finding includes description and remediation guidance, with inline hide actions for a check or category
 - Configurable: ignored namespaces (with wildcard patterns), disabled checks, persisted across sessions

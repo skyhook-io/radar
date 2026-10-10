@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,48 @@ func TestAuditToolWithholdsSecretFindingsAndCounts(t *testing.T) {
 				t.Fatalf("hidden Secret disclosed: %+v", result)
 			}
 
+		}
+	}
+}
+
+func TestAuditToolStoragePVGrantOnlyGatesPVMetadataAndFindings(t *testing.T) {
+	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "disk"}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased}}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pvc, pv)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	for _, allowed := range []bool{true, false, true} {
+		ctx := withTestUserPerms(t, "storage-audit-reader", nil, []string{"app"})
+		getPermCache().Get("storage-audit-reader", nil).SetCanI("list", "", "persistentvolumes", "", allowed)
+		getPermCache().Get("storage-audit-reader", nil).SetCanI("list", "storage.k8s.io", "storageclasses", "", false)
+		raw, _, err := handleGetAudit(ctx, nil, auditInput{Namespace: "app", Category: "Efficiency"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result auditToolResult
+		if err := json.Unmarshal([]byte(extractText(t, raw)), &result); err != nil {
+			t.Fatal(err)
+		}
+		// Without the grant PVs are outside the caller's subjects; the claim
+		// finding carries the caveat instead of a skipped-check input.
+		if slices.Contains(result.MissingInputs, "persistentvolumes") {
+			t.Fatalf("PV grant denial reported as a skipped check: %+v", result)
+		}
+		want := 1
+		if allowed {
+			want = 2
+		}
+		if result.TotalCount != want || result.Summary.Medium != want || result.Summary.Resources != want {
+			t.Fatalf("storage counts differ from grant: %+v", result)
+		}
+		for _, f := range result.Findings {
+			if !allowed && (f.Check != "pvcNoConsumer" || !strings.Contains(f.Message, "reclaim policy not visible")) {
+				t.Fatalf("unauthorized PV metadata/finding: %+v", f)
+			}
+			if f.Check != "pvcNoConsumer" && f.Check != "releasedPV" || f.Remediation == "" {
+				t.Fatalf("unexpected finding: %+v", f)
+			}
 		}
 	}
 }

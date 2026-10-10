@@ -1,0 +1,575 @@
+package audit
+
+import (
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+func storageInput() *CheckInput {
+	return &CheckInput{
+		PVCConsumerNamespaces:    []string{"app"},
+		PVDeletionEventsComplete: true,
+		Pods:                     []*corev1.Pod{}, Deployments: []*appsv1.Deployment{}, ReplicaSets: []*appsv1.ReplicaSet{},
+		StatefulSets: []*appsv1.StatefulSet{}, DaemonSets: []*appsv1.DaemonSet{}, Jobs: []*batchv1.Job{}, CronJobs: []*batchv1.CronJob{},
+		PersistentVolumeClaims: []*corev1.PersistentVolumeClaim{{
+			ObjectMeta: metav1.ObjectMeta{Name: "data-db-0", Namespace: "app", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))},
+			Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: ptr("local"), VolumeName: "disk", Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("8Gi")}}},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+		}},
+		PersistentVolumes: []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "disk", UID: "disk-uid", CreationTimestamp: metav1.NewTime(time.Now().Add(-72 * time.Hour))}, Spec: corev1.PersistentVolumeSpec{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("8Gi")}, StorageClassName: "local", PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain, ClaimRef: &corev1.ObjectReference{Namespace: "app", Name: "data-db-0"}}}},
+		StorageClasses:    []*storagev1.StorageClass{{ObjectMeta: metav1.ObjectMeta{Name: "local"}, VolumeBindingMode: ptr(storagev1.VolumeBindingWaitForFirstConsumer)}},
+		Events:            []*corev1.Event{},
+	}
+}
+
+func pvcPodSpec(name string) corev1.PodSpec {
+	return corev1.PodSpec{Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: name}}}}}
+}
+
+func TestPVCNoConsumer(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*CheckInput)
+		want   bool
+	}{
+		{"no consumer", func(*CheckInput) {}, true},
+		{"Pod", func(i *CheckInput) {
+			i.Pods = append(i.Pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: pvcPodSpec("data-db-0")})
+		}, false},
+		{"terminal Pod", func(i *CheckInput) {
+			i.Pods = append(i.Pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: pvcPodSpec("data-db-0"), Status: corev1.PodStatus{Phase: corev1.PodSucceeded}})
+		}, false},
+		{"generic ephemeral Pod", func(i *CheckInput) {
+			i.Pods = append(i.Pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "data-db"}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "0", VolumeSource: corev1.VolumeSource{Ephemeral: &corev1.EphemeralVolumeSource{}}}}}})
+		}, false},
+		{"StatefulSet direct claim", func(i *CheckInput) {
+			i.StatefulSets = append(i.StatefulSets, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: pvcPodSpec("data-db-0")}}})
+		}, false},
+		{"Deployment at zero", func(i *CheckInput) {
+			i.Deployments = append(i.Deployments, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: appsv1.DeploymentSpec{Replicas: ptr(int32(0)), Template: corev1.PodTemplateSpec{Spec: pvcPodSpec("data-db-0")}}})
+		}, false},
+		{"ReplicaSet", func(i *CheckInput) {
+			i.ReplicaSets = append(i.ReplicaSets, &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{Spec: pvcPodSpec("data-db-0")}}})
+		}, false},
+		{"DaemonSet", func(i *CheckInput) {
+			i.DaemonSets = append(i.DaemonSets, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: pvcPodSpec("data-db-0")}}})
+		}, false},
+		{"StatefulSet generated at zero", func(i *CheckInput) {
+			i.StatefulSets = append(i.StatefulSets, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "db"}, Spec: appsv1.StatefulSetSpec{Replicas: ptr(int32(0)), VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data"}}}}})
+		}, false},
+		{"StatefulSet retained ordinal", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Name = "data-db-12"
+			i.StatefulSets = append(i.StatefulSets, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "db"}, Spec: appsv1.StatefulSetSpec{Replicas: ptr(int32(0)), VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data"}}}}})
+		}, false},
+		{"not a generated ordinal", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Name = "data-db-backup"
+			i.StatefulSets = append(i.StatefulSets, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "db"}, Spec: appsv1.StatefulSetSpec{VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data"}}}}})
+		}, true},
+		{"Job including complete", func(i *CheckInput) {
+			i.Jobs = append(i.Jobs, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: pvcPodSpec("data-db-0")}}, Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}}})
+		}, false},
+		{"CronJob", func(i *CheckInput) {
+			i.CronJobs = append(i.CronJobs, &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: batchv1.CronJobSpec{JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: pvcPodSpec("data-db-0")}}}}})
+		}, false},
+		{"other namespace", func(i *CheckInput) {
+			i.Pods = append(i.Pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "other"}, Spec: pvcPodSpec("data-db-0")})
+		}, true},
+		{"unreadable Pods", func(i *CheckInput) { i.Pods = nil }, false},
+		{"unknown coverage", func(i *CheckInput) { i.PVCConsumerNamespaces = nil }, false},
+		{"CNPG controller owner", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].OwnerReferences = []metav1.OwnerReference{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "hibernated", Controller: ptr(true)}}
+		}, false},
+		{"non-controller owner", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "metadata"}}
+		}, true},
+		{"unreadable PVs", func(i *CheckInput) { i.PersistentVolumes = nil }, true},
+		{"PVs outside scope", func(i *CheckInput) { i.PersistentVolumes = []*corev1.PersistentVolume{} }, true},
+		{"Pending", func(i *CheckInput) { i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			tc.change(i)
+			r := RunChecks(i)
+			if got := findingNames(r.Findings, "pvcNoConsumer")[i.PersistentVolumeClaims[0].Name]; got != tc.want {
+				t.Fatalf("finding=%v want=%v: %+v", got, tc.want, r.Findings)
+			}
+			if tc.want {
+				for _, f := range r.Findings {
+					if f.CheckID == "pvcNoConsumer" {
+						for _, s := range []string{"No consumer observed", "8Gi", "local", "disk", "age", "CRD"} {
+							if !strings.Contains(f.Message, s) {
+								t.Errorf("missing %q in %q", s, f.Message)
+							}
+						}
+					}
+				}
+			}
+			if tc.name == "unreadable PVs" || tc.name == "PVs outside scope" {
+				// The claim is still evaluated; only releasedPV is skipped, and
+				// only when the inventory is unavailable rather than out of scope.
+				if !strings.Contains(r.Findings[0].Message, "reclaim policy not visible") || r.CheckCounts["pvcNoConsumer"].Evaluated != 1 {
+					t.Fatalf("claim finding lost its retention caveat: %+v", r)
+				}
+				if slices.Contains(r.MissingInputs, "persistentvolumes") != (tc.name == "unreadable PVs") {
+					t.Fatalf("PV missing input does not track skipped releasedPV: %v", r.MissingInputs)
+				}
+			}
+			if tc.name == "unknown coverage" && (r.CheckCounts["pvcNoConsumer"].Evaluated != 0 || !slices.Contains(r.MissingInputs, "pvc-consumers")) {
+				t.Fatalf("unknown counted as passing: %+v", r)
+			}
+		})
+	}
+}
+
+func TestLongPendingPVC(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                string
+		age                                                 time.Duration
+		consumer, immediate, unknownClass, unknownConsumers bool
+		want                                                bool
+	}{
+		{"WFFC no consumer", 48 * time.Hour, false, false, false, false, true},
+		{"WFFC with consumer", 48 * time.Hour, true, false, false, false, false},
+		{"WFFC with Pod", 48 * time.Hour, true, false, false, false, false},
+		{"Immediate with consumer", 48 * time.Hour, true, true, false, false, false},
+		{"young", time.Hour, false, false, false, false, false},
+		{"exact threshold", 24 * time.Hour, false, false, false, false, false},
+		{"unknown class with consumer", 48 * time.Hour, true, false, true, false, false},
+		{"unknown class no consumer", 48 * time.Hour, false, false, true, false, true},
+		{"unknown consumers", 48 * time.Hour, false, false, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			now := time.Now()
+			i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending
+			i.PersistentVolumeClaims[0].CreationTimestamp = metav1.NewTime(now.Add(-tc.age))
+			if tc.consumer {
+				if tc.name == "WFFC with Pod" {
+					i.Pods = append(i.Pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: pvcPodSpec("data-db-0")})
+				} else {
+					i.CronJobs = append(i.CronJobs, &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: batchv1.CronJobSpec{JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: pvcPodSpec("data-db-0")}}}}})
+				}
+			}
+			if tc.immediate {
+				i.StorageClasses[0].VolumeBindingMode = ptr(storagev1.VolumeBindingImmediate)
+			}
+			if tc.unknownClass {
+				i.StorageClasses = nil
+			}
+			if tc.unknownConsumers {
+				i.PVCConsumerNamespaces = nil
+			}
+			tr := newEvalTracker()
+			fs := checkStorage(tr, i, now)
+			if got := findingNames(fs, "pvcLongPending")["data-db-0"]; got != tc.want {
+				t.Fatalf("finding=%v want=%v: %+v", got, tc.want, fs)
+			}
+			if tc.want {
+				if !strings.Contains(fs[0].Message, "Pending since creation, 2d ago") || strings.Contains(fs[0].Message, "bound PV") || strings.Contains(fs[0].Message, "reclaim policy") || strings.Contains(fs[0].Message, "snapshot does not establish") {
+					t.Fatalf("inaccurate Pending detail: %+v", fs[0])
+				}
+			}
+		})
+	}
+}
+
+func TestPVCStorageEligibility(t *testing.T) {
+	now := time.Now()
+	for _, phase := range []corev1.PersistentVolumeClaimPhase{corev1.ClaimBound, corev1.ClaimPending} {
+		for _, age := range []time.Duration{time.Hour, 24 * time.Hour, 25 * time.Hour} {
+			t.Run(string(phase)+"/"+age.String(), func(t *testing.T) {
+				i := storageInput()
+				i.PersistentVolumeClaims[0].Status.Phase = phase
+				i.PersistentVolumeClaims[0].CreationTimestamp = metav1.NewTime(now.Add(-age))
+				fs := checkStorage(newEvalTracker(), i, now)
+				if (len(fs) > 0) != (age > 24*time.Hour) {
+					t.Fatalf("age eligibility: %+v", fs)
+				}
+				i.PersistentVolumeClaims[0].OwnerReferences = []metav1.OwnerReference{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "hibernated", Controller: ptr(true)}}
+				tr := newEvalTracker()
+				if fs := checkStorage(tr, i, now); len(fs) != 0 || tr.counts["pvcNoConsumer"]["app"] != 0 || tr.counts["pvcLongPending"]["app"] != 0 {
+					t.Fatalf("controller-owned claim evaluated: %+v", fs)
+				}
+			})
+		}
+	}
+}
+
+// Missing inputs name only gaps that left a subject unevaluated; gaps that
+// leave a finding in place are caveats in its message.
+func TestStorageMissingInputsOnlyForSkippedSubjects(t *testing.T) {
+	storageKeys := []string{"persistentvolumeclaims", "persistentvolumes", "storageclasses", "pvc-consumers", "pvc-binding-mode", "pv-deletion-events"}
+	for _, tc := range []struct {
+		name     string
+		change   func(*CheckInput)
+		missing  []string
+		findings int
+		caveat   string
+	}{
+		{"healthy", func(i *CheckInput) {
+			i.Pods = []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: pvcPodSpec("data-db-0")}}
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeBound
+		}, nil, 0, ""},
+		{"complete evidence", func(*CheckInput) {}, nil, 2, ""},
+		{"unreadable claims", func(i *CheckInput) { i.PersistentVolumeClaims = nil }, []string{"persistentvolumeclaims"}, 1, ""},
+		{"unknown consumers", func(i *CheckInput) { i.PVCConsumerNamespaces = nil }, []string{"pvc-consumers"}, 1, ""},
+		{"unreadable PVs without claims", func(i *CheckInput) {
+			i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+			i.PersistentVolumes = nil
+		}, []string{"persistentvolumes"}, 0, ""},
+		{"PVs outside scope", func(i *CheckInput) { i.PersistentVolumes = []*corev1.PersistentVolume{} }, nil, 1, "reclaim policy not visible"},
+		{"unreadable classes", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending
+			i.StorageClasses = nil
+		}, nil, 2, "StorageClass binding mode not visible"},
+		{"unreadable events after grace", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.Events = nil
+		}, nil, 2, "Deletion warning events not fully visible"},
+		{"unreadable events in grace", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(time.Now().Add(-time.Minute)))
+			i.Events = nil
+		}, []string{"pv-deletion-events"}, 1, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+			tc.change(i)
+			r := RunChecks(i)
+			var got []string
+			for _, key := range storageKeys {
+				if slices.Contains(r.MissingInputs, key) {
+					got = append(got, key)
+				}
+			}
+			if !slices.Equal(got, tc.missing) {
+				t.Fatalf("missing inputs %v, want %v", got, tc.missing)
+			}
+			var storageFindings []Finding
+			for _, f := range r.Findings {
+				if f.CheckID == "pvcNoConsumer" || f.CheckID == "pvcLongPending" || f.CheckID == "releasedPV" {
+					storageFindings = append(storageFindings, f)
+				}
+			}
+			if len(storageFindings) != tc.findings {
+				t.Fatalf("findings %+v, want %d", storageFindings, tc.findings)
+			}
+			if tc.caveat != "" && !slices.ContainsFunc(storageFindings, func(f Finding) bool { return strings.Contains(f.Message, tc.caveat) }) {
+				t.Fatalf("evidence gap %q not stated in findings: %+v", tc.caveat, storageFindings)
+			}
+			if tc.caveat == "" {
+				for _, f := range storageFindings {
+					if strings.Contains(f.Message, "not visible") || strings.Contains(f.Message, "not fully visible") {
+						t.Fatalf("unexpected evidence caveat: %+v", f)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestReleasedPVHealthyCounts(t *testing.T) {
+	i := storageInput()
+	i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+	i.PersistentVolumes[0].Status.Phase = corev1.VolumeBound
+	i.PersistentVolumes = append(i.PersistentVolumes, &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "available"}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeAvailable}})
+	r := RunChecks(i)
+	if count := r.CheckCounts["releasedPV"]; count.Evaluated != 2 || count.Passed != 2 || len(r.Findings) != 0 {
+		t.Fatalf("healthy PVs lost from counts: %+v", count)
+	}
+}
+
+func TestReleasedPV(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name       string
+		change     func(*CheckInput)
+		want, text string
+	}{
+		{"Retain", func(*CheckInput) {}, "disk", "kept after its claim was deleted"},
+		{"Bound", func(i *CheckInput) { i.PersistentVolumes[0].Status.Phase = corev1.VolumeBound }, "", ""},
+		{"Delete no event", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+		}, "disk", "deletion has not completed"},
+		{"Delete recent event", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.Events = []*corev1.Event{deleteFailure(now.Add(-time.Minute), "latest failure")}
+		}, "disk", "deletion is failing: latest failure"},
+		{"Delete old event", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.Events = []*corev1.Event{deleteFailure(now.Add(-48*time.Hour), "stale failure")}
+		}, "disk", "Latest deletion warning (2d ago): stale failure"},
+		{"Delete old UID", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			e := deleteFailure(now, "other object")
+			e.InvolvedObject.UID = "old-uid"
+			i.Events = []*corev1.Event{e}
+		}, "disk", "deletion has not completed"},
+		{"Delete unreadable events", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.Events = nil
+		}, "disk", "deletion has not completed"},
+		{"Retain unreadable events", func(i *CheckInput) { i.Events = nil }, "disk", "kept after its claim was deleted"},
+		{"transition time", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Hour)))
+		}, "", ""},
+		{"Retain recent release", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-23 * time.Hour)))
+		}, "", ""},
+		{"Delete recent release", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Minute)))
+		}, "", ""},
+		{"Delete recent release with warning", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Minute)))
+			i.Events = []*corev1.Event{deleteFailure(now, "immediate failure")}
+		}, "disk", "deletion is failing: immediate failure"},
+		{"Delete exact threshold", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Hour)))
+		}, "", ""},
+		{"Delete old release", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-2 * time.Hour)))
+		}, "disk", "Released for 2h"},
+		{"latest event series", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			e := deleteFailure(now.Add(-48*time.Hour), "series failure")
+			e.Series = &corev1.EventSeries{LastObservedTime: metav1.NewMicroTime(now.Add(-time.Minute))}
+			i.Events = []*corev1.Event{deleteFailure(now.Add(-time.Hour), "earlier failure"), e}
+		}, "disk", "series failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+			tc.change(i)
+			tr := newEvalTracker()
+			fs := checkStorage(tr, i, now)
+			if got := findingNames(fs, "releasedPV")["disk"]; got != (tc.want != "") {
+				t.Fatalf("finding=%v want=%q: %+v", got, tc.want, fs)
+			}
+			for _, f := range fs {
+				if f.CheckID == "releasedPV" && (!strings.Contains(f.Message, tc.text) || !strings.Contains(f.Message, "8Gi") || !strings.Contains(f.Message, "app/data-db-0")) {
+					t.Errorf("missing evidence: %+v", f)
+				}
+			}
+			if tr.counts["releasedPV"][""] != 1 {
+				t.Fatal("readable PV not evaluated")
+			}
+			if tc.name == "Delete unreadable events" && (len(tr.missingInputs) != 0 || !strings.Contains(fs[len(fs)-1].Message, "Deletion warning events not fully visible")) {
+				t.Fatalf("flagged volume's evidence gap reported as a skip, or not stated: %v %+v", tr.missingInputs, fs)
+			}
+			if tc.name == "Delete no event" && !strings.Contains(fs[len(fs)-1].Message, "PV age") {
+				t.Fatal("fallback age not labelled")
+			}
+		})
+	}
+}
+
+func TestPVDeletionEventIdentityAndTimes(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name   string
+		change func(*corev1.Event)
+		want   bool
+	}{
+		{"current UID", func(*corev1.Event) {}, true},
+		{"old UID", func(e *corev1.Event) { e.InvolvedObject.UID = "previous" }, false},
+		{"wrong name", func(e *corev1.Event) { e.InvolvedObject.Name = "other" }, false},
+		{"namespaced ref", func(e *corev1.Event) { e.InvolvedObject.Namespace = "app" }, false},
+		{"CRD ref", func(e *corev1.Event) { e.InvolvedObject.APIVersion = "storage.example.com/v1" }, false},
+		{"wrong kind", func(e *corev1.Event) { e.InvolvedObject.Kind = "PersistentVolumeClaim" }, false},
+		{"Normal", func(e *corev1.Event) { e.Type = corev1.EventTypeNormal }, false},
+		{"wrong reason", func(e *corev1.Event) { e.Reason = "ProvisioningFailed" }, false},
+		{"future timestamp", func(e *corev1.Event) { e.LastTimestamp = metav1.NewTime(now.Add(time.Hour)) }, false},
+		{"event time", func(e *corev1.Event) { e.LastTimestamp = metav1.Time{}; e.EventTime = metav1.NewMicroTime(now) }, true},
+		{"creation time", func(e *corev1.Event) { e.LastTimestamp = metav1.Time{}; e.CreationTimestamp = metav1.NewTime(now) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			e := deleteFailure(now, "warning")
+			tc.change(e)
+			got := latestPVDeleteFailures(i.PersistentVolumes, []*corev1.Event{e}, now)
+			if (got["disk-uid"].event != nil) != tc.want {
+				t.Fatalf("event identity/timestamp: %+v", got)
+			}
+		})
+	}
+}
+
+func deleteFailure(at time.Time, message string) *corev1.Event {
+	return &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "PersistentVolume", Name: "disk", UID: "disk-uid"}, Type: corev1.EventTypeWarning, Reason: "VolumeFailedDelete", Message: message, LastTimestamp: metav1.NewTime(at)}
+}
+
+func TestRecentReleasedPVEventCoverage(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name                        string
+		change                      func(*CheckInput)
+		evaluated, passed, findings int
+		missing                     bool
+	}{
+		{"complete events", func(*CheckInput) {}, 1, 1, 0, false},
+		{"unreadable events", func(i *CheckInput) { i.Events = nil }, 0, 0, 0, true},
+		{"partial events", func(i *CheckInput) { i.PVDeletionEventsComplete = false }, 0, 0, 0, true},
+		{"partial events with warning", func(i *CheckInput) {
+			i.PVDeletionEventsComplete = false
+			i.Events = []*corev1.Event{deleteFailure(now, "visible failure")}
+		}, 1, 0, 1, false},
+		{"unreadable events after grace", func(i *CheckInput) {
+			i.Events = nil
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-2 * time.Hour)))
+		}, 1, 0, 1, false},
+		{"Retain does not need events", func(i *CheckInput) {
+			i.Events = nil
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		}, 1, 1, 0, false},
+		{"Bound does not need events", func(i *CheckInput) {
+			i.Events = nil
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeBound
+		}, 1, 1, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Minute)))
+			tc.change(i)
+			tr := newEvalTracker()
+			r := buildResults(checkStorage(tr, i, now), tr, nil)
+			count := r.CheckCounts["releasedPV"]
+			if count.Evaluated != tc.evaluated || count.Passed != tc.passed || len(r.Findings) != tc.findings || slices.Contains(r.MissingInputs, "pv-deletion-events") != tc.missing {
+				t.Fatalf("evaluated=%d passed=%d findings=%+v missing=%v", count.Evaluated, count.Passed, r.Findings, r.MissingInputs)
+			}
+			complete := i.Events != nil && i.PVDeletionEventsComplete
+			for _, f := range r.Findings {
+				if strings.Contains(f.Message, "Deletion warning events not fully visible") == complete {
+					t.Fatalf("event coverage caveat wrong for complete=%v: %+v", complete, f)
+				}
+			}
+		})
+	}
+}
+
+func TestPVDeletionWarningsCurrentRelease(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name    string
+		change  func(*CheckInput)
+		message string
+	}{
+		{"previous release warning", func(*CheckInput) {}, ""},
+		{"previous release warning after grace", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-2 * time.Hour)))
+		}, "deletion has not completed"},
+		{"warning at transition", func(i *CheckInput) {
+			i.Events[0].LastTimestamp = *i.PersistentVolumes[0].Status.LastPhaseTransitionTime
+		}, "deletion is failing"},
+		{"series continued in current release", func(i *CheckInput) {
+			i.Events[0].Series = &corev1.EventSeries{LastObservedTime: metav1.NewMicroTime(now)}
+		}, "deletion is failing"},
+		{"transition unavailable", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = nil
+		}, "deletion is failing"},
+		{"transition zero", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = &metav1.Time{}
+		}, "deletion is failing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Minute)))
+			i.Events = []*corev1.Event{deleteFailure(now.Add(-3*time.Hour), "previous release failure")}
+			tc.change(i)
+			fs := checkStorage(newEvalTracker(), i, now)
+			if tc.message == "" {
+				if len(fs) != 0 {
+					t.Fatalf("previous release warning reused: %+v", fs)
+				}
+			} else if len(fs) != 1 || !strings.Contains(fs[0].Message, tc.message) {
+				t.Fatalf("current release outcome: %+v", fs)
+			}
+			if tc.name == "previous release warning after grace" && strings.Contains(fs[0].Message, "previous release failure") {
+				t.Fatalf("stale warning included as evidence: %+v", fs[0])
+			}
+		})
+	}
+}
+
+func TestLongPendingPVCStorageClassEvidence(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name    string
+		change  func(*CheckInput)
+		message string
+		hidden  bool
+	}{
+		{"unreadable classes", func(i *CheckInput) { i.StorageClasses = nil }, "binding mode not visible", true},
+		{"unreadable default class", func(i *CheckInput) {
+			i.StorageClasses = nil
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+		}, "binding mode not visible", true},
+		{"missing named class", func(i *CheckInput) { i.PersistentVolumeClaims[0].Spec.StorageClassName = ptr("missing") }, `StorageClass "missing" not found`, false},
+		{"empty class inventory", func(i *CheckInput) { i.StorageClasses = []*storagev1.StorageClass{} }, `StorageClass "local" not found`, false},
+		{"no default class", func(i *CheckInput) { i.PersistentVolumeClaims[0].Spec.StorageClassName = nil }, "No default StorageClass applies", false},
+		{"no classes or default", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses = []*storagev1.StorageClass{}
+		}, "No default StorageClass applies", false},
+		{"default WFFC class", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses[0].Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+		}, "Default StorageClass \"local\" uses WaitForFirstConsumer", false},
+		{"newest default class", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses[0].Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+			i.StorageClasses[0].CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+			i.StorageClasses = append([]*storagev1.StorageClass{{ObjectMeta: metav1.ObjectMeta{Name: "new", CreationTimestamp: metav1.NewTime(now), Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}}}}, i.StorageClasses...)
+		}, "Default StorageClass \"new\" applies", false},
+		{"default timestamp tie", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses[0].Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+			i.StorageClasses = append(i.StorageClasses, &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "alphabetical", Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}}})
+		}, "Default StorageClass \"alphabetical\" applies", false},
+		{"explicit no class", func(i *CheckInput) { i.PersistentVolumeClaims[0].Spec.StorageClassName = ptr("") }, "storage class \"\"", false},
+		{"explicit no class with unreadable classes", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = ptr("")
+			i.StorageClasses = nil
+		}, "storage class \"\"", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending
+			tc.change(i)
+			tr := newEvalTracker()
+			fs := checkStorage(tr, i, now)
+			if len(fs) != 1 || !strings.Contains(fs[0].Message, tc.message) {
+				t.Fatalf("class evidence: %+v", fs)
+			}
+			// The claim is evaluated either way, so class visibility is a
+			// caveat in the finding, never a missing input.
+			if len(tr.missingInputs) != 0 {
+				t.Fatalf("evaluated claim reported as skipped: %+v", tr.missingInputs)
+			}
+			if !tc.hidden && strings.Contains(fs[0].Message, "binding mode not visible") {
+				t.Fatalf("readable class evidence described as invisible: %+v", fs[0])
+			}
+		})
+	}
+}
