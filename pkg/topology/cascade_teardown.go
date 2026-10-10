@@ -1,0 +1,140 @@
+package topology
+
+import (
+	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// ControllerTeardown is what a GitOps controller deletes when its object is
+// deleted. It is controller policy carried out through a finalizer, not
+// garbage collection: force deletion strips the finalizer, and with it the
+// teardown.
+type ControllerTeardown struct {
+	Controller string `json:"controller"` // "Argo CD" or "Flux"
+	// Action is "prune" (managed resources are deleted) or "uninstall" (the
+	// Helm release is uninstalled).
+	Action string `json:"action"`
+	// Resources are the managed resources Radar observes; the controller acts
+	// on its own inventory, which can hold more, and skips resources that opt
+	// out of deletion.
+	Resources []ResourceRef `json:"resources,omitempty"`
+	// Terminating means the object is already being deleted, so the
+	// controller may already be tearing down and force delete can't stop it.
+	Terminating bool `json:"terminating,omitempty"`
+}
+
+// watchedGetter reads an object only from an existing watch. Topology reads
+// optional metadata through it so a build or a preview never starts an
+// informer; providers without it skip that metadata.
+type watchedGetter interface {
+	GetWatched(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
+}
+
+func getWatched(dp DynamicProvider, gvr schema.GroupVersionResource, namespace, name string) *unstructured.Unstructured {
+	getter, ok := dp.(watchedGetter)
+	if !ok {
+		return nil
+	}
+	obj, err := getter.GetWatched(gvr, namespace, name)
+	if err != nil {
+		return nil
+	}
+	return obj
+}
+
+// The finalizers through which each controller tears down on deletion,
+// matching gitops/insights' finalizer catalog: Argo CD's current key (with or
+// without a /background or /foreground suffix) and its deprecated
+// foreground-cascade key; Flux's shared key and its per-controller keys.
+const argoResourcesFinalizer = "resources-finalizer.argocd.argoproj.io"
+
+var fluxTeardownFinalizers = map[string]bool{
+	"finalizers.fluxcd.io":                   true,
+	"finalizers.kustomize.toolkit.fluxcd.io": true,
+	"finalizers.helm.toolkit.fluxcd.io":      true,
+}
+
+// controllerTeardown reports the teardown root's controller performs on
+// deletion, or nil when it leaves its resources in place.
+func controllerTeardown(root *Node, topo *Topology, dp DynamicProvider) *ControllerTeardown {
+	if root == nil || dp == nil {
+		return nil
+	}
+	group := nodeAPIGroupFromData(root)
+	var controller, action string
+	switch {
+	case root.Kind == KindApplication && group == "argoproj.io":
+		controller, action = "Argo CD", "prune"
+	case root.Kind == KindKustomization && group == "kustomize.toolkit.fluxcd.io":
+		controller, action = "Flux", "prune"
+	case root.Kind == KindHelmRelease && group == "helm.toolkit.fluxcd.io":
+		controller, action = "Flux", "uninstall"
+	default:
+		return nil
+	}
+	gvr, ok := dp.GetGVRWithGroup(string(root.Kind), group)
+	if !ok {
+		return nil
+	}
+	namespace, _ := root.Data["namespace"].(string)
+	obj := getWatched(dp, gvr, namespace, root.Name)
+	if obj == nil || !tearsDown(obj, controller, action) {
+		return nil
+	}
+
+	teardown := &ControllerTeardown{Controller: controller, Action: action, Terminating: obj.GetDeletionTimestamp() != nil}
+	nodeByID := make(map[string]*Node, len(topo.Nodes))
+	for i := range topo.Nodes {
+		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	}
+	seen := map[string]bool{}
+	for _, edge := range topo.Edges {
+		if edge.Source != root.ID || edge.Type != EdgeManages || edge.verifiedOwner() || edge.SkipIfKindVisible != "" || seen[edge.Target] {
+			continue
+		}
+		seen[edge.Target] = true
+		if ref := resourceRefForNode(nodeByID[edge.Target], dp); ref != nil {
+			teardown.Resources = append(teardown.Resources, *ref)
+		}
+	}
+	return teardown
+}
+
+func tearsDown(obj *unstructured.Unstructured, controller, action string) bool {
+	switch controller {
+	case "Argo CD":
+		for _, f := range obj.GetFinalizers() {
+			if f == argoResourcesFinalizer || strings.HasPrefix(f, argoResourcesFinalizer+"/") || f == "foreground-cascade.argocd.argoproj.io" {
+				return true
+			}
+		}
+		return false
+	case "Flux":
+		hasFinalizer := false
+		for _, f := range obj.GetFinalizers() {
+			hasFinalizer = hasFinalizer || fluxTeardownFinalizers[f]
+		}
+		// Both controllers skip teardown for a suspended object and only
+		// release the finalizer.
+		suspended, _, _ := unstructured.NestedBool(obj.Object, "spec", "suspend")
+		if !hasFinalizer || suspended {
+			return false
+		}
+		if action == "uninstall" {
+			return true
+		}
+		policy, _, _ := unstructured.NestedString(obj.Object, "spec", "deletionPolicy")
+		switch policy {
+		case "Delete", "WaitForTermination":
+			return true
+		case "Orphan":
+			return false
+		default: // MirrorPrune, the default, follows spec.prune.
+			prune, _, _ := unstructured.NestedBool(obj.Object, "spec", "prune")
+			return prune
+		}
+	}
+	return false
+}

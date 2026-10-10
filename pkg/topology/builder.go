@@ -457,7 +457,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		rolloutGVR, hasRollouts = resourceDiscovery.GetGVRWithGroup("Rollout", "argoproj.io")
 	}
+	var analysisRunGVR schema.GroupVersionResource
+	hasAnalysisRuns := false
 	if hasRollouts && dynamicCache != nil {
+		analysisRunGVR, hasAnalysisRuns = resourceDiscovery.GetGVRWithGroup("AnalysisRun", "argoproj.io")
 		rollouts, err := dynamicCache.ListNamespaces(rolloutGVR, opts.Namespaces)
 		if err != nil {
 			log.Printf("WARNING [topology] Failed to list Rollouts: %v", err)
@@ -595,7 +598,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			for _, run := range activeAnalysisRuns(status) {
 				runID := fmt.Sprintf("analysisrun/%s/%s", ns, run.name)
-				nodes = append(nodes, Node{
+				runNode := Node{
 					ID:     runID,
 					Kind:   "AnalysisRun",
 					Name:   run.name,
@@ -607,7 +610,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						"message":    run.message,
 						"apiVersion": rollout.GetAPIVersion(),
 					},
-				})
+				}
+				// The run's own owner reference is what makes the Rollout its
+				// owner. Read it only from an existing watch: AnalysisRuns
+				// accumulate, and a topology build must not start one.
+				if hasAnalysisRuns {
+					if obj := getWatched(dynamicCache, analysisRunGVR, ns, run.name); obj != nil {
+						runNode.uid, runNode.ownerReferences, runNode.observed = obj.GetUID(), obj.GetOwnerReferences(), true
+					}
+				}
+				nodes = append(nodes, runNode)
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", rolloutID, runID),
 					Source: rolloutID,
@@ -3004,9 +3016,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						Type:          EdgeManages,
 						metadataOwner: true,
 					})
-					// Track for shortcut edges (CronJob -> Pod)
-					jobKey := job.Namespace + "/" + job.Name
-					jobToCronJob[jobKey] = ownerID
+					// Track for shortcut edges (CronJob -> Pod): only the
+					// controller stands in for the Job it collapses.
+					if ownerRef.Controller != nil && *ownerRef.Controller {
+						jobToCronJob[job.Namespace+"/"+job.Name] = ownerID
+					}
 				}
 			case "ScaledJob":
 				ownerKey := job.Namespace + "/" + ownerRef.Name
@@ -3018,8 +3032,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						Type:          EdgeManages,
 						metadataOwner: true,
 					})
-					jobKey := job.Namespace + "/" + job.Name
-					jobToScaledJob[jobKey] = ownerID
+					if ownerRef.Controller != nil && *ownerRef.Controller {
+						jobToScaledJob[job.Namespace+"/"+job.Name] = ownerID
+					}
 				}
 			}
 		}
@@ -3270,7 +3285,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		for _, group := range groupingResult.Groups {
-			if len(group.Pods) <= maxIndividualPods {
+			// Relationship lookups answer for one Pod at a time, so the cache
+			// never collapses Pods into a group that no lookup can name.
+			if opts.ForRelationshipCache || len(group.Pods) <= maxIndividualPods {
 				// Small group - add as individual nodes
 				for _, pod := range group.Pods {
 					podID := GetPodID(pod)
@@ -3761,7 +3778,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Create GatewayClass → Gateway edges (match via spec.gatewayClassName on Gateway)
+	// Gateway → GatewayClass edges (spec.gatewayClassName). A Gateway depends on
+	// its class; the class neither owns nor reconciles it.
 	if hasGateways && dynamicCache != nil {
 		gateways, gwEdgeErr := dynamicCache.ListNamespaces(gatewayGVR, opts.Namespaces)
 		if gwEdgeErr != nil {
@@ -3782,10 +3800,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if className != "" {
 				if gcID, ok := gatewayClassIDs[className]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", gcID, gwID),
-						Source: gcID,
-						Target: gwID,
-						Type:   EdgeManages,
+						ID:     fmt.Sprintf("%s-to-%s", gwID, gcID),
+						Source: gwID,
+						Target: gcID,
+						Type:   EdgeUses,
 					})
 				}
 			}

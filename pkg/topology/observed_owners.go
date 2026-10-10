@@ -63,13 +63,21 @@ func addObservedOwnerEdges(nodes []Node, edges []Edge) []Edge {
 	return kept
 }
 
-// preferredOwnerEdge chooses an observed controller, otherwise the first
-// manages edge in graph order (including non-controller and logical links).
+// verifiedOwner reports whether edge is backed by an observed owner
+// reference. Other manages edges (GitOps inventory, class bindings, label
+// inference, display shortcuts) are management, not ownership, and Kubernetes
+// garbage collection never follows them.
+func (e Edge) verifiedOwner() bool {
+	return e.Type == EdgeManages && e.OwnerController != nil
+}
+
+// preferredOwnerEdge chooses the observed controller owner, otherwise the
+// first observed non-controller owner in graph order.
 func preferredOwnerEdge(edges []Edge) *Edge {
 	var first *Edge
 	for i := range edges {
 		edge := &edges[i]
-		if edge.Type != EdgeManages {
+		if !edge.verifiedOwner() {
 			continue
 		}
 		if edge.OwnerController != nil && *edge.OwnerController {

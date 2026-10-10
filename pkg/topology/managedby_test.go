@@ -173,8 +173,8 @@ func TestSynthesizeManagedBy_TopologyOwnerChain(t *testing.T) {
 			{ID: "pod/demo/web-abc-xyz", Kind: KindPod, Name: "web-abc-xyz"},
 		},
 		Edges: []Edge{
-			{ID: "d-rs", Source: "deployment/demo/web", Target: "replicaset/demo/web-abc", Type: EdgeManages},
-			{ID: "rs-p", Source: "replicaset/demo/web-abc", Target: "pod/demo/web-abc-xyz", Type: EdgeManages},
+			{ID: "d-rs", Source: "deployment/demo/web", Target: "replicaset/demo/web-abc", Type: EdgeManages, OwnerController: &controllerOwner},
+			{ID: "rs-p", Source: "replicaset/demo/web-abc", Target: "pod/demo/web-abc-xyz", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 
@@ -198,8 +198,8 @@ func TestSynthesizeManagedBy_TopologyOwnerChain_Indexed(t *testing.T) {
 			{ID: "pod/demo/web-abc-xyz", Kind: KindPod, Name: "web-abc-xyz"},
 		},
 		Edges: []Edge{
-			{ID: "d-rs", Source: "deployment/demo/web", Target: "replicaset/demo/web-abc", Type: EdgeManages},
-			{ID: "rs-p", Source: "replicaset/demo/web-abc", Target: "pod/demo/web-abc-xyz", Type: EdgeManages},
+			{ID: "d-rs", Source: "deployment/demo/web", Target: "replicaset/demo/web-abc", Type: EdgeManages, OwnerController: &controllerOwner},
+			{ID: "rs-p", Source: "replicaset/demo/web-abc", Target: "pod/demo/web-abc-xyz", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 	idx := IndexByResource(topo)
@@ -252,8 +252,8 @@ func TestSynthesizeManagedBy_CycleSafe(t *testing.T) {
 			{ID: "deployment/demo/b", Kind: KindDeployment, Name: "b"},
 		},
 		Edges: []Edge{
-			{ID: "a-b", Source: "deployment/demo/a", Target: "deployment/demo/b", Type: EdgeManages},
-			{ID: "b-a", Source: "deployment/demo/b", Target: "deployment/demo/a", Type: EdgeManages},
+			{ID: "a-b", Source: "deployment/demo/a", Target: "deployment/demo/b", Type: EdgeManages, OwnerController: &controllerOwner},
+			{ID: "b-a", Source: "deployment/demo/b", Target: "deployment/demo/a", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 	got := SynthesizeManagedBy(nil, "Deployment", "demo", "a", topo, nil, nil)
@@ -423,3 +423,7 @@ func TestParseArgoTrackingID(t *testing.T) {
 		})
 	}
 }
+
+// controllerOwner marks a fixture manages edge as an observed controller owner
+// reference, the only edge ownership projections and cascade previews follow.
+var controllerOwner = true

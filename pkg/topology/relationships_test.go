@@ -74,9 +74,9 @@ func TestGetCascadeDeletePreview_GroupQualifiedCollisions(t *testing.T) {
 			{ID: "backup/fleet/cnpg-backup", Kind: NodeKind("Backup"), Name: "cnpg-backup", Data: map[string]any{"namespace": "fleet", "apiVersion": "postgresql.cnpg.io/v1"}},
 		},
 		Edges: []Edge{
-			{Source: "capicluster/fleet/prod", Target: "machinedeployment/fleet/capi-workers", Type: EdgeManages},
-			{Source: "machinedeployment/fleet/capi-workers", Target: "machine/fleet/capi-worker-1", Type: EdgeManages},
-			{Source: "cluster/fleet/prod", Target: "backup/fleet/cnpg-backup", Type: EdgeManages},
+			{Source: "capicluster/fleet/prod", Target: "machinedeployment/fleet/capi-workers", Type: EdgeManages, OwnerController: &controllerOwner},
+			{Source: "machinedeployment/fleet/capi-workers", Target: "machine/fleet/capi-worker-1", Type: EdgeManages, OwnerController: &controllerOwner},
+			{Source: "cluster/fleet/prod", Target: "backup/fleet/cnpg-backup", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 
@@ -136,7 +136,7 @@ func TestGetCascadeDeletePreview_UnqualifiedUniqueGenericRoot(t *testing.T) {
 			{ID: "widget/demo/root/example.io", Kind: "Widget", Name: "root", Data: map[string]any{"namespace": "demo", "apiVersion": "example.io/v1"}},
 			{ID: "gadget/demo/child/example.io", Kind: "Gadget", Name: "child", Data: map[string]any{"namespace": "demo", "apiVersion": "example.io/v1"}},
 		},
-		Edges: []Edge{{Source: "widget/demo/root/example.io", Target: "gadget/demo/child/example.io", Type: EdgeManages}},
+		Edges: []Edge{{Source: "widget/demo/root/example.io", Target: "gadget/demo/child/example.io", Type: EdgeManages, OwnerController: &controllerOwner}},
 	}
 
 	preview := GetCascadeDeletePreview(ResourceRef{Kind: "Widget", Namespace: "demo", Name: "root"}, topo, nil)
@@ -178,8 +178,8 @@ func TestGetCascadeDeletePreview_RouteCollisionUsesGroup(t *testing.T) {
 			{ID: "service/demo/shop", Kind: KindService, Name: "shop", Data: map[string]any{"namespace": "demo"}},
 		},
 		Edges: []Edge{
-			{Source: "knativeroute/demo/shop", Target: "revision/demo/shop-v1", Type: EdgeManages},
-			{Source: "route/demo/shop", Target: "service/demo/shop", Type: EdgeManages},
+			{Source: "knativeroute/demo/shop", Target: "revision/demo/shop-v1", Type: EdgeManages, OwnerController: &controllerOwner},
+			{Source: "route/demo/shop", Target: "service/demo/shop", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 
@@ -218,8 +218,8 @@ func TestGetCascadeDeletePreview_CalicoGroupCollisionUsesQualifiedRoot(t *testin
 			{ID: "deployment/demo/legacy", Kind: KindDeployment, Name: "legacy", Data: map[string]any{"namespace": "demo"}},
 		},
 		Edges: []Edge{
-			{Source: projectID, Target: "deployment/demo/project", Type: EdgeManages},
-			{Source: legacyID, Target: "deployment/demo/legacy", Type: EdgeManages},
+			{Source: projectID, Target: "deployment/demo/project", Type: EdgeManages, OwnerController: &controllerOwner},
+			{Source: legacyID, Target: "deployment/demo/legacy", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 
@@ -498,7 +498,7 @@ func TestGetRelationshipsEmitsKubernetesKindForPseudoNode(t *testing.T) {
 			{ID: "knativeservice/demo/shop", Kind: KindKnativeService, Name: "shop", Data: map[string]any{"namespace": "demo", "apiVersion": "serving.knative.dev/v1"}},
 			{ID: "revision/demo/shop-v1", Kind: KindKnativeRevision, Name: "shop-v1", Data: map[string]any{"namespace": "demo", "apiVersion": "serving.knative.dev/v1"}},
 		},
-		Edges: []Edge{{Source: "knativeservice/demo/shop", Target: "revision/demo/shop-v1", Type: EdgeManages}},
+		Edges: []Edge{{Source: "knativeservice/demo/shop", Target: "revision/demo/shop-v1", Type: EdgeManages, OwnerController: &controllerOwner}},
 	}
 
 	rel := GetRelationships("Revision", "demo", "shop-v1", topo, nil, nil)

@@ -211,9 +211,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		}
 	}
 
+	// Generated descendants are what controllers created beneath a declared
+	// resource, recorded by owner references. Other manages edges (class
+	// bindings, a nested GitOps object's own inventory) are not generation.
 	adj := map[string][]topology.Edge{}
 	for _, e := range b.topoEdges() {
-		if e.Type != topology.EdgeManages {
+		if e.Type != topology.EdgeManages || e.OwnerController == nil {
 			continue
 		}
 		adj[e.Source] = append(adj[e.Source], e)

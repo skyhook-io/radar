@@ -11,6 +11,22 @@ export interface CascadeDependent {
   group?: string
 }
 
+/** What else a delete removes, beyond the dependents garbage collection takes for certain. */
+export interface CascadeDetail {
+  /** "ownerReferences" when dependents are garbage-collection results; absent from older servers. */
+  basis?: string
+  /** Deleted unless another owner Radar can't see is still live. */
+  possibleDependents?: CascadeDependent[]
+  /** What Argo CD or Flux deletes through its finalizer. */
+  controllerTeardown?: {
+    controller: string
+    action: 'prune' | 'uninstall' | string
+    resources?: CascadeDependent[]
+    /** Already being deleted: the teardown may be underway. */
+    terminating?: boolean
+  }
+}
+
 interface ForceDeleteConfirmDialogProps {
   open: boolean
   onClose: () => void
@@ -22,6 +38,7 @@ interface ForceDeleteConfirmDialogProps {
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
   cascadeRootResolved?: boolean
+  cascadeDetail?: CascadeDetail
 }
 
 export function ForceDeleteConfirmDialog({
@@ -35,6 +52,7 @@ export function ForceDeleteConfirmDialog({
   cascadeDependents,
   cascadeLoading,
   cascadeRootResolved,
+  cascadeDetail,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
 
@@ -54,7 +72,9 @@ export function ForceDeleteConfirmDialog({
       onConfirm={handleConfirm}
       title="Delete Resource"
       message={`Are you sure you want to delete "${resourceName}"?`}
-      details={`This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`}
+      details={namespaceName
+        ? `This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`
+        : `This will permanently delete the cluster-scoped ${resourceKind} "${resourceName}".`}
       confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
       variant="danger"
       isLoading={isLoading}
@@ -68,7 +88,32 @@ export function ForceDeleteConfirmDialog({
         )}
 
         {!cascadeLoading && cascadeDependents && cascadeDependents.length > 0 && (
-          <CascadeDependentsList dependents={cascadeDependents} />
+          cascadeDetail?.basis === 'ownerReferences' ? (
+            <CascadeDependentsList
+              dependents={cascadeDependents}
+              title={`Will also delete ${pluralize(cascadeDependents.length, 'dependent resource')}`}
+              note="Kubernetes deletes these through their owner references. Owned objects Radar doesn't track, such as EndpointSlices, go too but aren't listed."
+            />
+          ) : (
+            // An older Radar walked every management link, not only owner references.
+            <CascadeDependentsList
+              dependents={cascadeDependents}
+              title={`May also delete ${pluralize(cascadeDependents.length, 'related resource')}`}
+              note="This Radar version can't tell owned resources from other links. Kubernetes deletes only those that name this one as their owner."
+            />
+          )
+        )}
+
+        {!cascadeLoading && cascadeDetail?.possibleDependents && cascadeDetail.possibleDependents.length > 0 && (
+          <CascadeDependentsList
+            dependents={cascadeDetail.possibleDependents}
+            title={`May also delete ${pluralize(cascadeDetail.possibleDependents.length, 'resource')}`}
+            note="Each also has an owner Radar can't see. Kubernetes deletes it only if that owner is gone too."
+          />
+        )}
+
+        {!cascadeLoading && cascadeDetail?.controllerTeardown && (
+          <ControllerTeardownNotice teardown={cascadeDetail.controllerTeardown} force={forceDelete} />
         )}
 
         {!cascadeLoading && cascadeRootResolved === false && (
@@ -96,7 +141,45 @@ export function ForceDeleteConfirmDialog({
 
 const MAX_NAMES_PER_KIND = 8
 
-function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] }) {
+// How a managed resource opts out of its controller's teardown. A Helm
+// uninstall keeps resources by Helm's own annotation, not Flux's.
+function optOut(teardown: NonNullable<CascadeDetail['controllerTeardown']>): string | undefined {
+  if (teardown.action === 'uninstall') return 'helm.sh/resource-policy: keep'
+  if (teardown.controller === 'Argo CD') return 'argocd.argoproj.io/sync-options: Delete=false'
+  if (teardown.controller === 'Flux') return 'kustomize.toolkit.fluxcd.io/prune: disabled'
+  return undefined
+}
+
+function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<CascadeDetail['controllerTeardown']>; force: boolean }) {
+  const resources = teardown.resources ?? []
+  const what = teardown.action === 'uninstall' ? 'uninstall the Helm release' : 'delete the resources it manages'
+  if (force) {
+    return (
+      <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>
+          {teardown.terminating
+            ? `This is already being deleted, so ${teardown.controller} may already be working to ${what}. Force delete removes its finalizer but can't undo that.`
+            : `Force delete removes ${teardown.controller}'s finalizer, so ${teardown.controller} won't ${what}. They stay in the cluster.`}
+        </span>
+      </div>
+    )
+  }
+  const title = teardown.action === 'uninstall'
+    ? `${teardown.controller} will also uninstall the Helm release`
+    : `${teardown.controller} will also delete the resources it manages`
+  return (
+    <CascadeDependentsList
+      dependents={resources}
+      title={resources.length > 0 ? `${title} (${resources.length} shown)` : title}
+      summary={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show.${optOut(teardown) ? ` Resources marked ${optOut(teardown)} stay.` : ''}`}
+    />
+  )
+}
+
+// `note` explains the expanded list; `summary` is a caveat that must read
+// without expanding it.
+function CascadeDependentsList({ dependents, title, note, summary }: { dependents: CascadeDependent[]; title: string; note?: string; summary?: string }) {
   const [expanded, setExpanded] = useState(false)
   const { panelId, buttonProps } = useDisclosure(expanded)
 
@@ -119,10 +202,9 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
         className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-medium text-amber-400 hover:bg-amber-500/10 transition-colors"
       >
         <CollapseChevron open={expanded} inheritColor className="w-3.5 h-3.5" />
-        <span>
-          Will also delete {pluralize(dependents.length, 'dependent resource')}
-        </span>
+        <span>{title}</span>
       </button>
+      {summary && <p className="px-3 pb-2 text-xs text-theme-text-secondary">{summary}</p>}
 
       <Collapse open={expanded} id={panelId}>
         <div className="px-3 pb-2.5 space-y-1.5">
@@ -138,6 +220,7 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
               </div>
             </div>
           ))}
+          {note && <p className="text-xs text-theme-text-tertiary">{note}</p>}
         </div>
       </Collapse>
     </div>
