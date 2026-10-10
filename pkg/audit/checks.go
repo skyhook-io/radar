@@ -818,6 +818,16 @@ func checkPodSpecEfficiency(tr *evalTracker, kind, namespace, name string, spec 
 	// LimitRange defaults in the namespace are applied by admission — skip
 	// flagging missing values that would be filled in automatically.
 	defaults := containerDefaultsFromLimitRanges(lrs)
+	if pod := spec.Resources; pod != nil {
+		_, cpuLimit := pod.Limits[corev1.ResourceCPU]
+		_, memLimit := pod.Limits[corev1.ResourceMemory]
+		_, cpuReq := pod.Requests[corev1.ResourceCPU]
+		_, memReq := pod.Requests[corev1.ResourceMemory]
+		defaults.cpuLimit = defaults.cpuLimit || cpuLimit
+		defaults.memoryLimit = defaults.memoryLimit || memLimit
+		defaults.cpuRequest = defaults.cpuRequest || cpuReq || cpuLimit
+		defaults.memoryRequest = defaults.memoryRequest || memReq || memLimit
+	}
 
 	for _, c := range spec.Containers {
 		res := c.Resources
