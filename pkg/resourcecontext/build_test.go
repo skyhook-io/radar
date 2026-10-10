@@ -1868,6 +1868,7 @@ func TestBuild_Deployment_NoScaler_HasNoScaledBy(t *testing.T) {
 
 func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
 	deploy, topo, hpa := scaledByFixture(topology.KindScaledObject, "scaledobject/prod/api-scaler")
+	topo.Nodes[1].Data = map[string]any{"apiVersion": "keda.sh/v1alpha1"}
 	rc := Build(context.Background(), deploy, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
@@ -1888,8 +1889,8 @@ func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"scaledBy":[{"kind":"ScaledObject","namespace":"prod","name":"api-scaler"}]`) {
-		t.Errorf("KEDA scaledBy entry should serialize exactly as before: %s", b)
+	if !strings.Contains(string(b), `"scaledBy":[{"kind":"ScaledObject","group":"keda.sh","namespace":"prod","name":"api-scaler"}]`) {
+		t.Errorf("KEDA scaledBy entry should retain its observed API group: %s", b)
 	}
 }
 
@@ -1957,4 +1958,29 @@ func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
 	if rc.Execution != execution {
 		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
 	}
+}
+
+func TestBuildDependencyReferencesAreAuthorized(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1", "kind": "Certificate",
+		"metadata": map[string]any{"name": "tls", "namespace": "team"},
+	}}
+	rel := &topology.Relationships{
+		Dependencies: []topology.ResourceRef{{Kind: "Issuer", Group: "cert-manager.io", Namespace: "team", Name: "ca"}},
+		Dependents:   []topology.ResourceRef{{Kind: "CertificateRequest", Group: "cert-manager.io", Namespace: "team", Name: "request"}},
+	}
+	allowed := Build(context.Background(), obj, Options{Relationships: rel})
+	if len(allowed.Dependencies) != 1 || allowed.Dependencies[0].Group != "cert-manager.io" || len(allowed.Dependents) != 1 {
+		t.Fatalf("authorized dependency context = %+v", allowed)
+	}
+	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "cert-manager.io", kind: "Issuer", namespace: "team"}})
+	if len(denied.Dependencies) != 0 || len(denied.Dependents) != 1 {
+		t.Fatalf("denied dependency context = %+v", denied)
+	}
+	for _, omitted := range denied.Omitted {
+		if omitted.Field == "dependencies" && omitted.Reason == OmittedRBACDenied {
+			return
+		}
+	}
+	t.Fatalf("denied dependency did not disclose omission: %+v", denied.Omitted)
 }

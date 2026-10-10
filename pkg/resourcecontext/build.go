@@ -242,6 +242,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			toContextRefs(selected),
 			"selectedBy", omitted)
 
+		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
+			toContextRefs(rel.Dependencies), "dependencies", omitted)
+		rc.Dependents = filterRefs(ctx, opts.AccessChecker,
+			toContextRefs(rel.Dependents), "dependents", omitted)
+
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
 

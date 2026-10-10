@@ -61,19 +61,8 @@ export interface CheckResourceRef {
 /** Built-in (Radar-detected) finding source. The only V1 source. */
 export const SOURCE_RADAR_BUILTIN = 'radar_builtin';
 
-/**
- * resourceKey mirrors Go `audit.ResourceKey(group, kind, namespace, name)`:
- * `group|Kind|namespace|name`. Group first because group and namespace can each
- * independently be empty; `|` is delimiter-safe (K8s API groups follow
- * DNS-subdomain rules and can't contain it).
- */
-export function resourceKey(group: string, kind: string, namespace: string, name: string): string {
-  return `${group}|${kind}|${namespace}|${name}`;
-}
-
-export function resourceRefKey(ref: CheckResourceRef): string {
-  return resourceKey(ref.group, ref.kind, ref.namespace, ref.name);
-}
+// Preserve the Checks import path while sharing exact resource identity.
+export { resourceKey, resourceRefKey } from '../../utils/resource-refs';
 
 /**
  * checkFindingKey is the canonical built-in finding key:

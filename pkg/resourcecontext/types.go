@@ -43,6 +43,8 @@ type ResourceContext struct {
 	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
 	Uses            *UsesBlock         `json:"uses,omitempty"`
 	RunsOn          *ContextRef        `json:"runsOn,omitempty"`
+	Dependencies    []ContextRef       `json:"dependencies,omitempty"`
+	Dependents      []ContextRef       `json:"dependents,omitempty"`
 	ScaledBy        []ScalerRef        `json:"scaledBy,omitempty"`
 	StatusSummary   *StatusSummary     `json:"statusSummary,omitempty"`
 	Scheduling      *SchedulingSummary `json:"scheduling,omitempty"`

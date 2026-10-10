@@ -6128,7 +6128,7 @@ export function ResourcesView({
           )}
 
           {/* Column picker */}
-          <div className="relative" ref={columnPickerRef}>
+          <div className="relative flex" ref={columnPickerRef}>
             <Tooltip content="Configure columns">
             <button
               onClick={() => setShowColumnPicker(prev => !prev)}

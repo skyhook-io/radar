@@ -1,3 +1,4 @@
+import { dedupeResourceRefs } from '../../utils/resource-refs'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
 import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
@@ -3934,16 +3935,6 @@ function summarizeServingExposure(
   if (hasExternalService || externalLabels.length > 0) return { label: 'External service configured', badge: 'External', severity: 'info' }
   if (serviceCount > 0) return { label: 'Internal service only', badge: 'Internal', severity: 'neutral' }
   return { label: 'No serving path detected', badge: 'None', severity: 'neutral' }
-}
-
-function dedupeResourceRefs(refs: ResourceRef[]): ResourceRef[] {
-  const seen = new Set<string>()
-  return refs.filter((ref) => {
-    const key = resourceRefId(ref)
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
 }
 
 function resourceRefId(ref: ResourceRef): string {
