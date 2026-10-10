@@ -524,7 +524,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					continue
 				}
 				deployRef := refForNodeID(edge.Source)
-				if deployRef != nil && strings.EqualFold(deployRef.Kind, "Deployment") && deployRef.Group == "apps" {
+				if deployRef != nil && strings.EqualFold(deployRef.Kind, "Deployment") && isAppsGroup(deployRef.Group) {
 					rel.Deployment = deployRef
 					break
 				}
