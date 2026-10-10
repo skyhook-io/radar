@@ -245,7 +245,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 58500
+		maxCatalogBytes         = 60500
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -396,6 +396,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"manage_gitops":   true,
 		"apply_resource":  true,
 		"patch_resource":  true,
+		"delete_resource": true,
 		"manage_node":     true,
 	}
 
@@ -447,7 +448,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 // writeToolNames is the mutating tool set the read-only mount must exclude.
 var writeToolNames = []string{
 	"manage_workload", "manage_rollout", "manage_cronjob", "manage_gitops",
-	"apply_resource", "patch_resource", "manage_node",
+	"apply_resource", "patch_resource", "delete_resource", "manage_node",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the

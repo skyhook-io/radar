@@ -68,8 +68,8 @@ func DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
 
 // DeleteResourceWithClient deletes a Kubernetes resource using the provided client.
 // If client is nil, uses the shared dynamic client.
-func DeleteResourceWithClient(ctx context.Context, opts DeleteResourceOptions, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(client).DeleteResource(ctx, opts)
+func DeleteResourceWithClient(ctx context.Context, opts DeleteResourceOptions, client dynamic.Interface) (*k8score.DeleteResourceResult, error) {
+	return getWorkloadManagerWithClient(client).DeleteResourceWithResult(ctx, opts)
 }
 
 // ApplyResource creates or updates a Kubernetes resource from YAML.
