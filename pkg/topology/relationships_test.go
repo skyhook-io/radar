@@ -350,7 +350,7 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 			{ID: "sealedsecret/demo/web", Kind: KindSealedSecret, Name: "web"},
 			{ID: "configmap/demo/web", Kind: KindConfigMap, Name: "web"},
 			{ID: "destinationrule/demo/web", Kind: KindDestinationRule, Name: "web"},
-			{ID: "podmonitor/demo/web", Kind: KindPodMonitor, Name: "web"},
+			{ID: "podmonitor/demo/web", Kind: KindPodMonitor, Name: "web", Data: map[string]any{"apiVersion": "monitoring.coreos.com/v1"}},
 		},
 		Edges: []Edge{
 			{ID: "sa-to-web", Source: "serviceaccount/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
