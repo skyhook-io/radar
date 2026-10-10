@@ -7,7 +7,7 @@ import (
 )
 
 func TestCAPIClusterClassReferenceNamespace(t *testing.T) {
-	for _, version := range []string{"v1beta1", "v1beta2"} {
+	for _, version := range []string{"v1alpha4", "v1beta1", "v1beta2"} {
 		for _, namespace := range []string{"", "classes", "missing"} {
 			t.Run(version+"/"+namespace, func(t *testing.T) {
 				clGVR := schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: version, Resource: "clusters"}
@@ -15,7 +15,7 @@ func TestCAPIClusterClassReferenceNamespace(t *testing.T) {
 				ccGVR.Resource = "clusterclasses"
 				cl := genericIdentityObject(clGVR, "Cluster", "app", "cluster")
 				top := map[string]any{}
-				if version == "v1beta1" {
+				if version != "v1beta2" {
 					top["class"] = "shared"
 					top["classNamespace"] = namespace
 				} else {

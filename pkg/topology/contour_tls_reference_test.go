@@ -58,3 +58,25 @@ func TestContourDelegatedTLSUsesSecretNamespace(t *testing.T) {
 		})
 	}
 }
+
+func TestContourMalformedTLSNameKeepsTheProxyRoutes(t *testing.T) {
+	hpGVR := schema.GroupVersionResource{Group: "projectcontour.io", Version: "v1", Resource: "httpproxies"}
+	hp := genericIdentityObject(hpGVR, "HTTPProxy", "app", "tcp")
+	hp.Object["spec"] = map[string]any{
+		"virtualhost": map[string]any{"fqdn": "db.example.com", "tls": map[string]any{"secretName": "a/b/c"}},
+		"tcpproxy":    map[string]any{"services": []any{map[string]any{"name": "db", "port": int64(5432)}}},
+	}
+	d := &genericIdentityDynamic{watched: []schema.GroupVersionResource{hpGVR}, kinds: map[schema.GroupVersionResource]string{hpGVR: "HTTPProxy"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{hpGVR: {hp}}, listCalls: map[schema.GroupVersionResource]int{}}
+	provider := &mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "db"}}}}
+	topo, err := NewBuilder(provider).WithDynamic(d).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range topo.Edges {
+		found = found || e.Source == "httpproxy/app/tcp" && e.Target == "service/app/db"
+	}
+	if !found {
+		t.Error("an unusable TLS secret name dropped the proxy's tcpproxy backend")
+	}
+}

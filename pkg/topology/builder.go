@@ -1354,14 +1354,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !ok {
 					continue
 				}
-				var className, classNS string
-				switch _, version := resourceid.SplitAPIVersion(cl.GetAPIVersion()); version {
-				case "v1beta1":
+				// v1beta2 names the class in topology.classRef; earlier versions
+				// in topology.class and topology.classNamespace.
+				className, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "name")
+				classNS, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "namespace")
+				if className == "" {
 					className, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "class")
 					classNS, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classNamespace")
-				case "v1beta2":
-					className, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "name")
-					classNS, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "namespace")
 				}
 				if className == "" {
 					continue
@@ -5731,14 +5730,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// HTTPProxy → Secret edges (via spec.virtualhost.tls.secretName)
 		tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "tls", "secretName")
-		if tlsSecretName != "" {
-			secretNS := resNs
-			if namespace, name, qualified := strings.Cut(tlsSecretName, "/"); qualified {
-				secretNS, tlsSecretName = namespace, name
-			}
-			if secretNS == "" || tlsSecretName == "" || strings.Contains(tlsSecretName, "/") {
-				continue
-			}
+		// A delegated secret is named namespace/name.
+		secretNS := resNs
+		if namespace, name, qualified := strings.Cut(tlsSecretName, "/"); qualified {
+			secretNS, tlsSecretName = namespace, name
+		}
+		if secretNS != "" && tlsSecretName != "" && !strings.Contains(tlsSecretName, "/") {
 			secretNodeID := fmt.Sprintf("secret/%s/%s", secretNS, tlsSecretName)
 			// Create stub Secret node if it doesn't already exist (same pattern as Traefik)
 			if !existingSecretNodes[secretNodeID] {
@@ -8072,6 +8069,10 @@ func monitorNodeData(monitor *unstructured.Unstructured, endpointField string) m
 	}
 }
 
+// matchesHelmRelease reports whether a resource belongs to a Flux HelmRelease.
+// Flux's own labels are authoritative when present, so a resource another
+// release or Kustomization labelled can't fall through to the generic
+// app.kubernetes.io/instance match.
 func matchesHelmRelease(labels map[string]string, hrName, hrNamespace, resourceNamespace string) bool {
 	fluxName, hasName := labels[fluxHelmNameLabel]
 	fluxNS, hasNS := labels[fluxHelmNSLabel]
