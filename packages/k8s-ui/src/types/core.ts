@@ -821,6 +821,7 @@ export interface HelmRevision {
   appVersion: string
   description: string
   updated: string // ISO date string
+  deleted?: string
 }
 
 export type HelmOperationKind = 'release_failed' | 'upgrade_failed' | 'upgrade_rolled_back' | 'rollback' | 'pending'

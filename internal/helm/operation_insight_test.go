@@ -334,3 +334,13 @@ func TestBuildOperationInsightIgnoresUnknownHealthyResources(t *testing.T) {
 		t.Fatalf("buildOperationInsight = %#v, want nil without actionable insight", got)
 	}
 }
+
+func TestBuildOperationInsightUninstallHasNoSuggestedCompare(t *testing.T) {
+	detail := &HelmReleaseDetail{
+		LastOperation: &HelmOperation{Kind: helmhistory.KindPending, Status: helmhistory.StatusStuck, Revision: 2, PendingStatus: "uninstalling"},
+		History:       []HelmRevision{{Revision: 2, Status: "uninstalling"}, {Revision: 1, Status: "superseded"}},
+	}
+	if got := buildOperationInsight(detail); got != nil {
+		t.Fatalf("insight = %#v, want nil without actionable resources or comparison", got)
+	}
+}

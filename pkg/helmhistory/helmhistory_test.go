@@ -229,3 +229,36 @@ func rev(version int, status, description string, updated time.Time) Revision {
 		Updated:     updated,
 	}
 }
+
+func TestAnalyzeUninstalling(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name      string
+		status    string
+		started   time.Time
+		threshold time.Duration
+		wantStuck bool
+	}{
+		{name: "aged", status: "uninstalling", started: now.Add(-18 * time.Minute), wantStuck: true},
+		{name: "threshold boundary", status: "uninstalling", started: now.Add(-10 * time.Minute), wantStuck: true},
+		{name: "recent", status: "uninstalling", started: now.Add(-2 * time.Minute)},
+		{name: "missing timestamp", status: "uninstalling"},
+		{name: "future timestamp", status: "uninstalling", started: now.Add(time.Minute)},
+		{name: "completed", status: "uninstalled", started: now.Add(-time.Hour)},
+		{name: "custom threshold", status: "uninstalling", started: now.Add(-18 * time.Minute), threshold: 20 * time.Minute},
+		{name: "padded mixed case", status: " Uninstalling ", started: now.Add(-18 * time.Minute), wantStuck: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Analyze("cart", 2, []Revision{{Revision: 2, Status: tt.status, Description: "Deletion in progress", Updated: now.Add(-90 * 24 * time.Hour), Deleted: tt.started}}, Options{Now: now, PendingStuckAfter: tt.threshold})
+			if (got.LastOperation != nil) != tt.wantStuck {
+				t.Fatalf("LastOperation = %#v, wantStuck = %v", got.LastOperation, tt.wantStuck)
+			}
+			if tt.wantStuck {
+				op := got.LastOperation
+				if op.Kind != KindPending || op.Status != StatusStuck || op.PendingStatus != "uninstalling" || !op.Updated.Equal(tt.started) {
+					t.Fatalf("uninstall operation = %#v", op)
+				}
+			}
+		})
+	}
+}
