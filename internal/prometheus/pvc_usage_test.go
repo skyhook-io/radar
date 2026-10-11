@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/prom/promtest"
 )
 
 func TestPVCUsageAvailability(t *testing.T) {
@@ -323,7 +325,7 @@ func TestPVCUsageRefusesSplitMetricPartitions(t *testing.T) {
 		value := "100"
 		if strings.HasPrefix(query, "max(count by (") {
 			value = "1"
-			if strings.Contains(query, `__name__=~"kubelet_volume_stats_(capacity|used)_bytes"`) {
+			if strings.Contains(query, "kubelet_volume_stats_capacity_bytes") && strings.Contains(query, "kubelet_volume_stats_used_bytes") {
 				value = "2"
 			}
 		} else if strings.Contains(query, "used_bytes") {
@@ -342,4 +344,53 @@ func TestPVCUsageRefusesSplitMetricPartitions(t *testing.T) {
 			t.Fatalf("split metric scope accepted over %s: %v", window, err)
 		}
 	}
+}
+
+func TestPVCScopePromQL(t *testing.T) {
+	image := os.Getenv("RADAR_TEST_PROMTOOL_IMAGE")
+	if image == "" {
+		t.Skip("set RADAR_TEST_PROMTOOL_IMAGE=prom/prometheus:v3.5.0 to evaluate queries with Docker")
+	}
+	input := []map[string]string{}
+	tests := []map[string]any{}
+	for _, tc := range []struct {
+		claim            string
+		split, duplicate bool
+		identities       int
+	}{
+		{claim: "same", identities: 1},
+		{claim: "split", split: true, identities: 2},
+		{claim: "duplicate", duplicate: true, identities: 1},
+	} {
+		for _, metric := range []string{"kubelet_volume_stats_capacity_bytes", "kubelet_volume_stats_used_bytes"} {
+			cluster := "east"
+			if tc.split && metric == "kubelet_volume_stats_used_bytes" {
+				cluster = "west"
+			}
+			input = append(input, map[string]string{
+				"series": fmt.Sprintf(`%s{namespace="db",persistentvolumeclaim=%q,cluster=%q}`, metric, tc.claim, cluster),
+				"values": "100+0x10",
+			})
+			if tc.duplicate {
+				input = append(input, map[string]string{
+					"series": fmt.Sprintf(`%s{namespace="db",persistentvolumeclaim=%q}`, metric, tc.claim),
+					"values": "100+0x10",
+				})
+			}
+		}
+		for _, window := range []time.Duration{0, time.Hour} {
+			probe := pvcScopeProbe("db", []string{tc.claim}, window)
+			q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
+				tests = append(tests, map[string]any{
+					"expr": query, "eval_time": "10m",
+					"exp_samples": []map[string]any{{"labels": "{}", "value": tc.identities}},
+				})
+				return &prom.QueryResult{}, nil
+			}}
+			if _, _, err := decideScope(context.Background(), q, probe, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	promtest.Run(t, image, input, tests)
 }

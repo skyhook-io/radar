@@ -56,7 +56,8 @@ func withScope(selector, matchers string) string {
 // is collected over (an instant check would miss one that stopped reporting
 // minutes ago but still fills the chart).
 type scopeProbe struct {
-	metric string
+	metric            string
+	additionalMetrics []string
 	// key is the label one Kubernetes object's series share (pod, claim).
 	key       string
 	selectors []string
@@ -64,10 +65,17 @@ type scopeProbe struct {
 }
 
 func (p scopeProbe) over(sel string) string {
-	if p.window <= 0 {
-		return p.metric + "{" + sel + "}"
+	metrics := append([]string{p.metric}, p.additionalMetrics...)
+	probes := make([]string, len(metrics))
+	for i, metric := range metrics {
+		probes[i] = metric + "{" + sel + "}"
+		if p.window > 0 {
+			probes[i] = "count_over_time(" + probes[i] + "[" + p.window.String() + "])"
+		}
 	}
-	return "count_over_time(" + p.metric + "{" + sel + "}[" + p.window.String() + "])"
+	// Range functions drop metric names, so evaluate each metric before unioning
+	// to avoid identical labelsets in a single range-function result.
+	return strings.Join(probes, " or ")
 }
 
 // ResolvePVCScope decides the cluster-identity matchers for the named claims'
@@ -87,11 +95,10 @@ func (iso SeriesIsolation) forClaims() SeriesIsolation {
 }
 
 func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
-	selectors := ClaimSelectors(namespace, claims)
-	for i, selector := range selectors {
-		selectors[i] = withScope(selector, `__name__=~"kubelet_volume_stats_(capacity|used)_bytes"`)
+	return scopeProbe{
+		metric: "kubelet_volume_stats_capacity_bytes", additionalMetrics: []string{"kubelet_volume_stats_used_bytes"},
+		key: "persistentvolumeclaim", selectors: ClaimSelectors(namespace, claims), window: window,
 	}
-	return scopeProbe{key: "persistentvolumeclaim", selectors: selectors, window: window}
 }
 
 // ClaimSelectors selects the named claims of one namespace, in batches that
