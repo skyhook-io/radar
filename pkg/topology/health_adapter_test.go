@@ -163,3 +163,18 @@ func TestExtractNodeStatusCordoned(t *testing.T) {
 		t.Errorf("not-ready node = %q, want unhealthy", got)
 	}
 }
+
+func TestNodeRemovalTopologyHealth(t *testing.T) {
+	now := time.Now().UTC()
+	node := corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: now.Add(-time.Minute)}},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: metav1.NewTime(now.Add(-time.Second))}}},
+	}
+	if got := extractNodeStatus(node); got != StatusNeutral {
+		t.Fatalf("expected normal removal neutral, got %s", got)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Hour))
+	if got := extractNodeStatus(node); got != StatusUnhealthy {
+		t.Fatalf("expected preexisting failure unhealthy, got %s", got)
+	}
+}

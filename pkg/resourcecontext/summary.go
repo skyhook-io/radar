@@ -111,6 +111,8 @@ func deriveHealth(obj runtime.Object) string {
 	}
 	now := time.Now()
 	switch o := obj.(type) {
+	case *corev1.Node:
+		return levelToString(health.NodeLifecycle(o, now).Level)
 	case *corev1.Pod:
 		// PodDisplayLevel (not raw Pod) so an unschedulable / stuck-terminating pod
 		// reads degraded in AI/search context too, consistent with topology + timeline.

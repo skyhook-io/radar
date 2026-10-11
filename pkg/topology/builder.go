@@ -8527,21 +8527,7 @@ func extractKarpenterNodeClaimStatus(nc unstructured.Unstructured) HealthStatus 
 
 // extractNodeStatus reads the Ready condition from a Kubernetes Node
 func extractNodeStatus(node corev1.Node) HealthStatus {
-	for _, cond := range node.Status.Conditions {
-		if cond.Type == corev1.NodeReady {
-			if cond.Status != corev1.ConditionTrue {
-				return StatusUnhealthy
-			}
-			// Ready but cordoned = lost scheduling capacity — degraded (amber),
-			// matching the node table badge + drawer + Cordoned audit, so the same
-			// node doesn't read green here while it's flagged elsewhere.
-			if node.Spec.Unschedulable {
-				return StatusDegraded
-			}
-			return StatusHealthy
-		}
-	}
-	return StatusUnknown
+	return healthLevelToStatus(health.NodeLifecycle(&node, time.Now()).Level)
 }
 
 // extractKedaScaledObjectStatus reads conditions and annotations from a KEDA ScaledObject

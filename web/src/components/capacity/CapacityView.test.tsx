@@ -24,7 +24,7 @@ import type {
 } from "@skyhook-io/k8s-ui";
 import { CapacityView } from "./CapacityView";
 import { updateDemandSearchParam } from "./CapacityDemand";
-import { integrationBlock } from "./shared";
+import { integrationBlock, NodeReadyBadge } from "./shared";
 import { ApiError } from "../../api/client";
 import { RadarFeatureUnsupportedError } from "../../api/radarFeatures";
 
@@ -2313,5 +2313,35 @@ describe("integrationBlock version skew", () => {
     );
     expect(html).toContain("Capacity unavailable");
     expect(html).not.toContain("needs a newer Radar");
+  });
+});
+
+describe("Node lifecycle in Capacity", () => {
+  it("uses backend lifecycle while preserving raw readiness", () => {
+    const lifecycle = { label: "Removing (Karpenter)", level: "neutral" as const, removing: true, readinessFailed: false, delayed: false };
+    for (const ready of [true, false, undefined]) {
+      const html = renderToString(<NodeReadyBadge ready={ready} cordoned={false} lifecycle={lifecycle} />);
+      expect(html).toContain("Removing (Karpenter)");
+      expect(html).not.toContain("NotReady");
+      expect(html).not.toContain("text-red-");
+    }
+    const failed = renderToString(<NodeReadyBadge ready={false} cordoned={false} lifecycle={{ ...lifecycle, label: "Removing (Karpenter) · NotReady", level: "unhealthy", readinessFailed: true }} />);
+    expect(failed).toContain("NotReady");
+    expect(failed).toContain("text-red-");
+    const raw = renderToString(<NodeReadyBadge ready={false} cordoned={false} />);
+    expect(raw).toContain("NotReady (condition)");
+    expect(raw).toContain("text-red-");
+  });
+  it("renders exclusive operational counts, not overlapping raw counts", () => {
+    const html = renderCapacity("/capacity/pools/default", (client) => client.setQueryData(
+      ["capacity", "pool", "default"], poolDetailResponse({ ...cleanPoolDetail, nodes: {
+        total: 6, ready: 4, notReady: 2, cordoned: 1, terminating: 2,
+        operational: { total: 6, ready: 2, notReady: 1, cordoned: 1, removing: 2, removingUnhealthy: 1 },
+      } }),
+    ));
+    expect(html).toMatch(/>2<\/div><div[^>]*>Ready<\/div>/);
+    expect(html).toMatch(/>1<\/div><div[^>]*>Not ready<\/div>/);
+    expect(html).toMatch(/>2<\/div><div[^>]*>Removing<\/div>/);
+    expect(html.replace(/<!-- -->/g, "")).toContain("1 removing node has critical pressure or prolonged removal.");
   });
 });
