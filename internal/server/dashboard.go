@@ -364,8 +364,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// callers iterateNamespaces is [""], so this collapses to a single
 	// cluster-wide call.
 	t := time.Now()
-	// Problems follow the issues' read rules: a Secret's own problem and one
-	// drawn from Secrets need Secret access.
+	// Problems follow the issues' read rules: a cluster-scoped problem needs
+	// list on its kind, and a Secret's own problem and one drawn from Secrets
+	// need Secret access.
+	canReadClusterScoped := s.issueClusterScopedAccess(r)
 	canReadSubject, canReadEvidence := s.issueSubjectAccess(r), s.issueEvidenceAccess(r)
 	for _, ns := range iterateNamespaces {
 		h, probs := s.getDashboardHealth(cache, ns)
@@ -374,6 +376,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		resp.Health.Error += h.Error
 		for _, p := range probs {
 			if p.Kind == "Node" && !canReadNodes {
+				continue
+			}
+			if p.Namespace == "" && !canReadClusterScoped(p.Kind, p.Group) {
 				continue
 			}
 			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) ||

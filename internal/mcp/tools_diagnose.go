@@ -1097,6 +1097,11 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 		Dynamic:   k8s.GetDynamicResourceCache(),
 		Discovery: k8s.GetResourceDiscovery(),
 		Issues:    issues.NewCacheProvider(),
+		IssueAccess: trace.IssueAccess{
+			CanReadClusterScoped: issueClusterScopedAccess(ctx),
+			CanReadSubject:       issueSubjectAccess(ctx),
+			CanReadEvidence:      issueEvidenceAccess(ctx),
+		},
 		// Probes call services/proxy + pods/proxy on this client. Use the
 		// per-request impersonated identity (or the SA when auth is disabled)
 		// so the apiserver enforces the caller's RBAC on the proxy verbs.

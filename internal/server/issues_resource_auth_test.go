@@ -362,3 +362,44 @@ func TestSecretDerivedFindingsNeedSecretAccess(t *testing.T) {
 		t.Fatal("a caller with Secret access lost the missing-TLS finding")
 	}
 }
+
+// A cluster-scoped problem needs list on its kind, on the dashboard as on
+// Issues, even for a caller who can read Pods everywhere.
+func TestDashboardClusterScopedProblemsNeedListOnTheKind(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	client := fake.NewClientset(&rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "dangling"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "gone"},
+		Subjects:   []rbacv1.Subject{{Kind: "User", Name: "someone"}},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "clusterrolebindings", "", false)
+	env.srv.permCache.Set("pod-reader", nil, perms)
+
+	dangling := func() bool {
+		resp := env.authGet(t, "/api/dashboard", "pod-reader", "")
+		defer resp.Body.Close()
+		var body DashboardResponse
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode dashboard %d: %v", resp.StatusCode, err)
+		}
+		for _, p := range body.Problems {
+			if p.Kind == "ClusterRoleBinding" && p.Name == "dangling" {
+				return true
+			}
+		}
+		return false
+	}
+	if dangling() {
+		t.Fatal("a caller who can't list ClusterRoleBindings saw one's problem")
+	}
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "clusterrolebindings", "", true)
+	if !dangling() {
+		t.Fatal("a caller who can list ClusterRoleBindings lost the problem")
+	}
+}

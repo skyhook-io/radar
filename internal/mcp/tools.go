@@ -2651,11 +2651,16 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// Without this, the cap drops critical missing-refs in favour of
 	// medium-severity workload problems that happened to be appended
 	// earlier — the agent gets a non-representative subset.
-	// Problems follow the issues' read rules: a Secret's own problem and one
-	// drawn from Secrets need Secret access.
+	// Problems follow the issues' read rules: a cluster-scoped problem needs
+	// list on its kind, and a Secret's own problem and one drawn from Secrets
+	// need Secret access.
+	canReadClusterScoped := issueClusterScopedAccess(ctx)
 	canReadSubject, canReadEvidence := issueSubjectAccess(ctx), issueEvidenceAccess(ctx)
 	readable := allProblems[:0]
 	for _, p := range allProblems {
+		if p.Namespace == "" && !canReadClusterScoped(p.Kind, p.Group) {
+			continue
+		}
 		if p.Namespace != "" && !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
 			continue
 		}

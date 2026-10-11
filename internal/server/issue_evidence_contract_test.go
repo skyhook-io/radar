@@ -11,7 +11,7 @@ import (
 )
 
 func TestUserIssueProjectionsSupplyAuthorizers(t *testing.T) {
-	for _, dir := range []string{".", "../mcp"} {
+	for _, dir := range []string{".", "../mcp", "../trace"} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)
