@@ -698,15 +698,19 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		return false, true
 	}
 
+	// Split "pods/exec" as k8score.CanI does: webhook authorizers only
+	// recognize a subresource in its own field.
+	baseResource, subresource, _ := strings.Cut(resource, "/")
 	review := &authv1.SubjectAccessReview{
 		Spec: authv1.SubjectAccessReviewSpec{
 			User:   username,
 			Groups: groups,
 			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace: namespace,
-				Group:     group,
-				Verb:      verb,
-				Resource:  resource,
+				Namespace:   namespace,
+				Group:       group,
+				Verb:        verb,
+				Resource:    baseResource,
+				Subresource: subresource,
 			},
 		},
 	}

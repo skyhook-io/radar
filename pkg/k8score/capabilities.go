@@ -3,6 +3,7 @@ package k8score
 import (
 	"context"
 	"log"
+	"strings"
 
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,13 +25,20 @@ func CanI(ctx context.Context, client kubernetes.Interface, namespace, group, re
 		return false, true
 	}
 
+	// "pods/exec" names a subresource. RBAC matches either spelling, but webhook
+	// authorizers (e.g. GKE IAM) only recognize the subresource in its own field.
+	subresource := ""
+	if i := strings.IndexByte(resource, '/'); i >= 0 {
+		resource, subresource = resource[:i], resource[i+1:]
+	}
 	review := &authv1.SelfSubjectAccessReview{
 		Spec: authv1.SelfSubjectAccessReviewSpec{
 			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace: namespace, // Empty = cluster-wide
-				Group:     group,     // API group (empty = core)
-				Verb:      verb,
-				Resource:  resource,
+				Namespace:   namespace, // Empty = cluster-wide
+				Group:       group,     // API group (empty = core)
+				Verb:        verb,
+				Resource:    resource,
+				Subresource: subresource,
 			},
 		},
 	}
