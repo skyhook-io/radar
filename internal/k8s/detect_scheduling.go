@@ -12,6 +12,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
+	"github.com/skyhook-io/radar/pkg/gkedisk"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/scheduling"
@@ -1383,6 +1385,12 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 	}
 	latest := map[string]pbCandidate{}
 	expiredLatest := map[string]pbCandidate{}
+	// The newest attach failure per pod and volume that names a cause. Kept
+	// across the recency window: once the CSI attacher backs off, the latest
+	// event is a "due to backoff condition" echo and the real error is only in
+	// an older one. Backoff is tracked per disk, so an echo for one volume says
+	// nothing about another's error.
+	informativeAttach := map[string]*corev1.Event{}
 	var order []string
 	for _, e := range events {
 		if e.InvolvedObject.Kind != "Pod" {
@@ -1393,8 +1401,22 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 			continue
 		}
 		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
-		if _, isStuck := stuck[key]; !isStuck {
+		pod, isStuck := stuck[key]
+		if !isStuck {
 			continue
+		}
+		// A StatefulSet pod is recreated under the same name, so an event may
+		// describe a predecessor that failed on another node.
+		if uid := e.InvolvedObject.UID; uid != "" && pod.UID != "" && uid != pod.UID {
+			continue
+		}
+		if reason == "VolumeAttach" && !gkedisk.IsAttachBackoffEcho(e.Message) {
+			if vol := attachEventVolume(e.Message); vol != "" {
+				volKey := key + "\x00" + vol
+				if cur := informativeAttach[volKey]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
+					informativeAttach[volKey] = e
+				}
+			}
 		}
 		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
 			if cur, exists := expiredLatest[key]; !exists || t.After(eventLastTime(cur.ev)) {
@@ -1419,13 +1441,26 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 		ageDur := now.Sub(pod.CreationTimestamp.Time)
 		severity := postBindProblemSeverity(c.reason, ageDur)
 		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
+		eventMessage, onset := c.ev.Message, eventFirstTime(c.ev)
+		var cause, action string
+		if c.reason == "VolumeAttach" {
+			if inf := informativeAttach[key+"\x00"+attachEventVolume(eventMessage)]; inf != nil && gkedisk.IsAttachBackoffEcho(eventMessage) {
+				eventMessage = inf.Message
+				if t := eventFirstTime(inf); !t.IsZero() && (onset.IsZero() || t.Before(onset)) {
+					onset = t
+				}
+			}
+			cause, action = attachFailureDiagnosis(cache, pod, eventMessage)
+		}
 		detection := Detection{
 			Kind:              "Pod",
 			Namespace:         pod.Namespace,
 			Name:              pod.Name,
 			Severity:          severity,
 			Reason:            c.reason,
-			Message:           postBindEventMessage(pod, c.ev.Message),
+			Message:           postBindEventMessage(pod, eventMessage),
+			Cause:             cause,
+			Action:            action,
 			Age:               timeutil.FormatAgeShort(ageDur),
 			AgeSeconds:        int64(ageDur.Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
@@ -1433,7 +1468,7 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 			OwnerKind:         ownerKind,
 			OwnerName:         ownerName,
 		}
-		setDetectionOnset(&detection, now, eventFirstTime(c.ev))
+		setDetectionOnset(&detection, now, onset)
 		problems = append(problems, detection)
 	}
 
@@ -1547,6 +1582,88 @@ func postBindEventMessage(pod *corev1.Pod, eventMessage string) string {
 		msg += ": " + eventMessage
 	}
 	return msg
+}
+
+var attachEventVolumeRE = regexp.MustCompile(`AttachVolume\.Attach failed for volume "([^"]+)"`)
+
+// attachEventVolume returns the volume an attach-failure event names, or ""
+// when the message doesn't follow the attach-detach controller's format.
+func attachEventVolume(message string) string {
+	if m := attachEventVolumeRE.FindStringSubmatch(message); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// attachFailureDiagnosis explains an attach failure the cloud rejected
+// because the node's machine type can't use the volume's disk type. The
+// Compute Engine error says so directly; when only backoff echoes remain,
+// the same answer is derived from the node's machine type and the disk types
+// of the pod's GCE volumes.
+func attachFailureDiagnosis(cache *ResourceCache, pod *corev1.Pod, eventMessage string) (cause, action string) {
+	if diskType, machineType, ok := gkedisk.ParseIncompatibleAttach(eventMessage); ok {
+		return gkedisk.IncompatibilityCause(diskType, machineType), gkedisk.IncompatibilityAction(diskType)
+	}
+	if !gkedisk.IsAttachBackoffEcho(eventMessage) {
+		return "", ""
+	}
+	machineType := nodeInstanceType(cache, pod.Spec.NodeName)
+	if !gkedisk.HyperdiskOnly(machineType) {
+		return "", ""
+	}
+	for _, diskType := range podGCEDiskTypes(cache, pod) {
+		if gkedisk.IsPersistentDisk(diskType) {
+			return gkedisk.IncompatibilityCause(diskType, machineType), gkedisk.IncompatibilityAction(diskType)
+		}
+	}
+	return "", ""
+}
+
+func nodeInstanceType(cache *ResourceCache, nodeName string) string {
+	if cache == nil || nodeName == "" || cache.Nodes() == nil {
+		return ""
+	}
+	node, err := cache.Nodes().Get(nodeName)
+	if err != nil || node == nil {
+		return ""
+	}
+	return node.Labels[gkedisk.InstanceTypeLabel]
+}
+
+// podGCEDiskTypes returns the Compute Engine disk type of each bound PVC the
+// pod mounts, skipping volumes that aren't GCE disks or can't be resolved.
+func podGCEDiskTypes(cache *ResourceCache, pod *corev1.Pod) []string {
+	if cache == nil || pod == nil || cache.PersistentVolumeClaims() == nil || cache.PersistentVolumes() == nil {
+		return nil
+	}
+	storageClass := func(name string) *storagev1.StorageClass {
+		if cache.StorageClasses() == nil {
+			return nil
+		}
+		sc, err := cache.StorageClasses().Get(name)
+		if err != nil {
+			return nil
+		}
+		return sc
+	}
+	var out []string
+	for _, vol := range pod.Spec.Volumes {
+		if vol.PersistentVolumeClaim == nil {
+			continue
+		}
+		pvc, err := cache.PersistentVolumeClaims().PersistentVolumeClaims(pod.Namespace).Get(vol.PersistentVolumeClaim.ClaimName)
+		if err != nil || pvc.Spec.VolumeName == "" {
+			continue
+		}
+		pv, err := cache.PersistentVolumes().Get(pvc.Spec.VolumeName)
+		if err != nil {
+			continue
+		}
+		if diskType, ok := gkedisk.DiskType(pv, storageClass); ok {
+			out = append(out, diskType)
+		}
+	}
+	return out
 }
 
 func postBindFallbackMessage(pod *corev1.Pod, age time.Duration) string {

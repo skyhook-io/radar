@@ -87,6 +87,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// CloudNativePG clusters + their backup schedules for the declarative-backup
 	// posture check. Nil inventory (CNPG absent / RBAC denied) → check no-ops.
 	input.CNPGClusters, input.CNPGScheduledBackups, input.CNPGScheduledBackupsAuthoritative = listCNPGDynamic(namespaces)
+	input.PDPlacement = collectPDPlacement(cache, namespaces, scope)
 
 	results := bp.RunChecks(input)
 	if !hasCompleteSecretInput(cache, namespaces, scope) && !slices.Contains(results.MissingInputs, "secrets") {

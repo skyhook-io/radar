@@ -45,6 +45,12 @@ func resolveReadScope(namespaces, secretNamespaces []string, watched []schema.Gr
 			seen[gr] = true
 		}
 	}
+	for _, gvr := range pdPlacementClusterResources {
+		if gr := gvr.GroupResource(); !seen[gr] {
+			groups = append(groups, gr)
+			seen[gr] = true
+		}
+	}
 	grants := make([]bool, len(groups))
 	var checks errgroup.Group
 	checks.SetLimit(16)

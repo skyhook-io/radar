@@ -35,6 +35,7 @@ var (
 	refDisruptions     = Reference{Label: "K8s: Pod Disruption Budgets", URL: "https://kubernetes.io/docs/concepts/workloads/pods/disruptions/"}
 	refTopologySpread  = Reference{Label: "K8s: Topology Spread Constraints", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/"}
 	refAffinity        = Reference{Label: "K8s: Affinity and Anti-affinity", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity"}
+	refGKEDiskTypes    = Reference{Label: "Compute Engine: Machine series disk support", URL: "https://cloud.google.com/compute/docs/disks/persistent-disks"}
 	refSAToken         = Reference{Label: "K8s: Configure Service Accounts for Pods", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/"}
 	refSecrets         = Reference{Label: "K8s: Secrets", URL: "https://kubernetes.io/docs/concepts/configuration/secret/"}
 	refConfigMaps      = Reference{Label: "K8s: ConfigMaps", URL: "https://kubernetes.io/docs/concepts/configuration/configmap/"}
@@ -235,6 +236,14 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: rolloutdiag.Description,
 		Remediation: rolloutdiag.Remediation,
 		References:  []Reference{refDeployments},
+	},
+	checkPDVolumeHyperdiskOnlyNode: {
+		ID:          checkPDVolumeHyperdiskOnlyNode,
+		Title:       "Persistent Disk volume can land on a Hyperdisk-only node",
+		Category:    CategoryReliability,
+		Description: "The workload mounts a GCE Persistent Disk volume (pd-standard, pd-balanced, pd-ssd or pd-extreme), and the cluster has nodes from a machine series that attaches only Hyperdisk (such as N4, N4D, C4 or C4A). The workload's node selector, required node affinity and tolerations don't keep its pods off those nodes. When a pod is rescheduled onto one — after a node pool resize, upgrade or drain — Compute Engine rejects the attach and the pod never starts.",
+		Remediation: "Pin the workload to a node pool whose machine type supports its disk type: add a nodeSelector or required node affinity on node.kubernetes.io/instance-type or cloud.google.com/machine-family, or taint the Hyperdisk-only pool. Alternatively, move the data to a Hyperdisk StorageClass whose type every node pool the workload can run on supports — Hyperdisk support also varies by machine series.",
+		References:  []Reference{refGKEDiskTypes, refAffinity},
 	},
 	"missingPDB": {
 		ID:          "missingPDB",

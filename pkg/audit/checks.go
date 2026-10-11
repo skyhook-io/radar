@@ -149,6 +149,12 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// operators see the same "long enough to flag" semantics across surfaces.
 	findings = append(findings, checkCrossplaneStuck(tr, input)...)
 
+	// --- GKE: Persistent Disk volumes that can be scheduled onto nodes that
+	// attach only Hyperdisk. Self-gates on nil evidence (not GKE, or the
+	// reader can't list nodes/PVs/StorageClasses) and on the absence of
+	// Hyperdisk-only nodes.
+	findings = append(findings, checkPDVolumeHyperdiskPlacement(tr, input)...)
+
 	// --- GitOps coverage: workloads not tracked by a GitOps controller ---
 	// Self-gates on input.GitOpsToolsPresent; a no-GitOps cluster records
 	// nothing, so the check is absent from CheckCounts rather than reported as a

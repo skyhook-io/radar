@@ -197,6 +197,8 @@ type startupBlocker struct {
 	Reason   string `json:"reason"`
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
+	Cause    string `json:"cause,omitempty"`
+	Action   string `json:"action,omitempty"`
 }
 
 type diagnoseDNSContext struct {
@@ -781,6 +783,8 @@ func startupBlockersForWorkload(cache *k8s.ResourceCache, kind, group, namespace
 			Reason:   p.Reason,
 			Severity: p.Severity,
 			Message:  p.Message,
+			Cause:    p.Cause,
+			Action:   p.Action,
 		})
 	}
 	return out
