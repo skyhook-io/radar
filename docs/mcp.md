@@ -498,7 +498,9 @@ is fully healthy, or when Radar can't confirm that any finalizer's controller is
 down (see the table below). Radar only reads already
 watched CRD caches; absence of an issue does not establish that unwatched kinds
 are healthy. Namespace and exact kind list authorization apply to both
-namespaced and cluster-scoped subjects. Dashboard health summaries do not
+namespaced and cluster-scoped subjects. The home page's Active Issues panel and
+issue count read the same issues and show these rows; the `/api/dashboard`
+problem and health summary, MCP `get_dashboard` and `cluster://health` do not
 include this CR scan.
 
 The cause names the finalizers and elapsed deletion age, plus one controller
@@ -510,8 +512,9 @@ observation lands in one of these states:
 | Observation | Severity | Action |
 |---|---|---|
 | A matching controller pod is ready | Warning when every matched pod is ready; otherwise unchanged | Check the controller's logs, permissions and deletion-blocking references. No removal patch. |
-| Identified, and seen not running: no matching workload or pod anywhere Radar searched, or present with no ready pod (CrashLoopBackOff, Pending, degraded) | Critical at 30 minutes | Check the controller first. A one-finalizer removal preview is offered, for use only if the controller was intentionally removed |
-| Identified, but its finalizer drains nodes or releases cloud resources (Karpenter) and it is seen down | Critical at 30 minutes | Restore the controller. No removal patch: removal leaves the instances behind |
+| Identified and installed, but no pod is ready: CrashLoopBackOff, image pull failure, Pending, or no pods for its desired replicas | Critical at 30 minutes | Fix the controller; it finishes the deletion once running. No removal patch: removal would skip the cleanup it still intends to do |
+| Identified and absent: no matching workload or catalog pod anywhere Radar searched, or its Deployment or StatefulSet is scaled to 0 replicas | Critical at 30 minutes | Restore the controller if it should be running. A one-finalizer removal preview is offered, for use only if the controller was intentionally removed or scaled down |
+| Identified and absent, but its finalizer drains nodes or releases cloud resources (Karpenter) | Critical at 30 minutes | Restore the controller. No removal patch: removal leaves the instances behind |
 | Identified, but absence can't be established: no pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), workloads not searchable cluster-wide, or pods unreadable | Warning | Check that controller first. No removal patch |
 | **Controller unknown**: no confident mapping | Warning | The finalizer's domain usually names its controller; find and check it first. No removal patch |
 
@@ -520,9 +523,9 @@ ACK and Strimzi are not in the catalog and don't match the workload heuristic,
 so their stuck deletions stay at warning with no removal patch: their
 controllers may still be deleting cloud resources, and removing a finalizer
 skips that cleanup and can orphan infrastructure, volumes or nodes. Seeing a
-controller stopped, whether missing or down, needs a complete search:
-Deployments and StatefulSets readable and cached cluster-wide, and the
-catalog's pod selector searched where the controller would run. A down copy in
+controller absent or down needs a complete search:
+Deployments, StatefulSets and DaemonSets readable and cached cluster-wide, and
+the catalog's pod selector searched where the controller would run. A down copy in
 the visible namespaces doesn't rule out a healthy one elsewhere.
 
 The removal preview is text only. It previews one indexed finalizer removal

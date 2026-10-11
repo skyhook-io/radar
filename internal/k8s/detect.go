@@ -82,7 +82,7 @@ type Detection struct {
 	TerminatingFinalizers []string `json:"-"`
 	// TerminatingRemovalPreviews maps each operator finalizer to a dry-run
 	// removal it could take. Issue composition shows one only after observing
-	// the finalizer's controller stopped.
+	// that the finalizer's controller is absent.
 	TerminatingRemovalPreviews map[string]string         `json:"-"`
 	NodeStartupCorroboration   *NodeStartupCorroboration `json:"-"`
 	MessageBeforeCorroboration string                    `json:"-"`

@@ -54,10 +54,16 @@ func SummarizeControllerPods(pods []*corev1.Pod) ControllerPodHealth {
 // fact dominates the status. If all pods are Ready, "healthy". Anything
 // in between is "degraded" with a count.
 func SummarizeControllerHealth(controller string, pods []*corev1.Pod) string {
+	return controller + " is " + DescribeControllerHealth(pods)
+}
+
+// DescribeControllerHealth returns the status phrase SummarizeControllerHealth
+// puts after "<controller> is", such as "CrashLoopBackOff (1/1 pods)".
+func DescribeControllerHealth(pods []*corev1.Pod) string {
 	health := SummarizeControllerPods(pods)
 	switch {
 	case health.Crashing > 0:
-		return fmt.Sprintf("%s is %s (%d/%d pods)", controller, health.CrashReason, health.Crashing, health.Total)
+		return fmt.Sprintf("%s (%d/%d pods)", health.CrashReason, health.Crashing, health.Total)
 	case health.Ready == health.Total && health.Total > 0:
 		// All pods Ready — if the resource is *still* stuck deleting
 		// despite a healthy controller, it's a different problem (RBAC,
@@ -68,10 +74,10 @@ func SummarizeControllerHealth(controller string, pods []*corev1.Pod) string {
 		if health.Ready == 1 {
 			suffix = ""
 		}
-		return fmt.Sprintf("%s is healthy (%d pod%s ready)", controller, health.Ready, suffix)
+		return fmt.Sprintf("healthy (%d pod%s ready)", health.Ready, suffix)
 	case health.Pending > 0:
-		return fmt.Sprintf("%s is pending start (%d/%d pods Pending)", controller, health.Pending, health.Total)
+		return fmt.Sprintf("pending start (%d/%d pods Pending)", health.Pending, health.Total)
 	default:
-		return fmt.Sprintf("%s is degraded (%d/%d pods ready)", controller, health.Ready, health.Total)
+		return fmt.Sprintf("degraded (%d/%d pods ready)", health.Ready, health.Total)
 	}
 }
