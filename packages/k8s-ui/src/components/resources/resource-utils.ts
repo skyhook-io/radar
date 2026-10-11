@@ -92,7 +92,7 @@ export function summarizeSchedulerMessage(message?: string, options: { plain?: b
   if (options.plain) {
     m = m.replace(/^(?:Pod cannot be scheduled:\s*)?(?:Unschedulable:\s*)?(?:0\/\d+ nodes are available:\s*)?/i, '')
     // Schedulers with dynamic resource allocation append this after the node reasons.
-    m = m.replace(/\.?\s*no new claims to deallocate,?\s*$/i, '')
+    m = m.replace(/no new claims to deallocate,?/i, '').trim()
   } else {
     const colon = m.indexOf(':')
     if (colon >= 0) m = m.slice(colon + 1).trim()
