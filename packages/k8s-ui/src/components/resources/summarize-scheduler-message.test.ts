@@ -51,3 +51,10 @@ it.each([
 ])('offers a plain summary additively for %s', (raw, expected) => {
   expect(summarizeSchedulerMessage(raw, { plain: true })).toBe(expected)
 })
+
+it('summarizes a very long, separator-heavy message in linear time', () => {
+  const message = '0/2 nodes are available: ' + '1 node(s) custom reason, '.repeat(10_000) + '2 Insufficient cpu.'
+  const summary = summarizeSchedulerMessage(message, { plain: true })
+  expect(summary.split('; ')).toHaveLength(10_001)
+  expect(summary.endsWith('both nodes do not have enough CPU')).toBe(true)
+})

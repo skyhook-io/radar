@@ -108,8 +108,7 @@ export function summarizeSchedulerMessage(message?: string, options: { plain?: b
     [/^(\d+) node\(s\) (?:had )?untolerated taint(?:\(s\))?(?: \{[^}]*\}| [^\s]+)?(?: \(0\/\d+ nodes available\))?$/i, 'have taints the Pod does not tolerate'],
     [/^(\d+) node\(s\) (?:had )?volume node[- ]affinity conflict(?: \(0\/\d+ nodes available\))?$/i, 'do not match the volume’s node affinity'],
   ]
-  // Scheduler taints and resolved node labels can contain comma-separated values.
-  return m.split(/[,;](?![^\[\]{}]*[\]}])/).filter((part) => part.trim()).map((part) => {
+  return splitSchedulerClauses(m).filter((part) => part.trim()).map((part) => {
     const clause = part.trim()
     for (const [pattern, cause] of causes) {
       const count = pattern.exec(clause)?.[1]
@@ -118,6 +117,26 @@ export function summarizeSchedulerMessage(message?: string, options: { plain?: b
     if (/^(?:pod has )?unbound (?:immediate )?PersistentVolumeClaims?(?:\s*\(0\/\d+ nodes available\))?$/i.test(clause)) return 'a required volume claim is not bound'
     return clause
   }).join('; ')
+}
+
+// Splits on commas and semicolons, except where the next bracket ahead closes:
+// scheduler taints and resolved node labels can contain comma-separated values.
+// One pass from the end keeps long messages linear.
+function splitSchedulerClauses(m: string): string[] {
+  const parts: string[] = []
+  let end = m.length
+  let insideBrackets = false
+  for (let i = m.length - 1; i >= 0; i--) {
+    const c = m[i]
+    if (c === ']' || c === '}') insideBrackets = true
+    else if (c === '[' || c === '{') insideBrackets = false
+    else if ((c === ',' || c === ';') && !insideBrackets) {
+      parts.push(m.slice(i + 1, end))
+      end = i
+    }
+  }
+  parts.push(m.slice(0, end))
+  return parts.reverse()
 }
 
 /** Tailwind classes for severity dot indicators (used in tooltips and alert banners) */
