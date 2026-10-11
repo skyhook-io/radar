@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -180,5 +182,44 @@ func TestHubbleGetFlows_UnderTheBudgetNothingChanges(t *testing.T) {
 	}
 	if len(resp.Flows) != 2 || resp.FlowLimit != 0 || resp.CoveredSince != nil {
 		t.Errorf("flows=%d flowLimit=%d coveredSince=%v, want all flows and no cap reported", len(resp.Flows), resp.FlowLimit, resp.CoveredSince)
+	}
+}
+
+func TestHubblePodPrefix(t *testing.T) {
+	wl := func(name, kind string) EndpointRef {
+		return EndpointRef{Namespace: "shop", Name: name, Kind: EndpointKindWorkload, WorkloadKind: kind}
+	}
+	long := strings.Repeat("a", 50)
+	for _, tc := range []struct {
+		ref    EndpointRef
+		want   string
+		pushed bool
+	}{
+		{EndpointRef{Namespace: "shop", Name: "web-1", Kind: EndpointKindPod}, "shop/web-1", true},
+		{wl("web", "Deployment"), "shop/web-", true},
+		{wl("db", "StatefulSet"), "shop/db-", true},
+		{wl(long, "Deployment"), "shop/" + long[:hubbleWorkloadPrefixLen], true}, // generated names are cut; never claim the dash
+		{wl("pg", "Cluster"), "", false},                                         // a CRD may name its pods any way it likes
+		{EndpointRef{Name: "world", Kind: EndpointKindExternal}, "", false},
+	} {
+		got, ok := hubblePodPrefix(tc.ref)
+		if got != tc.want || ok != tc.pushed {
+			t.Errorf("hubblePodPrefix(%+v) = %q, %v; want %q, %v", tc.ref, got, ok, tc.want, tc.pushed)
+		}
+	}
+}
+
+func TestConvertEndpointTakesCiliumsWorkload(t *testing.T) {
+	ep := convertEndpoint(&flowpb.Endpoint{
+		Namespace: "shop", PodName: "web-7d9f-x2k4q",
+		Labels:    []string{"k8s:app=frontend"},
+		Workloads: []*flowpb.Workload{{Name: "web", Kind: "Deployment"}},
+	}, "10.0.0.1")
+	if ep.Workload != "web" || ep.WorkloadKind != "Deployment" {
+		t.Errorf("workload = %q/%q, want Cilium's owner, not a label", ep.Workload, ep.WorkloadKind)
+	}
+	bare := convertEndpoint(&flowpb.Endpoint{Namespace: "shop", PodName: "debug", Labels: []string{"k8s:app=frontend"}}, "")
+	if bare.Workload != "" {
+		t.Errorf("workload = %q, want none: an app label is not an owner, and two Deployments can share one", bare.Workload)
 	}
 }

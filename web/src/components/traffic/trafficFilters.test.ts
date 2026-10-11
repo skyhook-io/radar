@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -381,5 +381,29 @@ describe('selectionRawPairs', () => {
 
   it('omits an empty namespace so the server reads it as cluster-level', () => {
     expect(endpointPair(a).destination).toEqual({ namespace: undefined, name: '52.1.1.1', kind: 'External' })
+  })
+})
+
+describe('graphEndpoint', () => {
+  it('names a pod with a known workload by the workload, like the server aggregation', () => {
+    expect(graphEndpoint({ namespace: 'shop', name: 'web-7d9f-x2k4q', kind: 'Pod', workload: 'web', workloadKind: 'Deployment' }))
+      .toEqual({ namespace: 'shop', name: 'web' })
+  })
+  it('leaves everything else as it is', () => {
+    const bare = { namespace: 'shop', name: 'debug', kind: 'Pod' }
+    expect(graphEndpoint(bare)).toBe(bare)
+    const ext = { namespace: '', name: 'world', kind: 'External', workload: 'x' }
+    expect(graphEndpoint(ext)).toBe(ext)
+  })
+})
+
+describe('graphSize', () => {
+  it('counts distinct nodes and weighs edges double', () => {
+    const f = (s: string, d: string): AggregatedFlow => ({
+      source: { namespace: 'a', name: s, kind: 'Workload' },
+      destination: { namespace: 'a', name: d, kind: 'Workload' },
+      protocol: 'tcp', port: 80, flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1, lastSeen: '',
+    })
+    expect(graphSize([f('web', 'db'), f('web', 'cache'), f('api', 'db')])).toEqual({ nodes: 4, edges: 3, score: 10 })
   })
 })

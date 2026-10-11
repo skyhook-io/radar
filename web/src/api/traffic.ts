@@ -65,15 +65,19 @@ function trafficScopeKey({ namespaces = [], since, excludeNamespaces, excludeHos
 
 // Get traffic flows
 export interface UseTrafficFlowsOptions extends TrafficScope {
+  /** One graph node per pod instead of per workload. */
+  byPod?: boolean
   enabled?: boolean
 }
 
 export function useTrafficFlows(options: UseTrafficFlowsOptions = {}) {
-  const { enabled = true } = options
-  const queryString = trafficScopeParams(options).toString()
+  const { enabled = true, byPod = false } = options
+  const params = trafficScopeParams(options)
+  if (byPod) params.set('groupBy', 'pod')
+  const queryString = params.toString()
 
   return useQuery<TrafficFlowsResponse>({
-    queryKey: ['traffic-flows', ...trafficScopeKey(options)],
+    queryKey: ['traffic-flows', ...trafficScopeKey(options), byPod],
     queryFn: () => fetchJSON(`/traffic/flows${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled,
@@ -86,6 +90,7 @@ export interface TrafficEndpointRef {
   namespace?: string
   name: string
   kind?: string
+  workloadKind?: string
 }
 
 /** One edge of the server's aggregation, keyed as the server keys it. */

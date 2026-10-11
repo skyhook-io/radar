@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
@@ -133,7 +134,51 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, trafficFlowsPayload(response, s.visibleFlows(r, response.Flows, namespaces, opts)))
+	flows := resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows)
+	byPod := r.URL.Query().Get("groupBy") == "pod"
+	s.writeJSON(w, trafficFlowsPayload(response, s.visibleFlows(r, flows, namespaces, opts), byPod))
+}
+
+// resolveFlowWorkloads sets each pod endpoint's workload from Radar's pod
+// cache: the controller that ultimately owns it, through ReplicaSets and
+// Jobs. A source's own answer is kept for a pod the cache does not hold —
+// one already deleted, or in a namespace Radar cannot list.
+func resolveFlowWorkloads(cache *k8s.ResourceCache, flows []traffic.Flow) []traffic.Flow {
+	if cache == nil || cache.Pods() == nil {
+		return flows
+	}
+	pods := cache.Pods()
+	type owner struct{ kind, name string }
+	resolved := map[string]*owner{}
+	resolve := func(e *traffic.Endpoint) {
+		if e.Kind != traffic.EndpointKindPod || e.Namespace == "" || e.Name == "" {
+			return
+		}
+		key := e.Namespace + "/" + e.Name
+		o, seen := resolved[key]
+		if !seen {
+			if pod, err := pods.Pods(e.Namespace).Get(e.Name); err == nil {
+				// A pod nothing owns is its own unit, and so is a static pod,
+				// which the kubelet marks as owned by its Node: grouping by
+				// that would put a node's control-plane pods into one box.
+				// Either way a stale guess from the source must not group it
+				// with something else.
+				o = &owner{}
+				if top := k8s.TopOwnerForPod(cache, pod); top != nil && top.Kind != "Node" {
+					o = &owner{kind: top.Kind, name: top.Name}
+				}
+			}
+			resolved[key] = o
+		}
+		if o != nil {
+			e.Workload, e.WorkloadKind = o.name, o.kind
+		}
+	}
+	for i := range flows {
+		resolve(&flows[i].Source)
+		resolve(&flows[i].Destination)
+	}
+	return flows
 }
 
 // trafficFlowSample is how many records the flows response carries for the
@@ -208,13 +253,20 @@ func newestFlows(flows []traffic.Flow, limit int) []traffic.Flow {
 // trafficFlowsPayload shapes the flows response. Split out so it can be tested
 // directly: the payload is hand-built rather than marshalled from a struct, so a
 // field the source sets is easy to drop here without anything failing.
-func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) map[string]any {
+//
+// The aggregation draws pods by workload unless byPod asks for one node per
+// pod.
+func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow, byPod bool) map[string]any {
+	graphFlows := traffic.GraphFlows(flows)
+	if byPod {
+		graphFlows = flows
+	}
 	result := map[string]any{
 		"source":     response.Source,
 		"timestamp":  response.Timestamp,
 		"flows":      newestFlows(flows, trafficFlowSample),
 		"flowsTotal": len(flows),
-		"aggregated": traffic.AggregateFlows(flows),
+		"aggregated": traffic.AggregateFlows(graphFlows),
 		// L7 responses arrive on their request's edge, caller to callee on the
 		// server's port. A client pairing responses with requests needs to know
 		// that rather than guess it from which records happen to be present.
@@ -317,7 +369,7 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	flows := s.visibleFlows(r, response.Flows, namespaces, opts)
+	flows := s.visibleFlows(r, resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows), namespaces, opts)
 	result := map[string]any{
 		"source":                    response.Source,
 		"timestamp":                 response.Timestamp,

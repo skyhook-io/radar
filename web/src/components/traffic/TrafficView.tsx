@@ -6,14 +6,14 @@ import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock } from 'lucide-react'
+import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock, Network } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
-import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
+import { AlertBanner, EmptyState, PaneLoader, FreshnessControl, pluralize } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, mergeRawPairs, pairKey, selectionRawPairs } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionRawPairs, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -376,9 +376,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const [aggregateExternal, setAggregateExternal] = useState(true)
   const [detectServices, setDetectServices] = useState(true)
   const [collapseInternet, setCollapseInternet] = useState(true)
+  const [groupByWorkload, setGroupByWorkload] = useState(true)
+  // A record's endpoint as the graph draws it in the chosen grouping.
+  const drawnEndpoint = useCallback(
+    (e: TrafficFlow['source']) => (groupByWorkload ? graphEndpoint(e) : e),
+    [groupByWorkload])
   const [addonMode, setAddonMode] = useState<AddonMode>('show')
   const [graphSelection, setGraphSelection] = useState<TrafficGraphSelection | null>(null)
   const clearGraphSelection = useCallback(() => setGraphSelection(null), [])
+  const [drawAnyway, setDrawAnyway] = useState(false)
   const dock = useDock()
 
   // Dock: offset past sidebar, close flows tab on unmount
@@ -458,6 +464,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     since: timeRange,
     excludeNamespaces: hideSystem ? SYSTEM_NAMESPACE_LIST : undefined,
     excludeHost: hideSystem,
+    byPod: !groupByWorkload,
     // Only fetch flows when connected (not connecting and no connection error)
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
@@ -633,8 +640,12 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
   // The graph's filters, applied to individual records for the list view
   const rawFlowPasses = useCallback((flow: TrafficFlow) => {
-    const sourceIsSystem = isSystemEndpoint(flow.source.name, flow.source.namespace, flow.source.kind)
-    const destIsSystem = isSystemEndpoint(flow.destination.name, flow.destination.namespace, flow.destination.kind)
+    // Name rules (system components, addons) judge an endpoint by the name the
+    // graph draws it under, so a hidden workload's pods leave the list too.
+    const sourceName = drawnEndpoint(flow.source).name
+    const destName = drawnEndpoint(flow.destination).name
+    const sourceIsSystem = isSystemEndpoint(sourceName, flow.source.namespace, flow.source.kind)
+    const destIsSystem = isSystemEndpoint(destName, flow.destination.namespace, flow.destination.kind)
     if (hideSystem && (sourceIsSystem || destIsSystem)) return false
 
     const isAlwaysFiltered = (name: string) =>
@@ -646,7 +657,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     if (hideExternal && (isExternal(flow.source.kind) || isExternal(flow.destination.kind))) return false
 
     if (addonMode === 'hide') {
-      if (isClusterAddon(flow.source.name, flow.source.namespace) || isClusterAddon(flow.destination.name, flow.destination.namespace)) return false
+      if (isClusterAddon(sourceName, flow.source.namespace) || isClusterAddon(destName, flow.destination.namespace)) return false
     }
 
     if (hiddenNamespaces.size > 0) {
@@ -672,7 +683,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
 
     return true
-  }, [hideSystem, hideExternal, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern])
+  }, [hideSystem, hideExternal, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern, drawnEndpoint])
 
   const filteredRawFlows = useMemo(
     () => (flowsData?.flows ?? []).filter(rawFlowPasses),
@@ -991,27 +1002,28 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     if (!graphSelection) return filteredRawFlows
     if (selectionPairs) {
       const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
-      return filteredRawFlows.filter(f => keys.has(pairKey(f.source, f.destination, f.port, f.directionUnknown)))
+      return filteredRawFlows.filter(f =>
+        keys.has(pairKey(drawnEndpoint(f.source), drawnEndpoint(f.destination), f.port, f.directionUnknown)))
     }
     if (graphSelection.type === 'node' && graphSelection.nodeId) {
       const id = graphSelection.nodeId
       return filteredRawFlows.filter(f => {
-        const srcId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-        const dstId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
+        const srcId = graphEndpointId(drawnEndpoint(f.source))
+        const dstId = graphEndpointId(drawnEndpoint(f.destination))
         return srcId === id || dstId === id
       })
     }
     if (graphSelection.type === 'edge' && graphSelection.sourceId && graphSelection.destId) {
       return filteredRawFlows.filter(f => {
-        const srcId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-        const dstId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
+        const srcId = graphEndpointId(drawnEndpoint(f.source))
+        const dstId = graphEndpointId(drawnEndpoint(f.destination))
         // Match either direction (request goes A→B, response goes B→A)
         return (srcId === graphSelection.sourceId && dstId === graphSelection.destId) ||
                (srcId === graphSelection.destId && dstId === graphSelection.sourceId)
       })
     }
     return filteredRawFlows
-  }, [filteredRawFlows, graphSelection, selectionPairs])
+  }, [filteredRawFlows, graphSelection, selectionPairs, drawnEndpoint])
 
   const listFlows = useRecords ? filteredRecords : sampleSelection
 
@@ -1108,6 +1120,36 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }))
   }, [flowsData?.aggregated, hideSystem, hideExternal, activeMinConnections])
 
+  // The map is laid out on the main thread, so a view too large to draw is
+  // held back until it is narrowed rather than freezing the tab.
+  const drawnGraph = useMemo(() => graphSize(finalFlows), [finalFlows])
+  const tooLargeToDraw = drawnGraph.score > GRAPH_DRAW_CEILING ||
+    (drawnGraph.score > GRAPH_DRAW_BUDGET && !drawAnyway)
+  // "Draw anyway" answers for the view it was given on: a different scope, or
+  // one that has since fallen back under the budget, asks again.
+  const namespaceScope = namespaces.join(',')
+  useEffect(() => {
+    setDrawAnyway(false)
+  }, [namespaceScope, timeRange])
+  useEffect(() => {
+    if (drawnGraph.score <= GRAPH_DRAW_BUDGET) setDrawAnyway(false)
+  }, [drawnGraph.score])
+  // A selection made on a graph that is no longer drawn would keep filtering
+  // the flow list with nothing on screen to show it or clear it.
+  useEffect(() => {
+    if (tooLargeToDraw) setGraphSelection(null)
+  }, [tooLargeToDraw])
+  // Offered only while more than one namespace is in view: narrowing to the
+  // last one changes nothing.
+  const busiestNamespaces = useMemo(() => {
+    const inView = namespacesWithCounts.filter(ns => !hiddenNamespaces.has(ns.name))
+    if (inView.length < 2) return []
+    return inView.sort((a, b) => b.nodeCount - a.nodeCount).slice(0, 3).map(ns => ns.name)
+  }, [namespacesWithCounts, hiddenNamespaces])
+  const showOnlyNamespace = useCallback((keep: string) => {
+    setHiddenNamespaces(new Set(namespacesWithCounts.map(ns => ns.name).filter(ns => ns !== keep)))
+  }, [namespacesWithCounts])
+
   // Determine wizard state based on sources detection
   useEffect(() => {
     if (sourcesLoading) {
@@ -1198,6 +1240,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         setShowNamespaceGroups={setShowNamespaceGroups}
         collapseInternet={collapseInternet}
         setCollapseInternet={setCollapseInternet}
+        groupByWorkload={groupByWorkload}
+        setGroupByWorkload={setGroupByWorkload}
         addonMode={addonMode}
         setAddonMode={setAddonMode}
         aggregateExternal={aggregateExternal}
@@ -1375,15 +1419,56 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   />
                 </div>
               )}
-              <TrafficGraph
-                flows={finalFlows}
-                hotPathThreshold={hotPathThreshold}
-                showNamespaceGroups={showNamespaceGroups}
-                serviceCategories={serviceCategories}
-                addonMode={addonMode}
-                trafficSource={sourcesData?.active || ''}
-                onSelectionChange={setGraphSelection}
-              />
+              {tooLargeToDraw ? (
+                <div className="absolute inset-0 flex items-center justify-center px-4">
+                  <EmptyState
+                    tone="filtered"
+                    variant="card"
+                    icon={Network}
+                    headline="Too much traffic to draw at once"
+                    body={
+                      <>
+                        {pluralize(drawnGraph.nodes, 'endpoint')} and {pluralize(drawnGraph.edges, 'connection')} pass the current filters — more than the map can lay out without freezing this tab.
+                        {' '}Narrow it with the filters on the left: fewer namespaces, a minimum connection count, or external traffic hidden.
+                        {sampleSize > 0 && ' The flow list still shows the records.'}
+                      </>
+                    }
+                    action={
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        {busiestNamespaces.map(ns => (
+                          <button
+                            key={ns}
+                            type="button"
+                            onClick={() => showOnlyNamespace(ns)}
+                            className="btn-brand-muted text-xs px-2.5 py-1 rounded-md"
+                          >
+                            Only {ns}
+                          </button>
+                        ))}
+                        {drawnGraph.score <= GRAPH_DRAW_CEILING && (
+                          <button
+                            type="button"
+                            onClick={() => setDrawAnyway(true)}
+                            className="text-xs px-2.5 py-1 rounded-md border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
+                          >
+                            Draw anyway
+                          </button>
+                        )}
+                      </div>
+                    }
+                  />
+                </div>
+              ) : (
+                <TrafficGraph
+                  flows={finalFlows}
+                  hotPathThreshold={hotPathThreshold}
+                  showNamespaceGroups={showNamespaceGroups}
+                  serviceCategories={serviceCategories}
+                  addonMode={addonMode}
+                  trafficSource={sourcesData?.active || ''}
+                  onSelectionChange={setGraphSelection}
+                />
+              )}
             </>
           ) : connectionError ? (
             <div className="absolute inset-0 flex items-center justify-center">
