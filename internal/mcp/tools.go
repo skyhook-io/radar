@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
@@ -2532,7 +2533,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 					Name:                 pod.Name,
 					Severity:             severity,
 					Reason:               health.PodProblemReason(pod, now),
-					Age:                  k8s.FormatAge(ageDur),
+					Age:                  timeutil.FormatAgeShort(ageDur),
 					RestartCount:         restarts,
 					LastTerminatedReason: lastTermReason,
 					ageSeconds:           int64(ageDur.Seconds()),

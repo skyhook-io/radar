@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/cronsched"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 // HPAProblem describes a detected issue with an HPA.
@@ -276,5 +277,5 @@ func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJo
 		return "", time.Time{}, false
 	}
 	return fmt.Sprintf("%d consecutive schedules observed without a recorded success; last scheduled %s ago",
-		schedules, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), sequenceSince, true
+		schedules, timeutil.FormatAgeShort(now.Sub(cj.Status.LastScheduleTime.Time))), sequenceSince, true
 }

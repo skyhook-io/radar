@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -359,7 +360,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			OwnerKind:         ownerKind,
 			OwnerName:         ownerName,
 			Fingerprint:       "stale-secret-env",
-			Age:               FormatAge(now.Sub(pod.CreationTimestamp.Time)),
+			Age:               timeutil.FormatAgeShort(now.Sub(pod.CreationTimestamp.Time)),
 			AgeSeconds:        int64(now.Sub(pod.CreationTimestamp.Time).Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
 			Cause:             "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
@@ -407,7 +408,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 		}
 		if !group.subject.created.IsZero() && !group.subject.created.After(now) {
 			age := now.Sub(group.subject.created)
-			detection.Age = FormatAge(age)
+			detection.Age = timeutil.FormatAgeShort(age)
 			detection.AgeSeconds = int64(age.Seconds())
 			detection.ResourceCreatedAt = group.subject.created
 		}

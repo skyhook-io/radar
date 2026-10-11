@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 const (
@@ -615,7 +616,7 @@ func observedCoreDNSConfigMapChangeSignal() string {
 		if e.EventType != timeline.EventTypeUpdate || !strings.Contains(strings.ToLower(e.Name), "coredns") {
 			continue
 		}
-		return fmt.Sprintf("Radar observed ConfigMap kube-system/%s update %s ago", e.Name, k8s.FormatAge(time.Since(e.Timestamp)))
+		return fmt.Sprintf("Radar observed ConfigMap kube-system/%s update %s ago", e.Name, timeutil.FormatAgeShort(time.Since(e.Timestamp)))
 	}
 	return ""
 }
@@ -646,7 +647,7 @@ func deploymentChangeContext(cache *k8s.ResourceCache, namespace, name string) *
 		fmt.Sprintf("%d owned ReplicaSets", len(owned)),
 	}
 	if !newest.CreationTimestamp.IsZero() {
-		parts = append(parts, fmt.Sprintf("newest ReplicaSet %s created %s ago", newest.Name, k8s.FormatAge(time.Since(newest.CreationTimestamp.Time))))
+		parts = append(parts, fmt.Sprintf("newest ReplicaSet %s created %s ago", newest.Name, timeutil.FormatAgeShort(time.Since(newest.CreationTimestamp.Time))))
 	}
 	ctx := &issuesapi.ChangeContext{
 		Changed:  true,
@@ -654,7 +655,7 @@ func deploymentChangeContext(cache *k8s.ResourceCache, namespace, name string) *
 		Evidence: strings.Join(parts, ", "),
 	}
 	if !newest.CreationTimestamp.IsZero() {
-		ctx.When = k8s.FormatAge(time.Since(newest.CreationTimestamp.Time))
+		ctx.When = timeutil.FormatAgeShort(time.Since(newest.CreationTimestamp.Time))
 	}
 	return ctx
 }
@@ -678,7 +679,7 @@ func deploymentRolloutSignal(cache *k8s.ResourceCache, d *appsv1.Deployment, win
 	if newest.CreationTimestamp.IsZero() || time.Since(newest.CreationTimestamp.Time) > window {
 		return ""
 	}
-	return fmt.Sprintf("CoreDNS Deployment kube-system/%s rolled %s ago (generation=%d, %d owned ReplicaSets, newest=%s)", d.Name, k8s.FormatAge(time.Since(newest.CreationTimestamp.Time)), d.Generation, len(owned), newest.Name)
+	return fmt.Sprintf("CoreDNS Deployment kube-system/%s rolled %s ago (generation=%d, %d owned ReplicaSets, newest=%s)", d.Name, timeutil.FormatAgeShort(time.Since(newest.CreationTimestamp.Time)), d.Generation, len(owned), newest.Name)
 }
 
 func ownedReplicaSets(d *appsv1.Deployment, rss []*appsv1.ReplicaSet) []*appsv1.ReplicaSet {

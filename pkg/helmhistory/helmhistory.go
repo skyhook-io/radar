@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 const (
@@ -264,7 +266,7 @@ func pendingOperation(rev Revision, age time.Duration) Operation {
 		Status:        StatusStuck,
 		Source:        SourceStatus,
 		Confidence:    ConfidenceHigh,
-		Message:       fmt.Sprintf("Release has been %s for %s.", rev.Status, formatDuration(age)),
+		Message:       fmt.Sprintf("Release has been %s for %s.", rev.Status, timeutil.FormatAgeShort(age)),
 		Evidence:      evidence,
 		Revision:      rev.Revision,
 		PendingStatus: normalizeStatus(rev.Status),
@@ -334,19 +336,4 @@ func operationRevision(op Operation) int {
 		return op.Revision
 	}
 	return op.FailedRevision
-}
-
-func formatDuration(d time.Duration) string {
-	if d < time.Hour {
-		mins := int(d.Round(time.Minute) / time.Minute)
-		if mins < 1 {
-			mins = 1
-		}
-		return fmt.Sprintf("%dm", mins)
-	}
-	hours := int(d.Round(time.Hour) / time.Hour)
-	if hours < 1 {
-		hours = 1
-	}
-	return fmt.Sprintf("%dh", hours)
 }

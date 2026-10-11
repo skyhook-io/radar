@@ -238,8 +238,10 @@ func TestAnalyzeUninstalling(t *testing.T) {
 		started   time.Time
 		threshold time.Duration
 		wantStuck bool
+		wantAge   string
 	}{
-		{name: "aged", status: "uninstalling", started: now.Add(-18 * time.Minute), wantStuck: true},
+		{name: "aged", status: "uninstalling", started: now.Add(-18 * time.Minute), wantStuck: true, wantAge: "18m"},
+		{name: "weeks", status: "uninstalling", started: now.Add(-28*24*time.Hour - 5*time.Hour), wantStuck: true, wantAge: "28d"},
 		{name: "threshold boundary", status: "uninstalling", started: now.Add(-10 * time.Minute), wantStuck: true},
 		{name: "recent", status: "uninstalling", started: now.Add(-2 * time.Minute)},
 		{name: "missing timestamp", status: "uninstalling"},
@@ -257,6 +259,9 @@ func TestAnalyzeUninstalling(t *testing.T) {
 				op := got.LastOperation
 				if op.Kind != KindPending || op.Status != StatusStuck || op.PendingStatus != "uninstalling" || !op.Updated.Equal(tt.started) {
 					t.Fatalf("uninstall operation = %#v", op)
+				}
+				if tt.wantAge != "" && !strings.HasSuffix(op.Message, " for "+tt.wantAge+".") {
+					t.Fatalf("message = %q, want age %s", op.Message, tt.wantAge)
 				}
 			}
 		})

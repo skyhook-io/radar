@@ -3,22 +3,7 @@ package k8s
 import (
 	"fmt"
 	"strings"
-	"time"
 )
-
-// FormatAge formats a duration into a human-readable age string (e.g., "5d", "3h").
-func FormatAge(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	if d < 24*time.Hour {
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	}
-	return fmt.Sprintf("%dd", int(d.Hours()/24))
-}
 
 // Truncate trims a string to maxLen characters, appending "..." if truncated.
 func Truncate(s string, maxLen int) string {

@@ -19,6 +19,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 // ResourceSummary is the typed output for Summary-level minification.
@@ -467,7 +468,7 @@ func summarizeJob(job *batchv1.Job) *ResourceSummary {
 	// Duration
 	if job.Status.StartTime != nil && job.Status.CompletionTime != nil {
 		d := job.Status.CompletionTime.Sub(job.Status.StartTime.Time)
-		s.Duration = formatDuration(d)
+		s.Duration = timeutil.FormatAgeShort(d)
 	}
 
 	return s
@@ -905,18 +906,5 @@ func age(created time.Time) string {
 		return ""
 	}
 	d := time.Since(created)
-	return formatDuration(d)
-}
-
-func formatDuration(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return timeutil.FormatAgeShort(d)
 }

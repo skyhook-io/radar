@@ -23,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/scheduling"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 // Scheduling failure decomposition.
@@ -352,7 +353,7 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				Reason:                     "Unschedulable",
 				Action:                     schedAction,
 				Message:                    schedMessage,
-				Age:                        FormatAge(ageDur),
+				Age:                        timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:                 int64(ageDur.Seconds()),
 				ResourceCreatedAt:          pod.CreationTimestamp.Time,
 				OwnerGroup:                 ownerGroup,
@@ -913,7 +914,7 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 		}
 		if !createdAt.IsZero() && !createdAt.After(now) {
 			age := now.Sub(createdAt)
-			detection.Age = FormatAge(age)
+			detection.Age = timeutil.FormatAgeShort(age)
 			detection.AgeSeconds = int64(age.Seconds())
 		}
 		setDetectionOnset(&detection, now, eventFirstTime(c.ev))
@@ -1156,7 +1157,7 @@ func admissionConditionProblem(kind, namespace, name, message string, createdAt,
 		Severity:          "critical",
 		Reason:            reason,
 		Message:           "pod creation blocked: " + strings.TrimSpace(message),
-		Age:               FormatAge(ageDur),
+		Age:               timeutil.FormatAgeShort(ageDur),
 		AgeSeconds:        int64(ageDur.Seconds()),
 		ResourceCreatedAt: createdAt,
 	}
@@ -1425,7 +1426,7 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 			Severity:          severity,
 			Reason:            c.reason,
 			Message:           postBindEventMessage(pod, c.ev.Message),
-			Age:               FormatAge(ageDur),
+			Age:               timeutil.FormatAgeShort(ageDur),
 			AgeSeconds:        int64(ageDur.Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
 			OwnerGroup:        ownerGroup,
@@ -1461,7 +1462,7 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 			Severity:          postBindProblemSeverity("PostBindStartupStall", ageDur),
 			Reason:            "PostBindStartupStall",
 			Message:           postBindFallbackMessage(pod, ageDur),
-			Age:               FormatAge(ageDur),
+			Age:               timeutil.FormatAgeShort(ageDur),
 			AgeSeconds:        int64(ageDur.Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
 			OwnerGroup:        ownerGroup,
@@ -1549,7 +1550,7 @@ func postBindEventMessage(pod *corev1.Pod, eventMessage string) string {
 }
 
 func postBindFallbackMessage(pod *corev1.Pod, age time.Duration) string {
-	parts := []string{fmt.Sprintf("container is ContainerCreating with no Pod IP after %s", FormatAge(age))}
+	parts := []string{fmt.Sprintf("container is ContainerCreating with no Pod IP after %s", timeutil.FormatAgeShort(age))}
 	if cond := podCondition(pod, podReadyToStartContainers); cond != nil && cond.Status == corev1.ConditionFalse {
 		parts = append(parts, "PodReadyToStartContainers=False")
 	}

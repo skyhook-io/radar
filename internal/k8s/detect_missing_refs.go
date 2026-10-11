@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/envresolve"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -108,7 +109,7 @@ func missingRefProblemSev(now time.Time, kind, group, ns, name, severity, reason
 		Severity:          severity,
 		Reason:            reason,
 		Message:           message,
-		Age:               FormatAge(age),
+		Age:               timeutil.FormatAgeShort(age),
 		AgeSeconds:        int64(age.Seconds()),
 		ResourceCreatedAt: createdAt,
 		OnsetUnknown:      true,
@@ -567,7 +568,7 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 					Cause:             fmt.Sprintf("IngressClass %q is not installed, so no controller can claim these routing rules by that class.", className),
 					Action:            "Set spec.ingressClassName to an installed class, or install the intended ingress controller and IngressClass.",
 					Fingerprint:       missingRefFingerprint("Missing IngressClass", className),
-					Age:               FormatAge(age),
+					Age:               timeutil.FormatAgeShort(age),
 					AgeSeconds:        int64(age.Seconds()),
 					ResourceCreatedAt: ing.CreationTimestamp.Time,
 					OnsetUnknown:      true,

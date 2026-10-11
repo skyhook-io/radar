@@ -23,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -567,9 +568,9 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 				return "pods"
 			}()),
 			Message:         k8s.Truncate(strings.Join(reasonParts, ", "), 200),
-			Age:             k8s.FormatAge(g.newestAge),
+			Age:             timeutil.FormatAgeShort(g.newestAge),
 			AgeSeconds:      int64(g.newestAge.Seconds()),
-			Duration:        k8s.FormatAge(g.newestDur),
+			Duration:        timeutil.FormatAgeShort(g.newestDur),
 			DurationSeconds: int64(g.newestDur.Seconds()),
 			PodCount:        g.podCount,
 		})
@@ -721,9 +722,9 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		Severity:        severity,
 		Reason:          reason,
 		Message:         k8s.Truncate(message, 200),
-		Age:             k8s.FormatAge(ageDur),
+		Age:             timeutil.FormatAgeShort(ageDur),
 		AgeSeconds:      int64(ageDur.Seconds()),
-		Duration:        k8s.FormatAge(durDur),
+		Duration:        timeutil.FormatAgeShort(durDur),
 		DurationSeconds: int64(durDur.Seconds()),
 	}
 }

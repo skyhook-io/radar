@@ -25,6 +25,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 const probeFailureWindow = 10 * time.Minute
@@ -180,7 +181,7 @@ func setDetectionOnset(d *Detection, now, onsetAt time.Time) {
 	}
 	d.OnsetAt = onsetAt.UTC()
 	duration := now.Sub(onsetAt)
-	d.Duration = FormatAge(duration)
+	d.Duration = timeutil.FormatAgeShort(duration)
 	d.DurationSeconds = int64(duration.Seconds())
 	d.OnsetUnknown = false
 }
@@ -280,7 +281,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Action:            "Check the ReplicaSet's events — pod creation is being rejected (often a quota, admission webhook, or PodSecurity rule).",
 					Message:           replicaFailure.Message,
 					Fingerprint:       "deployment:replica-failure",
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					IssueTiming:       timingR.IssueTiming,
@@ -312,7 +313,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Group:             "apps",
 					Severity:          "critical",
 					Reason:            fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, desired),
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					IssueTiming:       timingR.IssueTiming,
@@ -360,7 +361,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Reason:            "Rollout stuck",
 					Action:            "Inspect the new pods (image, readiness probe, resources) — the rollout is waiting on them to become ready.",
 					Message:           message,
-					Age:               FormatAge(now.Sub(d.CreationTimestamp.Time)),
+					Age:               timeutil.FormatAgeShort(now.Sub(d.CreationTimestamp.Time)),
 					AgeSeconds:        int64(now.Sub(d.CreationTimestamp.Time).Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					IssueTiming:       timingR.IssueTiming,
@@ -402,7 +403,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Group:             "apps",
 					Severity:          "critical",
 					Reason:            fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, desired),
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: ss.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -434,7 +435,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Severity:          severity,
 					Reason:            reason,
 					Fingerprint:       fingerprint,
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: ds.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -665,7 +666,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Message:              message,
 				RawMessage:           rawMessage,
 				Fingerprint:          fingerprint,
-				Age:                  FormatAge(ageDur),
+				Age:                  timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
 				ResourceCreatedAt:    pod.CreationTimestamp.Time,
 				RestartCount:         restartCount,
@@ -719,7 +720,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Action:            "Check the cloud load-balancer controller and provider quota / subnet annotations.",
 					Message:           "Service is type LoadBalancer but has no assigned external address",
 					Fingerprint:       "svc:loadbalancer-pending",
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					OnsetUnknown:      true,
 					ResourceCreatedAt: svc.CreationTimestamp.Time,
@@ -791,7 +792,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				// problems with distinct fixes. Fingerprint on the problem kind so
 				// they don't collapse into one hpa_limited_or_failed row.
 				Fingerprint:       "hpa:" + hp.Problem,
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: hpaCreatedAt,
 				IssueTiming:       hpaIssueTiming.IssueTiming,
@@ -839,7 +840,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:          "medium",
 				Reason:            cp.Problem,
 				Message:           cp.Reason,
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: createdAt,
 			}
@@ -885,7 +886,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Action:            "Relax the PDB (minAvailable / maxUnavailable) or add replicas so drains and node upgrades can proceed.",
 				Message:           pdbBlocksEvictionsMessage(pdb),
 				Fingerprint:       "pdb:zero-disruptions",
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: pdb.CreationTimestamp.Time,
 			}
@@ -954,7 +955,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Action:            np.Action,
 				Reason:            np.Problem,
 				Message:           np.Reason,
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: nodeCreatedAt,
 				IssueTiming:       nodeIssueTiming.IssueTiming,
@@ -991,7 +992,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Reason:            "Lost",
 					Message:           "PVC has lost its bound volume",
 					Action:            "The bound PersistentVolume is gone — restore it from backup or recreate the PVC (data may be unrecoverable).",
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: pvc.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -1020,7 +1021,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Reason:            resize.reason,
 					Message:           resize.message,
 					Fingerprint:       "pvc:resize:" + resize.reason,
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: pvc.CreationTimestamp.Time,
 					IssueTiming:       resizeIssueTiming.IssueTiming,
@@ -1054,7 +1055,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						Severity:          "high",
 						Reason:            "Pending",
 						Message:           message,
-						Age:               FormatAge(ageDur),
+						Age:               timeutil.FormatAgeShort(ageDur),
 						AgeSeconds:        int64(ageDur.Seconds()),
 						ResourceCreatedAt: pvc.CreationTimestamp.Time,
 						Cause:             cause,
@@ -1089,7 +1090,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Reason:            "Failed",
 				Message:           pv.Status.Message,
 				Action:            "Check the volume's status message and the storage backend / CSI driver events; replace the PV only after confirming the data and its reclaim policy.",
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: pv.CreationTimestamp.Time,
 				OnsetUnknown:      true,
@@ -1128,7 +1129,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Severity:          "critical",
 					Reason:            reason,
 					Message:           cond.Message,
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: job.CreationTimestamp.Time,
 				}
@@ -1147,8 +1148,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Name:              job.Name,
 					Group:             "batch",
 					Severity:          "high",
-					Reason:            fmt.Sprintf("Running for %s with no completions", FormatAge(ageDur)),
-					Age:               FormatAge(ageDur),
+					Reason:            fmt.Sprintf("Running for %s with no completions", timeutil.FormatAgeShort(ageDur)),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: job.CreationTimestamp.Time,
 				}
@@ -1189,7 +1190,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					// One Deployment can share multiple distinct RWO PVCs; fingerprint
 					// per PVC so each is its own row rather than collapsing into one.
 					Fingerprint:       "pvc-rwo-multireplica:" + pvcName,
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -1315,7 +1316,7 @@ func serviceBackendDetection(svc *corev1.Service, age time.Duration, severity, r
 		Reason:            reason,
 		Message:           message,
 		Fingerprint:       fingerprint,
-		Age:               FormatAge(age),
+		Age:               timeutil.FormatAgeShort(age),
 		AgeSeconds:        int64(age.Seconds()),
 		ResourceCreatedAt: svc.CreationTimestamp.Time,
 		OnsetUnknown:      true,
@@ -1423,7 +1424,7 @@ func stalledInitContainerProblem(pod *corev1.Pod, now time.Time, skip string) (p
 		if now.Sub(cs.State.Running.StartedAt.Time) < 5*time.Minute {
 			continue
 		}
-		msg := fmt.Sprintf("init container %q has been running for %s and is blocking the pod from starting", cs.Name, FormatAge(now.Sub(cs.State.Running.StartedAt.Time)))
+		msg := fmt.Sprintf("init container %q has been running for %s and is blocking the pod from starting", cs.Name, timeutil.FormatAgeShort(now.Sub(cs.State.Running.StartedAt.Time)))
 		if detail := initContainerSpecSummary(pod, cs.Name); detail != "" {
 			msg += "; " + detail
 		}
@@ -1734,7 +1735,7 @@ func terminatingProblemSince(kind, group string, obj metav1.Object, now, started
 		Action:            "Check for finalizers holding the object (metadata.finalizers) and whether their controller is running.",
 		Message:           msg,
 		Fingerprint:       "lifecycle:terminating",
-		Age:               FormatAge(now.Sub(obj.GetCreationTimestamp().Time)),
+		Age:               timeutil.FormatAgeShort(now.Sub(obj.GetCreationTimestamp().Time)),
 		AgeSeconds:        int64(now.Sub(obj.GetCreationTimestamp().Time).Seconds()),
 		ResourceCreatedAt: obj.GetCreationTimestamp().Time,
 		IssueTiming:       timingR.IssueTiming,
