@@ -1345,6 +1345,7 @@ export function WorkloadView({
         renderOverviewLead={() => (
           <ResourceIssuesSection
             issues={liveIssues}
+            compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
             onResourceClick={
               rest.onNavigateToResource

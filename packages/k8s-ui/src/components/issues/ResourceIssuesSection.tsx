@@ -8,7 +8,9 @@ export function ResourceIssuesSection({
   issues,
   onResourceClick,
   subjectResource,
+  compact,
 }: {
+  compact?: boolean
   issues: Issue[] | undefined
   /** When provided, related resources in a causal link become clickable. */
   onResourceClick?: (ref: IssueResourceRef) => void
@@ -36,6 +38,7 @@ export function ResourceIssuesSection({
             <IssueRow
               key={key}
               issue={issue}
+              compact={compact}
               open={openId === key}
               onToggle={() => setOpenId((cur) => (cur === key ? null : key))}
               onResourceClick={onResourceClick}

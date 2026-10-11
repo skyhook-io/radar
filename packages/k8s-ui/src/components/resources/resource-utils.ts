@@ -86,12 +86,38 @@ export interface PodProblem {
  * misses. Presentation-only; the backend `scheduling` issue source does the
  * structured decomposition + node-label resolution (e.g. naming arm64).
  */
-export function summarizeSchedulerMessage(message?: string): string {
+export function summarizeSchedulerMessage(message?: string, options: { plain?: boolean } = {}): string {
   if (!message) return ''
   let m = message.split('. preemption:')[0].split(' preemption:')[0].trim()
-  const colon = m.indexOf(':')
-  if (colon >= 0) m = m.slice(colon + 1).trim()
-  return m.replace(/\.\s*$/, '').trim()
+  if (options.plain) {
+    m = m.replace(/^(?:Pod cannot be scheduled:\s*)?(?:Unschedulable:\s*)?(?:0\/\d+ nodes are available:\s*)?/i, '')
+    // Schedulers with dynamic resource allocation append this after the node reasons.
+    m = m.replace(/\.?\s*no new claims to deallocate,?\s*$/i, '')
+  } else {
+    const colon = m.indexOf(':')
+    if (colon >= 0) m = m.slice(colon + 1).trim()
+  }
+  m = m.replace(/\.\s*$/, '').trim()
+  if (!options.plain) return m
+  const total = /0\/(\d+) nodes (?:are )?available/.exec(message)?.[1]
+  const causes: [RegExp, string][] = [
+    [/^(\d+) (?:Too many pods|(?:node\(s\) )?insufficient pods)(?: \(0\/\d+ nodes available\))?$/i, 'have reached their Pod limit'],
+    [/^(\d+) (?:node\(s\) )?Insufficient cpu(?: \(0\/\d+ nodes available\))?$/i, 'do not have enough CPU'],
+    [/^(\d+) (?:node\(s\) )?Insufficient memory(?: \(0\/\d+ nodes available\))?$/i, 'do not have enough memory'],
+    [/^(\d+) node\(s\) (?:didn.t match Pod.s node affinity\/selector|node affinity\/selector mismatch)(?: \(0\/\d+ nodes available\))?$/i, 'do not match the Pod’s node affinity or selector'],
+    [/^(\d+) node\(s\) (?:had )?untolerated taint(?:\(s\))?(?: \{[^}]*\}| [^\s]+)?(?: \(0\/\d+ nodes available\))?$/i, 'have taints the Pod does not tolerate'],
+    [/^(\d+) node\(s\) (?:had )?volume node[- ]affinity conflict(?: \(0\/\d+ nodes available\))?$/i, 'do not match the volume’s node affinity'],
+  ]
+  // Scheduler taints and resolved node labels can contain comma-separated values.
+  return m.split(/[,;](?![^\[\]{}]*[\]}])/).filter((part) => part.trim()).map((part) => {
+    const clause = part.trim()
+    for (const [pattern, cause] of causes) {
+      const count = pattern.exec(clause)?.[1]
+      if (count) return `${count === '1' ? '1 node' : count === total && count === '2' ? 'both nodes' : count === total ? 'all nodes' : `${count} nodes`} ${count === '1' ? cause.replace(/^have /, 'has ').replace(/^do /, 'does ') : cause}`
+    }
+    if (/^(?:pod has )?unbound (?:immediate )?PersistentVolumeClaims?(?:\s*\(0\/\d+ nodes available\))?$/i.test(clause)) return 'a required volume claim is not bound'
+    return clause
+  }).join('; ')
 }
 
 /** Tailwind classes for severity dot indicators (used in tooltips and alert banners) */
