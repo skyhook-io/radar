@@ -1,10 +1,15 @@
 package k8score
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // IsSynced answers "is SOME informer for this GVR synced", which is true as soon
@@ -44,5 +49,36 @@ func TestIsNamespaceSynced_DoesNotBorrowAnotherNamespacesInformer(t *testing.T) 
 	// Cluster-wide is a stronger claim still: namespace-scoped coverage is not it.
 	if d.IsNamespaceSynced(gvr, "") {
 		t.Error("a namespace-scoped cache cannot license a cluster-wide absence")
+	}
+}
+
+// A read served by several namespace informers waits once, not once per
+// informer: three stalled informers must not triple the caller's timeout.
+func TestListBlocking_TimeoutCoversEveryInformer(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "WidgetList"},
+	)
+	dyn.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("denied"))
+		}
+		return true, nil, errors.New("apiserver hiccup")
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, NamespaceFallbacks: []string{"x", "y", "z"}})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+	defer d.Stop()
+
+	const timeout = 500 * time.Millisecond
+	start := time.Now()
+	_, _ = d.ListBlocking(gvr, "", timeout)
+	if elapsed := time.Since(start); elapsed > 2*timeout {
+		t.Fatalf("ListBlocking took %v with a %v timeout over three stalled informers", elapsed, timeout)
+	}
+	if d.IsNamespaceSynced(gvr, "x") {
+		t.Fatal("test premise broken: the x informer synced")
 	}
 }

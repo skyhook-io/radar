@@ -1423,7 +1423,8 @@ func (d *DynamicResourceCache) ListNamespaces(gvr schema.GroupVersionResource, n
 	return result, nil
 }
 
-// ListBlocking returns all resources, waiting for cache sync first.
+// ListBlocking returns all resources, waiting for cache sync first. timeout
+// bounds the whole wait, however many informers serve the read.
 func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
@@ -1438,12 +1439,16 @@ func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, nam
 		return nil, fmt.Errorf("informer not found for %v", gvr)
 	}
 
+	var pending []cache.InformerSynced
 	for _, e := range entries {
 		if !e.informer.HasSynced() {
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			cache.WaitForCacheSync(ctx.Done(), e.informer.HasSynced)
-			cancel()
+			pending = append(pending, e.informer.HasSynced)
 		}
+	}
+	if len(pending) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		cache.WaitForCacheSync(ctx.Done(), pending...)
+		cancel()
 	}
 
 	items, err := indexerItems(entries, namespace)
