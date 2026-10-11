@@ -53,6 +53,36 @@ func TestFinalizerOwnerMatchesWorkload(t *testing.T) {
 	}
 }
 
+func TestVictoriaMetricsReloaderImageIsNotOperator(t *testing.T) {
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("operator.victoriametrics.com/v1beta1")
+	owner := ResolveFinalizerOwner("apps.victoriametrics.com/finalizer", root)
+	for _, tc := range []struct {
+		name       string
+		containers []corev1.Container
+		want       bool
+	}{
+		{name: "default reloader", containers: []corev1.Container{{Name: "config-reloader", Image: "victoriametrics/operator:config-reloader-v0.66.1"}}},
+		{name: "renamed reloader container", containers: []corev1.Container{{Name: "reload", Image: "victoriametrics/operator:config-reloader-v0.66.1"}}},
+		{name: "mirrored tagged digest reloader", containers: []corev1.Container{{Name: "reload", Image: "mirror.example:5000/victoriametrics/operator:config-reloader-v0.66.1@sha256:0123"}}},
+		{name: "digest-only reloader", containers: []corev1.Container{{Name: "config-reloader", Image: "mirror.example:5000/victoriametrics/operator@sha256:0123"}}},
+		{name: "retagged reloader", containers: []corev1.Container{{Name: "config-reloader", Image: "victoriametrics/operator:custom"}}},
+		{name: "operator with default entrypoint", containers: []corev1.Container{{Name: "manager", Image: "victoriametrics/operator:v0.66.1"}}, want: true},
+		{name: "digest-only operator", containers: []corev1.Container{{Name: "manager", Image: "mirror.example:5000/victoriametrics/operator@sha256:0123"}}, want: true},
+		{name: "operator beside reloader", containers: []corev1.Container{{Name: "config-reloader", Image: "victoriametrics/operator:config-reloader-v0.66.1"}, {Name: "manager", Image: "victoriametrics/operator:v0.66.1"}}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := corev1.PodSpec{Containers: tc.containers}
+			if got := owner.MatchesPod(nil, spec); got != tc.want {
+				t.Errorf("pod match = %v, want %v", got, tc.want)
+			}
+			if got := owner.MatchesWorkload(&metav1.ObjectMeta{Name: "custom"}, corev1.PodTemplateSpec{Spec: spec}); got != tc.want {
+				t.Errorf("workload match = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestImageRepositoryPath(t *testing.T) {
 	for image, want := range map[string]string{
 		"victoriametrics/operator":                                 "victoriametrics/operator",

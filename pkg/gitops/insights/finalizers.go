@@ -226,8 +226,18 @@ func (o *FinalizerOwner) MatchesPod(labels map[string]string, spec corev1.PodSpe
 }
 
 func (o *FinalizerOwner) runsImage(container corev1.Container) bool {
-	if !slices.Contains(o.Images, ImageRepositoryPath(container.Image)) {
+	repository := ImageRepositoryPath(container.Image)
+	if !slices.Contains(o.Images, repository) {
 		return false
+	}
+	if repository == "victoriametrics/operator" {
+		// The reloader shares the operator's repository; its container name
+		// still identifies that role when the image is pinned by digest.
+		image, _, _ := strings.Cut(container.Image, "@")
+		_, tag, _ := strings.Cut(image[strings.LastIndex(image, "/")+1:], ":")
+		if container.Name == "config-reloader" || strings.HasPrefix(tag, "config-reloader") {
+			return false
+		}
 	}
 	if o.ImageBinary == "" {
 		return true

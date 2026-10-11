@@ -340,6 +340,77 @@ func TestFinalizerCandidateNeverEstablishesOwnership(t *testing.T) {
 	}
 }
 
+func TestVictoriaMetricsReloaderDoesNotEstablishControllerHealth(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		workload      string
+		withPod       bool
+		operatorState string
+		reloaderDown  bool
+	}{
+		{name: "deployment and pod", workload: "Deployment", withPod: true},
+		{name: "deployment template without pods", workload: "Deployment"},
+		{name: "statefulset and pod", workload: "StatefulSet", withPod: true},
+		{name: "daemonset and pod", workload: "DaemonSet", withPod: true},
+		{name: "bare pod", withPod: true},
+		{name: "healthy reloader cannot hide crashing operator", workload: "Deployment", withPod: true, operatorState: "crashing"},
+		{name: "crashing reloader cannot degrade healthy operator", workload: "Deployment", withPod: true, operatorState: "healthy", reloaderDown: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(k8s.ResetResourceCache)
+			labels := map[string]string{"app.kubernetes.io/name": "vmagent"}
+			metadata := metav1.ObjectMeta{Name: "vmagent-stuck", Namespace: "team", Labels: labels, OwnerReferences: []metav1.OwnerReference{{APIVersion: "operator.victoriametrics.com/v1beta1", Kind: "VMAgent", Name: "stuck", UID: "vmagent-uid"}}}
+			template := corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "vmagent", Image: "victoriametrics/vmagent:v1.117.0"}, {Name: "config-reloader", Image: "victoriametrics/operator:config-reloader-v0.66.1"}}}}
+			selector := &metav1.LabelSelector{MatchLabels: labels}
+			var objects []runtime.Object
+			switch tc.workload {
+			case "Deployment":
+				objects = append(objects, &appsv1.Deployment{ObjectMeta: metadata, Spec: appsv1.DeploymentSpec{Selector: selector, Template: template}})
+			case "StatefulSet":
+				objects = append(objects, &appsv1.StatefulSet{ObjectMeta: metadata, Spec: appsv1.StatefulSetSpec{Selector: selector, Template: template}})
+			case "DaemonSet":
+				objects = append(objects, &appsv1.DaemonSet{ObjectMeta: metadata, Spec: appsv1.DaemonSetSpec{Selector: selector, Template: template}})
+			}
+			if tc.withPod {
+				pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "vmagent-stuck-0", Namespace: "team", Labels: labels}, Spec: template.Spec, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "vmagent", Ready: true}, {Name: "config-reloader", Ready: true}}}}
+				if tc.reloaderDown {
+					pod.Status.ContainerStatuses[1] = corev1.ContainerStatus{Name: "config-reloader", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}
+				}
+				objects = append(objects, pod)
+			}
+			if tc.operatorState != "" {
+				operator := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "vmop", Namespace: "monitoring"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "victoriametrics/operator:v0.66.1"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "manager", Ready: true}}}}
+				if tc.operatorState == "crashing" {
+					operator.Status.ContainerStatuses[0] = corev1.ContainerStatus{Name: "manager", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}
+				}
+				objects = append(objects, operator)
+			}
+			scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}, "daemonsets": {Enabled: true}}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(objects...), scopes); err != nil {
+				t.Fatal(err)
+			}
+			provider := NewCacheProvider()
+			finalizer := "apps.victoriametrics.com/finalizer"
+			observation := provider.FinalizerOwnerStatus(finalizer, Ref{Group: "operator.victoriametrics.com", Kind: "VMAgent"}, nil)
+			problem := enrichTerminatingProblem(k8s.Detection{Kind: "VMAgent", Group: "operator.victoriametrics.com", Severity: "critical", TerminatingFinalizers: []string{finalizer}, TerminatingRemovals: map[string]issuesapi.FinalizerRemoval{finalizer: {Finalizer: finalizer}}}, provider, nil, map[string]finalizerObservation{})
+			switch tc.operatorState {
+			case "crashing":
+				if !observation.Down || observation.Running || problem.Severity != "critical" || problem.ConditionalCleanup != nil || !strings.Contains(problem.Action, "Fix victoria-metrics-operator") {
+					t.Fatalf("healthy reloader hid failing operator: observation=%+v problem=%+v", observation, problem)
+				}
+			case "healthy":
+				if !observation.Healthy || !observation.Running || problem.Severity != "high" || problem.ConditionalCleanup != nil {
+					t.Fatalf("failing reloader degraded healthy operator: observation=%+v problem=%+v", observation, problem)
+				}
+			default:
+				if !observation.NotFound || observation.Running || observation.Down || problem.Severity != "high" || problem.ConditionalCleanup == nil || !strings.Contains(problem.Action, "No recognized controller found") {
+					t.Fatalf("reloader mistaken for operator: observation=%+v problem=%+v", observation, problem)
+				}
+			}
+		})
+	}
+}
+
 func TestFinalizerOwnerRemovalEvidence(t *testing.T) {
 	t.Cleanup(k8s.ResetResourceCache)
 	scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}, "daemonsets": {Enabled: true}}

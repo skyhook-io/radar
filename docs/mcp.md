@@ -493,9 +493,12 @@ This selects the Argo Rollout workload path; it does not imply that `diagnose` s
 
 Watched custom resources that remain present after deletion started appear in
 `issues` as `termination_stuck`: warning after 10 minutes and critical at 30,
-with deletion time as the onset. It reaches critical only when a finalizer's
-controller is installed but not ready, or an in-use guard holds it (see the
-table below). Radar only reads already
+with deletion time as the onset. For operator finalizers, it reaches critical
+only when a recognized controller is installed but not fully ready (see the
+table below). In-use guards also reach critical at 30 minutes, unless another
+finalizer's controller is fully ready; that mixed-finalizer case stays at
+warning. Garbage-collection-only finalizers reach critical at 30 minutes.
+Radar only reads already
 watched CRD caches; absence of an issue does not establish that unwatched kinds
 are healthy. Namespace and exact kind list authorization apply to both
 namespaced and cluster-scoped subjects. The home page's Active Issues panel and
@@ -512,7 +515,10 @@ publishes (`victoriametrics/operator`, `fluxcd/<controller>`,
 `argoproj/argocd` running `argocd-application-controller`,
 `karpenter/controller`), ignoring registry host, tag and digest, so a renamed
 install (a Helm `nameOverride`) or a mirror that keeps the path is still
-recognized. A matched workload with replicas but no pods counts as installed.
+recognized. Image matching excludes containers named `config-reloader` and
+`victoriametrics/operator` tags starting with `config-reloader`: these run in
+managed workloads, sharing the operator's image repository. A matched workload
+with replicas but no pods counts as installed.
 Every recognized copy counts toward health: a healthy workload does not hide a
 failing copy elsewhere. For a finalizer outside the catalog, a workload whose
 name matches the API group's first label plus `-operator` is named as a
