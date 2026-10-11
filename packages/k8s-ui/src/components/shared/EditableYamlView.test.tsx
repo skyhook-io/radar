@@ -266,3 +266,10 @@ it("drops a refresh from an apply made before going back to a newer review", asy
     expect.objectContaining({ reviewedResourceVersion: "3" }),
   );
 });
+
+it("uses the accent token for a generic ConfigMap Edit control", () => {
+  render({ onSave: async () => {}, onPreview: async () => reviewed("1") });
+  const edit = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Edit")!;
+  expect(edit.classList.contains("text-accent-text")).toBe(true);
+  expect(edit.className).not.toContain("text-blue-");
+});
