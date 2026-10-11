@@ -434,7 +434,7 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		if serving := pfpkg.ServingPods(pods.Items); len(serving) > 0 {
 			return serving[0].Name, servicePort, scheme, nil
 		}
-		return "", 0, "", fmt.Errorf("no running pod found")
+		return "", 0, "", fmt.Errorf("no running pod found (pods being deleted are skipped)")
 	}
 
 	if servicePortSpec.TargetPort.Type == intstr.String && servicePortSpec.TargetPort.StrVal != "" {
@@ -443,7 +443,7 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 				return pod.Name, resolved, scheme, nil
 			}
 		}
-		return "", 0, "", fmt.Errorf("no running pod found with named port %q", servicePortSpec.TargetPort.StrVal)
+		return "", 0, "", fmt.Errorf("no running pod found with named port %q (pods being deleted are skipped)", servicePortSpec.TargetPort.StrVal)
 	}
 
 	containerPort, _ := k8score.ResolveServiceTargetPort(servicePortSpec, nil)
@@ -454,7 +454,7 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return serving[0].Name, containerPort, scheme, nil
 	}
 
-	return "", 0, "", fmt.Errorf("no running pod found")
+	return "", 0, "", fmt.Errorf("no running pod found (pods being deleted are skipped)")
 }
 
 // validatePodPort checks if the pod actually exposes the requested port and

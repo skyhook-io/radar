@@ -10,7 +10,13 @@ import (
 
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // statusObserver reports a connected-node count, as Relay does.
@@ -141,6 +147,46 @@ func TestHubbleGetFlows_SplitsTheBudgetAcrossNodes(t *testing.T) {
 	if got := obs.got.GetNumber(); got != 250 {
 		t.Errorf("Number = %d, want the budget split over 200 nodes", got)
 	}
+}
+
+// failingStatusObserver is a Relay waiting on an unreachable node: its
+// ServerStatus fails while flows from the other nodes still arrive.
+type failingStatusObserver struct {
+	scriptedObserver
+}
+
+func (s *failingStatusObserver) ServerStatus(context.Context, *observerpb.ServerStatusRequest) (*observerpb.ServerStatusResponse, error) {
+	return nil, status.Error(codes.DeadlineExceeded, "a node did not answer")
+}
+
+func TestHubbleGetFlows_KeepsTheBudgetSplitWhenStatusFails(t *testing.T) {
+	t.Run("the last count is kept", func(t *testing.T) {
+		obs := &failingStatusObserver{scriptedObserver{responses: []*observerpb.GetFlowsResponse{flowResponse("a", "b")}}}
+		h := connectedHubble(t, obs)
+		h.nodeCount, h.nodeCountAt = 200, time.Now().Add(-2*hubbleNodeCountTTL)
+		if _, err := h.GetFlows(context.Background(), DefaultFlowOptions()); err != nil {
+			t.Fatal(err)
+		}
+		if got := obs.got.GetNumber(); got != 250 {
+			t.Errorf("Number = %d, want the budget still split over the 200 nodes last reported", got)
+		}
+	})
+
+	t.Run("with no count yet the cluster's nodes are counted", func(t *testing.T) {
+		obs := &failingStatusObserver{scriptedObserver{responses: []*observerpb.GetFlowsResponse{flowResponse("a", "b")}}}
+		h := connectedHubble(t, obs)
+		var nodes []runtime.Object
+		for i := range 100 {
+			nodes = append(nodes, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("node-%d", i)}})
+		}
+		h.k8sClient = fake.NewSimpleClientset(nodes...)
+		if _, err := h.GetFlows(context.Background(), DefaultFlowOptions()); err != nil {
+			t.Fatal(err)
+		}
+		if got := obs.got.GetNumber(); got != 500 {
+			t.Errorf("Number = %d, want the budget split over the cluster's 100 nodes", got)
+		}
+	})
 }
 
 func TestHubbleGetFlows_KeepsTheNewestFlowsWithinTheBudget(t *testing.T) {

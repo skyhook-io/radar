@@ -1174,7 +1174,10 @@ func hubbleNodeLimit(perNode uint64, nodes int) uint64 {
 // reused; it changes with cluster size, not between refreshes.
 const hubbleNodeCountTTL = time.Minute
 
-// connectedNodes asks Relay how many nodes it reads from, 0 when it cannot say.
+// connectedNodes asks Relay how many nodes it reads from, 0 when nothing can
+// say. ServerStatus waits on every node, so it fails while one is unreachable,
+// which is when the per-node cap matters: a failed call keeps the last count,
+// or counts the cluster's nodes when there is none yet.
 func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.ObserverClient) int {
 	h.mu.RLock()
 	n, at := h.nodeCount, h.nodeCountAt
@@ -1182,15 +1185,33 @@ func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.Obs
 	if !at.IsZero() && time.Since(at) < hubbleNodeCountTTL {
 		return n
 	}
-	statusCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	statusCtx, cancel := context.WithTimeout(ctx, hubbleStatusTimeout)
 	defer cancel()
-	n = 0
 	if status, err := client.ServerStatus(statusCtx, &observerpb.ServerStatusRequest{}); err == nil {
 		n = int(status.GetNumConnectedNodes().GetValue())
+	} else if n == 0 {
+		n = h.clusterNodeCount(ctx)
 	}
 	h.mu.Lock()
 	h.nodeCount, h.nodeCountAt = n, time.Now()
 	h.mu.Unlock()
+	return n
+}
+
+// clusterNodeCount counts the cluster's nodes from a one-item page: the API
+// server reports how many it left out, so this reads one node, not all.
+func (h *HubbleSource) clusterNodeCount(ctx context.Context) int {
+	if h.k8sClient == nil {
+		return 0
+	}
+	nodes, err := h.k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+	if err != nil {
+		return 0
+	}
+	n := len(nodes.Items)
+	if nodes.RemainingItemCount != nil {
+		n += int(*nodes.RemainingItemCount)
+	}
 	return n
 }
 

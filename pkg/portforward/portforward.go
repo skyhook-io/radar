@@ -110,10 +110,10 @@ func FindPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return "", fmt.Errorf("no pods found matching selector for service %s", serviceName)
 	}
 
-	if pods := ServingPods(pods.Items); len(pods) > 0 {
-		return pods[0].Name, nil
+	if serving := ServingPods(pods.Items); len(serving) > 0 {
+		return serving[0].Name, nil
 	}
-	return "", fmt.Errorf("no running pod found for service %s", serviceName)
+	return "", fmt.Errorf("no running pod found for service %s (pods being deleted are skipped)", serviceName)
 }
 
 // ServingPods returns the pods a forward can be pointed at, best first: ready
