@@ -137,6 +137,33 @@ describe('IssueRow', () => {
     expect(html).toContain('after healthy')
   })
 
+  it('labels a stuck deletion by how long deletion has been pending', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        id: 'terminating',
+        kind: 'VMAgent',
+        group: 'operator.victoriametrics.com',
+        category: 'termination_stuck',
+        category_group: 'control_plane',
+        reason: 'Terminating stuck',
+        first_seen: '2026-06-30T11:30:00Z',
+        issue_timing: 'started_at_resource_creation',
+        issue_timing_basis: 'deletion',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('30m')
+    expect(html).toContain('since deletion')
+    expect(html).toContain('pending since deletion was requested')
+    expect(html).not.toContain('since creation')
+    expect(html).not.toContain('first reconciliation')
+  })
+
   it('uses the category-group chip class in the queue row', () => {
     const html = renderToString(createElement(IssueRow, {
       issue: mk({ category_group: 'control_plane' }),
@@ -392,6 +419,25 @@ describe('issueTiming', () => {
       chip: 'since creation',
       meta: 'present since creation or first reconciliation',
     })
+  })
+
+  it('times stuck deletions from the deletion request, however soon after creation it came', () => {
+    for (const timing of ['started_at_resource_creation', 'started_after_resource_was_healthy'] as const) {
+      for (const kind of ['Pod', 'VMAgent']) {
+        const display = issueTiming(mk({
+          kind,
+          category: 'termination_stuck',
+          issue_timing: timing,
+          issue_timing_basis: 'deletion',
+        }))
+        expect(display).toMatchObject({
+          kind: 'deletion',
+          chip: 'since deletion',
+          meta: 'pending since deletion was requested',
+        })
+        expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toMatch(/creation|healthy|deploy/i)
+      }
+    }
   })
 
   it('describes direct after-healthy timing without coupling it to first_seen', () => {

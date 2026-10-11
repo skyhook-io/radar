@@ -139,7 +139,7 @@ var categoryDescription = map[Category]string{
 	CategoryCertificateNotReady:  "A cert-manager Certificate isn't issued — issuance is failing or still pending.",
 	CategoryPodSecurityViolation: "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
 	// Control plane
-	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer's owning controller is unhealthy.",
+	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer hasn't been released, often because its controller is down, missing, or failing its cleanup.",
 	CategoryNodeNotReady:          "A node is NotReady — its kubelet isn't reporting healthy, putting the pods on it at risk.",
 	CategoryAPIServiceUnavailable: "An aggregated APIService is unavailable — its backing extension API server isn't responding.",
 	CategoryNodeProvisioningFail:  "Node provisioning failed — the autoscaler or Karpenter couldn't bring up a node.",
