@@ -35,20 +35,7 @@ import type { NavigateToResource } from '../../utils/navigation'
 import { builtinGroupForKind } from '../../utils/api-resources'
 import { kindToPluralWithGroup, refToSelectedResource, apiVersionToGroup } from '../../utils/navigation'
 import { pluralize } from '../../utils/pluralize'
-
-/** Format resource age (e.g., "3d", "5h", "10m") */
-function formatResourceAge(createdAt: string): string {
-  const diff = Date.now() - new Date(createdAt).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return '<1m'
-  if (mins < 60) return `${mins}m`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d`
-  const months = Math.floor(days / 30)
-  return `${months}mo`
-}
+import { formatCompactAge } from '../../utils/format'
 
 export type { ActivityTypeFilter, ActivityFilterKey }
 
@@ -736,7 +723,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
               {item.createdAt && (
                 <Tooltip content={`Created: ${new Date(item.createdAt).toLocaleString()}`}>
                   <span className="text-xs text-theme-text-quaternary">
-                    • {formatResourceAge(item.createdAt)} old
+                    • {formatCompactAge(item.createdAt)} old
                   </span>
                 </Tooltip>
               )}

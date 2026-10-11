@@ -2,7 +2,7 @@
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { effectivePolicyTypeNames } from '../../utils/network-policy'
-import { formatCPUString, formatMemoryString, formatBytes } from '../../utils/format'
+import { formatCPUString, formatMemoryString, formatBytes, formatCompactAge } from '../../utils/format'
 import { pluralize } from '../../utils/pluralize'
 import type { WorkloadPodInfo } from '../../types/core'
 import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActivity, isArgoRolloutResource, isRolloutActivityVisible, rolloutActivityBadge, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
@@ -1403,11 +1403,7 @@ export function getNodeVersion(node: any): string {
 // ============================================================================
 
 export function formatAge(timestamp: string): string {
-  if (!timestamp) return '-'
-  const created = new Date(timestamp)
-  const now = new Date()
-  const diffMs = now.getTime() - created.getTime()
-  return formatDuration(diffMs)
+  return formatCompactAge(timestamp) || '-'
 }
 
 export function formatDuration(ms: number, detailed: boolean = false): string {

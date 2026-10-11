@@ -34,6 +34,7 @@ import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions,
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
 import { isCoreBatchJob } from '../../utils/api-resources'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 // ============================================================================
 // ACTIONS BAR - Interactive buttons that change based on resource kind
@@ -1128,19 +1129,6 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
     setPromoteError(outcome.error ?? { message: 'The promotion did not go through.', controllerLagging: false })
   }
 
-  function formatTimeAgo(dateStr: string): string {
-    const date = new Date(dateStr)
-    const now = new Date()
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-    if (seconds < 60) return `${seconds}s ago`
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    const days = Math.floor(hours / 24)
-    return `${days}d ago`
-  }
-
   function getImageTag(image: string): string {
     if (!image) return '-'
     const parts = image.split(':')
@@ -1232,7 +1220,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                       <RevisionImage image={rev.image} displayImage={getImageTag(rev.image)} />
                     </td>
                     <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
-                      {formatTimeAgo(rev.createdAt)}
+                      {formatRelativeAgeTime(rev.createdAt)}
                     </td>
                     <td className="py-2 text-right">
                       <div className="flex items-center gap-1 justify-end">

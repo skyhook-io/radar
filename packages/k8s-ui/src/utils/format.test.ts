@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { formatCPUString, formatMemoryString, parseMemoryToBytes, parseQuantityToNumber } from './format'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseMemoryToBytes, parseQuantityToNumber } from './format'
 
 describe('formatCPUString', () => {
   it('renders exact zero as zero, not a fabricated near-zero', () => {
@@ -113,5 +113,43 @@ describe('parseQuantityToNumber', () => {
     expect(parseQuantityToNumber(0)).toBe(0)
     expect(parseQuantityToNumber(Number.NaN)).toBe(0)
     expect(parseQuantityToNumber(Number.POSITIVE_INFINITY)).toBe(0)
+  })
+})
+
+describe('relative ages', () => {
+  const now = Date.parse('2026-10-11T12:00:00Z')
+  const ago = (ms: number) => new Date(now - ms).toISOString()
+  const MIN = 60_000
+  const DAY = 24 * 60 * MIN
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('counts days past a month instead of rounding to months or years', () => {
+    expect(formatCompactAge(ago(212 * DAY))).toBe('212d')
+    expect(formatCompactAge(ago(364 * DAY))).toBe('364d')
+    expect(formatRelativeAgeTime(ago(364 * DAY))).toBe('364d ago')
+  })
+
+  it('says just now for the current moment and for small clock skew', () => {
+    expect(formatRelativeAgeTime(ago(0))).toBe('just now')
+    expect(formatRelativeAgeTime(ago(-30_000))).toBe('just now')
+    expect(formatRelativeAgeTime(ago(5 * MIN))).toBe('5m ago')
+  })
+
+  it('shows a real future time as a date, not a negative age', () => {
+    const future = ago(-2 * 60 * MIN)
+    expect(formatRelativeAgeTime(future)).toBe(new Date(future).toLocaleString())
+  })
+
+  it('keeps missing and unparseable input visible', () => {
+    expect(formatRelativeAgeTime(undefined)).toBe('-')
+    expect(formatRelativeAgeTime('', '')).toBe('')
+    expect(formatRelativeAgeTime('not a time')).toBe('not a time')
   })
 })
