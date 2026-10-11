@@ -75,7 +75,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams } from './utils/navigation'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -1527,32 +1527,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (skipUrlWriteAfterPopRef.current) return
     const currentSearch = window.location.search
     const params = new URLSearchParams(currentSearch)
-
-    // Update namespaces param
-    if (namespaces.length > 0) {
-      params.set('namespaces', namespaces.join(','))
-    } else {
-      params.delete('namespaces')
-    }
-    // Remove legacy 'namespace' param if present
-    params.delete('namespace')
-
-    // Topology-specific params: only set when on topology view, clean up otherwise
-    if (mainView === 'topology') {
-      if (topologyMode !== 'resources') {
-        params.set('mode', topologyMode)
-      } else {
-        params.delete('mode')
-      }
-      if (groupingMode !== 'none' && (namespaces.length === 0 || groupingMode !== 'namespace')) {
-        params.set('group', groupingMode)
-      } else {
-        params.delete('group')
-      }
-    } else {
-      params.delete('mode')
-      params.delete('group')
-    }
+    writeViewParams(params, namespaces, mainView === 'topology' ? { mode: topologyMode, grouping: groupingMode } : null)
 
     // Only update if params actually changed vs current URL
     if (params.toString() !== new URLSearchParams(currentSearch).toString()) {

@@ -174,6 +174,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// rows, so they run BEFORE grouping and BEFORE the public filters.
 	out = applyClusterScopedAccess(out, f)
 	out = applySubjectAccess(out, f.CanReadSubject)
+	out = applyOwnerAccess(out, f)
 	out = filterEvidenceAccess(out, f.CanReadEvidence, f.AllowUnfilteredEvidence, f.OnEvidenceWithheld)
 	out = redactUnreadableRelatedRefs(out, f.CanReadRelated)
 	out = dedupePodSchedulingOverProblem(out)

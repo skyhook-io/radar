@@ -75,12 +75,16 @@ export function capacityHrefForIssue(
   return null;
 }
 
-/** The subject a link into Issues narrows to (?kind=&group=&resource=ns/name), or null. */
+/**
+ * The subject a link into Issues narrows to (?kind=&apiGroup=&resource=ns/name),
+ * or null. The group is `apiGroup`, as in resource links: App's URL sync owns
+ * `group` (topology grouping) and drops it on every other view.
+ */
 export function issueSubjectFromParams(params: URLSearchParams): IssueSubject | null {
   const kind = params.get("kind");
   const resource = params.get("resource");
   if (!kind || !resource) return null;
-  const group = params.get("group") ?? "";
+  const group = params.get("apiGroup") ?? "";
   const slash = resource.indexOf("/");
   if (slash < 0) return { kind, group, namespace: "", name: resource };
   const name = resource.slice(slash + 1);
@@ -123,7 +127,7 @@ export function issueSubjectState(
   const data = related.data;
   if (related.isLoading || !data) return { state: "checking" };
   if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0 };
-  if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind} yet` };
+  if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind} yet; opening its list starts it` };
   if (data.coverage === "syncing") return { state: "unconfirmed", why: `Radar is still loading ${subject.kind}` };
   const withheld = data.withheld?.issues ?? 0;
   if (withheld > 0) {
@@ -203,7 +207,7 @@ export function IssuesPane({
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("kind");
-        next.delete("group");
+        next.delete("apiGroup");
         next.delete("resource");
         return next;
       },

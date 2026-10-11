@@ -221,3 +221,20 @@ func TestCapacityVisibleIssuesAuthorizesEvidence(t *testing.T) {
 		t.Fatalf("authorized evidence withheld: %+v", got)
 	}
 }
+
+// The memo is composed for every user, so an owner the caller can't read is
+// cleared at read time, as Compose does, rather than becoming the grouped issue.
+func TestCapacityVisibleIssuesClearsUnreadableOwners(t *testing.T) {
+	mirror := issues.Issue{ID: "mirror", Kind: "Pod", Namespace: "kube-system", Name: "kube-proxy-node-1", Owner: issues.Ref{Kind: "Node", Name: "node-1"}}
+	denyNodes := func(kind, _ string) bool { return kind != "Node" }
+	got := capacityVisibleIssues([]issues.Issue{mirror}, nil, denyNodes, nil, nil)
+	if len(got) != 1 || got[0].Owner.Kind != "" {
+		t.Fatalf("unreadable Node owner kept: %+v", got)
+	}
+	if grouped := issues.GroupIssues(got); len(grouped) != 1 || grouped[0].Kind != "Pod" {
+		t.Fatalf("grouped subject = %+v, want the Pod", grouped)
+	}
+	if got := capacityVisibleIssues([]issues.Issue{mirror}, nil, func(string, string) bool { return true }, nil, nil); got[0].Owner.Kind != "Node" {
+		t.Fatalf("readable Node owner cleared: %+v", got)
+	}
+}

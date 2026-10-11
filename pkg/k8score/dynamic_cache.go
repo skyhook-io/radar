@@ -345,15 +345,6 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 	return err
 }
 
-// hasCoveringInformer reports whether an existing informer already serves
-// reads for (gvr, ns), and must agree with readEntries: a cluster-wide
-// informer covers every namespace; a specific ns is also covered by its own
-// namespace-scoped informer. ns == "" is covered ONLY by a cluster-wide
-// informer — not by incidental namespace-scoped ones, since readEntries(gvr,
-// "") won't read those. Treating them as covering here would let
-// ensureWatching skip the probe and then have List(gvr, "") find nothing,
-// returning a spurious "informer not found" instead of probing cluster-wide
-// (or returning a clean forbidden).
 // HasCoveringInformer reports whether an informer serves reads of gvr in ns
 // ("" for all namespaces), synced or not.
 func (d *DynamicResourceCache) HasCoveringInformer(gvr schema.GroupVersionResource, ns string) bool {
@@ -363,6 +354,15 @@ func (d *DynamicResourceCache) HasCoveringInformer(gvr schema.GroupVersionResour
 	return d.hasCoveringInformer(gvr, ns)
 }
 
+// hasCoveringInformer reports whether an existing informer already serves
+// reads for (gvr, ns), and must agree with readEntries: a cluster-wide
+// informer covers every namespace; a specific ns is also covered by its own
+// namespace-scoped informer. ns == "" is covered ONLY by a cluster-wide
+// informer — not by incidental namespace-scoped ones, since readEntries(gvr,
+// "") won't read those. Treating them as covering here would let
+// ensureWatching skip the probe and then have List(gvr, "") find nothing,
+// returning a spurious "informer not found" instead of probing cluster-wide
+// (or returning a clean forbidden).
 func (d *DynamicResourceCache) hasCoveringInformer(gvr schema.GroupVersionResource, ns string) bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

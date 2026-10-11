@@ -127,6 +127,10 @@ func capacityVisibleIssues(
 	for _, namespace := range namespaces {
 		allowed[namespace] = struct{}{}
 	}
+	inNamespace := func(ref issues.Ref) bool {
+		_, ok := allowed[ref.Namespace]
+		return namespaces == nil || ok
+	}
 	out := make([]issues.Issue, 0, len(in))
 	for _, issue := range in {
 		// The memo keeps findings with inventory dependencies for this check.
@@ -134,8 +138,9 @@ func capacityVisibleIssues(
 			continue
 		}
 		// The memo composes user-agnostically; per-user redaction of
-		// referenced-by-NodePool context happens here, at read time.
+		// referenced-by-NodePool context and owners happens here, at read time.
 		issue = issues.RedactIssueRelatedRefs(issue, canReadRelated)
+		issue = issues.WithReadableOwner(issue, inNamespace, canReadClusterScoped)
 		if issue.Namespace == "" {
 			if canReadClusterScoped == nil || canReadClusterScoped(issue.Kind, issue.Group) {
 				out = append(out, issue)

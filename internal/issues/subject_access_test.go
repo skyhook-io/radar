@@ -147,3 +147,38 @@ func TestConcernsMatchesTheSubjectOrItsOwnerByGroup(t *testing.T) {
 		t.Fatal("a Knative Service matched a core Service's issue")
 	}
 }
+
+// A row's owner becomes the grouped issue's subject, so an owner the caller
+// can't read must not: the kubelet makes a mirror Pod's Node its controller,
+// and a namespace reader who can't list Nodes would otherwise see a Node
+// issue, and lose the Pod's own.
+func TestUnreadableOwnerLeavesTheRowItsOwnSubject(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		owner                   k8s.Detection
+		canReadNodes, canSecret bool
+		wantKind, wantNamespace string
+	}{
+		{"unreadable cluster-scoped owner", k8s.Detection{OwnerKind: "Node", OwnerName: "node-1"}, false, false, "Pod", "team-a"},
+		{"readable cluster-scoped owner", k8s.Detection{OwnerKind: "Node", OwnerName: "node-1"}, true, false, "Node", ""},
+		{"unreadable namespaced owner", k8s.Detection{OwnerKind: "Secret", OwnerName: "parent"}, true, false, "Pod", "team-a"},
+		{"readable namespaced owner", k8s.Detection{OwnerKind: "Secret", OwnerName: "parent"}, true, true, "Secret", "team-a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := tc.owner
+			pod.Kind, pod.Namespace, pod.Name, pod.Severity, pod.Reason = "Pod", "team-a", "worker", "critical", "CrashLoopBackOff"
+			p := &fakeProvider{problems: []k8s.Detection{pod}}
+			canReadClusterScoped := func(kind, _ string) bool { return kind != "Node" || tc.canReadNodes }
+			canReadSubject := func(ref Ref) bool { return ref.Namespace == "team-a" && (ref.Kind != "Secret" || tc.canSecret) }
+
+			grouped := Compose(p, Filters{Grouped: true, Limit: NoLimit, SkipPodTemplateContext: true, CanReadSubject: canReadSubject, CanReadClusterScoped: canReadClusterScoped})
+			if len(grouped) != 1 || grouped[0].Kind != tc.wantKind || grouped[0].Namespace != tc.wantNamespace {
+				t.Fatalf("grouped = %+v, want one %s issue in %q", grouped, tc.wantKind, tc.wantNamespace)
+			}
+			related := RelatedIssues(p, RelatedIssueOptions{SkipPodTemplateContext: true, CanReadSubject: canReadSubject, CanReadClusterScoped: canReadClusterScoped}, "", "Pod", "team-a", "worker")
+			if len(related) != 1 || related[0].ID != grouped[0].ID {
+				t.Fatalf("the Pod's own lookup = %+v, want the grouped issue %s", related, grouped[0].ID)
+			}
+		})
+	}
+}
