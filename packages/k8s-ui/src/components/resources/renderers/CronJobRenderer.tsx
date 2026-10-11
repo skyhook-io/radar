@@ -55,7 +55,7 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
         <AlertBanner
           variant="error"
           title="Recent Jobs Failing"
-          message={<>Jobs have been scheduled but haven't succeeded recently. Last success: {formatRelativeAgeTime(status.lastSuccessfulTime)}. Check job history and pod logs.</>}
+          message={<>Jobs have been scheduled but haven't succeeded recently. Last success: {formatRelativeAgeTime(status.lastSuccessfulTime, 'never')}. Check job history and pod logs.</>}
         />
       )}
 

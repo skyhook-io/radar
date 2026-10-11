@@ -1375,7 +1375,7 @@ function GitOpsTable({
               <TableCell>
                 {row.terminating
                   ? <span className="text-orange-400/80">Pending {formatRelativeAgeTime(row.terminationStartedAt, '') || 'now'}</span>
-                  : formatRelativeAgeTime(row.lastSync || row.createdAt, '')}
+                  : row.lastSync ? formatRelativeAgeTime(row.lastSync, '') : row.createdAt ? `Created ${formatRelativeAgeTime(row.createdAt, '')}` : ''}
               </TableCell>
               {showActions && onRowAction && (
                 <td
