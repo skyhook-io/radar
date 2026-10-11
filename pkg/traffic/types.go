@@ -97,13 +97,13 @@ type Endpoint struct {
 	Port         int    `json:"port,omitempty"` // Port number
 }
 
-// GraphEndpoint is the endpoint as the graph draws it: a pod with a known
+// graphEndpoint is the endpoint as the graph draws it: a pod with a known
 // workload becomes that workload, so a Deployment with fifty replicas is one
 // node rather than fifty, the way metric-based sources report it already.
 // Records keep their pods; only the aggregation and selection matching use
 // this. An endpoint already named after its workload (Istio and Beyla report
 // workloads as pods) is left as its source reported it.
-func GraphEndpoint(e Endpoint) Endpoint {
+func graphEndpoint(e Endpoint) Endpoint {
 	if e.Kind != EndpointKindPod || e.Workload == "" || e.Namespace == "" || e.Workload == e.Name {
 		return e
 	}
@@ -116,12 +116,12 @@ func GraphEndpoint(e Endpoint) Endpoint {
 	}
 }
 
-// GraphFlows maps each flow's endpoints to GraphEndpoint, returning copies.
+// GraphFlows maps each flow's endpoints to graphEndpoint, returning copies.
 func GraphFlows(flows []Flow) []Flow {
 	out := make([]Flow, len(flows))
 	for i, f := range flows {
-		f.Source = GraphEndpoint(f.Source)
-		f.Destination = GraphEndpoint(f.Destination)
+		f.Source = graphEndpoint(f.Source)
+		f.Destination = graphEndpoint(f.Destination)
 		out[i] = f
 	}
 	return out
@@ -181,7 +181,7 @@ func (r EndpointRef) matches(e Endpoint) bool {
 		return false
 	}
 	if r.Kind == EndpointKindWorkload {
-		return r.Name == GraphEndpoint(e).Name
+		return r.Name == graphEndpoint(e).Name
 	}
 	return r.Name == e.Name
 }

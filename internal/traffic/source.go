@@ -47,6 +47,5 @@ const (
 // Re-export functions from pkg/traffic.
 var AggregateFlows = pkgtraffic.AggregateFlows
 var GraphFlows = pkgtraffic.GraphFlows
-var GraphEndpoint = pkgtraffic.GraphEndpoint
 var RoundRate = pkgtraffic.RoundRate
 var DefaultFlowOptions = pkgtraffic.DefaultFlowOptions

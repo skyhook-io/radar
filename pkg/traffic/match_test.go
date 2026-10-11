@@ -90,9 +90,9 @@ func TestFlowOptionsExcludes(t *testing.T) {
 
 func TestGraphEndpoint(t *testing.T) {
 	pod := Endpoint{Namespace: "shop", Name: "web-7d9f-x2k4q", Kind: EndpointKindPod, IP: "10.0.0.1", Workload: "web", WorkloadKind: "Deployment"}
-	g := GraphEndpoint(pod)
+	g := graphEndpoint(pod)
 	if g.Name != "web" || g.Kind != EndpointKindWorkload || g.WorkloadKind != "Deployment" || g.IP != "" {
-		t.Errorf("GraphEndpoint = %+v, want the Deployment, with nothing pod-specific", g)
+		t.Errorf("graphEndpoint = %+v, want the Deployment, with nothing pod-specific", g)
 	}
 	for _, e := range []Endpoint{
 		{Namespace: "shop", Name: "standalone", Kind: EndpointKindPod},                          // nothing owns it
@@ -100,8 +100,8 @@ func TestGraphEndpoint(t *testing.T) {
 		{Namespace: "shop", Name: "checkout", Kind: EndpointKindWorkload, Workload: "checkout"}, // already a workload
 		{Namespace: "shop", Name: "reviews", Kind: EndpointKindPod, Workload: "reviews"},        // a source that reports workloads as pods (Istio, Beyla)
 	} {
-		if got := GraphEndpoint(e); !reflect.DeepEqual(got, e) {
-			t.Errorf("GraphEndpoint(%+v) = %+v, want it unchanged", e, got)
+		if got := graphEndpoint(e); !reflect.DeepEqual(got, e) {
+			t.Errorf("graphEndpoint(%+v) = %+v, want it unchanged", e, got)
 		}
 	}
 

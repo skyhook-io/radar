@@ -152,7 +152,7 @@ export interface TrafficEndpointPair {
 /** The selection rides in the query string, URL-encoded. Proxies in front of
  *  Radar commonly refuse request lines over 8 KiB (ingress-nginx's default),
  *  so a larger selection is not sent at all. */
-export const MAX_TRAFFIC_MATCH_CHARS = 6_000
+const MAX_TRAFFIC_MATCH_CHARS = 6_000
 
 /** A selection as the server matches it: its edges, or a node as the one
  *  endpoint it is, which every one of its edges has at an end. */

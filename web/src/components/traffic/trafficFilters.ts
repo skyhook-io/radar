@@ -343,7 +343,7 @@ function selectableId(e: { namespace?: string; name: string; kind?: string }): s
 
 /**
  * A record's endpoint as the graph names it: a pod with a known workload is
- * drawn as that workload. Mirrors the server's GraphEndpoint (pkg/traffic),
+ * drawn as that workload. Mirrors the server's graphEndpoint (pkg/traffic),
  * which builds the aggregation the graph is drawn from — the two have to agree
  * for a record to be found under its node.
  */
