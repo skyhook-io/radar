@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -178,6 +179,7 @@ func foldGroup(members []Issue) Issue {
 	if dg, ok := agreedDiagnosis(members); ok {
 		g.Cause = dg.Cause
 		g.Action = dg.Action
+		g.ConditionalCleanup = dg.ConditionalCleanup
 		g.RemediationKind = dg.RemediationKind
 		g.RemediationTarget = dg.RemediationTarget
 		g.OperationRetryCount = dg.OperationRetryCount
@@ -304,7 +306,7 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 			picked = m
 			continue
 		}
-		if m.Cause != picked.Cause || m.Action != picked.Action ||
+		if m.Cause != picked.Cause || m.Action != picked.Action || !reflect.DeepEqual(m.ConditionalCleanup, picked.ConditionalCleanup) ||
 			m.RemediationKind != picked.RemediationKind || m.RemediationTarget != picked.RemediationTarget ||
 			m.OperationRetryCount != picked.OperationRetryCount || m.Stuck != picked.Stuck {
 			return Issue{}, false
@@ -314,7 +316,7 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 }
 
 func hasDiagnosis(i Issue) bool {
-	return i.Cause != "" || i.Action != "" || i.RemediationKind != "" || i.RemediationTarget != "" ||
+	return i.Cause != "" || i.Action != "" || i.ConditionalCleanup != nil || i.RemediationKind != "" || i.RemediationTarget != "" ||
 		i.OperationRetryCount != 0 || i.Stuck
 }
 

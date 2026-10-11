@@ -80,12 +80,13 @@ type NodeStartupCorroboration struct {
 // issues.
 type Detection struct {
 	TerminatingFinalizers []string `json:"-"`
-	// TerminatingRemovalPreviews maps each operator finalizer to a dry-run
-	// removal it could take. Issue composition shows one only after observing
-	// that the finalizer's controller is absent.
-	TerminatingRemovalPreviews map[string]string         `json:"-"`
-	NodeStartupCorroboration   *NodeStartupCorroboration `json:"-"`
-	MessageBeforeCorroboration string                    `json:"-"`
+	// TerminatingRemovals maps each operator finalizer to a dry-run removal.
+	// Issue composition offers one only as a ConditionalCleanup, after finding
+	// no running copy of the finalizer's catalog controller.
+	TerminatingRemovals        map[string]issuesapi.FinalizerRemoval `json:"-"`
+	ConditionalCleanup         *issuesapi.ConditionalCleanup         `json:"-"`
+	NodeStartupCorroboration   *NodeStartupCorroboration             `json:"-"`
+	MessageBeforeCorroboration string                                `json:"-"`
 	Kind                       string
 	Namespace                  string
 	Name                       string

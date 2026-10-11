@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,5 +173,70 @@ func TestMCPIssuesHandlerPassesTerminationListAuthorizer(t *testing.T) {
 		if len(response.Issues) != 1 || response.Issues[0].Category != issuesapi.CategoryTerminationStuck || response.Issues[0].Name != "stuck" {
 			t.Fatalf("authorized handler must compose CR termination with CanListResource: %+v", response.Issues)
 		}
+	}
+}
+
+// Agents read the finalizer removal as a conditional step with its own
+// guidance, never as the issue's next step.
+func TestMCPIssuesCarryConditionalCleanup(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetResourceCache)
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmagents"}
+	agent := &unstructured.Unstructured{}
+	agent.SetAPIVersion(gvr.Group + "/" + gvr.Version)
+	agent.SetKind("VMAgent")
+	agent.SetName("stuck")
+	agent.SetNamespace("team")
+	agent.SetUID("vmagent-uid")
+	agent.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-24 * time.Hour)))
+	agent.SetDeletionTimestamp(&metav1.Time{Time: time.Now().Add(-2 * time.Hour)})
+	agent.SetFinalizers([]string{"apps.victoriametrics.com/finalizer"})
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "VMAgentList"}, agent)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "VMAgent", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	dc := k8s.GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !dc.WaitForSync(gvr, 2*time.Second) {
+		t.Fatal("VMAgent cache did not sync")
+	}
+
+	result, _, err := handleIssuesTool(context.Background(), nil, issuesInput{Namespace: "team", Kind: "VMAgent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(t, result)
+	var response struct {
+		Issues []struct {
+			Severity           string `json:"severity"`
+			Action             string `json:"action"`
+			ConditionalCleanup *struct {
+				Condition     string `json:"condition"`
+				AgentGuidance string `json:"agent_guidance"`
+				Removals      []struct {
+					PatchResource map[string]any `json:"patch_resource"`
+				} `json:"removals"`
+			} `json:"conditional_cleanup"`
+		} `json:"issues"`
+	}
+	if err := json.Unmarshal([]byte(text), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Issues) != 1 {
+		t.Fatalf("issues=%s", text)
+	}
+	issue := response.Issues[0]
+	if issue.Severity != "warning" || strings.Contains(issue.Action, "patch_resource") || strings.Contains(issue.Action, "kubectl patch") {
+		t.Fatalf("the next step must not carry the removal: %s", text)
+	}
+	cleanup := issue.ConditionalCleanup
+	if cleanup == nil || !strings.HasPrefix(cleanup.Condition, "If victoria-metrics-operator was uninstalled on purpose (and nothing else should finalize this object)") || !strings.Contains(cleanup.AgentGuidance, "Propose this only after the user confirms the condition") || len(cleanup.Removals) != 1 || cleanup.Removals[0].PatchResource["dry_run"] != true {
+		t.Fatalf("conditional_cleanup=%s", text)
 	}
 }

@@ -1,9 +1,12 @@
 package insights
 
 import (
+	"path"
+	"slices"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -44,6 +47,14 @@ type FinalizerOwner struct {
 	// releases cloud resources. Removing one leaves that infrastructure
 	// behind even when the controller is down.
 	ReleasesInfrastructure bool
+	// Images are the repository paths of the controller's published image,
+	// without registry host, tag or digest, so a mirror that keeps the path
+	// still matches. They recognize installs whose names and labels were
+	// changed (a Helm nameOverride renames both).
+	Images []string
+	// ImageBinary, when set, must also be the binary the container runs: the
+	// image ships several components and only this one is the controller.
+	ImageBinary string
 }
 
 // ResolveFinalizerOwner returns a best-guess FinalizerOwner for the
@@ -58,14 +69,23 @@ type FinalizerOwner struct {
 // an empty namespace to list controller pods cluster-wide.
 func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *FinalizerOwner {
 	if strings.HasPrefix(finalizer, "karpenter.sh/") || strings.HasPrefix(finalizer, "karpenter.k8s.aws/") || strings.HasPrefix(finalizer, "karpenter.azure.com/") {
-		return &FinalizerOwner{Controller: "karpenter", SelectorKey: "app.kubernetes.io/name", SelectorValue: "karpenter", OffClusterOfferings: "EKS Auto Mode, AKS node auto-provisioning", ReleasesInfrastructure: true}
+		return &FinalizerOwner{
+			Controller:             "karpenter",
+			SelectorKey:            "app.kubernetes.io/name",
+			SelectorValue:          "karpenter",
+			OffClusterOfferings:    "EKS Auto Mode, AKS node auto-provisioning",
+			ReleasesInfrastructure: true,
+			// public.ecr.aws/karpenter/controller (AWS provider chart),
+			// mcr.microsoft.com/aks/karpenter/controller (Azure provider chart).
+			Images: []string{"karpenter/controller", "aks/karpenter/controller"},
+		}
 	}
 	switch finalizer {
 	case "apps.victoriametrics.com/finalizer":
 		if resourceid.GroupFromAPIVersion(root.GetAPIVersion()) != "operator.victoriametrics.com" {
 			return nil
 		}
-		return &FinalizerOwner{Controller: "victoria-metrics-operator", SelectorKey: "app.kubernetes.io/name", SelectorValue: "victoria-metrics-operator"}
+		return &FinalizerOwner{Controller: "victoria-metrics-operator", SelectorKey: "app.kubernetes.io/name", SelectorValue: "victoria-metrics-operator", Images: []string{"victoriametrics/operator"}}
 
 	// Argo CD: a single Application controller owns all Argo-side
 	// finalizers, including the deprecated "foreground-cascade" key
@@ -79,6 +99,10 @@ func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *F
 			SelectorKey:         "app.kubernetes.io/name",
 			SelectorValue:       "argocd-application-controller",
 			OffClusterOfferings: "Amazon EKS Capabilities",
+			// quay.io/argoproj/argocd also runs the API server, repo server
+			// and the other Argo CD components.
+			Images:      []string{"argoproj/argocd"},
+			ImageBinary: "argocd-application-controller",
 		}
 
 	// Flux: legacy "finalizers.fluxcd.io" key is shared across all
@@ -134,54 +158,114 @@ func resolveFluxImageOwner(root *unstructured.Unstructured) *FinalizerOwner {
 }
 
 // Standard Flux controller catalog. Values match the official Helm chart
-// defaults for `flux-system`; custom-namespace installs return nil from
-// the lookup intentionally — omitting the controller-health line beats
-// pointing the operator at the wrong pod.
+// defaults for `flux-system`; images are ghcr.io/fluxcd/<controller>.
 var (
 	fluxKustomizeController = FinalizerOwner{
 		Controller:    "kustomize-controller",
 		Namespace:     "flux-system",
 		SelectorKey:   "app",
 		SelectorValue: "kustomize-controller",
+		Images:        []string{"fluxcd/kustomize-controller"},
 	}
 	fluxHelmController = FinalizerOwner{
 		Controller:    "helm-controller",
 		Namespace:     "flux-system",
 		SelectorKey:   "app",
 		SelectorValue: "helm-controller",
+		Images:        []string{"fluxcd/helm-controller"},
 	}
 	fluxSourceController = FinalizerOwner{
 		Controller:    "source-controller",
 		Namespace:     "flux-system",
 		SelectorKey:   "app",
 		SelectorValue: "source-controller",
+		Images:        []string{"fluxcd/source-controller"},
 	}
 	fluxNotificationController = FinalizerOwner{
 		Controller:    "notification-controller",
 		Namespace:     "flux-system",
 		SelectorKey:   "app",
 		SelectorValue: "notification-controller",
+		Images:        []string{"fluxcd/notification-controller"},
 	}
 	fluxImageController = FinalizerOwner{
 		Controller:    "image-reflector-controller",
 		Namespace:     "flux-system",
 		SelectorKey:   "app",
 		SelectorValue: "image-reflector-controller",
+		Images:        []string{"fluxcd/image-reflector-controller"},
 	}
 	fluxImageAutomationController = FinalizerOwner{
 		Controller:    "image-automation-controller",
 		Namespace:     "flux-system",
 		SelectorKey:   "app",
 		SelectorValue: "image-automation-controller",
+		Images:        []string{"fluxcd/image-automation-controller"},
 	}
 )
 
-// MatchesFinalizerController accepts explicit catalog identity, or a matching
-// finalizer/API domain together with an operator-named workload. Domain alone
-// never identifies a controller.
-func MatchesFinalizerController(finalizer string, root *unstructured.Unstructured, workload metav1.Object) bool {
-	if owner := ResolveFinalizerOwner(finalizer, root); owner != nil {
-		return workload.GetLabels()[owner.SelectorKey] == owner.SelectorValue || controllerNameMatches(workload.GetName(), owner.Controller)
+// MatchesWorkload reports whether a workload runs this owner's controller,
+// recognized by the workload's name or labels, or by its pod template's
+// labels or container image.
+func (o *FinalizerOwner) MatchesWorkload(workload metav1.Object, template corev1.PodTemplateSpec) bool {
+	return workload.GetLabels()[o.SelectorKey] == o.SelectorValue || controllerNameMatches(workload.GetName(), o.Controller) || o.MatchesPod(template.Labels, template.Spec)
+}
+
+// MatchesPod reports whether a pod (or pod template) runs this owner's
+// controller, recognized by the catalog label or a container image.
+func (o *FinalizerOwner) MatchesPod(labels map[string]string, spec corev1.PodSpec) bool {
+	if labels[o.SelectorKey] == o.SelectorValue {
+		return true
+	}
+	for _, container := range spec.Containers {
+		if o.runsImage(container) {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *FinalizerOwner) runsImage(container corev1.Container) bool {
+	if !slices.Contains(o.Images, ImageRepositoryPath(container.Image)) {
+		return false
+	}
+	if o.ImageBinary == "" {
+		return true
+	}
+	for _, token := range slices.Concat(container.Command, container.Args) {
+		if path.Base(token) == o.ImageBinary {
+			return true
+		}
+	}
+	return false
+}
+
+// ImageRepositoryPath returns an image reference's repository path without
+// its registry host, tag or digest: "ghcr.io/fluxcd/helm-controller:v1@sha256:…"
+// and "fluxcd/helm-controller" both give "fluxcd/helm-controller".
+func ImageRepositoryPath(image string) string {
+	ref, _, _ := strings.Cut(image, "@")
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+	// Like Docker, the first segment is a registry host only when it has a dot
+	// or a port, or is localhost; otherwise it is a Docker Hub namespace.
+	if host, rest, ok := strings.Cut(ref, "/"); ok && (strings.ContainsAny(host, ".:") || host == "localhost") {
+		ref = rest
+	}
+	return ref
+}
+
+// FinalizerControllerCandidate reports a workload whose name or labels match
+// an uncataloged finalizer's API group: the group's first DNS label plus
+// "-operator" or "operator-". The match names a candidate only. A short label
+// can match an unrelated operator (group cluster.example.io matches
+// rabbitmq-cluster-operator), so callers must not treat the candidate as the
+// finalizer's owner: not to judge it stopped or gone, not to raise severity,
+// not to offer removing the finalizer. Domain alone never matches.
+func FinalizerControllerCandidate(finalizer string, root *unstructured.Unstructured, workload metav1.Object) bool {
+	if ResolveFinalizerOwner(finalizer, root) != nil {
+		return false
 	}
 	domain, _, qualified := strings.Cut(finalizer, "/")
 	group := resourceid.GroupFromAPIVersion(root.GetAPIVersion())

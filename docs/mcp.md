@@ -493,9 +493,9 @@ This selects the Argo Rollout workload path; it does not imply that `diagnose` s
 
 Watched custom resources that remain present after deletion started appear in
 `issues` as `termination_stuck`: warning after 10 minutes and critical at 30,
-with deletion time as the onset. It stays at warning when a matched controller
-is fully healthy, or when Radar can't confirm that any finalizer's controller is
-down (see the table below). Radar only reads already
+with deletion time as the onset. It reaches critical only when a finalizer's
+controller is installed but not ready, or an in-use guard holds it (see the
+table below). Radar only reads already
 watched CRD caches; absence of an issue does not establish that unwatched kinds
 are healthy. Namespace and exact kind list authorization apply to both
 namespaced and cluster-scoped subjects. The home page's Active Issues panel and
@@ -504,37 +504,52 @@ problem and health summary, MCP `get_dashboard` and `cluster://health` do not
 include this CR scan.
 
 The cause names the finalizers and elapsed deletion age, plus one controller
-observation per finalizer. Controllers are identified from the Argo/Flux
-catalog, VictoriaMetrics and Karpenter entries, or a conservative match of an
-exact finalizer domain/API group to operator workload names or labels. Each
-observation lands in one of these states:
+observation per finalizer. Controllers are identified from a catalog (Argo CD,
+Flux, VictoriaMetrics and Karpenter): a workload matches by its name or labels,
+or by its pod template's labels or container image, and pods match by the
+catalog label or image. Images match on the repository path the vendor
+publishes (`victoriametrics/operator`, `fluxcd/<controller>`,
+`argoproj/argocd` running `argocd-application-controller`,
+`karpenter/controller`), ignoring registry host, tag and digest, so a renamed
+install (a Helm `nameOverride`) or a mirror that keeps the path is still
+recognized. A matched workload with replicas but no pods counts as installed.
+Every recognized copy counts toward health: a healthy workload does not hide a
+failing copy elsewhere. For a finalizer outside the catalog, a workload whose
+name matches the API group's first label plus `-operator` is named as a
+candidate only; it never decides the controller's state, the severity, or a
+cleanup. Each observation lands in one of these states:
 
 | Observation | Severity | Action |
 |---|---|---|
-| A matching controller pod is ready | Warning when every matched pod is ready; otherwise unchanged | Check the controller's logs, permissions and deletion-blocking references. No removal patch. |
-| Identified and installed, but no pod is ready: CrashLoopBackOff, image pull failure, Pending, or no pods for its desired replicas | Critical at 30 minutes | Fix the controller; it finishes the deletion once running. No removal patch: removal would skip the cleanup it still intends to do |
-| Identified and absent: no matching workload or catalog pod anywhere Radar searched, or its Deployment or StatefulSet is scaled to 0 replicas | Critical at 30 minutes | Restore the controller if it should be running. A one-finalizer removal preview is offered, for use only if the controller was intentionally removed or scaled down |
-| Identified, but absence can't be established: no running pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), even when an in-cluster copy is scaled to 0; workloads not searchable cluster-wide; or pods unreadable | Warning | Check that controller first. No removal patch |
-| **Controller unknown**: no confident mapping | Warning | The finalizer's domain usually names its controller; find and check it first. No removal patch |
+| A recognized controller pod is ready | Warning when every recognized pod is ready; otherwise unchanged | Check the controller's logs, permissions and deletion-blocking references. No cleanup. |
+| Recognized and installed, but no pod is ready: CrashLoopBackOff, image pull failure, Pending, or no pods for its desired replicas | Critical at 30 minutes | Fix the controller; it finishes the deletion once running. No cleanup: removal would skip the cleanup it still intends to do |
+| **No recognized controller found**: a complete search found nothing by name, labels or image, or every recognized copy is scaled to 0 replicas | Warning | Restore the controller if it should be running (it may also be installed in a way Radar doesn't recognize, or stopped for now). A `conditional_cleanup` is attached, never the action |
+| Identified, but its state can't be checked: no running pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), even when an in-cluster copy is scaled to 0; workloads not searchable cluster-wide; or the Pod cache not ready or pods unreadable | Warning | Check that controller first. No cleanup |
+| **Controller unknown**: no catalog entry, at most a name-only candidate | Warning | The finalizer's domain usually names its controller; find and check it first. No cleanup |
 
 Real infrastructure operators such as Crossplane, Cluster API, Config Connector,
-ACK and Strimzi are not in the catalog and don't match the workload heuristic,
-so their stuck deletions stay at warning with no removal patch: their
-controllers may still be deleting cloud resources, and removing a finalizer
-skips that cleanup and can orphan infrastructure, volumes or nodes. Seeing a
-controller absent or down needs a complete search:
+ACK and Strimzi are not in the catalog, so their stuck deletions stay at warning
+with no cleanup: their controllers may still be deleting cloud resources, and
+removing a finalizer skips that cleanup and can orphan infrastructure, volumes
+or nodes. Calling a controller down or not found needs a complete search:
 Deployments, StatefulSets and DaemonSets readable and cached cluster-wide, and
-the catalog's pod selector searched cluster-wide. A down copy in
-the visible namespaces doesn't rule out a healthy one elsewhere.
+Pods searched cluster-wide. A down copy in the visible namespaces doesn't rule
+out a healthy one elsewhere.
 
-The removal preview is text only. It previews one indexed finalizer removal
-using JSON Patch `test` operations for the object UID and finalizer value,
-followed by `remove`, both as a `patch_resource` call with `dry_run=true` and as
-`kubectl patch --type=json --dry-run=server`. Review the preview before an
+`conditional_cleanup` holds the one step Radar can't recommend outright:
+`condition` ("If victoria-metrics-operator was uninstalled on purpose (and
+nothing else should finalize this object), remove the finalizer"),
+`agent_guidance` (propose it only after the user confirms the condition, as a
+step with that precondition, never as the recommended fix), `caution`, and one
+entry per finalizer in `removals`. Each removal is a JSON Patch that tests the
+object UID and the finalizer value at its index before removing it, given as
+`patch_resource` tool input with `dry_run=true` and as
+`kubectl patch --type=json --dry-run=server`. Review the dry run before an
 explicit apply, and re-read the object after each removal: the next finalizer's
-index may change. Garbage-collection finalizers are never given removal
-patches; foreground deletion points at dependents without scanning operator
-workloads. Kubernetes protection finalizers (`*.k8s.io/*` and
+index may change. The Issues view shows it as a collapsed section labeled with
+the condition. Garbage-collection finalizers never get a cleanup: foreground
+deletion points at dependents, and orphaning keeps them, so neither scans
+operator workloads. Kubernetes protection finalizers (`*.k8s.io/*` and
 `*.kubernetes.io/*`, including slashless Gateway guards, and `*.x-k8s.io`
 finalizers named for `in-use` or `protection`, such as Kueue's
 `resource-in-use`) are in-use guards: resolve the referencing objects instead of

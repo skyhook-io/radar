@@ -388,6 +388,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"`diagnostic_context.role` marks roots, rollups, symptoms, or context; " +
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
+			"`conditional_cleanup` is never the next step: propose it only after the user confirms its `condition`, per `agent_guidance`. " +
 			"`incident_parent` is one unambiguous best root; absence may mean competing roots. " +
 			"When present, `timing_summary` reconciles timing fields whose scopes differ; otherwise " +
 			"read `first_seen` as 'active at least since' and `issue_timing` as timing evidence, " +

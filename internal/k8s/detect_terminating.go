@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -69,11 +70,14 @@ func DetectDynamicTerminatingProblems(dynamic *DynamicResourceCache, discovery *
 				if obj.GetNamespace() != "" {
 					namespaceArg = " -n " + shellQuote(obj.GetNamespace())
 				}
-				command := fmt.Sprintf("kubectl patch %s %s%s --type=json -p %s", shellQuote(gvr.Resource+"."+gvr.Group), shellQuote(obj.GetName()), namespaceArg, shellQuote(string(body)))
-				if det.TerminatingRemovalPreviews == nil {
-					det.TerminatingRemovalPreviews = map[string]string{}
+				if det.TerminatingRemovals == nil {
+					det.TerminatingRemovals = map[string]issuesapi.FinalizerRemoval{}
 				}
-				det.TerminatingRemovalPreviews[finalizer] = fmt.Sprintf("For %q, preview with patch_resource %s or %s --dry-run=server. After reviewing, apply the same command without --dry-run=server.", finalizer, input, command)
+				det.TerminatingRemovals[finalizer] = issuesapi.FinalizerRemoval{
+					Finalizer:     finalizer,
+					PatchResource: input,
+					Kubectl:       fmt.Sprintf("kubectl patch %s %s%s --type=json -p %s --dry-run=server", shellQuote(gvr.Resource+"."+gvr.Group), shellQuote(obj.GetName()), namespaceArg, shellQuote(string(body))),
+				}
 			}
 			out = append(out, det)
 		}

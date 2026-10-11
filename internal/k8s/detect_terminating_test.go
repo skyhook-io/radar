@@ -75,19 +75,18 @@ func TestDynamicTerminatingProblems(t *testing.T) {
 		if strings.Contains(det.Action, "patch_resource") || strings.Contains(det.Action, "kubectl patch") {
 			t.Fatalf("detector must not offer removal before the controller is observed: %s", det.Action)
 		}
-		if _, ok := det.TerminatingRemovalPreviews[metav1.FinalizerDeleteDependents]; ok || len(det.TerminatingRemovalPreviews) != 2 {
-			t.Fatalf("previews=%v", det.TerminatingRemovalPreviews)
+		if _, ok := det.TerminatingRemovals[metav1.FinalizerDeleteDependents]; ok || len(det.TerminatingRemovals) != 2 {
+			t.Fatalf("removals=%v", det.TerminatingRemovals)
 		}
-		preview := det.TerminatingRemovalPreviews["gaps.radar.test/cleanup"]
-		if !strings.Contains(preview, "kubectl patch 'widgets.gaps.radar.test'") || !strings.Contains(preview, "--dry-run=server") {
-			t.Fatal(preview)
+		removal := det.TerminatingRemovals["gaps.radar.test/cleanup"]
+		if removal.Finalizer != "gaps.radar.test/cleanup" || !strings.HasPrefix(removal.Kubectl, "kubectl patch 'widgets.gaps.radar.test'") || !strings.HasSuffix(removal.Kubectl, "--dry-run=server") {
+			t.Fatalf("%+v", removal)
 		}
 		var input struct {
 			Patch  string `json:"patch"`
 			DryRun bool   `json:"dry_run"`
 		}
-		suffix := strings.SplitN(preview, "patch_resource ", 2)[1]
-		if err := json.NewDecoder(strings.NewReader(suffix)).Decode(&input); err != nil {
+		if err := json.Unmarshal(removal.PatchResource, &input); err != nil {
 			t.Fatal(err)
 		}
 		if !input.DryRun {
@@ -187,7 +186,7 @@ func TestDynamicTerminatingProtectionGuidance(t *testing.T) {
 		t.Fatalf("out=%+v", out)
 	}
 	for _, det := range out {
-		if strings.Contains(det.Action, "patch_resource") || strings.Contains(det.Action, "kubectl patch") || len(det.TerminatingRemovalPreviews) != 0 {
+		if strings.Contains(det.Action, "patch_resource") || strings.Contains(det.Action, "kubectl patch") || len(det.TerminatingRemovals) != 0 {
 			t.Fatalf("guard offered removal: %+v", det)
 		}
 	}

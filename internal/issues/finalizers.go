@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,19 +14,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 type finalizerObservation struct {
 	Text string
-	// Controller names the identified controller; empty when Radar could not
-	// tell which controller owns the finalizer.
+	// Controller names the catalog controller that owns the finalizer; empty
+	// when Radar could not identify it.
 	Controller string
-	Running    bool
-	Healthy    bool
-	// Absent means a complete search found no workload for the identified
-	// controller, or only workloads scaled to zero replicas. It is the only
-	// evidence that justifies offering finalizer removal.
-	Absent bool
+	// Candidate names a workload that only resembles the finalizer's API group
+	// by name. It is never treated as the owner.
+	Candidate string
+	Running   bool
+	Healthy   bool
+	// NotFound means a complete search recognized no ready or installed copy
+	// of the catalog controller: nothing matched its name, labels or image, or
+	// every match is scaled to 0 replicas (ScaledDown). A negative search is
+	// not proof the controller is gone: it may be stopped for now, installed
+	// in a way Radar doesn't recognize, or running from outside the cluster.
+	// So it keeps the issue at warning and supports only a conditional
+	// cleanup.
+	NotFound   bool
+	ScaledDown bool
 	// Down means the identified controller is installed but has no ready pod
 	// (crashlooping, pending, or unable to create pods). It will finish the
 	// deletion once fixed, so removing its finalizer would skip cleanup it
@@ -57,245 +67,322 @@ type finalizerOwnerProvider interface {
 	FinalizerOwnerStatus(string, Ref, func(string, string, string) bool) finalizerObservation
 }
 
+func unknownController(detail string) finalizerObservation {
+	return finalizerObservation{Text: "controller unknown (" + detail + ")"}
+}
+
+func scopeOf(namespace string) string {
+	if namespace == "" {
+		return "across the watched cluster"
+	}
+	return "in namespace " + namespace
+}
+
+// A controller seen missing or down in the visible namespaces may still run
+// healthy in ones Radar could not search.
+const workloadsUnsearched = ", but Deployments, StatefulSets and DaemonSets could not be searched cluster-wide"
+
 func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList func(string, string, string) bool) finalizerObservation {
-	unknown := func(detail string) finalizerObservation {
-		return finalizerObservation{Text: "controller unknown (" + detail + ")"}
-	}
-	if p.cache == nil || p.cache.KindReadinessFor("pods") != k8score.KindReady {
-		return unknown("Pod cache is not ready")
-	}
 	root := &unstructured.Unstructured{}
 	root.SetAPIVersion(ref.Group + "/v1")
 	root.SetKind(ref.Kind)
-	allowed := func(group, resource, namespace string) bool {
-		return canList == nil || canList(group, resource, namespace)
-	}
-	scopeOf := func(namespace string) string {
-		if namespace == "" {
-			return "across the watched cluster"
-		}
-		return "in namespace " + namespace
-	}
-	// workload is nil when observing a catalog pod selector with no matched
-	// workload. empty reports such a selector-only search that found no
-	// active pods.
-	observe := func(controller, namespace string, selector labels.Selector, workload *matchedWorkload) (observation finalizerObservation, empty bool) {
-		unreadable := func(detail string) (finalizerObservation, bool) {
-			o := unknown(detail)
-			o.Controller = controller
-			return o, false
-		}
-		if !allowed("", "pods", namespace) {
-			return unreadable("controller pod inventory is unreadable")
-		}
-		if !p.cache.KindCoversNamespace("pods", namespace) {
-			return unreadable("Pod cache does not cover the controller namespace")
-		}
-		if namespace == "" && !p.cache.IsKindClusterWide("pods") {
-			return unreadable("Pod cache does not cover the whole cluster")
-		}
-		var pods []*corev1.Pod
-		var err error
-		if namespace == "" {
-			pods, err = p.cache.Pods().List(selector)
-		} else {
-			pods, err = p.cache.Pods().Pods(namespace).List(selector)
-		}
-		if err != nil {
-			return unreadable("controller pods could not be read")
-		}
-		var active []*corev1.Pod
-		for _, pod := range pods {
-			if pod.DeletionTimestamp == nil && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
-				active = append(active, pod)
-			}
-		}
-		if len(active) > 0 {
-			health := gitopsinsights.SummarizeControllerPods(active)
-			if health.Ready > 0 {
-				return finalizerObservation{
-					Controller: controller,
-					Text:       gitopsinsights.SummarizeControllerHealth(controller, active) + " " + scopeOf(namespace),
-					Running:    true,
-					Healthy:    health.Ready == health.Total && health.Crashing == 0,
-				}, false
-			}
-		}
-		down := func(state string) (finalizerObservation, bool) {
-			return finalizerObservation{Controller: controller, Down: true, State: state, Text: fmt.Sprintf("%s is %s %s", controller, state, scopeOf(namespace))}, false
-		}
-		switch {
-		case workload != nil && workload.scalable && workload.desired == 0:
-			return finalizerObservation{Controller: controller, Absent: true, Text: fmt.Sprintf("%s is scaled to 0 replicas %s", controller, scopeOf(namespace))}, false
-		case len(active) > 0:
-			return down(gitopsinsights.DescribeControllerHealth(active))
-		case workload != nil && workload.scalable:
-			replicas := "replicas"
-			if workload.desired == 1 {
-				replicas = "replica"
-			}
-			return down(fmt.Sprintf("not running (no pods for %d desired %s)", workload.desired, replicas))
-		case workload != nil:
-			return down("not running (no DaemonSet pods)")
-		}
-		return finalizerObservation{Controller: controller, Absent: true, Text: fmt.Sprintf("%s is not running %s (controller may not be installed, runs elsewhere, or uses different labels)", controller, scopeOf(namespace))}, true
-	}
 	owner := gitopsinsights.ResolveFinalizerOwner(finalizer, root)
-	workloadsSearched := true
-	var observations []finalizerObservation
-	collect := func(resource string, obj metav1.Object, selector *metav1.LabelSelector, template map[string]string, workload matchedWorkload) {
-		// A catalog controller's pod labels identify its workload even when the
-		// workload's own name and labels don't.
-		catalogPods := owner != nil && template[owner.SelectorKey] == owner.SelectorValue
-		if !(catalogPods || gitopsinsights.MatchesFinalizerController(finalizer, root, obj)) || !allowed("apps", resource, obj.GetNamespace()) {
-			return
+	if p.cache == nil || p.cache.KindReadinessFor("pods") != k8score.KindReady {
+		if owner != nil {
+			// The catalog identity is static; only the controller's state is
+			// unavailable.
+			return finalizerObservation{Controller: owner.Controller, ReleasesInfrastructure: owner.ReleasesInfrastructure, Text: owner.Controller + " state unknown (Pod cache is not ready)"}
 		}
-		if selector == nil {
+		return unknownController("Pod cache is not ready")
+	}
+	inventory := &controllerInventory{cache: p.cache, canList: canList, attributed: map[types.NamespacedName]bool{}}
+	if owner == nil {
+		return inventory.candidate(finalizer, root)
+	}
+	return inventory.catalogController(owner)
+}
+
+// controllerInventory reads controller workloads and pods from the cache,
+// limited to what the caller can list.
+type controllerInventory struct {
+	cache   *k8s.ResourceCache
+	canList func(group, resource, namespace string) bool
+	// attributed holds the active pods already observed through a matched
+	// workload, so the catalog's cluster-wide pod search covers the rest.
+	attributed map[types.NamespacedName]bool
+}
+
+func (inv *controllerInventory) allowed(group, resource, namespace string) bool {
+	return inv.canList == nil || inv.canList(group, resource, namespace)
+}
+
+// eachWorkload calls visit for every cached Deployment, StatefulSet and
+// DaemonSet the caller can list. It reports whether that covered every such
+// workload in the cluster.
+func (inv *controllerInventory) eachWorkload(visit func(obj metav1.Object, selector *metav1.LabelSelector, template corev1.PodTemplateSpec, workload matchedWorkload)) bool {
+	complete := true
+	ready := func(resource string) bool {
+		if inv.cache.KindReadinessFor(resource) != k8score.KindReady {
+			complete = false
+			return false
+		}
+		if !inv.cache.IsKindClusterWide(resource) || !inv.allowed("apps", resource, "") {
+			complete = false
+		}
+		return true
+	}
+	if ready("deployments") {
+		workloads, err := inv.cache.Deployments().List(labels.Everything())
+		complete = complete && err == nil
+		for _, w := range workloads {
+			if inv.allowed("apps", "deployments", w.Namespace) {
+				visit(w, w.Spec.Selector, w.Spec.Template, matchedWorkload{desired: replicasOrDefault(w.Spec.Replicas), scalable: true})
+			}
+		}
+	}
+	if ready("statefulsets") {
+		workloads, err := inv.cache.StatefulSets().List(labels.Everything())
+		complete = complete && err == nil
+		for _, w := range workloads {
+			if inv.allowed("apps", "statefulsets", w.Namespace) {
+				visit(w, w.Spec.Selector, w.Spec.Template, matchedWorkload{desired: replicasOrDefault(w.Spec.Replicas), scalable: true})
+			}
+		}
+	}
+	if ready("daemonsets") {
+		workloads, err := inv.cache.DaemonSets().List(labels.Everything())
+		complete = complete && err == nil
+		for _, w := range workloads {
+			if inv.allowed("apps", "daemonsets", w.Namespace) {
+				visit(w, w.Spec.Selector, w.Spec.Template, matchedWorkload{})
+			}
+		}
+	}
+	return complete
+}
+
+// observe reports the controller pods that selector and match select in
+// namespace ("" for cluster-wide). workload is nil for the catalog's pod
+// search, which skips pods already observed through a matched workload;
+// empty then reports that it found no active pods.
+func (inv *controllerInventory) observe(controller, namespace string, selector labels.Selector, match func(*corev1.Pod) bool, workload *matchedWorkload) (observation finalizerObservation, empty bool) {
+	unreadable := func(detail string) (finalizerObservation, bool) {
+		o := unknownController(detail)
+		o.Controller = controller
+		return o, false
+	}
+	if !inv.allowed("", "pods", namespace) {
+		return unreadable("controller pod inventory is unreadable")
+	}
+	if !inv.cache.KindCoversNamespace("pods", namespace) {
+		return unreadable("Pod cache does not cover the controller namespace")
+	}
+	if namespace == "" && !inv.cache.IsKindClusterWide("pods") {
+		return unreadable("Pod cache does not cover the whole cluster")
+	}
+	var pods []*corev1.Pod
+	var err error
+	if namespace == "" {
+		pods, err = inv.cache.Pods().List(selector)
+	} else {
+		pods, err = inv.cache.Pods().Pods(namespace).List(selector)
+	}
+	if err != nil {
+		return unreadable("controller pods could not be read")
+	}
+	var active []*corev1.Pod
+	for _, pod := range pods {
+		if pod.DeletionTimestamp != nil || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		if match != nil && !match(pod) {
+			continue
+		}
+		key := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
+		if workload == nil && inv.attributed[key] {
+			continue
+		}
+		if workload != nil {
+			inv.attributed[key] = true
+		}
+		active = append(active, pod)
+	}
+	if len(active) > 0 {
+		health := gitopsinsights.SummarizeControllerPods(active)
+		if health.Ready > 0 {
+			return finalizerObservation{
+				Controller: controller,
+				Text:       gitopsinsights.SummarizeControllerHealth(controller, active) + " " + scopeOf(namespace),
+				Running:    true,
+				Healthy:    health.Ready == health.Total && health.Crashing == 0,
+			}, false
+		}
+	}
+	down := func(state string) (finalizerObservation, bool) {
+		return finalizerObservation{Controller: controller, Down: true, State: state, Text: fmt.Sprintf("%s is %s %s", controller, state, scopeOf(namespace))}, false
+	}
+	switch {
+	case workload != nil && workload.scalable && workload.desired == 0:
+		return finalizerObservation{Controller: controller, NotFound: true, ScaledDown: true, Text: fmt.Sprintf("%s is scaled to 0 replicas %s", controller, scopeOf(namespace))}, false
+	case len(active) > 0:
+		return down(gitopsinsights.DescribeControllerHealth(active))
+	case workload != nil && workload.scalable:
+		replicas := "replicas"
+		if workload.desired == 1 {
+			replicas = "replica"
+		}
+		return down(fmt.Sprintf("not running (no pods for %d desired %s)", workload.desired, replicas))
+	case workload != nil:
+		return down("not running (no DaemonSet pods)")
+	}
+	return finalizerObservation{Controller: controller}, true
+}
+
+// catalogController observes a catalog owner's controller wherever it runs:
+// workloads recognized by name, labels, pod template labels or image, and
+// catalog pods outside them (another install, a bare pod).
+func (inv *controllerInventory) catalogController(owner *gitopsinsights.FinalizerOwner) finalizerObservation {
+	var observations []finalizerObservation
+	searched := inv.eachWorkload(func(obj metav1.Object, selector *metav1.LabelSelector, template corev1.PodTemplateSpec, workload matchedWorkload) {
+		if selector == nil || !owner.MatchesWorkload(obj, template) {
 			return
 		}
 		sel, err := metav1.LabelSelectorAsSelector(selector)
 		if err != nil || sel.Empty() {
 			return
 		}
-		observation, _ := observe(obj.GetName(), obj.GetNamespace(), sel, &workload)
+		observation, _ := inv.observe(obj.GetName(), obj.GetNamespace(), sel, nil, &workload)
 		observations = append(observations, observation)
-	}
-	for _, resource := range []string{"deployments", "statefulsets", "daemonsets"} {
-		if p.cache.KindReadinessFor(resource) != k8score.KindReady || !p.cache.IsKindClusterWide(resource) || !allowed("apps", resource, "") {
-			workloadsSearched = false
-		}
-	}
-	if p.cache.KindReadinessFor("deployments") == k8score.KindReady {
-		workloads, err := p.cache.Deployments().List(labels.Everything())
-		if err == nil {
-			for _, workload := range workloads {
-				collect("deployments", workload, workload.Spec.Selector, workload.Spec.Template.Labels, matchedWorkload{desired: replicasOrDefault(workload.Spec.Replicas), scalable: true})
-			}
-		} else {
-			workloadsSearched = false
-		}
-	}
-	if p.cache.KindReadinessFor("statefulsets") == k8score.KindReady {
-		workloads, err := p.cache.StatefulSets().List(labels.Everything())
-		if err == nil {
-			for _, workload := range workloads {
-				collect("statefulsets", workload, workload.Spec.Selector, workload.Spec.Template.Labels, matchedWorkload{desired: replicasOrDefault(workload.Spec.Replicas), scalable: true})
-			}
-		} else {
-			workloadsSearched = false
-		}
-	}
-	if p.cache.KindReadinessFor("daemonsets") == k8score.KindReady {
-		workloads, err := p.cache.DaemonSets().List(labels.Everything())
-		if err == nil {
-			for _, workload := range workloads {
-				collect("daemonsets", workload, workload.Spec.Selector, workload.Spec.Template.Labels, matchedWorkload{})
-			}
-		} else {
-			workloadsSearched = false
-		}
-	}
-	releasesInfrastructure := owner != nil && owner.ReleasesInfrastructure
-	// Catalog pods are searched cluster-wide even when the catalog names a
-	// conventional namespace: a controller can't be called absent while a
-	// catalog-labelled pod might run in a namespace Radar didn't look in.
-	var catalogPods labels.Selector
-	if owner != nil {
-		catalogPods = labels.SelectorFromSet(labels.Set{owner.SelectorKey: owner.SelectorValue})
-	}
-	// A controller seen absent or down in the visible namespaces may still run
-	// healthy in ones Radar could not search.
-	unsearched := ", but Deployments, StatefulSets and DaemonSets could not be searched cluster-wide"
-	if len(observations) > 0 {
-		result := finalizerObservation{Controller: observations[0].Controller, Absent: true, ReleasesInfrastructure: releasesInfrastructure}
-		var down *finalizerObservation
-		unknown := false
-		// Healthy means every matched copy that should be running is fully
-		// ready; a crashlooping or partly ready copy beside a healthy one isn't.
-		anyHealthy, degraded := false, false
-		var parts []string
-		for i, observation := range observations {
-			result.Running = result.Running || observation.Running
-			anyHealthy = anyHealthy || observation.Healthy
-			degraded = degraded || observation.Down || (observation.Running && !observation.Healthy)
-			result.Absent = result.Absent && observation.Absent
-			switch {
-			case observation.Down && down == nil:
-				down = &observations[i]
-			case !observation.Running && !observation.Absent && !observation.Down:
-				unknown = true
-			}
-			if i < 3 {
-				parts = append(parts, observation.Text)
-			}
-		}
-		if len(observations) > 3 {
-			parts = append(parts, fmt.Sprintf("+%d more controller observations", len(observations)-3))
-		}
-		result.Text = strings.Join(parts, "; ")
-		result.Healthy = anyHealthy && !degraded
-		if down != nil && !result.Running && !unknown {
-			result.Down, result.Controller, result.State = true, down.Controller, down.State
-		}
-		// Catalog controller pods outside the matched workloads, such as a
-		// DaemonSet or another install, may still be running.
-		if owner != nil && (result.Absent || result.Down) {
-			catalog, _ := observe(owner.Controller, "", catalogPods, nil)
-			switch {
-			case catalog.Running:
-				result.Absent, result.Down, result.Running, result.Healthy = false, false, true, catalog.Healthy && !degraded
-				result.Text += "; " + catalog.Text
-			case catalog.Down && result.Absent:
-				result.Absent, result.Down, result.Controller, result.State = false, true, owner.Controller, catalog.State
-				result.Text += "; " + catalog.Text
-			case !catalog.Absent && !catalog.Down:
-				result.Absent, result.Down = false, false
-				result.Text += fmt.Sprintf("; %s pods %s could not be checked", owner.Controller, scopeOf(""))
-			}
-		}
-		// A stopped in-cluster copy says nothing about a managed install that
-		// runs outside the cluster.
-		if result.Absent && owner != nil && owner.OffClusterOfferings != "" {
-			result.Absent = false
-			result.Text += fmt.Sprintf("; %s may run outside the cluster (%s)", owner.Controller, owner.OffClusterOfferings)
-		}
-		if (result.Absent || result.Down) && !workloadsSearched {
-			result.Absent, result.Down = false, false
-			result.Text += unsearched
-		}
-		return result
-	}
-	if owner == nil {
-		return unknown("no confident finalizer-to-controller match")
-	}
-	observation, empty := observe(owner.Controller, "", catalogPods, nil)
+	})
+	// Searched even when a matched workload is healthy: a failing copy
+	// elsewhere must keep the controller from reading as healthy.
+	catalog, empty := inv.observe(owner.Controller, "", labels.Everything(), func(pod *corev1.Pod) bool {
+		return owner.MatchesPod(pod.Labels, pod.Spec)
+	}, nil)
+	var result finalizerObservation
 	switch {
-	case empty && owner.OffClusterOfferings != "":
-		observation = finalizerObservation{Controller: owner.Controller, Text: fmt.Sprintf("%s has no pods %s; it may run outside the cluster (%s)", owner.Controller, scopeOf(""), owner.OffClusterOfferings)}
-	case empty && !workloadsSearched:
-		observation = finalizerObservation{Controller: owner.Controller, Text: fmt.Sprintf("%s has no pods %s", owner.Controller, scopeOf("")) + unsearched}
-	case observation.Down && !workloadsSearched:
-		observation.Down = false
-		observation.Text += unsearched
+	case len(observations) == 0 && !empty:
+		result = catalog
+	case len(observations) == 0 && owner.OffClusterOfferings != "":
+		return finalizerObservation{Controller: owner.Controller, ReleasesInfrastructure: owner.ReleasesInfrastructure, Text: fmt.Sprintf("%s has no pods %s; it may run outside the cluster (%s)", owner.Controller, scopeOf(""), owner.OffClusterOfferings)}
+	case len(observations) == 0:
+		result = finalizerObservation{Controller: owner.Controller, NotFound: true, Text: fmt.Sprintf("no recognized controller found: no workload or pod %s matches %s by name, labels or image", scopeOf(""), owner.Controller)}
+		if !searched {
+			result = finalizerObservation{Controller: owner.Controller, Text: fmt.Sprintf("%s has no pods %s", owner.Controller, scopeOf("")) + workloadsUnsearched}
+		}
+	default:
+		if !empty {
+			if !catalog.Running && !catalog.Down {
+				catalog.Text = fmt.Sprintf("%s pods %s could not be checked", owner.Controller, scopeOf(""))
+			}
+			observations = append(observations, catalog)
+		}
+		result = mergeControllerObservations(observations)
 	}
-	observation.ReleasesInfrastructure = releasesInfrastructure
-	return observation
+	result.ReleasesInfrastructure = owner.ReleasesInfrastructure
+	if (result.NotFound || result.Down) && !searched {
+		result.NotFound, result.ScaledDown, result.Down = false, false, false
+		result.Text += workloadsUnsearched
+	}
+	// A stopped in-cluster copy says nothing about a managed install that
+	// runs outside the cluster.
+	if result.NotFound && owner.OffClusterOfferings != "" {
+		result.NotFound, result.ScaledDown = false, false
+		result.Text += fmt.Sprintf("; %s may run outside the cluster (%s)", owner.Controller, owner.OffClusterOfferings)
+	}
+	return result
+}
+
+// mergeControllerObservations folds every observed copy of one controller.
+// Healthy means every copy that should be running is fully ready: a
+// crashlooping or partly ready copy beside a healthy one isn't. Down and
+// NotFound need every copy to agree; an unreadable copy may be the running
+// one.
+func mergeControllerObservations(observations []finalizerObservation) finalizerObservation {
+	result := finalizerObservation{Controller: observations[0].Controller}
+	running, degraded, unknown, notFound := false, false, false, true
+	var down *finalizerObservation
+	var parts []string
+	for i, observation := range observations {
+		running = running || observation.Running
+		degraded = degraded || observation.Down || (observation.Running && !observation.Healthy)
+		notFound = notFound && observation.NotFound
+		switch {
+		case observation.Down && down == nil:
+			down = &observations[i]
+		case !observation.Running && !observation.NotFound && !observation.Down:
+			unknown = true
+		}
+		if i < 3 {
+			parts = append(parts, observation.Text)
+		}
+	}
+	if len(observations) > 3 {
+		parts = append(parts, fmt.Sprintf("+%d more controller observations", len(observations)-3))
+	}
+	result.Text = strings.Join(parts, "; ")
+	switch {
+	case running:
+		result.Running, result.Healthy = true, !degraded
+	case unknown:
+	case down != nil:
+		result.Down, result.Controller, result.State = true, down.Controller, down.State
+	case notFound:
+		// Only matched workloads report NotFound, and only when scaled to 0.
+		result.NotFound, result.ScaledDown = true, true
+	}
+	return result
+}
+
+// candidate names a workload that only resembles an uncataloged finalizer's
+// API group. It describes the candidate's state for the reader but claims
+// nothing about ownership.
+func (inv *controllerInventory) candidate(finalizer string, root *unstructured.Unstructured) finalizerObservation {
+	var names, states []string
+	inv.eachWorkload(func(obj metav1.Object, selector *metav1.LabelSelector, _ corev1.PodTemplateSpec, workload matchedWorkload) {
+		if !gitopsinsights.FinalizerControllerCandidate(finalizer, root, obj) {
+			return
+		}
+		names = append(names, obj.GetName())
+		if len(states) == 2 {
+			return
+		}
+		state := obj.GetName() + " " + scopeOf(obj.GetNamespace())
+		if sel, err := metav1.LabelSelectorAsSelector(selector); selector != nil && err == nil && !sel.Empty() {
+			observation, _ := inv.observe(obj.GetName(), obj.GetNamespace(), sel, nil, &workload)
+			state = observation.Text
+		}
+		states = append(states, state)
+	})
+	if len(names) == 0 {
+		return unknownController("no confident finalizer-to-controller match")
+	}
+	if len(names) > len(states) {
+		states = append(states, fmt.Sprintf("+%d more", len(names)-len(states)))
+	}
+	return finalizerObservation{Candidate: names[0], Text: "no confident owner (name-only candidate: " + strings.Join(states, "; ") + ")"}
 }
 
 func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string, string, string) bool, memo map[string]finalizerObservation) k8s.Detection {
 	if !k8s.HasNonGarbageCollectionFinalizer(pr.TerminatingFinalizers) {
-		pr.Cause += " The garbage collector is waiting for dependents."
-		pr.Action = "Inspect ownerReferences and deletion-blocking dependents; let the garbage collector finish their deletion."
+		if slices.Contains(pr.TerminatingFinalizers, metav1.FinalizerDeleteDependents) {
+			pr.Cause += " The garbage collector is waiting for dependents."
+			pr.Action = "Inspect ownerReferences and deletion-blocking dependents; let the garbage collector finish their deletion."
+			return pr
+		}
+		pr.Cause += " The garbage collector is orphaning its dependents: it removes their ownerReferences and keeps them."
+		pr.Action = "Orphaning preserves the dependents; none of them will be deleted. If it stays stuck, check the garbage collector in kube-controller-manager and whether the dependents' ownerReferences can be updated."
 		return pr
 	}
 	resolver, available := p.(finalizerOwnerProvider)
 	running := false
 	healthy := false
-	// down covers identified controllers seen absent or installed but not
-	// ready; either justifies escalating to critical.
+	// down covers identified controllers that are installed but not ready;
+	// it justifies escalating to critical.
 	down := false
 	shown := 0
-	var fixes, guards, unconfirmed, unidentified, removals []string
+	var fixes, restores, guards, unconfirmed, candidates, unidentified []string
+	var cleanups []finalizerCleanup
 	for _, finalizer := range pr.TerminatingFinalizers {
 		if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
 			continue
@@ -321,16 +408,22 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 		case observation.Down:
 			down = true
 			fixes = append(fixes, fmt.Sprintf("Fix %s, which is %s; it will finish the deletion once running. Removing finalizer %q would skip its cleanup.", observation.Controller, observation.State, finalizer))
-		case observation.Absent && observation.ReleasesInfrastructure:
-			down = true
+		case observation.NotFound && observation.ReleasesInfrastructure:
 			unconfirmed = append(unconfirmed, fmt.Sprintf("Get %s running again rather than removing finalizer %q.", observation.Controller, finalizer))
-		case observation.Absent:
-			down = true
-			if preview := pr.TerminatingRemovalPreviews[finalizer]; preview != "" {
-				removals = append(removals, preview)
+		case observation.NotFound && observation.ScaledDown:
+			restores = append(restores, fmt.Sprintf("No running controller found for finalizer %q: %s. If it was stopped temporarily, scale it back up; it will finish the deletion.", finalizer, observation.Text))
+			if removal, ok := pr.TerminatingRemovals[finalizer]; ok {
+				cleanups = append(cleanups, finalizerCleanup{condition: observation.Controller + " was scaled to 0 on purpose and won't be restarted", removal: removal})
+			}
+		case observation.NotFound:
+			restores = append(restores, fmt.Sprintf("No recognized controller found for finalizer %q. If %s should be running, restore it; it will finish the deletion. It may also be installed under a name, labels or image Radar doesn't recognize, or run outside this cluster.", finalizer, observation.Controller))
+			if removal, ok := pr.TerminatingRemovals[finalizer]; ok {
+				cleanups = append(cleanups, finalizerCleanup{condition: observation.Controller + " was uninstalled on purpose", removal: removal})
 			}
 		case observation.Controller != "":
-			unconfirmed = append(unconfirmed, fmt.Sprintf("Radar can't confirm from this cluster that %s, which owns finalizer %q, is gone; check it first.", observation.Controller, finalizer))
+			unconfirmed = append(unconfirmed, fmt.Sprintf("Radar can't confirm from this cluster whether %s, which owns finalizer %q, is running; check it first.", observation.Controller, finalizer))
+		case observation.Candidate != "":
+			candidates = append(candidates, fmt.Sprintf("Radar couldn't confirm which controller owns finalizer %q; %s resembles its API group by name only. Check whether it handles this finalizer first.", finalizer, observation.Candidate))
 		default:
 			unidentified = append(unidentified, strconv.Quote(finalizer))
 		}
@@ -342,8 +435,9 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 	if shown > 3 {
 		pr.Cause += fmt.Sprintf(" +%d more finalizer observations.", shown-3)
 	}
-	// Escalating to critical needs a controller seen down or an in-use guard;
-	// an unconfirmed controller may simply still be cleaning up.
+	// Escalating to critical needs a controller seen down or an in-use guard.
+	// A controller Radar didn't find may be stopped on purpose, installed in a
+	// way Radar doesn't recognize, or still cleaning up from elsewhere.
 	if pr.Severity == "critical" && (healthy || (!running && !down && len(guards) == 0)) {
 		pr.Severity = "high"
 	}
@@ -354,7 +448,7 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 		}
 		return pr
 	}
-	parts := fixes
+	parts := slices.Concat(fixes, restores)
 	var cautions []string
 	if len(unidentified) > 0 {
 		subject := "finalizer " + unidentified[0]
@@ -363,21 +457,51 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 		}
 		cautions = append(cautions, fmt.Sprintf("Radar couldn't identify which controller owns %s; the finalizer's domain usually names it. Find that controller and check it first.", subject))
 	}
+	cautions = append(cautions, candidates...)
 	cautions = append(cautions, unconfirmed...)
 	if len(cautions) > 0 {
 		parts = append(parts, cautions...)
 		parts = append(parts, "Removing a finalizer skips its cleanup and can orphan external resources such as cloud infrastructure, volumes or nodes.")
 	}
-	if len(removals) > 0 {
-		parts = append(parts, "If the controller should still be running, restore it; it will finish the deletion. Only if it was intentionally removed or scaled down, consider removing its finalizer; this skips its cleanup and may leave external resources behind.")
-		parts = append(parts, removals...)
-		parts = append(parts, "Review the preview before applying with dry_run=false. Remove only one finalizer at a time and re-read the object before preparing the next patch; indices can change.")
-	}
 	parts = append(parts, guards...)
 	if len(parts) > 0 {
 		pr.Action = strings.Join(parts, " ")
 	}
+	pr.ConditionalCleanup = conditionalFinalizerCleanup(cleanups)
 	return pr
+}
+
+type finalizerCleanup struct {
+	condition string
+	removal   issuesapi.FinalizerRemoval
+}
+
+// conditionalFinalizerCleanup offers finalizer removal for controllers Radar
+// found no running copy of, conditioned on the reader knowing they were
+// removed on purpose: Radar can't tell an intentional uninstall from a
+// temporary stop or an install it doesn't recognize.
+func conditionalFinalizerCleanup(cleanups []finalizerCleanup) *issuesapi.ConditionalCleanup {
+	if len(cleanups) == 0 {
+		return nil
+	}
+	var conditions []string
+	removals := make([]issuesapi.FinalizerRemoval, 0, len(cleanups))
+	for _, cleanup := range cleanups {
+		if !slices.Contains(conditions, cleanup.condition) {
+			conditions = append(conditions, cleanup.condition)
+		}
+		removals = append(removals, cleanup.removal)
+	}
+	object := "the finalizer"
+	if len(removals) > 1 {
+		object = "the finalizers, one at a time"
+	}
+	return &issuesapi.ConditionalCleanup{
+		Condition:     fmt.Sprintf("If %s (and nothing else should finalize this object), remove %s", strings.Join(conditions, " and "), object),
+		AgentGuidance: "Not the next step: restore the controller first (see action). Propose this only after the user confirms the condition, as a step whose precondition is that condition, never as the recommended fix. Preview with dry_run=true or --dry-run=server, and apply one removal at a time only after the user reviews the preview.",
+		Caution:       "Removing a finalizer skips the cleanup its controller would have done and can leave external resources behind. Both commands are dry runs: after reviewing, apply with dry_run=false or without --dry-run=server. Re-read the object after each removal before preparing the next patch: finalizer indices change.",
+		Removals:      removals,
+	}
 }
 
 func foldDeletingConditions(in []Issue) []Issue {

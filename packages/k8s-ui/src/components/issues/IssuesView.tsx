@@ -1,6 +1,6 @@
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
-import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
-import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
+import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
+import { CardBody, CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
@@ -24,6 +24,7 @@ import {
   subjectRef,
   type Issue,
   type IssueAffected,
+  type IssueConditionalCleanup,
   type IssueResourceRef,
   type IssueSeverity,
 } from './types';
@@ -544,12 +545,41 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
         </CardSection>
       ) : null}
 
+      {issue.conditional_cleanup ? <ConditionalCleanup cleanup={issue.conditional_cleanup} /> : null}
+
       {rawError ? (
         <CardSection icon={Terminal} label="Raw error">
           <TerminalBlock>{rawError}</TerminalBlock>
         </CardSection>
       ) : null}
     </div>
+  );
+}
+
+// A step that is right only under its condition. It stays closed behind the
+// condition so the row's next step remains the default path, and it is not
+// toned as a fix.
+function ConditionalCleanup({ cleanup }: { cleanup: IssueConditionalCleanup }) {
+  return (
+    <CardSection icon={Eraser} label="Conditional cleanup">
+      <Disclosure
+        summary={<span className="text-sm leading-relaxed">{cleanup.condition}</span>}
+        summaryClassName="items-baseline text-theme-text-primary hover:text-theme-text-secondary"
+      >
+        <div className="flex flex-col gap-2 pt-2">
+          {cleanup.caution ? <p className="text-xs leading-relaxed text-theme-text-secondary">{cleanup.caution}</p> : null}
+          {cleanup.removals.map((removal) => (
+            <div key={removal.finalizer} className="flex flex-col gap-1.5">
+              <p className="text-xs text-theme-text-tertiary">
+                Finalizer <code className="inline-code">{removal.finalizer}</code>
+              </p>
+              <TerminalBlock label="patch_resource · dry run">{JSON.stringify(removal.patch_resource)}</TerminalBlock>
+              <TerminalBlock label="kubectl · server dry run">{removal.kubectl}</TerminalBlock>
+            </div>
+          ))}
+        </div>
+      </Disclosure>
+    </CardSection>
   );
 }
 
