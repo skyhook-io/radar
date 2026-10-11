@@ -17,6 +17,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/utils/ptr"
 )
 
 // statusObserver reports a connected-node count, as Relay does.
@@ -172,19 +174,44 @@ func TestHubbleGetFlows_KeepsTheBudgetSplitWhenStatusFails(t *testing.T) {
 		}
 	})
 
-	t.Run("with no count yet the cluster's nodes are counted", func(t *testing.T) {
+	// The API server answers a one-item page with the count it left out.
+	pagedNodes := func(t *testing.T, remaining *int64, cont string) *fake.Clientset {
+		client := fake.NewSimpleClientset()
+		client.PrependReactor("list", "nodes", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			if limit := action.(k8stesting.ListActionImpl).GetListOptions().Limit; limit != 1 {
+				t.Errorf("node list Limit = %d, want a one-item page", limit)
+			}
+			return true, &corev1.NodeList{
+				ListMeta: metav1.ListMeta{RemainingItemCount: remaining, Continue: cont},
+				Items:    []corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "node-0"}}},
+			}, nil
+		})
+		return client
+	}
+
+	t.Run("the cluster's nodes are counted, and win over a stale count", func(t *testing.T) {
 		obs := &failingStatusObserver{scriptedObserver{responses: []*observerpb.GetFlowsResponse{flowResponse("a", "b")}}}
 		h := connectedHubble(t, obs)
-		var nodes []runtime.Object
-		for i := range 100 {
-			nodes = append(nodes, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("node-%d", i)}})
-		}
-		h.k8sClient = fake.NewSimpleClientset(nodes...)
+		h.nodeCount, h.nodeCountAt = 20, time.Now().Add(-2*hubbleNodeCountTTL)
+		h.k8sClient = pagedNodes(t, ptr.To[int64](99), "more")
 		if _, err := h.GetFlows(context.Background(), DefaultFlowOptions()); err != nil {
 			t.Fatal(err)
 		}
 		if got := obs.got.GetNumber(); got != 500 {
 			t.Errorf("Number = %d, want the budget split over the cluster's 100 nodes", got)
+		}
+	})
+
+	t.Run("a page without a remaining count is not a count", func(t *testing.T) {
+		obs := &failingStatusObserver{scriptedObserver{responses: []*observerpb.GetFlowsResponse{flowResponse("a", "b")}}}
+		h := connectedHubble(t, obs)
+		h.nodeCount, h.nodeCountAt = 200, time.Now().Add(-2*hubbleNodeCountTTL)
+		h.k8sClient = pagedNodes(t, nil, "more")
+		if _, err := h.GetFlows(context.Background(), DefaultFlowOptions()); err != nil {
+			t.Fatal(err)
+		}
+		if got := obs.got.GetNumber(); got != 250 {
+			t.Errorf("Number = %d, want the last count (200 nodes) kept, not a count of 1", got)
 		}
 	})
 }

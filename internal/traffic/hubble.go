@@ -1176,8 +1176,9 @@ const hubbleNodeCountTTL = time.Minute
 
 // connectedNodes asks Relay how many nodes it reads from, 0 when nothing can
 // say. ServerStatus waits on every node, so it fails while one is unreachable,
-// which is when the per-node cap matters: a failed call keeps the last count,
-// or counts the cluster's nodes when there is none yet.
+// which is when the per-node cap matters: a failed call counts the cluster's
+// nodes instead, an upper bound on Relay's, and keeps the last count if that
+// fails too.
 func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.ObserverClient) int {
 	h.mu.RLock()
 	n, at := h.nodeCount, h.nodeCountAt
@@ -1189,8 +1190,8 @@ func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.Obs
 	defer cancel()
 	if status, err := client.ServerStatus(statusCtx, &observerpb.ServerStatusRequest{}); err == nil {
 		n = int(status.GetNumConnectedNodes().GetValue())
-	} else if n == 0 {
-		n = h.clusterNodeCount(ctx)
+	} else if c := h.clusterNodeCount(ctx); c > 0 {
+		n = c
 	}
 	h.mu.Lock()
 	h.nodeCount, h.nodeCountAt = n, time.Now()
@@ -1199,20 +1200,25 @@ func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.Obs
 }
 
 // clusterNodeCount counts the cluster's nodes from a one-item page: the API
-// server reports how many it left out, so this reads one node, not all.
+// server reports how many it left out, so this reads one node, not all. 0 when
+// it cannot tell.
 func (h *HubbleSource) clusterNodeCount(ctx context.Context) int {
 	if h.k8sClient == nil {
 		return 0
 	}
-	nodes, err := h.k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+	listCtx, cancel := context.WithTimeout(ctx, hubbleStatusTimeout)
+	defer cancel()
+	nodes, err := h.k8sClient.CoreV1().Nodes().List(listCtx, metav1.ListOptions{Limit: 1})
 	if err != nil {
 		return 0
 	}
-	n := len(nodes.Items)
 	if nodes.RemainingItemCount != nil {
-		n += int(*nodes.RemainingItemCount)
+		return len(nodes.Items) + int(*nodes.RemainingItemCount)
 	}
-	return n
+	if nodes.Continue != "" {
+		return 0
+	}
+	return len(nodes.Items)
 }
 
 // keepNewest trims flows to the newest limit, returning the trimmed slice
