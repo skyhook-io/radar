@@ -215,6 +215,13 @@ Namespace filters accept both `?namespace=X` (single) and `?namespaces=X,Y` (pre
 
 Radar Hub embeds the newest `@skyhook-io/radar-app` against whatever Radar each cluster runs, so a frontend call to a new endpoint can hit a Radar that predates it. When adding an endpoint the UI calls: advertise a flag for it in `FeatureCapabilities` (`internal/k8s/capabilities.go`) in the same PR, add an entry with that flag and `flagShippedWithEndpoint: true` to `web/src/api/radarFeatures.ts`, and guard the hook with `useRadarFeature`. An older Radar then gets a "needs a newer Radar" note instead of a red error. `TestFeatureFlagsHaveFrontendGates` fails if the flag and the entry drift apart.
 
+### Review checklist: the three ways Radar runs
+
+Every review of server or UI behavior considers all three:
+- **Local:** one user, auth off, UI and server ship together.
+- **In-cluster shared:** auth on, many users on one process. Anything process-wide (managers, caches, connections, detections) is shared across users, and per-user namespace RBAC must hold for derived data too (counts, coverage, timings).
+- **Radar Hub:** the newest `radar-app` against whatever Radar each cluster runs, through a GET-only proxy.
+
 ### Error Handling (Frontend)
 
 React Query mutations carry `meta: { errorMessage, successMessage }` — the global toast handler reads those. Server errors arrive as `{"error": "..."}` and surface unchanged. Don't add per-mutation `onError` toasts that would duplicate the meta-driven path.
