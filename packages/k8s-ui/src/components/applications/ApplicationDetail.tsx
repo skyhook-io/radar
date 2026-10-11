@@ -89,7 +89,7 @@ import {
   overlayProvenance,
 } from "../../utils/applications";
 import { PaneLoader } from "../ui/PaneLoader";
-import { midTruncate } from "../../utils/format";
+import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
 import { VersionTooltip, AppIdentityTooltip, RolloutSummaryTooltip } from "./AppTooltips";
 import {
   ProvenanceBadge,
@@ -1827,7 +1827,7 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
   return {
     latestValue: latest?.latestRunPhase || latest?.label || "None",
     latestDetail: latest
-      ? `${latest.latestRunName || latest.workload.name}${latestRunTimestamp(latest) ? ` · ${relativeTime(latestRunTimestamp(latest)!)} ` : ""}`.trim()
+      ? `${latest.latestRunName || latest.workload.name}${latestRunTimestamp(latest) ? ` · ${formatRelativeAgeTime(latestRunTimestamp(latest)!)} ` : ""}`.trim()
       : "No retained runs",
     retainedValue:
       retained > 0 ? `${succeeded} succeeded / ${failed} failed` : "0 retained",
@@ -1842,7 +1842,7 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
           : `${schedules.length} schedules`,
     scheduleDetail:
       schedules.length === 1 && latest?.lastSuccessfulAt
-        ? `last success ${relativeTime(latest.lastSuccessfulAt)}`
+        ? `last success ${formatRelativeAgeTime(latest.lastSuccessfulAt)}`
         : undefined,
     scheduleMono: schedules.length === 1,
   };
@@ -1856,17 +1856,6 @@ function activeWorkloadNames(activity: AppBatchActivity[]): string {
   return `${active.slice(0, 2).join(", ")} +${active.length - 2} more`;
 }
 
-function relativeTime(value: string): string {
-  const t = Date.parse(value);
-  if (Number.isNaN(t)) return value;
-  const diff = Date.now() - t;
-  if (diff < 60_000) return "just now";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
 
 function ApplicationLatestHistory({
   history,
@@ -2093,7 +2082,7 @@ function workloadRuntimeDetail(workload: AppWorkload): string {
   const at =
     batch.latestStartedAt || batch.latestFinishedAt || batch.lastScheduledAt;
   if (batch.latestRunName)
-    return `${midTruncate(batch.latestRunName, 28)}${at ? ` · ${relativeTime(at)}` : ""}`;
+    return `${midTruncate(batch.latestRunName, 28)}${at ? ` · ${formatRelativeAgeTime(at)}` : ""}`;
   if (batch.schedule) return `Schedule ${batch.schedule}`;
   return "No retained runs";
 }

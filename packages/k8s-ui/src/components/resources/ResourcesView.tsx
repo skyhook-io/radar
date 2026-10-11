@@ -150,7 +150,7 @@ import {
 import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
-import { parseQuantityToNumber } from '../../utils/format'
+import { formatRelativeAgeTime, parseQuantityToNumber } from '../../utils/format'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
 import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
@@ -9319,9 +9319,7 @@ function LeaseCell({ resource, column }: { resource: any; column: string }) {
       const elapsed = (Date.now() - new Date(renewTime).getTime()) / 1000
       const duration = resource.spec?.leaseDurationSeconds || 0
       const isStale = duration > 0 && elapsed > duration
-      const diff = Date.now() - new Date(renewTime).getTime()
-      const seconds = Math.floor(diff / 1000)
-      const label = seconds < 60 ? `${seconds}s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ago` : `${Math.floor(seconds / 86400)}d ago`
+      const label = formatRelativeAgeTime(renewTime)
       return <span className={clsx('text-sm', isStale ? 'text-red-400' : 'text-green-400')} title={new Date(renewTime).toLocaleString()}>{label}</span>
     }
     default:
