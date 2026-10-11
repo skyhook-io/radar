@@ -126,7 +126,9 @@ export function GitOpsWriteWarning({
           disabled={disabled}
           className="mt-0.5 h-3.5 w-3.5 accent-skyhook-500"
         />
-        <span>I understand {tool} may revert this.</span>
+        <span>
+          I understand {tool} {guard.level === 'will-revert' ? 'will' : 'may'} revert this.
+        </span>
       </label>
     </AlertBanner>
   )

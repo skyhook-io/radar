@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -187,7 +188,7 @@ func TestFieldsV1Owns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		owned, approximate := fieldsV1Owns(fields, segs)
+		owned, approximate := newFieldsTree(fields).owns(segs)
 		if owned != tc.owned || approximate != tc.appr {
 			t.Errorf("%s: owned=%v approximate=%v, want %v %v", tc.path, owned, approximate, tc.owned, tc.appr)
 		}
@@ -330,17 +331,18 @@ func TestWriteEvidenceArgoJQRuleIsUnevaluated(t *testing.T) {
 	}
 }
 
-// A manager that owns one container's image doesn't prove an
-// ignoreDifferences managedFieldsManagers rule covers every container's.
-func TestWriteEvidenceArgoManagerRulePartialOwnershipIsUnevaluated(t *testing.T) {
+// Argo matches managedFieldsManagers against the field's live owner, and the
+// write itself moves ownership to Radar: a rule naming another manager stops
+// covering the field, one naming Radar's may keep covering it.
+func TestWriteEvidenceArgoManagerRuleDoesNotCoverAWrite(t *testing.T) {
 	managed := []metav1.ManagedFieldsEntry{
 		fieldsEntry(t, "image-updater", metav1.ManagedFieldsOperationUpdate, map[string]any{
-			"f:spec": map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": map[string]any{
-				`k:{"name":"sidecar"}`: map[string]any{".": map[string]any{}, "f:image": map[string]any{}},
-			}}}},
-		}),
-		fieldsEntry(t, "image-updater", metav1.ManagedFieldsOperationUpdate, map[string]any{
-			"f:spec": map[string]any{"f:replicas": map[string]any{}},
+			"f:spec": map[string]any{
+				"f:replicas": map[string]any{},
+				"f:template": map[string]any{"f:spec": map[string]any{"f:containers": map[string]any{
+					`k:{"name":"sidecar"}`: map[string]any{".": map[string]any{}, "f:image": map[string]any{}},
+				}}},
+			},
 		}),
 	}
 	ignore := []any{map[string]any{"group": "apps", "kind": "Deployment", "managedFieldsManagers": []any{"image-updater"}}}
@@ -348,15 +350,61 @@ func TestWriteEvidenceArgoManagerRulePartialOwnershipIsUnevaluated(t *testing.T)
 		"automated":   map[string]any{"selfHeal": true},
 		"syncOptions": []any{"RespectIgnoreDifferences=true"},
 	}, ignore)
-	paths := []string{"spec.template.spec.containers[*].image", "spec.replicas"}
+	paths := []string{"spec.template.spec.containers[*].image", "spec.template.spec.containers[name=sidecar].image", "spec.replicas"}
 	resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, managed), deploymentRef, paths, argoOwner, app, nil)
-
-	wild := pathEvidence(t, resp, paths[0])
-	if wild.Ignored != "unevaluated" || !strings.Contains(wild.IgnoredBy, "managedFieldsManagers") {
-		t.Errorf("wildcard path owned by the manager for one container only: %+v", wild)
+	for _, path := range paths {
+		if got := pathEvidence(t, resp, path); got.Ignored != "" {
+			t.Errorf("%s owned by the ignored manager: %+v", path, got)
+		}
 	}
-	if got := pathEvidence(t, resp, paths[1]); got.Ignored != "effective" {
-		t.Errorf("a path the manager owns exactly stays covered: %+v", got)
+
+	radar := []any{map[string]any{"group": "apps", "kind": "Deployment", "managedFieldsManagers": []any{"radar"}}}
+	resp = buildGitOpsWriteEvidence(evidenceTarget(t, nil, managed), deploymentRef, paths[2:], argoOwner,
+		evidenceArgoApp(map[string]any{"syncOptions": []any{"RespectIgnoreDifferences=true"}}, radar), nil)
+	if got := resp.Paths[0]; got.Ignored != "unevaluated" || got.IgnoredBy != "spec.ignoreDifferences managedFieldsManagers" {
+		t.Errorf("a rule naming Radar's own manager: %+v", got)
+	}
+}
+
+// Argo reads RespectIgnoreDifferences from the sync operation, which carries
+// the Application's options, never from a resource's sync-options annotation.
+func TestWriteEvidenceRespectIgnoreDifferencesComesFromTheApplication(t *testing.T) {
+	target := evidenceTarget(t, nil, nil)
+	annotations := target.GetAnnotations()
+	annotations["argocd.argoproj.io/sync-options"] = "RespectIgnoreDifferences=true,ServerSideApply=true"
+	target.SetAnnotations(annotations)
+	ignore := []any{map[string]any{"group": "apps", "kind": "Deployment", "jsonPointers": []any{"/spec/replicas"}}}
+	resp := buildGitOpsWriteEvidence(target, deploymentRef, []string{"spec.replicas"}, argoOwner,
+		evidenceArgoApp(map[string]any{"automated": map[string]any{"selfHeal": true}}, ignore), nil)
+	if resp.Policy.RespectIgnoreDifferences || !resp.Policy.ServerSideApply {
+		t.Errorf("policy: %+v", resp.Policy)
+	}
+	if got := resp.Paths[0]; got.Ignored != "comparison-only" {
+		t.Errorf("annotation-only RespectIgnoreDifferences: %+v", got)
+	}
+}
+
+// Wildcards are expanded per live entry; a request can't make the server
+// expand (and match against last-applied) more than the budget allows.
+func TestWriteEvidenceWildcardBudget(t *testing.T) {
+	target := evidenceTarget(t, nil, nil)
+	items := make([]any, maxWriteEvidenceElements+1)
+	for i := range items {
+		items[i] = map[string]any{"name": fmt.Sprintf("c%d", i), "image": "x:1"}
+	}
+	if err := unstructured.SetNestedSlice(target.Object, items, "spec", "template", "spec", "containers"); err != nil {
+		t.Fatal(err)
+	}
+	const images = "spec.template.spec.containers[*].image"
+	resp := buildGitOpsWriteEvidence(target, deploymentRef, []string{images, images, "spec.template.spec.containers[name=c3].image"}, argoOwner, evidenceArgoApp(nil, nil), nil)
+	if len(resp.Paths) != 2 {
+		t.Fatalf("a repeated path is evaluated once: %+v", resp.Paths)
+	}
+	if got := resp.Paths[0]; got.Error == "" || got.Empty {
+		t.Errorf("an expansion over the budget is an error, not a verdict: %+v", got)
+	}
+	if got := resp.Paths[1]; got.Error != "" {
+		t.Errorf("a named path doesn't count against the wildcard budget: %+v", got)
 	}
 }
 

@@ -345,17 +345,17 @@ describe('copy', () => {
     }
   })
 
-  it('describes a manager rule that only partly covers the field as unconfirmed', () => {
+  it('describes a rule that covers only some of the entries as unconfirmed', () => {
     const g = guard({
       writes: [hibernate],
       evidence: evidence({ ...selfHeal, respectIgnoreDifferences: true }, [
-        pathEvidence({ lastApplied: 'present', ignored: 'unevaluated', ignoredBy: 'spec.ignoreDifferences managedFieldsManagers' }),
+        pathEvidence({ lastApplied: 'present', ignored: 'unevaluated', ignoredBy: 'spec.ignoreDifferences jsonPointers' }),
       ]),
     })
     expect(g.level).toBe('may-revert')
     expect(g.requiresAck).toBe(true)
     expect(g.perWrite[0].reason).toBe(
-      "Radar can't confirm the Application's ignore rule (spec.ignoreDifferences managedFieldsManagers) covers this field, so the next sync may overwrite it.",
+      "Radar can't confirm the Application's ignore rule (spec.ignoreDifferences jsonPointers) covers this field, so the next sync may overwrite it.",
     )
   })
 

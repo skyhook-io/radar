@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -37,7 +38,11 @@ const (
 	// Real field paths are a dozen segments deep; the cap bounds the work a
 	// request can ask for (each segment is walked per wildcard element).
 	maxWriteFieldPathSegments = 32
-	lastAppliedAnnotationKey  = "kubectl.kubernetes.io/last-applied-configuration"
+	// Wildcards expand to one path per live list entry, each matched against
+	// last-applied's copy of the list; this bounds the entries a request can
+	// expand to. A Pod template has a handful of containers.
+	maxWriteEvidenceElements = 256
+	lastAppliedAnnotationKey = "kubectl.kubernetes.io/last-applied-configuration"
 )
 
 type writeEvidenceRef struct {
@@ -315,6 +320,13 @@ var gitOpsFieldManagers = map[string]string{
 	"helm":                          "helm",
 }
 
+// The field managers Radar's own writes record: server-side apply names
+// "radar"; a patch records the client's user-agent prefix, the binary name.
+var radarWriteManagers = map[string]bool{
+	"radar": true,
+	strings.SplitN(rest.DefaultKubernetesUserAgent(), "/", 2)[0]: true,
+}
+
 // Which manager, for a given owner, is the one that re-applies the source.
 func ownerManagers(ref *topology.ResourceRef) map[string]bool {
 	switch ownerTool(ref) {
@@ -333,7 +345,7 @@ func ownerManagers(ref *topology.ResourceRef) map[string]bool {
 
 type parsedManagedFields struct {
 	entry  metav1.ManagedFieldsEntry
-	fields map[string]any
+	fields *fieldsTree
 }
 
 func buildGitOpsWriteEvidence(
@@ -388,10 +400,16 @@ func buildGitOpsWriteEvidence(
 		if err := json.Unmarshal(mf.FieldsV1.Raw, &fields); err != nil {
 			continue
 		}
-		managedFields = append(managedFields, parsedManagedFields{entry: mf, fields: fields})
+		managedFields = append(managedFields, parsedManagedFields{entry: mf, fields: newFieldsTree(fields)})
 	}
 
+	budget := maxWriteEvidenceElements
+	done := map[string]bool{}
 	for _, path := range paths {
+		if done[path] {
+			continue
+		}
+		done[path] = true
 		ev := gitOpsPathEvidence{Path: path, LastApplied: "no-annotation", OwnedBy: []fieldOwnerEvidence{}}
 		segs, err := parseWriteFieldPath(path)
 		if err != nil {
@@ -401,7 +419,15 @@ func buildGitOpsWriteEvidence(
 		}
 		// A wildcard is judged per element of the live object: the source may
 		// declare one container's image and not another's.
-		elements := expandWildcards(target.Object, segs)
+		elements, ok := expandWildcards(target.Object, segs, budget)
+		if !ok {
+			ev.Error = fmt.Sprintf("wildcards in this request match more than %d entries", maxWriteEvidenceElements)
+			resp.Paths = append(resp.Paths, ev)
+			continue
+		}
+		if hasWildcard(segs) {
+			budget -= len(elements)
+		}
 		if !anyAddressable(elements) {
 			ev.Empty = true
 			resp.Paths = append(resp.Paths, ev)
@@ -409,6 +435,7 @@ func buildGitOpsWriteEvidence(
 		}
 		present, declared := 0, 0
 		owners := map[string]*fieldOwnerEvidence{}
+		ownedElements := map[string]int{}
 		var order []string
 		for _, el := range elements {
 			elPresent := hasLastApplied && valuePresent(lastApplied, el)
@@ -416,9 +443,10 @@ func buildGitOpsWriteEvidence(
 				present++
 			}
 			elGitOps := false
+			elOwners := map[string]bool{}
 			for _, parsed := range managedFields {
 				mf := parsed.entry
-				owned, approximate := fieldsV1Owns(parsed.fields, el)
+				owned, approximate := parsed.fields.owns(el)
 				if !owned {
 					continue
 				}
@@ -428,6 +456,10 @@ func buildGitOpsWriteEvidence(
 					o = &fieldOwnerEvidence{Manager: mf.Manager, Operation: string(mf.Operation), Subresource: mf.Subresource, Tool: gitOpsFieldManagers[mf.Manager]}
 					owners[key] = o
 					order = append(order, key)
+				}
+				if !elOwners[key] {
+					elOwners[key] = true
+					ownedElements[key]++
 				}
 				o.Approximate = o.Approximate || approximate
 				if managers[mf.Manager] && mf.Subresource == "" {
@@ -443,7 +475,7 @@ func buildGitOpsWriteEvidence(
 		// A manager that owns the field on only some elements owns part of the path.
 		for _, key := range order {
 			o := owners[key]
-			if !ownsEveryElement(managedFields, o, elements) {
+			if ownedElements[key] < len(elements) {
 				o.Approximate = true
 				if managers[o.Manager] && o.Subresource == "" {
 					ev.Approximate = true
@@ -459,7 +491,7 @@ func buildGitOpsWriteEvidence(
 			}
 		}
 		ev.Partial = declared > 0 && declared < len(elements)
-		ev.Ignored, ev.IgnoredBy = ignoreRuleFor(owner, ownerObj, policy, target, ref, segs, ev.OwnedBy)
+		ev.Ignored, ev.IgnoredBy = ignoreRuleFor(owner, ownerObj, policy, target, ref, segs)
 		resp.Paths = append(resp.Paths, ev)
 	}
 	return resp
@@ -494,6 +526,14 @@ func readGitOpsWritePolicy(owner *topology.ResourceRef, ownerObj, target *unstru
 		p.SelfHeal = evidenceBool(auto && selfHeal)
 		p.Prune = evidenceBool(auto && prune)
 		options, _, _ := unstructured.NestedStringSlice(ownerObj.Object, "spec", "syncPolicy", "syncOptions")
+		// Argo reads RespectIgnoreDifferences from the sync operation, which
+		// carries the Application's options; a resource's sync-options
+		// annotation can't turn it on.
+		for _, opt := range options {
+			if strings.TrimSpace(opt) == "RespectIgnoreDifferences=true" {
+				p.RespectIgnoreDifferences = true
+			}
+		}
 		for _, opt := range strings.Split(annotations["argocd.argoproj.io/sync-options"], ",") {
 			if opt = strings.TrimSpace(opt); opt != "" {
 				options = append(options, opt)
@@ -501,8 +541,6 @@ func readGitOpsWritePolicy(owner *topology.ResourceRef, ownerObj, target *unstru
 		}
 		for _, opt := range options {
 			switch strings.TrimSpace(opt) {
-			case "RespectIgnoreDifferences=true":
-				p.RespectIgnoreDifferences = true
 			case "ServerSideApply=true":
 				p.ServerSideApply = true
 			case "Replace=true":
@@ -549,7 +587,6 @@ func ignoreRuleFor(
 	target *unstructured.Unstructured,
 	ref writeEvidenceRef,
 	segs []fieldPathSegment,
-	ownedBy []fieldOwnerEvidence,
 ) (string, string) {
 	if policy == nil || ownerObj == nil {
 		return "", ""
@@ -563,40 +600,34 @@ func ignoreRuleFor(
 	case "argocd":
 		entries, _, _ := unstructured.NestedSlice(ownerObj.Object, "spec", "ignoreDifferences")
 		covered := make([]bool, len(sets))
-		managerCovers, jqRule, partialManagerMatch := false, false, false
+		jqRule, radarManagerRule := false, false
 		for _, raw := range entries {
 			entry, ok := raw.(map[string]any)
 			if !ok || !argoIgnoreEntryMatches(entry, ref) {
 				continue
 			}
 			markCovered(stringSlice(entry["jsonPointers"]), sets, covered)
-			// A manager that owns only part of the path (one container's image
-			// under containers[*]) doesn't prove the rule covers the rest.
-			for _, m := range stringSlice(entry["managedFieldsManagers"]) {
-				for _, o := range ownedBy {
-					if o.Manager != m {
-						continue
-					}
-					if o.Approximate {
-						partialManagerMatch = true
-					} else {
-						managerCovers = true
-					}
-				}
-			}
 			if len(stringSlice(entry["jqPathExpressions"])) > 0 {
 				jqRule = true
 			}
+			// Argo matches managedFieldsManagers against the field's live
+			// owner, and the write makes Radar the owner: only a rule naming
+			// Radar's own manager can still cover the field afterwards.
+			for _, m := range stringSlice(entry["managedFieldsManagers"]) {
+				if radarWriteManagers[m] {
+					radarManagerRule = true
+				}
+			}
 		}
 		switch {
-		case managerCovers || allCovered(covered):
+		case allCovered(covered):
 			if policy.RespectIgnoreDifferences {
 				return "effective", "spec.ignoreDifferences"
 			}
 			return "comparison-only", "spec.ignoreDifferences"
 		case jqRule:
 			return "unevaluated", "spec.ignoreDifferences jqPathExpressions"
-		case partialManagerMatch:
+		case radarManagerRule:
 			return "unevaluated", "spec.ignoreDifferences managedFieldsManagers"
 		case anyCovered(covered):
 			return "unevaluated", "spec.ignoreDifferences jsonPointers"
@@ -780,27 +811,30 @@ func matchesSelector(item any, seg fieldPathSegment) bool {
 	return ok && fmt.Sprint(v) == seg.value
 }
 
+func hasWildcard(segs []fieldPathSegment) bool {
+	for _, seg := range segs {
+		if seg.typ == segAny {
+			return true
+		}
+	}
+	return false
+}
+
 // expandWildcards replaces each [*] with one path per element of the live
 // list: a [name=…] selector for elements that carry a name (the merge key
 // managedFields and last-applied are matched by), an index otherwise. A
-// wildcard over a missing or empty list is kept as is.
-func expandWildcards(obj any, segs []fieldPathSegment) [][]fieldPathSegment {
-	hasWildcard := false
-	for _, seg := range segs {
-		if seg.typ == segAny {
-			hasWildcard = true
-			break
-		}
-	}
-	if !hasWildcard {
-		return [][]fieldPathSegment{segs}
+// wildcard over a missing or empty list is kept as is. False when the
+// expansion exceeds limit paths.
+func expandWildcards(obj any, segs []fieldPathSegment, limit int) ([][]fieldPathSegment, bool) {
+	if !hasWildcard(segs) {
+		return [][]fieldPathSegment{segs}, true
 	}
 	var out [][]fieldPathSegment
-	var walk func(node any, i int, prefix []fieldPathSegment)
-	walk = func(node any, i int, prefix []fieldPathSegment) {
+	var walk func(node any, i int, prefix []fieldPathSegment) bool
+	walk = func(node any, i int, prefix []fieldPathSegment) bool {
 		if i == len(segs) {
 			out = append(out, prefix)
-			return
+			return len(out) <= limit
 		}
 		seg := segs[i]
 		with := func(sg fieldPathSegment) []fieldPathSegment {
@@ -812,13 +846,13 @@ func expandWildcards(obj any, segs []fieldPathSegment) [][]fieldPathSegment {
 			if m, ok := node.(map[string]any); ok {
 				next = m[seg.key]
 			}
-			walk(next, i+1, with(seg))
+			return walk(next, i+1, with(seg))
 		case segIndex:
 			var next any
 			if list, ok := node.([]any); ok && seg.index < len(list) {
 				next = list[seg.index]
 			}
-			walk(next, i+1, with(seg))
+			return walk(next, i+1, with(seg))
 		case segMatch:
 			var next any
 			if list, ok := node.([]any); ok {
@@ -829,12 +863,12 @@ func expandWildcards(obj any, segs []fieldPathSegment) [][]fieldPathSegment {
 					}
 				}
 			}
-			walk(next, i+1, with(seg))
+			return walk(next, i+1, with(seg))
 		default:
 			list, _ := node.([]any)
 			if len(list) == 0 {
 				out = append(out, append(with(seg), segs[i+1:]...))
-				return
+				return len(out) <= limit
 			}
 			for idx, item := range list {
 				el := fieldPathSegment{typ: segIndex, index: idx}
@@ -843,12 +877,17 @@ func expandWildcards(obj any, segs []fieldPathSegment) [][]fieldPathSegment {
 						el = fieldPathSegment{typ: segMatch, key: "name", value: name}
 					}
 				}
-				walk(item, i+1, with(el))
+				if !walk(item, i+1, with(el)) {
+					return false
+				}
 			}
+			return true
 		}
 	}
-	walk(obj, 0, nil)
-	return out
+	if !walk(obj, 0, nil) {
+		return nil, false
+	}
+	return out, true
 }
 
 // anyAddressable: some expansion names a concrete entry (a wildcard over an
@@ -867,26 +906,6 @@ func anyAddressable(elements [][]fieldPathSegment) bool {
 		}
 	}
 	return false
-}
-
-func ownsEveryElement(managedFields []parsedManagedFields, o *fieldOwnerEvidence, elements [][]fieldPathSegment) bool {
-	for _, el := range elements {
-		owned := false
-		for _, parsed := range managedFields {
-			mf := parsed.entry
-			if mf.Manager != o.Manager || string(mf.Operation) != o.Operation || mf.Subresource != o.Subresource {
-				continue
-			}
-			if ok, _ := fieldsV1Owns(parsed.fields, el); ok {
-				owned = true
-				break
-			}
-		}
-		if !owned {
-			return false
-		}
-	}
-	return true
 }
 
 // valuePresent reports whether the path exists in a decoded JSON document.
@@ -921,50 +940,91 @@ func valuePresent(node any, segs []fieldPathSegment) bool {
 	}
 }
 
-// fieldsV1Owns reports whether a managedFields fieldsV1 set covers the path.
-// Exact when the set names the path itself as a leaf; approximate when it
-// only names an ancestor as a leaf (an atomic value such as an atomic list),
-// names the path with a partially-owned subtree, or matched via a wildcard.
-func fieldsV1Owns(node map[string]any, segs []fieldPathSegment) (owned, approximate bool) {
-	return fieldsV1OwnsAt(node, segs, 0)
+// fieldsTree is a managedFields fieldsV1 set, decoded once per request with
+// its keyed list entries indexed by key field and value, so matching an
+// expanded wildcard never rescans (or re-decodes) the whole list.
+type fieldsTree struct {
+	// leaf: the set names this field itself, not fields below it.
+	leaf   bool
+	fields map[string]*fieldsTree
+	keyed  []*fieldsTree
+	byKey  map[string]map[string][]*fieldsTree
 }
 
-func fieldsV1OwnsAt(node map[string]any, segs []fieldPathSegment, depth int) (bool, bool) {
-	if len(segs) == 0 {
-		return true, !isFieldsLeaf(node)
-	}
-	seg := segs[0]
-	var children []map[string]any
-	switch seg.typ {
-	case segKey:
-		if child, ok := node["f:"+seg.key].(map[string]any); ok {
-			children = append(children, child)
+func newFieldsTree(node map[string]any) *fieldsTree {
+	t := &fieldsTree{leaf: true}
+	for k, v := range node {
+		if k != "." {
+			t.leaf = false
 		}
-	case segMatch, segAny:
-		for k, v := range node {
-			child, ok := v.(map[string]any)
-			if !ok || !strings.HasPrefix(k, "k:") {
+		child, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(k, "f:"):
+			if t.fields == nil {
+				t.fields = map[string]*fieldsTree{}
+			}
+			t.fields[k[len("f:"):]] = newFieldsTree(child)
+		case strings.HasPrefix(k, "k:"):
+			entry := newFieldsTree(child)
+			t.keyed = append(t.keyed, entry)
+			var keyFields map[string]any
+			if json.Unmarshal([]byte(k[len("k:"):]), &keyFields) != nil {
 				continue
 			}
-			var keyFields map[string]any
-			if seg.typ == segAny ||
-				(json.Unmarshal([]byte(strings.TrimPrefix(k, "k:")), &keyFields) == nil && matchesSelector(keyFields, seg)) {
-				children = append(children, child)
+			if t.byKey == nil {
+				t.byKey = map[string]map[string][]*fieldsTree{}
+			}
+			for field, value := range keyFields {
+				if t.byKey[field] == nil {
+					t.byKey[field] = map[string][]*fieldsTree{}
+				}
+				s := fmt.Sprint(value)
+				t.byKey[field][s] = append(t.byKey[field][s], entry)
 			}
 		}
+	}
+	return t
+}
+
+// owns reports whether the set covers the path. Exact when the set names the
+// path itself as a leaf; approximate when it only names an ancestor as a leaf
+// (an atomic value such as an atomic list), names the path with a
+// partially-owned subtree, or matched via a wildcard.
+func (t *fieldsTree) owns(segs []fieldPathSegment) (owned, approximate bool) {
+	return t.ownsAt(segs, 0)
+}
+
+func (t *fieldsTree) ownsAt(segs []fieldPathSegment, depth int) (bool, bool) {
+	if len(segs) == 0 {
+		return true, !t.leaf
+	}
+	seg := segs[0]
+	var children []*fieldsTree
+	switch seg.typ {
+	case segKey:
+		if child := t.fields[seg.key]; child != nil {
+			children = []*fieldsTree{child}
+		}
+	case segMatch:
+		children = t.byKey[seg.key][seg.value]
+	case segAny:
+		children = t.keyed
 	case segIndex:
 		// Index-addressed lists are atomic in managedFields; only an
 		// ancestor leaf can own them.
 	}
 	if len(children) == 0 {
-		if depth > 0 && isFieldsLeaf(node) {
+		if depth > 0 && t.leaf {
 			return true, true
 		}
 		return false, false
 	}
 	owned, approximate := false, seg.typ == segAny
 	for _, child := range children {
-		if o, a := fieldsV1OwnsAt(child, segs[1:], depth+1); o {
+		if o, a := child.ownsAt(segs[1:], depth+1); o {
 			owned = true
 			approximate = approximate || a
 		}
@@ -973,15 +1033,6 @@ func fieldsV1OwnsAt(node map[string]any, segs []fieldPathSegment, depth int) (bo
 		return false, false
 	}
 	return true, approximate
-}
-
-func isFieldsLeaf(node map[string]any) bool {
-	for k := range node {
-		if k != "." {
-			return false
-		}
-	}
-	return true
 }
 
 // pointerTokenSets turns the path into JSON-pointer tokens against the live
