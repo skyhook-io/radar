@@ -92,8 +92,11 @@ func (m *uninstallStartMemo) sweepLocked(now time.Time) {
 
 // analyzeReleaseHistory is helmhistory.Analyze with the current revision's
 // uninstall start anchored by uninstallStarts. contextName is the context the
-// read started under: a read that straddled a context switch may hold another
-// cluster's release, so it neither reads nor updates the anchors.
+// read started under: a read that ends under another context may hold another
+// cluster's release, so it neither reads nor updates the anchors. Comparing
+// names misses a switch away and back during one read; that read can clear or
+// re-anchor the release's clock, which only understates its age, as a restart
+// does.
 func analyzeReleaseHistory(contextName, storageNamespace, name string, currentRevision int, revisions []HelmRevision, opts helmhistory.Options) helmhistory.Analysis {
 	history := toHelmHistoryRevisions(revisions)
 	if i := currentRevisionIndex(history, currentRevision); i >= 0 && contextName == k8s.GetContextName() {
