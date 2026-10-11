@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
-import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, usePodEnvironment, useWorkloadHistory } from './client'
+import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, useNodeRemovalPlan, usePodEnvironment, useWorkloadHistory } from './client'
 import { getApiBase } from './config'
 import { usePolicyResource } from './policy'
 import { isRadarFeatureUnsupported } from './radarFeatures'
@@ -152,6 +152,24 @@ function DrainPlanProbe() {
   useEffect(() => { probe.drainPlan = drainPlan })
   return null
 }
+
+function RemovalPlanProbe() {
+  const { error } = useNodeRemovalPlan('worker-1', true)
+  return <span>{getRadarUpgradeRequirement(error) ? 'upgrade' : 'pending'}</span>
+}
+
+it('does not poll an old Radar for removal details', async () => {
+  host.radarVersion = 'v1.13.1'
+  await render(<RemovalPlanProbe />)
+  expect(element.textContent).toBe('upgrade')
+  expect(asked('/drain-plan')).toBe(false)
+})
+
+it('requests removal details once the drain-plan feature is supported', async () => {
+  client.setQueryData(['capabilities'], { features: { resourceIssues: true } })
+  await render(<RemovalPlanProbe />)
+  expect(asked('/drain-plan')).toBe(true)
+})
 
 it('never asks a Radar older than v1.14 for a drain plan', async () => {
   host.radarVersion = 'v1.13.1'

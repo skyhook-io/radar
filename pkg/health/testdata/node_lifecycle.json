@@ -1,0 +1,1556 @@
+{
+  "now": "2026-10-10T12:00:00Z",
+  "vectors": [
+    {
+      "name": "autoscaler-True",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "failure-True",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Ready",
+      "level": "healthy",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "candidate-True",
+      "node": {
+        "metadata": {
+          "name": "candidate-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "DeletionCandidateOfClusterAutoscaler",
+              "value": "",
+              "effect": "PreferNoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Scale-down candidate",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "karpenter-True",
+      "node": {
+        "metadata": {
+          "name": "karpenter-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "karpenter.sh/disrupted",
+              "value": "",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (Karpenter)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "problems": []
+    },
+    {
+      "name": "karpenter-deletion-True",
+      "node": {
+        "metadata": {
+          "name": "karpenter-deletion-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z",
+          "deletionTimestamp": "2026-10-10T11:59:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "karpenter.sh/disrupted",
+              "value": "",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (Karpenter)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "autoscaler-False",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "failure-False",
+      "node": {
+        "metadata": {
+          "name": "failure-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "candidate-False",
+      "node": {
+        "metadata": {
+          "name": "candidate-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "DeletionCandidateOfClusterAutoscaler",
+              "value": "",
+              "effect": "PreferNoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "karpenter-False",
+      "node": {
+        "metadata": {
+          "name": "karpenter-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "karpenter.sh/disrupted",
+              "value": "",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (Karpenter) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "problems": []
+    },
+    {
+      "name": "karpenter-deletion-False",
+      "node": {
+        "metadata": {
+          "name": "karpenter-deletion-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z",
+          "deletionTimestamp": "2026-10-10T11:59:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "karpenter.sh/disrupted",
+              "value": "",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (Karpenter)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "autoscaler-Unknown",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-Unknown",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "Unknown",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "failure-Unknown",
+      "node": {
+        "metadata": {
+          "name": "failure-Unknown",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "Unknown",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "candidate-Unknown",
+      "node": {
+        "metadata": {
+          "name": "candidate-Unknown",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "DeletionCandidateOfClusterAutoscaler",
+              "value": "",
+              "effect": "PreferNoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "Unknown",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "karpenter-Unknown",
+      "node": {
+        "metadata": {
+          "name": "karpenter-Unknown",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "karpenter.sh/disrupted",
+              "value": "",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "Unknown",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (Karpenter) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "problems": []
+    },
+    {
+      "name": "karpenter-deletion-Unknown",
+      "node": {
+        "metadata": {
+          "name": "karpenter-deletion-Unknown",
+          "creationTimestamp": "2026-10-08T12:00:00Z",
+          "deletionTimestamp": "2026-10-10T11:59:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "karpenter.sh/disrupted",
+              "value": "",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "Unknown",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (Karpenter)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "cordoned",
+      "node": {
+        "metadata": {
+          "name": "cordoned",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Cordoned",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "missing-readiness",
+      "node": {
+        "metadata": {
+          "name": "missing-readiness",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": []
+        }
+      },
+      "label": "Unknown",
+      "level": "unknown",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "deletion",
+      "node": {
+        "metadata": {
+          "name": "deletion",
+          "creationTimestamp": "2026-10-08T12:00:00Z",
+          "deletionTimestamp": "2026-10-10T11:59:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "Unknown",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "preexisting-failure",
+      "node": {
+        "metadata": {
+          "name": "preexisting-failure",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T11:55:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "removal-age-9",
+      "node": {
+        "metadata": {
+          "name": "removal-age-9",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633060",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "neutral",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:51:00Z",
+      "problems": []
+    },
+    {
+      "name": "removal-age-10",
+      "node": {
+        "metadata": {
+          "name": "removal-age-10",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633000",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:50:00Z",
+      "problems": []
+    },
+    {
+      "name": "removal-age-29",
+      "node": {
+        "metadata": {
+          "name": "removal-age-29",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791631860",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:31:00Z",
+      "problems": []
+    },
+    {
+      "name": "removal-age-30",
+      "node": {
+        "metadata": {
+          "name": "removal-age-30",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791631800",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "unhealthy",
+      "readinessFailed": false,
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:30:00Z",
+      "problems": []
+    },
+    {
+      "name": "invalid-time-malformed",
+      "node": {
+        "metadata": {
+          "name": "invalid-time-malformed",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "malformed",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "invalid-time-0",
+      "node": {
+        "metadata": {
+          "name": "invalid-time-0",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "0",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "invalid-time--1",
+      "node": {
+        "metadata": {
+          "name": "invalid-time--1",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "-1",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "invalid-time-1791633660",
+      "node": {
+        "metadata": {
+          "name": "invalid-time-1791633660",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633660",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "invalid-time-999999999999999999999999999999",
+      "node": {
+        "metadata": {
+          "name": "invalid-time-999999999999999999999999999999",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "999999999999999999999999999999",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "wrong-effect",
+      "node": {
+        "metadata": {
+          "name": "wrong-effect",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "PreferNoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "pressure-MemoryPressure",
+      "node": {
+        "metadata": {
+          "name": "pressure-MemoryPressure",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "MemoryPressure",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 Memory pressure",
+      "level": "unhealthy",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "MemoryPressure"
+      ]
+    },
+    {
+      "name": "pressure-DiskPressure",
+      "node": {
+        "metadata": {
+          "name": "pressure-DiskPressure",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "DiskPressure",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 Disk pressure",
+      "level": "unhealthy",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "DiskPressure"
+      ]
+    },
+    {
+      "name": "pressure-PIDPressure",
+      "node": {
+        "metadata": {
+          "name": "pressure-PIDPressure",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "PIDPressure",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 PID pressure",
+      "level": "unhealthy",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "PIDPressure"
+      ]
+    },
+    {
+      "name": "pressure-NetworkUnavailable",
+      "node": {
+        "metadata": {
+          "name": "pressure-NetworkUnavailable",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 Network unavailable",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "NetworkUnavailable"
+      ]
+    },
+    {
+      "name": "marker-before-deletion",
+      "node": {
+        "metadata": {
+          "name": "removal-age-29",
+          "creationTimestamp": "2026-10-08T12:00:00Z",
+          "deletionTimestamp": "2026-10-10T11:59:00Z"
+        },
+        "spec": {
+          "unschedulable": false,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791631860",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler)",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:31:00Z",
+      "problems": []
+    },
+    {
+      "name": "network-age-0",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Ready",
+      "level": "healthy",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "network-age-1",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T11:59:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Ready",
+      "level": "healthy",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": []
+    },
+    {
+      "name": "network-age-2",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T11:58:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Ready \u00b7 Network unavailable",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
+    },
+    {
+      "name": "network-age-3",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T11:57:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Ready \u00b7 Network unavailable",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
+    },
+    {
+      "name": "ready-under-pressure",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "DiskPressure",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "label": "Ready \u00b7 Disk pressure",
+      "level": "unhealthy",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "DiskPressure"
+      ]
+    },
+    {
+      "name": "signed-marker",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "+1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "marker-before-creation",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-10T11:59:30Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "missing-ready-transition",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "future-ready-transition",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:01:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "future-network-transition",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:01:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Ready \u00b7 Network unavailable",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
+    },
+    {
+      "name": "missing-network-transition",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "label": "Ready \u00b7 Network unavailable",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
+    }
+  ]
+}

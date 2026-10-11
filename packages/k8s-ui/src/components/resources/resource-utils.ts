@@ -1,5 +1,6 @@
 // Utility functions for resource display in tables
 
+import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { effectivePolicyTypeNames } from '../../utils/network-policy'
 import { formatCPUString, formatMemoryString, formatBytes } from '../../utils/format'
 import { pluralize } from '../../utils/pluralize'
@@ -1329,25 +1330,8 @@ export function getHPAMetrics(hpa: any): { cpu?: number; memory?: number; custom
 // ============================================================================
 
 export function getNodeStatus(node: any): StatusBadge {
-  const conditions = node.status?.conditions || []
-  const readyCondition = conditions.find((c: any) => c.type === 'Ready')
-
-  const isReady = readyCondition?.status === 'True'
-  const isUnschedulable = node.spec?.unschedulable === true
-
-  if (isReady && isUnschedulable) {
-    // Cordon is intentional but consequential — it's lost scheduling capacity, and
-    // a forgotten cordon strands nodes — so it stays on the warning axis (matching
-    // the backend Cordoned issue), unlike no-op intentional states (suspended/idle).
-    return { text: 'Ready,SchedulingDisabled', color: healthColors.degraded, level: 'degraded' }
-  }
-  if (isReady) {
-    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (readyCondition?.status === 'False') {
-    return { text: 'NotReady', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  const lifecycle = getNodeLifecycle(node)
+  return { text: lifecycle.label, color: healthColors[lifecycle.level], level: lifecycle.level }
 }
 
 export function getNodeRoles(node: any): string {
@@ -1375,27 +1359,32 @@ export interface NodeCondition {
   message?: string
 }
 
-// Problem conditions that indicate node issues
-const NODE_PROBLEM_CONDITIONS = ['DiskPressure', 'MemoryPressure', 'PIDPressure', 'NetworkUnavailable']
-
-export function getNodeConditions(node: any): { problems: string[]; healthy: boolean } {
+export function getNodeConditions(node: any): { problems: string[]; healthy: boolean; readinessLabel: string } {
   const conditions = node.status?.conditions || []
   const problems: string[] = []
+  const lifecycle = getNodeLifecycle(node)
 
   for (const cond of conditions) {
     // Ready=False is a problem
-    if (cond.type === 'Ready' && cond.status !== 'True') {
+    if (cond.type === 'Ready' && lifecycle.readinessFailed) {
       problems.push('NotReady')
     }
     // Other conditions are problems when True
-    if (NODE_PROBLEM_CONDITIONS.includes(cond.type) && cond.status === 'True') {
+    if (lifecycle.problems.includes(cond.type) && cond.status === 'True') {
       // Format: "DiskPressure" -> "Disk Pressure"
       const formatted = cond.type.replace(/([A-Z])/g, ' $1').trim()
       problems.push(formatted)
     }
   }
 
-  return { problems, healthy: problems.length === 0 }
+  if (lifecycle.delayed) problems.push('Removal delayed')
+  const ready = conditions.find((cond: any) => cond.type === 'Ready')
+  const readinessLabel = lifecycle.removing && !lifecycle.readinessFailed && ready?.status === 'False'
+    ? 'Not ready (expected during removal)'
+    : lifecycle.removing && !lifecycle.readinessFailed && ready?.status === 'Unknown'
+      ? 'Readiness unknown during removal'
+      : 'Readiness unknown'
+  return { problems, healthy: problems.length === 0 && ready?.status === 'True', readinessLabel }
 }
 
 export function getNodeTaints(node: any): { count: number; text: string } {

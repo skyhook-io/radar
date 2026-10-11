@@ -439,7 +439,7 @@ export interface DashboardResourceCounts {
   ingresses: number;
   gateways?: number;
   routes?: number;
-  nodes: { total: number; ready: number; notReady: number; cordoned: number };
+  nodes: { total: number; ready: number; notReady: number; cordoned: number; removing?: number; removingUnhealthy?: number };
   namespaces: number;
   jobs: { total: number; active: number; succeeded: number; failed: number };
   cronJobs: { total: number; active: number; suspended: number };
@@ -4170,7 +4170,7 @@ export function useUpdateResource() {
       });
       if (!response.ok) {
         const error = await readErrorBody(response);
-        const failure = new Error(error.error || `HTTP ${response.status}`);
+        const failure = new ApiError(error.error || `HTTP ${response.status}`, response.status, error);
         // A reviewed apply's failure is shown in the review itself (the
         // changed-after-review notice, or the error), so it gets no toast.
         if (reviewedResourceVersion !== undefined || reviewedContext !== undefined) {
@@ -5398,6 +5398,23 @@ export function useDrainPlan() {
     // renders a failure inline and keeps Drain disabled while it shows; a global toast would
     // report the same failure twice.
   });
+}
+
+export function useNodeRemovalPlan(name: string | undefined, enabled: boolean) {
+  const { guard, gatedKey } = useRadarFeature('drainPlan')
+  return useQuery<DrainPlan>({
+    queryKey: ['resources', 'node-removal-plan', name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<DrainPlan>(drainPlanPath(name!), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: drainPlanBody({ force: true, deleteEmptyDirData: true }),
+      signal,
+    })),
+    enabled: enabled && Boolean(name),
+    staleTime: ISSUES_REFRESH_INTERVAL_MS,
+    refetchInterval: (query) => query.state.error instanceof RadarFeatureUnsupportedError ? false : ISSUES_REFRESH_INTERVAL_MS,
+    retry: shouldRetryRadarQuery,
+  })
 }
 
 export function useDrainNode() {

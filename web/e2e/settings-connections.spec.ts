@@ -1698,7 +1698,7 @@ test('coming back to the window re-checks for an agent CLI', async ({ page }) =>
     json: installed ? aiAgents : { agents: [], enabled: false, eligible: true, consented: {} },
   }))
   const dialog = await openSettings(page, 'Overview')
-  const aiRow = dialog.getByRole('button', { name: /AI investigations/ })
+  const aiRow = dialog.getByRole('button', { name: /^AI investigations\b/ })
   await expect(aiRow).toContainText('No agent CLI')
 
   installed = true

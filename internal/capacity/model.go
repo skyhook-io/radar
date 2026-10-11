@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/subject"
 	corev1 "k8s.io/api/core/v1"
@@ -501,6 +502,8 @@ func populatePool(model *PoolModel, claims []*unstructured.Unstructured, nodes [
 
 	if sourceObserved(snapshot.Coverage, capacityapi.CoverageNodes) {
 		observation.Nodes = &capacityapi.NodeLifecycleSummary{Total: len(nodes)}
+		operational := health.CountNodeFleet(nodes, snapshot.GeneratedAt)
+		observation.Nodes.Operational = &operational
 		composition := capacityapi.NewPoolComposition()
 		observation.Composition = &composition
 	}
@@ -536,6 +539,8 @@ func populatePool(model *PoolModel, claims []*unstructured.Unstructured, nodes [
 		}
 
 		member := capacityapi.NewNodeMember()
+		lifecycle := health.NodeLifecycle(node, snapshot.GeneratedAt)
+		member.Lifecycle = &lifecycle
 		member.Ready = ready
 		member.Cordoned = node.Spec.Unschedulable
 		member.Conditions = normalizeNodeConditions(node.Status.Conditions)
