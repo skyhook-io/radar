@@ -683,6 +683,13 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 					mu.Unlock()
 					return
 				}
+				if k8score.IsLogsUnavailableNotice(string(data)) {
+					entry.Error = k8score.ErrLogsUnavailable.Error()
+					mu.Lock()
+					allLogs = append(allLogs, entry)
+					mu.Unlock()
+					return
+				}
 
 				// Capture pre-grep line count so callers can detect upstream
 				// truncation even when grep filters heavily — see RawLines.

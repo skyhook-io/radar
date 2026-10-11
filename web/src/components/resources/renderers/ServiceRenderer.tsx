@@ -2,7 +2,8 @@ import { useMemo, useState, useCallback } from 'react'
 import { ServiceRenderer as BaseServiceRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { CurlButton, CurlPanel, isHttpishPort, defaultScheme, defaultPathForPort } from '../../curl/ServiceCurlButton'
-import { useResources } from '../../../api/client'
+import { useResources, useServiceEndpointSlices } from '../../../api/client'
+import { isRadarFeatureUnsupported } from '../../../api/radarFeatures'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import type { ResourceRef } from '../../../types'
 import { DURATION_DISCLOSURE } from '@skyhook-io/k8s-ui/utils/animation'
@@ -36,21 +37,22 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
     window.setTimeout(() => setCurl((p) => (p?.closing ? null : p)), DURATION_DISCLOSURE + 20)
   }, [])
   const spec = data.spec || {}
-  const shouldLoadEndpointSlices = Boolean(
-    namespace &&
-    serviceName &&
-    spec.type !== 'ExternalName' &&
-    (!spec.selector || Object.keys(spec.selector).length === 0)
-  )
-  const { data: endpointSlices, isLoading: endpointSlicesLoading } = useResources<any>(
+  const hasNoSelector = !spec.selector || Object.keys(spec.selector).length === 0
+  const canListEndpointSlices = Boolean(namespace && serviceName && spec.type !== 'ExternalName')
+  const serviceSlices = useServiceEndpointSlices(namespace, serviceName, canListEndpointSlices)
+  // A Radar without the per-Service endpoint keeps its earlier behavior: only
+  // selector-less Services list the namespace's slices and filter them here.
+  const legacy = isRadarFeatureUnsupported(serviceSlices.error, 'serviceEndpointSlices')
+  const shouldLoadNamespaceSlices = canListEndpointSlices && hasNoSelector && legacy
+  const { data: namespaceSlices, isLoading: namespaceSlicesLoading, error: namespaceSlicesError } = useResources<any>(
     'endpointslices',
     namespace,
     'discovery.k8s.io',
-    { enabled: shouldLoadEndpointSlices, refetchInterval: 30000 }
+    { enabled: shouldLoadNamespaceSlices, refetchInterval: 30000 }
   )
-  const matchingEndpointSlices = useMemo(
-    () => (endpointSlices || []).filter((slice: any) => slice.metadata?.labels?.['kubernetes.io/service-name'] === serviceName),
-    [endpointSlices, serviceName]
+  const matchingNamespaceSlices = useMemo(
+    () => (namespaceSlices || []).filter((slice: any) => slice.metadata?.labels?.['kubernetes.io/service-name'] === serviceName),
+    [namespaceSlices, serviceName]
   )
 
   return (
@@ -58,8 +60,11 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
       data={data}
       onCopy={onCopy}
       copied={copied}
-      endpointSlices={matchingEndpointSlices}
-      endpointSlicesLoading={endpointSlicesLoading}
+      endpointSlices={legacy ? matchingNamespaceSlices : serviceSlices.data?.items}
+      endpointSlicesLoading={legacy ? namespaceSlicesLoading : serviceSlices.isLoading}
+      endpointSlicesEnabled={!legacy && canListEndpointSlices}
+      endpointSlicesError={(legacy ? namespaceSlicesError : serviceSlices.error)?.message}
+      endpointSlicesTruncated={!legacy && serviceSlices.data?.truncated}
       onNavigate={onNavigate}
       renderPortAction={({ port, name, appProtocol, protocol }) => (
         <>

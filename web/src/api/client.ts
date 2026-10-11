@@ -440,7 +440,7 @@ export interface DashboardResourceCounts {
   ingresses: number;
   gateways?: number;
   routes?: number;
-  nodes: { total: number; ready: number; notReady: number; cordoned: number };
+  nodes: { total: number; ready: number; notReady: number; cordoned: number; removing?: number; removingUnhealthy?: number };
   namespaces: number;
   jobs: { total: number; active: number; succeeded: number; failed: number };
   cronJobs: { total: number; active: number; suspended: number };
@@ -2616,6 +2616,41 @@ export function fetchResourceWithRelationships<T>(
   );
 }
 
+/**
+ * How often an open detail view re-checks a resource the server said is gone.
+ * Watch events stop refetching it (see refetchOnResourceEvents), so this is
+ * what finds one recreated under the same name when no event names it, such
+ * as a ConfigMap: the server streams adds only for pods.
+ */
+const GONE_RECHECK_MS = 60_000;
+
+export function goneRecheckInterval(
+  query: { state: { error: unknown } },
+  otherwise: number | false | undefined,
+): number | false | undefined {
+  return isNotFoundError(query.state.error) ? GONE_RECHECK_MS : otherwise;
+}
+
+export function resourceEventKey(kind: string, namespace: string, name: string): string {
+  return `${kind}/${namespace}/${name}`;
+}
+
+/**
+ * Whether a batch of watch events for `kind` refetches this ['resource', kind,
+ * namespace, name, group] query. One the server answered 404 for is refetched
+ * only when an event in the batch names its object; otherwise every change to
+ * the kind would ask again for something that is gone.
+ */
+export function refetchOnResourceEvents(
+  query: { queryKey: readonly unknown[]; state: { error: unknown } },
+  kind: string,
+  namedObjects: ReadonlySet<string>,
+): boolean {
+  if (!isNotFoundError(query.state.error)) return true;
+  const [, , namespace, name] = query.queryKey;
+  return namedObjects.has(resourceEventKey(kind, String(namespace ?? ""), String(name ?? "")));
+}
+
 // `cacheScope` keeps a caller's copy apart from the shared one, for hosts
 // that point one QueryClient at several clusters (see useGitOpsWriteGuard).
 export function useResource<T>(
@@ -2629,7 +2664,7 @@ export function useResource<T>(
     queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
-    refetchInterval: options?.refetchInterval,
+    refetchInterval: (query) => goneRecheckInterval(query, options?.refetchInterval),
     // Kind still completing its initial sync: stay in loading and poll until
     // it becomes readable instead of erroring out (deep links during startup).
     retry: (failureCount, error) => {
@@ -2663,6 +2698,7 @@ export function useResourceWithRelationships<T>(
     queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: Boolean(kind && name),
+    refetchInterval: (query) => goneRecheckInterval(query, undefined),
     // Deep-linked detail views can mount while the kind's informer is still
     // completing its initial sync: keep polling instead of erroring out.
     retry: (failureCount, error) => {
@@ -2996,6 +3032,38 @@ export function useWorkloadHistory(kind: string, namespace: string, name: string
   // A probe answered by an older Radar settles as unsupported and stops
   // polling; once /capabilities confirms the feature (the agent was upgraded),
   // ask again rather than staying on the fallback.
+  const { error, refetch } = query;
+  useEffect(() => {
+    if (support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
+  }, [support, error, refetch]);
+  return query;
+}
+
+export interface ServiceEndpointSlicesResult {
+  items: any[];
+  /** More slices are labeled for the Service than the server returns in one page. */
+  truncated: boolean;
+}
+
+// The EndpointSlices published for one Service, selected server-side by the
+// kubernetes.io/service-name label. A Radar that predates the endpoint settles
+// as unsupported; ServiceRenderer then falls back to the namespace list.
+export function useServiceEndpointSlices(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey, support } = useRadarFeature("serviceEndpointSlices");
+  const query = useQuery<ServiceEndpointSlicesResult>({
+    queryKey: ["service-endpointslices", namespace, name, ...gatedKey],
+    queryFn: ({ signal }) =>
+      guard(() =>
+        fetchJSON<ServiceEndpointSlicesResult>(
+          `/services/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/endpointslices`,
+          signal,
+        ),
+      ),
+    retry: shouldRetryRadarQuery,
+    refetchInterval: (query) =>
+      query.state.error instanceof RadarFeatureUnsupportedError ? false : 30000,
+    enabled,
+  });
   const { error, refetch } = query;
   useEffect(() => {
     if (support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
@@ -4124,7 +4192,7 @@ export function useUpdateResource() {
       });
       if (!response.ok) {
         const error = await readErrorBody(response);
-        const failure = new Error(error.error || `HTTP ${response.status}`);
+        const failure = new ApiError(error.error || `HTTP ${response.status}`, response.status, error);
         // A reviewed apply's failure is shown in the review itself (the
         // changed-after-review notice, or the error), so it gets no toast.
         if (reviewedResourceVersion !== undefined || reviewedContext !== undefined) {
@@ -5352,6 +5420,23 @@ export function useDrainPlan() {
     // renders a failure inline and keeps Drain disabled while it shows; a global toast would
     // report the same failure twice.
   });
+}
+
+export function useNodeRemovalPlan(name: string | undefined, enabled: boolean) {
+  const { guard, gatedKey } = useRadarFeature('drainPlan')
+  return useQuery<DrainPlan>({
+    queryKey: ['resources', 'node-removal-plan', name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<DrainPlan>(drainPlanPath(name!), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: drainPlanBody({ force: true, deleteEmptyDirData: true }),
+      signal,
+    })),
+    enabled: enabled && Boolean(name),
+    staleTime: ISSUES_REFRESH_INTERVAL_MS,
+    refetchInterval: (query) => query.state.error instanceof RadarFeatureUnsupportedError ? false : ISSUES_REFRESH_INTERVAL_MS,
+    retry: shouldRetryRadarQuery,
+  })
 }
 
 export function useDrainNode() {

@@ -29,6 +29,10 @@ export interface AgentsResponse {
   // "install an agent to enable this" (eligible && !enabled) apart from "not
   // available here" (auth/cloud/--no-mcp). Absent on older servers / embed hosts.
   eligible?: boolean;
+  // cliOverride: RADAR_AI_CLI_BIN is set, pinning the engine to one CLI. With
+  // CLIs detected and investigations still off, that variable is what's broken.
+  // Absent on older servers and embed hosts.
+  cliOverride?: boolean;
   // Machine-scoped consent per disclosure surface, recorded server-side
   // (~/.radar) — one acknowledgment covers the web panel and the CLI.
   consented?: Record<string, boolean>;
@@ -257,7 +261,14 @@ export async function fetchAgents(
     signal,
   });
   if (!res.ok) throw new Error(`agents: ${res.status}`);
-  return res.json();
+  const body = (await res.json()) as AgentsResponse & {
+    agents: AgentInfo[] | null;
+  };
+  // Older Radar servers send "no agent found" as JSON null, not []. This client
+  // also runs against servers of other versions, and that is the single most
+  // common response on a machine with no CLI, so normalise here rather than in
+  // every caller that reaches for .filter.
+  return { ...body, agents: body.agents ?? [] };
 }
 
 /**

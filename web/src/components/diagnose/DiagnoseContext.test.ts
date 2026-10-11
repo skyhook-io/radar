@@ -8,6 +8,7 @@ import {
   isInvestigationWorkspacePath,
   shouldExitUnavailableWorkspace,
   workspaceRunIDFromPath,
+  resolveSetupState,
 } from "./DiagnoseContext";
 
 describe("investigation workspace routes", () => {
@@ -101,5 +102,47 @@ describe("investigationPanelFillsViewport", () => {
     expect(investigationPanelFillsViewport(900, 560)).toBe(false);
     expect(investigationPanelFillsViewport(856, 560)).toBe(true);
     expect(investigationPanelFillsViewport(1200, 1000)).toBe(true);
+  });
+});
+
+describe("resolveSetupState", () => {
+  const base = {
+    available: false,
+    eligibilityResolved: true,
+    eligible: true,
+    supportedAgentCount: 0,
+  };
+
+  it("does not call an unanswered probe a deployment restriction", () => {
+    // eligible starts false and the probe's catch leaves it false, so both the
+    // in-flight and the failed request land here.
+    expect(
+      resolveSetupState({
+        ...base,
+        eligibilityResolved: false,
+        eligible: false,
+      }),
+    ).toBe("unknown");
+  });
+
+  it("reports off only once the probe said eligible: false", () => {
+    expect(resolveSetupState({ ...base, eligible: false })).toBe("off");
+  });
+
+  it("separates a CLI that appeared after boot from none at all", () => {
+    expect(resolveSetupState({ ...base, supportedAgentCount: 1 })).toBe(
+      "needs-restart",
+    );
+    expect(resolveSetupState(base)).toBe("needs-install");
+  });
+
+  it("lets a working engine win over an unresolved probe", () => {
+    expect(
+      resolveSetupState({
+        ...base,
+        available: true,
+        eligibilityResolved: false,
+      }),
+    ).toBe("ready");
   });
 });

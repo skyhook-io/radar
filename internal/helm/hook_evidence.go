@@ -436,6 +436,10 @@ func fetchHookLog(ctx context.Context, client kubernetes.Interface, namespace, p
 		log.Error = compactHookEvidenceError(err)
 		return log, true
 	}
+	if k8score.IsLogsUnavailableNotice(string(data)) {
+		log.Error = k8score.ErrLogsUnavailable.Error()
+		return log, true
+	}
 	filtered := aicontext.FilterLogs(string(data))
 	if len(filtered.Lines) == 0 {
 		return log, false

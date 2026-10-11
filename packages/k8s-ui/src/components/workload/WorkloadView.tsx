@@ -1,3 +1,4 @@
+import { dedupeResourceRefs } from '../../utils/resource-refs'
 import { PodRow, PodListFrame, PodListToggle, workloadPodDetail } from './PodList'
 export { workloadPodDetail, podStatusLabel, podStatusClass, podDotClass } from './PodList'
 import { useState, useMemo, useEffect, useRef, useCallback, type ComponentType, type ReactNode } from 'react'
@@ -37,6 +38,7 @@ import {
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
+import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
@@ -281,6 +283,8 @@ interface WorkloadViewProps {
    * resource rather than from owner labels on a managed object.
    */
   onNavigateGitOpsPath?: (path: string) => void
+  /** Opens the live traffic view focused on this workload. */
+  onOpenLiveTraffic?: () => void
 
   // ── Render props for platform-specific content ───────────────────────────
   /** Render the logs tab content */
@@ -494,6 +498,7 @@ export function WorkloadView({
   helmOwnerSource,
   onOpenHelmRelease,
   onNavigateGitOpsPath,
+  onOpenLiveTraffic,
 }: WorkloadViewProps) {
   // The live object preserves exact CRD capitalization (RayJob, TFJob); the URL
   // plural remains the API resource name used by fetches and mutations.
@@ -688,6 +693,11 @@ export function WorkloadView({
     setTimeout(() => setCopied(null), 2000)
   }, [])
 
+  // The edit is applied on top of the copy on screen, so the server is asked to
+  // reject it if the Secret was deleted or changed since that copy loaded.
+  // Otherwise the save would recreate a deleted Secret, or put back the old
+  // value of a key someone else changed.
+  const resourceVersion: string | undefined = resource?.metadata?.resourceVersion
   const handleSaveSecretValue = useCallback(async (yaml: string) => {
     if (!onUpdateResource) return
     try {
@@ -697,12 +707,14 @@ export function WorkloadView({
         name,
         yaml,
         force: true,
+        reviewedResourceVersion: resourceVersion,
       })
       setTimeout(() => refetch(), 1000)
-    } catch {
-      // Error handled by mutation (toast)
+    } catch (error) {
+      refetch()
+      throw error
     }
-  }, [onUpdateResource, apiKind, namespace, name, refetch])
+  }, [onUpdateResource, apiKind, namespace, name, resourceVersion, refetch])
 
   const handleSaved = useCallback(() => {
     setSaveSuccess(true)
@@ -765,7 +777,32 @@ export function WorkloadView({
     ? getWorkloadDisplayStatus(resource, apiKind, workloadPods)
     : null
   const rolloutActivity = rolloutDisplay?.activity ?? null
-  const status = rolloutDisplay?.status ?? getResourceStatus(apiKind, resource)
+  // A 404 with a cached copy: the object was deleted while this view was
+  // open. Everything below that copy describes the past.
+  const resourceGone = Boolean(resource) && isFetchError(resourceError) && resourceError.status === 404
+  const status = resourceGone
+    ? { text: 'Deleted', color: 'status-unknown' }
+    : rolloutDisplay?.status ?? getResourceStatus(apiKind, resource)
+  // The host's actions, and the host's renderers with their per-container
+  // terminal, logs, scale and env controls, would act on an object that no
+  // longer exists. The plain renderers show the last copy without them.
+  const actionsBarPropsForState = resourceGone ? undefined : effectiveActionsBarProps
+  const rendererOverridesForState = resourceGone ? undefined : rendererOverrides
+  // The host's overview panels and Reachability tab diagnose the live object,
+  // and the reachability panel polls for it every few seconds.
+  const renderOverviewLeadForState = resourceGone ? undefined : renderOverviewLead
+  const renderOverviewExtraForState = resourceGone ? undefined : renderOverviewExtra
+  const renderDiagnoseTabForState = resourceGone ? undefined : renderDiagnoseTab
+  // A remount closes any dialog the bar had open: once its actions are gone,
+  // a confirm button left on screen would do nothing.
+  const actionsBarKey = resourceGone ? 'gone' : 'live'
+  const deletedNotice = resourceGone ? (
+    <DeletedResourceNotice
+      kindLabel={displayKindName(apiKind, resource?.kind)}
+      owner={relationships?.deployment ?? relationships?.owner}
+      onNavigateToResource={onNavigateToResource}
+    />
+  ) : null
   const rolloutMayAutoAdvance = rolloutActivity ? rolloutMayAdvanceAutomatically(rolloutActivity) : false
   useEffect(() => {
     if (!recentImageSave) return
@@ -778,7 +815,9 @@ export function WorkloadView({
     const timeout = window.setTimeout(() => setRecentImageSave(false), 15000)
     return () => window.clearTimeout(timeout)
   }, [recentImageSave, rolloutActivity?.phase])
-  useProgressiveRefresh(rolloutMayAutoAdvance || recentImageSave, refetchProp)
+  // The rollout state above is the last copy fetched before a 404; a workload
+  // the server says is gone has nothing left to roll out.
+  useProgressiveRefresh((rolloutMayAutoAdvance || recentImageSave) && !resourceGone, refetchProp)
   const showOwnershipHeading = kind === 'Pod' && Boolean(ownershipContext)
   const headerImage = metadata.find(m => m.label === 'Image')?.value
 
@@ -790,7 +829,7 @@ export function WorkloadView({
   const renderDiagnose = actionsBarProps?.renderDiagnose as
     | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
-  const diagnoseAction = renderDiagnose?.({
+  const diagnoseAction = resourceGone ? null : renderDiagnose?.({
     kind: resource?.kind ?? knownKindForPluralWithGroup(apiKind, group ?? '') ?? apiKind,
     group,
     namespace,
@@ -827,7 +866,7 @@ export function WorkloadView({
       id: 'reachability',
       label: 'Reachability',
       icon: <Stethoscope className="w-4 h-4" />,
-      hidden: !(renderDiagnoseTab && (isDiagnoseKind(apiKind, group) || (reachableVia?.length ?? 0) > 0)),
+      hidden: !(renderDiagnoseTabForState && (isDiagnoseKind(apiKind, group) || (reachableVia?.length ?? 0) > 0)),
     },
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
@@ -929,19 +968,20 @@ export function WorkloadView({
               </Tooltip>
             </div>
             <p className="text-sm text-theme-text-tertiary">{namespace}</p>
-            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
+            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath) || onOpenLiveTraffic) && (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
                 {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
                 {gitOpsResourcePath && onNavigateGitOpsPath && (
                   <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
                 )}
+                {onOpenLiveTraffic && <LiveTrafficChip onClick={onOpenLiveTraffic} />}
               </div>
             )}
           </div>
 
           {/* Actions bar */}
-          <ResourceActionsBar resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...effectiveActionsBarProps} />
+          <ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...actionsBarPropsForState} />
         </div>
 
         {/* Success animation overlay */}
@@ -956,6 +996,7 @@ export function WorkloadView({
             damage to this scroll body; ui/Collapse.tsx keeps them from escaping in the first
             place. */}
         <div className="relative flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
+          {deletedNotice && <div className="px-4 pt-4">{deletedNotice}</div>}
           {!resource ? (
             // Fill the drawer body so the loading logo centers in it, not in a
             // 128px box pinned to the top (matches the splash/PaneLoader centering).
@@ -1007,9 +1048,9 @@ export function WorkloadView({
                 drawerSummary
               ) : (
               <>
-              {renderOverviewLead && hasOperationalIssues && (
+              {renderOverviewLeadForState && hasOperationalIssues && (
                 <div className="px-4 pt-4">
-                  {renderOverviewLead({ kind, namespace, name })}
+                  {renderOverviewLeadForState({ kind, namespace, name })}
                 </div>
               )}
               <ResourceRendererDispatch
@@ -1023,9 +1064,9 @@ export function WorkloadView({
                 onCopy={copyToClipboard}
                 copied={copied}
                 onNavigate={onNavigateToResource ? (ref) => onNavigateToResource(refToSelectedResource(ref)) : undefined}
-                onSaveSecretValue={canUpdateSecrets ? handleSaveSecretValue : undefined}
+                onSaveSecretValue={canUpdateSecrets && !resourceGone ? handleSaveSecretValue : undefined}
                 isSavingSecret={isUpdatingResource}
-                rendererOverrides={rendererOverrides}
+                rendererOverrides={rendererOverridesForState}
                 resolvedEnvFrom={resolvedEnvFrom}
                 renderMetrics={renderMetricsTab}
                 events={resourceFocusedK8sEvents}
@@ -1033,7 +1074,7 @@ export function WorkloadView({
                 updates={resourceFocusedUpdates}
                 eventsError={resourceFocusedK8sError}
                 updatesError={resourceFocusedUpdatesError}
-                mainFooter={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'drawer' })}
+                mainFooter={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'drawer' })}
               />
               </>
               )}
@@ -1115,6 +1156,7 @@ export function WorkloadView({
             {gitOpsResourcePath && onNavigateGitOpsPath && (
               <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
             )}
+            {onOpenLiveTraffic && <LiveTrafficChip onClick={onOpenLiveTraffic} />}
             {relationships?.owner && !showOwnershipHeading && (
               <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
             )}
@@ -1157,12 +1199,13 @@ export function WorkloadView({
       activeTab={effectiveTab}
       onTabChange={handleSetTab}
       scopeControls={scopeControls}
-      tabStripEnd={<ResourceActionsBar resource={selectedResource} data={resource} hideLogs {...effectiveActionsBarProps} />}
+      tabStripEnd={<ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} hideLogs {...actionsBarPropsForState} />}
       overlay={saveSuccess ? <SaveSuccessAnimation /> : null}
       compactHeader={compactHeader}
     >
       <div className="flex h-full min-h-0 flex-col">
-        {effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
+        {deletedNotice && <div className="shrink-0 px-4 pt-4">{deletedNotice}</div>}
+        {!resourceGone && effectiveTab !== 'overview' && rolloutActivity && (rolloutActivity.phase !== 'idle' || recentImageSave) && (
           <div className="shrink-0 px-4 pt-4">
             <WorkloadRolloutNotice activity={rolloutActivity} recentImageSave={recentImageSave} />
           </div>
@@ -1173,9 +1216,9 @@ export function WorkloadView({
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
           <div className="h-full min-h-0">
-            {hasOperationalIssues && renderOverviewLead && (
+            {hasOperationalIssues && renderOverviewLeadForState && (
               <div className="px-4 pt-4">
-                {renderOverviewLead({ kind, namespace, name })}
+                {renderOverviewLeadForState({ kind, namespace, name })}
               </div>
             )}
             {expandedOverview}
@@ -1199,22 +1242,22 @@ export function WorkloadView({
               onNavigate={onNavigateToResource}
               onCopy={copyToClipboard}
               copied={copied}
-              onSaveSecretValue={canUpdateSecrets ? handleSaveSecretValue : undefined}
+              onSaveSecretValue={canUpdateSecrets && !resourceGone ? handleSaveSecretValue : undefined}
               isSavingSecret={isUpdatingResource}
               onOpenLogs={handleOpenLogs}
               onSwitchToTimeline={() => handleSetTab('timeline')}
               onSwitchToLogs={logsTabVisible ? () => handleSetTab('logs') : undefined}
               onSwitchToTopology={!topologyTabHidden ? () => handleSetTab('topology') : undefined}
-              rendererOverrides={rendererOverrides}
+              rendererOverrides={rendererOverridesForState}
               resolvedEnvFrom={resolvedEnvFrom}
               events={overviewEvents}
               eventsLoading={overviewEventsLoading}
               updates={resourceFocusedUpdates}
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
-              extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'expanded' })}
+              extraContent={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
-              leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
+              leadContent={hasOperationalIssues && renderOverviewLeadForState ? renderOverviewLeadForState({ kind, namespace, name }) : undefined}
               onEvaluateCapacity={onEvaluateCapacity}
               recentImageSave={recentImageSave}
             />
@@ -1273,9 +1316,9 @@ export function WorkloadView({
             {renderMetricsTab({ kind: resource?.kind || kind, namespace, name })}
           </div>
         )}
-        {effectiveTab === 'reachability' && renderDiagnoseTab && (
+        {effectiveTab === 'reachability' && renderDiagnoseTabForState && (
           <div className="flex h-full min-h-0 flex-col p-3">
-            {renderDiagnoseTab({ kind: resource?.kind || kind, namespace, name })}
+            {renderDiagnoseTabForState({ kind: resource?.kind || kind, namespace, name })}
           </div>
         )}
         {effectiveTab === 'cost' && renderCostTab && (
@@ -1406,6 +1449,34 @@ function extractMetadata(kind: string, resource: any): { label: string; value: s
 // SUB-COMPONENTS
 // ============================================================================
 
+function DeletedResourceNotice({
+  kindLabel,
+  owner,
+  onNavigateToResource,
+}: {
+  kindLabel: string
+  owner?: ResourceRef
+  onNavigateToResource?: NavigateToResource
+}) {
+  return (
+    <AlertBanner
+      variant="warning"
+      title={`This ${kindLabel} no longer exists in the cluster`}
+      message="You're looking at the last version Radar loaded before it was deleted."
+    >
+      {owner && onNavigateToResource && (
+        <button
+          type="button"
+          onClick={() => onNavigateToResource(refToSelectedResource(owner))}
+          className="mt-2 text-xs text-accent-text hover:underline"
+        >
+          Go to its {displayKindName(owner.kind, owner.kind)} {owner.name}
+        </button>
+      )}
+    </AlertBanner>
+  )
+}
+
 function OpenInGitOpsChip({ onClick }: { onClick: () => void }) {
   return (
     <Tooltip content="Open this resource in the GitOps tab (tree + insights + ops)" delay={150}>
@@ -1415,6 +1486,21 @@ function OpenInGitOpsChip({ onClick }: { onClick: () => void }) {
         className="inline-flex items-center gap-1 rounded border border-skyhook-500/40 bg-skyhook-500/10 px-1.5 py-0.5 text-[11px] font-medium text-skyhook-500 hover:bg-skyhook-500/20 transition-colors"
       >
         Open in GitOps
+        <ArrowRight className="h-3 w-3 shrink-0" />
+      </button>
+    </Tooltip>
+  )
+}
+
+function LiveTrafficChip({ onClick }: { onClick: () => void }) {
+  return (
+    <Tooltip content="What this workload talks to, from the cluster's traffic source" delay={150}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover transition-colors"
+      >
+        Live traffic
         <ArrowRight className="h-3 w-3 shrink-0" />
       </button>
     </Tooltip>
@@ -3876,16 +3962,6 @@ function summarizeServingExposure(
   if (hasExternalService || externalLabels.length > 0) return { label: 'External service configured', badge: 'External', severity: 'info' }
   if (serviceCount > 0) return { label: 'Internal service only', badge: 'Internal', severity: 'neutral' }
   return { label: 'No serving path detected', badge: 'None', severity: 'neutral' }
-}
-
-function dedupeResourceRefs(refs: ResourceRef[]): ResourceRef[] {
-  const seen = new Set<string>()
-  return refs.filter((ref) => {
-    const key = resourceRefId(ref)
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
 }
 
 function resourceRefId(ref: ResourceRef): string {

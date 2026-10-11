@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -132,8 +134,13 @@ func TestEnrichEnvPrecedenceAndDiagnostics(t *testing.T) {
 			if wantConfig == "" {
 				wantConfig = tc.shellValue
 			}
+			// The shell's PATH leads; the launch PATH follows (common tool folders,
+			// which vary by machine, may follow that).
+			if got := os.Getenv("PATH"); !strings.HasPrefix(got+":", "/usr/bin:/bin:/process/path:") {
+				t.Errorf("PATH: got %q, want it to start with the shell's then the launch PATH", got)
+			}
 			for key, value := range map[string]string{
-				"PATH": "/usr/bin:/bin", "KUBECONFIG": wantConfig, "AWS_REGION": "eu-west-1",
+				"KUBECONFIG": wantConfig, "AWS_REGION": "eu-west-1",
 				"ANTHROPIC_AUTH_TOKEN": "process-token", "CLAUDE_CODE_USE_BEDROCK": "1",
 			} {
 				if got := os.Getenv(key); got != value {
@@ -150,5 +157,79 @@ func TestEnrichEnvPrecedenceAndDiagnostics(t *testing.T) {
 				t.Errorf("diagnostics=%v, want warning containing %q", entries, tc.warning)
 			}
 		})
+	}
+}
+
+// A login shell can answer without a folder the user's terminal has. The common
+// tool folders still get added, after everything the shell listed.
+func TestEnrichPathAddsCommonFoldersTheShellMissed(t *testing.T) {
+	skipUnixPaths(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/usr/bin:/launch-only")
+
+	enrichPath("/shell/first:/usr/bin")
+
+	got := filepath.SplitList(os.Getenv("PATH"))
+	if len(got) < 4 || got[0] != "/shell/first" || got[1] != "/usr/bin" || got[2] != "/launch-only" {
+		t.Fatalf("PATH = %v, want the shell's entries, then the launch-only one, then common folders", got)
+	}
+	if !slices.Contains(got[3:], localBin) {
+		t.Errorf("PATH = %v, want it to include %s", got, localBin)
+	}
+	seen := map[string]bool{}
+	for _, dir := range got {
+		if seen[dir] {
+			t.Errorf("PATH lists %s twice: %v", dir, got)
+		}
+		seen[dir] = true
+	}
+}
+
+func TestEnrichPathWithoutAShellAnswerKeepsTheLaunchPathFirst(t *testing.T) {
+	skipUnixPaths(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/launch/a::.:node_modules/.bin:/launch/b")
+
+	enrichPath("")
+
+	got := filepath.SplitList(os.Getenv("PATH"))
+	if len(got) < 3 || got[0] != "/launch/a" || got[1] != "/launch/b" || !slices.Contains(got[2:], localBin) {
+		t.Errorf("PATH = %v, want the launch PATH then common folders including %s", got, localBin)
+	}
+}
+
+// Entries are matched whole, and nothing relative is added: a child process
+// would resolve "." or "node_modules/.bin" against its own working directory.
+func TestMergePathListsMatchesWholeEntries(t *testing.T) {
+	skipUnixPaths(t)
+	merged, added := mergePathLists(
+		[]string{"/usr/local/bin2", "/a/", "", "/tools/current/../bin"},
+		[]string{"/usr/local/bin", "/a", "/b", ".", "node_modules/.bin", "", "/tools/bin"},
+	)
+	// "/tools/current/../bin" stays apart from "/tools/bin": through a symlink
+	// they can be different directories.
+	if want := []string{"/usr/local/bin2", "/a/", "/tools/current/../bin", "/usr/local/bin", "/b", "/tools/bin"}; !slices.Equal(merged, want) {
+		t.Errorf("merged = %v, want %v", merged, want)
+	}
+	if want := []string{"/usr/local/bin", "/b", "/tools/bin"}; !slices.Equal(added, want) {
+		t.Errorf("added = %v, want %v", added, want)
+	}
+}
+
+// The PATH tests use Unix paths, which aren't absolute on Windows.
+func skipUnixPaths(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix paths")
 	}
 }

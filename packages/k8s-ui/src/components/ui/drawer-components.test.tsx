@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection } from './drawer-components'
+import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
 
 const problems = [
   { color: 'red' as const, message: 'Application is Degraded' },
   { color: 'yellow' as const, message: 'Application is OutOfSync' },
 ]
+
+describe('GKE node condition polarity', () => {
+  it.each(['StoragePressureRootFileSystem', 'DPv2MigrationUnsupportedCNI', 'UnsupportedEBPFPrograms'])('%s is a problem only when True', type => {
+    expect(defaultConditionTone({ type, status: 'False' })).toBe('ok')
+    expect(defaultConditionTone({ type, status: 'True' })).toBe('fail')
+    expect(defaultConditionTone({ type, status: 'Unknown' })).toBe('unknown')
+  })
+})
 
 describe('ProblemAlerts', () => {
   it('renders every problem', () => {
@@ -60,5 +68,62 @@ describe('Recent Events layout', () => {
     expect(fullscreen).not.toContain('max-h-64')
     expect(fullscreen).toContain('Show 16 more events')
     expect(fullscreen).toContain('Reason23')
+  })
+})
+
+describe('dependency relationships', () => {
+  it('renders a dependency-only response with the existing navigation control', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependencies: [{ kind: 'Issuer', group: 'cert-manager.io', namespace: 'team', name: 'ca' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Depends On')
+    expect(html).toContain('ca')
+    expect(html).toContain('<button')
+    expect(html).not.toContain('Scale Target')
+  })
+
+  it('renders the reverse dependency without calling it an autoscaler', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependents: [{ kind: 'Certificate', group: 'cert-manager.io', namespace: 'team', name: 'tls' }] }} />)
+    expect(html).toContain('Required By')
+    expect(html).toContain('tls')
+    expect(html).not.toContain('Autoscaler')
+  })
+})
+
+describe('versioned dependency projections', () => {
+  const issuer = { kind: 'Issuer', group: 'cert-manager.io', namespace: 'team', name: 'ca' }
+  const certificate = { kind: 'Certificate', group: 'cert-manager.io', namespace: 'team', name: 'tls' }
+
+  it('presents mirrored configuration dependencies once under the specific labels', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependencies: [issuer], configRefs: [issuer], dependents: [certificate], consumers: [certificate] }} onNavigate={() => {}} />)
+    expect(html).toContain('Depends On')
+    expect(html).toContain('Required By')
+    expect(html).not.toContain('Configuration')
+    expect(html).not.toContain('Used By')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+
+  it('preserves configuration and consumer groups when dependency fields are absent', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ configRefs: [issuer], consumers: [certificate] }} />)
+    expect(html).toContain('Configuration')
+    expect(html).toContain('Used By')
+    expect(html).not.toContain('Depends On')
+  })
+
+  it('retains navigation controls for identically named resources from distinct API groups', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependencies: [issuer, { ...issuer, group: 'other.example.com' }, issuer] }} onNavigate={() => {}} />)
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+describe('namespace deletion condition polarity', () => {
+  it.each([
+    'NamespaceDeletionDiscoveryFailure',
+    'NamespaceDeletionGroupVersionParsingFailure',
+    'NamespaceDeletionContentFailure',
+    'NamespaceContentRemaining',
+    'NamespaceFinalizersRemaining',
+  ])('%s treats True as a blocker and False as cleared', (type) => {
+    expect(defaultConditionTone({ type, status: 'True' })).toBe('fail')
+    expect(defaultConditionTone({ type, status: 'False' })).toBe('ok')
+    expect(defaultConditionTone({ type, status: 'Unknown' })).toBe('unknown')
   })
 })

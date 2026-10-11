@@ -195,3 +195,61 @@ func TestStartupLogColorDisabledForNonTerminal(t *testing.T) {
 		t.Fatal("startupLogColorEnabled(buffer) = true, want false")
 	}
 }
+
+func TestStartupAIStatusExplainsWhyItIsOff(t *testing.T) {
+	cases := []struct {
+		name    string
+		summary startupLogSummary
+		want    string
+	}{
+		{
+			name:    "enabled names the agent",
+			summary: startupLogSummary{mcpEnabled: true, aiAgent: "claude"},
+			want:    "enabled via claude",
+		},
+		{
+			name:    "no CLI found asks for an install, not the override",
+			summary: startupLogSummary{mcpEnabled: true},
+			want:    "disabled (no agent CLI found). Install Claude Code, Codex, Cursor, or OpenCode",
+		},
+		{
+			name:    "--no-mcp names the flag",
+			summary: startupLogSummary{},
+			want:    "--no-mcp",
+		},
+		{
+			name:    "auth enabled says so instead of blaming a missing CLI",
+			summary: startupLogSummary{mcpEnabled: true, authMode: "OIDC"},
+			want:    "authentication is enabled",
+		},
+		{
+			name: "a broken override is named instead of blamed on a missing CLI",
+			summary: startupLogSummary{
+				mcpEnabled:    true,
+				aiCLIOverride: "/opt/typo/claude",
+			},
+			want: "can't run RADAR_AI_CLI_BIN=/opt/typo/claude",
+		},
+		{
+			name: "in-cluster does not tell a container to install a CLI",
+			summary: startupLogSummary{
+				mcpEnabled: true,
+				kubeconfig: k8s.KubeconfigSummary{Mode: "in-cluster"},
+			},
+			want: "not available when Radar runs inside the cluster",
+		},
+		{
+			name:    "a shared installation does not tell anyone to install a CLI",
+			summary: startupLogSummary{mcpEnabled: true, configManagement: "operator"},
+			want:    "not available in a shared installation",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := startupAIStatus(c.summary)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("startupAIStatus = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}

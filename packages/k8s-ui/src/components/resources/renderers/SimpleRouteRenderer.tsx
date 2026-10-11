@@ -2,6 +2,7 @@ import { Globe, ArrowRight, Network } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
+import { gatewayBackendResourceRef, gatewayParentResourceRef } from '../../../utils/gateway-references'
 
 interface SimpleRouteRendererProps {
   data: any
@@ -35,22 +36,8 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
     ? parentStatuses[0].conditions
     : undefined
 
-  function toGatewayRef(ref: any): ResourceRef {
-    return {
-      kind: 'Gateway',
-      namespace: ref.namespace || routeNs,
-      name: ref.name,
-      group: 'gateway.networking.k8s.io',
-    }
-  }
-
-  function toServiceRef(backend: any): ResourceRef {
-    return {
-      kind: 'Service',
-      namespace: backend.namespace || routeNs,
-      name: backend.name,
-    }
-  }
+  const toParentRef = (ref: any) => gatewayParentResourceRef(ref, routeNs)
+  const toBackendRef = (ref: any) => gatewayBackendResourceRef(ref, routeNs)
 
   return (
     <>
@@ -62,8 +49,8 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
             const cond = (p.conditions || []).find((c: any) => c.type === 'Accepted' && c.status === 'False')
             const gwName = p.parentRef?.name || 'unknown'
             return cond?.reason
-              ? `Gateway "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
-              : `Gateway "${gwName}" has not accepted this route.`
+              ? `Parent "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
+              : `Parent "${gwName}" has not accepted this route.`
           }).join('; ')}
         />
       )}
@@ -95,12 +82,12 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
             />
           )}
           <Property
-            label="Parent Gateways"
+            label="Parents"
             value={
               parentRefs.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
                   {parentRefs.map((ref: any, i: number) => (
-                    <ResourceRefBadge key={`${ref.namespace || ''}-${ref.name}-${i}`} resourceRef={toGatewayRef(ref)} onClick={onNavigate} />
+                    <ResourceRefBadge key={`${ref.namespace || ''}-${ref.name}-${i}`} resourceRef={toParentRef(ref)} onClick={onNavigate} />
                   ))}
                 </div>
               ) : 'None'
@@ -131,7 +118,7 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
                       const pct = hasWeights ? Math.round(((b.weight ?? 1) / totalWeight) * 100) : null
                       return (
                         <span key={bi} className="flex items-center gap-1">
-                          <ResourceRefBadge resourceRef={toServiceRef(b)} onClick={onNavigate} />
+                          <ResourceRefBadge resourceRef={toBackendRef(b)} onClick={onNavigate} />
                           {b.port && <span className="text-theme-text-tertiary">:{b.port}</span>}
                           {pct !== null && (
                             <span className="text-theme-text-tertiary text-[10px]">{pct}%</span>

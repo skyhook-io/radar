@@ -1,7 +1,8 @@
 import { Shield, Box, Users, Gauge } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ResourceLink, ConditionsSection } from '../../ui/drawer-components'
 import type { RBACNamespaceResponse, RBACBindingWithSubjects, RBACSubject, ResourceRef } from '../../../types'
+import { formatAge } from '../resource-utils'
 import { rbacKindBadgeClass } from '../../../utils/rbac-badges'
 import { RBACErrorSection } from './RBACErrorSection'
 import { NamespaceLimitRangesSection } from './LimitRangeRenderer'
@@ -70,11 +71,15 @@ export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quot
               )}>{phase}</span>
             ) : undefined
           } />
+          {metadata.deletionTimestamp && <Property label="Terminating for" value={formatAge(metadata.deletionTimestamp)} />}
+          {metadata.deletionTimestamp && data.spec?.finalizers?.length > 0 && <Property label="Namespace finalizers" value={data.spec.finalizers.join(', ')} />}
           {istioInjection && <Property label="Istio injection" value={istioInjection} />}
           {linkerdInjection && <Property label="Linkerd injection" value={linkerdInjection} />}
           {managedBy && <Property label="Managed by" value={managedBy} />}
         </PropertyList>
       </Section>
+
+      <ConditionsSection conditions={status.conditions} defaultExpanded />
 
       {/* ResourceQuota usage — only when host wired the fetch. */}
       {(quotaError || (quotaData != null && quotaData.length > 0)) && (

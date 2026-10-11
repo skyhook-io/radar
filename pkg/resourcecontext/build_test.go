@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -632,6 +633,30 @@ func TestBuild_NodeSummary(t *testing.T) {
 	}
 	if got := rc.NodeSummary.Warnings; len(got) != 3 {
 		t.Errorf("Warnings: got %+v want unschedulable/not_ready/memory_pressure", got)
+	}
+}
+
+func TestBuild_NodeRemovalSummary(t *testing.T) {
+	now := time.Now()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "removing", DeletionTimestamp: &metav1.Time{Time: now.Add(-time.Minute)}},
+		Spec:       corev1.NodeSpec{Unschedulable: true},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: metav1.NewTime(now.Add(-time.Second))}}},
+	}
+	summary := buildNodeSummary(node)
+	if summary.ReadyStatus != "Unknown" || !summary.Lifecycle.Removing || len(summary.Warnings) != 0 {
+		t.Fatalf("expected removal must retain raw readiness without failure warnings: %+v", summary)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-5 * time.Minute))
+	summary = buildNodeSummary(node)
+	if !summary.Lifecycle.ReadinessFailed || len(summary.Warnings) != 1 || summary.Warnings[0] != NodeWarningNotReady {
+		t.Fatalf("preexisting failure must remain visible: %+v", summary)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Second))
+	node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue})
+	summary = buildNodeSummary(node)
+	if len(summary.Warnings) != 1 || summary.Warnings[0] != NodeWarningMemoryPressure {
+		t.Fatalf("removal must not suppress pressure warnings: %+v", summary)
 	}
 }
 
@@ -1843,6 +1868,7 @@ func TestBuild_Deployment_NoScaler_HasNoScaledBy(t *testing.T) {
 
 func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
 	deploy, topo, hpa := scaledByFixture(topology.KindScaledObject, "scaledobject/prod/api-scaler")
+	topo.Nodes[1].Data = map[string]any{"apiVersion": "keda.sh/v1alpha1"}
 	rc := Build(context.Background(), deploy, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
@@ -1863,8 +1889,8 @@ func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"scaledBy":[{"kind":"ScaledObject","namespace":"prod","name":"api-scaler"}]`) {
-		t.Errorf("KEDA scaledBy entry should serialize exactly as before: %s", b)
+	if !strings.Contains(string(b), `"scaledBy":[{"kind":"ScaledObject","group":"keda.sh","namespace":"prod","name":"api-scaler"}]`) {
+		t.Errorf("KEDA scaledBy entry should retain its observed API group: %s", b)
 	}
 }
 
@@ -1932,4 +1958,29 @@ func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
 	if rc.Execution != execution {
 		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
 	}
+}
+
+func TestBuildDependencyReferencesAreAuthorized(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1", "kind": "Certificate",
+		"metadata": map[string]any{"name": "tls", "namespace": "team"},
+	}}
+	rel := &topology.Relationships{
+		Dependencies: []topology.ResourceRef{{Kind: "Issuer", Group: "cert-manager.io", Namespace: "team", Name: "ca"}},
+		Dependents:   []topology.ResourceRef{{Kind: "CertificateRequest", Group: "cert-manager.io", Namespace: "team", Name: "request"}},
+	}
+	allowed := Build(context.Background(), obj, Options{Relationships: rel})
+	if len(allowed.Dependencies) != 1 || allowed.Dependencies[0].Group != "cert-manager.io" || len(allowed.Dependents) != 1 {
+		t.Fatalf("authorized dependency context = %+v", allowed)
+	}
+	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "cert-manager.io", kind: "Issuer", namespace: "team"}})
+	if len(denied.Dependencies) != 0 || len(denied.Dependents) != 1 {
+		t.Fatalf("denied dependency context = %+v", denied)
+	}
+	for _, omitted := range denied.Omitted {
+		if omitted.Field == "dependencies" && omitted.Reason == OmittedRBACDenied {
+			return
+		}
+	}
+	t.Fatalf("denied dependency did not disclose omission: %+v", denied.Omitted)
 }

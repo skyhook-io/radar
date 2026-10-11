@@ -60,15 +60,31 @@ export type DiagnoseView = "home" | "investigation";
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
 //  - "needs-install": the feature is supported here but no agent CLI is installed
-//  - "needs-restart": a supported agent is now on PATH but Radar booted before it
-//                     existed (the engine is decided once, at startup)
+//  - "needs-restart": a supported agent is installed but investigations are
+//                     still off. The server picks up new installs whenever the
+//                     agent list is fetched, so locally this means RADAR_AI_CLI_BIN
+//                     pins the engine to a file Radar can't run (cliOverride); an
+//                     embedding host may report it when its own runner is down
 //  - "off":           not available in this deployment (proxy/OIDC auth, --no-mcp,
 //                     or an embed host) — no install nudge would help
-export type DiagnoseSetup = "ready" | "needs-install" | "needs-restart" | "off";
+//  - "unknown":       the agents probe hasn't answered (in flight, or it failed
+//                     and was swallowed). Nothing about the machine or the
+//                     deployment is established yet, so say nothing about either
+export type DiagnoseSetup =
+  "ready" | "needs-install" | "needs-restart" | "off" | "unknown";
 
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
   setupState: DiagnoseSetup; // readiness for the setup nudge (see DiagnoseSetup)
+  // Re-reads the agent list; the server turns investigations on if a CLI was
+  // installed since the last check. Resolves once the new state is applied.
+  recheckAgents: () => Promise<void>;
+  checkingAgents: boolean;
+  // The latest agent check failed to reach the server, so nothing about the
+  // machine is known from it.
+  agentsCheckFailed: boolean;
+  // RADAR_AI_CLI_BIN is set; with "needs-restart" it is what's broken.
+  cliOverride: boolean;
   agentLabel: string; // label of the selected agent, e.g. "Claude Code"
   hosted: boolean; // selected agent runs on the host's backend, not this machine
   agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
@@ -172,6 +188,31 @@ const MIN_APP_LEFT_OF_PANEL = 900;
 // area instead. Radar's own minimum width is about 856px, so this is the
 // drawer's floor: below it the investigation is the screen.
 const MIN_APP_PEEK_BESIDE_OVERLAY = 320;
+// resolveSetupState is the ONE mapping from the agents probe to what every
+// surface renders. Exported so it can be pinned by test, since each state drives
+// a different user-facing claim.
+//
+// "unknown" is not the same as "off". `eligible` starts false and the probe's
+// catch leaves it that way, so without a separate state a pending or failed
+// request reads as a confirmed deployment restriction. A non-empty agent list
+// while the engine is off means a drivable CLI appeared after Radar booted.
+export function resolveSetupState({
+  available,
+  eligibilityResolved,
+  eligible,
+  supportedAgentCount,
+}: {
+  available: boolean;
+  eligibilityResolved: boolean;
+  eligible: boolean;
+  supportedAgentCount: number;
+}): DiagnoseSetup {
+  if (available) return "ready";
+  if (!eligibilityResolved) return "unknown";
+  if (!eligible) return "off";
+  return supportedAgentCount > 0 ? "needs-restart" : "needs-install";
+}
+
 export function investigationPanelFillsViewport(
   viewportWidth: number,
   panelWidth: number,
@@ -452,52 +493,79 @@ function RoutedDiagnoseProvider({
   const narrow = viewportW - width < MIN_APP_LEFT_OF_PANEL;
   const fullWidthForced = investigationPanelFillsViewport(viewportW, width);
 
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let live = true;
-    fetchAgents()
-      .then((r) => {
-        if (!live) return;
-        setConsented(r.consented ?? {});
-        setEligible(!!r.eligible);
-        const supported = r.agents.filter(
-          (a) =>
-            a.supported &&
-            (a.hosted ||
-              (!!a.profiles?.length &&
-                a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
-        );
-        setAvailable(r.enabled && supported.length > 0);
-        setAgents(supported);
-        // Keep the stored pick only if it's still installed; else default to the
-        // first supported agent (matches the server's default selection).
-        const stored = readStored(AGENT_KEY) || "";
-        const next =
-          stored && supported.some((a) => a.name === stored)
-            ? stored
-            : (supported[0]?.name ?? "");
-        setSelectedAgentState(next);
-        const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
-        const storedProfile =
-          (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
-        if (!profiles.includes(storedProfile) && profiles[0]) {
-          setProfileState(profiles[0]);
-          writeStored(PROFILE_KEY, profiles[0]);
-        }
-        // Model/effort are agent-specific; if the stored agent is gone, its values
-        // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
-        if (next !== stored) {
-          setModelState("");
-          writeStored(MODEL_KEY, "");
-          setEffortState("");
-          writeStored(EFFORT_KEY, "");
-        }
-        setAgentEligibilityResolved(true);
-      })
-      .catch(() => {});
+    mountedRef.current = true;
     return () => {
-      live = false;
+      mountedRef.current = false;
     };
   }, []);
+  const [checkingAgents, setCheckingAgents] = useState(false);
+  const [agentsCheckFailed, setAgentsCheckFailed] = useState(false);
+  const [cliOverride, setCliOverride] = useState(false);
+  // A click and a window-focus re-check can overlap; only the newest one may
+  // apply its answer, or a stale "nothing installed" could land last.
+  const agentCheckSeq = useRef(0);
+  // The agent in use now, picked by hand or by default. A check compares
+  // against it, not just the stored pick, so seeing the same agent again
+  // keeps the model and effort set for it.
+  const agentInUseRef = useRef(selectedAgent);
+  const recheckAgents = useCallback(async () => {
+    const seq = ++agentCheckSeq.current;
+    const latest = () => mountedRef.current && seq === agentCheckSeq.current;
+    setCheckingAgents(true);
+    try {
+      const r = await fetchAgents();
+      if (!latest()) return;
+      setAgentsCheckFailed(false);
+      setCliOverride(!!r.cliOverride);
+      setConsented(r.consented ?? {});
+      setEligible(!!r.eligible);
+      const supported = r.agents.filter(
+        (a) =>
+          a.supported &&
+          (a.hosted ||
+            (!!a.profiles?.length &&
+              a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
+      );
+      setAvailable(r.enabled && supported.length > 0);
+      setAgents(supported);
+      // Keep the stored pick only if it's still installed; else default to the
+      // first supported agent. Runs always name it, so the server's own default
+      // doesn't apply.
+      const stored = readStored(AGENT_KEY) || "";
+      const next =
+        stored && supported.some((a) => a.name === stored)
+          ? stored
+          : (supported[0]?.name ?? "");
+      setSelectedAgentState(next);
+      const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
+      const storedProfile =
+        (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
+      if (!profiles.includes(storedProfile) && profiles[0]) {
+        setProfileState(profiles[0]);
+        writeStored(PROFILE_KEY, profiles[0]);
+      }
+      // Model/effort are agent-specific; if the agent changed, its values
+      // don't apply to the new one (e.g. a Codex slug under Claude), so drop them.
+      if (next !== agentInUseRef.current) {
+        setModelState("");
+        writeStored(MODEL_KEY, "");
+        setEffortState("");
+        writeStored(EFFORT_KEY, "");
+      }
+      agentInUseRef.current = next;
+      setAgentEligibilityResolved(true);
+    } catch {
+      // Leaves the previous state in place; "unknown" until a probe answers.
+      if (latest()) setAgentsCheckFailed(true);
+    } finally {
+      if (latest()) setCheckingAgents(false);
+    }
+  }, []);
+  useEffect(() => {
+    void recheckAgents();
+  }, [recheckAgents]);
 
   const setModel = useCallback((v: string) => {
     setModelState(v);
@@ -511,6 +579,7 @@ function RoutedDiagnoseProvider({
     (name: string) => {
       setSelectedAgentState(name);
       writeStored(AGENT_KEY, name);
+      agentInUseRef.current = name;
       const nextProfile = agents.find((agent) => agent.name === name)
         ?.profiles?.[0];
       if (nextProfile) {
@@ -541,15 +610,21 @@ function RoutedDiagnoseProvider({
     ? "standard"
     : (selectedAgentInfo?.consentSurfaces?.[effectiveProfile] ?? "");
 
-  // `agents` holds only supported CLIs (filtered on fetch), so a non-empty list
-  // while the engine is off means a drivable agent appeared on PATH after boot.
-  const setupState: DiagnoseSetup = available
-    ? "ready"
-    : !eligible
-      ? "off"
-      : agents.length > 0
-        ? "needs-restart"
-        : "needs-install";
+  const setupState = resolveSetupState({
+    available,
+    eligibilityResolved: agentEligibilityResolved,
+    eligible,
+    supportedAgentCount: agents.length,
+  });
+
+  // Coming back from a terminal after installing a CLI is when to look again,
+  // so the setup notice clears without the user hunting for a button.
+  useEffect(() => {
+    if (setupState === "ready" || setupState === "off") return;
+    const onFocus = () => void recheckAgents();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [setupState, recheckAgents]);
 
   useEffect(() => {
     const onResize = () => setViewportW(window.innerWidth);
@@ -701,6 +776,9 @@ function RoutedDiagnoseProvider({
         writeFocusedRunID(run.id, true);
       })
       .catch((e) => {
+        // The picked agent may have been uninstalled since the list was
+        // fetched; refresh it so the picker shows what's installed now.
+        void recheckAgents();
         if (seq !== startSeqRef.current) return;
         setStartFailure({
           message:
@@ -1021,6 +1099,10 @@ function RoutedDiagnoseProvider({
   const value: DiagnoseCtx = {
     available,
     setupState,
+    recheckAgents,
+    checkingAgents,
+    agentsCheckFailed,
+    cliOverride,
     agentLabel,
     hosted,
     agents,

@@ -565,6 +565,14 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	t := time.Now()
 	ResetAllSubsystems()
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
+	// Drop the previous cluster's permission result before the client swap, so
+	// nothing pairs it with the new client, including when the switch fails
+	// past this point. Not before the reset above: until then the previous
+	// cluster's resource cache is live, and several readers treat a nil
+	// permission result as cluster-wide access. The invalidations right after
+	// SwitchContext retire any probe still in flight against the previous
+	// client.
+	InvalidateResourcePermissionsCache()
 
 	// Step 2: Switch the K8s client to the new context
 	reportProgress("Connecting to cluster...")
@@ -749,7 +757,6 @@ func reinitializeNamespaceScope(namespace, resetMessage string) error {
 
 	SetNamespaceScopeOverride(namespace)
 	InvalidateCapabilitiesCache()
-	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 
 	t = time.Now()

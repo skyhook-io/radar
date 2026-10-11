@@ -453,6 +453,19 @@ export function PodRenderer({
           <Property label="Node" value={
             data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
           } copyable onCopy={onCopy} copied={copied} />
+          {/* A nomination outlives its meaning: the API server clears it on binding by
+              default only from Kubernetes 1.35, and pod GC fails a terminating unbound
+              Pod without clearing it. Only a Pending, unbound, live Pod can still use it. */}
+          {data.status?.nominatedNodeName && !data.spec?.nodeName && data.status?.phase === 'Pending' && !data.metadata?.deletionTimestamp && (
+            <Property
+              label={
+                <Tooltip content="The node this Pod is expected to run on, set by the scheduler or another component. It can change before the Pod is bound." position="right">
+                  <span className="border-b border-dotted border-theme-text-tertiary cursor-help">Nominated Node</span>
+                </Tooltip>
+              }
+              value={<ResourceLink name={data.status.nominatedNodeName} kind="nodes" onNavigate={onNavigate} />}
+            />
+          )}
           {data.spec?.priorityClassName && <Property label="Priority Class" value={
             <ResourceLink name={data.spec.priorityClassName} kind="priorityclasses" group="scheduling.k8s.io" onNavigate={onNavigate} />
           } />}

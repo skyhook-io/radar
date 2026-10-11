@@ -40,7 +40,8 @@ type PodDrainDecision struct {
 	// for decisions that never reach the budget check (skips, Pending or terminating pods), during
 	// drain execution (the Eviction API decides), and when the budgets of the pod's namespace could
 	// not be listed (see DrainPlan.PDBError).
-	PDBChecked bool `json:"pdbChecked"`
+	PDBChecked  bool `json:"pdbChecked"`
+	Terminating bool `json:"terminating"`
 }
 
 // ClassifyPodForDrain decides, without touching the cluster, what DrainNode would do with pod
@@ -51,7 +52,7 @@ type PodDrainDecision struct {
 // Pending or already terminating bypass PodDisruptionBudgets entirely; otherwise see
 // pdbBlocking for the cases reported as may-block.
 func ClassifyPodForDrain(pod corev1.Pod, opts DrainOptions, pdbs []policyv1.PodDisruptionBudget) PodDrainDecision {
-	d := PodDrainDecision{Namespace: pod.Namespace, Name: pod.Name, EmptyDir: hasLocalStorage(pod)}
+	d := PodDrainDecision{Namespace: pod.Namespace, Name: pod.Name, EmptyDir: hasLocalStorage(pod), Terminating: pod.DeletionTimestamp != nil}
 	skip := func(reason string) PodDrainDecision {
 		d.Outcome, d.Reason = DrainOutcomeSkip, reason
 		return d

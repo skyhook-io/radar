@@ -375,11 +375,16 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.Pods = append(rel.Pods, *ref)
 			}
 		case EdgeUses:
-			if isStorageRefKind(kindLower) {
+			source := refForNodeID(edge.Source)
+			if isStorageResourceRef(source) {
 				rel.Consumers = append(rel.Consumers, *ref)
-			} else {
-				// HPA/ScaledObject/ScaledJob scales a workload
+			} else if isScalingRelationship(source, ref) {
 				rel.ScaleTarget = ref
+			} else {
+				rel.Dependencies = append(rel.Dependencies, *ref)
+				if isConfigurationDependency(ref) {
+					rel.ConfigRefs = append(rel.ConfigRefs, *ref)
+				}
 			}
 		case EdgeProtects:
 			// Outgoing EdgeProtects fires when the queried resource IS a
@@ -439,11 +444,15 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.Services = append(rel.Services, *ref)
 			}
 		case EdgeUses:
-			if isStorageRefKind(ref.Kind) {
+			if isStorageResourceRef(ref) {
 				rel.StorageRefs = append(rel.StorageRefs, *ref)
-			} else {
-				// An HPA/ScaledObject/ScaledJob scales this resource
+			} else if isScalingRelationship(ref, refForNodeID(edge.Target)) {
 				rel.Scalers = append(rel.Scalers, *ref)
+			} else {
+				rel.Dependents = append(rel.Dependents, *ref)
+				if isConfigurationDependency(refForNodeID(edge.Target)) {
+					rel.Consumers = append(rel.Consumers, *ref)
+				}
 			}
 		case EdgeProtects:
 			// Incoming EdgeProtects: dispatch on source kind so PDBs and
@@ -681,10 +690,16 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	// Return nil if no relationships found
+	// Collected without per-append checks: a PVC shared by thousands of
+	// workloads would make a linear duplicate scan quadratic.
+	for _, refs := range []*[]ResourceRef{&rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+		*refs = uniqueResourceRefs(*refs)
+	}
+
 	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
-		len(rel.StorageRefs) == 0 &&
+		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
@@ -776,10 +791,57 @@ func appendResourceRef(refs []ResourceRef, candidate ResourceRef) []ResourceRef 
 	return append(refs, candidate)
 }
 
-func isStorageRefKind(kind string) bool {
-	switch strings.ToLower(kind) {
-	case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-		return true
+func uniqueResourceRefs(refs []ResourceRef) []ResourceRef {
+	if len(refs) < 2 {
+		return refs
+	}
+	seen := make(map[ResourceRef]bool, len(refs))
+	unique := refs[:0]
+	for _, ref := range refs {
+		key := ResourceRef{Kind: strings.ToLower(ref.Kind), Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, ref)
+	}
+	return unique
+}
+
+func isStorageResourceRef(ref *ResourceRef) bool {
+	return ref != nil && ref.Group == "" && strings.EqualFold(ref.Kind, "PersistentVolumeClaim")
+}
+
+// Configuration projections preserve navigation for Radar Hub's versioned
+// embedded frontend; newer clients present the same refs as dependencies.
+func isConfigurationDependency(ref *ResourceRef) bool {
+	if ref == nil {
+		return false
+	}
+	switch ref.Kind {
+	case "Issuer", "ClusterIssuer":
+		return ref.Group == "cert-manager.io"
+	case "TriggerAuthentication", "ClusterTriggerAuthentication":
+		return ref.Group == "keda.sh"
+	default:
+		return false
+	}
+}
+
+func isScalingRelationship(source, target *ResourceRef) bool {
+	if source == nil || target == nil || source.Namespace != target.Namespace {
+		return false
+	}
+	switch source.Kind {
+	case "HorizontalPodAutoscaler":
+		return source.Group == "autoscaling"
+	case "VerticalPodAutoscaler":
+		return source.Group == "autoscaling.k8s.io"
+	case "ScaledObject", "ScaledJob":
+		if target.Group == "keda.sh" && (target.Kind == "TriggerAuthentication" || target.Kind == "ClusterTriggerAuthentication") {
+			return false
+		}
+		return source.Group == "keda.sh"
 	default:
 		return false
 	}

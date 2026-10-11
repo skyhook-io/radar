@@ -2,8 +2,11 @@ package resourcecontext
 
 import (
 	"context"
+	"slices"
 	"sort"
+	"time"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -238,6 +241,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.SelectedBy = filterRefs(ctx, opts.AccessChecker,
 			toContextRefs(selected),
 			"selectedBy", omitted)
+
+		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
+			toContextRefs(rel.Dependencies), "dependencies", omitted)
+		rc.Dependents = filterRefs(ctx, opts.AccessChecker,
+			toContextRefs(rel.Dependents), "dependents", omitted)
 
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
@@ -1059,14 +1067,16 @@ func buildNodeSummary(obj runtime.Object) *NodeSummary {
 		Capacity:      compactResourceList(node.Status.Capacity),
 		Allocatable:   compactResourceList(node.Status.Allocatable),
 	}
-	if out.Unschedulable {
+	lifecycle := health.NodeLifecycle(node, time.Now())
+	out.Lifecycle = &lifecycle
+	if out.Unschedulable && !lifecycle.Removing {
 		out.Warnings = append(out.Warnings, NodeWarningUnschedulable)
 	}
 	for _, cond := range node.Status.Conditions {
 		switch cond.Type {
 		case corev1.NodeReady:
 			out.ReadyStatus = string(cond.Status)
-			if cond.Status != corev1.ConditionTrue {
+			if lifecycle.ReadinessFailed {
 				out.Warnings = append(out.Warnings, NodeWarningNotReady)
 			}
 		case corev1.NodeDiskPressure:
@@ -1082,7 +1092,7 @@ func buildNodeSummary(obj runtime.Object) *NodeSummary {
 				out.Warnings = append(out.Warnings, NodeWarningPIDPressure)
 			}
 		case corev1.NodeNetworkUnavailable:
-			if cond.Status == corev1.ConditionTrue {
+			if slices.Contains(lifecycle.Problems, "NetworkUnavailable") {
 				out.Warnings = append(out.Warnings, NodeWarningNetworkUnavailable)
 			}
 		}

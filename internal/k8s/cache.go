@@ -356,7 +356,11 @@ func InitResourceCache(ctx context.Context) error {
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
 		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		permResult := CheckResourcePermissions(rbacCtx)
+		// A superseded result is still wired from rather than discarded: this
+		// runs under contextOpMu, so the operation that superseded the probe is
+		// already tearing this cache down, and the ctx.Err() check below drops
+		// out of the boot path that does not hold that lock.
+		permResult, _ := CheckResourcePermissions(rbacCtx)
 		cancel()
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 
@@ -1443,9 +1447,42 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 		}
 	}
 
+	gvr, err := resolveDynamicGVR(kind, group)
+	if err != nil {
+		return nil, err
+	}
+
+	dynamicCache := GetDynamicResourceCache()
+	if dynamicCache == nil {
+		return nil, fmt.Errorf("%w: dynamic cache", ErrDynamicNotReady)
+	}
+
+	if shouldBypassDynamicInformer(gvr) {
+		return dynamicCache.ListDirect(ctx, gvr, namespace)
+	}
+
+	return dynamicCache.List(gvr, namespace)
+}
+
+// ListDirectSelectedWithGroup lists one bounded, label-selected page of a
+// dynamic kind straight from the API server, never through an informer. It
+// resolves the GVR the same way ListDynamicWithGroup does.
+func (c *ResourceCache) ListDirectSelectedWithGroup(ctx context.Context, kind, namespace, group, labelSelector string, limit int64) ([]*unstructured.Unstructured, bool, error) {
+	gvr, err := resolveDynamicGVR(kind, group)
+	if err != nil {
+		return nil, false, err
+	}
+	dynamicCache := GetDynamicResourceCache()
+	if dynamicCache == nil {
+		return nil, false, fmt.Errorf("%w: dynamic cache", ErrDynamicNotReady)
+	}
+	return dynamicCache.ListDirectSelected(ctx, gvr, namespace, labelSelector, limit)
+}
+
+func resolveDynamicGVR(kind, group string) (schema.GroupVersionResource, error) {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
-		return nil, fmt.Errorf("%w: resource discovery", ErrDynamicNotReady)
+		return schema.GroupVersionResource{}, fmt.Errorf("%w: resource discovery", ErrDynamicNotReady)
 	}
 
 	var gvr schema.GroupVersionResource
@@ -1463,21 +1500,11 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 
 	if !ok {
 		if group != "" {
-			return nil, fmt.Errorf("%w: %s (group: %s)", ErrUnknownDynamicKind, kind, group)
+			return schema.GroupVersionResource{}, fmt.Errorf("%w: %s (group: %s)", ErrUnknownDynamicKind, kind, group)
 		}
-		return nil, fmt.Errorf("%w: %s", ErrUnknownDynamicKind, kind)
+		return schema.GroupVersionResource{}, fmt.Errorf("%w: %s", ErrUnknownDynamicKind, kind)
 	}
-
-	dynamicCache := GetDynamicResourceCache()
-	if dynamicCache == nil {
-		return nil, fmt.Errorf("%w: dynamic cache", ErrDynamicNotReady)
-	}
-
-	if shouldBypassDynamicInformer(gvr) {
-		return dynamicCache.ListDirect(ctx, gvr, namespace)
-	}
-
-	return dynamicCache.List(gvr, namespace)
+	return gvr, nil
 }
 
 // builtinGVRFallback resolves a built-in kind's GVR from the static table when

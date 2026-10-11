@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -79,6 +81,14 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
+		if errors.Is(err, k8score.ErrLogsUnavailable) {
+			s.writeError(w, http.StatusNotFound, k8score.ErrLogsUnavailable.Error())
+			return
+		}
+		if previous && isNoPreviousContainer(err) {
+			s.writeError(w, http.StatusNotFound, "This container has not restarted, so there is no earlier run to show.")
+			return
+		}
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to fetch logs: %v", err))
 			return
@@ -191,6 +201,12 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 			return
 		default:
 			line, err := reader.ReadString('\n')
+			// Checked before the EOF branch: the notice is the whole body with
+			// no trailing newline, so it arrives together with EOF.
+			if k8score.IsLogsUnavailableNotice(line) {
+				sendSSEError(w, flusher, k8score.ErrLogsUnavailable.Error())
+				return
+			}
 			if err != nil {
 				if err == io.EOF {
 					// Stream ended (pod terminated or container finished)
@@ -245,7 +261,18 @@ func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Inter
 		return "", err
 	}
 
+	if body := string(content); k8score.IsLogsUnavailableNotice(body) {
+		return "", k8score.ErrLogsUnavailable
+	}
+
 	return string(content), nil
+}
+
+// isNoPreviousContainer matches the apiserver's answer when an earlier run is
+// asked for on a container that never restarted. The apiserver sends it as a
+// 400 BadRequest, so any other failure that mentions the phrase is left alone.
+func isNoPreviousContainer(err error) bool {
+	return apierrors.IsBadRequest(err) && strings.Contains(err.Error(), "previous terminated container")
 }
 
 // parseLogLine extracts timestamp from a log line (format: 2024-01-20T10:30:00.123456789Z content)

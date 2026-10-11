@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/cronsched"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -26,8 +27,8 @@ type ResourceSummary struct {
 	Kind      string `json:"kind"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
-	// Status is the DISPLAY state, computed the way `kubectl get` computes its
-	// STATUS column: what is true about this object right now.
+	// Status is the display state, including intentional lifecycle states;
+	// Ready preserves the observed readiness separately.
 	Status string `json:"status,omitempty"`
 	Ready  string `json:"ready,omitempty"`
 	// Issue is the diagnostic hint — a reason worth looking at. It is
@@ -545,6 +546,7 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 	// Status and pressure conditions
 	for _, c := range node.Status.Conditions {
 		if c.Type == corev1.NodeReady {
+			s.Ready = string(c.Status)
 			if c.Status == corev1.ConditionTrue {
 				s.Status = "Ready"
 			} else {
@@ -564,15 +566,21 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 		}
 	}
 
-	// Cordoned/unschedulable status
+	lifecycle := health.NodeLifecycle(node, time.Now())
+	s.Status = lifecycle.Label
+	if !lifecycle.ReadinessFailed {
+		s.Issue = ""
+	}
+	if lifecycle.Delayed {
+		if s.Issue != "" {
+			s.Issue += "; Removal delayed"
+		} else {
+			s.Issue = "Removal delayed"
+		}
+	}
 	if node.Spec.Unschedulable {
 		unschedulable := true
 		s.Unschedulable = &unschedulable
-		if s.Status != "" {
-			s.Status += ",SchedulingDisabled"
-		} else {
-			s.Status = "SchedulingDisabled"
-		}
 	}
 
 	return s

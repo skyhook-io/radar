@@ -139,7 +139,7 @@ describe('IssueRow', () => {
 
   it('uses the category-group chip class in the queue row', () => {
     const html = renderToString(createElement(IssueRow, {
-      issue: mk({ category_group: 'control_plane' }),
+      issue: mk({ category_group: 'control_plane', kind: 'Node' }),
       open: false,
       onToggle: () => undefined,
     }))

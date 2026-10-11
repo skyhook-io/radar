@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/ingressstatus"
 	"github.com/skyhook-io/radar/internal/logsafe"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/envresolve"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -1155,13 +1156,10 @@ func detectGatewayRouteMissingBackends(cache *ResourceCache, svcLister corev1lis
 				continue
 			}
 			name, _ := refm["name"].(string)
-			if name == "" || !gatewayBackendRefIsService(refm) {
+			if name == "" || !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
-			svcNS := route.GetNamespace()
-			if ns, _ := refm["namespace"].(string); ns != "" {
-				svcNS = ns
-			}
+			svcNS := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			port := gatewayBackendPort(refm)
 			key := svcNS + "/" + name + "/" + port
 			if seen[key] {
@@ -1215,12 +1213,6 @@ func detectGatewayRouteMissingBackends(cache *ResourceCache, svcLister corev1lis
 		}
 	}
 	return out
-}
-
-func gatewayBackendRefIsService(ref map[string]any) bool {
-	group, _ := ref["group"].(string)
-	kind, _ := ref["kind"].(string)
-	return group == "" && (kind == "" || kind == "Service")
 }
 
 func gatewayBackendPort(ref map[string]any) string {

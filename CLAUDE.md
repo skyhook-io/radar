@@ -42,6 +42,7 @@ Not everything is in this file. The following files contain critical details tha
 | Touching **usage stats / telemetry** | [docs/usage-stats.md](docs/usage-stats.md) — it is a public promise of what is and isn't collected; a change that breaks it breaks the promise |
 | Working on **performance at high object counts** | [docs/loadtest.md](docs/loadtest.md) — synthetic fake-cluster UI load testing |
 | Working on the **Capacity (Karpenter) views** | [docs/capacity.md](docs/capacity.md) — the four screens, the per-value certainty contract (`= ≥ ≤ ?`, unavailable ≠ zero, partial ≠ exact, declared ≠ actual), demand-evaluation semantics, and the real Karpenter failure model. Wire types in `pkg/capacityapi`, engine in `internal/capacity`, handlers in `internal/server/capacity*` |
+| Working on **Node status or removal diagnostics** | [docs/nodes.md](docs/nodes.md) — cross-surface contract; policy in `pkg/health/node_lifecycle.go`, raw-node UI mirror in `packages/k8s-ui/src/utils/node-lifecycle.ts`, shared vectors in `pkg/health/testdata/node_lifecycle.json` |
 | Working on **resource renderers** | `packages/k8s-ui/src/components/resources/renderers/` — all existing renderers live here |
 | Understanding **cluster connection behavior** or the **namespace picker** | [docs/configuration.md](docs/configuration.md) — kubeconfig precedence, multi-context, in-cluster, and the Namespace Picker section (persistence, kubectl-parity default, `--namespace-scope`) |
 | Working on **MCP tools or AI context** | [docs/mcp.md](docs/mcp.md) + `internal/mcp/tools.go` — tool definitions and design rationale |
@@ -214,6 +215,13 @@ Namespace filters accept both `?namespace=X` (single) and `?namespaces=X,Y` (pre
 ### Version skew (newer UI, older Radar)
 
 Radar Hub embeds the newest `@skyhook-io/radar-app` against whatever Radar each cluster runs, so a frontend call to a new endpoint can hit a Radar that predates it. When adding an endpoint the UI calls: advertise a flag for it in `FeatureCapabilities` (`internal/k8s/capabilities.go`) in the same PR, add an entry with that flag and `flagShippedWithEndpoint: true` to `web/src/api/radarFeatures.ts`, and guard the hook with `useRadarFeature`. An older Radar then gets a "needs a newer Radar" note instead of a red error. `TestFeatureFlagsHaveFrontendGates` fails if the flag and the entry drift apart.
+
+### Review checklist: the three ways Radar runs
+
+Every review of server or UI behavior considers all three:
+- **Local:** one user, auth off, UI and server ship together.
+- **In-cluster shared:** auth on, many users on one process. Anything process-wide (managers, caches, connections, detections) is shared across users, and per-user namespace RBAC must hold for derived data too (counts, coverage, timings).
+- **Radar Hub:** the newest `radar-app` against whatever Radar each cluster runs, through a GET-only proxy.
 
 ### Error Handling (Frontend)
 

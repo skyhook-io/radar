@@ -364,3 +364,47 @@ func TestProbeListeningIgnoresBasePathSuffix(t *testing.T) {
 		t.Error("probeListening on a closed port = true, want false")
 	}
 }
+
+// With RADAR_AI_CLI_BIN set, detection is off, so "install one" can't help.
+func TestLocalNoAgentHintNamesABrokenOverride(t *testing.T) {
+	t.Setenv("RADAR_AI_CLI_BIN", "")
+	if got := localNoAgentHint(); !strings.Contains(got, "Install Claude Code") || strings.Contains(got, "RADAR_AI_CLI_BIN") {
+		t.Errorf("without the override, hint = %q, want install advice and no mention of the override", got)
+	}
+	t.Setenv("RADAR_AI_CLI_BIN", "/opt/typo/claude")
+	got := localNoAgentHint()
+	if !strings.Contains(got, "/opt/typo/claude") || strings.Contains(got, "Install") {
+		t.Errorf("with a broken override, hint = %q, want it to name the path and not suggest an install", got)
+	}
+}
+
+// The server's default agent can differ from the first one listed (it stays on
+// the CLI found first when another is installed later), so the run must name
+// the agent the user consented to.
+func TestRunStartsTheAgentItAskedConsentFor(t *testing.T) {
+	var started string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/agents":
+			_, _ = w.Write([]byte(`{"enabled":true,"eligible":true,"consented":{"claude:safeguarded":true},"agents":[` +
+				`{"name":"claude","label":"Claude Code","supported":true,"profiles":["safeguarded","full-local"]},` +
+				`{"name":"opencode","label":"OpenCode","supported":true,"profiles":["full-local"]}]}`))
+		case "/api/diagnose/runs":
+			var body struct {
+				Agent string `json:"agent"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			started = body.Agent
+			_, _ = w.Write([]byte(`{"id":"run-1","kind":"Pod","namespace":"prod","name":"api-0","agent":"claude"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	Run([]string{"pod/api-0", "-n", "prod", "--server", server.URL}, func(string) {})
+	if started != "claude" {
+		t.Fatalf("run started with agent %q, want claude (the agent consent was given for)", started)
+	}
+}

@@ -44,24 +44,19 @@ var shellEnvPrefixes = []string{
 // shell so the desktop app can find CLI tools and config files that are
 // set in .zshrc/.bashrc but not available to macOS .app bundles or
 // Linux desktop applications.
+//
+// On Windows only the common tool folders are added: there is no login shell
+// to ask, and apps already get the user's PATH.
 func enrichEnv() {
+	if runtime.GOOS == "windows" {
+		// No login shell to ask, and Windows already gives apps the user's
+		// PATH. The common tool folders still fill gaps, as elsewhere.
+		enrichPath("")
+		return
+	}
 	originalKubeconfig := os.Getenv("KUBECONFIG")
 	captured := getShellEnv(shellEnvVars, shellEnvPrefixes)
-
-	if path, ok := captured["PATH"]; ok && path != "" {
-		os.Setenv("PATH", path)
-		log.Printf("PATH enriched from login shell (%d entries)", len(strings.Split(path, ":")))
-	} else {
-		// Fallback: append common tool locations
-		current := os.Getenv("PATH")
-		extras := commonPaths()
-		if len(extras) > 0 {
-			os.Setenv("PATH", current+":"+strings.Join(extras, ":"))
-			log.Printf("PATH enriched with %d common paths (shell detection failed)", len(extras))
-		} else {
-			log.Printf("PATH enrichment: no additional paths found; auth plugins like gke-gcloud-auth-plugin may not be found")
-		}
-	}
+	enrichPath(captured["PATH"])
 
 	for key, val := range captured {
 		if key == "PATH" {
@@ -212,14 +207,86 @@ func commonPaths() []string {
 	}
 
 	var existing []string
-	current := os.Getenv("PATH")
 	for _, p := range candidates {
-		if strings.Contains(current, p) {
-			continue
-		}
 		if info, err := os.Stat(p); err == nil && info.IsDir() {
 			existing = append(existing, p)
 		}
 	}
 	return existing
+}
+
+// enrichPath sets PATH to the login shell's PATH, then any entries of the PATH
+// the app was launched with, then the common tool folders that exist. The
+// shell's order wins; the rest only fill gaps. Adding the common folders even
+// when the shell answered is deliberate: a login shell can answer without a
+// folder the user's terminal has (an rc file that sets PATH under a condition
+// the probe doesn't meet), and a missing ~/.local/bin hides both agent CLIs and
+// kubectl auth plugins.
+func enrichPath(shellPath string) {
+	// Relative launch entries ("." and the like) would make child processes,
+	// such as the local terminal and agent CLIs, run programs from whatever
+	// directory they start in.
+	var launch []string
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if filepath.IsAbs(dir) {
+			launch = append(launch, dir)
+		}
+	}
+	common := commonPaths()
+	if shellPath == "" {
+		merged, added := mergePathLists(launch, common)
+		os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
+		why := " (shell detection failed)"
+		if runtime.GOOS == "windows" {
+			why = ""
+		}
+		if len(added) == 0 {
+			if why != "" {
+				log.Printf("PATH enrichment: shell detection failed and no common tool folders were found; auth plugins like gke-gcloud-auth-plugin may not be found")
+			}
+			return
+		}
+		log.Printf("PATH enriched with %d common tool folders%s: %s", len(added), why, strings.Join(added, ", "))
+		return
+	}
+	shell := filepath.SplitList(shellPath)
+	merged, added := mergePathLists(shell, launch, common)
+	os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
+	if len(added) == 0 {
+		log.Printf("PATH from login shell (%d entries)", len(shell))
+		return
+	}
+	log.Printf("PATH from login shell (%d entries), plus %d it didn't have: %s",
+		len(shell), len(added), strings.Join(added, ", "))
+}
+
+// mergePathLists joins PATH lists in order, keeping the first occurrence of each
+// directory and dropping empty entries. Later lists contribute absolute
+// directories only; only the first list (the shell's own PATH) is trusted to
+// mean a relative one. Entries match exactly, ignoring a trailing separator:
+// cleaning "a/link/../bin" lexically could merge two directories the
+// filesystem keeps apart. It also returns the entries that came from lists
+// after the first.
+func mergePathLists(lists ...[]string) (merged, added []string) {
+	seen := map[string]bool{}
+	for i, list := range lists {
+		for _, dir := range list {
+			if dir == "" || (i > 0 && !filepath.IsAbs(dir)) {
+				continue
+			}
+			key := dir
+			if trimmed := strings.TrimRight(dir, string(filepath.Separator)); trimmed != "" {
+				key = trimmed
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, dir)
+			if i > 0 {
+				added = append(added, dir)
+			}
+		}
+	}
+	return merged, added
 }
