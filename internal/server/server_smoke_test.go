@@ -2055,3 +2055,17 @@ func TestSmokeChangesExactGroup(t *testing.T) {
 		t.Fatalf("Volcano Job history = %v, want only its own versioned rows", got)
 	}
 }
+
+func TestPodMetricsHistoryAPIReachability(t *testing.T) {
+	for _, tc := range []struct {
+		lastSuccess string
+		failures    int
+		reachable   bool
+	}{{"", 0, false}, {"2026-10-06T00:00:00Z", 0, true}, {"2026-10-06T00:00:00Z", 1, false}} {
+		health := k8s.MetricsCollectionHealth{PodMetrics: k8s.MetricsSourceHealth{LastSuccess: tc.lastSuccess, ConsecutiveErrors: tc.failures, LastError: "transport failed"}}
+		got := podMetricsHistoryResponse(context.Background(), nil, "default", "nginx", health, false)
+		if got.MetricsAPIReachable != tc.reachable {
+			t.Fatalf("%+v: %+v", tc, got)
+		}
+	}
+}

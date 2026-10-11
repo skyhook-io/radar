@@ -450,3 +450,34 @@ describe('PodRenderer on a Radar without variable sources', () => {
     expect(html).not.toContain('could not be loaded')
   })
 })
+
+describe('PodRenderer pending Pods, including non-CNPG workloads', () => {
+  const pending = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'nginx-join', namespace: 'default' }, spec: { containers: [{ name: 'nginx', image: 'nginx' }], initContainers: [{ name: 'setup', image: 'busybox' }] }, status: { phase: 'Pending' } }
+  const render = (data: any, metricsHistory: any = { containers: [], metricsAPIReachable: true }) => renderToString(<PodRenderer data={data} onCopy={() => {}} copied={null} metricsUnavailable metricsHistory={metricsHistory} />)
+  it('shows no usage yet only with a successful metrics API collection', () => {
+    expect(render(pending)).toContain('No usage yet: this Pod is not running')
+    expect(render(pending)).not.toContain('Radar cannot read metrics.k8s.io')
+    expect(render(pending, { containers: [], metricsAPIReachable: false })).toContain('Radar cannot read metrics.k8s.io')
+    expect(render(pending, { containers: [], collectionError: 'forbidden' })).toContain('forbidden')
+    expect(render({ ...pending, status: { phase: 'Running' } })).toContain('Radar cannot read metrics.k8s.io')
+  })
+  it('shows unstarted regular and init containers neutrally', () => {
+    const html = render(pending)
+    expect(html.match(/Not started/g)).toHaveLength(2)
+    expect(html).not.toContain('Not Ready')
+    expect(html).not.toMatch(/>unknown</)
+  })
+  it.each(['ContainerCreating', 'PodInitializing', 'ImagePullBackOff', 'CrashLoopBackOff'])('tones reported waiting reason %s appropriately', (reason) => {
+    const html = render({ ...pending, status: { phase: 'Pending', containerStatuses: [{ name: 'nginx', state: { waiting: { reason } } }] } })
+    const bad = ['ImagePullBackOff', 'CrashLoopBackOff'].includes(reason)
+    expect(html).toContain(bad ? 'bg-red-100' : 'bg-theme-hover/50')
+    if (bad) expect(html).toContain(reason)
+  })
+})
+
+it('shows reported running-but-unready nginx readiness as degraded', () => {
+  const data = { ...pod, status: { phase: 'Running', containerStatuses: [{ name: pod.spec.containers[0].name, ready: false, state: { running: {} } }] } }
+  const html = renderToString(<PodRenderer data={data} onCopy={() => {}} copied={null} />)
+  expect(html).toMatch(/bg-amber-100[^>]*>Not Ready</)
+  expect(html).toMatch(/>running</)
+})
