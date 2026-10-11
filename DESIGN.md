@@ -172,6 +172,17 @@ Use CSS classes from `components.css` for status cells in table rows:
 | `.border-r-subtle` | Right border |
 | `.border-t-subtle` | Top border |
 
+### Times and Ages
+Every relative time uses the shared tiers — seconds, minutes, hours, days (`45s`, `12m`, `4h`, `212d`) — never months or years, matching kubectl. What the text says depends on what the reader is asking:
+
+| The value answers | Shows | Use |
+|-------------------|-------|-----|
+| When did it happen? ("Started", "Last Reconciled", "Last Seen", "Created") | `5m ago`, `just now` | `<TimeValue>` for a drawer property (adds the exact local time on hover); `formatRelativeAgeTime` in lists and sentences |
+| How long has it existed or lasted? ("Age", "5m old", "Terminating for") | `5m` | `formatAge` / `formatCompactAge` |
+| A resource-list column | `5m` | `formatAge`, as kubectl prints it; the column header names the event |
+
+A bare `5m` under "Started" or "Finished" reads as a duration, so a moment outside a table column always says "ago". Go text uses `pkg/timeutil.FormatAgeShort`, with the same tiers.
+
 ## 5. Layout Principles
 
 ### Spacing
