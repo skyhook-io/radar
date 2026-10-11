@@ -96,6 +96,22 @@ func TestDiskType(t *testing.T) {
 	}
 }
 
+// A rejected Hyperdisk type must not be told its machine "supports only
+// Hyperdisk", nor be advised to move to Hyperdisk.
+func TestIncompatibilityForHyperdiskTypes(t *testing.T) {
+	cause := IncompatibilityCause("hyperdisk-extreme", "n4-standard-4")
+	if strings.Contains(cause, "only Hyperdisk") || !strings.Contains(cause, "hyperdisk-extreme disks on n4-standard-4") {
+		t.Errorf("cause = %q", cause)
+	}
+	action := IncompatibilityAction("hyperdisk-balanced")
+	if strings.Contains(action, "Hyperdisk StorageClass") || !strings.Contains(action, "supports hyperdisk-balanced") {
+		t.Errorf("action = %q", action)
+	}
+	if !strings.Contains(IncompatibilityAction("pd-ssd"), "Hyperdisk StorageClass") {
+		t.Error("PD types should still be offered the Hyperdisk move")
+	}
+}
+
 func provisioned(by string) metav1.ObjectMeta {
 	return metav1.ObjectMeta{Annotations: map[string]string{"pv.kubernetes.io/provisioned-by": by}}
 }

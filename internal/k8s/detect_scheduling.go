@@ -1611,10 +1611,9 @@ func attachFailureDiagnosis(cache *ResourceCache, pod *corev1.Pod, eventMessage 
 	if !gkedisk.HyperdiskOnly(machineType) {
 		return "", ""
 	}
-	for _, diskType := range podGCEDiskTypes(cache, pod) {
-		if gkedisk.IsPersistentDisk(diskType) {
-			return gkedisk.IncompatibilityCause(diskType, machineType), gkedisk.IncompatibilityAction(diskType)
-		}
+	// Only the volume the echo names; another of the pod's disks may be fine.
+	if diskType := podGCEDiskType(cache, pod, attachEventVolume(eventMessage)); gkedisk.IsPersistentDisk(diskType) {
+		return gkedisk.IncompatibilityCause(diskType, machineType), gkedisk.IncompatibilityAction(diskType)
 	}
 	return "", ""
 }
@@ -1630,11 +1629,12 @@ func nodeInstanceType(cache *ResourceCache, nodeName string) string {
 	return node.Labels[gkedisk.InstanceTypeLabel]
 }
 
-// podGCEDiskTypes returns the Compute Engine disk type of each bound PVC the
-// pod mounts, skipping volumes that aren't GCE disks or can't be resolved.
-func podGCEDiskTypes(cache *ResourceCache, pod *corev1.Pod) []string {
-	if cache == nil || pod == nil || cache.PersistentVolumeClaims() == nil || cache.PersistentVolumes() == nil {
-		return nil
+// podGCEDiskType returns the Compute Engine disk type of the named volume
+// when the pod mounts it through a bound claim, or "" when it can't be
+// resolved to a GCE disk.
+func podGCEDiskType(cache *ResourceCache, pod *corev1.Pod, volumeName string) string {
+	if cache == nil || pod == nil || volumeName == "" || cache.PersistentVolumeClaims() == nil || cache.PersistentVolumes() == nil {
+		return ""
 	}
 	storageClass := func(name string) *storagev1.StorageClass {
 		if cache.StorageClasses() == nil {
@@ -1646,24 +1646,22 @@ func podGCEDiskTypes(cache *ResourceCache, pod *corev1.Pod) []string {
 		}
 		return sc
 	}
-	var out []string
 	for _, vol := range pod.Spec.Volumes {
 		if vol.PersistentVolumeClaim == nil {
 			continue
 		}
 		pvc, err := cache.PersistentVolumeClaims().PersistentVolumeClaims(pod.Namespace).Get(vol.PersistentVolumeClaim.ClaimName)
-		if err != nil || pvc.Spec.VolumeName == "" {
+		if err != nil || pvc.Spec.VolumeName != volumeName {
 			continue
 		}
-		pv, err := cache.PersistentVolumes().Get(pvc.Spec.VolumeName)
+		pv, err := cache.PersistentVolumes().Get(volumeName)
 		if err != nil {
-			continue
+			return ""
 		}
-		if diskType, ok := gkedisk.DiskType(pv, storageClass); ok {
-			out = append(out, diskType)
-		}
+		diskType, _ := gkedisk.DiskType(pv, storageClass)
+		return diskType
 	}
-	return out
+	return ""
 }
 
 func postBindFallbackMessage(pod *corev1.Pod, age time.Duration) string {

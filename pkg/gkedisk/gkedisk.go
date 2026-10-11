@@ -115,7 +115,7 @@ func DiskType(pv *corev1.PersistentVolume, storageClass func(name string) *stora
 
 // IncompatibilityCause explains why a disk type can't attach to a machine type.
 func IncompatibilityCause(diskType, machineType string) string {
-	if HyperdiskOnly(machineType) {
+	if IsPersistentDisk(diskType) && HyperdiskOnly(machineType) {
 		return fmt.Sprintf("%s volumes can't attach to %s nodes: the %s machine series supports only Hyperdisk.",
 			diskType, machineType, strings.ToUpper(MachineSeries(machineType)))
 	}
@@ -124,6 +124,10 @@ func IncompatibilityCause(diskType, machineType string) string {
 
 // IncompatibilityAction names the two fixes for an incompatible attach.
 func IncompatibilityAction(diskType string) string {
-	return fmt.Sprintf("Pin the workload to a node pool whose machine type supports %s (a nodeSelector or required node affinity on %s or cloud.google.com/machine-family), or move the data to a Hyperdisk StorageClass whose type every node pool the workload can run on supports.",
+	pin := fmt.Sprintf("Pin the workload to a node pool whose machine type supports %s (a nodeSelector or required node affinity on %s or cloud.google.com/machine-family)",
 		diskType, InstanceTypeLabel)
+	if IsPersistentDisk(diskType) {
+		return pin + ", or move the data to a Hyperdisk StorageClass whose type every node pool the workload can run on supports."
+	}
+	return pin + ", or move the data to a StorageClass whose disk type every node pool the workload can run on supports."
 }

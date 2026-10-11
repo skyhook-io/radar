@@ -170,6 +170,19 @@ func TestDetectPostBindProblems_AttachEchoMatchesItsOwnVolume(t *testing.T) {
 	}
 }
 
+// An echo for a volume that isn't Persistent Disk gets no PD cause, even when
+// the pod also mounts a PD volume on the same Hyperdisk-only node.
+func TestDetectPostBindProblems_AttachEchoFallbackUsesEchoedVolume(t *testing.T) {
+	defer ResetTestState()
+	now := time.Now()
+	hyperdiskEcho := strings.Replace(attachBackoffEcho, "pvc-d28294a7", "pvc-hyperdisk", 1)
+	p := redisAttachProblem(t, append(redisOnNode("n4d-standard-4"),
+		attachEvent("echo", hyperdiskEcho, now.Add(-5*time.Minute), now.Add(-10*time.Second)))...)
+	if p.Cause != "" {
+		t.Errorf("echo for pvc-hyperdisk must not be blamed on the pod's pd-ssd volume: %q", p.Cause)
+	}
+}
+
 func TestDetectPostBindProblems_UnrelatedAttachFailureHasNoDiskCause(t *testing.T) {
 	defer ResetTestState()
 	now := time.Now()
