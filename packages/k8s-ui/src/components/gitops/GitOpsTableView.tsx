@@ -40,7 +40,7 @@ import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
-import { formatRelativeAgeTime } from '../../utils/format'
+import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
 
 // =============================================================================
 // GitOpsTableView — the canonical GitOps fleet list (Argo + Flux).
@@ -1374,7 +1374,7 @@ function GitOpsTable({
               )}
               <TableCell>
                 {row.terminating
-                  ? <span className="text-orange-400/80">Pending {formatRelativeAgeTime(row.terminationStartedAt, '') || 'now'}</span>
+                  ? <span className="text-orange-400/80">{pendingFor(row.terminationStartedAt)}</span>
                   : row.lastSync ? formatRelativeAgeTime(row.lastSync, '') : row.createdAt ? `Created ${formatRelativeAgeTime(row.createdAt, '')}` : ''}
               </TableCell>
               {showActions && onRowAction && (
@@ -1604,7 +1604,7 @@ function GitOpsTile({
             <div className="truncate font-mono text-[11px] text-theme-text-tertiary">{shortRevision(revision)}</div>
           )}
           {row.terminating ? (
-            <div className="font-medium text-orange-400/80">Pending {formatRelativeAgeTime(row.terminationStartedAt, '') || 'now'}</div>
+            <div className="font-medium text-orange-400/80">{pendingFor(row.terminationStartedAt)}</div>
           ) : (
             lastSyncRaw && <div className={clsx('font-medium', recencyClass)}>{formatRelativeAgeTime(lastSyncRaw, '')}</div>
           )}
@@ -1925,6 +1925,12 @@ function compactClusterURL(dest: string): string {
   return dest
     .replace(/^https?:\/\//, '')
     .replace(/^kubernetes\.default\.svc(:\d+)?\/?$/, 'in-cluster')
+}
+
+// How long deletion has been pending, not when it started.
+function pendingFor(startedAt?: string): string {
+  const age = formatCompactAge(startedAt)
+  return age ? `Pending for ${age}` : 'Pending'
 }
 
 // =============================================================================
