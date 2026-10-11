@@ -74,7 +74,7 @@ func TestFollowCNPGContainerLogs_DropsLogsUnavailableNotice(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := logAPIServer(t, http.StatusOK, "", tc.body)
 			logCh := make(chan workloadLogEntry, 10)
-			err := followCNPGContainerLogs(context.Background(), client, "db", "pg-orders-2", corev1.PodLogOptions{Container: "postgres", Timestamps: true, Follow: true}, logCh)
+			err := followCNPGContainerLogs(context.Background(), client, "db", "pg-orders-2", corev1.PodLogOptions{Container: "postgres", Timestamps: true, Follow: true}, 1, logCh)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
