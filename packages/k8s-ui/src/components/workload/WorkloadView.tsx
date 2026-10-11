@@ -951,7 +951,7 @@ export function WorkloadView({
                     {copied === 'name' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                   </button>
                 </Tooltip>
-                {renderStatusBadge && !resourceGone ? renderStatusBadge(resource) : status && (
+                {renderStatusBadge && resource && !resourceGone ? renderStatusBadge(resource) : status && (
                   <span className={clsx('badge', status.color)}>
                     {status.text}
                   </span>
@@ -1161,7 +1161,7 @@ export function WorkloadView({
                 {displayKindName(apiKind, resource?.kind)}
               </span>
             )}
-            {renderStatusBadge && !resourceGone ? renderStatusBadge(resource) : status && (
+            {renderStatusBadge && resource && !resourceGone ? renderStatusBadge(resource) : status && (
               <span className={clsx('badge whitespace-nowrap', status.color)}>
                 {status.text}
               </span>

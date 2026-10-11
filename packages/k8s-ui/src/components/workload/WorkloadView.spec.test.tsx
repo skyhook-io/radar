@@ -61,6 +61,14 @@ it('lets a host render the reported phase while preserving the default derived b
   }
 })
 
+it('waits for the resource before asking a host for its status badge', () => {
+  const badge = vi.fn((r: any) => <span>Phase: {r.status.phase}</span>)
+  for (const expanded of [true, false]) {
+    expect(() => renderToStaticMarkup(<WorkloadView {...props} expanded={expanded} resource={undefined} renderStatusBadge={badge} />)).not.toThrow()
+  }
+  expect(badge).not.toHaveBeenCalled()
+})
+
 it.each(['ScheduledBackup', 'Database', 'Publication', 'ClusterImageCatalog', 'Deployment', 'Pod', 'Pooler'])('keeps %s drawer utilities apart from identity and object actions', (kind) => {
   const host = document.createElement('div')
   const root = createRoot(host)
