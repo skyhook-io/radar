@@ -46,7 +46,8 @@ const EDGE_COLORS = {
   'exposes': '#3b82f6',    // Blue for service exposure
   'manages': '#64748b',    // Gray for management relationships
   'configures': '#f59e0b', // Amber for config
-  'uses': '#ec4899',       // Pink for HPA
+  'uses': '#ec4899',       // Pink: autoscalers, mounted claims, dependencies
+  'protects': '#8b5cf6',   // Violet for policies and disruption budgets
 } as const
 
 function getEdgeColor(type: string, isTrafficView: boolean): string {
@@ -59,10 +60,11 @@ function getEdgeColor(type: string, isTrafficView: boolean): string {
 
 // Human-readable edge legend for the resources view (traffic view is all-green).
 const EDGE_LEGEND: { label: string; color: string }[] = [
-  { label: 'owns', color: EDGE_COLORS['manages'] },
+  { label: 'manages', color: EDGE_COLORS['manages'] },
   { label: 'exposes', color: EDGE_COLORS['exposes'] },
   { label: 'configures', color: EDGE_COLORS['configures'] },
-  { label: 'scales', color: EDGE_COLORS['uses'] },
+  { label: 'uses', color: EDGE_COLORS['uses'] },
+  { label: 'protects', color: EDGE_COLORS['protects'] },
   { label: 'routes to', color: EDGE_COLORS['routes-to'] },
 ]
 

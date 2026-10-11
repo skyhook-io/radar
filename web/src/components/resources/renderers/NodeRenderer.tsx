@@ -1,6 +1,7 @@
 import { NodeRenderer as BaseNodeRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/NodeRenderer'
 import { useNavigate } from 'react-router-dom'
-import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
+import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, useNodeRemovalPlan, useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
+import { getNodeLifecycle } from '@skyhook-io/k8s-ui/utils/node-lifecycle'
 import { serializeColumnFilters } from '../resource-utils'
 
 interface NodeRendererProps {
@@ -11,6 +12,8 @@ interface NodeRendererProps {
 export function NodeRenderer({ data, relationships }: NodeRendererProps) {
   const navigate = useNavigate()
   const nodeName = data.metadata?.name
+  const lifecycle = getNodeLifecycle(data)
+  const removalPlan = useNodeRemovalPlan(nodeName, lifecycle.removing)
 
   // Fetch node metrics
   const metricsHistoryQuery = useNodeMetricsHistory(nodeName)
@@ -35,6 +38,9 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
   return (
     <BaseNodeRenderer
       data={data}
+      removalPlan={removalPlan.data}
+      removalPlanLoading={removalPlan.isLoading}
+      removalPlanError={removalPlan.error?.message}
       relationships={relationships}
       onViewPods={nodeName ? () => {
         const params = new URLSearchParams()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -632,6 +633,30 @@ func TestBuild_NodeSummary(t *testing.T) {
 	}
 	if got := rc.NodeSummary.Warnings; len(got) != 3 {
 		t.Errorf("Warnings: got %+v want unschedulable/not_ready/memory_pressure", got)
+	}
+}
+
+func TestBuild_NodeRemovalSummary(t *testing.T) {
+	now := time.Now()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "removing", DeletionTimestamp: &metav1.Time{Time: now.Add(-time.Minute)}},
+		Spec:       corev1.NodeSpec{Unschedulable: true},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: metav1.NewTime(now.Add(-time.Second))}}},
+	}
+	summary := buildNodeSummary(node)
+	if summary.ReadyStatus != "Unknown" || !summary.Lifecycle.Removing || len(summary.Warnings) != 0 {
+		t.Fatalf("expected removal must retain raw readiness without failure warnings: %+v", summary)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-5 * time.Minute))
+	summary = buildNodeSummary(node)
+	if !summary.Lifecycle.ReadinessFailed || len(summary.Warnings) != 1 || summary.Warnings[0] != NodeWarningNotReady {
+		t.Fatalf("preexisting failure must remain visible: %+v", summary)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Second))
+	node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue})
+	summary = buildNodeSummary(node)
+	if len(summary.Warnings) != 1 || summary.Warnings[0] != NodeWarningMemoryPressure {
+		t.Fatalf("removal must not suppress pressure warnings: %+v", summary)
 	}
 }
 

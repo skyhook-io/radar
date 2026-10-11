@@ -794,6 +794,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Traffic routes (non-streaming)
 			r.Get("/traffic/sources", s.handleGetTrafficSources)
 			r.Get("/traffic/flows", s.handleGetTrafficFlows)
+			r.Get("/traffic/flows/records", s.handleGetTrafficRecords)
 			r.Get("/traffic/source", s.handleGetActiveTrafficSource)
 			r.Post("/traffic/source", s.handleSetTrafficSource)
 			r.Post("/traffic/connect", s.handleTrafficConnect)
@@ -1347,6 +1348,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		PolicyResource:        true,
 		WorkloadHistory:       true,
 		ServiceEndpointSlices: true,
+		TrafficRecords:        true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
@@ -1401,7 +1403,17 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		caps.Resources = result.Perms
 		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 	} else if k8s.GetResourceCache() != nil {
-		if result := k8s.CheckResourcePermissions(r.Context()); result != nil {
+		result, isCurrent := k8s.CheckResourcePermissions(r.Context())
+		// Prefer what the cache holds; fall back to the probe's own result only
+		// when it describes the cluster still in effect. A probe superseded by a
+		// context switch describes the cluster it probed, not the one being
+		// rendered, and rendering it would report the previous cluster's
+		// permissions - leaving resources unset is the "no probe data yet"
+		// signal documented above.
+		if cached := k8s.GetCachedPermissionResult(); cached != nil {
+			result, isCurrent = cached, true
+		}
+		if result != nil && isCurrent {
 			caps.Resources = result.Perms
 			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 		}

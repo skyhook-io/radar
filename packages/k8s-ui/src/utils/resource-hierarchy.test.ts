@@ -1528,3 +1528,35 @@ describe('structural app members survive the window filter', () => {
     expect(isChildVisibleInWindow(stray, 0, 1000, { pinned: false, userExpanded: false })).toBe(false)
   })
 })
+
+describe('uses edges in the timeline hierarchy', () => {
+  const node = (kind: string, apiVersion: string, name: string) => ({
+    id: `${kind.toLowerCase()}/team/${name}`, kind, name, status: 'healthy', data: { namespace: 'team', apiVersion },
+  })
+  const topology = {
+    nodes: [
+      node('HorizontalPodAutoscaler', 'autoscaling/v2', 'web'),
+      node('Deployment', 'apps/v1', 'web'),
+      node('Certificate', 'cert-manager.io/v1', 'tls'),
+      node('Issuer', 'cert-manager.io/v1', 'ca'),
+    ],
+    edges: [
+      { id: 'hpa', source: 'horizontalpodautoscaler/team/web', target: 'deployment/team/web', type: 'uses' },
+      { id: 'issuer', source: 'certificate/team/tls', target: 'issuer/team/ca', type: 'uses' },
+    ],
+  } as unknown as Topology
+  const events = [
+    changeEvent('HorizontalPodAutoscaler', 'team', 'web', { apiVersion: 'autoscaling/v2' }),
+    changeEvent('Deployment', 'team', 'web', { apiVersion: 'apps/v1' }),
+    changeEvent('Certificate', 'team', 'tls', { apiVersion: 'cert-manager.io/v1' }),
+    changeEvent('Issuer', 'team', 'ca', { apiVersion: 'cert-manager.io/v1' }),
+  ]
+
+  it('files an autoscaler under its workload but not a dependent under its dependency', () => {
+    const lanes = buildResourceHierarchy({ events, topology, grouping: 'owner' })
+    const top = lanes.map(lane => `${lane.kind}/${lane.name}`).sort()
+    expect(top).toEqual(['Certificate/tls', 'Deployment/web', 'Issuer/ca'])
+    const deployment = lanes.find(lane => lane.kind === 'Deployment')!
+    expect(deployment.children?.map(child => child.kind)).toEqual(['HorizontalPodAutoscaler'])
+  })
+})

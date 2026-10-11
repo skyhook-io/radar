@@ -48,6 +48,8 @@ export interface TrafficGraphSelection {
   sourceId?: string
   destId?: string
   port?: number
+  // The graph draws traffic of unknown direction as its own edge.
+  directionUnknown?: boolean
 }
 
 interface TrafficGraphProps {
@@ -1634,7 +1636,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         flow,
       },
     })
-    onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port })
+    onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port, directionUnknown: !!flow?.directionUnknown })
   }, [flowByEdgeId, onSelectionChange])
 
   const onPaneClick = useCallback(() => {

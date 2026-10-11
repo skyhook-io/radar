@@ -1,4 +1,6 @@
 import type { AggregatedFlow, TrafficFlow } from '../../types'
+import type { TrafficEndpointPair } from '../../api/traffic'
+import type { TrafficGraphSelection } from './TrafficGraph'
 
 /**
  * Does a flow fall into one of the selected HTTP status ranges?
@@ -286,4 +288,82 @@ export function dedupeHTTPPairs(flows: TrafficFlow[], callerOriented: boolean): 
       : call(f.destination.name, f.source.name, f))
   }
   return flows.filter(f => !(isHTTP(f, 'REQUEST') && answered.has(call(f.source.name, f.destination.name, f))))
+}
+
+/**
+ * A graph edge, carrying the server edges merged into it. The graph renames and
+ * merges endpoints (external services, the Internet node, the addon group), so
+ * these are what a selection is traced back through to ask the server for its
+ * records.
+ */
+export type GraphFlow = AggregatedFlow & { rawPairs?: TrafficEndpointPair[] }
+
+export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
+  const ref = (e: AggregatedFlow['source']) => ({ namespace: e.namespace || undefined, name: e.name, kind: e.kind })
+  return {
+    source: ref(flow.source),
+    destination: ref(flow.destination),
+    port: flow.port,
+    ...(flow.directionUnknown && { directionUnknown: true }),
+  }
+}
+
+/** Adds a merged edge's pairs to the edge it was merged into. The target owns
+ *  its array, so merging appends in place: copying it on every merge is
+ *  quadratic, and an ingress with tens of thousands of distinct clients
+ *  collapses into a single Internet edge. */
+export function mergeRawPairs(into: GraphFlow, from: GraphFlow): void {
+  const target = into.rawPairs ?? (into.rawPairs = [])
+  for (const pair of from.rawPairs ?? []) target.push(pair)
+}
+
+// The renderer draws the addon group's virtual endpoints as one group node.
+function selectableId(e: { namespace?: string; name: string; kind?: string }): string {
+  if (e.kind === 'AddonGroupTarget' || e.kind === 'AddonGroupSource') return 'addon-group'
+  return graphEndpointId(e)
+}
+
+export function graphEndpointId(e: { namespace?: string; name: string }): string {
+  return e.namespace ? `${e.namespace}/${e.name}` : e.name
+}
+
+export function pairKey(source: { namespace?: string; name: string }, destination: { namespace?: string; name: string }, port: number, directionUnknown?: boolean): string {
+  return `${graphEndpointId(source)}->${graphEndpointId(destination)}:${port}${directionUnknown ? ':u' : ''}`
+}
+
+/**
+ * The server edges behind the selected node or edge, deduplicated and in a
+ * stable order — the server returns its aggregation in no particular order,
+ * and the result keys the records query. Null when the selection traces back
+ * to none. `inAddonGroup` says which endpoints the addon group node holds
+ * while addons are grouped, so selecting the group selects their traffic too.
+ */
+export function selectionRawPairs(
+  flows: GraphFlow[],
+  selection: TrafficGraphSelection | null,
+  inAddonGroup?: (e: { namespace?: string; name: string }) => boolean,
+): TrafficEndpointPair[] | null {
+  if (!selection) return null
+  const pairs = new Map<string, TrafficEndpointPair>()
+  const groupId = (e: GraphFlow['source']) =>
+    inAddonGroup && selection.nodeId === 'addon-group' && inAddonGroup(e) ? 'addon-group' : selectableId(e)
+  for (const flow of flows) {
+    const sourceId = groupId(flow.source)
+    const destId = groupId(flow.destination)
+    // An edge is drawn per port, so a selected edge stands for its own port.
+    // An edge merged from several ports carries one of them, and which one can
+    // change between refreshes, so any port merged into it identifies it.
+    const selected = selection.type === 'node'
+      ? sourceId === selection.nodeId || destId === selection.nodeId
+      : sourceId === selection.sourceId && destId === selection.destId &&
+        (selection.port === undefined || flow.port === selection.port ||
+          (flow.rawPairs ?? []).some(p => p.port === selection.port)) &&
+        !!flow.directionUnknown === !!selection.directionUnknown
+    if (!selected) continue
+    for (const pair of flow.rawPairs ?? []) {
+      pairs.set(pairKey(pair.source, pair.destination, pair.port, pair.directionUnknown), pair)
+    }
+  }
+  if (pairs.size === 0) return null
+  return Array.from(pairs.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, pair]) => pair)
 }

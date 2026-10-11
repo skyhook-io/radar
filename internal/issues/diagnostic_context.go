@@ -837,28 +837,7 @@ func hpaBlockedOnMetricFamily(i Issue, family string) bool {
 // exact condition transitions can lag or retrigger; topology plus category is
 // the evidence for this deliberately medium-confidence relationship.
 func addNodeBlastRadiusContext(b *diagnosticContextBuilder, node Issue, edges *[]incidentEdge, np nodeBlastRadiusProvider, flatByResource map[string][]Issue, groupedByID map[string]Issue) {
-	// A node can hit several pressures at once (memory + disk + PID); those
-	// detections share the node_not_ready ID and group into one issue that keeps
-	// only one representative Reason. Union the attributable categories across ALL
-	// of the node's detected reasons so a multi-pressure node links every pressure's
-	// pods (OOM under memory, stuck-creation under disk/PID), not just the
-	// representative's. (The flat node rows for both pressures sit under the node's
-	// resource key whether we were handed the grouped issue or a flat one.)
-	attributable := map[issuesapi.Category]bool{}
-	for _, f := range flatByResource[issueResourceKey(node)] {
-		if f.Kind == "Node" && f.Category == issuesapi.CategoryNodeNotReady {
-			for c := range nodeReasonAttributable[f.Reason] {
-				attributable[c] = true
-			}
-		}
-	}
-	// Fallback to the issue's own reason if no flat node rows are indexed under
-	// this key (defensive — normally the detections are present).
-	if len(attributable) == 0 {
-		for c := range nodeReasonAttributable[node.Reason] {
-			attributable[c] = true
-		}
-	}
+	attributable := nodeReasonAttributable[node.Reason]
 	if len(attributable) == 0 {
 		return
 	}

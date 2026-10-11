@@ -58,7 +58,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'namespace', desc: 'omit for cluster-scoped kinds (Node, ClusterRole, IngressClass, etc.)' },
       { arg: 'group', desc: 'API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)' },
-      { arg: 'include', desc: 'events, metrics, changes, revisions (rollback targets for Deployment/StatefulSet/DaemonSet/Rollout)' },
+      { arg: 'include', desc: 'events, metrics, changes, issues, drain-plan (Node pod/PDB estimate), revisions (rollback targets for Deployment/StatefulSet/DaemonSet/Rollout)' },
       { arg: 'context', desc: 'resourceContext tier: basic (default) or none' },
     ],
   },
