@@ -81,12 +81,15 @@ it.each(['ScheduledBackup', 'Database', 'Publication', 'ClusterImageCatalog', 'D
   expect(utilityRow.querySelector('[aria-label="Refresh"]')).not.toBeNull()
   expect(utilityRow.querySelector('[aria-label="Close"]')).not.toBeNull()
   expect(utilityRow.textContent).not.toContain('Object action')
-  const identity = host.querySelector('h2')!.parentElement!
-  expect(identity.textContent).toContain(name)
-  expect(identity.textContent).toContain('Reported status')
+  // The name has its own line under the badges and controls, so a long one gets the drawer's full width.
+  const title = host.querySelector('h2')!
+  expect(title.textContent).toBe(name)
+  const topRow = utilityRow.parentElement!
+  expect(topRow.contains(title)).toBe(false)
+  expect(topRow.textContent).toContain('Reported status')
   const action = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Object action')!
-  expect(identity.contains(action)).toBe(false)
-  expect(utilityRow.contains(action)).toBe(false)
+  expect(topRow.contains(action)).toBe(false)
+  expect(title.parentElement!.contains(action)).toBe(false)
   act(() => root.unmount())
 })
 

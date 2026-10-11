@@ -939,25 +939,17 @@ export function WorkloadView({
       <div className="flex flex-col h-full w-full">
         {/* Drawer header */}
         <div className="border-b border-theme-border shrink-0">
-          <div className="flex items-start gap-3 px-4 pt-3 pb-2">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={clsx('badge', getKindColorOutline(apiKind))}>
-                  {displayKindName(apiKind, resource?.kind)}
+          {/* Top row: badges and controls */}
+          <div className="flex items-center justify-between px-4 pt-3 pb-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={clsx('badge', getKindColorOutline(apiKind))}>
+                {displayKindName(apiKind, resource?.kind)}
+              </span>
+              {renderStatusBadge && resource && !resourceGone ? renderStatusBadge(resource) : status && (
+                <span className={clsx('badge', status.color)}>
+                  {status.text}
                 </span>
-                <h2 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">{name}</h2>
-                <Tooltip content="Copy name" delay={150}>
-                  <button onClick={() => copyToClipboard(name, 'name')} className="shrink-0 rounded p-1 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary" aria-label="Copy name">
-                    {copied === 'name' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
-                </Tooltip>
-                {renderStatusBadge && resource && !resourceGone ? renderStatusBadge(resource) : status && (
-                  <span className={clsx('badge', status.color)}>
-                    {status.text}
-                  </span>
-                )}
-              </div>
-              <p className="mt-1 text-sm text-theme-text-tertiary">{namespace}</p>
+              )}
             </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
               {diagnoseAction}
@@ -1003,16 +995,32 @@ export function WorkloadView({
             </div>
           </div>
 
-          {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath) || onOpenLiveTraffic) && (
-            <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
-              {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
-              {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
-              {gitOpsResourcePath && onNavigateGitOpsPath && (
-                <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
-              )}
-              {onOpenLiveTraffic && <LiveTrafficChip onClick={onOpenLiveTraffic} />}
+          {/* Name and namespace */}
+          <div className="px-4 pb-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h2>
+              <Tooltip content="Copy name" delay={150}>
+                <button
+                  onClick={() => copyToClipboard(name, 'name')}
+                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
+                  aria-label="Copy name"
+                >
+                  {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </Tooltip>
             </div>
-          )}
+            <p className="text-sm text-theme-text-tertiary">{namespace}</p>
+            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath) || onOpenLiveTraffic) && (
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
+                {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
+                {gitOpsResourcePath && onNavigateGitOpsPath && (
+                  <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+                )}
+                {onOpenLiveTraffic && <LiveTrafficChip onClick={onOpenLiveTraffic} />}
+              </div>
+            )}
+          </div>
 
           {/* Actions bar */}
           <ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...actionsBarPropsForState} leadingActions={headerActions} />
