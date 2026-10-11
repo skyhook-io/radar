@@ -326,7 +326,7 @@ export function PodRenderer({
   const operationalIssuesShown = useOperationalIssuesShown()
   const podProblems = getPodProblems(data)
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
-  const notRunning = data.status?.phase === 'Pending' && !containerStatuses.some((s: any) => s.state?.running)
+  const notRunning = data.status?.phase === 'Pending' && ![...containerStatuses, ...initContainerStatuses].some((s: any) => s.state?.running)
   const noUsageYet = notRunning && metricsHistory?.metricsAPIReachable === true && !metricsHistory.collectionError && !metricsHistory.containers?.length && !metrics?.containers?.length
   const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
   const hasMetricsHistory = !!metricsHistory?.containers?.length

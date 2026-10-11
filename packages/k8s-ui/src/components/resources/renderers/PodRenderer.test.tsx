@@ -460,6 +460,7 @@ describe('PodRenderer pending Pods, including non-CNPG workloads', () => {
     expect(render(pending, { containers: [], metricsAPIReachable: false })).toContain('Radar cannot read metrics.k8s.io')
     expect(render(pending, { containers: [], collectionError: 'forbidden' })).toContain('forbidden')
     expect(render({ ...pending, status: { phase: 'Running' } })).toContain('Radar cannot read metrics.k8s.io')
+    expect(render({ ...pending, status: { phase: 'Pending', initContainerStatuses: [{ name: 'setup', state: { running: {} } }] } })).not.toContain('No usage yet')
   })
   it('shows unstarted regular and init containers neutrally', () => {
     const html = render(pending)
