@@ -107,8 +107,12 @@ func DiskType(pv *corev1.PersistentVolume, storageClass func(name string) *stora
 	if sc == nil || (sc.Provisioner != CSIDriver && sc.Provisioner != InTreeProvision) {
 		return "", false
 	}
-	if t := strings.TrimSpace(sc.Parameters["type"]); t != "" {
-		return strings.ToLower(t), true
+	for key, value := range sc.Parameters {
+		if strings.EqualFold(key, "type") {
+			if t := strings.TrimSpace(value); t != "" {
+				return strings.ToLower(t), true
+			}
+		}
 	}
 	return defaultDiskType, true
 }

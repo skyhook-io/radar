@@ -175,8 +175,17 @@ func volumeTopologyLabelsAdmit(pv *corev1.PersistentVolume, node *corev1.Node) b
 		if !ok {
 			continue
 		}
+		actual, present := node.Labels[key]
+		if !present {
+			switch key {
+			case corev1.LabelFailureDomainBetaZone:
+				actual = node.Labels[corev1.LabelTopologyZone]
+			case corev1.LabelFailureDomainBetaRegion:
+				actual = node.Labels[corev1.LabelTopologyRegion]
+			}
+		}
 		// Multi-zone volumes list their zones joined by "__".
-		if !slices.Contains(strings.Split(want, "__"), node.Labels[key]) {
+		if !slices.Contains(strings.Split(want, "__"), actual) {
 			return false
 		}
 	}

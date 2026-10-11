@@ -51,6 +51,7 @@ func TestDiskType(t *testing.T) {
 		"premium-rwo":  {ObjectMeta: metav1.ObjectMeta{Name: "premium-rwo"}, Provisioner: CSIDriver, Parameters: map[string]string{"type": "pd-ssd"}},
 		"standard":     {ObjectMeta: metav1.ObjectMeta{Name: "standard"}, Provisioner: InTreeProvision},
 		"hyperdisk":    {ObjectMeta: metav1.ObjectMeta{Name: "hyperdisk"}, Provisioner: CSIDriver, Parameters: map[string]string{"type": "hyperdisk-balanced"}},
+		"mixed-case":   {ObjectMeta: metav1.ObjectMeta{Name: "mixed-case"}, Provisioner: CSIDriver, Parameters: map[string]string{"Type": "hyperdisk-balanced"}},
 		"ebs":          {ObjectMeta: metav1.ObjectMeta{Name: "ebs"}, Provisioner: "ebs.csi.aws.com", Parameters: map[string]string{"type": "gp3"}},
 		"mismatch-csi": {ObjectMeta: metav1.ObjectMeta{Name: "mismatch-csi"}, Provisioner: "ebs.csi.aws.com"},
 	}
@@ -80,6 +81,7 @@ func TestDiskType(t *testing.T) {
 	}{
 		{"csi pd-ssd", csiPV("premium-rwo"), "pd-ssd", true},
 		{"csi hyperdisk", csiPV("hyperdisk"), "hyperdisk-balanced", true},
+		{"csi case-insensitive parameter key", csiPV("mixed-case"), "hyperdisk-balanced", true},
 		{"in-tree default type", inTreePV, "pd-standard", true},
 		{"static PV borrowing a class name", staticPV, "", false},
 		{"other cloud", ebsPV, "", false},

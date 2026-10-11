@@ -175,25 +175,31 @@ func TestPDPlacement_VolumeZoneKeepsPodOffOtherZones(t *testing.T) {
 
 // Older in-tree volumes carry their zone as a label instead of node affinity.
 func TestPDPlacement_LegacyVolumeZoneLabel(t *testing.T) {
-	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
-		corev1.LabelTopologyZone: "us-east1-a__us-east1-c",
-	}}}
-	node := func(zone string) *corev1.Node {
-		n := pdNode("n4d-"+zone, "n4d-standard-4")
-		n.Labels[corev1.LabelTopologyZone] = zone
-		return n
+	cases := []struct {
+		name, pvLabel, nodeLabel, allowed, nodeValue string
+		want                                         int
+	}{
+		{"same zone label, outside", corev1.LabelTopologyZone, corev1.LabelTopologyZone, "us-east1-a__us-east1-c", "us-east1-b", 0},
+		{"same zone label, inside", corev1.LabelTopologyZone, corev1.LabelTopologyZone, "us-east1-a__us-east1-c", "us-east1-c", 1},
+		{"beta zone on stable node, outside", corev1.LabelFailureDomainBetaZone, corev1.LabelTopologyZone, "us-east1-a__us-east1-c", "us-east1-b", 0},
+		{"beta zone on stable node, inside", corev1.LabelFailureDomainBetaZone, corev1.LabelTopologyZone, "us-east1-a__us-east1-c", "us-east1-c", 1},
+		{"beta region on stable node, outside", corev1.LabelFailureDomainBetaRegion, corev1.LabelTopologyRegion, "us-east1", "us-west1", 0},
+		{"beta region on stable node, inside", corev1.LabelFailureDomainBetaRegion, corev1.LabelTopologyRegion, "us-east1", "us-east1", 1},
 	}
-	for zone, want := range map[string]int{"us-east1-b": 0, "us-east1-c": 1} {
+	for _, tc := range cases {
+		pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{tc.pvLabel: tc.allowed}}}
+		node := pdNode("n4d-node", "n4d-standard-4")
+		node.Labels[tc.nodeLabel] = tc.nodeValue
 		findings, _ := runPDPlacement(&CheckInput{
 			Pods: []*corev1.Pod{pdPod("app-0", "e2-node", nil, "data")},
 			PDPlacement: &PDPlacementEvidence{
-				HyperdiskOnlyNodes: []*corev1.Node{node(zone)},
+				HyperdiskOnlyNodes: []*corev1.Node{node},
 				ClaimDiskTypes:     map[string]string{"redis/data": "pd-balanced"},
 				ClaimVolumes:       map[string]*corev1.PersistentVolume{"redis/data": pv},
 			},
 		})
-		if len(findings) != want {
-			t.Errorf("node in %s: want %d findings, got %+v", zone, want, findings)
+		if len(findings) != tc.want {
+			t.Errorf("%s: want %d findings, got %+v", tc.name, tc.want, findings)
 		}
 	}
 }
