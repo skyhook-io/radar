@@ -89,10 +89,10 @@ const recentSourcesMaxAge = 2 * time.Minute
 // handleGetTrafficSources returns available traffic sources and recommendations
 // GET /api/traffic/sources
 //
-// ?recent=1 accepts a detection up to recentSourcesMaxAge old. Pages that only
-// ask whether traffic is available (the workload page's Live traffic entry)
-// send it, so browsing workloads doesn't re-probe every source; the Traffic
-// view and its setup flow detect afresh. A Radar without this parameter
+// ?recent=1 accepts a detection up to recentSourcesMaxAge old, so browsing
+// workloads or opening the Traffic view from one doesn't re-probe every source.
+// Callers detect afresh when the answer will be shown as setup advice, or when
+// connecting to the reused source failed. A Radar without this parameter
 // ignores it and detects, as before.
 func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
