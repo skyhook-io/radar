@@ -1424,7 +1424,9 @@ func (d *DynamicResourceCache) ListNamespaces(gvr schema.GroupVersionResource, n
 }
 
 // ListBlocking returns all resources, waiting for cache sync first. timeout
-// bounds the whole wait, however many informers serve the read.
+// bounds the sync wait as a whole, however many informers serve the read. It
+// doesn't cover starting a watch that isn't running yet, which can wait for
+// CRD discovery and scope probes.
 func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
