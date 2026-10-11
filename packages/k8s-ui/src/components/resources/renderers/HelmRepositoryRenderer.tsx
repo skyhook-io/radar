@@ -1,10 +1,10 @@
 import { Database, CheckCircle2, Shield } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
-import { formatAge } from '../resource-utils'
 import { formatBytes } from '../../../utils/format'
 import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface HelmRepositoryRendererProps {
   data: any
@@ -98,7 +98,7 @@ export function HelmRepositoryRenderer({ data }: HelmRepositoryRendererProps) {
             <Property label="Digest" value={artifact.digest} />
             <Property
               label="Last Updated"
-              value={artifact.lastUpdateTime ? formatAge(artifact.lastUpdateTime) : '-'}
+              value={<TimeValue timestamp={artifact.lastUpdateTime} />}
             />
             {artifact.size && (
               <Property label="Size" value={formatBytes(artifact.size)} />
@@ -115,7 +115,7 @@ export function HelmRepositoryRenderer({ data }: HelmRepositoryRendererProps) {
             {status.lastHandledReconcileAt && (
               <Property
                 label="Last Reconciled"
-                value={formatAge(status.lastHandledReconcileAt)}
+                value={<TimeValue timestamp={status.lastHandledReconcileAt} />}
               />
             )}
           </PropertyList>

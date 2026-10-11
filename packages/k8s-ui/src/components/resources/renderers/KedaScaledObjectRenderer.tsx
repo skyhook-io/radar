@@ -1,13 +1,13 @@
 import { Cpu, Settings } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
+import { TimeValue } from '../../ui/ScheduleValue'
 import {
   getScaledObjectStatus,
   getScaledObjectTarget,
   getScaledObjectReplicas,
   getScaledObjectTriggers,
   getScaledObjectHpaName,
-  getScaledObjectLastActiveTime,
   getScaledObjectPollingInterval,
   getScaledObjectCooldownPeriod,
 } from '../resource-utils-keda'
@@ -97,7 +97,7 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
             }
             return hpaName
           })()} />
-          <Property label="Last Active" value={getScaledObjectLastActiveTime(data)} />
+          <Property label="Last Active" value={<TimeValue timestamp={data.status?.lastActiveTime} />} />
         </PropertyList>
         {fallback && (
           <div className="mt-2 pt-2 border-t border-theme-border">

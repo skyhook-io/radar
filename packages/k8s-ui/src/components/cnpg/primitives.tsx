@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import type { HealthLevel } from '../resources/resource-utils'
-import { formatAge } from '../resources/resource-utils'
 import { StatusDot } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { AlertBanner } from '../ui/drawer-components'
 import { TONE_TEXT_CLASS } from '../ui/severity-tone'
 import type { CNPGFact, CNPGProblem } from './workspace'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 export interface CNPGRef {
   kind: string
@@ -35,11 +35,11 @@ export function toneTextClass(tone: HealthLevel): string {
 }
 
 export function FactValue({ fact, className }: { fact: CNPGFact; className?: string }) {
-  const age = fact.at ? formatAge(fact.at) : null
+  const when = fact.at ? formatRelativeAgeTime(fact.at) : null
   const body = (
     <span className={clsx(toneTextClass(fact.tone), className)}>
       {fact.text}
-      {age && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{age} ago</span>}
+      {when && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{when}</span>}
     </span>
   )
   if (!fact.source && !fact.at) return body

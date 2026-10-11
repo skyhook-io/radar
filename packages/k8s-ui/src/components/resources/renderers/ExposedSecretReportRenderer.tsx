@@ -3,10 +3,10 @@ import { KeyRound } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
-import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, TrivyAlertBanner, formatTrivyImage } from './trivy-shared'
 import { pluralize } from '../../../utils/pluralize'
 import { BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface ExposedSecretReportRendererProps {
   data: any
@@ -45,7 +45,7 @@ export function ExposedSecretReportRenderer({ data }: ExposedSecretReportRendere
           <Property label="Container" value={containerName} />
           <Property label="Image" value={image} />
           <Property label="Scanner" value={scanner.name ? `${scanner.name} ${scanner.version || ''}`.trim() : '-'} />
-          <Property label="Scanned" value={report.updateTimestamp ? formatAge(report.updateTimestamp) + ' ago' : '-'} />
+          <Property label="Scanned" value={<TimeValue timestamp={report.updateTimestamp} />} />
         </PropertyList>
       </Section>
 

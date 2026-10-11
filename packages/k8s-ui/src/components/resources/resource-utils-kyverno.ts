@@ -1,7 +1,7 @@
 // Kyverno / Policy Report CRD utility functions
 
 import type { StatusBadge } from './resource-utils'
-import { healthColors, formatAge } from './resource-utils'
+import { healthColors } from './resource-utils'
 
 // ============================================================================
 // SHARED HELPERS
@@ -284,12 +284,6 @@ export function getKyvernoPolicyRuleCountByType(resource: any): {
 export function getKyvernoPolicyAutogenRules(resource: any): string[] {
   const autogen = resource.status?.autogen?.rules || []
   return autogen.map((r: any) => r.name).filter(Boolean)
-}
-
-export function getKyvernoPolicyLastScheduleTime(resource: any): string {
-  const lastSchedule = resource.status?.lastScheduleTime
-  if (!lastSchedule) return '-'
-  return formatAge(lastSchedule)
 }
 
 // ============================================================================

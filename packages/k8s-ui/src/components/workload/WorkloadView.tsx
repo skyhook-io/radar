@@ -78,6 +78,7 @@ import { ServicePortCards, type ServicePortRenderProps } from '../resources/rend
 import { rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
 import { isCoreBatchJob } from '../../utils/api-resources'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 export type WorkloadTabType = 'overview' | 'spec' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
 type TabType = WorkloadTabType
@@ -2525,8 +2526,8 @@ function buildSummaryMetrics(
       },
       {
         label: 'Latest run',
-        value: status.lastScheduleTime ? formatAge(status.lastScheduleTime) : 'Never',
-        detail: status.lastSuccessfulTime ? `last success ${formatAge(status.lastSuccessfulTime)}` : 'no successful run recorded',
+        value: status.lastScheduleTime ? formatRelativeAgeTime(status.lastScheduleTime) : 'Never',
+        detail: status.lastSuccessfulTime ? `last success ${formatRelativeAgeTime(status.lastSuccessfulTime)}` : 'no successful run recorded',
         icon: Activity,
       },
       {
@@ -2642,8 +2643,8 @@ function getReadinessSummary(resource: any, apiKind: string): ReadinessSummary {
         { label: 'Schedule', value: spec.schedule || '-' },
         { label: 'Active jobs', value: active, tone: active > 0 ? 'warn' : 'default' },
         { label: 'Suspend', value: suspended ? 'Yes' : 'No', tone: suspended ? 'warn' : 'default' },
-        { label: 'Last schedule', value: status.lastScheduleTime ? formatAge(status.lastScheduleTime) : '-' },
-        { label: 'Last success', value: status.lastSuccessfulTime ? formatAge(status.lastSuccessfulTime) : '-' },
+        { label: 'Last schedule', value: status.lastScheduleTime ? formatRelativeAgeTime(status.lastScheduleTime) : '-' },
+        { label: 'Last success', value: status.lastSuccessfulTime ? formatRelativeAgeTime(status.lastSuccessfulTime) : '-' },
       ],
     }
   }
@@ -2742,8 +2743,8 @@ function getScalingSummary(
       label: phase,
       detail: '',
       stats: [
-        { label: 'Started', value: status.startTime ? formatAge(status.startTime) : '-' },
-        { label: 'Finished', value: status.completionTime ? formatAge(status.completionTime) : phase === 'Running' ? 'Running' : '-' },
+        { label: 'Started', value: status.startTime ? formatRelativeAgeTime(status.startTime) : '-' },
+        { label: 'Finished', value: status.completionTime ? formatRelativeAgeTime(status.completionTime) : phase === 'Running' ? 'Running' : '-' },
         { label: 'Parallelism', value: spec.parallelism ?? 1 },
         { label: 'Completions', value: spec.completions ?? 1 },
         { label: 'Completion mode', value: spec.completionMode ?? 'NonIndexed' },
@@ -3383,8 +3384,8 @@ function CronJobRunsCard({
     >
       <div className="mb-3 grid gap-x-8 gap-y-3 sm:grid-cols-2">
         <OverviewStat label="Active jobs" value={activeJobs.length} tone={activeJobs.length > 0 ? 'warn' : 'default'} />
-        <OverviewStat label="Last schedule" value={status.lastScheduleTime ? formatAge(status.lastScheduleTime) : 'Never'} />
-        <OverviewStat label="Last success" value={status.lastSuccessfulTime ? formatAge(status.lastSuccessfulTime) : 'Never'} />
+        <OverviewStat label="Last schedule" value={status.lastScheduleTime ? formatRelativeAgeTime(status.lastScheduleTime) : 'Never'} />
+        <OverviewStat label="Last success" value={status.lastSuccessfulTime ? formatRelativeAgeTime(status.lastSuccessfulTime) : 'Never'} />
         <OverviewStat label="Retained history" value={`${spec.successfulJobsHistoryLimit ?? 3} ok / ${spec.failedJobsHistoryLimit ?? 1} failed`} />
       </div>
 
@@ -3841,7 +3842,7 @@ function ActivityCard({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium text-theme-text-primary">{event.reason || event.eventType || 'update'}</span>
-                    <span className="shrink-0 text-xs text-theme-text-tertiary">{formatAge(event.timestamp)}</span>
+                    <span className="shrink-0 text-xs text-theme-text-tertiary">{formatRelativeAgeTime(event.timestamp)}</span>
                   </div>
                   <div className="mt-0.5 line-clamp-2 text-xs text-theme-text-secondary">
                     {event.message || event.diff?.summary || `${event.kind} ${event.name}`}

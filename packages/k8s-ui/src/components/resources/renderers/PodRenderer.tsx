@@ -28,6 +28,7 @@ import { getRadarUpgradeRequirement, type RadarUpgradeRequirement } from '../../
 import { MetricsChart } from '../../ui/MetricsChart'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 function parseValidDate(dateStr: string): Date | null {
   const d = new Date(dateStr)
@@ -35,13 +36,7 @@ function parseValidDate(dateStr: string): Date | null {
 }
 
 function formatMsAgo(dateStr: string): string | null {
-  const d = parseValidDate(dateStr)
-  if (!d) return null
-  const ms = Date.now() - d.getTime()
-  if (ms < 60000) return 'just now'
-  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`
-  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`
-  return `${Math.floor(ms / 86400000)}d ago`
+  return parseValidDate(dateStr) ? formatRelativeAgeTime(dateStr) : null
 }
 
 function getRestartRecency(finishedAt: string | undefined, restarts: number): { color: string; label: string | null } {

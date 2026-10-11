@@ -752,10 +752,10 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   // detail title row and fleet rows.
   if (isNodeTerminating(node)) {
     chips.push({ value: 'Terminating', tone: 'warning' })
-    if (typeof data.createdAt === 'string') chips.push({ label: 'age', value: formatAge(data.createdAt) })
+    if (typeof data.createdAt === 'string') chips.push({ label: 'age', value: formatCompactAge(data.createdAt) })
     return chips
   }
-  if (typeof data.createdAt === 'string') chips.push({ label: 'age', value: formatAge(data.createdAt) })
+  if (typeof data.createdAt === 'string') chips.push({ label: 'age', value: formatCompactAge(data.createdAt) })
   const revision = stringData(data.revision) || stringData(data.lastSyncRevision)
   if (revision) chips.push({ label: 'rev', value: revision })
   const attempted = stringData(data.attemptedRevision)
@@ -886,6 +886,3 @@ function pluralize(kind: string): string {
   return `${kind}s`
 }
 
-function formatAge(timestamp: string): string {
-  return formatCompactAge(timestamp)
-}

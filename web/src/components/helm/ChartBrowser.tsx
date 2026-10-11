@@ -5,10 +5,10 @@ import { clsx } from 'clsx'
 import { useHelmRepositories, useSearchCharts, useUpdateRepository, useUpdateRepositorySilent, useArtifactHubSearch, type ArtifactHubSortOption } from '../../api/client'
 import { useCanHelmWrite, useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
 import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '../../types'
-import { formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
+import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 
 interface ChartBrowserProps {
   onChartSelect: (repo: string, chart: string, version: string, source: ChartSource) => void
@@ -431,7 +431,7 @@ function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, ca
         {repo.name}
         {repo.lastUpdated && (
           <span className="text-xs text-theme-text-tertiary ml-2">
-            {formatAge(repo.lastUpdated)}
+            {formatRelativeAgeTime(repo.lastUpdated)}
           </span>
         )}
       </button>
@@ -514,7 +514,7 @@ interface ArtifactHubChartCardProps {
 function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
   // Format Unix timestamp to relative age
   const lastUpdated = chart.updatedAt
-    ? formatAge(new Date(chart.updatedAt * 1000).toISOString())
+    ? formatRelativeAgeTime(new Date(chart.updatedAt * 1000).toISOString())
     : null
 
   return (

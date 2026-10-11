@@ -1,9 +1,10 @@
 import { Play, Clock, CheckCircle, XCircle, Loader2, SkipForward, PauseCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
-import { formatAge, formatDuration } from '../resource-utils'
+import { formatDuration } from '../resource-utils'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, WorkflowExecutionModel, WorkflowExecutionNode, WorkflowTemplateReference } from '../../../utils/workflow-execution'
 import { SEVERITY_TEXT } from '../../../utils/badge-colors'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface WorkflowRendererProps {
   data: any
@@ -145,8 +146,8 @@ export function WorkflowRenderer({ data, onNavigate }: WorkflowRendererProps) {
             </span>
           } />
           {duration && <Property label="Duration" value={duration} />}
-          {status.startedAt && <Property label="Started" value={formatAge(status.startedAt)} />}
-          <Property label="Finished" value={status.finishedAt ? formatAge(status.finishedAt) : 'Running...'} />
+          {status.startedAt && <Property label="Started" value={<TimeValue timestamp={status.startedAt} />} />}
+          <Property label="Finished" value={<TimeValue timestamp={status.finishedAt} fallback="Running..." />} />
           {workflowTemplateRef && <Property label="Definition" value={<TemplateRefLink refInfo={workflowTemplateRef} onNavigate={onNavigate} />} />}
           {status.progress && (
             <Property label="Progress" value={status.progress} />

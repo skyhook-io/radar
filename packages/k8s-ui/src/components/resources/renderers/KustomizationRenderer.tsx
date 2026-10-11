@@ -1,8 +1,8 @@
 import { Layers, FolderTree, GitBranch } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
-import { formatAge } from '../resource-utils'
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } from '../../../types/gitops'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface KustomizationRendererProps {
   data: any
@@ -175,7 +175,7 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
             {status.lastHandledReconcileAt && (
               <Property
                 label="Last Reconciled"
-                value={formatAge(status.lastHandledReconcileAt)}
+                value={<TimeValue timestamp={status.lastHandledReconcileAt} />}
               />
             )}
           </PropertyList>

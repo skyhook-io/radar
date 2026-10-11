@@ -1,10 +1,10 @@
 import { KeyRound, RefreshCw, CloudCog } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
+import { TimeValue } from '../../ui/ScheduleValue'
 import {
   getExternalSecretStatus,
   getExternalSecretStore,
   getExternalSecretRefreshInterval,
-  getExternalSecretLastSync,
   getExternalSecretTargetName,
   getExternalSecretTargetCreationPolicy,
   getExternalSecretTargetDeletionPolicy,
@@ -47,7 +47,7 @@ export function ExternalSecretRenderer({ data, onNavigate }: ExternalSecretRende
       <Section title="Sync Status" icon={RefreshCw} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={esStatus.text} />
-          <Property label="Last Sync" value={getExternalSecretLastSync(data)} />
+          <Property label="Last Sync" value={<TimeValue timestamp={data.status?.refreshTime} />} />
           <Property label="Refresh Interval" value={getExternalSecretRefreshInterval(data)} />
           <Property label="Target Secret" value={(() => {
             const targetName = getExternalSecretTargetName(data)

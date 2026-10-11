@@ -1,5 +1,6 @@
 import { Tooltip } from './Tooltip'
-import { cronToHuman, formatAge } from '../resources/resource-utils'
+import { cronToHuman } from '../resources/resource-utils'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 /**
  * Hover affordance used across the drawer: without it a tooltip is a secret.
@@ -79,7 +80,7 @@ export function TimeValue({ timestamp, fallback = '-' }: TimeValueProps) {
   if (!timestamp) return <>{fallback}</>
   return (
     <Tooltip content={new Date(timestamp).toLocaleString()} position="right">
-      <span className={HOVERABLE}>{formatAge(timestamp)}</span>
+      <span className={HOVERABLE}>{formatRelativeAgeTime(timestamp)}</span>
     </Tooltip>
   )
 }

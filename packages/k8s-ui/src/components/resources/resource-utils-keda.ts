@@ -1,7 +1,7 @@
 // KEDA CRD utility functions
 
 import type { StatusBadge } from './resource-utils'
-import { healthColors, formatAge } from './resource-utils'
+import { healthColors } from './resource-utils'
 
 // ============================================================================
 // SHARED HELPERS
@@ -106,12 +106,6 @@ export function getScaledObjectTriggerCount(resource: any): number {
 
 export function getScaledObjectHpaName(resource: any): string {
   return resource.status?.hpaName || '-'
-}
-
-export function getScaledObjectLastActiveTime(resource: any): string {
-  const lastActive = resource.status?.lastActiveTime
-  if (!lastActive) return '-'
-  return formatAge(lastActive)
 }
 
 export function getScaledObjectPollingInterval(resource: any): number {

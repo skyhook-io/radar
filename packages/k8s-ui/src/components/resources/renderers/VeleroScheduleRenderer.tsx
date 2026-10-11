@@ -3,13 +3,13 @@ import { Section, PropertyList, Property, ConditionsSection, AlertBanner, Resour
 import {
   getScheduleStatus,
   getScheduleCron,
-  getScheduleLastBackup,
   getSchedulePaused,
   getScheduleTemplate,
   getScheduleUseOwnerReferences,
   getScheduleValidationErrors,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroScheduleRendererProps {
   data: any
@@ -64,7 +64,7 @@ export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRende
           <Property label="Cron Schedule" value={
             <span className="font-mono text-sm">{getScheduleCron(data)}</span>
           } />
-          <Property label="Last Backup" value={getScheduleLastBackup(data)} />
+          <Property label="Last Backup" value={<TimeValue timestamp={data.status?.lastBackup} fallback="Never" />} />
           <Property label="Paused" value={isPaused ? 'Yes' : 'No'} />
           <Property label="Use Owner References" value={getScheduleUseOwnerReferences(data) ? 'Yes' : 'No'} />
         </PropertyList>

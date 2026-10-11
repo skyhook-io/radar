@@ -1,7 +1,6 @@
 import { GitBranch, FolderTree, Settings, Target, XCircle, History, ListChecks, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts } from '../../ui/drawer-components'
-import { formatAge } from '../resource-utils'
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import {
   argoStatusToGitOpsStatus,
@@ -11,6 +10,8 @@ import {
 } from '../../../types/gitops'
 import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 import { buildRepoBrowseUrl, buildPathBrowseUrl } from '../../../utils/git-provider-urls'
+import { TimeValue } from '../../ui/ScheduleValue'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 const REPO_LINK_CLASS = 'text-blue-400 hover:text-blue-300 hover:underline break-all'
 
@@ -297,10 +298,10 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               <Property label="Message" value={operationState.message} />
             )}
             {operationState.startedAt && (
-              <Property label="Started" value={formatAge(operationState.startedAt)} />
+              <Property label="Started" value={<TimeValue timestamp={operationState.startedAt} />} />
             )}
             {operationState.finishedAt && (
-              <Property label="Finished" value={formatAge(operationState.finishedAt)} />
+              <Property label="Finished" value={<TimeValue timestamp={operationState.finishedAt} />} />
             )}
             {operationState.retryCount != null && (
               <Property
@@ -402,7 +403,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
                     </span>
                     {entry.deployedAt && (
                       <span className="text-xs text-theme-text-tertiary">
-                        {formatAge(entry.deployedAt)}
+                        {formatRelativeAgeTime(entry.deployedAt)}
                       </span>
                     )}
                   </div>
@@ -425,7 +426,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               <Property label="Current Revision" value={status.sync.revision} />
             )}
             {status.reconciledAt && (
-              <Property label="Last Reconciled" value={formatAge(status.reconciledAt)} />
+              <Property label="Last Reconciled" value={<TimeValue timestamp={status.reconciledAt} />} />
             )}
           </PropertyList>
         </Section>

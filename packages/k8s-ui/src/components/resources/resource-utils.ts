@@ -2676,7 +2676,6 @@ export {
   getScaledObjectTriggers,
   getScaledObjectTriggerCount,
   getScaledObjectHpaName,
-  getScaledObjectLastActiveTime,
   getScaledObjectPollingInterval,
   getScaledObjectCooldownPeriod,
   getScaledJobStatus,

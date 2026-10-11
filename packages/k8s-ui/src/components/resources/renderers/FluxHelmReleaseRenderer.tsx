@@ -1,9 +1,9 @@
 import { Package, Settings, CheckCircle2, History, FileCode2, GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
-import { formatAge } from '../resource-utils'
 import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface FluxHelmReleaseRendererProps {
   data: any
@@ -249,13 +249,13 @@ export function FluxHelmReleaseRenderer({ data, onNavigate }: FluxHelmReleaseRen
             {lastRelease.firstDeployed && (
               <Property
                 label="First Deployed"
-                value={formatAge(lastRelease.firstDeployed)}
+                value={<TimeValue timestamp={lastRelease.firstDeployed} />}
               />
             )}
             {lastRelease.lastDeployed && (
               <Property
                 label="Last Deployed"
-                value={formatAge(lastRelease.lastDeployed)}
+                value={<TimeValue timestamp={lastRelease.lastDeployed} />}
               />
             )}
           </PropertyList>
@@ -319,7 +319,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate }: FluxHelmReleaseRen
             {status.lastHandledReconcileAt && (
               <Property
                 label="Last Reconciled"
-                value={formatAge(status.lastHandledReconcileAt)}
+                value={<TimeValue timestamp={status.lastHandledReconcileAt} />}
               />
             )}
           </PropertyList>

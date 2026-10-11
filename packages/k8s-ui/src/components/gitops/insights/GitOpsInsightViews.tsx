@@ -72,7 +72,7 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
   const revision = summary.lastRevision || summary.targetRevision || ''
   const shortRev = shortRevisionForCommit(revision)
   const commitUrl = revision ? commitURLForRepo(summary.source, revision) : null
-  const reconcileAge = formatRelative(summary.lastReconcile)
+  const reconcileAge = formatRelativeAgeTime(summary.lastReconcile)
   const healthSummary = buildHealthSummary(insight.changes ?? [])
   // STUCK belongs with the operation chip — it's a property of the same
   // state ("failed AND won't self-recover"). Co-locating FAILED + STUCK ·
@@ -257,7 +257,7 @@ function buildHealthSummary(changes: GitOpsChange[]): { text: string; tone: stri
 // disclosure — still available for forensics but not noise during deletion.
 function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsight['summary']> }) {
   const [showHistorical, setShowHistorical] = useState(false)
-  const pending = formatRelative(summary.terminationStartedAt) || 'recently'
+  const pending = formatRelativeAgeTime(summary.terminationStartedAt) || 'recently'
   const finalizers = summary.finalizers ?? []
   return (
     <div className="border-b border-orange-500/20 bg-orange-500/[0.04] px-4 py-2">
@@ -282,7 +282,7 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
           {(summary.lastRevision || summary.targetRevision) && (
             <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
           )}
-          {summary.lastReconcile && <MetaFact label="Last reconcile" value={formatRelative(summary.lastReconcile)} />}
+          {summary.lastReconcile && <MetaFact label="Last reconcile" value={formatRelativeAgeTime(summary.lastReconcile)} />}
           {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
         </div>
       </Collapse>
@@ -1628,7 +1628,7 @@ function RecentEventsPanel({ events }: { events: NonNullable<GitOpsChange['recen
                 {e.count && e.count > 1 && (
                   <span className="text-[10px] text-theme-text-tertiary">×{e.count}</span>
                 )}
-                <span className="ml-auto text-[10px] text-theme-text-tertiary">{formatRelativeTime(e.lastTimestamp)}</span>
+                <span className="ml-auto text-[10px] text-theme-text-tertiary">{formatRelativeAgeTime(e.lastTimestamp, '')}</span>
               </div>
               <p className="mt-0.5 text-theme-text-secondary">{e.message}</p>
             </div>
@@ -1637,10 +1637,6 @@ function RecentEventsPanel({ events }: { events: NonNullable<GitOpsChange['recen
       </div>
     </div>
   )
-}
-
-function formatRelativeTime(value: string): string {
-  return formatRelativeAgeTime(value, '')
 }
 
 interface GitOpsActivityInsightViewProps {
@@ -1729,7 +1725,7 @@ function HistoryRows({
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span className="font-mono text-xs text-theme-text-primary">{item.revision || item.phase || '-'}</span>
                 <PhaseChip phase={item.phase} message={item.message} />
-                <span className="text-[11px] text-theme-text-tertiary">{formatRelative(item.deployedAt)}</span>
+                <span className="text-[11px] text-theme-text-tertiary">{formatRelativeAgeTime(item.deployedAt)}</span>
                 {item.initiatedBy && (
                   <span className="text-[11px] text-theme-text-tertiary">by {item.initiatedBy}</span>
                 )}
@@ -1831,6 +1827,3 @@ function InsightErrorState({ error }: { error: Error }) {
   )
 }
 
-function formatRelative(value?: string) {
-  return formatRelativeAgeTime(value)
-}

@@ -865,10 +865,6 @@ export function getCNPGBackupStartedAt(resource: any): string {
   return resource.status?.startedAt ? formatAge(resource.status.startedAt) : '-'
 }
 
-export function getCNPGBackupStoppedAt(resource: any): string {
-  return resource.status?.stoppedAt ? formatAge(resource.status.stoppedAt) : '-'
-}
-
 export function getCNPGBackupName(resource: any): string {
   return resource.status?.backupName || '-'
 }

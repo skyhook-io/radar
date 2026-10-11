@@ -3,7 +3,7 @@ import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState } from 'react'
 import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatAge, formatDuration, formatResources } from '../resources/resource-utils'
+import { formatDuration, formatResources } from '../resources/resource-utils'
 import { getEffectiveResources } from '../../utils/extended-resources'
 import { Tooltip } from './Tooltip'
 import { getKindColorClass } from '../ui/Badge'
@@ -537,7 +537,7 @@ export function MetadataSection({ data }: { data: any }) {
         <Property label="Generation" value={meta.generation} />
         <Property label="Created" value={meta.creationTimestamp ? (
           <Tooltip content={new Date(meta.creationTimestamp).toLocaleString()}>
-            <span className="border-b border-dotted border-theme-text-tertiary cursor-help">{formatAge(meta.creationTimestamp)}</span>
+            <span className="border-b border-dotted border-theme-text-tertiary cursor-help">{formatRelativeAgeTime(meta.creationTimestamp)}</span>
           </Tooltip>
         ) : '-'} />
       </PropertyList>
@@ -794,6 +794,7 @@ export type CopyHandler = (text: string, key: string) => void
 import type { TimelineEvent, Relationships, ResourceRef } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { Link } from 'lucide-react'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 interface RelatedResourcesSectionProps {
   relationships: Relationships | undefined

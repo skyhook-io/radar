@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { Server, Globe, Network, Layers, Download, CheckCircle, AlertCircle } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
-import { formatAge } from '../resource-utils'
 import { getClusterStatus, getClusterClass, getClusterVersion, getClusterEndpoint, getProviderFromInfraKind, parseCAPIConditionMessage } from '../resource-utils-capi'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface Props {
   data: any
@@ -119,7 +119,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect
           {className !== '-' && <Property label="Cluster Class" value={className} />}
           {endpoint !== '-' && <Property label="Control Plane Endpoint" value={endpoint} />}
           {readyCond?.lastTransitionTime && (
-            <Property label="Since" value={formatAge(readyCond.lastTransitionTime)} />
+            <Property label="Since" value={<TimeValue timestamp={readyCond.lastTransitionTime} />} />
           )}
         </PropertyList>
       </Section>

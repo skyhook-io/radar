@@ -1,10 +1,10 @@
 import { useState, useId } from 'react'
 import { Box } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatAge } from '../../resource-utils'
 import { Collapse, CollapseChevron, disclosurePanelId } from '../../../ui/Collapse'
 import { revisionRoleBadges } from '../../../shared/ResourceActionsBar'
 import type { WorkloadRevision, WorkloadPodInfo } from '../../../../types'
+import { formatRelativeAgeTime } from '../../../../utils/format'
 
 interface ReplicaSetProgressionProps {
   revisions: WorkloadRevision[]
@@ -90,7 +90,7 @@ export function ReplicaSetProgression({ revisions, pods, namespace, onNavigate }
                 ))}
               </div>
               <span className="shrink-0 text-xs tabular-nums text-theme-text-tertiary">{rev.replicas ?? 0} replicas</span>
-              <span className="shrink-0 text-xs text-theme-text-tertiary">{formatAge(rev.createdAt)}</span>
+              <span className="shrink-0 text-xs text-theme-text-tertiary">{formatRelativeAgeTime(rev.createdAt)}</span>
             </button>
             <Collapse open={isOpen} mountLazily id={disclosurePanelId(panelBase, rev.number)}>
               <div className="space-y-0.5 border-t border-theme-border/50 px-2 py-1.5 pl-8">

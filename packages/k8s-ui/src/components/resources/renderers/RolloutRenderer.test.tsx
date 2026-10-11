@@ -269,7 +269,7 @@ describe('rolloutProblems', () => {
     )
     expect(problems).toHaveLength(1)
     expect(problems[0].color).toBe('yellow')
-    expect(problems[0].message).toMatch(/^Rollout is paused: CanaryPauseStep \(since .+\)$/)
+    expect(problems[0].message).toMatch(/^Rollout is paused: CanaryPauseStep \(for \d+d\)$/)
   })
 
   it('does not report a paused rollout that is actually aborted', () => {

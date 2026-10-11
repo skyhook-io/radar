@@ -28,6 +28,7 @@ import {
 } from '../resource-utils-cnpg'
 import { formatAge } from '../resource-utils'
 import { RecoveryTime } from './CNPGShared'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 interface CNPGClusterRendererProps {
   /** Filled by the host with the Databases, Publications and Subscriptions
@@ -195,7 +196,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
           variant="warning"
           title="Last backup failed"
           message={
-            `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatAge(lastBackupFailure.lastTransitionTime)} ago` : ''}.` +
+            `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatRelativeAgeTime(lastBackupFailure.lastTransitionTime)}` : ''}.` +
             (lastBackupFailure.message ? ` Operator reported: ${lastBackupFailure.message}` : '')
           }
         />
