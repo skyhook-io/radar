@@ -122,6 +122,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		SkipPodTemplateContext: !includeFacts,
 		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
 		CanReadRelated:         issueRelatedResourceAccess(ctx),
+		CanReadSubject:         issueSubjectAccess(ctx),
 		CanReadEvidence:        issueEvidenceAccess(ctx),
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
@@ -243,8 +244,37 @@ func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvi
 	return topology, provider, dyn, true
 }
 
+// issueSubjectAccess mirrors the REST drawer gate for an issue's own
+// namespaced resource: namespace access, plus a get for Secrets and LimitRanges.
+func issueSubjectAccess(ctx context.Context) func(issues.Ref) bool {
+	return func(ref issues.Ref) bool {
+		if !checkNamespaceAccess(ctx, ref.Namespace) {
+			return false
+		}
+		switch {
+		case ref.Group == "" && strings.EqualFold(ref.Kind, "Secret"):
+			return canReadInNamespace(ctx, "", "secrets", ref.Namespace, "get")
+		case ref.Group == "" && strings.EqualFold(ref.Kind, "LimitRange"):
+			return canReadInNamespace(ctx, "", "limitranges", ref.Namespace, "get")
+		}
+		return true
+	}
+}
+
+// issueEvidenceAccess authorizes an inventory a finding was derived from at
+// the granularity Radar reads it: a namespaced read needs namespace access
+// (and a Secret read a Secrets check); a cluster-wide read needs the SAR.
 func issueEvidenceAccess(ctx context.Context) func(issues.EvidenceRead) bool {
 	return func(read issues.EvidenceRead) bool {
-		return (read.Namespace == "" || checkNamespaceAccess(ctx, read.Namespace)) && canReadInNamespace(ctx, read.Group, read.Resource, read.Namespace, read.Verb)
+		if read.Namespace == "" {
+			return canReadInNamespace(ctx, read.Group, read.Resource, "", read.Verb)
+		}
+		if !checkNamespaceAccess(ctx, read.Namespace) {
+			return false
+		}
+		if read.Group == "" && read.Resource == "secrets" {
+			return canReadInNamespace(ctx, "", "secrets", read.Namespace, read.Verb)
+		}
+		return true
 	}
 }

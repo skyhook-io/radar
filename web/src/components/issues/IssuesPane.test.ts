@@ -169,7 +169,7 @@ describe('issueSubjectState', () => {
     expect(issueSubjectState(subject, [], loaded({ coverage: 'syncing' }))).toEqual({ state: 'unconfirmed', why: 'Radar is still loading Cluster' })
   })
   it('reads an empty answer as unconfirmed when RBAC withheld issues about it', () => {
-    expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2, members: 0 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })
+    expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })
   })
   it('reads an empty answer under limited visibility as unconfirmed, never none', () => {
     expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'degraded', impact: 'Pods are not readable.' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable (Pods are not readable)" })
@@ -181,6 +181,6 @@ describe('issueSubjectState', () => {
   })
   it('takes the per-resource answer, which covers members past the inline cap', () => {
     const grouped = issue({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main', members: [], members_truncated: true })
-    expect(issueSubjectState(subject, [], loaded({ issues: [grouped], withheld: { issues: 1, members: 0 } }))).toEqual({ state: 'found', issues: [grouped], withheld: 1 })
+    expect(issueSubjectState(subject, [], loaded({ issues: [grouped], withheld: { issues: 1 } }))).toEqual({ state: 'found', issues: [grouped], withheld: 1 })
   })
 })

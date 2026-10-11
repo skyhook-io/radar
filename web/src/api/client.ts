@@ -797,7 +797,7 @@ export function useResourceIssues(
 export interface SubjectIssuesResponse {
   issues: Issue[];
   coverage: "ok" | "syncing" | "notWatched";
-  withheld?: { issues: number; members: number };
+  withheld?: { issues: number };
   visibility?: { state?: string; impact?: string };
 }
 

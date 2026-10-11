@@ -24,8 +24,10 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 		Limit:                   NoLimit,
 		CanReadClusterScoped:    opts.CanReadClusterScoped,
 		CanReadRelated:          opts.CanReadRelated,
+		CanReadSubject:          opts.CanReadSubject,
 		CanReadEvidence:         opts.CanReadEvidence,
 		AllowUnfilteredEvidence: opts.AllowUnfilteredEvidence,
+		OnEvidenceWithheld:      opts.OnEvidenceWithheld,
 	})
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
@@ -57,9 +59,22 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 	match := func(g, k, ns, n string) bool {
 		return strings.EqualFold(k, kind) && ns == namespace && n == name && resolveGroup(g, k) == wantGroup
 	}
+	// A precomposed pair may come from a shared memo; authorize again here.
+	canReadSubject := func(i Issue) bool {
+		return opts.CanReadSubject == nil || i.Namespace == "" || opts.CanReadSubject(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name})
+	}
+	canReadEvidence := func(i Issue) bool {
+		if CanReadIssueEvidence(i, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
+			return true
+		}
+		if opts.OnEvidenceWithheld != nil {
+			opts.OnEvidenceWithheld(i)
+		}
+		return false
+	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
 	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
-		if match(g.Group, g.Kind, g.Namespace, g.Name) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) && CanReadIssueEvidence(g, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
+		if match(g.Group, g.Kind, g.Namespace, g.Name) && canReadSubject(g) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) && canReadEvidence(g) {
 			matched[g.ID] = true
 		}
 		if g.DiagnosticContext != nil {
@@ -79,13 +94,13 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		}
 	}
 	for _, f := range flat { // as ANY evidence row (uncapped)
-		if match(f.Group, f.Kind, f.Namespace, f.Name) && CanReadIssueRelatedRefs(f, opts.CanReadRelated) && CanReadIssueEvidence(f, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
+		if match(f.Group, f.Kind, f.Namespace, f.Name) && canReadSubject(f) && CanReadIssueRelatedRefs(f, opts.CanReadRelated) && canReadEvidence(f) {
 			matched[f.ID] = true
 		}
 	}
 	var out []Issue
 	for _, g := range grouped {
-		if matched[g.ID] && CanReadIssueEvidence(g, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
+		if matched[g.ID] && canReadSubject(g) && canReadEvidence(g) {
 			out = append(out, g)
 		}
 	}

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestUserIssueProjectionsSupplyEvidenceAuthorizer(t *testing.T) {
+func TestUserIssueProjectionsSupplyAuthorizers(t *testing.T) {
 	for _, dir := range []string{".", "../mcp"} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -39,7 +39,10 @@ func TestUserIssueProjectionsSupplyEvidenceAuthorizer(t *testing.T) {
 				if !ok || owner.Name != "issues" || (selector.Sel.Name != "Filters" && selector.Sel.Name != "RelatedIssueOptions") {
 					return true
 				}
-				authorized := false
+				// The Capacity memo composes for every user and authorizes each
+				// projection itself.
+				memo := entry.Name() == "capacity_issues.go"
+				evidence, subject := false, false
 				for _, field := range literal.Elts {
 					kv, ok := field.(*ast.KeyValueExpr)
 					if !ok {
@@ -49,15 +52,18 @@ func TestUserIssueProjectionsSupplyEvidenceAuthorizer(t *testing.T) {
 					if !ok {
 						continue
 					}
-					if key.Name == "CanReadEvidence" {
-						authorized = true
-					}
-					if key.Name == "AllowUnfilteredEvidence" && entry.Name() == "capacity_issues.go" {
-						authorized = true
+					switch {
+					case key.Name == "CanReadEvidence", key.Name == "AllowUnfilteredEvidence" && memo:
+						evidence = true
+					case key.Name == "CanReadSubject":
+						subject = true
 					}
 				}
-				if !authorized {
+				if !evidence {
 					t.Errorf("%s: issue projection lacks an evidence authorizer", fset.Position(literal.Pos()))
+				}
+				if !subject && !memo {
+					t.Errorf("%s: issue projection lacks a subject authorizer", fset.Position(literal.Pos()))
 				}
 				return true
 			})

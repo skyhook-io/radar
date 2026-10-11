@@ -89,29 +89,55 @@ func initMCPRelatedIssueAuthDiscovery(t *testing.T) {
 	t.Cleanup(k8s.ResetTestDynamicState)
 }
 
-func TestMCPCachedIssuesAuthorizeEvidenceInventories(t *testing.T) {
+// Evidence is authorized at the granularity Radar reads it: namespace access
+// for a namespace's inventories, a Secrets check for Secrets, the SAR for a
+// cluster-wide read.
+func TestMCPCachedIssuesAuthorizeEvidenceAtReadGranularity(t *testing.T) {
 	ctx := withTestUserPerms(t, "evidence-user", nil, []string{"db"})
 	perms := getPermCache().Get("evidence-user", nil)
-	perms.SetCanI("list", "example.com", "widgets", "db", true)
-	perms.SetCanI("get", "", "pods", "db", true)
-	perms.SetCanI("list", "", "pods", "db", false)
-	perms.SetCanI("list", "other.example", "pods", "db", true)
-	issue := issues.Issue{ID: "contradiction", Group: "example.com", Kind: "Widget", Namespace: "db", Name: "w", RequiredReads: []issues.EvidenceRead{
-		{Group: "example.com", Resource: "widgets", Namespace: "db", Verb: "list"},
-		{Resource: "pods", Namespace: "db", Verb: "list"},
-	}}
+	perms.SetCanI("list", "", "secrets", "db", false)
+	perms.SetCanI("list", "", "nodes", "", false)
 	options := issues.RelatedIssueOptions{CanReadEvidence: issueEvidenceAccess(ctx)}
-	lookup := func() []issues.Issue {
-		return issues.RelatedIssuesFrom(nil, []issues.Issue{issue}, options, issue.Group, issue.Kind, issue.Namespace, issue.Name)
+	lookup := func(reads ...issues.EvidenceRead) int {
+		issue := issues.Issue{ID: "derived", Group: "example.com", Kind: "Widget", Namespace: "db", Name: "w", RequiredReads: reads}
+		return len(issues.RelatedIssuesFrom(nil, []issues.Issue{issue}, options, issue.Group, issue.Kind, issue.Namespace, issue.Name))
 	}
-	if len(lookup()) != 0 {
-		t.Fatal("get Pods or list another group's Pods must not authorize the evidence")
+	widgets := issues.EvidenceRead{Group: "example.com", Resource: "widgets", Namespace: "db", Verb: "list"}
+	pods := issues.EvidenceRead{Resource: "pods", Namespace: "db", Verb: "list"}
+	secrets := issues.EvidenceRead{Resource: "secrets", Namespace: "db", Verb: "list"}
+	nodes := issues.EvidenceRead{Resource: "nodes", Verb: "list"}
+	if lookup(widgets, pods) != 1 {
+		t.Fatal("namespace access must authorize the namespace's inventories")
 	}
-	perms.SetCanI("list", "", "pods", "db", true)
-	if len(lookup()) != 1 {
-		t.Fatal("authorized inventory withheld")
+	if lookup(issues.EvidenceRead{Resource: "pods", Namespace: "other", Verb: "list"}) != 0 {
+		t.Fatal("another namespace's inventory authorized")
 	}
-	if options.CanReadEvidence(issues.EvidenceRead{Resource: "pods", Namespace: "other", Verb: "list"}) {
-		t.Fatal("unread namespace authorized")
+	if lookup(pods, secrets) != 0 || lookup(nodes) != 0 {
+		t.Fatal("Secrets or a cluster-wide inventory authorized without the SAR")
+	}
+	perms.SetCanI("list", "", "secrets", "db", true)
+	perms.SetCanI("list", "", "nodes", "", true)
+	if lookup(pods, secrets) != 1 || lookup(nodes) != 1 {
+		t.Fatal("granted inventories withheld")
+	}
+}
+
+func TestMCPIssueSubjectAccessFollowsTheDrawer(t *testing.T) {
+	ctx := withTestUserPerms(t, "subject-user", nil, []string{"db"})
+	perms := getPermCache().Get("subject-user", nil)
+	perms.SetCanI("get", "", "secrets", "db", false)
+	access := issueSubjectAccess(ctx)
+	if !access(issues.Ref{Group: "apps", Kind: "Deployment", Namespace: "db", Name: "web"}) {
+		t.Fatal("namespace access must open a Deployment's issues")
+	}
+	if access(issues.Ref{Group: "apps", Kind: "Deployment", Namespace: "other", Name: "web"}) {
+		t.Fatal("another namespace's row authorized")
+	}
+	if access(issues.Ref{Kind: "Secret", Namespace: "db", Name: "creds"}) {
+		t.Fatal("a Secret's issue authorized without Secret access")
+	}
+	perms.SetCanI("get", "", "secrets", "db", true)
+	if !access(issues.Ref{Kind: "Secret", Namespace: "db", Name: "creds"}) {
+		t.Fatal("Secret access did not open the Secret's issue")
 	}
 }

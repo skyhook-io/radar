@@ -3031,6 +3031,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 			return canReadClusterScopedKind(ctx, kind, group, "list")
 		},
 		CanReadRelated:  issueRelatedResourceAccess(ctx),
+		CanReadSubject:  issueSubjectAccess(ctx),
 		CanReadEvidence: issueEvidenceAccess(ctx),
 	}
 	if input.Filter != "" {

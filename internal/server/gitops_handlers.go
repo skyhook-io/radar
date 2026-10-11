@@ -172,6 +172,7 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
 	}
 	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	resolver.canReadSubject = s.issueSubjectAccess(r)
 	resolver.canReadEvidence = s.issueEvidenceAccess(r)
 	memoKey := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces)
 	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
@@ -845,6 +846,7 @@ type insightsResolver struct {
 	cache             *k8s.ResourceCache
 	allowedNamespaces []string
 	canAccess         func(group, kind, namespace, name string) bool
+	canReadSubject    func(issues.Ref) bool
 	canReadEvidence   func(issues.EvidenceRead) bool
 
 	// The cluster-wide issue set is composed at most once per insights request
@@ -1040,6 +1042,7 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 		r.composedFlat, r.composedGrouped = r.composeIssues()
 	})
 	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, issues.RelatedIssueOptions{
+		CanReadSubject:  r.canReadSubject,
 		CanReadEvidence: r.canReadEvidence,
 		CanReadRelated: func(ref issues.Ref) bool {
 			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
@@ -1149,6 +1152,7 @@ func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 		SkipPodTemplateContext: true,
 		Namespaces:             r.allowedNamespaces,
 		Limit:                  issues.NoLimit,
+		CanReadSubject:         r.canReadSubject,
 		CanReadEvidence:        r.canReadEvidence,
 		CanReadRelated: func(ref issues.Ref) bool {
 			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)

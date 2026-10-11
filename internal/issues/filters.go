@@ -51,6 +51,21 @@ func applyClusterScopedAccess(in []Issue, f Filters) []Issue {
 	return out
 }
 
+// applySubjectAccess drops namespaced rows whose own resource the caller can't
+// read. Cluster-scoped rows are applyClusterScopedAccess's.
+func applySubjectAccess(in []Issue, canRead func(Ref) bool) []Issue {
+	if canRead == nil {
+		return in
+	}
+	out := make([]Issue, 0, len(in))
+	for _, i := range in {
+		if i.Namespace == "" || canRead(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name}) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // SeverityRank orders the normalized issue severity, higher = worse. Shared by
 // the grouping comparators here and by the per-resource summary rollups in the
 // server/MCP layers, so all three rank off one function.

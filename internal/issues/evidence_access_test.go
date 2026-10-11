@@ -67,3 +67,26 @@ func TestRequiredReadsAreNotSerialized(t *testing.T) {
 		t.Fatalf("issue JSON exposes its evidence reads: %s", data)
 	}
 }
+
+func TestEvidenceWithheldFindingsAreReported(t *testing.T) {
+	podList := EvidenceRead{Resource: "pods", Namespace: "team-a", Verb: "list"}
+	issue := evidenceIssue("derived", podList)
+	var seen []string
+	opts := RelatedIssueOptions{
+		CanReadEvidence:    func(EvidenceRead) bool { return false },
+		OnEvidenceWithheld: func(i Issue) { seen = append(seen, i.ID) },
+	}
+	if got := RelatedIssuesFrom([]Issue{issue}, []Issue{issue}, opts, "example.com", "Widget", "team-a", "w"); len(got) != 0 {
+		t.Fatalf("denied evidence returned: %+v", got)
+	}
+	if len(seen) == 0 || seen[0] != "derived" {
+		t.Fatalf("withheld finding not reported: %v", seen)
+	}
+	seen = nil
+	if out := filterEvidenceAccess([]Issue{issue, evidenceIssue("plain")}, opts.CanReadEvidence, false, opts.OnEvidenceWithheld); len(out) != 1 || out[0].ID != "plain" {
+		t.Fatalf("filterEvidenceAccess kept %+v", out)
+	}
+	if len(seen) != 1 || seen[0] != "derived" {
+		t.Fatalf("filterEvidenceAccess reported %v", seen)
+	}
+}

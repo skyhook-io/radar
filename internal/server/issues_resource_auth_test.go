@@ -12,7 +12,6 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
-	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,110 +22,144 @@ func resourceIssuesRequest(t *testing.T, s *Server, path string) *httptest.Respo
 	t.Helper()
 	rt := chi.NewRouter()
 	rt.Get("/api/issues/resource/{kind}/{namespace}/{name}", s.handleResourceIssues)
+	rt.Get("/api/issues", s.handleIssues)
 	w := httptest.NewRecorder()
 	rt.ServeHTTP(w, requestWithUser(http.MethodGet, path, &auth.User{Username: "pg-user"}))
 	return w
 }
 
+// Namespaced issues follow the drawer: namespace access opens a Deployment,
+// so it opens the Deployment's issues too, with no per-kind check.
 // Fixture: TestMain seeds Deployment broken/stuck-app with no available replicas.
-func TestResourceIssuesRequireGetOnTheSubjectKind(t *testing.T) {
+func TestResourceIssuesFollowTheDrawersNamespaceAccess(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	perms := &auth.UserPermissions{AllowedNamespaces: nil}
-	s.permCache.Set("pg-user", nil, perms)
+	s.permCache.Set("pg-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"broken"}})
 
-	perms.SetCanI("get", "apps", "deployments", "broken", false)
-	w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/stuck-app?group=apps")
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("denied get on deployments: status %d, want 403 (body %s)", w.Code, w.Body.String())
-	}
-
-	perms.SetCanI("get", "apps", "deployments", "broken", true)
-	w = resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/stuck-app?group=apps&coverage=1")
+	w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/stuck-app?group=apps&coverage=1")
 	if w.Code != http.StatusOK {
-		t.Fatalf("allowed: status %d (body %s)", w.Code, w.Body.String())
+		t.Fatalf("namespace access: status %d (body %s)", w.Code, w.Body.String())
 	}
 	var resp ResourceIssuesResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(resp.Issues) == 0 {
-		t.Fatal("allowed caller got no issues for the broken Deployment")
+		t.Fatal("a caller with namespace access got no issues for the broken Deployment")
 	}
 	if resp.Coverage != resourceIssuesCoverageOK {
 		t.Fatalf("coverage %q, want ok for a synced typed kind", resp.Coverage)
 	}
-
-	w = resourceIssuesRequest(t, s, "/api/issues/resource/deployments/broken/stuck-app")
-	if w.Code != http.StatusOK {
+	if w := resourceIssuesRequest(t, s, "/api/issues/resource/deployments/broken/stuck-app"); w.Code != http.StatusOK {
 		t.Fatalf("plural kind: status %d (body %s)", w.Code, w.Body.String())
 	}
+
+	s.permCache.Set("pg-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"other"}})
+	if w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/stuck-app?group=apps"); w.Code != http.StatusForbidden {
+		t.Fatalf("no namespace access: status %d, want 403", w.Code)
+	}
 }
 
-func TestResourceIssuesWithholdUnreadableSubjectsAndMembers(t *testing.T) {
+func TestIssueSubjectAccessFollowsTheDrawer(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	perms := &auth.UserPermissions{AllowedNamespaces: nil}
-	perms.SetCanI("get", "apps", "deployments", "pg", true)
-	perms.SetCanI("get", "", "pods", "pg", false)
-	perms.SetCanI("get", "apps", "statefulsets", "pg", false)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}}
+	perms.SetCanI("get", "", "secrets", "team-a", false)
 	s.permCache.Set("pg-user", nil, perms)
-	r := requestWithUser(http.MethodGet, "/api/issues/resource/Deployment/pg/app", &auth.User{Username: "pg-user"})
+	access := s.issueSubjectAccess(requestWithUser(http.MethodGet, "/", &auth.User{Username: "pg-user"}))
 
-	in := []issues.Issue{
-		{ID: "a", Group: "apps", Kind: "Deployment", Namespace: "pg", Name: "app", Members: []issues.Ref{
-			{Kind: "Pod", Namespace: "pg", Name: "app-1"},
-			{Kind: "Pod", Namespace: "pg", Name: "app-2"},
-			{Group: "apps", Kind: "Deployment", Namespace: "pg", Name: "app"},
-		}},
-		{ID: "b", Group: "apps", Kind: "StatefulSet", Namespace: "pg", Name: "db"},
+	if !access(issues.Ref{Group: "apps", Kind: "Deployment", Namespace: "team-a", Name: "web"}) {
+		t.Fatal("namespace access must open a Deployment's issues")
 	}
-	out, withheld := s.withholdUnreadableIssueRefs(r, in)
-	if withheld.Issues != 1 || withheld.Members != 2 {
-		t.Fatalf("withheld %+v, want 1 issue and 2 members", withheld)
+	if access(issues.Ref{Group: "apps", Kind: "Deployment", Namespace: "team-b", Name: "web"}) {
+		t.Fatal("another namespace's row was authorized")
 	}
-	if len(out) != 1 || out[0].ID != "a" {
-		t.Fatalf("kept %+v, want only the Deployment's issue", out)
+	if access(issues.Ref{Kind: "Secret", Namespace: "team-a", Name: "creds"}) {
+		t.Fatal("a Secret's issue was authorized without Secret access")
 	}
-	if len(out[0].Members) != 1 || !out[0].MembersTruncated {
-		t.Fatalf("members %+v truncated=%v, want the readable one and truncated", out[0].Members, out[0].MembersTruncated)
+	perms.SetCanI("get", "", "secrets", "team-a", true)
+	if !access(issues.Ref{Kind: "Secret", Namespace: "team-a", Name: "creds"}) {
+		t.Fatal("Secret access did not open the Secret's issue")
+	}
+
+	open := newAuthServer(auth.Config{Mode: "none"}).issueSubjectAccess(httptest.NewRequest(http.MethodGet, "/", nil))
+	if !open(issues.Ref{Kind: "Secret", Namespace: "team-b", Name: "creds"}) {
+		t.Fatal("auth off must not gate rows")
 	}
 }
 
-func TestResourceIssuesWithholdNothingWithoutAuth(t *testing.T) {
-	s := newAuthServer(auth.Config{Mode: "none"})
-	r := httptest.NewRequest(http.MethodGet, "/api/issues/resource/Deployment/pg/app", nil)
-	in := []issues.Issue{{ID: "a", Kind: "Pod", Namespace: "pg", Name: "p"}}
-	if out, withheld := s.withholdUnreadableIssueRefs(r, in); len(out) != 1 || withheld != (ResourceIssuesWithheld{}) {
-		t.Fatalf("auth off: out %+v withheld %+v", out, withheld)
+func TestIssueEvidenceAccessFollowsReadGranularity(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}}
+	perms.SetCanI("list", "", "secrets", "team-a", false)
+	perms.SetCanI("list", "", "nodes", "", false)
+	s.permCache.Set("pg-user", nil, perms)
+	access := s.issueEvidenceAccess(requestWithUser(http.MethodGet, "/", &auth.User{Username: "pg-user"}))
+
+	if !access(issues.EvidenceRead{Resource: "pods", Namespace: "team-a", Verb: "list"}) {
+		t.Fatal("namespace access must authorize a namespaced inventory")
+	}
+	if access(issues.EvidenceRead{Resource: "pods", Namespace: "team-b", Verb: "list"}) {
+		t.Fatal("another namespace's inventory was authorized")
+	}
+	if access(issues.EvidenceRead{Resource: "secrets", Namespace: "team-a", Verb: "list"}) {
+		t.Fatal("Secrets were authorized without Secret access")
+	}
+	if access(issues.EvidenceRead{Resource: "nodes", Verb: "list"}) {
+		t.Fatal("a cluster-wide inventory was authorized without the SAR")
+	}
+	perms.SetCanI("list", "", "secrets", "team-a", true)
+	perms.SetCanI("list", "", "nodes", "", true)
+	if !access(issues.EvidenceRead{Resource: "secrets", Namespace: "team-a", Verb: "list"}) || !access(issues.EvidenceRead{Resource: "nodes", Verb: "list"}) {
+		t.Fatal("granted inventories were withheld")
+	}
+}
+
+// A Secret stuck terminating is an issue about the Secret, so it reaches only
+// a caller who can read Secrets there, on the list as on the drawer.
+func TestIssuesListWithholdsSecretsTheCallerCantRead(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	deleted := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	client := fake.NewClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: "creds", Namespace: "vault", DeletionTimestamp: &deleted, Finalizers: []string{"example.com/hold"},
+	}})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"vault"}}
+	perms.SetCanI("get", "", "secrets", "vault", false)
+	s.permCache.Set("pg-user", nil, perms)
+
+	secretIssue := func() bool {
+		w := resourceIssuesRequest(t, s, "/api/issues?namespaces=vault")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d (body %s)", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Issues []issues.Issue `json:"issues"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		for _, i := range resp.Issues {
+			if i.Kind == "Secret" && i.Name == "creds" {
+				return true
+			}
+		}
+		return false
+	}
+	if secretIssue() {
+		t.Fatal("a caller without Secret access saw the Secret's issue")
+	}
+	perms.SetCanI("get", "", "secrets", "vault", true)
+	if !secretIssue() {
+		t.Fatal("a caller with Secret access lost the Secret's issue")
 	}
 }
 
 func TestResourceIssuesCoverageOfAnUnwatchedKind(t *testing.T) {
-	if got := resourceIssuesCoverage("Cluster", "postgresql.cnpg.io", "pg"); got != resourceIssuesCoverageNotWatched {
+	if got := resourceIssuesCoverage("Widget", "example.com", "pg"); got != resourceIssuesCoverageNotWatched {
 		t.Fatalf("coverage %q, want notWatched for a kind Radar has not discovered", got)
-	}
-}
-
-func TestResourceIssuesHonourAResourceNamesGrant(t *testing.T) {
-	fakeSARServer(t, func(a authv1.ResourceAttributes) bool {
-		return a.Group == "apps" && a.Resource == "deployments" && a.Namespace == "broken" && a.Name == "stuck-app" && a.Verb == "get"
-	})
-	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("pg-user", nil, &auth.UserPermissions{AllowedNamespaces: nil})
-
-	w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/stuck-app?group=apps&coverage=1")
-	if w.Code != http.StatusOK {
-		t.Fatalf("named grant: status %d, want 200 (body %s)", w.Code, w.Body.String())
-	}
-	var resp ResourceIssuesResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Issues) == 0 {
-		t.Fatal("named grant got no issues for the broken Deployment")
-	}
-
-	if w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/other-app?group=apps"); w.Code != http.StatusForbidden {
-		t.Fatalf("a name outside the grant: status %d, want 403", w.Code)
 	}
 }
 
@@ -244,40 +277,6 @@ func TestResourceIssuesCountWithheldWithAndWithoutTheGroupParam(t *testing.T) {
 	}
 }
 
-func TestResourceIssuesAcceptExactNamespaceListGrant(t *testing.T) {
-	fakeSARServer(t, func(a authv1.ResourceAttributes) bool {
-		return a.Group == "apps" && a.Resource == "deployments" && a.Namespace == "broken" && a.Verb == "list"
-	})
-	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("pg-user", nil, &auth.UserPermissions{AllowedNamespaces: nil})
-	w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/stuck-app?group=apps&coverage=1")
-	if w.Code != http.StatusOK {
-		t.Fatalf("list grant: status=%d body=%s", w.Code, w.Body.String())
-	}
-	var response ResourceIssuesResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if len(response.Issues) == 0 {
-		t.Fatal("list-authorized caller lost Deployment issues")
-	}
-	r := requestWithUser(http.MethodGet, "/", &auth.User{Username: "pg-user"})
-	for _, ref := range []issues.Ref{
-		{Kind: "Deployment", Group: "apps", Namespace: "other", Name: "app"},
-		{Kind: "StatefulSet", Group: "apps", Namespace: "broken", Name: "db"},
-		{Kind: "Pod", Namespace: "broken", Name: "app"},
-	} {
-		if s.canGetIssueRef(r, ref) {
-			t.Fatalf("list grant leaked to %+v", ref)
-		}
-	}
-	in := []issues.Issue{{Kind: "Deployment", Group: "apps", Namespace: "broken", Name: "stuck-app", Members: []issues.Ref{{Kind: "Pod", Namespace: "broken", Name: "p"}}}}
-	out, withheld := s.withholdUnreadableIssueRefs(r, in)
-	if len(out) != 1 || withheld.Members != 1 || !out[0].MembersTruncated {
-		t.Fatalf("list-only rows must still hide denied members: %+v %+v", out, withheld)
-	}
-}
-
 func TestResourceIssuesUnresolvedKindUsesPreflight(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	s.permCache.Set("pg-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"broken"}})
@@ -285,15 +284,14 @@ func TestResourceIssuesUnresolvedKindUsesPreflight(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("unresolved kind: status=%d body=%s", w.Code, w.Body.String())
 	}
+	var resp ResourceIssuesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Coverage != resourceIssuesCoverageNotWatched {
+		t.Fatalf("coverage %q, want notWatched for an undiscovered kind", resp.Coverage)
+	}
 	if w := resourceIssuesRequest(t, s, "/api/issues/resource/NewWidget/denied/new?group=widgets.example.io"); w.Code != http.StatusForbidden {
 		t.Fatalf("preflight deny: status=%d body=%s", w.Code, w.Body.String())
-	}
-	r := requestWithUser(http.MethodGet, "/", &auth.User{Username: "pg-user"})
-	out, withheld := s.withholdUnreadableIssueRefs(r, []issues.Issue{
-		{Kind: "NewWidget", Group: "widgets.example.io", Namespace: "broken", Name: "new"},
-		{Kind: "NewWidget", Group: "widgets.example.io", Namespace: "denied", Name: "new"},
-	})
-	if len(out) != 1 || withheld.Issues != 1 {
-		t.Fatalf("fallback bypassed preflight: %+v %+v", out, withheld)
 	}
 }

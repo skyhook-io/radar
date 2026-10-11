@@ -101,6 +101,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		Grouped:              q.Get("view") != "flat",
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanReadSubject:       s.issueSubjectAccess(r),
 		CanReadEvidence:      s.issueEvidenceAccess(r),
 	}
 	if expr := q.Get("filter"); expr != "" {
@@ -238,12 +239,13 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 // section in the resource detail. Namespace "_" denotes a cluster-scoped resource;
 // optional ?group= disambiguates a CRD whose kind collides with a core kind.
 //
-// RBAC: the drawer's preflight (namespace access, cluster-scoped get) and then
-// a get-SAR on the subject's own kind: namespace access does not imply reading
-// every kind in it, and an issue's message describes the object. Grouped issues
-// whose subject the caller can't get are withheld, as are members of kinds it
-// can't get; ?coverage=1 returns the envelope that counts them and says whether
-// Radar is watching the subject's kind at all.
+// RBAC follows the drawer (docs/authentication.md, "Read granularity"): the
+// preflight gates the subject, and every row is gated the same way before
+// grouping, so a member, count or diagnostic link never comes from a namespace
+// or a Secret the caller can't open. A cluster-scoped subject's issues are
+// composed across namespaces, which that per-row gate keeps to the caller's.
+// ?coverage=1 returns an envelope that also says whether Radar watches the
+// subject's kind and counts what the caller's access withheld.
 func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -290,25 +292,27 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !s.canGetIssueRef(r, issues.Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}) {
-		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to %s %s", kind, name))
-		return
-	}
-
 	// Scope the scan to the resource's namespace (a workload's owned pods live
-	// there too); cluster-scoped resources scan all namespaces (nil).
+	// there too); cluster-scoped resources scan all namespaces (nil), and
+	// CanReadSubject drops the rows from namespaces the caller can't open.
 	var namespaces []string
 	if namespace != "" {
 		namespaces = []string{namespace}
 	}
 
+	evidenceWithheld := map[string]bool{}
 	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
 		Namespaces:           namespaces,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanReadSubject:       s.issueSubjectAccess(r),
 		CanReadEvidence:      s.issueEvidenceAccess(r),
+		OnEvidenceWithheld: func(i issues.Issue) {
+			if strings.EqualFold(i.Kind, kind) && i.Namespace == namespace && i.Name == name {
+				evidenceWithheld[i.ID] = true
+			}
+		},
 	}, group, kind, namespace, name)
-	related, withheld := s.withholdUnreadableIssueRefs(r, related)
 	if related == nil {
 		related = []issues.Issue{}
 	}
@@ -316,12 +320,13 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, related)
 		return
 	}
+	withheld := ResourceIssuesWithheld{Issues: len(evidenceWithheld)}
 	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
 	resp := ResourceIssuesResponse{
 		Issues:   related,
 		Coverage: resourceIssuesCoverage(kind, group, namespace),
 	}
-	if withheld.Issues > 0 || withheld.Members > 0 {
+	if withheld.Issues > 0 {
 		resp.Withheld = &withheld
 	}
 	if result := k8s.GetCachedPermissionResult(); result != nil {
@@ -340,12 +345,12 @@ type ResourceIssuesResponse struct {
 	Visibility *k8s.VisibilitySummary  `json:"visibility,omitempty"`
 }
 
-// ResourceIssuesWithheld counts what the caller's RBAC kept out of the answer.
+// ResourceIssuesWithheld counts what the caller's access kept out of the
+// answer, without naming it.
 type ResourceIssuesWithheld struct {
-	// Grouped issues whose subject the caller can't get.
+	// Issues about the subject the caller's access removed: a cluster-scoped
+	// kind it can get but not list, or evidence it can't read.
 	Issues int `json:"issues"`
-	// Member refs of kinds the caller can't get, dropped from returned issues.
-	Members int `json:"members"`
 }
 
 const (
@@ -353,84 +358,6 @@ const (
 	resourceIssuesCoverageSyncing    = "syncing"
 	resourceIssuesCoverageNotWatched = "notWatched"
 )
-
-// canGetIssueRef accepts kind-wide get/list or named get. An unresolved kind
-// uses the drawer's preflight gates until discovery can identify its resource.
-func (s *Server) canGetIssueRef(r *http.Request, ref issues.Ref) bool {
-	user := auth.UserFromContext(r.Context())
-	if user == nil {
-		return true
-	}
-	group, resource, clusterScoped, ok := k8s.ResolveChangeGVR(ref.Kind, ref.Group)
-	if !ok {
-		_, _, allowed := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group)
-		return allowed
-	}
-	namespace := ref.Namespace
-	if clusterScoped {
-		namespace = ""
-	}
-	if s.canRead(r, group, resource, namespace, "get") {
-		return true
-	}
-	if s.canRead(r, group, resource, namespace, "list") {
-		return true
-	}
-	if ref.Name == "" || s.permCache == nil {
-		return false
-	}
-	perms := s.permCache.Get(user.Username, user.Groups)
-	if perms != nil {
-		if v, ok := perms.CanINamed("get", group, resource, namespace, ref.Name); ok {
-			return v
-		}
-	}
-	client := k8s.GetClient()
-	if client == nil {
-		return false
-	}
-	allowed, err := auth.SubjectCanINamed(r.Context(), client, user.Username, user.Groups, namespace, group, resource, ref.Name, "get")
-	if err != nil {
-		return false
-	}
-	if perms != nil {
-		perms.SetCanINamed("get", group, resource, namespace, ref.Name, allowed)
-	}
-	return allowed
-}
-
-// withholdUnreadableIssueRefs drops grouped issues whose subject the caller
-// can't get and member refs of kinds it can't get, counting both. A trimmed
-// member list is marked truncated so it never reads as the whole fan-out.
-func (s *Server) withholdUnreadableIssueRefs(r *http.Request, in []issues.Issue) ([]issues.Issue, ResourceIssuesWithheld) {
-	var withheld ResourceIssuesWithheld
-	if auth.UserFromContext(r.Context()) == nil {
-		return in, withheld
-	}
-	out := make([]issues.Issue, 0, len(in))
-	for _, issue := range in {
-		if !s.canGetIssueRef(r, issues.Ref{Group: issue.Group, Kind: issue.Kind, Namespace: issue.Namespace, Name: issue.Name}) {
-			withheld.Issues++
-			continue
-		}
-		if len(issue.Members) > 0 {
-			kept := make([]issues.Ref, 0, len(issue.Members))
-			for _, m := range issue.Members {
-				if s.canGetIssueRef(r, m) {
-					kept = append(kept, m)
-				} else {
-					withheld.Members++
-				}
-			}
-			if len(kept) < len(issue.Members) {
-				issue.Members = kept
-				issue.MembersTruncated = true
-			}
-		}
-		out = append(out, issue)
-	}
-	return out, withheld
-}
 
 // clusterScopedSubjectIssuesWithheld counts the issues about a cluster-scoped
 // subject that the composition left out because the caller can get it but not
@@ -453,6 +380,7 @@ func (s *Server) clusterScopedSubjectIssuesWithheld(r *http.Request, provider is
 		Limit:                  issues.NoLimit,
 		CanReadClusterScoped:   subjectKind,
 		CanReadRelated:         s.issueRelatedResourceAccess(r),
+		CanReadSubject:         s.issueSubjectAccess(r),
 		CanReadEvidence:        s.issueEvidenceAccess(r),
 		Grouped:                true,
 	})
@@ -543,8 +471,35 @@ func splitCSV(v string) []string {
 	return out
 }
 
+// issueSubjectAccess is the drawer's gate for an issue's own namespaced
+// resource: namespace access, plus a get for Secrets and LimitRanges.
+func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
+	return func(ref issues.Ref) bool {
+		if auth.UserFromContext(r.Context()) == nil {
+			return true
+		}
+		_, _, ok := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group)
+		return ok
+	}
+}
+
+// issueEvidenceAccess authorizes an inventory a finding was derived from at
+// the granularity Radar reads it: a namespaced read needs namespace access
+// (and a Secret read a Secrets check); a cluster-wide read needs the SAR.
 func (s *Server) issueEvidenceAccess(r *http.Request) func(issues.EvidenceRead) bool {
 	return func(read issues.EvidenceRead) bool {
-		return s.canRead(r, read.Group, read.Resource, read.Namespace, read.Verb)
+		if auth.UserFromContext(r.Context()) == nil {
+			return true
+		}
+		if read.Namespace == "" {
+			return s.canRead(r, read.Group, read.Resource, "", read.Verb)
+		}
+		if noNamespaceAccess(s.getUserNamespaces(r, []string{read.Namespace})) {
+			return false
+		}
+		if read.Group == "" && read.Resource == "secrets" {
+			return s.canRead(r, "", "secrets", read.Namespace, read.Verb)
+		}
+		return true
 	}
 }

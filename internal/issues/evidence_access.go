@@ -14,11 +14,13 @@ func CanReadIssueEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnf
 	return true
 }
 
-func filterEvidenceAccess(list []Issue, canRead func(EvidenceRead) bool, allowUnfiltered bool) []Issue {
+func filterEvidenceAccess(list []Issue, canRead func(EvidenceRead) bool, allowUnfiltered bool, onWithheld func(Issue)) []Issue {
 	out := list[:0]
 	for _, issue := range list {
 		if CanReadIssueEvidence(issue, canRead, allowUnfiltered) {
 			out = append(out, issue)
+		} else if onWithheld != nil {
+			onWithheld(issue)
 		}
 	}
 	return out
