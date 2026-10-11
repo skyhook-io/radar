@@ -56,3 +56,46 @@ describe('WorkloadView for an object deleted while open', () => {
     expect(html).toContain('Reachability')
   })
 })
+
+function renderHosted(resourceError: unknown, activeTab: string) {
+  return renderToStaticMarkup(
+    <WorkloadView
+      kind="clusters"
+      group="postgresql.cnpg.io"
+      namespace="db"
+      name="pg"
+      expanded
+      activeTab={activeTab as never}
+      onBack={vi.fn()}
+      resource={{ apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'db' }, spec: {} }}
+      resourceError={resourceError}
+      renderSummary={() => 'Host summary action'}
+      extraTabs={[{ id: 'backups', label: 'Host backups', render: () => 'Host backups action' }]}
+      subheader="Host subheader action"
+      renderHeaderActions={() => 'Host header action'}
+      renderStatusBadge={() => 'Host phase'}
+      statusNote="Host verdict"
+      specTab={{ render: () => 'Host spec action' }}
+    />,
+  )
+}
+
+describe('a host page for an object deleted while open', () => {
+  it('drops the host summary, tabs, subheader and actions, which act on the live object', () => {
+    const gone = Object.assign(new Error('clusters "pg" not found'), { status: 404 })
+    for (const tab of ['overview', 'backups', 'spec']) {
+      const html = renderHosted(gone, tab)
+      expect(html).toContain('>Deleted<')
+      for (const host of ['Host summary action', 'Host backups', 'Host subheader action', 'Host header action', 'Host phase', 'Host verdict', 'Host spec action']) {
+        expect(html, `${tab}: ${host}`).not.toContain(host)
+      }
+    }
+  })
+
+  it('keeps them while the object exists', () => {
+    const html = renderHosted(Object.assign(new Error('boom'), { status: 500 }), 'overview')
+    for (const host of ['Host summary action', 'Host backups', 'Host subheader action', 'Host header action', 'Host phase', 'Host verdict']) {
+      expect(html).toContain(host)
+    }
+  })
+})
