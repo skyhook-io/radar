@@ -5,7 +5,7 @@ import { MetricsChart } from '../../ui/MetricsChart'
 import { formatMemoryString } from '../../../utils/format'
 import { getExtendedCapacityRows } from '../../../utils/extended-resources'
 import { getNodeLifecycle } from '../../../utils/node-lifecycle'
-import { formatCompactAge } from '../../../utils/format'
+import { formatRelativeAgeTime } from '../../../utils/format'
 import type { DrainPlan } from '../../shared/DrainPlanDialog'
 import type { MetricsDataPoint } from '../../../types/core'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
@@ -115,14 +115,14 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
             : 'This node is marked for removal. New pods are kept off it while the controller prepares or completes removal.'}
         >
           <div className="mt-2 space-y-2 text-xs">
-            <p>{lifecycle.startedAt !== undefined ? `Marked for removal ${formatCompactAge(new Date(lifecycle.startedAt).toISOString())} ago.` : 'Removal start time is not reported.'}</p>
+            <p>{lifecycle.startedAt !== undefined ? `Marked for removal ${formatRelativeAgeTime(new Date(lifecycle.startedAt).toISOString())}.` : 'Removal start time is not reported.'}</p>
             {removalPlanLoading && <p>Checking remaining pods and disruption budgets…</p>}
             {removalPlanError && <p>Drain details unavailable: {removalPlanError}</p>}
             {!removalPlanLoading && !removalPlanError && !currentPlan && <p>Pod and disruption-budget checks are not available from this host.</p>}
             {currentPlan && (
               <>
                 <p>{currentPlan.pods.length} pods in the current snapshot · {terminationKnown ? `${terminatingPods} terminating` : 'termination state unavailable from this Radar'} · {currentPlan.summary.skip} skipped by drain estimate (DaemonSet, static or completed).</p>
-                <p className="text-theme-text-secondary">Checked {formatCompactAge(currentPlan.generatedAt)} ago. This is a snapshot, not an eviction history. Disruption-budget checks estimate what the Eviction API would allow now.</p>
+                <p className="text-theme-text-secondary">Checked {formatRelativeAgeTime(currentPlan.generatedAt)}. This is a snapshot, not an eviction history. Disruption-budget checks estimate what the Eviction API would allow now.</p>
                 <p className="text-theme-text-secondary">Removal controllers can also hold pods marked karpenter.sh/do-not-disrupt or cluster-autoscaler.kubernetes.io/safe-to-evict=false. Those policies are not evaluated by this drain estimate.</p>
                 <ul className="max-h-48 overflow-y-auto space-y-1">
                   {currentPlan.pods.map(pod => (
