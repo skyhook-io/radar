@@ -633,10 +633,17 @@ func ignoreRuleFor(
 			return "unevaluated", "spec.ignoreDifferences jsonPointers"
 		}
 	case "fluxcd":
-		if owner.Group != "helm.toolkit.fluxcd.io" {
-			return "", ""
+		// A Kustomization's spec.ignore has the same shape as a HelmRelease's
+		// drift ignore. Flux documents that it keeps a kubectl-edit-style
+		// change, but that isn't verified against a live controller, so a
+		// covered field stays unevaluated rather than waived.
+		helm := owner.Group == "helm.toolkit.fluxcd.io"
+		field := []string{"spec", "ignore"}
+		if helm {
+			field = []string{"spec", "driftDetection", "ignore"}
 		}
-		rules, _, _ := unstructured.NestedSlice(ownerObj.Object, "spec", "driftDetection", "ignore")
+		by := strings.Join(field, ".")
+		rules, _, _ := unstructured.NestedSlice(ownerObj.Object, field...)
 		covered := make([]bool, len(sets))
 		for _, raw := range rules {
 			rule, ok := raw.(map[string]any)
@@ -649,10 +656,10 @@ func ignoreRuleFor(
 			markCovered(stringSlice(rule["paths"]), sets, covered)
 		}
 		switch {
-		case allCovered(covered):
-			return "effective", "spec.driftDetection.ignore"
+		case allCovered(covered) && helm:
+			return "effective", by
 		case anyCovered(covered):
-			return "unevaluated", "spec.driftDetection.ignore"
+			return "unevaluated", by
 		}
 	}
 	return "", ""

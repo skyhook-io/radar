@@ -301,7 +301,8 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
         ? `drift detection ignores this field (${ev.ignoredBy ?? 'ignore rule'})`
         : null
     : null
-  if (!helm && policy?.objectReconcile === 'ignore') {
+  // A change whose fields are unknown may be the one that removes the opt-out.
+  if (!helm && path && policy?.objectReconcile === 'ignore') {
     return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so a sync is not expected to overwrite it.` }
   }
   // Flux reads IfNotPresent from the desired manifest; the live annotation

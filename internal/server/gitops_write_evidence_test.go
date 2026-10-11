@@ -470,6 +470,14 @@ func TestWriteEvidenceFluxKustomization(t *testing.T) {
 	if ifNotPresent.Policy.ObjectReconcile != "if-not-present" || ifNotPresent.Paths[0].Ignored != "effective" {
 		t.Errorf("ssa IfNotPresent: %+v %+v", ifNotPresent.Policy, ifNotPresent.Paths[0])
 	}
+
+	ignoring := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"ignore": []any{
+		map[string]any{"paths": []any{"/spec/replicas"}, "target": map[string]any{"kind": "Deploy.*"}},
+	}}}}
+	ignored := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, []string{"spec.replicas", "spec.paused"}, owner, ignoring, nil)
+	if ignored.Paths[0].Ignored != "unevaluated" || ignored.Paths[0].IgnoredBy != "spec.ignore" || ignored.Paths[1].Ignored != "" {
+		t.Errorf("Kustomization spec.ignore must soften, not waive: %+v", ignored.Paths)
+	}
 }
 
 func TestWriteEvidenceOwnerUnreadable(t *testing.T) {

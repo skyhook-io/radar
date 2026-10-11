@@ -346,6 +346,13 @@ describe('copy', () => {
     }
   })
 
+  it("doesn't let an object's opt-out waive a change whose fields are unknown", () => {
+    const optedOut = evidence({ ...selfHeal, objectReconcile: 'ignore' })
+    const g = guard({ writes: [{ scope: 'spec' }], evidence: optedOut })
+    expect(g.level).toBe('may-revert')
+    expect(g.requiresAck).toBe(true)
+  })
+
   it('describes a rule that covers only some of the entries as unconfirmed', () => {
     const g = guard({
       writes: [hibernate],
