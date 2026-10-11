@@ -480,8 +480,8 @@ cloud:
     memberClusterRole: edit
     viewerClusterRole: view
     # Grant cluster-wide infrastructure read (Nodes, PVs, StorageClasses,
-    # IngressClasses, PriorityClasses, RuntimeClasses, CRDs, and admission
-    # webhooks) plus list-only Upgrade impact source evidence
+    # IngressClasses, PriorityClasses, RuntimeClasses, Leases, CRDs, and
+    # admission webhooks) plus list-only Upgrade impact source evidence
     # (CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control
     # config) on top of the built-in view/edit/admin roles, which don't cover
     # all of them.

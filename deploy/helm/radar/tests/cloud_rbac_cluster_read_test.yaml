@@ -46,6 +46,12 @@ tests:
       - contains:
           path: rules
           content:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
             apiGroups: ["certificates.k8s.io"]
             resources: ["clustertrustbundles"]
             verbs: ["get", "list", "watch"]
