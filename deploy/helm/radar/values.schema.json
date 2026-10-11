@@ -111,7 +111,7 @@
             "traefik": { "type": "boolean" },
             "trivy": { "type": "boolean" },
             "velero": { "type": "boolean" },
-            "victoriaMetrics": { "type": "boolean", "description": "Opt-in collector reads of VMAgent, VMCluster and VMSingle. Full objects may expose inline credentials to Radar namespace viewers. Adds no caller RBAC grants." }
+            "victoriaMetrics": { "type": "boolean", "description": "Opt-in collector reads of VMAgent, VMCluster and VMSingle. Full objects may expose inline credentials to users who can read them through Radar. Adds no caller RBAC grants." }
           }
         },
         "additionalCrdGroups": {

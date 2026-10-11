@@ -222,8 +222,9 @@ rbac:
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
     # operator.victoriametrics.com: only vmagents, vmclusters and vmsingles.
     # Opt-in: inline scrape config, remote-write headers, extraArgs and license
-    # keys can contain credentials. Collected namespaced objects are visible
-    # to Radar namespace viewers; this flag adds no Kubernetes caller grants.
+    # keys can contain credentials. Anyone who can read collected objects
+    # through Radar sees that configuration; this flag adds no Kubernetes
+    # caller grants.
     # All other kinds, including vmusers/vmauths, remain excluded.
     victoriaMetrics: false
     volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh

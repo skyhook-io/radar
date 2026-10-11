@@ -470,7 +470,7 @@ retain their finite grants.
 | `victoriaMetrics` (default `false`) | `operator.victoriametrics.com`: only `vmagents`, `vmclusters`, `vmsingles` |
 
 **VictoriaMetrics collection:** opt in after reviewing the configuration in these
-objects and who can access their namespaces:
+objects and who can read them through Radar:
 
 ```bash
 --set rbac.crdGroups.victoriaMetrics=true
@@ -484,12 +484,10 @@ values and license keys. Use Secret references where supported and keep inline
 credentials out of these objects before enabling collection in shared namespaces.
 
 Collector grants are not Kubernetes caller grants: this flag does not expand the
-Radar Cloud integration-read roles. However, Radar currently serves most
-namespaced CRDs to callers who can view their namespace, so collecting these
-objects makes their full configuration visible to those viewers through Radar.
-Turning off a Cloud caller's integration-read add-on does not prevent this exposure.
-Setting the flag back to `false` ends it only when the Radar pod restarts, which
-`helm upgrade` does automatically.
+Radar Cloud integration-read roles. However, once these objects are collected,
+anyone who can read them through Radar can see their full configuration,
+including any inline credentials. Setting the flag back to `false` ends this
+only when the Radar pod restarts, which `helm upgrade` does automatically.
 
 All other VictoriaMetrics operator kinds are excluded from this flag, including
 VMUser/VMAuth, alerting resources, every scrape/probe resource, and the Logs,
