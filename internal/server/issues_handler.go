@@ -472,14 +472,29 @@ func splitCSV(v string) []string {
 }
 
 // issueSubjectAccess is the drawer's gate for an issue's own namespaced
-// resource: namespace access, plus a get for Secrets and LimitRanges.
+// resource: namespace access, plus a get for Secrets and LimitRanges. It runs
+// once per composed row, so the caller's namespaces are resolved once.
 func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
+	if auth.UserFromContext(r.Context()) == nil {
+		return func(issues.Ref) bool { return true }
+	}
+	inNamespace := s.callerNamespaces(r)
 	return func(ref issues.Ref) bool {
-		if auth.UserFromContext(r.Context()) == nil {
-			return true
+		if ref.Namespace == "" {
+			return true // cluster-scoped rows are CanReadClusterScoped's
 		}
-		_, _, ok := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group)
-		return ok
+		if !inNamespace(ref.Namespace) {
+			return false
+		}
+		if ref.Group == "" {
+			switch {
+			case strings.EqualFold(ref.Kind, "Secret"):
+				return s.canRead(r, "", "secrets", ref.Namespace, "get")
+			case strings.EqualFold(ref.Kind, "LimitRange"):
+				return s.canRead(r, "", "limitranges", ref.Namespace, "get")
+			}
+		}
+		return true
 	}
 }
 
@@ -487,19 +502,42 @@ func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
 // the granularity Radar reads it: a namespaced read needs namespace access
 // (and a Secret read a Secrets check); a cluster-wide read needs the SAR.
 func (s *Server) issueEvidenceAccess(r *http.Request) func(issues.EvidenceRead) bool {
+	if auth.UserFromContext(r.Context()) == nil {
+		return func(issues.EvidenceRead) bool { return true }
+	}
+	inNamespace := s.callerNamespaces(r)
 	return func(read issues.EvidenceRead) bool {
-		if auth.UserFromContext(r.Context()) == nil {
-			return true
-		}
 		if read.Namespace == "" {
 			return s.canRead(r, read.Group, read.Resource, "", read.Verb)
 		}
-		if noNamespaceAccess(s.getUserNamespaces(r, []string{read.Namespace})) {
+		if !inNamespace(read.Namespace) {
 			return false
 		}
 		if read.Group == "" && read.Resource == "secrets" {
 			return s.canRead(r, "", "secrets", read.Namespace, read.Verb)
 		}
 		return true
+	}
+}
+
+// callerNamespaces reports whether the caller may read a namespace, resolving
+// its namespaces on first use.
+func (s *Server) callerNamespaces(r *http.Request) func(string) bool {
+	var once sync.Once
+	var allowed map[string]bool
+	all := false
+	return func(namespace string) bool {
+		once.Do(func() {
+			namespaces := s.getUserNamespaces(r, nil)
+			if namespaces == nil {
+				all = true
+				return
+			}
+			allowed = make(map[string]bool, len(namespaces))
+			for _, ns := range namespaces {
+				allowed[ns] = true
+			}
+		})
+		return all || allowed[namespace]
 	}
 }

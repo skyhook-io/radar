@@ -156,6 +156,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		reason = "RBACForbidden"
 	}
 	iss := Issue{
+		RequiredReads:        p.RequiredReads,
 		Severity:             sev,
 		Source:               source,
 		Kind:                 p.Kind,

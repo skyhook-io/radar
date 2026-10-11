@@ -42,7 +42,7 @@ func TestUserIssueProjectionsSupplyAuthorizers(t *testing.T) {
 				// The Capacity memo composes for every user and authorizes each
 				// projection itself.
 				memo := entry.Name() == "capacity_issues.go"
-				evidence, subject := false, false
+				evidence, subject, clusterScoped := false, false, false
 				for _, field := range literal.Elts {
 					kv, ok := field.(*ast.KeyValueExpr)
 					if !ok {
@@ -57,6 +57,8 @@ func TestUserIssueProjectionsSupplyAuthorizers(t *testing.T) {
 						evidence = true
 					case key.Name == "CanReadSubject":
 						subject = true
+					case key.Name == "CanReadClusterScoped":
+						clusterScoped = true
 					}
 				}
 				if !evidence {
@@ -64,6 +66,9 @@ func TestUserIssueProjectionsSupplyAuthorizers(t *testing.T) {
 				}
 				if !subject && !memo {
 					t.Errorf("%s: issue projection lacks a subject authorizer", fset.Position(literal.Pos()))
+				}
+				if !clusterScoped && !memo {
+					t.Errorf("%s: issue projection lacks a cluster-scoped authorizer", fset.Position(literal.Pos()))
 				}
 				return true
 			})

@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -293,5 +294,71 @@ func TestResourceIssuesUnresolvedKindUsesPreflight(t *testing.T) {
 	}
 	if w := resourceIssuesRequest(t, s, "/api/issues/resource/NewWidget/denied/new?group=widgets.example.io"); w.Code != http.StatusForbidden {
 		t.Fatalf("preflight deny: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A missing TLS Secret is learned from the Secret, so the Ingress's issue and
+// dashboard problem reach only a caller who can read Secrets there.
+func TestSecretDerivedFindingsNeedSecretAccess(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	created := metav1.NewTime(time.Now().Add(-time.Hour))
+	client := fake.NewClientset(
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}}},
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "front", Namespace: "shop", CreationTimestamp: created},
+			Spec: networkingv1.IngressSpec{
+				TLS: []networkingv1.IngressTLS{{Hosts: []string{"shop.example.com"}, SecretName: "shop-tls"}},
+				DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+					Name: "web", Port: networkingv1.ServiceBackendPort{Number: 80},
+				}},
+			},
+		},
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"shop"}}
+	perms.SetCanI("get", "", "secrets", "shop", false)
+	s.permCache.Set("pg-user", nil, perms)
+
+	tlsIssue := func() bool {
+		w := resourceIssuesRequest(t, s, "/api/issues?namespaces=shop")
+		var resp struct {
+			Issues []issues.Issue `json:"issues"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode %d: %v (%s)", w.Code, err, w.Body.String())
+		}
+		for _, i := range resp.Issues {
+			if i.Kind == "Ingress" && i.Name == "front" && i.Reason == "Missing TLS Secret" {
+				return true
+			}
+		}
+		return false
+	}
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("pg-user", nil, perms)
+	tlsProblem := func() bool {
+		resp := env.authGet(t, "/api/dashboard?namespaces=shop", "pg-user", "")
+		defer resp.Body.Close()
+		var body DashboardResponse
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode dashboard %d: %v", resp.StatusCode, err)
+		}
+		for _, p := range body.Problems {
+			if p.Reason == "Missing TLS Secret" {
+				return true
+			}
+		}
+		return false
+	}
+	if tlsIssue() || tlsProblem() {
+		t.Fatal("a caller without Secret access learned whether the TLS Secret exists")
+	}
+	perms.SetCanI("get", "", "secrets", "shop", true)
+	if !tlsIssue() || !tlsProblem() {
+		t.Fatal("a caller with Secret access lost the missing-TLS finding")
 	}
 }

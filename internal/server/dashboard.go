@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -90,6 +91,8 @@ type DashboardProblem struct {
 	DurationSeconds int64  `json:"durationSeconds"` // For sorting by problem age
 	OnsetUnknown    bool   `json:"onsetUnknown,omitempty"`
 	PodCount        int    `json:"podCount,omitempty"` // For workload rollups: number of affected pods
+	// requiredReads are the detection's evidence, checked like an issue's.
+	requiredReads []issues.EvidenceRead
 }
 
 // mergeResourceCounts adds src's per-namespace counts into dst. Cluster-scoped
@@ -361,6 +364,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// callers iterateNamespaces is [""], so this collapses to a single
 	// cluster-wide call.
 	t := time.Now()
+	// Problems follow the issues' read rules: a Secret's own problem and one
+	// drawn from Secrets need Secret access.
+	canReadSubject, canReadEvidence := s.issueSubjectAccess(r), s.issueEvidenceAccess(r)
 	for _, ns := range iterateNamespaces {
 		h, probs := s.getDashboardHealth(cache, ns)
 		resp.Health.Healthy += h.Healthy
@@ -368,6 +374,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		resp.Health.Error += h.Error
 		for _, p := range probs {
 			if p.Kind == "Node" && !canReadNodes {
+				continue
+			}
+			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) ||
+				!issues.CanReadIssueEvidence(issues.Issue{RequiredReads: p.requiredReads}, canReadEvidence, false) {
 				continue
 			}
 			resp.Problems = append(resp.Problems, p)
@@ -670,6 +680,7 @@ func detectionToDashboardProblem(p k8s.Detection) DashboardProblem {
 		Duration:        p.Duration,
 		DurationSeconds: p.DurationSeconds,
 		OnsetUnknown:    p.OnsetUnknown,
+		requiredReads:   p.RequiredReads,
 	}
 }
 

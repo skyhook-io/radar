@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -277,6 +278,11 @@ func groupStaleSecretEnvChecks(checks []StaleSecretEnvCheck) []StaleSecretEnvChe
 	return out
 }
 
+// secretReads is the evidence a finding drawn from a namespace's Secrets rests on.
+func secretReads(namespace string) []issuesapi.EvidenceRead {
+	return []issuesapi.EvidenceRead{{Resource: "secrets", Namespace: namespace, Verb: "get"}}
+}
+
 func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time) []Detection {
 	if cache == nil || cache.Pods() == nil || cache.Secrets() == nil {
 		return nil
@@ -365,6 +371,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
 			Cause:             "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
 			Action:            "Restart the pod so its containers re-read Secret-backed environment variables.",
+			RequiredReads:     secretReads(pod.Namespace),
 		})
 		setStaleSecretEnvOnset(&notReadyOut[len(notReadyOut)-1], issueChecks, now)
 	}
@@ -395,16 +402,17 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			affectedPods[check.PodName] = true
 		}
 		detection := Detection{
-			Group:       group.subject.group,
-			Kind:        group.subject.kind,
-			Namespace:   group.subject.namespace,
-			Name:        group.subject.name,
-			Severity:    "warning",
-			Reason:      "StaleSecretEnv",
-			Message:     staleSecretEnvReadyDetectionMessage(group.subject, len(affectedPods), len(currentChecks)),
-			Fingerprint: "stale-secret-env",
-			Cause:       "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
-			Action:      staleSecretEnvReadyAction(group.subject),
+			Group:         group.subject.group,
+			Kind:          group.subject.kind,
+			Namespace:     group.subject.namespace,
+			Name:          group.subject.name,
+			Severity:      "warning",
+			Reason:        "StaleSecretEnv",
+			Message:       staleSecretEnvReadyDetectionMessage(group.subject, len(affectedPods), len(currentChecks)),
+			Fingerprint:   "stale-secret-env",
+			Cause:         "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
+			Action:        staleSecretEnvReadyAction(group.subject),
+			RequiredReads: secretReads(group.subject.namespace),
 		}
 		if !group.subject.created.IsZero() && !group.subject.created.After(now) {
 			age := now.Sub(group.subject.created)

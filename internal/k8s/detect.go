@@ -112,6 +112,10 @@ type Detection struct {
 	// RestartLoop is set on a Pod crashloop row emitted because a container is
 	// in an active restart loop (see activeRestartLoop). Nil otherwise.
 	RestartLoop *issuesapi.RestartLoop
+	// RequiredReads names the inventories a detection read beyond its own
+	// resource whose access is checked per kind (a Secret's history or
+	// existence), so a caller who can't read them doesn't get the finding.
+	RequiredReads []issuesapi.EvidenceRead `json:"-"`
 	// OwnerKind + OwnerName name the topmost stable controller of a Pod
 	// problem (Pod→Deployment, not the intermediate ReplicaSet), resolved
 	// via topOwnerForPod when the Pod is detected. Empty for non-Pod and

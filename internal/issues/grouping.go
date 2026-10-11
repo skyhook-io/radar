@@ -61,7 +61,10 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 	}
 	// A precomposed pair may come from a shared memo; authorize again here.
 	canReadSubject := func(i Issue) bool {
-		return opts.CanReadSubject == nil || i.Namespace == "" || opts.CanReadSubject(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name})
+		if i.Namespace == "" {
+			return opts.CanReadClusterScoped == nil || opts.CanReadClusterScoped(i.Kind, i.Group)
+		}
+		return opts.CanReadSubject == nil || opts.CanReadSubject(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name})
 	}
 	canReadEvidence := func(i Issue) bool {
 		if CanReadIssueEvidence(i, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {

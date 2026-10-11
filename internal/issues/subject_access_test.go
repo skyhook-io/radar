@@ -112,3 +112,21 @@ func hasIssueKind(list []Issue, kind string) bool {
 	}
 	return false
 }
+
+// A precomposed pair can come from a memo shared by callers with different
+// access, so the match itself applies the cluster-scoped gate.
+func TestRelatedIssuesFromGatesClusterScopedMatches(t *testing.T) {
+	ns := Issue{ID: "ns", Kind: "Namespace", Name: "team-a", Reason: "Terminating"}
+	lookup := func(canRead func(kind, group string) bool) int {
+		return len(RelatedIssuesFrom([]Issue{ns}, []Issue{ns}, RelatedIssueOptions{CanReadClusterScoped: canRead}, "", "Namespace", "", "team-a"))
+	}
+	if lookup(func(string, string) bool { return false }) != 0 {
+		t.Fatal("a cluster-scoped issue matched for a caller who can't list its kind")
+	}
+	if lookup(func(string, string) bool { return true }) != 1 {
+		t.Fatal("a readable cluster-scoped issue was dropped")
+	}
+	if lookup(nil) != 1 {
+		t.Fatal("internal composition without a gate must keep the issue")
+	}
+}

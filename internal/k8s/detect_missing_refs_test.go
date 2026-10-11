@@ -320,6 +320,10 @@ func TestDetectMissingRefs(t *testing.T) {
 		if p.Severity != wantSev {
 			t.Errorf("reason %q: severity = %q, want %q: %+v", p.Reason, p.Severity, wantSev, p)
 		}
+		// Whether a TLS Secret exists is learned only from the Secret.
+		if wantReads := p.Reason == "Missing TLS Secret"; wantReads != (len(p.RequiredReads) == 1 && p.RequiredReads[0].Resource == "secrets" && p.RequiredReads[0].Namespace == p.Namespace) {
+			t.Errorf("reason %q: RequiredReads = %+v", p.Reason, p.RequiredReads)
+		}
 	}
 
 	// Every dangling-ref finding must carry a structured cause + next-step action

@@ -2345,6 +2345,8 @@ type mcpProblem struct {
 	// ageSeconds is for sort tiebreak; not serialized so it doesn't widen
 	// the wire shape callers depend on.
 	ageSeconds int64 `json:"-"`
+	// requiredReads are the detection's evidence, checked like an issue's.
+	requiredReads []issues.EvidenceRead
 }
 
 // problemSeverityRank maps the Problem.Severity vocabulary onto sort order.
@@ -2567,6 +2569,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			RestartCount:         p.RestartCount,
 			LastTerminatedReason: p.LastTerminatedReason,
 			ageSeconds:           p.AgeSeconds,
+			requiredReads:        p.RequiredReads,
 		})
 	}
 
@@ -2616,15 +2619,16 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			continue
 		}
 		allProblems = append(allProblems, mcpProblem{
-			Kind:       p.Kind,
-			Namespace:  p.Namespace,
-			Name:       p.Name,
-			Group:      p.Group,
-			Severity:   p.Severity,
-			Reason:     p.Reason,
-			Message:    p.Message,
-			Age:        p.Age,
-			ageSeconds: p.AgeSeconds,
+			Kind:          p.Kind,
+			Namespace:     p.Namespace,
+			Name:          p.Name,
+			Group:         p.Group,
+			Severity:      p.Severity,
+			Reason:        p.Reason,
+			Message:       p.Message,
+			Age:           p.Age,
+			ageSeconds:    p.AgeSeconds,
+			requiredReads: p.RequiredReads,
 		})
 	}
 
@@ -2647,6 +2651,20 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// Without this, the cap drops critical missing-refs in favour of
 	// medium-severity workload problems that happened to be appended
 	// earlier — the agent gets a non-representative subset.
+	// Problems follow the issues' read rules: a Secret's own problem and one
+	// drawn from Secrets need Secret access.
+	canReadSubject, canReadEvidence := issueSubjectAccess(ctx), issueEvidenceAccess(ctx)
+	readable := allProblems[:0]
+	for _, p := range allProblems {
+		if p.Namespace != "" && !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
+			continue
+		}
+		if !issues.CanReadIssueEvidence(issues.Issue{RequiredReads: p.requiredReads}, canReadEvidence, false) {
+			continue
+		}
+		readable = append(readable, p)
+	}
+	allProblems = readable
 	sortMCPDashboardProblems(allProblems)
 	d.TotalProblems = len(allProblems)
 	d.ProblemsBySeverity = countBySeverity(allProblems)
