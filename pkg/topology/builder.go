@@ -5196,14 +5196,15 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				svcKind, _ := svcMap["kind"].(string)
 
 				// The route uses its transport whether or not the backend exists.
-				// ServersTransport is resolved relative to the IngressRoute's
-				// namespace, not the service's.
-				if stName, _ := svcMap["serversTransport"].(string); stName != "" {
-					stPrefix := "serverstransport"
+				// Traefik resolves an HTTP transport in the backend Service's
+				// namespace and a TCP transport in the route's, and ignores it
+				// on a TraefikService backend.
+				if stName, _ := svcMap["serversTransport"].(string); stName != "" && svcKind != "TraefikService" {
+					stPrefix, stNs := "serverstransport", svcNs
 					if def.kind == "IngressRouteTCP" {
-						stPrefix = "serverstransporttcp"
+						stPrefix, stNs = "serverstransporttcp", routeNs
 					}
-					if stID := traefikConfigIDs[stPrefix+":"+routeNs+"/"+stName]; stID != "" {
+					if stID := traefikConfigIDs[stPrefix+":"+stNs+"/"+stName]; stID != "" {
 						dedupeKey := stID + "|" + routeID
 						if !traefikEdgeSeen[dedupeKey] {
 							traefikEdgeSeen[dedupeKey] = true
@@ -6011,6 +6012,33 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 	}
+	// A DomainMapping publishes its Knative Service on a custom domain, even
+	// one that is otherwise cluster-local. It may name the Service or the
+	// Route the Service generates, which shares its name.
+	domainMappedKnativeServices := map[string]bool{}
+	if trafficDynamicCache != nil && trafficResourceDiscovery != nil && len(trafficKnativeServices) > 0 {
+		if dmGVR, ok := trafficResourceDiscovery.GetGVRWithGroup("DomainMapping", "serving.knative.dev"); ok {
+			dms, err := trafficDynamicCache.ListNamespaces(dmGVR, opts.Namespaces)
+			if err != nil {
+				log.Printf("WARNING [topology/traffic] Failed to list KNative DomainMappings: %v", err)
+				warnings = append(warnings, fmt.Sprintf("Failed to list KNative DomainMappings: %v", err))
+			}
+			for _, dm := range dms {
+				ref, _, _ := unstructured.NestedMap(dm.Object, "spec", "ref")
+				apiVersion, _ := ref["apiVersion"].(string)
+				kind, _ := ref["kind"].(string)
+				name, _ := ref["name"].(string)
+				if (kind != "Service" && kind != "Route") || resourceid.GroupFromAPIVersion(apiVersion) != "serving.knative.dev" || name == "" {
+					continue
+				}
+				ns, _ := ref["namespace"].(string)
+				if ns == "" {
+					ns = dm.GetNamespace()
+				}
+				domainMappedKnativeServices[ns+"/"+name] = true
+			}
+		}
+	}
 
 	// Step 1: Find services referenced by ingresses
 	for _, ing := range ingresses {
@@ -6665,7 +6693,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 
 		// Get URL from status (set by KNative Route)
 		url, _, _ := unstructured.NestedString(ksvc.Object, "status", "url")
-		if !knativeServiceIsClusterLocal(ksvc, url) {
+		if domainMappedKnativeServices[ns+"/"+name] || !knativeServiceIsClusterLocal(ksvc, url) {
 			publicKnativeServiceIDs = append(publicKnativeServiceIDs, ksvcID)
 		}
 		latestRevision, _, _ := unstructured.NestedString(ksvc.Object, "status", "latestReadyRevisionName")
@@ -9108,17 +9136,22 @@ var _ = strings.Contains
 
 // knativeServiceIsClusterLocal reports whether a Knative Service is reachable
 // only inside the cluster: labelled networking.knative.dev/visibility=
-// cluster-local, or published at its cluster-local URL (the label may sit on
-// the Route instead, and the URL reflects either).
+// cluster-local, or published at its cluster-local address. A private Route's
+// URL is built from the same cluster-local template as its address, on any
+// cluster domain; a public URL uses the external domain. The label may sit on
+// the Route instead, and the URL reflects either.
 func knativeServiceIsClusterLocal(ksvc *unstructured.Unstructured, statusURL string) bool {
 	if ksvc.GetLabels()["networking.knative.dev/visibility"] == "cluster-local" {
 		return true
 	}
-	parsed, err := url.Parse(statusURL)
+	addressURL, _, _ := unstructured.NestedString(ksvc.Object, "status", "address", "url")
+	published, err := url.Parse(statusURL)
+	if err != nil || published.Hostname() == "" {
+		return false
+	}
+	address, err := url.Parse(addressURL)
 	if err != nil {
 		return false
 	}
-	// Only the default cluster domain: a public domain may itself begin with
-	// "svc.", and the label covers Services on other cluster domains.
-	return parsed.Hostname() == ksvc.GetName()+"."+ksvc.GetNamespace()+".svc.cluster.local"
+	return published.Hostname() == address.Hostname()
 }

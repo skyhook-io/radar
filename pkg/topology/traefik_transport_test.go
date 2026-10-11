@@ -65,3 +65,56 @@ func TestServersTransportConfiguresRoutesWithoutReplacingTheirBackends(t *testin
 		t.Errorf("Service web routes = %+v, want its IngressRoute", web)
 	}
 }
+
+func TestServersTransportResolvesWhereTraefikDoes(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "ingressroutes"}
+	transportGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "serverstransports"}
+	traefikServiceGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "traefikservices"}
+	route := func(name string, backend map[string]any) *unstructured.Unstructured {
+		obj := genericIdentityObject(routeGVR, "IngressRoute", "edge", name)
+		obj.Object["spec"] = map[string]any{"routes": []any{map[string]any{
+			"match":    "Host(`" + name + ".example.com`)",
+			"services": []any{backend},
+		}}}
+		return obj
+	}
+	dynamic := &genericIdentityDynamic{
+		watched: []schema.GroupVersionResource{routeGVR, transportGVR, traefikServiceGVR},
+		kinds:   map[schema.GroupVersionResource]string{routeGVR: "IngressRoute", transportGVR: "ServersTransport", traefikServiceGVR: "TraefikService"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			routeGVR: {
+				// An HTTP backend's transport lives in the backend's namespace.
+				route("web", map[string]any{"name": "web", "namespace": "apps", "port": int64(443), "serversTransport": "mtls"}),
+				// Traefik ignores serversTransport on a TraefikService backend.
+				route("weighted", map[string]any{"name": "split", "kind": "TraefikService", "serversTransport": "mtls"}),
+			},
+			transportGVR: {
+				genericIdentityObject(transportGVR, "ServersTransport", "edge", "mtls"),
+				genericIdentityObject(transportGVR, "ServersTransport", "apps", "mtls"),
+			},
+			traefikServiceGVR: {genericIdentityObject(traefikServiceGVR, "TraefikService", "edge", "split")},
+		},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	provider := &mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "apps"}}}}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	edges := map[string]bool{}
+	for _, edge := range topo.Edges {
+		edges[edge.Source+" -> "+edge.Target] = true
+	}
+	if !edges["serverstransport/apps/mtls -> ingressroute/edge/web"] {
+		t.Errorf("web's transport not resolved in its backend's namespace: %v", edges)
+	}
+	for _, wrong := range []string{
+		"serverstransport/edge/mtls -> ingressroute/edge/web",
+		"serverstransport/edge/mtls -> ingressroute/edge/weighted",
+		"serverstransport/apps/mtls -> ingressroute/edge/weighted",
+	} {
+		if edges[wrong] {
+			t.Errorf("unexpected transport edge %s", wrong)
+		}
+	}
+}

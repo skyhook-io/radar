@@ -9,24 +9,50 @@ import (
 
 func TestTrafficInternetReachesOnlyPublicKnativeServices(t *testing.T) {
 	ksvcGVR := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "services"}
-	ksvc := func(name, statusURL string, labels map[string]string) *unstructured.Unstructured {
+	dmGVR := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1beta1", Resource: "domainmappings"}
+	ksvc := func(name, statusURL, addressURL string, labels map[string]string) *unstructured.Unstructured {
 		obj := genericIdentityObject(ksvcGVR, "Service", "team", name)
 		obj.SetLabels(labels)
-		obj.Object["status"] = map[string]any{"url": statusURL}
+		if statusURL != "" {
+			obj.Object["status"] = map[string]any{"url": statusURL, "address": map[string]any{"url": addressURL}}
+		}
 		return obj
 	}
+	domainMapping := func(host, apiVersion, kind, name string) *unstructured.Unstructured {
+		obj := genericIdentityObject(dmGVR, "DomainMapping", "team", host)
+		obj.Object["spec"] = map[string]any{"ref": map[string]any{"apiVersion": apiVersion, "kind": kind, "name": name}}
+		return obj
+	}
+	private := map[string]string{"networking.knative.dev/visibility": "cluster-local"}
 	dynamic := &genericIdentityDynamic{
-		watched: []schema.GroupVersionResource{ksvcGVR},
-		kinds:   map[schema.GroupVersionResource]string{ksvcGVR: "Service"},
-		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{ksvcGVR: {
-			ksvc("web", "https://web.team.example.com", nil),
-			// The label alone decides, even before the Route publishes a private URL.
-			ksvc("billing", "https://billing.team.example.com", map[string]string{"networking.knative.dev/visibility": "cluster-local"}),
-			// Made private through its Route: only the published URL says so.
-			ksvc("jobs", "http://jobs.team.svc.cluster.local", nil),
-			// A public domain that happens to start with "svc." stays public.
-			ksvc("shop", "https://shop.team.svc.example.com", nil),
-		}},
+		watched: []schema.GroupVersionResource{ksvcGVR, dmGVR},
+		kinds:   map[schema.GroupVersionResource]string{ksvcGVR: "Service", dmGVR: "DomainMapping"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			ksvcGVR: {
+				ksvc("web", "https://web.team.example.com", "http://web.team.svc.cluster.local", nil),
+				// The label alone decides, even before the Route publishes a private URL.
+				ksvc("billing", "https://billing.team.example.com", "http://billing.team.svc.cluster.local", private),
+				// Made private through its Route: its URL is its cluster-local address.
+				ksvc("jobs", "http://jobs.team.svc.cluster.local", "http://jobs.team.svc.cluster.local", nil),
+				// The same on a cluster with a custom cluster domain.
+				ksvc("reports", "http://reports.team.svc.corp.internal", "http://reports.team.svc.corp.internal", nil),
+				// A public domain that happens to start with "svc." stays public.
+				ksvc("shop", "https://shop.team.svc.example.com", "http://shop.team.svc.cluster.local", nil),
+				// Nothing published yet: not known to be private.
+				ksvc("pending", "", "", nil),
+				// Private, but published on a custom domain by a DomainMapping.
+				ksvc("api", "http://api.team.svc.cluster.local", "http://api.team.svc.cluster.local", private),
+				// Private, but published through the Route it generates.
+				ksvc("search", "http://search.team.svc.cluster.local", "http://search.team.svc.cluster.local", private),
+				// A DomainMapping to a core Service of the same name does not publish it.
+				ksvc("admin", "http://admin.team.svc.cluster.local", "http://admin.team.svc.cluster.local", private),
+			},
+			dmGVR: {
+				domainMapping("api.example.com", "serving.knative.dev/v1", "Service", "api"),
+				domainMapping("search.example.com", "serving.knative.dev/v1", "Route", "search"),
+				domainMapping("admin.example.com", "v1", "Service", "admin"),
+			},
+		},
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
 	opts := DefaultBuildOptions()
@@ -41,13 +67,13 @@ func TestTrafficInternetReachesOnlyPublicKnativeServices(t *testing.T) {
 			internet[edge.Target] = true
 		}
 	}
-	for _, public := range []string{"knativeservice/team/web", "knativeservice/team/shop"} {
-		if !internet[public] {
+	for _, public := range []string{"web", "shop", "pending", "api", "search"} {
+		if !internet["knativeservice/team/"+public] {
 			t.Errorf("public %s lost its Internet edge: %v", public, internet)
 		}
 	}
-	for _, private := range []string{"knativeservice/team/billing", "knativeservice/team/jobs"} {
-		if internet[private] {
+	for _, private := range []string{"billing", "jobs", "reports", "admin"} {
+		if internet["knativeservice/team/"+private] {
 			t.Errorf("cluster-local %s drawn as reachable from the Internet", private)
 		}
 	}
