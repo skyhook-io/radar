@@ -514,8 +514,7 @@ observation lands in one of these states:
 | A matching controller pod is ready | Warning when every matched pod is ready; otherwise unchanged | Check the controller's logs, permissions and deletion-blocking references. No removal patch. |
 | Identified and installed, but no pod is ready: CrashLoopBackOff, image pull failure, Pending, or no pods for its desired replicas | Critical at 30 minutes | Fix the controller; it finishes the deletion once running. No removal patch: removal would skip the cleanup it still intends to do |
 | Identified and absent: no matching workload or catalog pod anywhere Radar searched, or its Deployment or StatefulSet is scaled to 0 replicas | Critical at 30 minutes | Restore the controller if it should be running. A one-finalizer removal preview is offered, for use only if the controller was intentionally removed or scaled down |
-| Identified and absent, but its finalizer drains nodes or releases cloud resources (Karpenter) | Critical at 30 minutes | Restore the controller. No removal patch: removal leaves the instances behind |
-| Identified, but absence can't be established: no pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), workloads not searchable cluster-wide, or pods unreadable | Warning | Check that controller first. No removal patch |
+| Identified, but absence can't be established: no running pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), even when an in-cluster copy is scaled to 0; workloads not searchable cluster-wide; or pods unreadable | Warning | Check that controller first. No removal patch |
 | **Controller unknown**: no confident mapping | Warning | The finalizer's domain usually names its controller; find and check it first. No removal patch |
 
 Real infrastructure operators such as Crossplane, Cluster API, Config Connector,
@@ -525,7 +524,7 @@ controllers may still be deleting cloud resources, and removing a finalizer
 skips that cleanup and can orphan infrastructure, volumes or nodes. Seeing a
 controller absent or down needs a complete search:
 Deployments, StatefulSets and DaemonSets readable and cached cluster-wide, and
-the catalog's pod selector searched where the controller would run. A down copy in
+the catalog's pod selector searched cluster-wide. A down copy in
 the visible namespaces doesn't rule out a healthy one elsewhere.
 
 The removal preview is text only. It previews one indexed finalizer removal

@@ -196,6 +196,13 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 		}
 	}
 	releasesInfrastructure := owner != nil && owner.ReleasesInfrastructure
+	// Catalog pods are searched cluster-wide even when the catalog names a
+	// conventional namespace: a controller can't be called absent while a
+	// catalog-labelled pod might run in a namespace Radar didn't look in.
+	var catalogPods labels.Selector
+	if owner != nil {
+		catalogPods = labels.SelectorFromSet(labels.Set{owner.SelectorKey: owner.SelectorValue})
+	}
 	// A controller seen absent or down in the visible namespaces may still run
 	// healthy in ones Radar could not search.
 	unsearched := ", but Deployments, StatefulSets and DaemonSets could not be searched cluster-wide"
@@ -203,10 +210,14 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 		result := finalizerObservation{Controller: observations[0].Controller, Absent: true, ReleasesInfrastructure: releasesInfrastructure}
 		var down *finalizerObservation
 		unknown := false
+		// Healthy means every matched copy that should be running is fully
+		// ready; a crashlooping or partly ready copy beside a healthy one isn't.
+		anyHealthy, degraded := false, false
 		var parts []string
 		for i, observation := range observations {
 			result.Running = result.Running || observation.Running
-			result.Healthy = result.Healthy || observation.Healthy
+			anyHealthy = anyHealthy || observation.Healthy
+			degraded = degraded || observation.Down || (observation.Running && !observation.Healthy)
 			result.Absent = result.Absent && observation.Absent
 			switch {
 			case observation.Down && down == nil:
@@ -222,13 +233,14 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 			parts = append(parts, fmt.Sprintf("+%d more controller observations", len(observations)-3))
 		}
 		result.Text = strings.Join(parts, "; ")
+		result.Healthy = anyHealthy && !degraded
 		if down != nil && !result.Running && !unknown {
 			result.Down, result.Controller, result.State = true, down.Controller, down.State
 		}
 		// Catalog controller pods outside the matched workloads, such as a
 		// DaemonSet or another install, may still be running.
 		if owner != nil && (result.Absent || result.Down) {
-			catalog, _ := observe(owner.Controller, owner.Namespace, labels.SelectorFromSet(labels.Set{owner.SelectorKey: owner.SelectorValue}), nil)
+			catalog, _ := observe(owner.Controller, "", catalogPods, nil)
 			switch {
 			case catalog.Running:
 				result.Absent, result.Down, result.Running, result.Healthy = false, false, true, catalog.Healthy
@@ -238,8 +250,14 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 				result.Text += "; " + catalog.Text
 			case !catalog.Absent && !catalog.Down:
 				result.Absent, result.Down = false, false
-				result.Text += fmt.Sprintf("; %s pods %s could not be checked", owner.Controller, scopeOf(owner.Namespace))
+				result.Text += fmt.Sprintf("; %s pods %s could not be checked", owner.Controller, scopeOf(""))
 			}
+		}
+		// A stopped in-cluster copy says nothing about a managed install that
+		// runs outside the cluster.
+		if result.Absent && owner != nil && owner.OffClusterOfferings != "" {
+			result.Absent = false
+			result.Text += fmt.Sprintf("; %s may run outside the cluster (%s)", owner.Controller, owner.OffClusterOfferings)
 		}
 		if (result.Absent || result.Down) && !workloadsSearched {
 			result.Absent, result.Down = false, false
@@ -250,12 +268,12 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 	if owner == nil {
 		return unknown("no confident finalizer-to-controller match")
 	}
-	observation, empty := observe(owner.Controller, owner.Namespace, labels.SelectorFromSet(labels.Set{owner.SelectorKey: owner.SelectorValue}), nil)
+	observation, empty := observe(owner.Controller, "", catalogPods, nil)
 	switch {
 	case empty && owner.OffClusterOfferings != "":
-		observation = finalizerObservation{Controller: owner.Controller, Text: fmt.Sprintf("%s has no pods %s; it may run outside the cluster (%s)", owner.Controller, scopeOf(owner.Namespace), owner.OffClusterOfferings)}
+		observation = finalizerObservation{Controller: owner.Controller, Text: fmt.Sprintf("%s has no pods %s; it may run outside the cluster (%s)", owner.Controller, scopeOf(""), owner.OffClusterOfferings)}
 	case empty && !workloadsSearched:
-		observation = finalizerObservation{Controller: owner.Controller, Text: fmt.Sprintf("%s has no pods %s", owner.Controller, scopeOf(owner.Namespace)) + unsearched}
+		observation = finalizerObservation{Controller: owner.Controller, Text: fmt.Sprintf("%s has no pods %s", owner.Controller, scopeOf("")) + unsearched}
 	case observation.Down && !workloadsSearched:
 		observation.Down = false
 		observation.Text += unsearched

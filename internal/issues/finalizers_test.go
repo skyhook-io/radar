@@ -317,6 +317,15 @@ func TestFinalizerOwnerRemovalEvidence(t *testing.T) {
 	vmStrayReady := vmStrayCrashing.DeepCopy()
 	vmStrayReady.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}
 	clusterPodsDenied := func(_, resource, namespace string) bool { return resource != "pods" || namespace != "" }
+	argoLabel := map[string]string{"app.kubernetes.io/name": "argocd-application-controller"}
+	argoScaledDown := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "argocd-application-controller", Namespace: "argocd", Labels: argoLabel}, Spec: appsv1.StatefulSetSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: argoLabel}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: argoLabel}}}}
+	karpenterScaledDown := karpenter.DeepCopy()
+	karpenterScaledDown.Spec.Replicas = &zero
+	fluxStrayCrashing := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "kustomize-controller-x", Namespace: "custom-flux", Labels: map[string]string{"app": "kustomize-controller"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}}}
+	fluxStrayReady := fluxStrayCrashing.DeepCopy()
+	fluxStrayReady.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}
+	vmReadyPod := vmCrashing.DeepCopy()
+	vmReadyPod.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}
 	vmDaemon := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "vm-agent-operator", Namespace: "monitoring"}, Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "vmop-ds"}}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "vmop-ds", "app.kubernetes.io/name": "victoria-metrics-operator"}}}}}
 	for _, tc := range []struct {
 		name, finalizer, group string
@@ -343,8 +352,11 @@ func TestFinalizerOwnerRemovalEvidence(t *testing.T) {
 		{name: "managed karpenter", finalizer: "karpenter.sh/termination", group: "karpenter.sh", want: "karpenter has no pods across the watched cluster; it may run outside the cluster (EKS Auto Mode, AKS node auto-provisioning)", wantInfrastructure: true},
 		{name: "managed karpenter node class", finalizer: "karpenter.k8s.aws/termination", group: "karpenter.k8s.aws", want: "may run outside the cluster", wantInfrastructure: true},
 		{name: "self-hosted karpenter crashing", finalizer: "karpenter.sh/termination", group: "karpenter.sh", objects: []runtime.Object{karpenter, crashing}, want: "karpenter is CrashLoopBackOff (1/1 pods) in namespace kube-system", wantDown: true, wantInfrastructure: true},
-		{name: "managed argo cd", finalizer: "resources-finalizer.argocd.argoproj.io", group: "argoproj.io", want: "argocd-application-controller has no pods in namespace argocd; it may run outside the cluster (Amazon EKS Capabilities)"},
-		{name: "flux controller absent", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", want: "kustomize-controller is not running in namespace flux-system", wantAbsent: true},
+		{name: "managed argo cd", finalizer: "resources-finalizer.argocd.argoproj.io", group: "argoproj.io", want: "argocd-application-controller has no pods across the watched cluster; it may run outside the cluster (Amazon EKS Capabilities)"},
+		{name: "argo cd scaled to zero may still run off-cluster", finalizer: "resources-finalizer.argocd.argoproj.io", group: "argoproj.io", objects: []runtime.Object{argoScaledDown}, want: "argocd-application-controller is scaled to 0 replicas in namespace argocd; argocd-application-controller may run outside the cluster (Amazon EKS Capabilities)"},
+		{name: "karpenter scaled to zero may still run off-cluster", finalizer: "karpenter.sh/termination", group: "karpenter.sh", objects: []runtime.Object{karpenterScaledDown}, want: "karpenter is scaled to 0 replicas in namespace kube-system; karpenter may run outside the cluster (EKS Auto Mode, AKS node auto-provisioning)", wantInfrastructure: true},
+		{name: "flux controller pod crashlooping outside flux-system", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", objects: []runtime.Object{fluxStrayCrashing}, want: "kustomize-controller is CrashLoopBackOff (1/1 pods) across the watched cluster", wantDown: true},
+		{name: "flux controller absent", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", want: "kustomize-controller is not running across the watched cluster", wantAbsent: true},
 		{name: "visible controller down without a cluster-wide workload search", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", objects: []runtime.Object{vmOperator, vmCrashing}, access: appsDenied, want: "victoria-metrics-operator is CrashLoopBackOff (1/1 pods) in namespace monitoring, but Deployments, StatefulSets and DaemonSets could not be searched cluster-wide"},
 		{name: "visible controller down", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", objects: []runtime.Object{vmOperator, vmCrashing}, want: "victoria-metrics-operator is CrashLoopBackOff (1/1 pods) in namespace monitoring", wantDown: true},
 	} {
@@ -362,6 +374,38 @@ func TestFinalizerOwnerRemovalEvidence(t *testing.T) {
 			}
 		})
 	}
+	t.Run("flux controller ready outside flux-system", func(t *testing.T) {
+		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(fluxStrayReady), scopes); err != nil {
+			t.Fatal(err)
+		}
+		observation := NewCacheProvider().FinalizerOwnerStatus("finalizers.kustomize.toolkit.fluxcd.io", Ref{Group: "kustomize.toolkit.fluxcd.io", Kind: "Subject"}, nil)
+		if !observation.Running || observation.Absent || observation.Down || !strings.Contains(observation.Text, "kustomize-controller is healthy (1 pod ready) across the watched cluster") {
+			t.Fatalf("observation=%+v", observation)
+		}
+	})
+	t.Run("healthy install beside a crashlooping one is not healthy", func(t *testing.T) {
+		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(vmOperator, vmReadyPod, vmOtherCrashing, vmOtherCrashingPod), scopes); err != nil {
+			t.Fatal(err)
+		}
+		p := NewCacheProvider()
+		observation := p.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", Ref{Group: "operator.victoriametrics.com", Kind: "Subject"}, nil)
+		if !observation.Running || observation.Healthy || observation.Absent {
+			t.Fatalf("observation=%+v", observation)
+		}
+		pr := k8s.Detection{Kind: "VMAgent", Group: "operator.victoriametrics.com", Severity: "critical", TerminatingFinalizers: []string{"apps.victoriametrics.com/finalizer"}}
+		if pr = enrichTerminatingProblem(pr, p, nil, map[string]finalizerObservation{}); pr.Severity != "critical" {
+			t.Fatalf("a crashlooping matched install must keep the deletion critical: %+v", pr)
+		}
+	})
+	t.Run("healthy install beside a copy scaled to zero is healthy", func(t *testing.T) {
+		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(vmOperator, vmReadyPod, vmUnlabeledScaledDown), scopes); err != nil {
+			t.Fatal(err)
+		}
+		observation := NewCacheProvider().FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", Ref{Group: "operator.victoriametrics.com", Kind: "Subject"}, nil)
+		if !observation.Running || !observation.Healthy || observation.Absent {
+			t.Fatalf("observation=%+v", observation)
+		}
+	})
 	t.Run("scaled down workload beside a ready catalog pod", func(t *testing.T) {
 		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(vmUnlabeledScaledDown, vmStrayReady), scopes); err != nil {
 			t.Fatal(err)
@@ -394,6 +438,7 @@ func TestStuckDeletionRemovalNeedsAbsentController(t *testing.T) {
 		{schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta1", Resource: "clusterqueues"}, "ClusterQueue", "", []string{"kueue.x-k8s.io/resource-in-use"}},
 		{schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodeclaims"}, "NodeClaim", "", []string{"karpenter.sh/termination"}},
 		{schema.GroupVersionResource{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmagents"}, "VMAgent", "monitoring", []string{"apps.victoriametrics.com/finalizer"}},
+		{schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}, "Application", "argocd", []string{"resources-finalizer.argocd.argoproj.io"}},
 	}
 	compose := func(t *testing.T, typed ...runtime.Object) map[string]Issue {
 		t.Helper()
@@ -465,6 +510,9 @@ func TestStuckDeletionRemovalNeedsAbsentController(t *testing.T) {
 	if issue := controllersAbsent["NodeClaim"]; offersRemoval(issue) || issue.Severity != SeverityWarning || !strings.Contains(issue.Cause, "may run outside the cluster (EKS Auto Mode, AKS node auto-provisioning)") || !strings.Contains(issue.Action, "can't confirm") {
 		t.Errorf("managed Karpenter: severity=%s cause=%s action=%s", issue.Severity, issue.Cause, issue.Action)
 	}
+	if issue := controllersAbsent["Application"]; offersRemoval(issue) || issue.Severity != SeverityWarning || !strings.Contains(issue.Cause, "may run outside the cluster (Amazon EKS Capabilities)") || !strings.Contains(issue.Action, "can't confirm") {
+		t.Errorf("managed Argo CD: severity=%s cause=%s action=%s", issue.Severity, issue.Cause, issue.Action)
+	}
 	vm := controllersAbsent["VMAgent"]
 	if !offersRemoval(vm) || vm.Severity != SeverityCritical || !strings.Contains(vm.Cause, "victoria-metrics-operator is not running") || !strings.Contains(vm.Action, `"name":"stuck"`) {
 		t.Errorf("uninstalled VictoriaMetrics operator: severity=%s cause=%s action=%s", vm.Severity, vm.Cause, vm.Action)
@@ -506,6 +554,11 @@ func TestStuckDeletionRemovalNeedsAbsentController(t *testing.T) {
 	zero := int32(0)
 	scaledDown := vmOperator.DeepCopy()
 	scaledDown.Spec.Replicas = &zero
+	argoLabel := map[string]string{"app.kubernetes.io/name": "argocd-application-controller"}
+	argoScaledDown := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "argocd-application-controller", Namespace: "argocd", Labels: argoLabel}, Spec: appsv1.StatefulSetSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: argoLabel}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: argoLabel}}}}
+	if issue := compose(t, argoScaledDown)["Application"]; offersRemoval(issue) || issue.Severity != SeverityWarning || !strings.Contains(issue.Cause, "is scaled to 0 replicas in namespace argocd") || !strings.Contains(issue.Cause, "may run outside the cluster (Amazon EKS Capabilities)") || !strings.Contains(issue.Action, "can't confirm") {
+		t.Errorf("in-cluster Argo CD scaled to zero beside a possible managed install: severity=%s cause=%s action=%s", issue.Severity, issue.Cause, issue.Action)
+	}
 	if vm := compose(t, scaledDown)["VMAgent"]; !offersRemoval(vm) || vm.Severity != SeverityCritical || !strings.Contains(vm.Cause, "vm-victoria-metrics-operator is scaled to 0 replicas in namespace monitoring") || !strings.Contains(vm.Action, "intentionally removed or scaled down") {
 		t.Errorf("VictoriaMetrics operator scaled to zero: severity=%s cause=%s action=%s", vm.Severity, vm.Cause, vm.Action)
 	}
