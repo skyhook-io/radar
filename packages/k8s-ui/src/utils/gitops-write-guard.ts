@@ -356,7 +356,11 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
     return { level: 'may-revert', reason: `Radar doesn't know which fields this change touches. ${unknown}` }
   }
   if (!ev || ev.error) {
-    return { level: 'may-revert', reason: `Radar can't see which fields the GitOps source declares. ${unknown}` }
+    const cause = ev?.error || ctx.input.evidenceError
+    return {
+      level: 'may-revert',
+      reason: `Radar can't see which fields the GitOps source declares${cause ? ` (${cause})` : ''}. ${unknown}`,
+    }
   }
   return {
     level: 'may-revert',

@@ -121,10 +121,11 @@ describe('evaluateGitOpsWriteGuard', () => {
       expect(g.summary).not.toMatch(/won't be reverted|not declared in Git/i)
     })
 
-    it('no evidence at all ⇒ may-revert', () => {
-      const g = guard({ writes: [hibernate], evidenceError: 'boom' })
+    it('no evidence at all ⇒ may-revert, and says why', () => {
+      const g = guard({ writes: [hibernate], evidenceError: 'GitOps revert warnings need a newer Radar' })
       expect(g.level).toBe('may-revert')
-      expect(g.perWrite[0].reason).toContain("can't see which fields")
+      expect(g.requiresAck).toBe(true)
+      expect(g.perWrite[0].reason).toContain("can't see which fields the GitOps source declares (GitOps revert warnings need a newer Radar)")
     })
 
     it('unknown fields (no paths) ⇒ may-revert', () => {

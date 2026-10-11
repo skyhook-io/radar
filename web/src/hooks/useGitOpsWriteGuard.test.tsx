@@ -11,16 +11,25 @@ const mocks = vi.hoisted(() => ({
   inherited: { data: undefined as unknown, isPending: false, isError: false },
   target: { data: undefined as unknown, relationships: undefined as unknown, isLoading: false, isError: false },
   evidence: vi.fn(),
+  evidenceUnsupported: false,
 }))
 vi.mock('../api/client', () => ({
   useResource: (kind: string) => (kind === 'deployments' ? mocks.target : { data: undefined, isLoading: false, isError: false }),
   useResourceWithRelationships: () => mocks.inherited,
   useResources: () => mocks.applications,
-  useRadarFeature: () => ({ guard: (fn: () => unknown) => fn(), gatedKey: [] }),
+  useRadarFeature: () => ({
+    guard: async (fn: () => unknown) => {
+      if (!mocks.evidenceUnsupported) return fn()
+      const { RadarFeatureUnsupportedError } = await import('../api/radarFeatures')
+      throw new RadarFeatureUnsupportedError('gitopsWriteEvidence', { currentVersion: 'v1.16.0' })
+    },
+    gatedKey: mocks.evidenceUnsupported ? ['radar-feature-unsupported'] : [],
+  }),
   fetchGitOpsWriteEvidence: (...args: unknown[]) => mocks.evidence(...args),
 }))
 
 afterEach(() => {
+  mocks.evidenceUnsupported = false
   mocks.applications.data = undefined
   mocks.applications.isPending = true
   mocks.applications.isError = false
@@ -199,7 +208,28 @@ it('does not keep an exemption after a refetch fails', async () => {
   }
 })
 
-const pod = { kind: 'Pod', group: '', namespace: 'prod', name: 'web-1-abc' }
+it('asks for an acknowledgment, not a block, on a Radar without write evidence', async () => {
+  mocks.evidenceUnsupported = true
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }] },
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    const guard = h.ref.state!.guard
+    expect(guard?.level).toBe('may-revert')
+    expect(guard?.perWrite[0].reason).toContain('need a newer Radar')
+    expect(canConfirmGitOpsWrite(guard, false)).toBe(false)
+    expect(canConfirmGitOpsWrite(guard, true)).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+const pod ={ kind: 'Pod', group: '', namespace: 'prod', name: 'web-1-abc' }
 const podRelationships = {
   owner: { kind: 'ReplicaSet', group: 'apps', namespace: 'prod', name: 'web-1' },
   deployment: { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'web' },
