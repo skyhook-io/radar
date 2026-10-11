@@ -18,7 +18,7 @@ it('distinguishes mismatched volume-stat labels from multiple cluster identities
   expect(renderToStaticMarkup(<PVCUsageBar namespace="demo" name="disk" />)).toContain('more than one cluster')
   state.status = 'scope_mismatch'
   const html = renderToStaticMarkup(<PVCUsageBar namespace="demo" name="disk" />)
-  expect(html).toContain('do not match this cluster’s verified labels')
+  expect(html).toContain('could not match this volume’s stats to this cluster')
   expect(html).toContain('Used space is unknown')
   expect(html).not.toContain('more than one cluster')
 })

@@ -651,9 +651,15 @@ If the UI loads through an ingress but pod exec does not connect, ensure the ing
 Radar discovers Prometheus in the background as soon as it connects to the cluster (and again after every context switch), by listing Services and probing the ones that look like a PromQL backend at their in-cluster address. While that runs the charts show "Discovering Prometheus…"; once it ends without a connection, the charts and **Settings → Overview → Metrics** show why:
 
 - *no Prometheus service found in cluster* — nothing matched the well-known names or labels. Set `traffic.prometheusUrl`.
-- *no Prometheus service reachable in cluster* — a candidate exists but its Service address did not answer from Radar's pod. In-cluster Radar does not fall back to port-forwarding, so anything that blocks Radar's namespace from the monitoring namespace shows up exactly like this. Allow the traffic, or point `traffic.prometheusUrl` at an address that is reachable.
+- *No working Prometheus endpoint found. Candidate services could not be reached* — candidates exist but their Service addresses did not answer from Radar's pod. In-cluster Radar does not fall back to port-forwarding. Check endpoint health and network access, or point `traffic.prometheusUrl` at an address that is reachable. This is an unavailable installation, not evidence that Prometheus is absent.
 - *Prometheus candidate monitoring/prometheus-server:9090 was unreachable, and NetworkPolicy monitoring/… isolates ingress to its pods with no rule admitting radar/…* — Radar found the reason. When a probe fails at the network level, Radar evaluates the core `NetworkPolicy` objects it can see in its own namespace and the candidate's against its own pod and the candidate's published endpoints, and names the policies only when they deny the connection outright (an egress denial on Radar's side is reported the same way). It stays silent whenever the answer is uncertain: `MY_POD_NAME`/`MY_POD_NAMESPACE` unset, a namespace-scoped install that cannot list policies in the candidate's namespace, an endpoint it cannot resolve, a `hostNetwork` pod, or a probe that was refused rather than unreachable. Two limits: this is the policy's declared intent — a CNI that does not enforce NetworkPolicy (kindnet) will still pass the traffic — and Cilium/Calico CRD policies are not evaluated.
 - *Prometheus headers are configured but no Prometheus URL is set* — see `traffic.prometheusHeadersFromEnv` above.
+
+When running Radar locally against the same cluster, discovery can fall back to
+port-forwarding. A refusal names the missing operation when the API server
+provides it, such as `needs list pods` or `needs create pods/portforward`.
+Grant the named operation in the monitoring namespace, or configure a reachable
+URL. These port-forward diagnostics do not describe the in-cluster path.
 
 ### Basic auth prompt not appearing
 

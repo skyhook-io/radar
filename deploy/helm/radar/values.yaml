@@ -595,9 +595,9 @@ traffic:
   #   http://vmsingle.victoria-metrics:8428
   #   http://vmselect.victoria-metrics:8481/select/0/prometheus
   prometheusUrl: ""
-  # Optional workload-metrics scope override, not a feature enable switch.
+  # Optional workload/PVC metrics scope override, not a feature enable switch.
   # Leave both unset for automatic matching; set at most one mode.
-  # Does not scope rightsizing, node/HPA/PVC or legacy network/storage queries.
+  # Does not scope rightsizing, node/HPA or legacy network/storage queries.
   prometheusSingleCluster: false
   prometheusClusterLabels: {}
   # Beyla Live Traffic matcher fragment. Workload charts use it only with an

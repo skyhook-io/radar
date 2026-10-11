@@ -241,9 +241,13 @@ evidence is retained only for unchanged name/UID pairs while replacement Pods
 are checked. Its original expiry is not extended. Connection changes invalidate
 all attribution and their old churn timers. Sources covering a subset report partial coverage.
 
-Historical partition proof has a separate connection-wide five-minute positive
-cache and one coalesced probe per connection generation. Proof from an authorized
+Historical partition proof has a separate connection-wide five-minute cache
+when Pod UID evidence establishes positive cluster labels. Empty or unlabeled
+proof is cached for 30 seconds, only for its anchor namespace. Concurrent probes
+are coalesced per connection generation and namespace; a late empty or unlabeled
+probe cannot replace a still-valid labeled proof. Labeled proof from one
 namespace can be reused; charts still query only their own authorized namespace.
+Unlabeled evidence does not establish scope for historical workload charts.
 At zero Pods, bounded anchors can come from other Pods in that same namespace.
 A cold connection with no anchors and no assertion cannot establish scope.
 UID joins inside a store cannot prove which cluster Radar is connected to.
@@ -251,9 +255,51 @@ The UI points to operator configuration in **About these metrics** when this pre
 
 Current UID-filtered charts exclude previous incarnations of same-name Pods.
 Historical charts describe the logical cluster/namespace/kind/name workload,
-including recreation under that name, not workload-UID lifetimes. Network/storage
-and other existing surfaces keep their previous query behavior. Template overlays
+including recreation under that name, not workload-UID lifetimes. PVC usage has
+the separate scope checks described below; legacy network/storage and other
+existing surfaces keep their previous query behavior. Template overlays
 are current per-Pod settings, not historical capacity.
+
+## PVC usage scope
+
+The PVC detail drawer reads used space and capacity from
+`kubelet_volume_stats_used_bytes` and `kubelet_volume_stats_capacity_bytes`.
+Missing, failed or invalid measurements are unknown, not zero. The queries check
+both metric families before combining their values.
+
+An operator override takes precedence. Otherwise, Radar uses Pod UIDs in the
+PVC's namespace to match kube-state-metrics evidence to the connected cluster.
+Positive cluster labels pin queries to those labels. If the matched Pod evidence
+has no recognized cluster labels, PVC queries exclude stats carrying those
+labels. That remains **unverified**: another cluster's unlabeled stats cannot be
+distinguished from this cluster's. It does not enable unscoped workload history.
+
+Without usable Pod evidence, Radar matches namespace and claim names and refuses
+multiple labeled identities. A labeled scrape plus an unlabeled scrape is
+allowed for duplicate-scrape compatibility, but does not prove cluster ownership.
+Two unlabeled clusters and duplicate cluster names across projects/locations
+also require an operator's exact scope. For a shared GMP store, for example,
+include all identifying dimensions:
+
+```sh
+radar --prometheus-url https://metrics.example.com \
+  --prometheus-cluster-label project_id=my-project \
+  --prometheus-cluster-label location=us-central1 \
+  --prometheus-cluster-label cluster=production
+```
+
+| PVC state | Meaning | Remedy |
+|---|---|---|
+| `ambiguous_scope` | The claim's stats have multiple labeled identities; Radar cannot choose this cluster's value | Configure the actual cluster labels on the volume stats using `--prometheus-cluster-label` or Helm's `traffic.prometheusClusterLabels` |
+| `scope_mismatch` | Pod evidence selected labels, or their absence, that do not match any volume stats, although unscoped stats exist | Check that KSM and kubelet jobs use consistent cluster labels; if the volume stats carry different labels, configure their exact identity after verifying ownership |
+| `no_series` | No complete used/capacity pair matches the selected scope | Check kubelet scraping, driver support and configured label constraints; this does not prove the volume is empty |
+
+Scope controls are process-level operator configuration, not Settings fields.
+Desktop does not expose them; use standalone CLI Radar if an override is needed.
+For a backend actually dedicated to this cluster, `--prometheus-single-cluster`
+(Helm: `traffic.prometheusSingleCluster`) can assert that scope. Do not use that
+assertion to bypass ambiguity in a shared backend. A wrong exact-label override
+can select no stats even when other jobs have those labels.
 
 ## Optional operator override
 
@@ -279,9 +325,10 @@ single-cluster isolation. Use existing `--prometheus-header-from-env` for creden
 
 These assertions are process-local, apply to the startup Kubernetes connection,
 and are not saved to the config file. Changing context, endpoint or headers discards
-the assertion and returns to automatic matching. Restart to supply a fresh assertion. Existing resource
-charts retain their existing query behavior; this is not a retrofit of cluster
-isolation onto every metrics API.
+the assertion and returns to automatic matching. Restart to supply a fresh assertion.
+The assertions also scope PVC usage. Rightsizing, node/HPA and legacy
+network/storage charts retain their existing query behavior; cluster isolation
+does not extend to every metrics API.
 
 Helm installations can provision the assertion with
 `traffic.prometheusSingleCluster: true` or `traffic.prometheusClusterLabels`,

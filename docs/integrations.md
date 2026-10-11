@@ -1236,7 +1236,13 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 
 Radar supports two read-only cost paths. Auto mode keeps OpenCost-compatible metrics from the
 already-discovered Prometheus when representative cost data is usable; when those metrics are
-absent, it tries the current allocation and asset APIs of a Kubecost 3 Aggregator. Source selection
+absent, it tries the current allocation and asset APIs of a Kubecost 3 Aggregator.
+If discovered Prometheus candidates are unreachable, or detection reaches its
+deadline, a working Kubecost is selected provisionally. The next Cost request
+after one minute rechecks Prometheus; usable OpenCost metrics take priority again.
+If no Kubecost is discovered during this provisional attempt, Prometheus's failure
+remains visible and is retried. Explicit Prometheus configuration/query errors
+remain visible rather than triggering a new source switch. Source selection
 can also be pinned to `prometheus` or `kubecost` in Settings → Cost or Helm. Local CLI/Desktop
 save the choice per context in `clusters.json`; shared installations use operator configuration. When
 Auto positively finds neither source, Radar reports that state and retries discovery; it does not

@@ -509,7 +509,7 @@ func TestProbeCandidatesWithReasons_DeadlineMarksLaunchedProbesAsTransportFailur
 func TestUnreachableErrorsAreOneSentenceAndKeepTheirSentinels(t *testing.T) {
 	for _, err := range []error{
 		errPrometheusUnreachable,
-		unreachableBecause("Radar found %d services that may be Prometheus but may not port-forward to them (needs create pods/portforward)", 2),
+		unreachableBecause(nil, "Radar found %d services that may be Prometheus but may not port-forward to them (needs create pods/portforward)", 2),
 	} {
 		if !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
 			t.Errorf("%v must be unreachable without not-found", err)
@@ -553,6 +553,7 @@ func TestDiscoverCandidateFailuresAreNotAbsent(t *testing.T) {
 		count  int
 		denied bool
 	}{
+		{"single candidate failure", 1, false},
 		{"multi-candidate failure", 2, false},
 		{"single denied candidate", 1, true},
 		{"multiple denied candidates", 2, true},
@@ -593,5 +594,18 @@ func TestDiscoverCandidateFailuresAreNotAbsent(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestUnreachablePreservesCandidateCause(t *testing.T) {
+	cause := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("denied"))
+	err := unreachableBecause(cause, "candidate could not be read")
+	if !IsUnreachable(err) || !apierrors.IsForbidden(err) || !errors.Is(err, cause) || errors.Is(err, ErrPrometheusNotFound) {
+		t.Fatalf("lost candidate failure classification: %v", err)
+	}
+	for _, err := range []error{ErrPrometheusNotFound, context.Canceled, context.DeadlineExceeded, errDiscoverySuperseded, errors.New("manual URL failed")} {
+		if IsUnreachable(err) {
+			t.Fatalf("classified incomplete discovery or configuration as unreachable: %v", err)
+		}
 	}
 }

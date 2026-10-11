@@ -81,17 +81,7 @@ func (p scopeProbe) over(sel string) string {
 // ResolvePVCScope decides the cluster-identity matchers for the named claims'
 // kubelet volume stats over window (0 for an instant read).
 func (client *Client) ResolvePVCScope(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, SeriesIsolation, error) {
-	m, iso, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
-	return m, iso.forClaims(), err
-}
-
-// forClaims words an unverified match for volume stats, which are matched by
-// claim name rather than Pod name.
-func (iso SeriesIsolation) forClaims() SeriesIsolation {
-	if iso.Mode == SeriesIsolationUnverified {
-		iso.Note = "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)"
-	}
-	return iso
+	return client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
 }
 
 func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
@@ -151,7 +141,7 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 		for i, label := range partitionLabels {
 			matchers[i] = label + `=""`
 		}
-		iso := SeriesIsolation{Mode: SeriesIsolationVerified, Note: "Matched to volume stats without cluster labels, confirmed against this namespace's Pods"}
+		iso := SeriesIsolation{Mode: SeriesIsolationUnverified, Note: "Matched to volume stats without cluster identity labels, like this namespace's kube-state-metrics Pod evidence. Radar cannot distinguish unlabeled stats from another cluster"}
 		return decideVerifiedScope(ctx, client, probe, strings.Join(matchers, ","), iso)
 	}
 	return decideScope(ctx, client, probe, verified)
@@ -182,7 +172,11 @@ func decideScope(ctx context.Context, q seriesQuerier, probe scopeProbe, verifie
 			return "", SeriesIsolation{}, ErrScopeAmbiguous
 		}
 	}
-	return "", SeriesIsolation{Mode: SeriesIsolationUnverified, Note: "Matched by namespace and Pod names. Radar couldn't confirm these series belong to this exact cluster (no cluster label it could check)"}, nil
+	note := "Matched by namespace and Pod names. Radar couldn't confirm these series belong to this exact cluster (no cluster label it could check)"
+	if probe.key == "persistentvolumeclaim" {
+		note = "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)"
+	}
+	return "", SeriesIsolation{Mode: SeriesIsolationUnverified, Note: note}, nil
 }
 
 func verifiedIsolation(labels map[string]string) SeriesIsolation {

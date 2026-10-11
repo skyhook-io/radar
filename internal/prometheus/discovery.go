@@ -33,8 +33,14 @@ type prometheusUnreachableError struct {
 func (e *prometheusUnreachableError) Error() string { return e.msg }
 func (e *prometheusUnreachableError) Unwrap() error { return e.cause }
 
-func unreachableBecause(format string, args ...any) error {
-	return &prometheusUnreachableError{msg: fmt.Sprintf(format, args...), cause: errPrometheusUnreachable}
+func unreachableBecause(cause error, format string, args ...any) error {
+	return &prometheusUnreachableError{msg: fmt.Sprintf(format, args...), cause: errors.Join(errPrometheusUnreachable, cause)}
+}
+
+// IsUnreachable identifies completed auto-discovery with candidates but no
+// usable endpoint. A manual URL failure or an interrupted discovery is separate.
+func IsUnreachable(err error) bool {
+	return errors.Is(err, errPrometheusUnreachable)
 }
 
 // errDiscoverySuperseded is returned when a configuration change (Reset /
@@ -288,7 +294,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 				logDiscoveryEnded(start, err)
 				return "", "", err
 			}
-			lastErr = fmt.Errorf("No working Prometheus endpoint found.\nCandidate %s/%s: port-forward failed: %w", cand.Namespace, cand.Name, pfErr)
+			lastErr = unreachableBecause(pfErr, "No working Prometheus endpoint found.\nCandidate %s/%s: port-forward failed: %v", cand.Namespace, cand.Name, pfErr)
 			if strings.Contains(strings.ToLower(pfErr.Error()), "forbidden") {
 				denied = append(denied, deniedGrant(pfErr))
 			}
@@ -341,11 +347,11 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	case lastErr == nil:
 		return "", "", errPrometheusUnreachable
 	case len(candidates) == 1 && len(denied) == 1:
-		return "", "", unreachableBecause("No working Prometheus endpoint found.\nCandidate %s/%s: port-forward denied (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
+		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\nCandidate %s/%s: port-forward denied (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
 	case len(candidates) > 1 && len(denied) == len(candidates):
-		return "", "", unreachableBecause("No working Prometheus endpoint found.\n%d candidates: port-forward denied (%s)", len(candidates), deniedGrantsPhrase(denied))
+		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates: port-forward denied (%s)", len(candidates), deniedGrantsPhrase(denied))
 	case len(candidates) > 1:
-		return "", "", unreachableBecause("No working Prometheus endpoint found.\n%d candidates did not answer through a port-forward", len(candidates))
+		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates did not answer through a port-forward", len(candidates))
 	}
 	return "", "", lastErr
 }
@@ -579,5 +585,5 @@ func (c *Client) markConnected(addr, basePath, identity string, gen uint64) bool
 }
 
 func prometheusCandidateProbeError(namespace, name string) error {
-	return fmt.Errorf("No working Prometheus endpoint found.\nCandidate %s/%s did not respond after port-forward", namespace, name)
+	return unreachableBecause(nil, "No working Prometheus endpoint found.\nCandidate %s/%s did not respond after port-forward", namespace, name)
 }

@@ -45,9 +45,9 @@ type PVCUsageBatch struct {
 const pvcUsageBatchSize = 100
 
 // QueryPVCUsage reads kubelet_volume_stats_{used,capacity}_bytes for the named
-// claims of one namespace, held to this cluster's identity (anchors are the
-// Pods that prove it). Authorization is the caller's: this reads nothing the
-// caller did not name.
+// claims of one namespace. Anchors can establish cluster label constraints;
+// Isolation records when ownership remains unverified. Authorization is the
+// caller's: this reads nothing the caller did not name.
 func (client *Client) QueryPVCUsage(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity) PVCUsageBatch {
 	if client == nil {
 		return PVCUsageBatch{Status: PVCUsageNoPrometheus, Usage: map[string]PVCUsage{}, Invalid: map[string]bool{}}
@@ -63,7 +63,7 @@ func (client *Client) QueryPVCUsage(ctx context.Context, namespace string, claim
 		return out
 	}
 	out := queryPVCUsage(ctx, client, namespace, claims, matchers)
-	out.Isolation = iso.forClaims()
+	out.Isolation = iso
 	if out.Status == PVCUsageQueryFailed {
 		errorlog.Record("prometheus", "warning", "pvc usage query failed for namespace %s: %s", namespace, out.Error)
 	}

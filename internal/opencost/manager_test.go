@@ -8,14 +8,18 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -231,6 +235,7 @@ func TestPrometheusDetectionDeadlineAttemptsKubecost(t *testing.T) {
 		{name: "Prometheus absent", state: prometheusCostAbsent, want: true},
 		{name: "detection deadline", state: prometheusCostUnknown, detectionErr: context.DeadlineExceeded, want: true},
 		{name: "upstream failure", state: prometheusCostUnknown, want: false},
+		{name: "unreachable candidates", state: prometheusCostUnreachable, want: true},
 		{name: "Prometheus available at deadline", state: prometheusCostAvailable, detectionErr: context.DeadlineExceeded, want: false},
 	}
 	for _, tt := range tests {
@@ -848,7 +853,7 @@ func TestDiscoveredKubecostConnectionSeparatesTransportFromService(t *testing.T)
 	}
 }
 
-func TestCostDetectionCandidateFailuresRemainUnknown(t *testing.T) {
+func TestCostDetectionCandidateFailuresRemainUnreachable(t *testing.T) {
 	restoreMode := k8s.SetTestLocalMode()
 	defer restoreMode()
 	for _, tc := range []struct {
@@ -891,8 +896,8 @@ func TestCostDetectionCandidateFailuresRemainUnknown(t *testing.T) {
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if state := detectPrometheusCostState(ctx); state != prometheusCostUnknown {
-				t.Fatalf("state=%v, want unknown", state)
+			if state := detectPrometheusCostState(ctx); state != prometheusCostUnreachable {
+				t.Fatalf("state=%v, want unreachable", state)
 			}
 			_, _, err := prometheuspkg.GetClient().EnsureConnected(ctx)
 			if err == nil || errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
@@ -900,6 +905,125 @@ func TestCostDetectionCandidateFailuresRemainUnknown(t *testing.T) {
 			}
 			if tc.denied && !strings.Contains(err.Error(), "needs list pods") {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		blocked, kubecost bool
+	}{
+		{name: "unreachable", kubecost: true},
+		{name: "NetworkPolicy blocked", blocked: true, kubecost: true},
+		{name: "no Kubecost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restoreMode := k8s.SetTestLocalMode()
+			defer restoreMode()
+			k8s.ForceInCluster = true
+			previousContext := k8s.SetTestContextName("cost-scope")
+			defer k8s.SetTestContextName(previousContext)
+			var recovered atomic.Bool
+			promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !recovered.Load() {
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Errorf("hijack: %v", err)
+						return
+					}
+					_ = conn.Close()
+					return
+				}
+				_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"shop"},"value":[100,"1"]}]}}`))
+			}))
+			defer promServer.Close()
+			proxy, _ := url.Parse(promServer.URL)
+			transport := &http.Transport{Proxy: func(r *http.Request) (*url.URL, error) {
+				if strings.HasSuffix(r.URL.Hostname(), ".svc.cluster.local") {
+					return proxy, nil
+				}
+				return nil, nil
+			}}
+			previousTransport := http.DefaultTransport
+			http.DefaultTransport = transport
+			defer func() { http.DefaultTransport = previousTransport; transport.CloseIdleConnections() }()
+			objects := []runtime.Object{
+				&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}}},
+			}
+			if tc.blocked {
+				t.Setenv("MY_POD_NAME", "radar-0")
+				t.Setenv("MY_POD_NAMESPACE", "radar")
+				ready, port, protocol, portName := true, int32(9090), corev1.ProtocolTCP, "http"
+				objects = append(objects,
+					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "radar"}},
+					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "monitoring"}},
+					&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "radar", Name: "radar-0"}, Status: corev1.PodStatus{PodIP: "10.0.1.5"}},
+					&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-0"}, Status: corev1.PodStatus{PodIP: "10.0.2.9"}},
+					&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "deny-prom"}, Spec: networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}}},
+					&discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-endpoints", Labels: map[string]string{discoveryv1.LabelServiceName: "prometheus-server"}}, AddressType: discoveryv1.AddressTypeIPv4, Ports: []discoveryv1.EndpointPort{{Name: &portName, Port: &port, Protocol: &protocol}}, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.0.2.9"}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "monitoring", Name: "prometheus-0"}}}},
+				)
+			}
+			cs := fakeclientset.NewClientset(objects...)
+			if err := k8s.InitScopedTestResourceCache(cs, map[string]k8score.ResourceScope{
+				string(k8score.Pods): {Enabled: true}, string(k8score.Services): {Enabled: true},
+				string(k8score.Namespaces): {Enabled: true}, string(k8score.NetworkPolicies): {Enabled: true},
+				string(k8score.StatefulSets): {Enabled: true},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			defer k8s.ResetResourceCache()
+			prometheuspkg.Initialize(cs, &rest.Config{}, "cost-scope")
+			defer func() { prometheuspkg.Reset(); prometheuspkg.Initialize(nil, nil, "") }()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _, probeErr := prometheuspkg.GetClient().EnsureConnected(ctx)
+			if !prometheuspkg.IsUnreachable(probeErr) || errors.Is(probeErr, prometheuspkg.ErrPrometheusNotFound) {
+				t.Fatalf("probe: %v", probeErr)
+			}
+			if tc.blocked && !strings.Contains(probeErr.Error(), "NetworkPolicy monitoring/deny-prom") {
+				t.Fatalf("missing policy attribution: %v", probeErr)
+			}
+			var kubecostCalls atomic.Int32
+			costServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				kubecostCalls.Add(1)
+				_, _ = w.Write([]byte(`{"code":200,"data":[{"prod-a":{"properties":{"cluster":"prod-a"}}}]}`))
+			}))
+			defer costServer.Close()
+			config := ManagerConfig{Source: SourceAuto}
+			if tc.kubecost {
+				config.URL, config.ClusterID, config.ClusterIDContext = costServer.URL, "prod-a", "cost-scope"
+			}
+			m := &Manager{config: config}
+			connection, err := m.Selected(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := SourcePrometheus
+			if tc.kubecost {
+				want = SourceKubecost
+			}
+			if connection.Source != want || m.retryAt.IsZero() {
+				t.Fatalf("selection=%s retry=%v", connection.Source, m.retryAt)
+			}
+			calls := kubecostCalls.Load()
+			m.retryAt = time.Now().Add(-time.Second)
+			connection, err = m.Selected(ctx)
+			if err != nil || connection.Source != want || !m.retryAt.After(time.Now()) || kubecostCalls.Load() != calls {
+				t.Fatalf("unreachable recheck: %s %v", connection.Source, err)
+			}
+			pinned := &Manager{config: ManagerConfig{Source: SourcePrometheus}}
+			connection, err = pinned.Selected(ctx)
+			if err != nil || connection.Source != SourcePrometheus || kubecostCalls.Load() != calls {
+				t.Fatalf("explicit metrics source switched: %s %v", connection.Source, err)
+			}
+			recovered.Store(true)
+			prometheuspkg.Reset()
+			m.retryAt = time.Now().Add(-time.Second)
+			connection, err = m.Selected(ctx)
+			if err != nil || connection.Source != SourcePrometheus || !m.retryAt.IsZero() {
+				t.Fatalf("recovered metrics did not win: %s %v retry=%v", connection.Source, err, m.retryAt)
 			}
 		})
 	}

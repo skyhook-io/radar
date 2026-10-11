@@ -12,8 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/prom/promtest"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestPVCUsageAvailability(t *testing.T) {
@@ -44,7 +49,7 @@ func TestPVCUsageAvailability(t *testing.T) {
 				}
 				calls++
 				if strings.HasPrefix(query, "max(count by (") {
-					_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"1"]}]}}`))
+					_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"1"]}]}}`))
 					return
 				}
 				value, kind := tc.capacity, "capacity"
@@ -57,7 +62,7 @@ func TestPVCUsageAvailability(t *testing.T) {
 				}
 				result := "[]"
 				if value != "" {
-					result = fmt.Sprintf(`[{"metric":{},"value":[1700000000,%q]}]`, value)
+					result = fmt.Sprintf(`[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,%q]}]`, value)
 				}
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 			}))
@@ -143,9 +148,9 @@ func TestPVCUsageHandlerRefusesMergedClusters(t *testing.T) {
 			_, _ = w.Write([]byte(authProbeBody))
 			return
 		}
-		result := `[{"metric":{},"value":[1700000000,"1024"]}]`
+		result := `[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"1024"]}]`
 		if strings.HasPrefix(query, "max(count by (") {
-			result = `[{"metric":{},"value":[1700000000,"2"]}]`
+			result = `[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"2"]}]`
 		}
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 	}))
@@ -193,7 +198,7 @@ func TestPVCUsageSingleClusterScrapes(t *testing.T) {
 				} else if strings.Contains(query, "used_bytes") {
 					value = 256
 				}
-				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"%d"]}]}}`, value)
+				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"%d"]}]}}`, value)
 			}))
 			defer upstream.Close()
 			Initialize(nil, nil, "pvc-test")
@@ -223,7 +228,7 @@ func TestPVCUsageHandlerKeepsCapturedClient(t *testing.T) {
 	replacementCalls := 0
 	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		replacementCalls++
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"2"]}]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"2"]}]}}`))
 	}))
 	defer replacement.Close()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +243,7 @@ func TestPVCUsageHandlerKeepsCapturedClient(t *testing.T) {
 		} else if strings.Contains(query, "used_bytes") {
 			value = 256
 		}
-		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"%d"]}]}}`, value)
+		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"%d"]}]}}`, value)
 	}))
 	defer upstream.Close()
 	Initialize(nil, nil, "original")
@@ -304,7 +309,7 @@ func TestPVCUsageUnlabeledProofExcludesForeignSeries(t *testing.T) {
 			out := c.QueryPVCUsage(context.Background(), "db", []string{"pg-data"}, []prom.WorkloadPodIdentity{{Name: "pg-0", UID: "local-uid"}})
 			if localPresent {
 				usage := out.Usage["pg-data"]
-				if out.Status != PVCUsageAvailable || usage.UsedBytes != 95 || usage.CapacityBytes != 100 || usage.Ratio != 0.95 || out.Isolation.Mode != SeriesIsolationVerified {
+				if out.Status != PVCUsageAvailable || usage.UsedBytes != 95 || usage.CapacityBytes != 100 || usage.Ratio != 0.95 || out.Isolation.Mode != SeriesIsolationUnverified || !strings.Contains(out.Isolation.Note, "unlabeled stats from another cluster") {
 					t.Fatalf("foreign stats merged into local claim: %+v", out)
 				}
 			} else if out.Status != PVCUsageScopeMismatch || len(out.Usage) != 0 {
@@ -392,5 +397,142 @@ func TestPVCScopePromQL(t *testing.T) {
 			}
 		}
 	}
+	for _, tc := range []struct {
+		claim, cluster string
+		missing        bool
+	}{
+		{claim: "verified", cluster: "east"},
+		{claim: "unlabeled"},
+		{claim: "foreign-only", missing: true},
+	} {
+		if !tc.missing {
+			for metric, value := range map[string]int{"kubelet_volume_stats_used_bytes": 10, "kubelet_volume_stats_capacity_bytes": 100} {
+				input = append(input, map[string]string{
+					"series": fmt.Sprintf(`%s{namespace="db",persistentvolumeclaim=%q,cluster=%q}`, metric, tc.claim, tc.cluster),
+					"values": fmt.Sprintf("%d+0x10", value),
+				})
+			}
+		}
+		for metric, value := range map[string]int{"kubelet_volume_stats_used_bytes": 95, "kubelet_volume_stats_capacity_bytes": 1000} {
+			input = append(input, map[string]string{
+				"series": fmt.Sprintf(`%s{namespace="db",persistentvolumeclaim=%q,cluster="west"}`, metric, tc.claim),
+				"values": fmt.Sprintf("%d+0x10", value),
+			})
+		}
+		matchers := `cluster="east"`
+		if tc.cluster == "" {
+			parts := make([]string, len(partitionLabels))
+			for i, label := range partitionLabels {
+				parts[i] = label + `=""`
+			}
+			matchers = strings.Join(parts, ",")
+		}
+		for _, window := range []time.Duration{0, time.Hour} {
+			q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
+				result := &prom.QueryResult{}
+				samples := []map[string]any{}
+				if !tc.missing || !strings.Contains(query, matchers) {
+					result.Series = []prom.Series{vec(nil, 1)}
+					samples = append(samples, map[string]any{"labels": "{}", "value": 1})
+				}
+				tests = append(tests, map[string]any{"expr": query, "eval_time": "10m", "exp_samples": samples})
+				return result, nil
+			}}
+			_, _, err := decideVerifiedScope(context.Background(), q, pvcScopeProbe("db", []string{tc.claim}, window), matchers, SeriesIsolation{})
+			if tc.missing && !errors.Is(err, ErrScopeMismatch) || !tc.missing && err != nil {
+				t.Fatalf("scope for %s over %s: %v", tc.claim, window, err)
+			}
+		}
+		q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
+			samples := []map[string]any{}
+			if !tc.missing {
+				value := 100
+				if strings.Contains(query, "used_bytes") {
+					value = 10
+				}
+				samples = append(samples, map[string]any{"labels": fmt.Sprintf(`{persistentvolumeclaim=%q}`, tc.claim), "value": value})
+			}
+			tests = append(tests, map[string]any{"expr": query, "eval_time": "10m", "exp_samples": samples})
+			return &prom.QueryResult{}, nil
+		}}
+		queryPVCUsage(context.Background(), q, "db", []string{tc.claim}, matchers)
+	}
 	promtest.Run(t, image, input, tests)
+}
+
+func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
+	for _, localPresent := range []bool{true, false} {
+		t.Run(fmt.Sprintf("local present=%t", localPresent), func(t *testing.T) {
+			cs := fake.NewClientset(
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "db", Name: "pg-0", UID: "local-uid"}},
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "other-pod", UID: "other-uid"}},
+			)
+			if err := k8s.InitScopedTestResourceCache(cs, map[string]k8score.ResourceScope{string(k8score.Pods): {Enabled: true}}); err != nil {
+				t.Fatal(err)
+			}
+			defer k8s.ResetResourceCache()
+			proofs := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = r.ParseForm()
+				query := r.Form.Get("query")
+				if query == "up" {
+					_, _ = w.Write([]byte(authProbeBody))
+					return
+				}
+				if strings.Contains(query, "kube_pod_info") {
+					proofs++
+					if !strings.Contains(query, `namespace="db"`) || !strings.Contains(query, `pod=~"pg-0"`) || strings.Contains(query, "other-pod") {
+						t.Errorf("proof escaped claim namespace: %s", query)
+					}
+					_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: map[string]string{"namespace": "db", "pod": "pg-0", "uid": "local-uid"}}}, ""))
+					return
+				}
+				unlabeled := true
+				for _, label := range partitionLabels {
+					unlabeled = unlabeled && strings.Contains(query, label+`=""`)
+				}
+				value := 1000
+				if strings.Contains(query, "used_bytes") {
+					value = 95
+				}
+				if unlabeled {
+					value = 100
+					if strings.Contains(query, "used_bytes") {
+						value = 10
+					}
+				}
+				result := "[]"
+				if !unlabeled || localPresent {
+					if strings.HasPrefix(query, "count(") {
+						value = 1
+					}
+					result = fmt.Sprintf(`[{"metric":{"persistentvolumeclaim":"pg-data"},"value":[100,"%d"]}]`, value)
+				}
+				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
+			}))
+			defer upstream.Close()
+			Initialize(nil, nil, "cache-proof")
+			SetManualURL(upstream.URL)
+			SetAuthGate(func(_ *http.Request, group, resource, namespace, verb string) bool {
+				return group == "" && resource == "persistentvolumeclaims" && namespace == "db" && verb == "get"
+			})
+			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+			w := httptest.NewRecorder()
+			metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/db/pg-data", nil))
+			var response PVCUsageResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != 200 || proofs != 1 {
+				t.Fatalf("status=%d proofs=%d body=%s", w.Code, proofs, w.Body.String())
+			}
+			if localPresent {
+				if response.Status != PVCUsageAvailable || !response.HasData || response.Used != 10 || response.Capacity != 100 {
+					t.Fatalf("cache-backed proof selected foreign values: %+v", response)
+				}
+			} else if response.Status != PVCUsageScopeMismatch || response.HasData {
+				t.Fatalf("cache-backed proof accepted foreign-only stats: %+v", response)
+			}
+		})
+	}
 }

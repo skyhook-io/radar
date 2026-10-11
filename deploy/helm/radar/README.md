@@ -287,8 +287,8 @@ trend charts remain unavailable for Kubecost.
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
-| `traffic.prometheusSingleCluster` | Optional workload-metrics override: assert that the backend contains only this cluster. Replaces automatic matching; does not scope rightsizing or other metrics features | `false` |
-| `traffic.prometheusClusterLabels` | Optional exact label/value constraints for workload metrics in a shared store, ANDed. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.prometheusSingleCluster` | Optional workload/PVC metrics override: assert that the backend contains only this cluster. Replaces automatic matching; does not scope rightsizing, node/HPA or legacy network/storage metrics | `false` |
+| `traffic.prometheusClusterLabels` | Optional exact label/value constraints for workload metrics and PVC usage in a shared store, ANDed. The labels must also exist on kubelet volume stats. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
 | `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |

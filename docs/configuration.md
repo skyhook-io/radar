@@ -178,7 +178,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `historyLimit` | Max timeline events to retain (memory only) |
 | `prometheusUrl` | Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, Mimir, and similar backends. Skips auto-discovery; useful when the backend is not in the same cluster or uses a non-standard service name. Leave it empty and Radar looks for a Prometheus-like Service on startup and after each context switch. While it looks, the Metrics status says "discovering". If it finds a backend it cannot reach, and it can see a NetworkPolicy that blocks the connection, the status names that policy. |
 | `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In local Settings → Cost, this preference saves automatically for all local clusters, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
-| `costSource` | `auto` (default), `prometheus`, or `kubecost`, shown in Settings as **Automatic**, **OpenCost metrics** and **Kubecost**. Automatic keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Local Settings saves this preference per context; connection-check behavior is described below. |
+| `costSource` | `auto` (default), `prometheus`, or `kubecost`, shown in Settings as **Automatic**, **OpenCost metrics** and **Kubecost**. Automatic keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator. If discovered Prometheus candidates are unreachable or detection times out, a working Kubecost is selected provisionally; the next Cost request after one minute rechecks Prometheus and switches back when its cost metrics are usable. If neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Local Settings saves this preference per context; connection-check behavior is described below. |
 | `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service and tries its named `tcp-api` port (9004). When that port requires SAML/OIDC and no API key is configured, Radar can fall back to the same Service's exact `tcp-api-rbac` port (9008). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
 | `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. Local Settings stores the override with this context's Cost settings; copying another cluster's backend never copies its cluster ID. |
 | `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Values are redacted from settings responses. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. Local CLI/Desktop stores new keys in `clusters.json`, with explicit reuse and origin-change protection described below; this `config.json` field is only an import source locally. In Helm, provision a Kubernetes Secret with `cost.kubecost.existingSecret`; Settings is read-only. |
@@ -570,8 +570,8 @@ not read local profiles.
 
 Cross-origin HTTP redirects are refused, including for custom auth
 and tenant headers. Headers require an explicit URL and are not sent during auto-discovery.
-The new workload charts recheck identity, but older name-based metrics are not
-protected by that attribution contract. See [Workload metrics](workload-metrics.md).
+The workload charts recheck identity, and PVC usage applies separate cluster
+scope checks. Other name-based metrics are not protected by those contracts. See [Workload metrics](workload-metrics.md).
 
 In-cluster Radar has no context switcher. Configure the integration for that
 installation, using Secret-backed environment variables for credentials where
@@ -581,9 +581,12 @@ supported; local config persistence is not a replacement for deployment configur
 
 Workload metrics normally use automatic identity matching. The optional
 `--prometheus-single-cluster` and repeatable `--prometheus-cluster-label` flags
-replace that matching for workload request/resource charts, history and Pod
-comparison only. They do not scope rightsizing, node/HPA/PVC or legacy
-network/storage queries. Leave both unset for automatic matching.
+replace that matching for workload request/resource charts, history, Pod
+comparison and PVC usage. They do not scope rightsizing, node/HPA or legacy
+network/storage queries. Leave both unset for automatic matching. PVC usage
+requires the configured labels to exist on its kubelet volume stats; labels
+present only on other scrape jobs do not select those stats. See
+[PVC usage scope and remedies](workload-metrics.md#pvc-usage-scope).
 
 | Run mode | How to configure an explicit override |
 |---|---|
