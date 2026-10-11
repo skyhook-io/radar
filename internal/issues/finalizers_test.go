@@ -397,6 +397,22 @@ func TestFinalizerOwnerRemovalEvidence(t *testing.T) {
 			t.Fatalf("a crashlooping matched install must keep the deletion critical: %+v", pr)
 		}
 	})
+	t.Run("healthy catalog pod beside a crashlooping matched workload is not healthy", func(t *testing.T) {
+		kustomize := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kustomize-controller", Namespace: "flux-system"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "kc-custom"}}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "kc-custom"}}}}}
+		kustomizeCrashing := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "kustomize-controller-0", Namespace: "flux-system", Labels: map[string]string{"app": "kc-custom"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}}}
+		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(kustomize, kustomizeCrashing, fluxStrayReady), scopes); err != nil {
+			t.Fatal(err)
+		}
+		p := NewCacheProvider()
+		observation := p.FinalizerOwnerStatus("finalizers.kustomize.toolkit.fluxcd.io", Ref{Group: "kustomize.toolkit.fluxcd.io", Kind: "Subject"}, nil)
+		if !observation.Running || observation.Healthy || observation.Absent || observation.Down {
+			t.Fatalf("observation=%+v", observation)
+		}
+		pr := k8s.Detection{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Severity: "critical", TerminatingFinalizers: []string{"finalizers.kustomize.toolkit.fluxcd.io"}}
+		if pr = enrichTerminatingProblem(pr, p, nil, map[string]finalizerObservation{}); pr.Severity != "critical" {
+			t.Fatalf("a crashlooping matched workload must keep the deletion critical: %+v", pr)
+		}
+	})
 	t.Run("healthy install beside a copy scaled to zero is healthy", func(t *testing.T) {
 		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(vmOperator, vmReadyPod, vmUnlabeledScaledDown), scopes); err != nil {
 			t.Fatal(err)

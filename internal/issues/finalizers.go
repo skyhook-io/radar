@@ -243,7 +243,7 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 			catalog, _ := observe(owner.Controller, "", catalogPods, nil)
 			switch {
 			case catalog.Running:
-				result.Absent, result.Down, result.Running, result.Healthy = false, false, true, catalog.Healthy
+				result.Absent, result.Down, result.Running, result.Healthy = false, false, true, catalog.Healthy && !degraded
 				result.Text += "; " + catalog.Text
 			case catalog.Down && result.Absent:
 				result.Absent, result.Down, result.Controller, result.State = false, true, owner.Controller, catalog.State
