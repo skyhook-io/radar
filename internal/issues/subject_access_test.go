@@ -130,3 +130,20 @@ func TestRelatedIssuesFromGatesClusterScopedMatches(t *testing.T) {
 		t.Fatal("internal composition without a gate must keep the issue")
 	}
 }
+
+func TestConcernsMatchesTheSubjectOrItsOwnerByGroup(t *testing.T) {
+	pod := Issue{Kind: "Pod", Namespace: "shop", Name: "web-1", Owner: Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}}
+	if !Concerns(pod, "", "Pod", "shop", "web-1") {
+		t.Fatal("a row is about its own resource")
+	}
+	if !Concerns(pod, "apps", "Deployment", "shop", "web") || !Concerns(pod, "", "Deployment", "shop", "web") {
+		t.Fatal("a member row is about the workload it folds into")
+	}
+	if Concerns(pod, "example.com", "Deployment", "shop", "web") {
+		t.Fatal("a custom kind sharing the workload's kind and name matched")
+	}
+	service := Issue{Kind: "Service", Namespace: "shop", Name: "web"}
+	if Concerns(service, "serving.knative.dev", "Service", "shop", "web") {
+		t.Fatal("a Knative Service matched a core Service's issue")
+	}
+}

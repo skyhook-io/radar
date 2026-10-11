@@ -42,6 +42,18 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	return matched
 }
 
+// Concerns reports whether an issue is about the resource: its own subject,
+// or the owner a member row folds into (a Pod row under its Deployment). The
+// group is compared the way RelatedIssuesFrom compares it.
+func Concerns(i Issue, group, kind, namespace, name string) bool {
+	wantGroup := resolveGroup(group, kind)
+	same := func(g, k, ns, n string) bool {
+		return strings.EqualFold(k, kind) && ns == namespace && n == name && resolveGroup(g, k) == wantGroup
+	}
+	return same(i.Group, i.Kind, i.Namespace, i.Name) ||
+		(i.Owner.Kind != "" && same(i.Owner.Group, i.Owner.Kind, i.Owner.Namespace, i.Owner.Name))
+}
+
 // RelatedIssuesFrom is the matching half of RelatedIssues over an
 // already-composed (flat, grouped) pair. Split out so a caller that needs the
 // related issues for MANY resources in one request (e.g. the GitOps insights

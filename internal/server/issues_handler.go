@@ -308,7 +308,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		CanReadSubject:       s.issueSubjectAccess(r),
 		CanReadEvidence:      s.issueEvidenceAccess(r),
 		OnEvidenceWithheld: func(i issues.Issue) {
-			if strings.EqualFold(i.Kind, kind) && i.Namespace == namespace && i.Name == name {
+			if issues.Concerns(i, group, kind, namespace, name) {
 				evidenceWithheld[i.ID] = true
 			}
 		},
@@ -427,10 +427,9 @@ func resourceIssuesCoverage(kind, group, namespace string) string {
 	if dyn.IsNamespaceSynced(gvr, namespace) {
 		return resourceIssuesCoverageOK
 	}
-	for _, watched := range dyn.GetWatchedResources() {
-		if watched == gvr {
-			return resourceIssuesCoverageSyncing
-		}
+	// A watch in another namespace doesn't cover this one.
+	if dyn.HasCoveringInformer(gvr, namespace) {
+		return resourceIssuesCoverageSyncing
 	}
 	return resourceIssuesCoverageNotWatched
 }

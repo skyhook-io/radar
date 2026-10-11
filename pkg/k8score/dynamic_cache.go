@@ -354,6 +354,15 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 // ensureWatching skip the probe and then have List(gvr, "") find nothing,
 // returning a spurious "informer not found" instead of probing cluster-wide
 // (or returning a clean forbidden).
+// HasCoveringInformer reports whether an informer serves reads of gvr in ns
+// ("" for all namespaces), synced or not.
+func (d *DynamicResourceCache) HasCoveringInformer(gvr schema.GroupVersionResource, ns string) bool {
+	if d == nil {
+		return false
+	}
+	return d.hasCoveringInformer(gvr, ns)
+}
+
 func (d *DynamicResourceCache) hasCoveringInformer(gvr schema.GroupVersionResource, ns string) bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
