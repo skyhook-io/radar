@@ -21,7 +21,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
@@ -6791,8 +6791,35 @@ export function useNamespaceScope() {
   });
 }
 
-const NAMESPACE_SWITCH_TIMEOUT = 5000;
+const NAMESPACE_SWITCH_TIMEOUT = 15000;
 const NAMESPACE_RESCOPE_TIMEOUT = 120000;
+const NAMESPACE_RECONCILE_TIMEOUT = 5000;
+
+// After a switch times out on the client the server may still have applied
+// it. Returns the server's scope when it holds exactly the requested pick, so
+// a slow success is not reported as a failure.
+export async function reconcileNamespaceSwitch(
+  namespaces: string[],
+): Promise<NamespaceScope | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    NAMESPACE_RECONCILE_TIMEOUT,
+  );
+  try {
+    const scope = await fetchJSON<NamespaceScope>(
+      "/cluster/namespace-scope",
+      controller.signal,
+    );
+    const want = [...new Set(namespaces)].sort().join(",");
+    const got = [...new Set(scope.actives)].sort().join(",");
+    return want === got ? scope : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 export function debugNamespaceLog(
   label: string,
@@ -6806,6 +6833,20 @@ export function debugNamespaceLog(
     href: window.location.href,
     ...payload,
   });
+}
+
+/**
+ * A cache-scoped switch rebuilds the watched inventory. View-filter switches
+ * use namespace-specific query keys and do not invalidate the whole client.
+ */
+export async function refreshAfterNamespaceSwitch(
+  queryClient: QueryClient,
+  scope: Pick<NamespaceScope, "cacheScoped" | "actives">,
+): Promise<void> {
+  if (!scope.cacheScoped) return;
+  const notScope = (query: { queryKey: readonly unknown[] }) =>
+    query.queryKey[0] !== "namespace-scope";
+  await queryClient.invalidateQueries({ predicate: notScope }, { cancelRefetch: false });
 }
 
 export function useSetActiveNamespace() {
@@ -6829,7 +6870,7 @@ export function useSetActiveNamespace() {
       // flag). If the scope query is missing/stale we can't yet tell a cheap
       // view-filter change from a cache-rebuilding rescope, so bias to the long
       // timeout — only a confirmed non-scoped session gets the fast switch timeout.
-      // Aborting a real rebuild at 5s surfaces a spurious failure while the server
+      // Aborting a real rebuild at the switch timeout surfaces a spurious failure while the server
       // keeps going.
       const isRescope = currentScope?.cacheScoped !== false;
       const timeoutMs = isRescope
@@ -6863,6 +6904,11 @@ export function useSetActiveNamespace() {
           error: error instanceof Error ? error.message : String(error),
         });
         if (error instanceof Error && error.name === "AbortError") {
+          const applied = await reconcileNamespaceSwitch(namespaces);
+          if (applied) {
+            debugNamespaceLog("mutation:timeout-but-applied", { namespaces });
+            return applied;
+          }
           throw new Error(
             isRescope
               ? "Namespace rescope timed out. The cluster may still be loading."
@@ -6885,9 +6931,7 @@ export function useSetActiveNamespace() {
         });
       }
       queryClient.setQueryData<NamespaceScope>(["namespace-scope"], scope);
-      if (scope.cacheScoped) {
-        queryClient.invalidateQueries();
-      }
+      void refreshAfterNamespaceSwitch(queryClient, scope);
       debugNamespaceLog("mutation:success-after-scope-cache-write");
     },
     onError: () => {
