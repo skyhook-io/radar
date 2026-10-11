@@ -106,7 +106,11 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 		if len(proof.scope.ClusterLabels) == 0 {
 			ttl = 30 * time.Second
 		}
-		c.workloadPartition = &workloadPartitionMemo{generation: generation, expires: time.Now().Add(ttl), scope: proof.scope, namespace: scope.Namespace, unlabeled: proof.unlabeled}
+		memo := c.workloadPartition
+		if len(proof.scope.ClusterLabels) > 0 || memo == nil || memo.generation != generation ||
+			len(memo.scope.ClusterLabels) == 0 || !time.Now().Before(memo.expires) {
+			c.workloadPartition = &workloadPartitionMemo{generation: generation, expires: time.Now().Add(ttl), scope: proof.scope, namespace: scope.Namespace, unlabeled: proof.unlabeled}
+		}
 		return proof, nil
 	})
 	select {

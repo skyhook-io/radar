@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -450,51 +451,63 @@ func TestHistoricalPartitionDistinguishesUnlabeledEvidence(t *testing.T) {
 }
 
 func TestUnlabeledPartitionFlightStaysInNamespace(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		query := r.Form.Get("query")
-		if query == "up" {
-			_, _ = w.Write([]byte(authProbeBody))
-			return
-		}
-		var rows []prom.Series
-		if strings.Contains(query, `namespace="original"`) {
-			close(started)
-			<-release
-			rows = []prom.Series{{Labels: map[string]string{"namespace": "original", "pod": "api-0", "uid": "uid"}}}
-		}
-		_, _ = w.Write(attributionEvidence(rows, ""))
-	}))
-	defer upstream.Close()
-	defer func() {
-		select {
-		case <-release:
-		default:
+	for _, labeledOther := range []bool{false, true} {
+		t.Run(fmt.Sprintf("labeled other=%t", labeledOther), func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = r.ParseForm()
+				query := r.Form.Get("query")
+				if query == "up" {
+					_, _ = w.Write([]byte(authProbeBody))
+					return
+				}
+				var rows []prom.Series
+				if strings.Contains(query, `namespace="original"`) {
+					close(started)
+					<-release
+					rows = []prom.Series{{Labels: map[string]string{"namespace": "original", "pod": "api-0", "uid": "uid"}}}
+				} else if labeledOther {
+					rows = []prom.Series{{Labels: map[string]string{"namespace": "other", "pod": "api-0", "uid": "other-uid", "cluster": "east"}}}
+				}
+				_, _ = w.Write(attributionEvidence(rows, ""))
+			}))
+			defer upstream.Close()
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			}()
+			c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+			anchors := []prom.WorkloadPodIdentity{{Name: "api-0", UID: "uid"}}
+			result := make(chan workloadPartitionProof, 1)
+			go func() {
+				proof, _ := c.historicalClusterProof(context.Background(), PodScope{Namespace: "original", Identities: anchors}, nil)
+				result <- proof
+			}()
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("original namespace probe did not start")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			proof, err := c.historicalClusterProof(ctx, PodScope{Namespace: "other", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "other-uid"}}}, nil)
+			if err != nil || proof.unlabeled || (len(proof.scope.ClusterLabels) > 0) != labeledOther {
+				t.Fatalf("other namespace inherited or waited for the original proof: %+v err=%v", proof, err)
+			}
 			close(release)
-		}
-	}()
-	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
-	anchors := []prom.WorkloadPodIdentity{{Name: "api-0", UID: "uid"}}
-	result := make(chan workloadPartitionProof, 1)
-	go func() {
-		proof, _ := c.historicalClusterProof(context.Background(), PodScope{Namespace: "original", Identities: anchors}, nil)
-		result <- proof
-	}()
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("original namespace probe did not start")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	proof, err := c.historicalClusterProof(ctx, PodScope{Namespace: "other", Identities: anchors}, nil)
-	if err != nil || proof.unlabeled || len(proof.scope.ClusterLabels) != 0 {
-		t.Fatalf("other namespace inherited or waited for the original proof: %+v err=%v", proof, err)
-	}
-	close(release)
-	if original := <-result; !original.unlabeled {
-		t.Fatalf("original namespace did not prove its unlabeled partition: %+v", original)
+			if original := <-result; !original.unlabeled {
+				t.Fatalf("original namespace did not prove its unlabeled partition: %+v", original)
+			}
+			if labeledOther {
+				config, err := c.historicalClusterScope(context.Background(), PodScope{Namespace: "no-ksm"}, nil)
+				if err != nil || config.ClusterLabels["cluster"] != "east" {
+					t.Fatalf("late unlabeled proof evicted connection-wide labeled evidence: %+v err=%v", config, err)
+				}
+			}
+		})
 	}
 }
 

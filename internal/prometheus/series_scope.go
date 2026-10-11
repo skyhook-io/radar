@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -86,7 +87,11 @@ func (iso SeriesIsolation) forClaims() SeriesIsolation {
 }
 
 func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
-	return scopeProbe{metric: "kubelet_volume_stats_capacity_bytes", key: "persistentvolumeclaim", selectors: ClaimSelectors(namespace, claims), window: window}
+	selectors := ClaimSelectors(namespace, claims)
+	for i, selector := range selectors {
+		selectors[i] = withScope(selector, `__name__=~"kubelet_volume_stats_(capacity|used)_bytes"`)
+	}
+	return scopeProbe{key: "persistentvolumeclaim", selectors: selectors, window: window}
 }
 
 // ClaimSelectors selects the named claims of one namespace, in batches that
@@ -130,6 +135,8 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 	if len(anchors) > 0 || cache != nil {
 		if proof, err := client.historicalClusterProof(ctx, PodScope{Namespace: namespace, Identities: anchors}, cache); err == nil {
 			verified, unlabeled = proof.scope.ClusterLabels, proof.unlabeled
+		} else if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
+			errorlog.Record("prometheus", "warning", "series scope proof failed for namespace %s: %v", namespace, err)
 		}
 	}
 	if unlabeled && probe.key == "persistentvolumeclaim" {

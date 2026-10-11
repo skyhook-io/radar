@@ -3,11 +3,13 @@ package prometheus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -307,5 +309,37 @@ func TestPVCUsageUnlabeledProofExcludesForeignSeries(t *testing.T) {
 				t.Fatalf("foreign-only stats used for a local claim: %+v", out)
 			}
 		})
+	}
+}
+
+func TestPVCUsageRefusesSplitMetricPartitions(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query := r.Form.Get("query")
+		if query == "up" {
+			_, _ = w.Write([]byte(authProbeBody))
+			return
+		}
+		value := "100"
+		if strings.HasPrefix(query, "max(count by (") {
+			value = "1"
+			if strings.Contains(query, `__name__=~"kubelet_volume_stats_(capacity|used)_bytes"`) {
+				value = "2"
+			}
+		} else if strings.Contains(query, "used_bytes") {
+			value = "95"
+		}
+		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"data"},"value":[100,%q]}]}}`, value)
+	}))
+	defer upstream.Close()
+	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+	out := c.QueryPVCUsage(context.Background(), "db", []string{"data"}, nil)
+	if out.Status != PVCUsageAmbiguous || len(out.Usage) != 0 {
+		t.Fatalf("used from west paired with capacity from east: %+v", out)
+	}
+	for _, window := range []time.Duration{0, time.Hour} {
+		if _, _, err := c.ResolvePVCScope(context.Background(), "db", []string{"data"}, nil, window); !errors.Is(err, ErrScopeAmbiguous) {
+			t.Fatalf("split metric scope accepted over %s: %v", window, err)
+		}
 	}
 }
