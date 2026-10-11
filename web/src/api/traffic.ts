@@ -99,7 +99,7 @@ export interface TrafficEndpointPair {
 /** The selection rides in the query string, URL-encoded. Proxies in front of
  *  Radar commonly refuse request lines over 8 KiB (ingress-nginx's default),
  *  so a larger selection is not sent at all. */
-export const MAX_TRAFFIC_MATCH_CHARS = 6_000
+const MAX_TRAFFIC_MATCH_CHARS = 6_000
 
 export interface UseTrafficRecordsOptions extends TrafficScope {
   /** The selection as raw edges, or null for no selection. */
