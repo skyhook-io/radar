@@ -5,6 +5,7 @@ import {
   CollapseChevron,
   formatDuration,
   StatusDot,
+  Tooltip,
   WithTooltip,
   mapHealthToTone,
   type CapacityAutoscalerBackoff,
@@ -1031,7 +1032,7 @@ function GroupRow({
             : undefined
         }
       >
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           <div className="flex items-center gap-1.5">
             {hasChildren ? (
               <button
@@ -1103,7 +1104,7 @@ function GroupRow({
             )}
           </div>
         </td>
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           {group.manager ? (
             <span className="flex flex-wrap items-center gap-1.5">
               <Badge tone="structural" size="sm">
@@ -1130,50 +1131,63 @@ function GroupRow({
         >
           {`${group.readyNodeCount}/${group.nodeCount}`}
         </td>
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           <InventoryQuantityCell
             observation={group.allocatable}
             empty="Not observed"
           />
         </td>
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           <InventoryQuantityCell
             observation={group.scheduledRequests}
             empty="Not observed"
           />
         </td>
         <td className={`${TD} text-xs text-theme-text-secondary`}>
-          {group.scaling.map((fact, index) => (
-            <span key={fact.code}>
-              {index > 0 && " · "}
-              {fact.code === "at_min_size" ? (
-                <WithTooltip tip={MIN_SIZE_EXPLANATION}>
-                  <span
-                    tabIndex={0}
-                    role="note"
-                    aria-label={`${fact.summary}. ${MIN_SIZE_EXPLANATION}`}
-                    className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+          {/* The only wrapping column, so long prose adds lines instead of
+              squeezing names and badges. Inline tooltip triggers let a fact
+              wrap with the text around it rather than as one box. */}
+          <div className="min-w-[10rem]">
+            {group.scaling.map((fact, index) => (
+              <span key={fact.code}>
+                {index > 0 && " · "}
+                {fact.code === "at_min_size" ? (
+                  <Tooltip
+                    content={MIN_SIZE_EXPLANATION}
+                    wrapperClassName="!inline"
                   >
-                    {fact.summary}
-                  </span>
-                </WithTooltip>
-              ) : fact.code === "scale_down_candidates" ? (
-                <WithTooltip tip={SCALE_DOWN_EXPLANATION}>
-                  <span
-                    tabIndex={0}
-                    role="note"
-                    aria-label={`${fact.summary}. ${SCALE_DOWN_EXPLANATION}`}
-                    className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                    <span
+                      tabIndex={0}
+                      role="note"
+                      aria-label={`${fact.summary}. ${MIN_SIZE_EXPLANATION}`}
+                      className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                    >
+                      {fact.summary}
+                    </span>
+                  </Tooltip>
+                ) : fact.code === "scale_down_candidates" ? (
+                  <Tooltip
+                    content={SCALE_DOWN_EXPLANATION}
+                    wrapperClassName="!inline"
                   >
-                    {fact.summary}
-                  </span>
-                </WithTooltip>
-              ) : (
-                fact.summary
-              )}
-            </span>
-          ))}
-          {group.scaling.length === 0 && <span className="text-theme-text-tertiary">—</span>}
+                    <span
+                      tabIndex={0}
+                      role="note"
+                      aria-label={`${fact.summary}. ${SCALE_DOWN_EXPLANATION}`}
+                      className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                    >
+                      {fact.summary}
+                    </span>
+                  </Tooltip>
+                ) : (
+                  fact.summary
+                )}
+              </span>
+            ))}
+            {group.scaling.length === 0 && (
+              <span className="text-theme-text-tertiary">—</span>
+            )}
+          </div>
         </td>
       </tr>
       {hasChildren && (
@@ -1190,10 +1204,10 @@ function GroupRow({
 }
 
 const MIN_SIZE_EXPLANATION =
-  "Every observed autoscaler child has its target at its published minimum. Unattributed groups are separate; current registered nodes may still exceed the target.";
+  "Every observed autoscaler group has its target at its published minimum. Unattributed groups are separate; current registered nodes may still exceed the target.";
 
 const SCALE_DOWN_EXPLANATION =
-  "Unneeded nodes are removed after the autoscaler's scale-down delay unless PodDisruptionBudgets, local storage, or annotations block it — Radar can't see those blockers.";
+  "Scale-down candidates are removed after the autoscaler's scale-down delay unless PodDisruptionBudgets, local storage, or annotations block the removal — Radar can't see those blockers.";
 const SCALE_DOWN_STATUS_LABELS = new Map([
   ["NoCandidates", "No scale-down candidates"],
   ["CandidatesPresent", "Scale-down candidates present"],
@@ -1233,7 +1247,7 @@ function ChildSubTable({
           <tbody className={TBODY}>
             {group.children.map((child) => (
               <tr key={child.id} className={ROW_HOVER}>
-                <td className={`${CHILD_TD} font-mono`}>
+                <td className={`${CHILD_TD} whitespace-nowrap font-mono`}>
                   <WithTooltip tip={child.name}>
                     <span>{child.id}</span>
                   </WithTooltip>
@@ -1314,7 +1328,7 @@ function OrphanAutoscalerSection({
           <tbody className={TBODY}>
             {orphans.map((child) => (
               <tr key={child.id} className={ROW_HOVER}>
-                <td className={`${TD} font-mono text-xs`}>
+                <td className={`${TD} whitespace-nowrap font-mono text-xs`}>
                   <WithTooltip tip={child.name}>
                     <span>{child.id}</span>
                   </WithTooltip>
@@ -1421,7 +1435,7 @@ function ChildScaleDown({
   const candidatesLabel =
     scaleDown.candidates === undefined
       ? "Candidates: not published"
-      : `${scaleDown.candidates} ${scaleDown.candidates === 1 ? "node" : "nodes"} unneeded`;
+      : `${scaleDown.candidates} scale-down ${scaleDown.candidates === 1 ? "candidate" : "candidates"}`;
   const statusLabel = scaleDown.status
     ? (SCALE_DOWN_STATUS_LABELS.get(scaleDown.status) ?? scaleDown.status)
     : "Status not published";

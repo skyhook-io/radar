@@ -1376,6 +1376,10 @@ describe("Capacity scale-down observations", () => {
     });
     clock.mockRestore();
     expect(html).toContain("at minimum size");
+    expect(html).toContain(
+      "Every observed autoscaler group has its target at its published minimum.",
+    );
+    expect(html).not.toContain("autoscaler child");
     expect(html).toContain("No scale-down candidates");
     expect(html).toContain("Candidate count published by the autoscaler: 0.");
     expect(html).not.toContain("Candidates:");
@@ -1457,7 +1461,7 @@ describe("Capacity scale-down observations", () => {
     });
     expect(html).toContain("Scale-down candidates present");
     expect(html).toContain("Candidates: not published");
-    expect(html).not.toContain("0 nodes unneeded");
+    expect(html).not.toContain("0 scale-down candidates");
   });
 
   it.each(["joined", "orphan"])(
@@ -1568,7 +1572,7 @@ describe("Capacity scale-down observations", () => {
   });
 
   it.each([
-    ["CandidatesPresent", "2 nodes unneeded"],
+    ["CandidatesPresent", "2 scale-down candidates"],
     ["InProgress", "Scale-down in progress"],
     ["NewControllerStatus", "NewControllerStatus"],
     ["constructor", "constructor"],
@@ -1578,9 +1582,21 @@ describe("Capacity scale-down observations", () => {
       scaleDown: { status, candidates: 2 },
     });
     expect(html).toContain(label);
-    expect(html).toContain("2 nodes unneeded");
+    expect(html).toContain("2 scale-down candidates");
+    expect(html).not.toContain("unneeded");
     expect(html).not.toContain("Candidates:");
     expect(html).not.toContain("Status since");
+  });
+
+  it("names a single published candidate the same way the pool row does", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "CandidatesPresent", candidates: 1 },
+    });
+    expect(html).toMatch(
+      /role="note" aria-label="1 scale-down candidate\. Scale-down candidates are removed/,
+    );
+    expect(html).not.toContain("1 scale-down candidates");
   });
 });
 
