@@ -140,7 +140,7 @@ func TestAttributeNetworkPolicyBlock(t *testing.T) {
 				t.Errorf("error %q lacks %q", err, want)
 			}
 		}
-		if !errors.Is(err, ErrPrometheusNotFound) || !errors.Is(err, errPrometheusUnreachable) {
+		if errors.Is(err, ErrPrometheusNotFound) || !errors.Is(err, errPrometheusUnreachable) {
 			t.Fatalf("attributed error must still satisfy the discovery sentinels: %v", err)
 		}
 	})

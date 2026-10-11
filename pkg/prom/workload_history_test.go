@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/prom/promtest"
 )
 
 func TestWorkloadHistoryScope(t *testing.T) {
@@ -132,5 +134,5 @@ func TestWorkloadHistoryPromQL(t *testing.T) {
 	check(population, "7m", map[string]any{"labels": "{}", "value": 1.0})
 	add("container_cpu_cfs_periods_total", `cluster="west",namespace="weights",pod="agent-0",container="app",job="kubelet",replica="duplicate"`, "_ _ _ _ _ _ _ _ 0+60x2")
 	check(population, "10m", map[string]any{"labels": "{}", "value": 2.0})
-	runWorkloadPromQL(t, image, input, tests)
+	promtest.Run(t, image, input, tests)
 }

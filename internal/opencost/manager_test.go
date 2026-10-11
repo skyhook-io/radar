@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -15,9 +16,14 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 )
 
 func TestResolveEnvironmentConfig(t *testing.T) {
@@ -839,5 +845,62 @@ func TestDiscoveredKubecostConnectionSeparatesTransportFromService(t *testing.T)
 	}
 	if connection.Service != (ServiceReference{Name: "kubecost-aggregator", Namespace: "kubecost", Port: 9008}) {
 		t.Fatalf("Service reference = %#v", connection.Service)
+	}
+}
+
+func TestCostDetectionCandidateFailuresRemainUnknown(t *testing.T) {
+	restoreMode := k8s.SetTestLocalMode()
+	defer restoreMode()
+	for _, tc := range []struct {
+		name   string
+		count  int
+		denied bool
+	}{
+		{"multi-candidate failure", 2, false}, {"single denied candidate", 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unreachable", 503) }))
+			defer upstream.Close()
+			proxy, _ := url.Parse(upstream.URL)
+			transport := &http.Transport{Proxy: http.ProxyURL(proxy)}
+			previousTransport := http.DefaultTransport
+			http.DefaultTransport = transport
+			defer func() { http.DefaultTransport = previousTransport; transport.CloseIdleConnections() }()
+			objects := []runtime.Object{&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"},
+				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "prometheus"}, Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}},
+			}}
+			if tc.count == 2 {
+				objects = append(objects, &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-operated"},
+					Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "prometheus"}, Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}},
+				})
+			}
+			cs := fakeclientset.NewSimpleClientset(objects...)
+			if tc.denied {
+				cs.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
+				})
+			}
+			portforward.SetK8sClients(cs, &rest.Config{})
+			prometheuspkg.Initialize(cs, &rest.Config{}, "test")
+			defer func() {
+				prometheuspkg.Reset()
+				prometheuspkg.Initialize(nil, nil, "")
+				portforward.SetK8sClients(nil, nil)
+			}()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if state := detectPrometheusCostState(ctx); state != prometheusCostUnknown {
+				t.Fatalf("state=%v, want unknown", state)
+			}
+			_, _, err := prometheuspkg.GetClient().EnsureConnected(ctx)
+			if err == nil || errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
+				t.Fatalf("discovery failure=%v, want failure without not-found", err)
+			}
+			if tc.denied && !strings.Contains(err.Error(), "needs list pods") {
+				t.Fatal(err)
+			}
+		})
 	}
 }

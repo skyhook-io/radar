@@ -173,7 +173,8 @@ func TestHistoricalPartitionRequiresExternalAnchor(t *testing.T) {
 			}
 			return attributionEvidence([]prom.Series{row}, ""), nil
 		}))
-		config, err := probeHistoricalPartition(context.Background(), client, "shop", []prom.WorkloadPodIdentity{pod})
+		proof, err := probeHistoricalPartition(context.Background(), client, "shop", []prom.WorkloadPodIdentity{pod})
+		config := proof.scope
 		if err != nil || (len(config.ClusterLabels) > 0) != labeled {
 			t.Fatalf("invalid partition proof: %+v %v", config, err)
 		}
@@ -335,5 +336,172 @@ func TestHistoricalPartitionSurvivesLeaderCancellation(t *testing.T) {
 	got, err := c.historicalClusterScope(context.Background(), PodScope{Namespace: "shop"}, cache)
 	if err != nil || got.ClusterLabels["cluster"] != "west" {
 		t.Fatalf("leader cancellation poisoned shared proof: %+v %v", got, err)
+	}
+}
+
+func TestHistoricalPartitionCachesEmptyProofBriefly(t *testing.T) {
+	var probes atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.Form.Get("query") == "up" {
+			_, _ = w.Write([]byte(authProbeBody))
+			return
+		}
+		if strings.Contains(r.Form.Get("query"), "kube_pod_info") {
+			probes.Add(1)
+		}
+		_, _ = w.Write(attributionEvidence(nil, ""))
+	}))
+	defer upstream.Close()
+	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+	scope := PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "uid"}}}
+	for range 2 {
+		config, err := c.historicalClusterScope(context.Background(), scope, nil)
+		if err != nil || len(config.ClusterLabels) != 0 {
+			t.Fatalf("empty proof=%+v err=%v", config, err)
+		}
+	}
+	if probes.Load() != 1 || c.workloadPartition == nil || time.Until(c.workloadPartition.expires) > 30*time.Second {
+		t.Fatalf("negative proof not cached briefly: probes=%d memo=%+v", probes.Load(), c.workloadPartition)
+	}
+	c.workloadPartition.expires = time.Now().Add(-time.Second)
+	if _, err := c.historicalClusterScope(context.Background(), scope, nil); err != nil {
+		t.Fatal(err)
+	}
+	if probes.Load() != 2 {
+		t.Fatalf("expired proof not retried: %d probes", probes.Load())
+	}
+	c.cancelWorkloadAttributionsLocked()
+	if c.workloadPartition != nil {
+		t.Fatal("connection reset retained negative proof")
+	}
+}
+
+func TestHistoricalPartitionNegativeMemoStaysInNamespace(t *testing.T) {
+	var probes atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query := r.Form.Get("query")
+		if query == "up" {
+			_, _ = w.Write([]byte(authProbeBody))
+			return
+		}
+		probes.Add(1)
+		var rows []prom.Series
+		if strings.Contains(query, `namespace="other"`) {
+			rows = []prom.Series{{Labels: map[string]string{"namespace": "other", "pod": "api-0", "uid": "uid", "cluster": "west"}}}
+		}
+		_, _ = w.Write(attributionEvidence(rows, ""))
+	}))
+	defer upstream.Close()
+	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+	for _, namespace := range []string{"empty", "other", "empty"} {
+		got, err := c.historicalClusterScope(context.Background(), PodScope{Namespace: namespace, Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "uid"}}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if probes.Load() == 1 && len(got.ClusterLabels) != 0 {
+			t.Fatalf("empty namespace gained a proof: %+v", got)
+		}
+		if namespace == "other" && got.ClusterLabels["cluster"] != "west" {
+			t.Fatalf("negative memo suppressed another namespace's proof: %+v", got)
+		}
+		if namespace == "empty" && probes.Load() == 2 && got.ClusterLabels["cluster"] != "west" {
+			t.Fatalf("positive proof not reused across namespaces: %+v", got)
+		}
+	}
+	if probes.Load() != 2 {
+		t.Fatalf("want two namespace probes with connection-wide positive reuse, got %d", probes.Load())
+	}
+}
+
+func TestHistoricalPartitionDistinguishesUnlabeledEvidence(t *testing.T) {
+	pod := prom.WorkloadPodIdentity{Name: "api-0", UID: "local-uid"}
+	local := prom.Series{Labels: map[string]string{"namespace": "shop", "pod": pod.Name, "uid": pod.UID}}
+	foreign := prom.Series{Labels: map[string]string{"namespace": "shop", "pod": pod.Name, "uid": "foreign-uid"}}
+	labeledLocal := prom.Series{Labels: map[string]string{"namespace": "shop", "pod": pod.Name, "uid": pod.UID, "cluster": "east"}}
+	labeledForeign := prom.Series{Labels: map[string]string{"namespace": "shop", "pod": pod.Name, "uid": "foreign-uid", "cluster": "west"}}
+	for _, tc := range []struct {
+		name      string
+		rows      []prom.Series
+		unlabeled bool
+		cluster   string
+	}{
+		{name: "no evidence"},
+		{name: "foreign UID", rows: []prom.Series{foreign}},
+		{name: "unlabeled UID match", rows: []prom.Series{local}, unlabeled: true},
+		{name: "foreign labeled population", rows: []prom.Series{local, labeledForeign}, unlabeled: true},
+		{name: "unlabeled UID collision", rows: []prom.Series{local, foreign}},
+		{name: "labeled proof takes precedence", rows: []prom.Series{local, labeledLocal}, cluster: "east"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := prom.NewClient(attributionTransport(func(string) ([]byte, error) {
+				return attributionEvidence(tc.rows, ""), nil
+			}))
+			proof, err := probeHistoricalPartition(context.Background(), client, "shop", []prom.WorkloadPodIdentity{pod})
+			if err != nil || proof.unlabeled != tc.unlabeled || proof.scope.ClusterLabels["cluster"] != tc.cluster {
+				t.Fatalf("proof=%+v err=%v", proof, err)
+			}
+			if !tc.unlabeled && tc.cluster == "" && len(proof.scope.ClusterLabels) != 0 {
+				t.Fatalf("unknown identity became a verified partition: %+v", proof)
+			}
+		})
+	}
+}
+
+func TestUnlabeledPartitionFlightStaysInNamespace(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query := r.Form.Get("query")
+		if query == "up" {
+			_, _ = w.Write([]byte(authProbeBody))
+			return
+		}
+		var rows []prom.Series
+		if strings.Contains(query, `namespace="original"`) {
+			close(started)
+			<-release
+			rows = []prom.Series{{Labels: map[string]string{"namespace": "original", "pod": "api-0", "uid": "uid"}}}
+		}
+		_, _ = w.Write(attributionEvidence(rows, ""))
+	}))
+	defer upstream.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+	anchors := []prom.WorkloadPodIdentity{{Name: "api-0", UID: "uid"}}
+	result := make(chan workloadPartitionProof, 1)
+	go func() {
+		proof, _ := c.historicalClusterProof(context.Background(), PodScope{Namespace: "original", Identities: anchors}, nil)
+		result <- proof
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("original namespace probe did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	proof, err := c.historicalClusterProof(ctx, PodScope{Namespace: "other", Identities: anchors}, nil)
+	if err != nil || proof.unlabeled || len(proof.scope.ClusterLabels) != 0 {
+		t.Fatalf("other namespace inherited or waited for the original proof: %+v err=%v", proof, err)
+	}
+	close(release)
+	if original := <-result; !original.unlabeled {
+		t.Fatalf("original namespace did not prove its unlabeled partition: %+v", original)
+	}
+}
+
+func TestUnlabeledPartitionRequiresPodUID(t *testing.T) {
+	rows := []prom.Series{{Labels: map[string]string{"pod": "api-0"}}}
+	partition, _ := identifyPartitionWithUnlabeled([]prom.WorkloadPodIdentity{{Name: "api-0"}}, rows, true)
+	if len(partition) != 0 {
+		t.Fatalf("missing Pod UID became an unlabeled proof: %v", partition)
 	}
 }
