@@ -152,10 +152,14 @@ func TestClassifyTimelineHealthWorkloads(t *testing.T) {
 
 func TestClassifyTimelineChangeHealthPod(t *testing.T) {
 	now := time.Now()
-	ready := func(v corev1.ConditionStatus) []corev1.PodCondition {
-		return []corev1.PodCondition{{Type: corev1.PodReady, Status: v, LastTransitionTime: metav1.NewTime(now)}}
+	readyAt := func(v corev1.ConditionStatus, at time.Time) []corev1.PodCondition {
+		return []corev1.PodCondition{{Type: corev1.PodReady, Status: v, LastTransitionTime: metav1.NewTime(at)}}
 	}
-	running := corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Hour))}}
+	ready := func(v corev1.ConditionStatus) []corev1.PodCondition { return readyAt(v, now) }
+	runningAt := func(at time.Time) corev1.ContainerState {
+		return corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(at)}}
+	}
+	running := runningAt(now.Add(-time.Hour))
 	pod := func(conds []corev1.PodCondition, state corev1.ContainerState, restarts int32) *corev1.Pod {
 		return &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
@@ -177,7 +181,10 @@ func TestClassifyTimelineChangeHealthPod(t *testing.T) {
 		{"lost readiness while running", pod(ready(corev1.ConditionTrue), running, 0), pod(ready(corev1.ConditionFalse), running, 0), timeline.HealthDegraded},
 		{"clean completion is not a failure", pod(ready(corev1.ConditionTrue), running, 0), pod(ready(corev1.ConditionFalse), completed, 0), timeline.HealthHealthy},
 		{"regained readiness", pod(ready(corev1.ConditionFalse), running, 0), pod(ready(corev1.ConditionTrue), running, 0), timeline.HealthHealthy},
-		{"added while not ready yet keeps the startup grace", nil, pod(ready(corev1.ConditionFalse), running, 0), timeline.HealthHealthy},
+		{"added while not ready yet keeps the startup grace", nil, pod(readyAt(corev1.ConditionFalse, now.Add(-40*time.Second)), runningAt(now.Add(-30*time.Second)), 0), timeline.HealthHealthy},
+		{"starting and still not ready keeps the startup grace", pod(readyAt(corev1.ConditionFalse, now.Add(-40*time.Second)), runningAt(now.Add(-30*time.Second)), 0), pod(readyAt(corev1.ConditionFalse, now.Add(-40*time.Second)), runningAt(now.Add(-30*time.Second)), 0), timeline.HealthHealthy},
+		{"a later change while readiness is still lost stays degraded", pod(readyAt(corev1.ConditionFalse, now.Add(-2*time.Minute)), running, 0), pod(readyAt(corev1.ConditionFalse, now.Add(-2*time.Minute)), running, 0), timeline.HealthDegraded},
+		{"added after readiness was lost is degraded", nil, pod(readyAt(corev1.ConditionFalse, now.Add(-2*time.Minute)), running, 0), timeline.HealthDegraded},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
