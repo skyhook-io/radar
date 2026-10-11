@@ -690,6 +690,11 @@ export function WorkloadView({
     setTimeout(() => setCopied(null), 2000)
   }, [])
 
+  // The edit is applied on top of the copy on screen, so the server is asked to
+  // reject it if the Secret was deleted or changed since that copy loaded.
+  // Otherwise the save would recreate a deleted Secret, or put back the old
+  // value of a key someone else changed.
+  const resourceVersion: string | undefined = resource?.metadata?.resourceVersion
   const handleSaveSecretValue = useCallback(async (yaml: string) => {
     if (!onUpdateResource) return
     try {
@@ -699,12 +704,14 @@ export function WorkloadView({
         name,
         yaml,
         force: true,
+        reviewedResourceVersion: resourceVersion,
       })
       setTimeout(() => refetch(), 1000)
-    } catch {
-      // Error handled by mutation (toast)
+    } catch (error) {
+      refetch()
+      throw error
     }
-  }, [onUpdateResource, apiKind, namespace, name, refetch])
+  }, [onUpdateResource, apiKind, namespace, name, resourceVersion, refetch])
 
   const handleSaved = useCallback(() => {
     setSaveSuccess(true)
@@ -1053,7 +1060,7 @@ export function WorkloadView({
                 onCopy={copyToClipboard}
                 copied={copied}
                 onNavigate={onNavigateToResource ? (ref) => onNavigateToResource(refToSelectedResource(ref)) : undefined}
-                onSaveSecretValue={canUpdateSecrets ? handleSaveSecretValue : undefined}
+                onSaveSecretValue={canUpdateSecrets && !resourceGone ? handleSaveSecretValue : undefined}
                 isSavingSecret={isUpdatingResource}
                 rendererOverrides={rendererOverridesForState}
                 resolvedEnvFrom={resolvedEnvFrom}
@@ -1230,7 +1237,7 @@ export function WorkloadView({
               onNavigate={onNavigateToResource}
               onCopy={copyToClipboard}
               copied={copied}
-              onSaveSecretValue={canUpdateSecrets ? handleSaveSecretValue : undefined}
+              onSaveSecretValue={canUpdateSecrets && !resourceGone ? handleSaveSecretValue : undefined}
               isSavingSecret={isUpdatingResource}
               onOpenLogs={handleOpenLogs}
               onSwitchToTimeline={() => handleSetTab('timeline')}
