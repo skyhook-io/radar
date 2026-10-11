@@ -164,6 +164,7 @@ export interface FeatureCapabilities {
   yamlSchemas?: boolean
   workloadImages?: boolean
   resourceIssues?: boolean
+  resourceIssueCoverage?: boolean
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean

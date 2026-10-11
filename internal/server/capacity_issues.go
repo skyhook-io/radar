@@ -94,6 +94,7 @@ func (s *Server) capacityIssuesForRequest(r *http.Request) capacityIssueProjecti
 			SkipPodTemplateContext:        true,
 			Limit:                         issues.NoLimit,
 			IncludeClusterScopedKarpenter: true,
+			AllowUnfilteredEvidence:       true,
 		})
 		capacity := make([]issues.Issue, 0, len(composed))
 		for _, issue := range composed {
@@ -112,7 +113,7 @@ func (s *Server) capacityIssuesForRequest(r *http.Request) capacityIssueProjecti
 		return newCapacityIssueProjection(nil, false)
 	}
 	namespaces := s.capacityNamespacesForUser(r)
-	return newCapacityIssueProjection(capacityVisibleIssues(flat, namespaces, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r)), true)
+	return newCapacityIssueProjection(capacityVisibleIssues(flat, namespaces, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueEvidenceAccess(r)), true)
 }
 
 func capacityVisibleIssues(
@@ -120,6 +121,7 @@ func capacityVisibleIssues(
 	namespaces []string,
 	canReadClusterScoped func(kind, group string) bool,
 	canReadRelated func(issues.Ref) bool,
+	canReadEvidence func(issues.EvidenceRead) bool,
 ) []issues.Issue {
 	allowed := make(map[string]struct{}, len(namespaces))
 	for _, namespace := range namespaces {
@@ -127,7 +129,8 @@ func capacityVisibleIssues(
 	}
 	out := make([]issues.Issue, 0, len(in))
 	for _, issue := range in {
-		if !issues.CanReadIssueRelatedRefs(issue, canReadRelated) {
+		// The memo keeps findings with inventory dependencies for this check.
+		if !issues.CanReadIssueEvidence(issue, canReadEvidence, false) || !issues.CanReadIssueRelatedRefs(issue, canReadRelated) {
 			continue
 		}
 		// The memo composes user-agnostically; per-user redaction of

@@ -112,7 +112,7 @@ func TestBuildIssueIndex_GroupAware(t *testing.T) {
 			{Kind: "Service", Group: "serving.knative.dev", Namespace: "prod", Name: "api", Reason: "RouteNotReady", Severity: "warning"},
 		},
 	}
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	// The index counts GROUPED issues (consistent with the issues tool), not flat
 	// rows: the two Knative rows share subject+category and fold into one grouped
 	// issue → count 1. The core Service is a distinct group → its own key (the
@@ -138,7 +138,7 @@ func TestBuildIssueIndex_GroupedSubjectPropagation(t *testing.T) {
 				OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web"},
 		},
 	}
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	if got := idx.Count("apps", "Deployment", "prod", "web"); got != 1 {
 		t.Errorf("owning Deployment count = %d, want 1 (Pod-evidenced issue must surface on the grouped subject)", got)
 	}
@@ -161,7 +161,7 @@ func TestBuildIssueIndex_BeyondMaxLimit(t *testing.T) {
 		})
 	}
 	p := &fakeIssuesProvider{problems: probs}
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	tailName := fmtPodName(issues.MaxLimit + 25)
 	if got := idx.Count("", "Pod", "prod", tailName); got != 1 {
 		t.Fatalf("tail pod %s count = %d, want 1 (silent MaxLimit truncation?)", tailName, got)
@@ -205,7 +205,7 @@ func TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered(t *testing.T) 
 	}
 
 	// Cluster-wide compose (nil namespaces) — issue surfaces.
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	if got := idx.Count("", "Node", "", "worker-1"); got != 1 {
 		t.Errorf("cluster-wide index: Node issueCount = %d, want 1 (cluster-scoped issue should appear)", got)
 	}
@@ -214,7 +214,7 @@ func TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered(t *testing.T) 
 	// ["prod","staging"] drops it because the user-namespaced perm
 	// slice never matches "". This is what the pre-fix handler did for
 	// Node lists.
-	scopedIdx := BuildIssueIndex(p, []string{"prod", "staging"})
+	scopedIdx := BuildIssueIndex(p, issues.Filters{Namespaces: []string{"prod", "staging"}})
 	if got := scopedIdx.Count("", "Node", "", "worker-1"); got != 0 {
 		t.Errorf("namespace-scoped index: Node issueCount = %d, want 0 (namespace filter drops cluster-scoped issue)", got)
 	}
@@ -243,7 +243,7 @@ func TestBuildIssueIndex_CRDPlural_NonZeroCount(t *testing.T) {
 	// Pre-fix simulation: the handler would have passed kindFilter="applications"
 	// — the URL plural. We no longer take a kindFilter, but verify that
 	// the index contains the row keyed by the canonical singular form.
-	idx := BuildIssueIndex(p, []string{"argocd"})
+	idx := BuildIssueIndex(p, issues.Filters{Namespaces: []string{"argocd"}})
 	if got := idx.Count("argoproj.io", "Application", "argocd", "storefront"); got != 1 {
 		t.Errorf("CRD Application count (singular kind) = %d, want 1", got)
 	}
@@ -276,8 +276,8 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	}
 
 	// Build the two indexes the search constructor would build.
-	namespacedIdx := BuildIssueIndex(p, []string{"prod"})
-	clusterIdx := BuildIssueIndex(p, nil)
+	namespacedIdx := BuildIssueIndex(p, issues.Filters{Namespaces: []string{"prod"}})
+	clusterIdx := BuildIssueIndex(p, issues.Filters{})
 
 	// Sanity: pre-fix, the search handler passed namespacedIdx for
 	// both; Node issueCount silently zeroed.

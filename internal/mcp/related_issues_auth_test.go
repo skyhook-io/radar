@@ -88,3 +88,30 @@ func initMCPRelatedIssueAuthDiscovery(t *testing.T) {
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
 }
+
+func TestMCPCachedIssuesAuthorizeEvidenceInventories(t *testing.T) {
+	ctx := withTestUserPerms(t, "evidence-user", nil, []string{"db"})
+	perms := getPermCache().Get("evidence-user", nil)
+	perms.SetCanI("list", "example.com", "widgets", "db", true)
+	perms.SetCanI("get", "", "pods", "db", true)
+	perms.SetCanI("list", "", "pods", "db", false)
+	perms.SetCanI("list", "other.example", "pods", "db", true)
+	issue := issues.Issue{ID: "contradiction", Group: "example.com", Kind: "Widget", Namespace: "db", Name: "w", RequiredReads: []issues.EvidenceRead{
+		{Group: "example.com", Resource: "widgets", Namespace: "db", Verb: "list"},
+		{Resource: "pods", Namespace: "db", Verb: "list"},
+	}}
+	options := issues.RelatedIssueOptions{CanReadEvidence: issueEvidenceAccess(ctx)}
+	lookup := func() []issues.Issue {
+		return issues.RelatedIssuesFrom(nil, []issues.Issue{issue}, options, issue.Group, issue.Kind, issue.Namespace, issue.Name)
+	}
+	if len(lookup()) != 0 {
+		t.Fatal("get Pods or list another group's Pods must not authorize the evidence")
+	}
+	perms.SetCanI("list", "", "pods", "db", true)
+	if len(lookup()) != 1 {
+		t.Fatal("authorized inventory withheld")
+	}
+	if options.CanReadEvidence(issues.EvidenceRead{Resource: "pods", Namespace: "other", Verb: "list"}) {
+		t.Fatal("unread namespace authorized")
+	}
+}

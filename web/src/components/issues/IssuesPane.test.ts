@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Issue } from "@skyhook-io/k8s-ui";
-import { capacityHrefForIssue } from "./IssuesPane";
+import type { SubjectIssuesResponse } from "../../api/client";
+import { capacityHrefForIssue, issueSubjectFromParams, issueSubjectState } from "./IssuesPane";
 
 function issue(partial: Partial<Issue>): Issue {
   return {
@@ -140,3 +141,46 @@ describe("capacityHrefForIssue subject carry", () => {
     ).toBe("/capacity/demand");
   });
 });
+
+describe('issue subject links', () => {
+  it('reads the subject a link narrows to, with its API group', () => {
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&group=postgresql.cnpg.io&resource=pg%2Fpg-main'))).toEqual({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg-main' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Pod&resource=pg%2Fpg-main-1'))).toEqual({ kind: 'Pod', group: '', namespace: 'pg', name: 'pg-main-1' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=ClusterImageCatalog&group=postgresql.cnpg.io&resource=pg'))).toEqual({ kind: 'ClusterImageCatalog', group: 'postgresql.cnpg.io', namespace: '', name: 'pg' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster'))).toBeNull()
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&resource=pg%2F'))).toBeNull()
+  })
+  it('never reads the view filter as the subject namespace', () => {
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&namespace=pg&name=pg-main'))).toBeNull()
+  })
+})
+
+describe('issueSubjectState', () => {
+  const subject = { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' }
+  const loaded = (data: Partial<SubjectIssuesResponse>) => ({ isLoading: false, error: null, data: { issues: [], coverage: 'ok' as const, ...data } })
+  it('says the view filter hides the subject rather than none', () => {
+    expect(issueSubjectState(subject, ['app'], loaded({}))).toEqual({ state: 'hidden' })
+    expect(issueSubjectState(subject, ['app', 'pg'], loaded({}))).toEqual({ state: 'none' })
+    expect(issueSubjectState(subject, [], loaded({}))).toEqual({ state: 'none' })
+    expect(issueSubjectState({ ...subject, kind: 'ClusterImageCatalog', namespace: '' }, ['app'], loaded({}))).toEqual({ state: 'none' })
+  })
+  it('reads an empty answer as unconfirmed when Radar does not read the kind', () => {
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'notWatched' }))).toEqual({ state: 'unconfirmed', why: "Radar isn't watching Cluster yet" })
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'syncing' }))).toEqual({ state: 'unconfirmed', why: 'Radar is still loading Cluster' })
+  })
+  it('reads an empty answer as unconfirmed when RBAC withheld issues about it', () => {
+    expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2, members: 0 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })
+  })
+  it('reads an empty answer under limited visibility as unconfirmed, never none', () => {
+    expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'degraded', impact: 'Pods are not readable.' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable (Pods are not readable)" })
+    expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'limited' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable" })
+  })
+  it('reports a failed lookup as unconfirmed and a pending one as checking', () => {
+    expect(issueSubjectState(subject, [], { isLoading: false, error: new Error('no access to Cluster main'), data: undefined })).toEqual({ state: 'unconfirmed', why: 'no access to Cluster main' })
+    expect(issueSubjectState(subject, [], { isLoading: true, error: null, data: undefined })).toEqual({ state: 'checking' })
+  })
+  it('takes the per-resource answer, which covers members past the inline cap', () => {
+    const grouped = issue({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main', members: [], members_truncated: true })
+    expect(issueSubjectState(subject, [], loaded({ issues: [grouped], withheld: { issues: 1, members: 0 } }))).toEqual({ state: 'found', issues: [grouped], withheld: 1 })
+  })
+})

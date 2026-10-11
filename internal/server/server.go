@@ -1345,6 +1345,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		YAMLSchemas:           true,
 		WorkloadImages:        true,
 		ResourceIssues:        true,
+		ResourceIssueCoverage: true,
 		PodEnvironment:        true,
 		PolicyResource:        true,
 		WorkloadHistory:       true,

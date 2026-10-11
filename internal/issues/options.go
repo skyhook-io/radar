@@ -41,6 +41,12 @@ type Filters struct {
 	// assert an issue on another subject, such as a NodeClass referenced by a
 	// NodePool. Nil preserves internal/no-auth composition.
 	CanReadRelated func(Ref) bool
+	// CanReadEvidence authorizes the exact inventory operations retained on
+	// cross-resource findings, including after grouping or memoization.
+	CanReadEvidence func(EvidenceRead) bool
+	// AllowUnfilteredEvidence is only for internal composition whose results
+	// are authorized again before reaching a caller.
+	AllowUnfilteredEvidence bool
 	// Grouped folds the flat rows into the public grouped model
 	// (GroupIssues) before the cap, so the limit counts issue groups, not
 	// replica fan-out. The public /api/issues + MCP issues set this; flat
@@ -62,8 +68,10 @@ type RelatedIssueOptions struct {
 	// folded into per-issue signals such as capacity relevance. Omitting it here
 	// would let a caller who cannot list NodePools read that state through the
 	// per-resource path. Nil preserves auth-mode=none and internal composition.
-	CanReadClusterScoped func(kind, group string) bool
-	CanReadRelated       func(Ref) bool
+	CanReadClusterScoped    func(kind, group string) bool
+	CanReadRelated          func(Ref) bool
+	CanReadEvidence         func(EvidenceRead) bool
+	AllowUnfilteredEvidence bool
 }
 
 const (

@@ -10,6 +10,7 @@
 package mcp
 
 import (
+	"context"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
@@ -30,12 +31,12 @@ import (
 // per-hit between a namespaced and a cluster-wide index — search
 // returns mixed kinds in one response, so a single index can't get
 // both right.
-func newResourceSummaryContextBuilder(namespaces []string) summarycontext.Builder {
+func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
 	}
-	idx := summarycontext.BuildIssueIndex(provider, namespaces)
+	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(namespaces), idx, idx)
 }
 
@@ -46,15 +47,15 @@ func newResourceSummaryContextBuilder(namespaces []string) summarycontext.Builde
 // canReadClusterScopedKind) already gates which cluster-scoped kinds
 // are reachable, so composing the cluster-wide index doesn't leak
 // rows the user can't see.
-func newSearchSummaryContextBuilder(scanNamespaces []string) summarycontext.Builder {
+func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
 	}
-	namespacedIdx := summarycontext.BuildIssueIndex(provider, scanNamespaces)
+	namespacedIdx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: scanNamespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	clusterIdx := namespacedIdx
 	if scanNamespaces != nil {
-		clusterIdx = summarycontext.BuildIssueIndex(provider, nil)
+		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
 	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(scanNamespaces), namespacedIdx, clusterIdx)
 }

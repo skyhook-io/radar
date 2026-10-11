@@ -14,6 +14,31 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
+func TestRESTCachedIssuesAuthorizeEvidenceInventories(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"db"}}
+	perms.SetCanI("list", "example.com", "widgets", "db", true)
+	perms.SetCanI("get", "", "pods", "db", true)
+	perms.SetCanI("list", "", "pods", "db", false)
+	s.permCache.Set("evidence-user", nil, perms)
+	r := requestWithUser(http.MethodGet, "/api/issues/resource/widget/db/w", &auth.User{Username: "evidence-user"})
+	issue := issues.Issue{ID: "contradiction", Group: "example.com", Kind: "Widget", Namespace: "db", Name: "w", RequiredReads: []issues.EvidenceRead{
+		{Group: "example.com", Resource: "widgets", Namespace: "db", Verb: "list"},
+		{Resource: "pods", Namespace: "db", Verb: "list"},
+	}}
+	options := issues.RelatedIssueOptions{CanReadEvidence: s.issueEvidenceAccess(r)}
+	lookup := func() []issues.Issue {
+		return issues.RelatedIssuesFrom(nil, []issues.Issue{issue}, options, issue.Group, issue.Kind, issue.Namespace, issue.Name)
+	}
+	if len(lookup()) != 0 {
+		t.Fatal("get Pods must not authorize a list-dependent finding")
+	}
+	perms.SetCanI("list", "", "pods", "db", true)
+	if len(lookup()) != 1 {
+		t.Fatal("authorized inventory withheld")
+	}
+}
+
 func TestRESTRelatedIssuesAuthorizeNodeClassSubject(t *testing.T) {
 	initRelatedIssueAuthDiscovery(t)
 	s := newAuthServer(auth.Config{Mode: "proxy"})

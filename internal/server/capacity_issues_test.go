@@ -21,16 +21,16 @@ func TestCapacityVisibleIssuesKeepsClusterAndAuthorizedNamespaces(t *testing.T) 
 	}
 
 	allowCluster := func(string, string) bool { return true }
-	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, allowCluster, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed", "hidden") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, allowCluster, nil, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed", "hidden") {
 		t.Fatalf("unrestricted issue IDs = %v", got)
 	}
-	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{"team-a"}, allowCluster, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{"team-a"}, allowCluster, nil, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed") {
 		t.Fatalf("team-a issue IDs = %v", got)
 	}
-	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{}, allowCluster, nil)); !sameCapacityIssueIDs(got, "cluster") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{}, allowCluster, nil, nil)); !sameCapacityIssueIDs(got, "cluster") {
 		t.Fatalf("no-namespace-access issue IDs = %v", got)
 	}
-	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, func(string, string) bool { return false }, nil)); !sameCapacityIssueIDs(got, "allowed", "hidden") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, func(string, string) bool { return false }, nil, nil)); !sameCapacityIssueIDs(got, "allowed", "hidden") {
 		t.Fatalf("cluster-denied issue IDs = %v", got)
 	}
 }
@@ -44,10 +44,10 @@ func TestCapacityVisibleIssuesRequiresReferencedNodeClassAccess(t *testing.T) {
 		}}},
 	}
 	allowCluster := func(string, string) bool { return true }
-	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, func(issues.Ref) bool { return false }); len(got) != 0 {
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, func(issues.Ref) bool { return false }, nil); len(got) != 0 {
 		t.Fatalf("denied NodeClass leaked through NodePool issue: %+v", got)
 	}
-	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, func(issues.Ref) bool { return true }); len(got) != 1 {
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, func(issues.Ref) bool { return true }, nil); len(got) != 1 {
 		t.Fatalf("authorized NodeClass issue omitted: %+v", got)
 	}
 }
@@ -204,4 +204,20 @@ func sameCapacityIssueIDs(got []string, want ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestCapacityVisibleIssuesAuthorizesEvidence(t *testing.T) {
+	allowCluster := func(string, string) bool { return true }
+	issue := issues.Issue{ID: "derived", Kind: "NodePool", Group: "karpenter.sh", Name: "default", RequiredReads: []issues.EvidenceRead{
+		{Resource: "pods", Namespace: "team-a", Verb: "list"},
+	}}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, nil); len(got) != 0 {
+		t.Fatalf("a finding with inventory dependencies passed without an authorizer: %+v", got)
+	}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, func(issues.EvidenceRead) bool { return false }); len(got) != 0 {
+		t.Fatalf("denied evidence passed: %+v", got)
+	}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, func(issues.EvidenceRead) bool { return true }); len(got) != 1 {
+		t.Fatalf("authorized evidence withheld: %+v", got)
+	}
 }

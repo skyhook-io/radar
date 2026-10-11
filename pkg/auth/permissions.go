@@ -78,6 +78,16 @@ func (p *UserPermissions) SetCanI(verb, group, resource, namespace string, allow
 	p.canI[canIKey(verb, group, resource, namespace)] = allowed
 }
 
+// CanINamed and SetCanINamed are CanI and SetCanI for one named object, which a
+// resourceNames-restricted grant can allow while the kind-wide check denies.
+func (p *UserPermissions) CanINamed(verb, group, resource, namespace, name string) (bool, bool) {
+	return p.CanI(verb, group, resource, namespace+"\x00"+name)
+}
+
+func (p *UserPermissions) SetCanINamed(verb, group, resource, namespace, name string, allowed bool) {
+	p.SetCanI(verb, group, resource, namespace+"\x00"+name, allowed)
+}
+
 // PermissionCache caches per-user permission lookups (thread-safe)
 type PermissionCache struct {
 	mu          sync.RWMutex
@@ -314,6 +324,23 @@ func ReviewSubjectAccess(ctx context.Context, client kubernetes.Interface, usern
 // on behalf of the user.
 func SubjectCanI(ctx context.Context, client kubernetes.Interface, username string, groups []string, namespace, group, resource, verb string) (bool, error) {
 	return SubjectCanISubresource(ctx, client, username, groups, namespace, group, resource, "", verb)
+}
+
+// SubjectCanINamed is SubjectCanI for one named object, so a grant restricted
+// by resourceNames is honoured.
+func SubjectCanINamed(ctx context.Context, client kubernetes.Interface, username string, groups []string, namespace, group, resource, name, verb string) (bool, error) {
+	status, err := ReviewSubjectAccess(ctx, client, username, groups, authv1.ResourceAttributes{
+		Namespace: namespace,
+		Group:     group,
+		Resource:  resource,
+		Name:      name,
+		Verb:      verb,
+	})
+	if err != nil {
+		log.Printf("[auth] SubjectAccessReview failed for user=%s %s %s/%s %s: %v", username, verb, group, resource, name, err)
+		return false, err
+	}
+	return status.Allowed, nil
 }
 
 // SubjectCanISubresource performs the same impersonated authorization check
