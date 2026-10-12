@@ -1014,6 +1014,24 @@ function GroupRow({
     ? pickWorstPressure(pool.ledger.limitPressure)
     : undefined;
   const childHealth = worstChildHealth(group.children);
+  const noScaleDownCandidates =
+    hasChildren &&
+    !group.childrenMeta.truncated &&
+    !group.scaling.some((fact) => fact.code === "at_min_size") &&
+    group.children.every(
+      (child) =>
+        child.minSize !== undefined &&
+        child.target !== undefined &&
+        child.target >= child.minSize &&
+        child.scaleDown?.status === "NoCandidates" &&
+        child.scaleDown.candidates === 0,
+    ) &&
+    group.children.some(
+      (child) =>
+        child.target !== undefined &&
+        child.minSize !== undefined &&
+        child.target > child.minSize,
+    );
 
   return (
     <>
@@ -1184,7 +1202,25 @@ function GroupRow({
                 )}
               </span>
             ))}
-            {group.scaling.length === 0 && (
+            {noScaleDownCandidates && (
+              <>
+                {group.scaling.length > 0 && " · "}
+                <Tooltip
+                  content={NO_CANDIDATES_EXPLANATION}
+                  wrapperClassName="!inline"
+                >
+                  <span
+                    tabIndex={0}
+                    role="note"
+                    aria-label={`No node can be removed right now. ${NO_CANDIDATES_EXPLANATION}`}
+                    className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                  >
+                    No node can be removed right now
+                  </span>
+                </Tooltip>
+              </>
+            )}
+            {group.scaling.length === 0 && !noScaleDownCandidates && (
               <span className="text-theme-text-tertiary">—</span>
             )}
           </div>
@@ -1204,10 +1240,12 @@ function GroupRow({
 }
 
 const MIN_SIZE_EXPLANATION =
-  "Every observed autoscaler group has its target at its published minimum. Unattributed groups are separate; current registered nodes may still exceed the target.";
+  "Every observed autoscaler group has its target at its published minimum. Lowering the pool's minimum is required for it to shrink below this size. Unattributed groups are separate; current registered nodes may still exceed the target.";
 
 const SCALE_DOWN_EXPLANATION =
-  "Scale-down candidates are removed after the autoscaler's scale-down delay unless PodDisruptionBudgets, local storage, or annotations block the removal — Radar can't see those blockers.";
+  "Scale-down candidates are observations, not guaranteed removals. PodDisruptionBudgets, local storage, kube-system pods, or safe-to-evict annotations can block removal. Radar can't tell which nodes the autoscaler picked, but a node's drain plan shows what would block removing it.";
+const NO_CANDIDATES_EXPLANATION =
+  "The autoscaler found no node it can remove. Usually every node is above its utilization threshold, or pods on emptier nodes can't move (PodDisruptionBudgets, local storage, kube-system pods, safe-to-evict annotations). A node's drain plan shows what would block it.";
 const SCALE_DOWN_STATUS_LABELS = new Map([
   ["NoCandidates", "No scale-down candidates"],
   ["CandidatesPresent", "Scale-down candidates present"],
@@ -1444,17 +1482,21 @@ function ChildScaleDown({
     scaleDown.candidates !== undefined;
   const noCandidates =
     scaleDown.status === "NoCandidates" && scaleDown.candidates === 0;
+  const explanation =
+    scaleDown.status === "NoCandidates"
+      ? NO_CANDIDATES_EXPLANATION
+      : SCALE_DOWN_EXPLANATION;
   const transition = scaleDown.lastTransitionTime
     ? Date.parse(scaleDown.lastTransitionTime)
     : NaN;
   return (
     <div className="space-y-1 text-theme-text-secondary">
       <div className="flex items-center gap-1">
-        <WithTooltip tip={`${statusLabel}. ${SCALE_DOWN_EXPLANATION}`}>
+        <WithTooltip tip={`${statusLabel}. ${explanation}`}>
           <span
             tabIndex={0}
             role="note"
-            aria-label={`${countIsStatus ? candidatesLabel : statusLabel}. ${SCALE_DOWN_EXPLANATION}`}
+            aria-label={`${countIsStatus ? candidatesLabel : statusLabel}. ${explanation}`}
             className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
           >
             {countIsStatus ? candidatesLabel : statusLabel}

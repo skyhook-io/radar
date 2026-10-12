@@ -1341,6 +1341,11 @@ describe("CapacityView overview", () => {
 });
 
 describe("Capacity scale-down observations", () => {
+  const noCandidatesExplanation =
+    "The autoscaler found no node it can remove. Usually every node is above its utilization threshold, or pods on emptier nodes can't move (PodDisruptionBudgets, local storage, kube-system pods, safe-to-evict annotations). A node's drain plan shows what would block it.";
+  const candidateExplanation =
+    "Scale-down candidates are observations, not guaranteed removals. PodDisruptionBudgets, local storage, kube-system pods, or safe-to-evict annotations can block removal. Radar can't tell which nodes the autoscaler picked, but a node's drain plan shows what would block removing it.";
+
   function renderScaleDown(child: CapacityAutoscalerChildObservation) {
     return renderCapacity("/capacity", (client) =>
       client.setQueryData(["capacity", "overview"], {
@@ -1379,6 +1384,11 @@ describe("Capacity scale-down observations", () => {
     expect(html).toContain(
       "Every observed autoscaler group has its target at its published minimum.",
     );
+    expect(html).toContain(
+      "Lowering the pool&#x27;s minimum is required for it to shrink below this size.",
+    );
+    expect(html).not.toContain("No node can be removed right now");
+    expect(html).toContain(noCandidatesExplanation.replaceAll("'", "&#x27;"));
     expect(html).not.toContain("autoscaler child");
     expect(html).toContain("No scale-down candidates");
     expect(html).toContain("Candidate count published by the autoscaler: 0.");
@@ -1388,6 +1398,52 @@ describe("Capacity scale-down observations", () => {
     expect(html).not.toContain("As of");
     expect(html).toContain("PodDisruptionBudgets");
     expect(html).not.toContain("ETA");
+  });
+
+  it("explains no candidates above the minimum on the collapsed pool and both child tables", () => {
+    const child: CapacityAutoscalerChildObservation = {
+      ...gkeChild,
+      scaleDown: { status: "NoCandidates", candidates: 0 },
+    };
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [{ ...gkeGroup, children: [child], childrenMeta: boundedMeta(1) }],
+        orphanAutoscalerGroups: [child],
+      }),
+    );
+    expect(html).toContain('aria-expanded="false"');
+    const explanation = noCandidatesExplanation.replaceAll("'", "&#x27;");
+    expect(html).toContain(
+      `tabindex="0" role="note" aria-label="No node can be removed right now. ${explanation}"`,
+    );
+    expect(html.split(`No scale-down candidates. ${explanation}`)).toHaveLength(3);
+    expect(html).not.toContain("Scale-down candidates are observations");
+  });
+
+  it.each([
+    ["missing count", { scaleDown: { status: "NoCandidates" } }, false],
+    ["missing observation", { scaleDown: undefined }, false],
+    ["candidates present", { scaleDown: { status: "CandidatesPresent", candidates: 1 } }, false],
+    ["missing minimum", { minSize: undefined }, false],
+    ["missing target", { target: undefined }, false],
+    ["below the minimum", { target: -1 }, false],
+    ["truncated children", {}, true],
+  ])("does not assert no removable nodes with %s", (_label, override, truncated) => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [{
+          ...gkeGroup,
+          children: [
+            { ...gkeChild, scaleDown: { status: "NoCandidates", candidates: 0 } },
+            { ...gkeChildBackoff, scaleDown: { status: "NoCandidates", candidates: 0 }, ...override },
+          ],
+          childrenMeta: { total: truncated ? 3 : 2, returned: 2, truncated },
+        }],
+      }),
+    );
+    expect(html).not.toContain("No node can be removed right now");
   });
 
   it("keeps scale-down probe freshness separate from health in both tables", () => {
@@ -1568,6 +1624,9 @@ describe("Capacity scale-down observations", () => {
     );
     expect(html).toContain("3 scale-down candidates");
     expect(html).toMatch(/tabindex="0" role="note" aria-label="3 scale-down candidates\. [^"]*PodDisruptionBudgets/);
+    expect(html).toContain(candidateExplanation.replaceAll("'", "&#x27;"));
+    expect(html).not.toContain("scale-down delay");
+    expect(html).not.toContain("Radar can&#x27;t see those blockers");
     expect(html).toContain('aria-expanded="false"');
   });
 
@@ -1594,8 +1653,9 @@ describe("Capacity scale-down observations", () => {
       scaleDown: { status: "CandidatesPresent", candidates: 1 },
     });
     expect(html).toMatch(
-      /role="note" aria-label="1 scale-down candidate\. Scale-down candidates are removed/,
+      /role="note" aria-label="1 scale-down candidate\. Scale-down candidates are observations/,
     );
+    expect(html).toContain(candidateExplanation.replaceAll("'", "&#x27;"));
     expect(html).not.toContain("1 scale-down candidates");
   });
 });
