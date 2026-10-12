@@ -217,8 +217,8 @@ func TestTerminatingGuidanceAndNoise(t *testing.T) {
 		wantCalls     int
 	}{
 		{name: "healthy infrastructure", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "crossplane is healthy (1 pod ready)", Controller: "crossplane", Running: true, Healthy: true}, wantSeverity: SeverityWarning, wantAction: "Check its logs", wantCalls: 1},
-		{name: "identified crashloop", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "crossplane is CrashLoopBackOff (1/1 pods)", Controller: "crossplane", Down: true, State: "CrashLoopBackOff (1/1 pods)"}, wantSeverity: SeverityCritical, wantAction: `Fix crossplane, which is CrashLoopBackOff (1/1 pods); it will finish the deletion once running. Removing finalizer "crossplane.io/cleanup" would skip its cleanup.`, wantCalls: 1},
-		{name: "no recognized controller", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "no recognized controller found", Controller: "crossplane", NotFound: true, AllowConditionalCleanup: true}, wantSeverity: SeverityWarning, wantAction: `No recognized controller found for finalizer "crossplane.io/cleanup". If crossplane should be running, restore it; it will finish the deletion.`, wantCondition: "If crossplane was uninstalled on purpose (and nothing else should finalize this object), remove the finalizer", wantCalls: 1},
+		{name: "identified crashloop", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "crossplane is CrashLoopBackOff (1/1 pods)", Controller: "crossplane", Down: true, State: "CrashLoopBackOff (1/1 pods)"}, wantSeverity: SeverityCritical, wantAction: `Fix crossplane, which is CrashLoopBackOff (1/1 pods), so it can resume cleanup. Removing finalizer "crossplane.io/cleanup" would skip its cleanup.`, wantCalls: 1},
+		{name: "no recognized controller", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "no recognized controller found", Controller: "crossplane", NotFound: true, AllowConditionalCleanup: true}, wantSeverity: SeverityWarning, wantAction: `No recognized controller found for finalizer "crossplane.io/cleanup". If crossplane should be running, restore it so it can resume cleanup.`, wantCondition: "If crossplane was uninstalled on purpose (and nothing else should finalize this object), remove the finalizer", wantCalls: 1},
 		{name: "scaled to zero", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "crossplane is scaled to 0 replicas in namespace crossplane-system", Controller: "crossplane", NotFound: true, ScaledDown: true, AllowConditionalCleanup: true}, wantSeverity: SeverityWarning, wantAction: `No running controller found for finalizer "crossplane.io/cleanup": crossplane is scaled to 0 replicas in namespace crossplane-system. If it was stopped temporarily, scale it back up`, wantCondition: "If crossplane was scaled to 0 on purpose and won't be restarted (and nothing else should finalize this object), remove the finalizer", wantCalls: 1},
 		{name: "catalog owner without cleanup opt-in", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "no recognized controller found", Controller: "crossplane", NotFound: true}, wantSeverity: SeverityWarning, wantAction: "Get crossplane running again rather than removing finalizer", wantCalls: 1},
 		{name: "scaled down owner without cleanup opt-in", finalizers: []string{"crossplane.io/cleanup"}, observation: finalizerObservation{Text: "crossplane is scaled to 0 replicas", Controller: "crossplane", NotFound: true, ScaledDown: true}, wantSeverity: SeverityWarning, wantAction: "Get crossplane running again rather than removing finalizer", wantCalls: 1},
@@ -771,7 +771,7 @@ func TestStuckDeletionCleanupNeedsNoRecognizedController(t *testing.T) {
 		unhealthy := vmPod.DeepCopy()
 		unhealthy.Status = tc.status
 		vm := compose(t, vmOperator, unhealthy)["VMAgent"]
-		if offersRemoval(vm) || vm.Severity != SeverityCritical || !strings.Contains(vm.Cause, "victoria-metrics-operator is "+tc.state) || !strings.Contains(vm.Action, "Fix vm-victoria-metrics-operator, which is "+tc.state+"; it will finish the deletion once running.") || !strings.Contains(vm.Action, "would skip its cleanup") {
+		if offersRemoval(vm) || vm.Severity != SeverityCritical || !strings.Contains(vm.Cause, "victoria-metrics-operator is "+tc.state) || !strings.Contains(vm.Action, "Fix vm-victoria-metrics-operator, which is "+tc.state+", so it can resume cleanup.") || !strings.Contains(vm.Action, "would skip its cleanup") {
 			t.Errorf("installed VictoriaMetrics operator, %s: severity=%s cause=%s action=%s", tc.name, vm.Severity, vm.Cause, vm.Action)
 		}
 	}
@@ -797,7 +797,7 @@ func TestStuckDeletionCleanupNeedsNoRecognizedController(t *testing.T) {
 	}
 	// Admission can block every pod of a renamed install; the template image
 	// still identifies it as installed and down.
-	if vm := compose(t, renamed)["VMAgent"]; offersRemoval(vm) || vm.Severity != SeverityCritical || !strings.Contains(vm.Action, "Fix vmop, which is not running (no pods for 1 desired replica); it will finish the deletion once running.") {
+	if vm := compose(t, renamed)["VMAgent"]; offersRemoval(vm) || vm.Severity != SeverityCritical || !strings.Contains(vm.Action, "Fix vmop, which is not running (no pods for 1 desired replica), so it can resume cleanup.") {
 		t.Errorf("renamed VictoriaMetrics operator with no pods: severity=%s cause=%s action=%s", vm.Severity, vm.Cause, vm.Action)
 	}
 	// "cluster" in cluster.example.io matches rabbitmq-cluster-operator by name

@@ -495,9 +495,11 @@ Watched custom resources that remain present after deletion started appear in
 `issues` as `termination_stuck`: warning after 10 minutes and critical at 30,
 with deletion time as the onset. For operator finalizers, it reaches critical
 only when a recognized controller is installed but not fully ready (see the
-table below). In-use guards also reach critical at 30 minutes, unless another
-finalizer's controller is fully ready; that mixed-finalizer case stays at
-warning. Garbage-collection-only finalizers reach critical at 30 minutes.
+table below). A fully ready controller for any finalizer keeps a mixed-finalizer
+finding at warning, even when another controller is down; repair advice for
+that controller remains. In-use guards also reach critical at 30 minutes unless
+that mixed-finalizer exception applies. Garbage-collection-only finalizers
+reach critical at 30 minutes.
 Radar only reads already
 watched CRD caches; absence of an issue does not establish that unwatched kinds
 are healthy. Namespaced subjects follow namespace access; Secret subjects also

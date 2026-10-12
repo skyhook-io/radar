@@ -38,9 +38,8 @@ type finalizerObservation struct {
 	NotFound   bool
 	ScaledDown bool
 	// Down means the identified controller is installed but has no ready pod
-	// (crashlooping, pending, or unable to create pods). It will finish the
-	// deletion once fixed, so removing its finalizer would skip cleanup it
-	// still intends to do.
+	// (crashlooping, pending, or unable to create pods). Removing its finalizer would skip
+	// cleanup it still intends to do.
 	Down bool
 	// State describes a Down controller, such as "CrashLoopBackOff (1/1 pods)".
 	State string
@@ -427,16 +426,16 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 		case observation.Running:
 		case observation.Down:
 			down = true
-			fixes = append(fixes, fmt.Sprintf("Fix %s, which is %s; it will finish the deletion once running. Removing finalizer %q would skip its cleanup.", observation.Controller, observation.State, finalizer))
+			fixes = append(fixes, fmt.Sprintf("Fix %s, which is %s, so it can resume cleanup. Removing finalizer %q would skip its cleanup.", observation.Controller, observation.State, finalizer))
 		case observation.NotFound && (observation.ReleasesInfrastructure || !observation.AllowConditionalCleanup):
 			unconfirmed = append(unconfirmed, fmt.Sprintf("Get %s running again rather than removing finalizer %q.", observation.Controller, finalizer))
 		case observation.NotFound && observation.ScaledDown:
-			restores = append(restores, fmt.Sprintf("No running controller found for finalizer %q: %s. If it was stopped temporarily, scale it back up; it will finish the deletion.", finalizer, observation.Text))
+			restores = append(restores, fmt.Sprintf("No running controller found for finalizer %q: %s. If it was stopped temporarily, scale it back up so it can resume cleanup.", finalizer, observation.Text))
 			if removal, ok := pr.TerminatingRemovals[finalizer]; ok && observation.AllowConditionalCleanup {
 				cleanups = append(cleanups, finalizerCleanup{condition: observation.Controller + " was scaled to 0 on purpose and won't be restarted", removal: removal})
 			}
 		case observation.NotFound:
-			restores = append(restores, fmt.Sprintf("No recognized controller found for finalizer %q. If %s should be running, restore it; it will finish the deletion. It may also be installed under a name, labels or image Radar doesn't recognize, or run outside this cluster.", finalizer, observation.Controller))
+			restores = append(restores, fmt.Sprintf("No recognized controller found for finalizer %q. If %s should be running, restore it so it can resume cleanup. It may also be installed under a name, labels or image Radar doesn't recognize, or run outside this cluster.", finalizer, observation.Controller))
 			if removal, ok := pr.TerminatingRemovals[finalizer]; ok && observation.AllowConditionalCleanup {
 				cleanups = append(cleanups, finalizerCleanup{condition: observation.Controller + " was uninstalled on purpose", removal: removal})
 			}

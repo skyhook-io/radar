@@ -25,7 +25,7 @@ const issue: Issue = {
   reason: 'Terminating stuck',
   cause: 'Deletion has been pending for 2h.',
   action:
-    'No recognized controller found for finalizer "apps.victoriametrics.com/finalizer". If victoria-metrics-operator should be running, restore it; it will finish the deletion.',
+    'No recognized controller found for finalizer "apps.victoriametrics.com/finalizer". If victoria-metrics-operator should be running, restore it so it can resume cleanup.',
   conditional_cleanup: {
     condition,
     agent_guidance: 'Not the next step.',
