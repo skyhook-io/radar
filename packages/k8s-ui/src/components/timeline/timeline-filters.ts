@@ -172,6 +172,7 @@ export const TIMELINE_RESOURCE_KINDS = [
   'HTTPRoute',
   'GRPCRoute',
   'TCPRoute',
+  'UDPRoute',
   'TLSRoute',
   'ReplicaSet',
   'DaemonSet',

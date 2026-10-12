@@ -220,7 +220,7 @@ func detectGatewayConditionIssues(gvr schema.GroupVersionResource, kind string, 
 	switch kind {
 	case "GatewayClass", "Gateway":
 		return detectObjectConditionIssues(gvr, kind, u, SeverityWarning, "Accepted", "Programmed")
-	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute":
 		return detectGatewayRouteParentIssues(gvr, kind, u)
 	default:
 		return nil

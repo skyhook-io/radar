@@ -225,3 +225,37 @@ func TestWorkloadsSeeEventSourcesBehindTheirService(t *testing.T) {
 		t.Fatalf("Deployment routedFrom = %+v, want the PingSource sending to its Service", rel)
 	}
 }
+
+func TestUDPRouteIsBuiltLikeTheOtherGatewayRoutes(t *testing.T) {
+	gwGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+	udpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "udproutes"}
+	route := genericIdentityObject(udpGVR, "UDPRoute", "demo", "dns")
+	route.Object["spec"] = map[string]any{
+		"parentRefs": []any{map[string]any{"name": "edge"}},
+		"rules":      []any{map[string]any{"backendRefs": []any{map[string]any{"name": "coredns", "port": int64(53)}}}},
+	}
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{gwGVR, udpGVR},
+		kinds:     map[schema.GroupVersionResource]string{gwGVR: "Gateway", udpGVR: "UDPRoute"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gwGVR: {genericIdentityObject(gwGVR, "Gateway", "demo", "edge")}, udpGVR: {route}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	provider := &mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "demo"}}}}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	edges := map[string]EdgeType{}
+	for _, e := range topo.Edges {
+		edges[e.Source+" -> "+e.Target] = e.Type
+	}
+	for _, want := range []string{"gateway/demo/edge -> udproute/demo/dns", "udproute/demo/dns -> service/demo/coredns"} {
+		if edges[want] != EdgeRoutesTo {
+			t.Errorf("missing routes-to edge %s; edges: %v", want, edges)
+		}
+	}
+	rel := GetRelationships("Service", "demo", "coredns", topo, nil, nil)
+	if rel == nil || len(rel.Routes) != 1 || rel.Routes[0].Kind != "UDPRoute" {
+		t.Errorf("Service should list the UDPRoute under Routes: %+v", rel)
+	}
+}

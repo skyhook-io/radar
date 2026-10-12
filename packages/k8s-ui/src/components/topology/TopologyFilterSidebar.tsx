@@ -33,6 +33,7 @@ const RESOURCE_KINDS: {
   { kind: 'GRPCRoute', label: 'GRPCRoute', icon: getTopologyIcon('GRPCRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'TCPRoute', label: 'TCPRoute', icon: getTopologyIcon('TCPRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'TLSRoute', label: 'TLSRoute', icon: getTopologyIcon('TLSRoute'), color: 'text-purple-300', category: 'networking' },
+  { kind: 'UDPRoute', label: 'UDPRoute', icon: getTopologyIcon('UDPRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'Service', label: 'Service', icon: getTopologyIcon('Service'), color: 'text-blue-400', category: 'networking' },
   { kind: 'CalicoNetworkPolicy', label: 'Calico NetworkPolicy', icon: getTopologyIcon('CalicoNetworkPolicy'), color: 'text-teal-400', category: 'custom' },
   { kind: 'CalicoGlobalNetworkPolicy', label: 'Calico GlobalNetworkPolicy', icon: getTopologyIcon('CalicoGlobalNetworkPolicy'), color: 'text-teal-400', category: 'custom' },

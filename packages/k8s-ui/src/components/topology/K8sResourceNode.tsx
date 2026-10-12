@@ -244,6 +244,7 @@ export const NODE_DIMENSIONS: Record<
   HTTPRoute: { width: 300, height: 84 },
   GRPCRoute: { width: 300, height: 84 },
   TCPRoute: { width: 300, height: 84 },
+  UDPRoute: { width: 300, height: 84 },
   TLSRoute: { width: 300, height: 84 },
   Service: { width: 260, height: 84 },
   Deployment: { width: 280, height: 84 },
@@ -466,7 +467,8 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
     case "HTTPRoute":
     case "GRPCRoute":
     case "TCPRoute":
-    case "TLSRoute": {
+    case "TLSRoute":
+    case "UDPRoute": {
       const hostnames = nodeData.hostnames as string[];
       const rulesCount = (nodeData.rulesCount as number) || 0;
       const host = hostnames?.length ? hostnames[0] : "";

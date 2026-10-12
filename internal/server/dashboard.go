@@ -1009,7 +1009,7 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 				counts.Gateways = len(gateways)
 			}
 		}
-		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 			if rGVR, ok := resourceDiscovery.GetGVR(routeKind); ok {
 				routes, err := dynamicCache.List(rGVR, namespace)
 				if err != nil {

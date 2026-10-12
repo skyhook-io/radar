@@ -312,7 +312,7 @@ entries:
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
   - group: "gateway.networking.k8s.io"
-    resources: ["gateways","grpcroutes","httproutes","referencegrants","tcproutes","tlsroutes"]
+    resources: ["gateways","grpcroutes","httproutes","referencegrants","tcproutes","tlsroutes","udproutes"]
     scope: Namespaced
     collection: "gatewayApi"
     decision: grant

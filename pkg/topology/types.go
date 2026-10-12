@@ -41,6 +41,7 @@ const (
 	KindHTTPRoute                      NodeKind = "HTTPRoute"
 	KindGRPCRoute                      NodeKind = "GRPCRoute"
 	KindTCPRoute                       NodeKind = "TCPRoute"
+	KindUDPRoute                       NodeKind = "UDPRoute"
 	KindTLSRoute                       NodeKind = "TLSRoute"
 	KindService                        NodeKind = "Service"
 	KindDeployment                     NodeKind = "Deployment"

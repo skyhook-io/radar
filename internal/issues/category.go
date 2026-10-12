@@ -110,7 +110,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			switch in.Kind {
 			case "GatewayClass", "Gateway":
 				return issuesapi.CategoryGatewayNotReady
-			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute":
 				return issuesapi.CategoryGatewayRouteInvalid
 			}
 			return issuesapi.CategoryOperatorConditionFail

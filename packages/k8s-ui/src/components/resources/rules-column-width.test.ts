@@ -27,7 +27,7 @@ function columnSetBody(key: string): string {
 // in the sortable-key list, so neither affordance ever renders on it. w-20
 // (80px) leaves 47px.
 describe('Rules column width', () => {
-  const kinds = ['kyvernopolicies', 'clusterpolicies', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes']
+  const kinds = ['kyvernopolicies', 'clusterpolicies', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'udproutes']
 
   it.each(kinds)('%s Rules column is at least w-20', (kind) => {
     const rules = columnSetBody(kind).match(/\{ key: 'rules'.*\}/)

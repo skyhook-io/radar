@@ -1460,6 +1460,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  udproutes: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-28', tooltip: 'Accepted = controllers accepted this route and confirmed it can use the backends and other objects it names. Traffic has not been tested. Degraded or Not Accepted: open the route to see which Gateway or backend failed. Pending or Unknown: check the named Gateways or Services and their controllers.' },
+    { key: 'parents', label: 'Gateways', width: 'w-36' },
+    { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   tlsroutes: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
@@ -2884,6 +2893,7 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   grpcroutes: ['gateway.networking.k8s.io'],
   httproutes: ['gateway.networking.k8s.io'],
   tcproutes: ['gateway.networking.k8s.io'],
+  udproutes: ['gateway.networking.k8s.io'],
   tlsroutes: ['gateway.networking.k8s.io'],
   helmreleases: ['helm.toolkit.fluxcd.io'],
   awsmachines: ['infrastructure.cluster.x-k8s.io'],
@@ -7235,6 +7245,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'grpcroutes':
     case 'tcproutes':
     case 'tlsroutes':
+    case 'udproutes':
       return <RouteCell resource={resource} column={column} />
     case 'gatewayclasses':
       return <GatewayClassCell resource={resource} column={column} />
@@ -9130,7 +9141,7 @@ function GatewayClassCell({ resource, column }: { resource: any; column: string 
   }
 }
 
-// Shared cell renderer for all Gateway API route types (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+// Shared cell renderer for all Gateway API route types (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
 function RouteCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {

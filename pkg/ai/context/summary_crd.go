@@ -43,7 +43,7 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 		return summarizeKedaTriggerAuthentication(obj)
 	case group == "gateway.networking.k8s.io" && kind == "GatewayClass":
 		return summarizeGatewayClass(obj)
-	case group == "gateway.networking.k8s.io" && (kind == "HTTPRoute" || kind == "GRPCRoute" || kind == "TCPRoute" || kind == "TLSRoute"):
+	case group == "gateway.networking.k8s.io" && (kind == "HTTPRoute" || kind == "GRPCRoute" || kind == "TCPRoute" || kind == "TLSRoute" || kind == "UDPRoute"):
 		return summarizeGatewayRoute(obj)
 	case group == "projectcontour.io" && kind == "HTTPProxy":
 		return summarizeContourHTTPProxy(obj)

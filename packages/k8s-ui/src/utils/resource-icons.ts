@@ -111,6 +111,7 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   httproute: Globe,
   grpcroute: Globe,
   tcproute: Globe,
+  udproute: Globe,
   tlsroute: Globe,
 
   // Config

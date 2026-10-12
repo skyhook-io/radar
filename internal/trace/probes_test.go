@@ -1944,6 +1944,11 @@ func TestProbeHop_L4RouteSkips(t *testing.T) {
 			t.Errorf("%s: want a single L4 skip, got %+v", kind, out)
 		}
 	}
+	// A UDP route can't claim the TCP listener probe the other L4 routes get.
+	out := probeHop(context.Background(), &Hop{Resource: ResourceRef{Kind: "UDPRoute"}}, probe.VantageLocal, nil, "/")
+	if len(out) != 1 || !out[0].Skipped || !strings.Contains(out[0].Reason, "UDP listeners aren't probed") {
+		t.Errorf("UDPRoute: want a single UDP skip, got %+v", out)
+	}
 }
 
 // TestSanitizeHTTPPath_Contract pins the exported sanitizer's semantics -

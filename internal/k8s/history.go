@@ -76,6 +76,7 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
 	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
 	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
+	"UDPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
 	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
 	"ReferenceGrant":                 {group: "gateway.networking.k8s.io", diff: diffReferenceGrant},
 	"ResourceQuota":                  {group: "", diff: diffResourceQuota},
@@ -3884,7 +3885,7 @@ func diffGateway(oldObj, newObj any) ([]FieldChange, []string) {
 	return changes, summary
 }
 
-// diffGatewayRoute computes diff for Gateway API route resources (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+// diffGatewayRoute computes diff for Gateway API route resources (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
 func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 	oldRoute, ok1 := oldObj.(*unstructured.Unstructured)
 	newRoute, ok2 := newObj.(*unstructured.Unstructured)
@@ -4039,7 +4040,7 @@ func diffReferenceGrant(oldObj, newObj any) ([]FieldChange, []string) {
 	return changes, summary
 }
 
-// indexParentConditions extracts {parentKey -> {conditionType -> status}} from
+// indexParentConditions extracts {parentKey -> {conditionType -> "status (reason)"}} from
 // a Gateway-API route's status.parents. The parent key is
 // "<group>/<kind>/<ns>/<name>/<sectionName>/<port>" — Gateway API permits a
 // route to attach to the same Gateway twice via different listeners
@@ -4069,6 +4070,11 @@ func indexParentConditions(parents []any) map[string]map[string]string {
 			}
 			t, _ := cMap["type"].(string)
 			s, _ := cMap["status"].(string)
+			// The reason is part of the value: a route can stay False while its
+			// cause changes (BackendNotFound to RefNotPermitted).
+			if r, _ := cMap["reason"].(string); r != "" {
+				s += " (" + r + ")"
+			}
 			if t != "" {
 				conds[t] = s
 			}

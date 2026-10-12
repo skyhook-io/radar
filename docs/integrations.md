@@ -321,7 +321,7 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 
 ### What Radar Shows
 
-**Topology:** Full network path — GatewayClass → Gateway → HTTPRoute/GRPCRoute/TCPRoute/TLSRoute → Service → Pod. Visualize how traffic flows from the gateway controller through routes to your backend services.
+**Topology:** Full network path — GatewayClass → Gateway → HTTPRoute/GRPCRoute/TCPRoute/TLSRoute/UDPRoute → Service → Pod. Visualize how traffic flows from the gateway controller through routes to your backend services.
 
 <p align="center">
   <img src="screenshots/integrations/gateway-topology.png" alt="Gateway API Topology" width="800">
@@ -346,6 +346,7 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Yes | Yes | Yes |
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Yes | Yes | Yes |
 | TLSRoute | `gateway.networking.k8s.io/v1alpha2` | Yes | Yes | Yes |
+| UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Yes | Yes | Yes |
 
 ---
 

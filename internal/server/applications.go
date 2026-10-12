@@ -832,7 +832,7 @@ func appRouteRefs(routes []topology.ResourceRef, routeLikeGroups ...[]topology.R
 
 func isAppRouteKind(kind string) bool {
 	switch strings.ToLower(kind) {
-	case "httproute", "grpcroute", "tcproute", "tlsroute", "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
+	case "httproute", "grpcroute", "tcproute", "tlsroute", "udproute", "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
 		return true
 	default:
 		return false

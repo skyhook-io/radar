@@ -650,3 +650,27 @@ func TestDiffAdmissionWebhookConfiguration_SelectorRescope(t *testing.T) {
 		t.Fatalf("selector rescope summary = %v", summary)
 	}
 }
+
+func TestDiffGatewayRouteRecordsAConditionReasonChange(t *testing.T) {
+	if reg, ok := diffFunctions["UDPRoute"]; !ok || reg.group != "gateway.networking.k8s.io" {
+		t.Fatalf("UDPRoute has no Gateway API route differ: %+v", reg)
+	}
+	route := func(reason string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1alpha2",
+			"kind":       "UDPRoute",
+			"metadata":   map[string]any{"name": "dns", "namespace": "demo"},
+			"status": map[string]any{"parents": []any{map[string]any{
+				"parentRef":  map[string]any{"name": "edge"},
+				"conditions": []any{map[string]any{"type": "ResolvedRefs", "status": "False", "reason": reason}},
+			}}},
+		}}
+	}
+	changes, _ := diffGatewayRoute(route("BackendNotFound"), route("RefNotPermitted"))
+	if len(changes) != 1 || changes[0].OldValue != "False (BackendNotFound)" || changes[0].NewValue != "False (RefNotPermitted)" {
+		t.Errorf("reason change under an unchanged status = %+v", changes)
+	}
+	if changes, _ := diffGatewayRoute(route("BackendNotFound"), route("BackendNotFound")); len(changes) != 0 {
+		t.Errorf("identical routes produced changes: %+v", changes)
+	}
+}

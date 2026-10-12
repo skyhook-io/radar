@@ -2065,11 +2065,15 @@ func traceGatewayEntry(ctx context.Context, deps Deps, t *Trace) {
 		// L4 routes are inventoried so the attachment list never claims
 		// HTTP-only completeness, but radar doesn't walk their backends or
 		// probe them - say so instead of leaving an unexplained bare hop.
-		if ref.Kind == "TCPRoute" || ref.Kind == "TLSRoute" {
+		if ref.Kind == "TCPRoute" || ref.Kind == "TLSRoute" || ref.Kind == "UDPRoute" {
+			listener := "The Gateway listener's TCP reachability is still probed."
+			if ref.Kind == "UDPRoute" {
+				listener = "UDP listeners aren't probed either."
+			}
 			hop.Findings = append(hop.Findings, Finding{
 				Code:     "gateway:l4-route-not-traced",
 				Severity: SeverityInfo,
-				Message:  fmt.Sprintf("This %s is attached to the Gateway but its backends are not traced or tested - radar doesn't walk L4 routes. The Gateway listener's TCP reachability is still probed.", ref.Kind),
+				Message:  fmt.Sprintf("This %s is attached to the Gateway but its backends are not traced or tested - radar doesn't walk L4 routes. %s", ref.Kind, listener),
 			})
 			sortFindingsBySeverity(hop.Findings)
 		}
@@ -2149,10 +2153,10 @@ func gatewayConfig(gw *unstructured.Unstructured) *HopConfig {
 }
 
 // gatewayRouteKinds is the full set of Gateway API route kinds radar
-// inventories on a Gateway trace. TCPRoute/TLSRoute attachments are listed so
+// inventories on a Gateway trace. TCPRoute/TLSRoute/UDPRoute attachments are listed so
 // the inventory never claims HTTP-only completeness, even though their
 // backends aren't traced (see the l4-route note in traceGatewayEntry).
-var gatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"}
+var gatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"}
 
 // attachedRoutes enumerates every route attached to the Gateway. The third
 // return value reports whether the enumeration was authoritative: false means

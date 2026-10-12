@@ -1088,7 +1088,7 @@ func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 	now := time.Now()
 	getReferenceGrants := gatewayReferenceGrantGetter(dynamicCache, discovery)
 	var out []Detection
-	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 		gvr, ok := discovery.GetGVRWithGroup(kind, "gateway.networking.k8s.io")
 		if !ok {
 			continue

@@ -3724,8 +3724,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Add Gateway API route nodes (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
-	gatewayRouteKindList := []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"}
+	// Add Gateway API route nodes (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
+	gatewayRouteKindList := []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"}
 	for _, routeKind := range gatewayRouteKindList {
 		var routeGVR schema.GroupVersionResource
 		hasRoutes := false
@@ -5868,7 +5868,7 @@ func addGitOpsManagedResourceEdges(
 		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
 		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
 		"Gateway": true, "HTTPRoute": true, "GRPCRoute": true,
-		"TCPRoute": true, "TLSRoute": true,
+		"TCPRoute": true, "TLSRoute": true, "UDPRoute": true,
 	}
 	for _, app := range applications {
 		// A remote destination's status.resources name objects in that
@@ -5900,7 +5900,7 @@ func addGitOpsManagedResourceEdges(
 		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
 		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
 		"Ingress": true, "Gateway": true, "HTTPRoute": true,
-		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true,
+		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true, "UDPRoute": true,
 	}
 	for _, kustomization := range kustomizations {
 		if !gitops.FluxTargetsLocalCluster(kustomization) {
@@ -5977,7 +5977,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				trafficGateways = gws
 			}
 		}
-		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 			if rGVR, ok := trafficResourceDiscovery.GetGVRWithGroup(routeKind, "gateway.networking.k8s.io"); ok {
 				rts, err := trafficDynamicCache.ListNamespaces(rGVR, opts.Namespaces)
 				if err != nil {
@@ -8777,7 +8777,7 @@ var genericCRDExclusions = map[string]map[string]bool{
 	"cert-manager.io":             {"certificate": true},
 	"gateway.networking.k8s.io": {
 		"gateway": true, "gatewayclass": true, "httproute": true,
-		"grpcroute": true, "tcproute": true, "tlsroute": true,
+		"grpcroute": true, "tcproute": true, "tlsroute": true, "udproute": true,
 	},
 	"karpenter.sh": {"nodepool": true, "nodeclaim": true},
 	"keda.sh":      {"scaledobject": true, "scaledjob": true},
