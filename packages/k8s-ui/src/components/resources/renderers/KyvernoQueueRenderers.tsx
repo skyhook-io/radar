@@ -3,7 +3,8 @@ import { clsx } from 'clsx'
 import { ListChecks, Workflow, Boxes, FileWarning } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { HEALTH_BADGE_COLORS, SEVERITY_BADGE } from '../../../utils/badge-colors'
-import { formatAge } from '../resource-utils'
+import { TimeValue } from '../../ui/ScheduleValue'
+import { formatRelativeAgeTime } from '../../../utils/format'
 import {
   getKyvernoRequestType,
   getKyvernoRequestTriggers,
@@ -155,7 +156,7 @@ export function KyvernoUpdateRequestRenderer({ data, onNavigate }: { data: any; 
             }
           />
           {data?.metadata?.creationTimestamp && (
-            <Property label="Queued" value={`${formatAge(data.metadata.creationTimestamp)} ago`} />
+            <Property label="Queued" value={<TimeValue timestamp={data.metadata.creationTimestamp} />} />
           )}
         </PropertyList>
         {message && state.level !== 'unhealthy' && (
@@ -290,7 +291,7 @@ export function KyvernoEphemeralReportRenderer({ data, onNavigate }: { data: any
                     </span>
                   )}
                   {at && (
-                    <span className="ml-auto shrink-0 text-theme-text-tertiary">{formatAge(at)} ago</span>
+                    <span className="ml-auto shrink-0 text-theme-text-tertiary">{formatRelativeAgeTime(at)}</span>
                   )}
                 </div>
               )

@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
 import { compareIssues, issueSortAnchor, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
-import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
+import { categoryLabel, groupBadgeClass, groupLabel, issueTitle } from './severity'
 import { IssueRow } from './IssuesView'
 import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing'
 
@@ -83,6 +83,8 @@ describe('category/group label fallbacks', () => {
   it('returns the mapped label, else humanizes (server-added category needs no frontend deploy)', () => {
     expect(categoryLabel('crashloop')).toBe('Crash loop')
     expect(categoryLabel('some_new_future_category')).toBe('Some new future category')
+    expect(issueTitle({ category: 'backup_failed', reason: 'CNPGWALArchivingFailing' })).toBe('WAL archiving failing')
+    expect(issueTitle({ category: 'backup_failed', reason: 'BackupFailed' })).toBe('Backup failed')
   })
   it('humanizes an unmapped group', () => {
     expect(groupLabel('runtime')).toBe('Runtime')
@@ -166,7 +168,7 @@ describe('IssueRow', () => {
 
   it('uses the category-group chip class in the queue row', () => {
     const html = renderToString(createElement(IssueRow, {
-      issue: mk({ category_group: 'control_plane' }),
+      issue: mk({ category_group: 'control_plane', kind: 'Node' }),
       open: false,
       onToggle: () => undefined,
     }))

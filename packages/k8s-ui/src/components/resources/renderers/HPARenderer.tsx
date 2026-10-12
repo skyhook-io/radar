@@ -4,9 +4,9 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ResourceLink, type ConditionTone } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 import { kindToPlural } from '../../../utils/navigation'
-import { formatAge } from '../resource-utils'
 import { HPADiagnosisSummary } from '../HPADiagnosisSummary'
 import type { HPADiagnosis } from '../../../types'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface HPARendererProps {
   data: any
@@ -63,7 +63,7 @@ export function HPARenderer({ data, onNavigate, hpaDiagnosis, extraSections }: H
           <Property label="Desired" value={status.desiredReplicas} />
           <Property label="Min" value={spec.minReplicas ?? 1} />
           <Property label="Max" value={spec.maxReplicas} />
-          {status.lastScaleTime && <Property label="Last Scale" value={formatAge(status.lastScaleTime)} />}
+          {status.lastScaleTime && <Property label="Last Scale" value={<TimeValue timestamp={status.lastScaleTime} />} />}
         </PropertyList>
       </Section>
 

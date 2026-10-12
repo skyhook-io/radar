@@ -5,6 +5,7 @@ import {
   getHTTPProxyRouteCount,
   getHTTPProxyServiceCount,
   getHTTPProxyStatus,
+  getHTTPProxyTLSSecret,
   hasHTTPProxyTLS,
 } from '../resource-utils-contour'
 
@@ -19,6 +20,7 @@ export function ContourHTTPProxyRenderer({ data, onNavigate }: ContourHTTPProxyR
   const routes = spec.routes || []
   const includes = spec.includes || []
   const tls = spec.virtualhost?.tls
+  const tlsSecret = getHTTPProxyTLSSecret(data)
   const tcpproxy = spec.tcpproxy
   const ns = data.metadata?.namespace || ''
   const conditions = status.conditions
@@ -174,12 +176,13 @@ export function ContourHTTPProxyRenderer({ data, onNavigate }: ContourHTTPProxyR
       {tls && (
         <Section title="TLS" icon={Lock} defaultExpanded>
           <PropertyList>
-            {tls.secretName && (
+            {tlsSecret && (
               <Property label="Secret" value={
                 <ResourceLink
-                  name={tls.secretName}
+                  name={tlsSecret.name}
                   kind="secrets"
-                  namespace={ns}
+                  namespace={tlsSecret.namespace}
+                  label={tlsSecret.namespace !== ns ? `${tlsSecret.namespace}/${tlsSecret.name}` : undefined}
                   onNavigate={onNavigate}
                 />
               } />

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -141,7 +142,7 @@ var configRefDependencies = map[schema.GroupResource]configRefDependency{
 	{Group: "traefik.containo.us", Resource: "tlsoptions"}:                    {traefikTLSOptionConfigRefs, false, false},
 	{Group: "traefik.io", Resource: "tlsstores"}:                              {traefikTLSStoreConfigRefs, false, false},
 	{Group: "traefik.containo.us", Resource: "tlsstores"}:                     {traefikTLSStoreConfigRefs, false, false},
-	{Group: "projectcontour.io", Resource: "httpproxies"}:                     {contourHTTPProxyConfigRefs, false, false},
+	{Group: "projectcontour.io", Resource: "httpproxies"}:                     {contourHTTPProxyConfigRefs, false, true},
 	{Group: "networking.istio.io", Resource: "gateways"}:                      {istioGatewayConfigRefs, false, false},
 	{Group: "cert-manager.io", Resource: "certificates"}:                      {certManagerCertificateConfigRefs, false, false},
 	{Group: "cert-manager.io", Resource: "issuers"}:                           {certManagerIssuerConfigRefs, false, false},
@@ -243,7 +244,26 @@ func traefikTLSStoreConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRe
 
 func contourHTTPProxyConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
-	addSecret(&refs, u.GetNamespace(), stringAt(u.Object, "spec", "virtualhost", "tls", "secretName"))
+	add := func(ref string) {
+		if ref != "" {
+			ns, name := configrefs.ContourSecretRef(u.GetNamespace(), ref)
+			addSecret(&refs, ns, name)
+		}
+	}
+	add(stringAt(u.Object, "spec", "virtualhost", "tls", "secretName"))
+	add(stringAt(u.Object, "spec", "virtualhost", "tls", "clientValidation", "caSecret"))
+	add(stringAt(u.Object, "spec", "virtualhost", "tls", "clientValidation", "crlSecret"))
+	for _, provider := range mapsAt(u.Object, "spec", "virtualhost", "jwtProviders") {
+		add(stringAt(provider, "remoteJWKS", "validation", "caSecret"))
+	}
+	for _, route := range mapsAt(u.Object, "spec", "routes") {
+		for _, service := range mapsAt(route, "services") {
+			add(stringAt(service, "validation", "caSecret"))
+		}
+	}
+	for _, service := range mapsAt(u.Object, "spec", "tcpproxy", "services") {
+		add(stringAt(service, "validation", "caSecret"))
+	}
 	return refs
 }
 

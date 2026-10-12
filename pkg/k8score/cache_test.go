@@ -2010,3 +2010,32 @@ func TestDynamicResourceCache_SingleFallbackCountsWithoutAllNamespacesRead(t *te
 		t.Fatalf("single-fallback Count = %d, %v; want 1", n, err)
 	}
 }
+
+// A namespace-scoped watch covers its own namespace only: another namespace
+// is not covered, so a caller can tell "not watched" from "still syncing".
+func TestDynamicResourceCache_HasCoveringInformerIsPerNamespace(t *testing.T) {
+	const nsA, nsB = "team-a", "team-b"
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	dyn := fakeDynamicForListAccess(t, map[schema.GroupVersionResource]string{
+		gvr: "WidgetList",
+	}, func(_ schema.GroupVersionResource, namespace string) bool {
+		return namespace == nsA
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, NamespaceFallbacks: []string{nsA}})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+	if _, err := d.ListBlocking(gvr, nsA, 3*time.Second); err != nil {
+		t.Fatalf("ListBlocking failed: %v", err)
+	}
+	if !d.HasCoveringInformer(gvr, nsA) || !d.IsNamespaceSynced(gvr, nsA) {
+		t.Fatal("the watched namespace is not covered and synced")
+	}
+	if d.HasCoveringInformer(gvr, nsB) || d.IsNamespaceSynced(gvr, nsB) {
+		t.Fatal("a namespace with no informer reads as covered")
+	}
+	var missing *DynamicResourceCache
+	if missing.HasCoveringInformer(gvr, nsA) {
+		t.Fatal("a nil cache covers nothing")
+	}
+}

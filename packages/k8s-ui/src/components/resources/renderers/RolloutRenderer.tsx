@@ -9,6 +9,7 @@ import { CanaryStepTimeline, BlueGreenTimeline } from './rollout/CanaryStepTimel
 import { ReplicaSetProgression } from './rollout/ReplicaSetProgression'
 import { LookupFailureNote } from './LookupFailureNote'
 import type { WorkloadRevision, WorkloadPodInfo } from '../../../types'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 export type RolloutAction = 'abort' | 'retry' | 'promote' | 'promote-full' | 'skip-step'
 
@@ -214,7 +215,7 @@ export function rolloutProblems(data: any): RolloutProblem[] {
 
   if (phase === 'Paused' && !status.abort) {
     const reasons = (status.pauseConditions || []).map((pc: any) => {
-      const since = pc.startTime ? ` (since ${formatAge(pc.startTime)})` : ''
+      const since = pc.startTime ? ` (for ${formatAge(pc.startTime)})` : ''
       return `${pc.reason || 'Unknown'}${since}`
     })
     problems.push({
@@ -741,7 +742,7 @@ export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pend
                   </span>
                 )}
                 <span className={clsx('text-xs text-theme-text-tertiary', run.metricsTotal === 0 && 'ml-auto')}>
-                  {formatAge(run.createdAt)}
+                  {formatRelativeAgeTime(run.createdAt)}
                 </span>
               </div>
             ))}

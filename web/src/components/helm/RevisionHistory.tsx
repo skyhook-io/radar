@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { History, Eye, GitCompare, Check, RotateCcw } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { HelmOperation, HelmRevision } from '../../types'
-import { getStatusColor, formatDate, formatAge } from './helm-utils'
+import { getStatusColor, formatDate } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
+import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 
 interface RevisionHistoryProps {
   history: HelmRevision[]
@@ -117,7 +118,7 @@ export function RevisionHistory({ history, currentRevision, operations = [], onV
 
                   <div className="flex items-center gap-4 mt-1 text-xs text-theme-text-tertiary">
                     <Tooltip content={revision.updated}><span>{formatDate(revision.updated)}</span></Tooltip>
-                    <span>{formatAge(revision.updated)} ago</span>
+                    <span>{formatRelativeAgeTime(revision.updated)}</span>
                   </div>
 
                   {revision.description && (

@@ -2,8 +2,11 @@ package resourcecontext
 
 import (
 	"context"
+	"slices"
 	"sort"
+	"time"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -1024,14 +1028,8 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	}
 
 	svcSet := newRefSet()
-	addIngressBackendService(svcSet, ing.Namespace, ing.Spec.DefaultBackend)
-	for _, rule := range ing.Spec.Rules {
-		if rule.HTTP == nil {
-			continue
-		}
-		for _, path := range rule.HTTP.Paths {
-			addIngressBackendService(svcSet, ing.Namespace, &path.Backend)
-		}
+	for _, name := range configrefs.IngressBackendServices(ing) {
+		svcSet.add(name, ing.Namespace)
 	}
 	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
@@ -1047,13 +1045,6 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	return out
 }
 
-func addIngressBackendService(dst *refSet, namespace string, backend *networkingv1.IngressBackend) {
-	if backend == nil || backend.Service == nil {
-		return
-	}
-	dst.add(backend.Service.Name, namespace)
-}
-
 func buildNodeSummary(obj runtime.Object) *NodeSummary {
 	node, ok := obj.(*corev1.Node)
 	if !ok || node == nil {
@@ -1064,14 +1055,16 @@ func buildNodeSummary(obj runtime.Object) *NodeSummary {
 		Capacity:      compactResourceList(node.Status.Capacity),
 		Allocatable:   compactResourceList(node.Status.Allocatable),
 	}
-	if out.Unschedulable {
+	lifecycle := health.NodeLifecycle(node, time.Now())
+	out.Lifecycle = &lifecycle
+	if out.Unschedulable && !lifecycle.Removing {
 		out.Warnings = append(out.Warnings, NodeWarningUnschedulable)
 	}
 	for _, cond := range node.Status.Conditions {
 		switch cond.Type {
 		case corev1.NodeReady:
 			out.ReadyStatus = string(cond.Status)
-			if cond.Status != corev1.ConditionTrue {
+			if lifecycle.ReadinessFailed {
 				out.Warnings = append(out.Warnings, NodeWarningNotReady)
 			}
 		case corev1.NodeDiskPressure:
@@ -1087,7 +1080,7 @@ func buildNodeSummary(obj runtime.Object) *NodeSummary {
 				out.Warnings = append(out.Warnings, NodeWarningPIDPressure)
 			}
 		case corev1.NodeNetworkUnavailable:
-			if cond.Status == corev1.ConditionTrue {
+			if slices.Contains(lifecycle.Problems, "NetworkUnavailable") {
 				out.Warnings = append(out.Warnings, NodeWarningNetworkUnavailable)
 			}
 		}

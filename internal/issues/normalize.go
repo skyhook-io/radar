@@ -156,6 +156,8 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		reason = "RBACForbidden"
 	}
 	iss := Issue{
+		RequiredReads:        p.RequiredReads,
+		Degraded:             p.Degraded,
 		Severity:             sev,
 		Source:               source,
 		Kind:                 p.Kind,
@@ -205,10 +207,16 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		if ownerGroup == "" {
 			ownerGroup = resolveGroup("", p.OwnerKind)
 		}
+		// A namespaced object's owner is in its namespace or cluster-scoped,
+		// like the Node that controls a mirror Pod.
+		ownerNamespace := p.Namespace
+		if b, ok := resourceid.BuiltinForKind(p.OwnerKind); ok && b.Group == ownerGroup && !b.Namespaced {
+			ownerNamespace = ""
+		}
 		iss.Owner = Ref{
 			Group:     ownerGroup,
 			Kind:      p.OwnerKind,
-			Namespace: p.Namespace,
+			Namespace: ownerNamespace,
 			Name:      p.OwnerName,
 		}
 	}

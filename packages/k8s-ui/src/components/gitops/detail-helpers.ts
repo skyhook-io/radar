@@ -82,7 +82,7 @@ export function describeGitOpsTerminating(summary?: {
   finalizers?: string[]
 }): { chipTooltip: string; actionDisabledTooltip: string } {
   const ageText = formatCompactAge(summary?.terminationStartedAt)
-  const ageSuffix = ageText ? ` ${ageText} ago` : ''
+  const ageSuffix = ageText ? ` for ${ageText}` : ''
   const finalizers = summary?.finalizers ?? []
   const finSuffix = finalizers.length > 0 ? ` Finalizers: ${finalizers.join(', ')}.` : ''
   const ageInline = ageText ? ` (${ageText})` : ''

@@ -58,7 +58,9 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Badge } from "@skyhook-io/k8s-ui";
+import { useNavigate } from "react-router-dom";
+import { Badge, gitOpsRouteForOwner, type GitOpsWrite } from "@skyhook-io/k8s-ui";
+import { useGitOpsWriteGuard } from "../../hooks/useGitOpsWriteGuard";
 import {
   Send,
   AlertTriangle,
@@ -263,6 +265,8 @@ function captureEvidenceCardLayout(container: HTMLElement) {
       }),
   );
 }
+
+const APPLY_WRITES: GitOpsWrite[] = [{ scope: "spec", description: "The proposed change" }];
 
 export function InvestigationView({
   run,
@@ -949,6 +953,38 @@ export function InvestigationView({
   // Apply: a user-confirmed remediation turn. Any step is applyable; the chosen
   // step's text is sent so the server binds the apply to it.
   const [confirmApply, setConfirmApply] = useState(false);
+  // The agent's change can touch any field of the target, so the guard
+  // classifies an unknown spec write.
+  const { guard: applyGitOpsGuard, ownership: applyOwnership } =
+    useGitOpsWriteGuard({
+      target: { kind, group: run.group, namespace, name },
+      writes: APPLY_WRITES,
+      declaredManager: run.managedBy,
+      enabled: confirmApply,
+    });
+  const navigateRouter = useNavigate();
+  const {
+    owner: applyOwner,
+    ownerVerified: applyOwnerVerified,
+    helmOwner: applyHelmOwner,
+  } = applyOwnership;
+  const openApplyOwner = useMemo(() => {
+    // A host without resource navigation (Radar Hub's fleet Diagnose panel)
+    // has no route for the owner either.
+    if (!onOpenResource) return undefined;
+    const owner = applyOwner;
+    const helmOwner = applyHelmOwner;
+    if (owner && applyOwnerVerified) {
+      return () => navigateRouter(gitOpsRouteForOwner(owner));
+    }
+    if (helmOwner) {
+      return () =>
+        navigateRouter(
+          `/helm?release=${encodeURIComponent(`${helmOwner.namespace}/${helmOwner.name}`)}`,
+        );
+    }
+    return undefined;
+  }, [applyOwner, applyOwnerVerified, applyHelmOwner, navigateRouter, onOpenResource]);
   const [pendingFix, setPendingFix] = useState("");
   const requestApply = (fix: string) => {
     if (interactionsBlocked) return;
@@ -2546,7 +2582,8 @@ export function InvestigationView({
               ]?.precondition
             : undefined
         }
-        managedBy={run.managedBy}
+        gitOpsGuard={applyGitOpsGuard}
+        onOpenGitOpsOwner={openApplyOwner}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
     </div>

@@ -154,6 +154,9 @@ func TestClassifyPodForDrain(t *testing.T) {
 			if got.EmptyDir != hasLocalStorage(tt.pod) {
 				t.Fatalf("emptyDir flag must reflect the pod's volumes regardless of outcome: %+v", got)
 			}
+			if got.Terminating != (tt.pod.DeletionTimestamp != nil) {
+				t.Fatalf("terminating flag must reflect the pod's deletion timestamp: %+v", got)
+			}
 		})
 	}
 }

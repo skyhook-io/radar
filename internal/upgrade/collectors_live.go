@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
@@ -107,7 +108,7 @@ func collectDeprecatedAPIRequests(ctx context.Context) ([]upgradereadiness.Depre
 	if !processStartedAt.IsZero() {
 		age := time.Since(processStartedAt)
 		if age >= 0 {
-			window = k8s.FormatAge(age)
+			window = timeutil.FormatAgeShort(age)
 		}
 	}
 	return requests, window

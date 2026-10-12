@@ -1,11 +1,11 @@
 import { Clock, Database } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { CronValue } from '../../ui/ScheduleValue'
+import { TimeValue } from '../../ui/ScheduleValue'
 import {
   getCNPGScheduledBackupCluster,
   getCNPGScheduleCron,
   getCNPGScheduledBackupMethod,
-  getCNPGScheduledBackupLastSchedule,
   getCNPGScheduledBackupNextSchedule,
   getCNPGScheduledBackupIsSuspended,
   getCNPGScheduledBackupIsImmediate,
@@ -39,7 +39,7 @@ export function CNPGScheduledBackupRenderer({ data, onNavigate }: CNPGScheduledB
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Cron Expression" value={<CronValue cron={getCNPGScheduleCron(data)} dialect="seconds" />} />
-          <Property label="Last Schedule" value={getCNPGScheduledBackupLastSchedule(data)} />
+          <Property label="Last Schedule" value={<TimeValue timestamp={data.status?.lastScheduleTime} />} />
           <Property label="Next Schedule" value={getCNPGScheduledBackupNextSchedule(data)} />
           <Property label="Suspended" value={isSuspended ? 'Yes' : 'No'} />
           <Property label="Immediate" value={getCNPGScheduledBackupIsImmediate(data) ? 'Yes' : 'No'} />

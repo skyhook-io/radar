@@ -9,6 +9,8 @@ A read-only diagnosis surface for Karpenter-managed fleets. It answers the quest
 
 Capacity is diagnosis only — it never mutates NodePools, NodeClaims, or workloads.
 
+Node member status uses Radar’s [Node removal lifecycle](nodes.md), independently of raw readiness. Pool `nodes.operational` contains the same exclusive fleet buckets as dashboard/vitals/MCP; raw node-condition counts still overlap. Allocatable, requests, group readiness and NodeClaim stages remain observed capacity facts.
+
 ## When it appears
 
 **Capacity requires cluster-level node visibility; Karpenter access adds the Karpenter screens.** That is the whole rule — one page gate, two Overview shapes, never a partial Karpenter rendering.

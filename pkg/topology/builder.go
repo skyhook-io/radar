@@ -3,6 +3,8 @@ package topology
 import (
 	"fmt"
 	"log"
+	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -3624,22 +3626,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Connect to backend Services
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					if svcID, ok := serviceIDs[svcKey]; ok {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-							Source: ingID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			if svcID, ok := serviceIDs[ing.Namespace+"/"+svcName]; ok {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
+					Source: ingID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}
@@ -5183,9 +5177,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 
-			// Route → Service/TraefikService edges
-			// When a serversTransport is present: IngressRoute → Transport → Service
-			// Otherwise: IngressRoute → Service (direct)
+			// Route → Service/TraefikService edges. A serversTransport only
+			// configures how Traefik dials the backend: it is configuration of
+			// the route, never a hop between the route and its Service.
 			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
 			for _, svc := range svcs {
 				svcMap, ok := svc.(map[string]any)
@@ -5202,6 +5196,29 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 				svcKind, _ := svcMap["kind"].(string)
 
+				// The route uses its transport whether or not the backend exists.
+				// Traefik resolves an HTTP transport in the backend Service's
+				// namespace and a TCP transport in the route's, and ignores it
+				// on a TraefikService backend.
+				if stName, _ := svcMap["serversTransport"].(string); stName != "" && svcKind != "TraefikService" {
+					stPrefix, stNs := "serverstransport", svcNs
+					if def.kind == "IngressRouteTCP" {
+						stPrefix, stNs = "serverstransporttcp", routeNs
+					}
+					if stID := traefikConfigIDs[stPrefix+":"+stNs+"/"+stName]; stID != "" {
+						dedupeKey := stID + "|" + routeID
+						if !traefikEdgeSeen[dedupeKey] {
+							traefikEdgeSeen[dedupeKey] = true
+							edges = append(edges, Edge{
+								ID:     fmt.Sprintf("%s-to-%s", stID, routeID),
+								Source: stID,
+								Target: routeID,
+								Type:   EdgeConfigures,
+							})
+						}
+					}
+				}
+
 				var targetID string
 				if svcKind == "TraefikService" {
 					targetID = traefikServiceIDs[svcNs+"/"+svcName]
@@ -5212,55 +5229,17 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if targetID == "" {
 					continue
 				}
-
-				// Check for ServersTransport reference
-				stName, _ := svcMap["serversTransport"].(string)
-				var stID string
-				if stName != "" {
-					stPrefix := "serverstransport"
-					if def.kind == "IngressRouteTCP" {
-						stPrefix = "serverstransporttcp"
-					}
-					// ServersTransport is resolved relative to the IngressRoute's namespace, not the service's
-					stID = traefikConfigIDs[stPrefix+":"+routeNs+"/"+stName]
+				dedupeKey := routeID + "|" + targetID
+				if traefikEdgeSeen[dedupeKey] {
+					continue
 				}
-
-				if stID != "" {
-					// Chain: IngressRoute → ServersTransport → Service
-					dedupeKey := routeID + "|" + stID
-					if !traefikEdgeSeen[dedupeKey] {
-						traefikEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, stID),
-							Source: routeID,
-							Target: stID,
-							Type:   EdgeConfigures,
-						})
-					}
-					dedupeKey2 := stID + "|" + targetID
-					if !traefikEdgeSeen[dedupeKey2] {
-						traefikEdgeSeen[dedupeKey2] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", stID, targetID),
-							Source: stID,
-							Target: targetID,
-							Type:   EdgeConfigures,
-						})
-					}
-				} else {
-					// Direct: IngressRoute → Service
-					dedupeKey := routeID + "|" + targetID
-					if traefikEdgeSeen[dedupeKey] {
-						continue
-					}
-					traefikEdgeSeen[dedupeKey] = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
-						Source: routeID,
-						Target: targetID,
-						Type:   EdgeExposes,
-					})
-				}
+				traefikEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
+					Source: routeID,
+					Target: targetID,
+					Type:   EdgeExposes,
+				})
 			}
 
 			// Route → Middleware/MiddlewareTCP edges
@@ -5719,9 +5698,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		// HTTPProxy → Secret edges (via spec.virtualhost.tls.secretName)
-		tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "tls", "secretName")
-		if tlsSecretName != "" {
-			secretNodeID := fmt.Sprintf("secret/%s/%s", resNs, tlsSecretName)
+		tlsSecretRef, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "tls", "secretName")
+		secretNs, tlsSecretName := configrefs.ContourSecretRef(resNs, tlsSecretRef)
+		// A delegated certificate lives in another namespace, which a filtered view may exclude.
+		if tlsSecretName != "" && opts.MatchesNamespaceFilter(secretNs) {
+			secretNodeID := fmt.Sprintf("secret/%s/%s", secretNs, tlsSecretName)
 			// Create stub Secret node if it doesn't already exist (same pattern as Traefik)
 			if !existingSecretNodes[secretNodeID] {
 				existingSecretNodes[secretNodeID] = true
@@ -5731,7 +5712,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					Name:   tlsSecretName,
 					Status: StatusUnknown,
 					Data: map[string]any{
-						"namespace": resNs,
+						"namespace": secretNs,
 						"labels":    map[string]string{},
 					},
 				})
@@ -5747,7 +5728,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 			// Also check for cert-manager Certificate edge
-			certID := certBySecret[resNs+"/"+tlsSecretName]
+			certID := certBySecret[secretNs+"/"+tlsSecretName]
 			if certID != "" {
 				dedupeKey2 := resID + "|" + certID
 				if !contourEdgeSeen[dedupeKey2] {
@@ -6034,22 +6015,45 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 	}
+	// A DomainMapping publishes its Knative Service on a custom domain, even
+	// one that is otherwise cluster-local. It may name the Service or the
+	// Route the Service generates, which shares its name.
+	domainMappedKnativeServices := map[string][]string{} // ns/name -> mapped domains
+	// Whether the absence of a mapping is known; only then can a node be
+	// labelled cluster-local.
+	domainMappingsKnown := true
+	if trafficDynamicCache != nil && trafficResourceDiscovery != nil && len(trafficKnativeServices) > 0 {
+		if dmGVR, ok := trafficResourceDiscovery.GetGVRWithGroup("DomainMapping", "serving.knative.dev"); ok {
+			dms, err := trafficDynamicCache.ListNamespaces(dmGVR, opts.Namespaces)
+			if err != nil {
+				domainMappingsKnown = false
+				log.Printf("WARNING [topology/traffic] Failed to list KNative DomainMappings: %v", err)
+				warnings = append(warnings, fmt.Sprintf("Failed to list KNative DomainMappings: %v", err))
+			}
+			for _, dm := range dms {
+				ref, _, _ := unstructured.NestedMap(dm.Object, "spec", "ref")
+				apiVersion, _ := ref["apiVersion"].(string)
+				kind, _ := ref["kind"].(string)
+				name, _ := ref["name"].(string)
+				if (kind != "Service" && kind != "Route") || resourceid.GroupFromAPIVersion(apiVersion) != "serving.knative.dev" || name == "" {
+					continue
+				}
+				ns, _ := ref["namespace"].(string)
+				if ns == "" {
+					ns = dm.GetNamespace()
+				}
+				domainMappedKnativeServices[ns+"/"+name] = append(domainMappedKnativeServices[ns+"/"+name], dm.GetName())
+			}
+		}
+	}
 
 	// Step 1: Find services referenced by ingresses
 	for _, ing := range ingresses {
 		if !opts.MatchesNamespaceFilter(ing.Namespace) {
 			continue
 		}
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					servicesFromIngress[svcKey] = true
-				}
-			}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			servicesFromIngress[ing.Namespace+"/"+svcName] = true
 		}
 	}
 
@@ -6401,24 +6405,17 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Connect to backend Services (only if service is included)
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					if _, ok := servicesToInclude[svcKey]; ok {
-						svcID := fmt.Sprintf("service/%s/%s", ing.Namespace, path.Backend.Service.Name)
-						serviceIDs[svcKey] = svcID
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-							Source: ingID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			svcKey := ing.Namespace + "/" + svcName
+			if _, ok := servicesToInclude[svcKey]; ok {
+				svcID := fmt.Sprintf("service/%s/%s", ing.Namespace, svcName)
+				serviceIDs[svcKey] = svcID
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
+					Source: ingID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}
@@ -6692,7 +6689,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Step 3d: Build KNative Serving nodes/edges for traffic view
 	// KNative traffic flow: Internet → KnativeService → K8s Service → Pods
 	// KnativeRoute shown as subtitle data on KnativeService (URL comes from Route)
-	trafficKnativeServiceIDs := make([]string, 0)
+	publicKnativeServiceIDs := make([]string, 0)
 	for _, ksvc := range trafficKnativeServices {
 		ns := ksvc.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -6700,10 +6697,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 		name := ksvc.GetName()
 		ksvcID := fmt.Sprintf("knativeservice/%s/%s", ns, name)
-		trafficKnativeServiceIDs = append(trafficKnativeServiceIDs, ksvcID)
 
 		// Get URL from status (set by KNative Route)
 		url, _, _ := unstructured.NestedString(ksvc.Object, "status", "url")
+		mappedDomains := slices.Sorted(slices.Values(domainMappedKnativeServices[ns+"/"+name]))
+		clusterLocal := knativeServiceIsClusterLocal(ksvc, url)
+		if len(mappedDomains) > 0 || !clusterLocal {
+			publicKnativeServiceIDs = append(publicKnativeServiceIDs, ksvcID)
+		}
 		latestRevision, _, _ := unstructured.NestedString(ksvc.Object, "status", "latestReadyRevisionName")
 
 		// Get traffic splits from status
@@ -6738,6 +6739,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"apiVersion":     ksvc.GetAPIVersion(),
 			},
 		})
+		if internalURL, _, _ := unstructured.NestedString(ksvc.Object, "status", "address", "url"); internalURL != "" {
+			nodes[len(nodes)-1].Data["internalUrl"] = internalURL
+		}
+		if len(mappedDomains) > 0 {
+			nodes[len(nodes)-1].Data["mappedDomains"] = mappedDomains
+		} else if clusterLocal && domainMappingsKnown {
+			nodes[len(nodes)-1].Data["visibility"] = "cluster-local"
+		}
 
 		// KnativeService → revision private services (the ones that actually select pods)
 		for _, tt := range trafficTargets {
@@ -7296,7 +7305,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// Step 4: Add Internet node if we have ingresses, gateways, Istio gateways, or KNative services with URLs
-	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(trafficKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 || len(trafficHTTPProxyIDs) > 0 {
+	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(publicKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 || len(trafficHTTPProxyIDs) > 0 {
 		nodes = append([]Node{{
 			ID:     "internet",
 			Kind:   KindInternet,
@@ -7329,7 +7338,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				Type:   EdgeRoutesTo,
 			})
 		}
-		for _, ksvcID := range trafficKnativeServiceIDs {
+		for _, ksvcID := range publicKnativeServiceIDs {
 			edges = append(edges, Edge{
 				ID:     fmt.Sprintf("internet-to-%s", ksvcID),
 				Source: "internet",
@@ -7392,8 +7401,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		// are emitted; the Service nodes (built above) carry the counts.
 		podSummaries := make(map[string]*PodSummary)
 		for _, group := range groupingResult.Groups {
-			for svcID := range group.ServiceIDs {
-				for _, pod := range group.Pods {
+			for i, pod := range group.Pods {
+				for _, svcID := range group.PodServiceIDs[i] {
 					addPodHealth(podSummaries, svcID, pod)
 				}
 			}
@@ -7410,12 +7419,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		for _, group := range groupingResult.Groups {
 			if len(group.Pods) <= maxIndividualPods {
 				// Small group - show as individual nodes
-				for _, pod := range group.Pods {
+				for i, pod := range group.Pods {
 					podID := GetPodID(pod)
 					nodes = append(nodes, CreatePodNode(pod, b.provider, false)) // includeNodeName=false for traffic view
 
 					// Add edges from services to pod (traffic view specific)
-					for svcID := range group.ServiceIDs {
+					for _, svcID := range group.PodServiceIDs[i] {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", svcID, podID),
 							Source: svcID,
@@ -7427,16 +7436,43 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			} else {
 				// Large group - create PodGroup node
 				podGroupID := GetPodGroupID(group)
-				nodes = append(nodes, CreatePodGroupNode(group, b.provider))
+				podGroupNode := CreatePodGroupNode(group, b.provider)
+				nodes = append(nodes, podGroupNode)
 
-				// Add edges from services to pod group (traffic view specific)
-				for svcID := range group.ServiceIDs {
-					edges = append(edges, Edge{
+				// Add edges from services to pod group (traffic view specific).
+				// A Service selecting only part of the group says how much.
+				selected := make(map[string]int, len(group.ServiceIDs))
+				for _, svcIDs := range group.PodServiceIDs {
+					for _, svcID := range svcIDs {
+						selected[svcID]++
+					}
+				}
+				mixed := false
+				for svcID, count := range selected {
+					edge := Edge{
 						ID:     fmt.Sprintf("%s-to-%s", svcID, podGroupID),
 						Source: svcID,
 						Target: podGroupID,
 						Type:   EdgeRoutesTo,
-					})
+					}
+					if count < len(group.Pods) {
+						edge.Label = fmt.Sprintf("%d of %d pods", count, len(group.Pods))
+						mixed = true
+					}
+					edges = append(edges, edge)
+				}
+				// Expanding a mixed group reconnects each pod to only the
+				// Services that select it.
+				if pods, ok := podGroupNode.Data["pods"].([]map[string]any); ok && mixed {
+					servicesByPod := make(map[string][]string, len(group.Pods))
+					for i, pod := range group.Pods {
+						servicesByPod[pod.Namespace+"/"+pod.Name] = group.PodServiceIDs[i]
+					}
+					for _, pd := range pods {
+						namespace, _ := pd["namespace"].(string)
+						name, _ := pd["name"].(string)
+						pd["ownerIds"] = servicesByPod[namespace+"/"+name]
+					}
 				}
 			}
 		}
@@ -8003,7 +8039,7 @@ func matchesSelector(labels, selector map[string]string) bool {
 		return false
 	}
 	for k, v := range selector {
-		if labels[k] != v {
+		if lv, ok := labels[k]; !ok || lv != v {
 			return false
 		}
 	}
@@ -8527,21 +8563,7 @@ func extractKarpenterNodeClaimStatus(nc unstructured.Unstructured) HealthStatus 
 
 // extractNodeStatus reads the Ready condition from a Kubernetes Node
 func extractNodeStatus(node corev1.Node) HealthStatus {
-	for _, cond := range node.Status.Conditions {
-		if cond.Type == corev1.NodeReady {
-			if cond.Status != corev1.ConditionTrue {
-				return StatusUnhealthy
-			}
-			// Ready but cordoned = lost scheduling capacity — degraded (amber),
-			// matching the node table badge + drawer + Cordoned audit, so the same
-			// node doesn't read green here while it's flagged elsewhere.
-			if node.Spec.Unschedulable {
-				return StatusDegraded
-			}
-			return StatusHealthy
-		}
-	}
-	return StatusUnknown
+	return healthLevelToStatus(health.NodeLifecycle(&node, time.Now()).Level)
 }
 
 // extractKedaScaledObjectStatus reads conditions and annotations from a KEDA ScaledObject
@@ -9103,7 +9125,7 @@ func matchesStringMap(labels map[string]string, selector map[string]any) bool {
 		if !ok {
 			return false // non-string selector value cannot match string labels
 		}
-		if labels[k] != sv {
+		if lv, ok := labels[k]; !ok || lv != sv {
 			return false
 		}
 	}
@@ -9114,3 +9136,25 @@ func matchesStringMap(labels map[string]string, selector map[string]any) bool {
 var _ = appsv1.Deployment{}
 var _ = networkingv1.Ingress{}
 var _ = strings.Contains
+
+// knativeServiceIsClusterLocal reports whether a Knative Service is reachable
+// only inside the cluster: labelled networking.knative.dev/visibility=
+// cluster-local, or published at its cluster-local address. A private Route's
+// URL is built from the same cluster-local template as its address, on any
+// cluster domain; a public URL uses the external domain. The label may sit on
+// the Route instead, and the URL reflects either.
+func knativeServiceIsClusterLocal(ksvc *unstructured.Unstructured, statusURL string) bool {
+	if ksvc.GetLabels()["networking.knative.dev/visibility"] == "cluster-local" {
+		return true
+	}
+	addressURL, _, _ := unstructured.NestedString(ksvc.Object, "status", "address", "url")
+	published, err := url.Parse(statusURL)
+	if err != nil || published.Hostname() == "" {
+		return false
+	}
+	address, err := url.Parse(addressURL)
+	if err != nil {
+		return false
+	}
+	return published.Hostname() == address.Hostname()
+}

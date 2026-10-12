@@ -40,6 +40,7 @@ import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
+import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
 
 // =============================================================================
 // GitOpsTableView — the canonical GitOps fleet list (Argo + Flux).
@@ -1373,8 +1374,8 @@ function GitOpsTable({
               )}
               <TableCell>
                 {row.terminating
-                  ? <span className="text-orange-400/80">Pending {formatRelativeAge(row.terminationStartedAt ?? '') || 'now'}</span>
-                  : formatRelativeAge(row.lastSync || row.createdAt)}
+                  ? <span className="text-orange-400/80">{pendingFor(row.terminationStartedAt)}</span>
+                  : row.lastSync ? formatRelativeAgeTime(row.lastSync, '') : row.createdAt ? `Created ${formatRelativeAgeTime(row.createdAt, '')}` : ''}
               </TableCell>
               {showActions && onRowAction && (
                 <td
@@ -1603,9 +1604,9 @@ function GitOpsTile({
             <div className="truncate font-mono text-[11px] text-theme-text-tertiary">{shortRevision(revision)}</div>
           )}
           {row.terminating ? (
-            <div className="font-medium text-orange-400/80">Pending {formatRelativeAge(row.terminationStartedAt ?? '') || 'now'}</div>
+            <div className="font-medium text-orange-400/80">{pendingFor(row.terminationStartedAt)}</div>
           ) : (
-            lastSyncRaw && <div className={clsx('font-medium', recencyClass)}>{formatRelativeAge(lastSyncRaw)}</div>
+            lastSyncRaw && <div className={clsx('font-medium', recencyClass)}>{formatRelativeAgeTime(lastSyncRaw, '')}</div>
           )}
         </div>
         {(dest || ns || row.project) && (
@@ -1926,26 +1927,10 @@ function compactClusterURL(dest: string): string {
     .replace(/^kubernetes\.default\.svc(:\d+)?\/?$/, 'in-cluster')
 }
 
-// formatRelativeAge — inline relative-time formatter. Returns "" for unparseable
-// inputs so callers can treat empty as "no timestamp" and skip the time
-// cell gracefully.
-function formatRelativeAge(rfc3339: string): string {
-  if (!rfc3339) return ''
-  const time = Date.parse(rfc3339)
-  if (!Number.isFinite(time)) return ''
-  const diffMs = Date.now() - time
-  const s = Math.max(0, Math.floor(diffMs / 1000))
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  if (d < 30) return `${d}d ago`
-  const mo = Math.floor(d / 30)
-  if (mo < 12) return `${mo}mo ago`
-  const y = Math.floor(d / 365)
-  return `${y}y ago`
+// How long deletion has been pending, not when it started.
+function pendingFor(startedAt?: string): string {
+  const age = formatCompactAge(startedAt)
+  return age ? `Pending for ${age}` : 'Pending'
 }
 
 // =============================================================================

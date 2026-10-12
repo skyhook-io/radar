@@ -175,6 +175,7 @@ func main() {
 	authOIDCClientID := flag.String("auth-oidc-client-id", "", "OIDC client ID")
 	authOIDCClientSecret := flag.String("auth-oidc-client-secret", "", "OIDC client secret")
 	authOIDCRedirectURL := flag.String("auth-oidc-redirect-url", "", "OIDC redirect URL")
+	authOIDCUsernameClaim := flag.String("auth-oidc-username-claim", "", "ID token claim used as the Kubernetes username (must match kube-apiserver --oidc-username-claim); empty uses email, falling back to sub")
 	authOIDCGroupsClaim := flag.String("auth-oidc-groups-claim", "groups", "JWT claim for groups")
 	authOIDCScopes := flag.String("auth-oidc-scopes", "openid,profile,email,groups", "Comma-separated OAuth2 scopes requested at OIDC authorization (e.g. 'openid,profile,email,groups,offline_access')")
 	authOIDCPostLogoutRedirectURL := flag.String("auth-oidc-post-logout-redirect-url", "", "URL to redirect after OIDC provider logout (must be registered with IdP)")
@@ -423,6 +424,7 @@ func main() {
 			OIDCClientID:              *authOIDCClientID,
 			OIDCClientSecret:          *authOIDCClientSecret,
 			OIDCRedirectURL:           *authOIDCRedirectURL,
+			OIDCUsernameClaim:         *authOIDCUsernameClaim,
 			OIDCGroupsClaim:           *authOIDCGroupsClaim,
 			OIDCScopes:                parseCSV(*authOIDCScopes),
 			OIDCPostLogoutRedirectURL: *authOIDCPostLogoutRedirectURL,

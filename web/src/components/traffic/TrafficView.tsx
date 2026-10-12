@@ -1,19 +1,23 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { useTrafficSources, useTrafficFlows, useTrafficConnect, useSetTrafficSource } from '../../api/traffic'
-import { useClusterInfo } from '../../api/client'
-import type { TrafficWizardState, AggregatedFlow } from '../../types'
+import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useSetTrafficSource, type TrafficEndpointPair } from '../../api/traffic'
+import { useClusterInfo, useNamespaceScope } from '../../api/client'
+import { useSearchParams } from 'react-router-dom'
+import type { TrafficWizardState, AggregatedFlow, TrafficFlow } from '../../types'
 import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock } from 'lucide-react'
+import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock, Crosshair, X } from 'lucide-react'
+import { TrafficFocusSearch } from './TrafficFocusSearch'
+import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel } from './trafficFilters'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -165,6 +169,10 @@ const SYSTEM_NAMESPACES = new Set([
   'vault',          // HashiCorp Vault
   'external-secrets', // External Secrets Operator
 ])
+
+// Sent with each query while system traffic is hidden, so the source drops it
+// before it counts against the source's per-node limits.
+const SYSTEM_NAMESPACE_LIST: readonly string[] = [...SYSTEM_NAMESPACES]
 
 // Detect internal load balancer IPs (appear as "external" but are internal)
 function isInternalLoadBalancer(name: string): boolean {
@@ -339,11 +347,35 @@ function isSystemEndpoint(name: string, namespace: string | undefined, kind: str
 
 const isExternal = isExternalKind
 
-interface TrafficViewProps {
-  namespaces: string[]
+
+// Why the map covers less than the chosen window. Two limits can cut it: each
+// node returns at most nodeFlowLimit flows, and on a large cluster Radar keeps
+// at most flowLimit in total. Narrowing what is fetched is the way to see more.
+function coverageExplanation(data: { nodeFlowLimit?: number; flowLimit?: number } | undefined, timeRange: string, hideSystem: boolean): string {
+  const narrow = hideSystem
+    ? 'Selecting fewer namespaces fetches less traffic, so the map covers more of the window.'
+    : 'Hiding system traffic or selecting fewer namespaces fetches less traffic, so the map covers more of the window.'
+  if (data?.flowLimit) {
+    return `This cluster produced more flows in the last ${timeRange} than Radar keeps per refresh (${data.flowLimit.toLocaleString()}), so the map shows the newest ones. ${narrow}`
+  }
+  return `Radar reads at most ${(data?.nodeFlowLimit ?? 0).toLocaleString()} of the newest flows from each node. At least one node reached that limit before the start of the ${timeRange} window, so its earlier traffic is not included. Other nodes may still show older flows. ${narrow}`
 }
 
-export function TrafficView({ namespaces }: TrafficViewProps) {
+function flowStatsExplanation(stats: { shown: number; total: number; hidden: number; outsideFocus: number; aggregated: number }): string {
+  const parts = [`${stats.shown.toLocaleString()} of the ${stats.total.toLocaleString()} connections in this window are shown`]
+  if (stats.hidden > 0) parts.push(`${stats.hidden.toLocaleString()} hidden by filters`)
+  if (stats.outsideFocus > 0) parts.push(`${stats.outsideFocus.toLocaleString()} outside the focus`)
+  if (stats.aggregated > 0) parts.push(`${stats.aggregated.toLocaleString()} merged into others`)
+  return parts.join('; ') + '.'
+}
+
+interface TrafficViewProps {
+  namespaces: string[]
+  /** Sets the app-wide namespace selection. */
+  onSetNamespaces?: (namespaces: string[]) => void
+}
+
+export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const { connection } = useConnection()
   const [wizardState, setWizardState] = useState<TrafficWizardState>('detecting')
   const [timeRange, setTimeRange] = useState<string>('5m')
@@ -358,9 +390,43 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const [aggregateExternal, setAggregateExternal] = useState(true)
   const [detectServices, setDetectServices] = useState(true)
   const [collapseInternet, setCollapseInternet] = useState(true)
+  // Focus and grouping live in the URL so a link carries both: a pod focus
+  // matches only while pods are drawn. A focus is a history entry; switching
+  // the grouping replaces the current one.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const groupByWorkload = searchParams.get('groupBy') !== 'pod'
+  const setGroupByWorkload = useCallback((on: boolean) => {
+    setSearchParams(prev => {
+      const params = new URLSearchParams(prev)
+      if (on) params.delete('groupBy')
+      else params.set('groupBy', 'pod')
+      return params
+    }, { replace: true })
+  }, [setSearchParams])
+  // A record's endpoint as the graph draws it in the chosen grouping.
+  const drawnEndpoint = useCallback(
+    (e: TrafficFlow['source']) => (groupByWorkload ? graphEndpoint(e) : e),
+    [groupByWorkload])
   const [addonMode, setAddonMode] = useState<AddonMode>('show')
   const [graphSelection, setGraphSelection] = useState<TrafficGraphSelection | null>(null)
+  const clearGraphSelection = useCallback(() => setGraphSelection(null), [])
+  // The view the graph was last drawn for, and so keeps drawing (up to the
+  // ceiling) as refreshes move its size: set by drawing it or by Draw anyway.
+  const [drawnViewKey, setDrawnViewKey] = useState<string | null>(null)
   const dock = useDock()
+  const graphPaneRef = useRef<HTMLDivElement>(null)
+
+  const focusValue = searchParams.get('focus')
+  const focus = useMemo(() => parseFocus(focusValue), [focusValue])
+  const focusKey = focus ? focusId(focus) : undefined
+  const setFocus = useCallback((next: TrafficFocus | null) => {
+    setSearchParams(prev => {
+      const params = new URLSearchParams(prev)
+      if (next) params.set('focus', focusParam(next))
+      else params.delete('focus')
+      return params
+    })
+  }, [setSearchParams])
 
   // Dock: offset past sidebar, close flows tab on unmount
   const flowsTabIdRef = useRef<string | null>(null)
@@ -376,7 +442,9 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [hiddenNamespaces, setHiddenNamespaces] = useState<Set<string>>(new Set())
+  const [chosenHiddenNamespaces, setHiddenNamespaces] = useState<Set<string>>(new Set())
+  // Paused while focused: a neighbor in a hidden namespace is still a neighbor.
+  const hiddenNamespaces = useMemo(() => (focus ? new Set<string>() : chosenHiddenNamespaces), [focus, chosenHiddenNamespaces])
   // L7 filters (Hubble-only)
   const [l7Protocol, setL7Protocol] = useState<string>('all')
   const [l7Methods, setL7Methods] = useState<Set<string>>(new Set())
@@ -426,7 +494,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const {
     data: sourcesData,
     isLoading: sourcesLoading,
-    refetch: refetchSources,
+    detectAgain: detectSourcesAgain,
   } = useTrafficSources()
 
   const {
@@ -437,6 +505,9 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   } = useTrafficFlows({
     namespaces,
     since: timeRange,
+    excludeNamespaces: hideSystem ? SYSTEM_NAMESPACE_LIST : undefined,
+    excludeHost: hideSystem,
+    byPod: !groupByWorkload,
     // Only fetch flows when connected (not connecting and no connection error)
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
@@ -449,6 +520,21 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // An 'incomplete' one is a fetch that worked but could not see everything
   // (events lost, nodes unreachable). Not a failure, so not retried at once.
   const warningIsIncomplete = flowsData?.warningKind === 'incomplete'
+  const flowsWarning = flowsData?.warning ? (
+    <AlertBanner
+      variant="warning"
+      // The title follows the kind. A partial warning is about values
+      // on edges that are shown — a port reported as 0, UDP as TCP, a
+      // 5xx rate that failed to load — so it says "unreliable", not
+      // "incomplete", which would send the reader looking for missing
+      // workloads. An incomplete or transient one beside flows is
+      // exactly that: a stream cut short, events lost, a node the
+      // relay could not reach, a TCP query that failed — edges may
+      // be missing from what is drawn.
+      title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic may be missing from this map'}
+      message={flowsData.warning}
+    />
+  ) : null
 
   // Auto-retry when flows return with warning but no data (e.g., port-forward not
   // ready yet). Bounded: a warning that keeps coming back — a node the relay
@@ -610,74 +696,57 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     })
   }, [flowsData?.aggregated, hideSystem, hideExternal, activeMinConnections, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern])
 
-  // Filter raw flows with the same base filters (for list view)
-  const filteredRawFlows = useMemo(() => {
-    if (!flowsData?.flows) return []
-    return flowsData.flows.filter(flow => {
-      const sourceIsSystem = isSystemEndpoint(flow.source.name, flow.source.namespace, flow.source.kind)
-      const destIsSystem = isSystemEndpoint(flow.destination.name, flow.destination.namespace, flow.destination.kind)
-      if (hideSystem && (sourceIsSystem || destIsSystem)) return false
+  // The graph's filters, applied to individual records for the list view
+  const rawFlowPasses = useCallback((flow: TrafficFlow) => {
+    // Name rules (system components, addons) judge an endpoint by the name the
+    // graph draws it under, so a hidden workload's pods leave the list too.
+    const sourceName = drawnEndpoint(flow.source).name
+    const destName = drawnEndpoint(flow.destination).name
+    const sourceIsSystem = isSystemEndpoint(sourceName, flow.source.namespace, flow.source.kind)
+    const destIsSystem = isSystemEndpoint(destName, flow.destination.namespace, flow.destination.kind)
+    if (hideSystem && (sourceIsSystem || destIsSystem)) return false
 
-      const isAlwaysFiltered = (name: string) =>
-        name === 'metadata.google.internal' || name === 'metadata.google.internal.' ||
-        name.startsWith('169.254.') || name === 'instance-data.ec2.internal' ||
-        name === 'localhost' || name === '127.0.0.1' || name.startsWith('127.') || name === '0.0.0.0'
-      if (isAlwaysFiltered(flow.source.name) || isAlwaysFiltered(flow.destination.name)) return false
+    const isAlwaysFiltered = (name: string) =>
+      name === 'metadata.google.internal' || name === 'metadata.google.internal.' ||
+      name.startsWith('169.254.') || name === 'instance-data.ec2.internal' ||
+      name === 'localhost' || name === '127.0.0.1' || name.startsWith('127.') || name === '0.0.0.0'
+    if (isAlwaysFiltered(flow.source.name) || isAlwaysFiltered(flow.destination.name)) return false
 
-      if (hideExternal && (isExternal(flow.source.kind) || isExternal(flow.destination.kind))) return false
+    if (hideExternal && (isExternal(flow.source.kind) || isExternal(flow.destination.kind))) return false
 
-      if (addonMode === 'hide') {
-        if (isClusterAddon(flow.source.name, flow.source.namespace) || isClusterAddon(flow.destination.name, flow.destination.namespace)) return false
-      }
-
-      if (hiddenNamespaces.size > 0) {
-        if (flow.source.namespace && hiddenNamespaces.has(flow.source.namespace)) return false
-        if (flow.destination.namespace && hiddenNamespaces.has(flow.destination.namespace)) return false
-      }
-
-      // Protocol filter
-      if (l7Protocol === 'HTTP' && flow.l7Protocol !== 'HTTP') return false
-      if (l7Protocol === 'DNS' && flow.l7Protocol !== 'DNS') return false
-      if (l7Protocol === 'TCP' && flow.l7Protocol) return false
-
-      // L7 sub-filters on individual flow fields
-      if (activeMethods.size > 0) {
-        if (!flow.httpMethod || !activeMethods.has(flow.httpMethod)) return false
-      }
-      if (!matchesStatusRanges(activeStatusRanges, bucketsFromStatus(flow.httpStatus), (flow.errorRate ?? 0) > 0)) return false
-      if (activeVerdicts.size > 0) {
-        if (!flow.verdict || !activeVerdicts.has(flow.verdict)) return false
-      }
-      if (activeDnsPattern) {
-        if (!flow.dnsQuery || !flow.dnsQuery.toLowerCase().includes(activeDnsPattern.toLowerCase())) return false
-      }
-
-      return true
-    })
-  }, [flowsData?.flows, hideSystem, hideExternal, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern])
-
-  // Apply graph selection to filter raw flows for the list panel
-  const listFlows = useMemo(() => {
-    if (!graphSelection) return filteredRawFlows
-    if (graphSelection.type === 'node' && graphSelection.nodeId) {
-      const id = graphSelection.nodeId
-      return filteredRawFlows.filter(f => {
-        const srcId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-        const dstId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
-        return srcId === id || dstId === id
-      })
+    if (addonMode === 'hide') {
+      if (isClusterAddon(sourceName, flow.source.namespace) || isClusterAddon(destName, flow.destination.namespace)) return false
     }
-    if (graphSelection.type === 'edge' && graphSelection.sourceId && graphSelection.destId) {
-      return filteredRawFlows.filter(f => {
-        const srcId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-        const dstId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
-        // Match either direction (request goes A→B, response goes B→A)
-        return (srcId === graphSelection.sourceId && dstId === graphSelection.destId) ||
-               (srcId === graphSelection.destId && dstId === graphSelection.sourceId)
-      })
+
+    if (hiddenNamespaces.size > 0) {
+      if (flow.source.namespace && hiddenNamespaces.has(flow.source.namespace)) return false
+      if (flow.destination.namespace && hiddenNamespaces.has(flow.destination.namespace)) return false
     }
-    return filteredRawFlows
-  }, [filteredRawFlows, graphSelection])
+
+    // Protocol filter
+    if (l7Protocol === 'HTTP' && flow.l7Protocol !== 'HTTP') return false
+    if (l7Protocol === 'DNS' && flow.l7Protocol !== 'DNS') return false
+    if (l7Protocol === 'TCP' && flow.l7Protocol) return false
+
+    // L7 sub-filters on individual flow fields
+    if (activeMethods.size > 0) {
+      if (!flow.httpMethod || !activeMethods.has(flow.httpMethod)) return false
+    }
+    if (!matchesStatusRanges(activeStatusRanges, bucketsFromStatus(flow.httpStatus), (flow.errorRate ?? 0) > 0)) return false
+    if (activeVerdicts.size > 0) {
+      if (!flow.verdict || !activeVerdicts.has(flow.verdict)) return false
+    }
+    if (activeDnsPattern) {
+      if (!flow.dnsQuery || !flow.dnsQuery.toLowerCase().includes(activeDnsPattern.toLowerCase())) return false
+    }
+
+    return true
+  }, [hideSystem, hideExternal, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern, drawnEndpoint])
+
+  const filteredRawFlows = useMemo(
+    () => (flowsData?.flows ?? []).filter(rawFlowPasses),
+    [flowsData?.flows, rawFlowPasses])
+
 
   // Open flow list in the bottom dock
   const openFlowListDock = useCallback(() => {
@@ -727,8 +796,12 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
   // Process flows for external service aggregation (Phase 4.2)
   // Also tracks service categories for coloring external nodes
+  const graphInputFlows = useMemo<GraphFlow[]>(
+    () => filteredFlows.map(flow => ({ ...flow, rawPairs: [endpointPair(flow)] })),
+    [filteredFlows])
+
   const { processedFlows, serviceCategories } = useMemo<{
-    processedFlows: AggregatedFlow[]
+    processedFlows: GraphFlow[]
     serviceCategories: Map<string, string>
   }>(() => {
     const categories = new Map<string, string>()
@@ -740,7 +813,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
     if (!aggregateExternal) {
       // Even without aggregation, detect service categories for coloring (destinations only)
-      filteredFlows.forEach(flow => {
+      graphInputFlows.forEach(flow => {
         if (isExternal(flow.destination.kind)) {
           const info = getServiceInfo(flow.destination.name, flow.port)
           if (info.category) {
@@ -749,13 +822,13 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         }
         // Don't apply port-based detection to sources - port tells us the destination service
       })
-      return { processedFlows: filteredFlows, serviceCategories: categories }
+      return { processedFlows: graphInputFlows, serviceCategories: categories }
     }
 
     // Aggregate flows to the same external service
-    const aggregatedMap = new Map<string, AggregatedFlow>()
+    const aggregatedMap = new Map<string, GraphFlow>()
 
-    filteredFlows.forEach(flow => {
+    graphInputFlows.forEach(flow => {
       // Only aggregate destinations based on port/hostname - sources keep their original name
       // Port-based detection (MongoDB:27017) only makes sense for destinations
       const sourceAgg = isExternal(flow.source.kind)
@@ -784,12 +857,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       const existing = aggregatedMap.get(key)
       if (existing) {
         mergeFlowVolume(existing, flow)
+        mergeRawPairs(existing, flow)
+        existing.port = mergedEdgePort(existing.port, flow.port)
         // Everything merged here shares the key's direction-known state, so the
         // flag is already correct on the entry that was created first.
       } else {
         // Create new aggregated flow with modified names
         aggregatedMap.set(key, {
           ...flow,
+          rawPairs: [...(flow.rawPairs ?? [])],
           source: sourceAgg.aggregated
             ? { ...flow.source, name: sourceAgg.name }
             : flow.source,
@@ -801,15 +877,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     })
 
     return { processedFlows: Array.from(aggregatedMap.values()), serviceCategories: categories }
-  }, [filteredFlows, aggregateExternal, detectServices])
+  }, [graphInputFlows, aggregateExternal, detectServices])
 
   // Collapse inbound internet traffic (external sources → internal destinations)
-  const internetCollapsedFlows = useMemo<AggregatedFlow[]>(() => {
+  const internetCollapsedFlows = useMemo<GraphFlow[]>(() => {
     if (!collapseInternet) return processedFlows
 
     // Group flows where external sources connect to internal destinations
-    const internetFlowsMap = new Map<string, AggregatedFlow>() // destKey -> aggregated flow
-    const nonInternetFlows: AggregatedFlow[] = []
+    const internetFlowsMap = new Map<string, GraphFlow>() // destKey -> aggregated flow
+    const nonInternetFlows: GraphFlow[] = []
 
     processedFlows.forEach(flow => {
       const sourceIsExternal = isExternal(flow.source.kind)
@@ -828,10 +904,12 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         const existing = internetFlowsMap.get(destKey)
         if (existing) {
           mergeFlowVolume(existing, flow)
+          mergeRawPairs(existing, flow)
         } else {
           // Create new "Internet" → destination flow
           internetFlowsMap.set(destKey, {
             ...flow,
+            rawPairs: [...(flow.rawPairs ?? [])],
             source: {
               name: 'Internet',
               namespace: '',
@@ -850,22 +928,41 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // When grouping addons:
   // 1. Aggregate internet → addon into single edge to group
   // 2. Aggregate addon → kubernetes into single edge from group
-  const finalFlows = useMemo<AggregatedFlow[]>(() => {
-    if (addonMode !== 'group') return internetCollapsedFlows
+  // Everything a focus can be put on: the endpoints drawn before addons are
+  // grouped, which are real ones.
+  const focusableEndpoints = useMemo(() => endpointSummaries(internetCollapsedFlows), [internetCollapsedFlows])
+  const focusedFlows = useMemo(
+    () => (focus ? focusNeighborhood(internetCollapsedFlows, focus) : internetCollapsedFlows),
+    [internetCollapsedFlows, focus])
+  // A new focus starts with nothing selected: the flow list follows the focus
+  // itself (listSelection), and opening its details would cover the node the
+  // view was just fitted around.
+  const focusFound = !!focus && focusedFlows.length > 0
+  useEffect(() => {
+    setGraphSelection(null)
+  }, [focusKey])
+
+  // A focused view draws its endpoints as they are: grouping the addons would
+  // fold the focus or its neighbors into the group.
+  const groupAddons = addonMode === 'group' && !focus
+  const finalFlows = useMemo<GraphFlow[]>(() => {
+    if (!groupAddons) return focusedFlows
 
     // Track totals for aggregated edges
     let addonInternetTotal = 0
     let addonToK8sTotal = 0
     let addonInternetRate = 0
     let addonToK8sRate = 0
-    const processedFlows: AggregatedFlow[] = []
+    const addonInternetPairs: TrafficEndpointPair[] = []
+    const addonToK8sPairs: TrafficEndpointPair[] = []
+    const processedFlows: GraphFlow[] = []
 
     // Check if destination is the kubernetes API server
     const isKubernetesAPI = (name: string, namespace: string | undefined) => {
       return name === 'kubernetes' && (!namespace || namespace === 'default')
     }
 
-    internetCollapsedFlows.forEach(flow => {
+    focusedFlows.forEach(flow => {
       const sourceIsAddon = isClusterAddon(flow.source.name, flow.source.namespace)
       const destIsAddon = isClusterAddon(flow.destination.name, flow.destination.namespace)
       const sourceIsInternet = flow.source.kind === 'Internet'
@@ -875,6 +972,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       if (sourceIsInternet && destIsAddon) {
         addonInternetTotal += flow.connections
         addonInternetRate += flow.requestRate ?? 0
+        for (const pair of flow.rawPairs ?? []) addonInternetPairs.push(pair)
         processedFlows.push({
           ...flow,
           source: {
@@ -888,6 +986,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       else if (sourceIsAddon && destIsK8sAPI) {
         addonToK8sTotal += flow.connections
         addonToK8sRate += flow.requestRate ?? 0
+        for (const pair of flow.rawPairs ?? []) addonToK8sPairs.push(pair)
         processedFlows.push({
           ...flow,
           destination: {
@@ -918,6 +1017,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         port: 0,
         connections: addonInternetTotal,
         ...(addonInternetRate > 0 && { requestRate: addonInternetRate }),
+        rawPairs: addonInternetPairs,
         bytesSent: 0,
         bytesRecv: 0,
         flowCount: 1,
@@ -942,6 +1042,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         port: 443,
         connections: addonToK8sTotal,
         ...(addonToK8sRate > 0 && { requestRate: addonToK8sRate }),
+        rawPairs: addonToK8sPairs,
         bytesSent: 0,
         bytesRecv: 0,
         flowCount: 1,
@@ -950,7 +1051,149 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
 
     return processedFlows
-  }, [internetCollapsedFlows, addonMode])
+  }, [focusedFlows, groupAddons])
+
+  // The map is laid out on the main thread, so a view too large to draw is
+  // listed as a table instead of freezing the tab.
+  const drawnGraph = useMemo(() => graphSize(finalFlows), [finalFlows])
+  // Everything that makes it a different view. A refresh doesn't, so a view
+  // that was drawn keeps being drawn as its size drifts past the budget.
+  const viewKey = JSON.stringify([
+    sourcesData?.active ?? '', namespaces, timeRange, focusKey ?? '', groupByWorkload, hideSystem, hideExternal, activeMinConnections,
+    [...hiddenNamespaces].sort(), addonMode, aggregateExternal, detectServices, collapseInternet,
+    l7Protocol, [...activeMethods].sort(), [...activeStatusRanges].sort(), [...activeVerdicts].sort(), activeDnsPattern,
+  ])
+  const fitsBudget = drawnGraph.score <= GRAPH_DRAW_BUDGET
+  const tooLargeToDraw = drawnGraph.score > GRAPH_DRAW_CEILING || (!fitsBudget && drawnViewKey !== viewKey)
+  useEffect(() => {
+    if (finalFlows.length > 0 && fitsBudget) setDrawnViewKey(viewKey)
+  }, [finalFlows.length, fitsBudget, viewKey])
+
+  // The table lists the endpoints as they are, so a selection made from it is
+  // traced through the same flows.
+  const selectableFlows = tooLargeToDraw ? focusedFlows : finalFlows
+  // The server edges behind the selection, as drawn: what its records are
+  // narrowed to, whichever form the lookup is sent in.
+  // The flow list follows the focus while nothing else is selected: closing
+  // its details must not widen the list to the whole cluster's sample.
+  const listSelection = useMemo<TrafficGraphSelection | null>(
+    () => graphSelection ?? (focusFound && focusKey ? { type: 'node', nodeId: focusKey } : null),
+    [graphSelection, focusFound, focusKey])
+  const selectionPairs = useMemo(
+    () => selectionRawPairs(selectableFlows, listSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
+    [listSelection, selectableFlows, groupAddons, tooLargeToDraw])
+  const selection = useMemo(() => selectionMatch(selectionPairs, listSelection), [selectionPairs, listSelection])
+  // Ungrouped, a workload focus is drawn as its pods, so no node carries its
+  // id; its records are still the workload's.
+  const focusSelected = listSelection?.type === 'node' && listSelection.nodeId === focusKey && !!focus
+  const recordsMatch = useMemo(
+    () => {
+      if (selection) return selection
+      if (!focusSelected || !focus?.namespace) return null
+      // The owner kind lets Hubble select the workload's pods by name.
+      const pod = focusedFlows.flatMap(f => [f.source, f.destination])
+        .find(e => e.namespace === focus.namespace && e.workload === focus.name && e.workloadKind)
+      return { endpoints: [{ namespace: focus.namespace, name: focus.name, kind: 'Workload', ...(pod && { workloadKind: pod.workloadKind }) }] }
+    },
+    [selection, focusSelected, focus, focusedFlows])
+
+  // A selection names something in the representation it was made in: the
+  // table lists endpoints as they are, the graph may group addons. Switching
+  // between them keeps only a focus's selection, which means the same in both.
+  const prevTooLargeRef = useRef(tooLargeToDraw)
+  useEffect(() => {
+    if (prevTooLargeRef.current === tooLargeToDraw) return
+    prevTooLargeRef.current = tooLargeToDraw
+    setGraphSelection(prev => (prev?.type === 'node' && prev.nodeId === focusKey ? prev : null))
+  }, [tooLargeToDraw, focusKey])
+
+  // Namespaces hidden in the sidebar are dropped at the source too, when the
+  // request has room, so their traffic can't fill the records limit. Only
+  // here: the flows query keeps them, since the sidebar lists them from its
+  // data to be shown again.
+  const hiddenNamespaceList = useMemo(() => [...hiddenNamespaces].sort(), [hiddenNamespaces])
+  const records = useTrafficRecords({
+    namespaces,
+    since: timeRange,
+    excludeNamespaces: hideSystem ? SYSTEM_NAMESPACE_LIST : undefined,
+    optionalExcludeNamespaces: hiddenNamespaceList,
+    excludeHost: hideSystem,
+    match: recordsMatch,
+    enabled: wizardState === 'ready' && !isConnecting && !connectionError,
+  })
+  // Records come from their own query when the selection could be sent;
+  // otherwise the selection is applied to the sample the flows response carries.
+  const recordsEligible = recordsMatch !== null && records.supported && !records.tooLarge
+  const useRecords = recordsEligible && !records.isError
+
+  const responsesCallerOriented = flowsData?.l7ResponsesCallerOriented === true
+  const onSelectedEdge = useMemo(
+    () => selectedEdgeMatcher(selectionPairs, responsesCallerOriented, drawnEndpoint),
+    [selectionPairs, responsesCallerOriented, drawnEndpoint])
+  // An endpoint lookup answers with all of its edges, including ones the view
+  // hides (below the connection threshold), so they are dropped here.
+  const filteredRecords = useMemo(
+    () => (records.data?.flows ?? []).filter(f => rawFlowPasses(f) && onSelectedEdge(f)),
+    [records.data?.flows, rawFlowPasses, onSelectedEdge])
+  // Only the records the view's filters drop: an endpoint lookup also returns
+  // edges the graph doesn't draw (outside a focus, or past the flows cap).
+  const recordsHiddenByFilters = useMemo(
+    () => (records.data?.flows ?? []).filter(f => onSelectedEdge(f) && !rawFlowPasses(f)).length,
+    [records.data?.flows, rawFlowPasses, onSelectedEdge])
+
+  const sampleSelection = useMemo(() => {
+    if (!listSelection) return filteredRawFlows
+    if (focusSelected && focus && !selection) {
+      return filteredRawFlows.filter(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))
+    }
+    if (selectionPairs) return filteredRawFlows.filter(onSelectedEdge)
+    if (listSelection.type === 'node' && listSelection.nodeId) {
+      const id = listSelection.nodeId
+      return filteredRawFlows.filter(f => {
+        const srcId = graphEndpointId(drawnEndpoint(f.source))
+        const dstId = graphEndpointId(drawnEndpoint(f.destination))
+        return srcId === id || dstId === id
+      })
+    }
+    if (listSelection.type === 'edge' && listSelection.sourceId && listSelection.destId) {
+      return filteredRawFlows.filter(f => {
+        const srcId = graphEndpointId(drawnEndpoint(f.source))
+        const dstId = graphEndpointId(drawnEndpoint(f.destination))
+        // Match either direction (request goes A→B, response goes B→A)
+        return (srcId === listSelection.sourceId && dstId === listSelection.destId) ||
+               (srcId === listSelection.destId && dstId === listSelection.sourceId)
+      })
+    }
+    return filteredRawFlows
+  }, [filteredRawFlows, listSelection, selectionPairs, onSelectedEdge, drawnEndpoint, focusSelected, focus, selection])
+
+  const listFlows = useRecords ? filteredRecords : sampleSelection
+
+  const sampleTotal = flowsData?.flowsTotal ?? flowsData?.flows?.length ?? 0
+  const sampleSize = flowsData?.flows?.length ?? 0
+  const listNote = useMemo(() => {
+    if (useRecords) {
+      // This query's own account of what it could see: it is a separate fetch
+      // from the graph's, and an empty list beside a warning is not "no traffic".
+      const data = records.data
+      if (!data) return undefined
+      const parts: string[] = []
+      if (data.warning) parts.push(data.warning)
+      if (data.matched > data.flows.length) {
+        parts.push(`Newest ${data.flows.length.toLocaleString()} of ${data.matched.toLocaleString()} records for this selection`)
+      }
+      if (recordsHiddenByFilters > 0) parts.push(`${recordsHiddenByFilters.toLocaleString()} record${recordsHiddenByFilters === 1 ? '' : 's'} hidden by the view's filters`)
+      const covered = coverageLabel(data.coveredSince, data.timestamp)
+      if (covered) parts.push(`Records cover the ${covered} of ${timeRange}`)
+      return parts.length > 0 ? parts.join(' · ') : undefined
+    }
+    if (sampleTotal <= sampleSize) return undefined
+    const sample = `newest ${sampleSize.toLocaleString()} of ${sampleTotal.toLocaleString()} records`
+    if (!listSelection) return `Showing the ${sample} — select a node or edge to load its records`
+    if (records.tooLarge) return `This selection is too large to look up on its own; showing its flows among the ${sample}`
+    if (records.isError) return `Couldn't load this selection's records (${records.error?.message}); showing its flows among the ${sample}`
+    return `Showing this selection's flows among the ${sample}`
+  }, [useRecords, records.data, recordsHiddenByFilters, records.tooLarge, records.isError, records.error, sampleTotal, sampleSize, listSelection, timeRange])
 
   // Stats for display
   const flowStats = useMemo(() => {
@@ -958,9 +1201,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     const filtered = filteredFlows.length
     const shown = finalFlows.length
     const hidden = total - filtered
-    const aggregated = filtered - shown
-    return { total, filtered, shown, hidden, aggregated }
-  }, [flowsData?.aggregated?.length, filteredFlows.length, finalFlows.length])
+    const outsideFocus = internetCollapsedFlows.length - focusedFlows.length
+    const aggregated = filtered - shown - outsideFocus
+    return { total, filtered, shown, hidden, outsideFocus, aggregated }
+  }, [flowsData?.aggregated?.length, filteredFlows.length, finalFlows.length, internetCollapsedFlows.length, focusedFlows.length])
 
   // Compute hot path threshold (top 10% of connections)
   const hotPathThreshold = useMemo(() => {
@@ -1020,6 +1264,33 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }))
   }, [flowsData?.aggregated, hideSystem, hideExternal, activeMinConnections])
 
+  const namespaceScopeQuery = useNamespaceScope()
+  const namespaceLocked = !!namespaceScopeQuery.data?.cacheScoped && !namespaceScopeQuery.data?.namespaceRescope
+  // Narrowing to one namespace keeps the edges with either end in it, as the
+  // server does, so these are what each choice would show. With one namespace
+  // in view already, the others listed are only its peers: picking one would
+  // switch, not narrow, so the panel points at focus and the sidebar instead.
+  const namespaceChoices = useMemo(() => {
+    if (!onSetNamespaces || namespaceLocked || focus || namespaces.length === 1) return null
+    const choices = namespaceSummaries(finalFlows)
+    return choices.length > 0 ? choices : null
+  }, [onSetNamespaces, namespaceLocked, focus, finalFlows, namespaces])
+
+  const focusPartial = !!focus?.namespace && namespaces.length > 0 && !namespaces.includes(focus.namespace)
+
+  const resetFilters = useCallback(() => {
+    setHideSystem(false)
+    setHideExternal(false)
+    chooseMinConnections(0)
+    setHiddenNamespaces(new Set())
+    setAddonMode('show')
+    setL7Protocol('all')
+    setL7Methods(new Set())
+    setL7StatusRanges(new Set())
+    setL7Verdicts(new Set())
+    setDnsPattern('')
+  }, [chooseMinConnections])
+
   // Determine wizard state based on sources detection
   useEffect(() => {
     if (sourcesLoading) {
@@ -1046,24 +1317,51 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // the auto-connect effect, and re-arming it would re-fire auto-connect on
   // every failed attempt (unbounded loop). Retries come from the explicit
   // Retry button, which calls handleConnect directly.
-  const handleConnect = useCallback(() => {
+  //
+  // The page opens on a detection that may be a couple of minutes old, so the
+  // source it names may since have gone. A retry detects again first, which
+  // also picks another available source, and the first failed connect gets
+  // one such retry on its own.
+  const handleConnect = useCallback((redetect: boolean) => {
     setIsConnecting(true)
     setConnectionError(null)
     queryClient.removeQueries({ queryKey: ['traffic-flows'] })
 
-    connectMutation.mutate(undefined, {
-      onSuccess: (data) => {
-        setIsConnecting(false)
-        if (!data.connected && data.error) {
-          setConnectionError(data.error)
+    const attempt = (fresh: boolean) => {
+      const fail = (message: string) => {
+        if (!fresh) {
+          attempt(true)
+          return
         }
-      },
-      onError: (error) => {
         setIsConnecting(false)
-        setConnectionError(error.message)
-      },
-    })
-  }, [connectMutation, queryClient])
+        setConnectionError(message)
+      }
+      const detected = fresh ? detectSourcesAgain() : Promise.resolve(undefined)
+      detected.then(
+        () => connectMutation.mutate(undefined, {
+          onSuccess: (data) => {
+            if (!data.connected && data.error) {
+              fail(data.error)
+              return
+            }
+            setIsConnecting(false)
+          },
+          onError: (error) => fail(error.message),
+        }),
+        (error: Error) => {
+          setIsConnecting(false)
+          setConnectionError(error.message)
+        },
+      )
+    }
+    attempt(redetect)
+  }, [connectMutation, queryClient, detectSourcesAgain])
+
+  // The wizard polls without waiting on the answer; a failed detection shows
+  // through the sources query's own state.
+  const detectForWizard = useCallback(() => {
+    detectSourcesAgain().catch(() => {})
+  }, [detectSourcesAgain])
 
   // Auto-connect once when a source is first detected. Strictly one-shot per
   // mount / cluster (the ref resets on cluster change); failures surface a
@@ -1071,7 +1369,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   useEffect(() => {
     if (wizardState === 'ready' && !hasAutoConnectedRef.current && !isConnecting) {
       hasAutoConnectedRef.current = true
-      handleConnect()
+      handleConnect(false)
     }
   }, [wizardState, isConnecting, handleConnect])
 
@@ -1083,13 +1381,20 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         setState={setWizardState}
         sourcesData={sourcesData}
         sourcesLoading={sourcesLoading}
-        onRefetch={refetchSources}
+        onRefetch={detectForWizard}
       />
     )
   }
 
   return (
-    <TrafficFlowListProvider flows={listFlows} responsesCallerOriented={flowsData?.l7ResponsesCallerOriented === true} graphSelection={graphSelection} clearSelection={() => setGraphSelection(null)}>
+    <TrafficFlowListProvider
+      flows={listFlows}
+      responsesCallerOriented={(useRecords ? records.data?.l7ResponsesCallerOriented : flowsData?.l7ResponsesCallerOriented) === true}
+      graphSelection={graphSelection}
+      clearSelection={clearGraphSelection}
+      loading={useRecords && records.isLoading}
+      note={listNote}
+    >
     <div className="flex h-full w-full">
       {/* Sidebar */}
       <TrafficFilterSidebar
@@ -1103,6 +1408,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         setShowNamespaceGroups={setShowNamespaceGroups}
         collapseInternet={collapseInternet}
         setCollapseInternet={setCollapseInternet}
+        groupByWorkload={groupByWorkload}
+        setGroupByWorkload={setGroupByWorkload}
         addonMode={addonMode}
         setAddonMode={setAddonMode}
         aggregateExternal={aggregateExternal}
@@ -1128,12 +1435,13 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         dnsPattern={dnsPattern}
         setDnsPattern={setDnsPattern}
         namespaces={namespacesWithCounts}
-        hiddenNamespaces={hiddenNamespaces}
+        hiddenNamespaces={chosenHiddenNamespaces}
         onToggleNamespace={toggleNamespace}
+        namespacesPausedFor={focus?.name}
       />
 
       {/* Main content area */}
-      <div className="flex-1 relative min-w-0">
+      <div ref={graphPaneRef} className="flex-1 relative min-w-0">
           {/* Floating controls — overlaid on graph like topology view */}
           {(() => {
             const availableSources = sourcesData?.detected.filter(s => s.status === 'available') || []
@@ -1164,8 +1472,42 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
             return (
               <>
-                {/* Top-left: source status pill */}
+                {/* Top-left: source status pill, focus */}
                 <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
+                  {focus ? (
+                    <div className="flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-skyhook-500/40 text-[11px]">
+                      <Crosshair className="h-3 w-3 text-skyhook-500" />
+                      <span className="text-theme-text-secondary">Focused on</span>
+                      <span className="font-medium text-theme-text-primary">{focus.name}</span>
+                      {focus.namespace && <span className="text-theme-text-tertiary">({focus.namespace})</span>}
+                      {focusPartial && (
+                        // Narrowing fetches the edges with an end in the chosen
+                        // namespaces, so a focus outside them shows only those.
+                        <>
+                          <span className={SEVERITY_TEXT.warning}>· only its traffic with {namespaces.join(', ')}</span>
+                          {onSetNamespaces && !namespaceLocked && (
+                            <button type="button" onClick={() => onSetNamespaces([focus.namespace!])} className="text-blue-400 hover:text-blue-300 font-medium">
+                              Show all its traffic
+                            </button>
+                          )}
+                        </>
+                      )}
+                      <Tooltip content="Leave focus">
+                        <button type="button" onClick={() => setFocus(null)} aria-label="Leave focus" className="p-0.5 rounded hover:bg-theme-hover text-theme-text-secondary">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Tooltip>
+                    </div>
+                  ) : null}
+                  {/* The too-large panel carries its own search button. */}
+                  {finalFlows.length > 0 && !tooLargeToDraw && !isConnecting && (
+                    <TrafficFocusSearch
+                      endpoints={focusableEndpoints}
+                      onFocus={setFocus}
+                      isRateBased={isRateBased}
+                      overlayContainer={graphPaneRef.current}
+                    />
+                  )}
                   {activeSource && (
                     <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[11px]">
                       {isConnecting ? (
@@ -1177,7 +1519,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                         <>
                           <span className="w-2 h-2 rounded-full bg-yellow-500" />
                           <span className="text-theme-text-secondary">{activeSource.name}</span>
-                          <button onClick={handleConnect} className="text-yellow-500 hover:text-yellow-400 font-medium">retry</button>
+                          <button onClick={() => handleConnect(true)} className="text-yellow-500 hover:text-yellow-400 font-medium">retry</button>
                         </>
                       ) : (
                         <>
@@ -1220,15 +1562,17 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   {coverage && (
                     // Not a warning: a busy cluster reaches the limit on every
                     // fetch. It says which part of the window the map shows.
-                    <Tooltip content={`Radar reads at most ${(flowsData?.nodeFlowLimit ?? 0).toLocaleString()} of the newest flows from each node. At least one node reached that limit before the start of the ${timeRange} window, so its earlier traffic is not included. Other nodes may still show older flows.`}>
+                    <Tooltip content={coverageExplanation(flowsData, timeRange, hideSystem)}>
                       <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-secondary tabular-nums">
                         <Clock className="w-3 h-3" /> {coverage} of {timeRange}
                       </div>
                     </Tooltip>
                   )}
-                  <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">
-                    {flowStats.shown}/{flowStats.total}
-                  </div>
+                  <Tooltip content={flowStatsExplanation(flowStats)}>
+                    <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">
+                      {flowStats.shown}/{flowStats.total}
+                    </div>
+                  </Tooltip>
                   {/* Flows are a REST snapshot (no poll, no stream), so this is
                       an honest "Updated N ago" + manual refresh — not "live". */}
                   <div className="flex items-center rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border px-1.5 py-0.5">
@@ -1236,7 +1580,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       mode="snapshot"
                       dataUpdatedAt={flowsUpdatedAt}
                       isFetching={flowsFetching}
-                      onRefresh={() => refetchFlowsRaw()}
+                      onRefresh={() => {
+                        refetchFlowsRaw()
+                        if (recordsEligible) records.refetch()
+                      }}
                       connectionState={connection.state}
                     />
                   </div>
@@ -1252,7 +1599,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
             />
           ) : finalFlows.length > 0 ? (
             <>
-              {flowsData?.warning && (
+              {flowsWarning && !tooLargeToDraw && (
                 // Sits below the two chip rows (both top-3) rather than beside
                 // them: centred at that height it would cover the flow count and
                 // the refresh control at common widths. role/aria-live because it
@@ -1262,33 +1609,60 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   aria-live="polite"
                   className="absolute top-14 left-1/2 z-10 w-[min(40rem,calc(100%-1.5rem))] -translate-x-1/2"
                 >
-                  <AlertBanner
-                    variant="warning"
-                    // The title follows the kind. A partial warning is about values
-                    // on edges that are shown — a port reported as 0, UDP as TCP, a
-                    // 5xx rate that failed to load — so it says "unreliable", not
-                    // "incomplete", which would send the reader looking for missing
-                    // workloads. An incomplete or transient one beside flows is
-                    // exactly that: a stream cut short, events lost, a node the
-                    // relay could not reach, a TCP query that failed — edges may
-                    // be missing from what is drawn.
-                    title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic may be missing from this map'}
-                    message={flowsData.warning}
-                  />
+                  {flowsWarning}
                 </div>
               )}
-              <TrafficGraph
-                flows={finalFlows}
-                hotPathThreshold={hotPathThreshold}
-                showNamespaceGroups={showNamespaceGroups}
-                serviceCategories={serviceCategories}
-                addonMode={addonMode}
-                trafficSource={sourcesData?.active || ''}
-                onSelectionChange={setGraphSelection}
-              />
+              {tooLargeToDraw ? (
+                <TrafficGraphTooLarge
+                  graph={drawnGraph}
+                  focusName={focus?.name}
+                  canFilterNamespaces={!focus && namespacesWithCounts.length > 1}
+                  onDrawAnyway={drawnGraph.score <= GRAPH_DRAW_CEILING ? () => setDrawnViewKey(viewKey) : undefined}
+                  namespaces={namespaceChoices}
+                  onPickNamespace={ns => onSetNamespaces?.([ns])}
+                  endpoints={focusableEndpoints}
+                  onFocus={setFocus}
+                  isRateBased={isRateBased}
+                  overlayContainer={graphPaneRef.current}
+                  flows={focusedFlows}
+                  selection={graphSelection}
+                  onSelect={setGraphSelection}
+                  focusedId={focusKey}
+                  notice={flowsWarning && <div role="status" aria-live="polite">{flowsWarning}</div>}
+                />
+              ) : (
+                <TrafficGraph
+                  flows={finalFlows}
+                  hotPathThreshold={hotPathThreshold}
+                  showNamespaceGroups={showNamespaceGroups}
+                  serviceCategories={serviceCategories}
+                  addonMode={groupAddons ? 'group' : addonMode === 'group' ? 'show' : addonMode}
+                  trafficSource={sourcesData?.active || ''}
+                  selection={graphSelection}
+                  onSelectionChange={setGraphSelection}
+                  onFocus={setFocus}
+                  focusedId={focusKey}
+                />
+              )}
             </>
+          ) : focus && flowsData && !connectionError ? (
+            <div className="absolute inset-0 grid grid-rows-[1fr_auto_2fr] justify-items-center [&>*]:row-start-2 px-4">
+              <FocusNotFound
+                focus={focus}
+                hiddenByFilters={(flowsData?.aggregated ?? []).some(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))}
+                systemHidden={hideSystem && !!focus.namespace && SYSTEM_NAMESPACES.has(focus.namespace)}
+                hideSystem={hideSystem}
+                outsideNamespaces={namespaces.length > 0 && !!focus.namespace && !namespaces.includes(focus.namespace)}
+                window={coverage ? `${coverage} of ${timeRange}` : `last ${timeRange}`}
+                onShowAll={resetFilters}
+                onShowSystem={() => setHideSystem(false)}
+                onSwitchNamespace={onSetNamespaces && !namespaceLocked && focus.namespace ? () => onSetNamespaces([focus.namespace!]) : undefined}
+                warning={flowsData.warning}
+                onLeave={() => setFocus(null)}
+              />
+            </div>
           ) : connectionError ? (
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div className="absolute inset-0 grid grid-rows-[1fr_auto_2fr] justify-items-center [&>*]:row-start-2">
               <div className="text-center space-y-3">
                 <Plug className="h-12 w-12 text-yellow-500 mx-auto" />
                 <p className="text-theme-text-secondary">Connection failed</p>
@@ -1296,7 +1670,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   {connectionError}
                 </p>
                 <button
-                  onClick={handleConnect}
+                  onClick={() => handleConnect(true)}
                   className="px-3 py-1.5 text-sm btn-brand rounded"
                 >
                   Retry Connection
@@ -1304,7 +1678,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
               </div>
             </div>
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center px-4">
+            <div className="absolute inset-0 grid grid-rows-[1fr_auto_2fr] justify-items-center [&>*]:row-start-2 px-4">
               {flowStats.total > 0 && flowStats.shown === 0 ? (
                 <EmptyState
                   tone="filtered"
@@ -1319,18 +1693,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       // the user pressing a button that promised everything back and
                       // changed nothing whenever the cause was a namespace, an addon
                       // mode or an L7 choice.
-                      onClick={() => {
-                        setHideSystem(false)
-                        setHideExternal(false)
-                        chooseMinConnections(0)
-                        setHiddenNamespaces(new Set())
-                        setAddonMode('show')
-                        setL7Protocol('all')
-                        setL7Methods(new Set())
-                        setL7StatusRanges(new Set())
-                        setL7Verdicts(new Set())
-                        setDnsPattern('')
-                      }}
+                      onClick={resetFilters}
                       className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary hover:bg-theme-hover transition-colors"
                     >
                       Show all
@@ -1372,5 +1735,75 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       </div>
     </div>
     </TrafficFlowListProvider>
+  )
+}
+
+/**
+ * A focus with nothing to show. Says which of the reasons it is, since only
+ * one of them means the workload is quiet: Radar may have hidden its traffic,
+ * or never fetched it.
+ */
+function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, onLeave }: {
+  focus: TrafficFocus
+  /** Hide System is on: traffic with system namespaces was never fetched. */
+  hideSystem: boolean
+  /** The fetch's own warning: with it, absence is not proof of quiet. */
+  warning?: string
+  hiddenByFilters: boolean
+  systemHidden: boolean
+  outsideNamespaces: boolean
+  window: string
+  onShowAll: () => void
+  onShowSystem: () => void
+  onSwitchNamespace?: () => void
+  onLeave: () => void
+}) {
+  const name = focus.namespace ? `${focus.name} (${focus.namespace})` : focus.name
+  let body: string
+  let action: { label: string; onClick: () => void } | undefined
+  if (hiddenByFilters) {
+    body = 'Its traffic is hidden by the current filters.'
+    action = { label: 'Show all traffic', onClick: onShowAll }
+  } else if (systemHidden) {
+    body = `${focus.namespace} is a system namespace, and Hide System keeps its traffic from being fetched.`
+    action = { label: 'Show system traffic', onClick: onShowSystem }
+  } else if (outsideNamespaces) {
+    body = `${focus.namespace} is outside the namespaces in view, so only its traffic with them was fetched, and there was none.`
+    if (onSwitchNamespace) action = { label: `Switch to ${focus.namespace}`, onClick: onSwitchNamespace }
+  } else if (warning) {
+    body = `Radar found none in the ${window}, but some traffic may be missing.`
+  } else if (hideSystem) {
+    body = `Radar saw no traffic to or from it in the ${window}, other than any with system namespaces, which Hide System keeps from being fetched.`
+    action = { label: 'Show system traffic', onClick: onShowSystem }
+  } else {
+    body = `Radar saw no traffic to or from it in the ${window}.`
+  }
+  // Whatever else applies, a fetch that reported trouble is not proof of quiet.
+  if (warning) body += ` ${warning}`
+  return (
+    <EmptyState
+      tone="neutral"
+      variant="card"
+      icon={Crosshair}
+      headline={`No traffic for ${name}`}
+      body={body}
+      action={
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {action && (
+            <button type="button" onClick={action.onClick} className="btn-brand-muted text-xs px-2.5 py-1 rounded-md">
+              {action.label}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onLeave}
+            className="text-xs px-2.5 py-1 rounded-md border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
+          >
+            Leave focus
+          </button>
+        </div>
+      }
+      className="max-w-md"
+    />
   )
 }

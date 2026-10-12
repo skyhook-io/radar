@@ -25,6 +25,7 @@ import type { ActivityFilterKey } from './TimelineList'
 import { TimelineSwimlanes } from './TimelineSwimlanes'
 import { RetainedTimelineScrubber, extendSelection, type ScrubberDomainInfo } from './RetainedTimelineScrubber'
 import { LocalTimelineScrubber } from './LocalTimelineScrubber'
+import { TimelineRetentionBanner } from './TimelineRetentionNote'
 import { useTopology, useApplications } from '../../api/client'
 import { useTimelineSource } from '../../context/TimelineSource'
 import type { Topology } from '../../types'
@@ -829,11 +830,16 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // The scrubber sits above whichever view is active, sharing one selection
   // across list + swimlane. Retained draws its server-overview strip; local
   // derives the strip client-side from the loaded ring and omits the gap band.
+  // The host's note about how far back history goes: without it the stretch
+  // before the limit reads as "nothing happened". Without a scrubber the list
+  // view shows it itself, above its own range selector.
+  const retentionBanner = showScrubber || viewMode === 'swimlane' ? <TimelineRetentionBanner /> : null
   const wrap = (node: ReactNode): ReactNode => {
     if (!showScrubber) {
       return (
         <div className="flex-1 flex flex-col min-h-0">
           {appScopeBar}
+          {retentionBanner}
           <div className="flex-1 flex flex-col min-h-0">{node}</div>
         </div>
       )
@@ -850,6 +856,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     return (
       <div className="flex-1 flex flex-col min-h-0">
         {appScopeBar}
+        {retentionBanner}
         {/* A row-capped ring load means the OLDEST part of the retention
             window is not loaded — say so, or an old selection reads as
             "nothing happened back then". */}

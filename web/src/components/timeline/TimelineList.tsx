@@ -13,6 +13,7 @@ import {
 import type { TimelineEvent } from '../../types'
 import { useTimelineSource } from '../../context/TimelineSource'
 import { isManagedTimelineEvent } from '../../api/timelineSource'
+import { TimelineRetentionBanner } from './TimelineRetentionNote'
 import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { NavigateToResource } from '../../utils/navigation'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
@@ -175,6 +176,8 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
+      {/* Under a scrubber TimelineView already shows the note above it. */}
+      {!selectionWindow && <TimelineRetentionBanner />}
       {staleNote}
       <div className="min-h-0 flex-1">
         <TimelineListUI

@@ -102,6 +102,11 @@ type CheckInput struct {
 	// check treats that label as GitOps-managed only when its value names a
 	// real Application.
 	ArgoAppNames map[string]struct{}
+
+	// PDPlacement is the node and volume evidence for the Persistent Disk
+	// placement check. Nil when the reader can't list nodes, persistent
+	// volumes and storage classes, or the cluster isn't on GKE.
+	PDPlacement *PDPlacementEvidence
 }
 
 // ConfigObjectRef identifies a ConfigMap or Secret dependency.

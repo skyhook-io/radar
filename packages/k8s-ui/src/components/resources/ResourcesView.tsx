@@ -147,10 +147,10 @@ import {
   type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
   printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
 } from './printer-columns'
-import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
+import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
-import { parseQuantityToNumber } from '../../utils/format'
+import { formatRelativeAgeTime, parseQuantityToNumber } from '../../utils/format'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
 import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
@@ -6128,7 +6128,7 @@ export function ResourcesView({
           )}
 
           {/* Column picker */}
-          <div className="relative" ref={columnPickerRef}>
+          <div className="relative flex" ref={columnPickerRef}>
             <Tooltip content="Configure columns">
             <button
               onClick={() => setShowColumnPicker(prev => !prev)}
@@ -8722,7 +8722,7 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
           </span>
           {problems.length > 0 && (
             <Tooltip content={problems.join(', ')}>
-              <span className="text-red-400">
+              <span className={SEVERITY_TEXT[healthToSeverity(status.level ?? 'unknown')]}>
                 <AlertTriangle className="w-3.5 h-3.5" />
               </span>
             </Tooltip>
@@ -8735,7 +8735,8 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
       return <span className="text-sm text-theme-text-secondary">{roles}</span>
     }
     case 'conditions': {
-      const { problems, healthy } = getNodeConditions(resource)
+      const { problems, healthy, readinessLabel } = getNodeConditions(resource)
+      if (problems.length === 0 && !healthy) return <span className="text-theme-text-secondary">{readinessLabel}</span>
       if (healthy) {
         return <span className="text-sm text-green-400">Healthy</span>
       }
@@ -9318,9 +9319,7 @@ function LeaseCell({ resource, column }: { resource: any; column: string }) {
       const elapsed = (Date.now() - new Date(renewTime).getTime()) / 1000
       const duration = resource.spec?.leaseDurationSeconds || 0
       const isStale = duration > 0 && elapsed > duration
-      const diff = Date.now() - new Date(renewTime).getTime()
-      const seconds = Math.floor(diff / 1000)
-      const label = seconds < 60 ? `${seconds}s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ago` : `${Math.floor(seconds / 86400)}d ago`
+      const label = formatRelativeAgeTime(renewTime)
       return <span className={clsx('text-sm', isStale ? 'text-red-400' : 'text-green-400')} title={new Date(renewTime).toLocaleString()}>{label}</span>
     }
     default:

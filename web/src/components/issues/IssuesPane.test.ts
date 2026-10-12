@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Issue } from "@skyhook-io/k8s-ui";
-import { capacityHrefForIssue } from "./IssuesPane";
+import type { SubjectIssuesResponse } from "../../api/client";
+import { writeViewParams } from "../../utils/navigation";
+import { capacityHrefForIssue, issueSubjectFromParams, issueSubjectKindLabel, issueSubjectState } from "./IssuesPane";
 
 function issue(partial: Partial<Issue>): Issue {
   return {
@@ -140,3 +142,65 @@ describe("capacityHrefForIssue subject carry", () => {
     ).toBe("/capacity/demand");
   });
 });
+
+describe('issue subject links', () => {
+  it('reads the subject a link narrows to, with its API group', () => {
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&apiGroup=postgresql.cnpg.io&resource=pg%2Fpg-main'))).toEqual({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg-main' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Pod&resource=pg%2Fpg-main-1'))).toEqual({ kind: 'Pod', group: '', namespace: 'pg', name: 'pg-main-1' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=ClusterImageCatalog&apiGroup=postgresql.cnpg.io&resource=pg'))).toEqual({ kind: 'ClusterImageCatalog', group: 'postgresql.cnpg.io', namespace: '', name: 'pg' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster'))).toBeNull()
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&resource=pg%2F'))).toBeNull()
+  })
+  it('keeps the API group through App’s URL sync on the Issues view', () => {
+    for (const [search, subject] of [
+      ['kind=Cluster&apiGroup=postgresql.cnpg.io&resource=pg%2Fpg-main', { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg-main' }],
+      ['kind=Service&apiGroup=serving.knative.dev&resource=web%2Fapi', { kind: 'Service', group: 'serving.knative.dev', namespace: 'web', name: 'api' }],
+    ] as const) {
+      const params = new URLSearchParams(search)
+      writeViewParams(params, ['web'], null)
+      expect(issueSubjectFromParams(params)).toEqual(subject)
+    }
+  })
+  it('names the API group when the kind could be another resource', () => {
+    expect(issueSubjectKindLabel({ kind: 'Service', group: 'serving.knative.dev', namespace: 'web', name: 'api' })).toBe('Service (serving.knative.dev)')
+    expect(issueSubjectKindLabel({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' })).toBe('Cluster (postgresql.cnpg.io)')
+    expect(issueSubjectKindLabel({ kind: 'Service', group: '', namespace: 'web', name: 'api' })).toBe('Service')
+    expect(issueSubjectKindLabel({ kind: 'Deployment', group: 'apps', namespace: 'web', name: 'api' })).toBe('Deployment')
+  })
+  it('never reads the view filter as the subject namespace', () => {
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&namespace=pg&name=pg-main'))).toBeNull()
+  })
+})
+
+describe('issueSubjectState', () => {
+  const subject = { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' }
+  const loaded = (data: Partial<SubjectIssuesResponse>) => ({ isLoading: false, error: null, data: { issues: [], coverage: 'ok' as const, ...data } })
+  it('says the view filter hides the subject rather than none', () => {
+    expect(issueSubjectState(subject, ['app'], loaded({}))).toEqual({ state: 'hidden' })
+    expect(issueSubjectState(subject, ['app', 'pg'], loaded({}))).toEqual({ state: 'none' })
+    expect(issueSubjectState(subject, [], loaded({}))).toEqual({ state: 'none' })
+    expect(issueSubjectState({ ...subject, kind: 'ClusterImageCatalog', namespace: '' }, ['app'], loaded({}))).toEqual({ state: 'none' })
+  })
+  it('reads an empty answer as unconfirmed when Radar does not read the kind', () => {
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'notWatched' }))).toEqual({ state: 'unconfirmed', why: "Radar isn't watching Cluster" })
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'syncing' }))).toEqual({ state: 'unconfirmed', why: 'Radar is still loading Cluster' })
+  })
+  it('says when the cluster has no such kind, as for a link made on another cluster', () => {
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'unknownKind' }))).toEqual({ state: 'unconfirmed', why: 'this cluster has no such kind' })
+  })
+  it('reads an empty answer as unconfirmed when RBAC withheld issues about it', () => {
+    expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })
+  })
+  it('reads an empty answer under limited visibility as unconfirmed, never none', () => {
+    expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'degraded', impact: 'Pods are not readable.' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable (Pods are not readable)" })
+    expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'limited' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable" })
+  })
+  it('reports a failed lookup as unconfirmed and a pending one as checking', () => {
+    expect(issueSubjectState(subject, [], { isLoading: false, error: new Error('no access to Cluster main'), data: undefined })).toEqual({ state: 'unconfirmed', why: 'no access to Cluster main' })
+    expect(issueSubjectState(subject, [], { isLoading: true, error: null, data: undefined })).toEqual({ state: 'checking' })
+  })
+  it('takes the per-resource answer, which covers members past the inline cap', () => {
+    const grouped = issue({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main', members: [], members_truncated: true })
+    expect(issueSubjectState(subject, [], loaded({ issues: [grouped], withheld: { issues: 1 } }))).toEqual({ state: 'found', issues: [grouped], withheld: 1 })
+  })
+})

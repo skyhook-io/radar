@@ -3,7 +3,7 @@ import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState } from 'react'
 import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatAge, formatDuration, formatResources } from '../resources/resource-utils'
+import { formatDuration, formatResources } from '../resources/resource-utils'
 import { getEffectiveResources } from '../../utils/extended-resources'
 import { Tooltip } from './Tooltip'
 import { getKindColorClass } from '../ui/Badge'
@@ -207,6 +207,12 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'NetworkUnavailable',
   // Core K8s — Pod
   'DisruptionTarget',
+  // Core K8s — Namespace
+  'NamespaceDeletionDiscoveryFailure',
+  'NamespaceDeletionGroupVersionParsingFailure',
+  'NamespaceDeletionContentFailure',
+  'NamespaceContentRemaining',
+  'NamespaceFinalizersRemaining',
   // Core K8s — workloads
   'ReplicaFailure',
   // NPD — upstream default configs
@@ -221,6 +227,9 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'ReadOnlyRootFileSystem',
   'ResourceExhausted',
   'Swap',
+  'StoragePressureRootFileSystem',
+  'DPv2MigrationUnsupportedCNI',
+  'UnsupportedEBPFPrograms',
   // NPD — AKS extensions (learn.microsoft.com/azure/aks/node-problem-detector)
   'FilesystemCorruptionProblem',
   'KubeletProblem',
@@ -403,15 +412,17 @@ interface AlertBannerProps {
   message?: React.ReactNode
   items?: string[]
   children?: React.ReactNode
+  /** Replaces the default bottom margin when the banner sits in a tighter layout. */
+  className?: string
 }
 
-export function AlertBanner({ variant, icon, title, message, items, children }: AlertBannerProps) {
+export function AlertBanner({ variant, icon, title, message, items, children, className }: AlertBannerProps) {
   const colors = ALERT_COLORS[variant]
   const Icon = icon || DEFAULT_ICONS[variant]
   const hasBody = message || items || children
 
   return (
-    <div className={clsx('mb-4 p-3 border rounded-lg', colors.bg, colors.border)}>
+    <div className={clsx('p-3 border rounded-lg', className ?? 'mb-4', colors.bg, colors.border)}>
       <div className={clsx('flex gap-2', hasBody ? 'items-start' : 'items-center')}>
         <Icon className={clsx('w-4 h-4 shrink-0', colors.title, hasBody && 'mt-0.5')} />
         {hasBody ? (
@@ -528,7 +539,7 @@ export function MetadataSection({ data }: { data: any }) {
         <Property label="Generation" value={meta.generation} />
         <Property label="Created" value={meta.creationTimestamp ? (
           <Tooltip content={new Date(meta.creationTimestamp).toLocaleString()}>
-            <span className="border-b border-dotted border-theme-text-tertiary cursor-help">{formatAge(meta.creationTimestamp)}</span>
+            <span className="border-b border-dotted border-theme-text-tertiary cursor-help">{formatRelativeAgeTime(meta.creationTimestamp)}</span>
           </Tooltip>
         ) : '-'} />
       </PropertyList>
@@ -785,6 +796,7 @@ export type CopyHandler = (text: string, key: string) => void
 import type { TimelineEvent, Relationships, ResourceRef } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { Link } from 'lucide-react'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 interface RelatedResourcesSectionProps {
   relationships: Relationships | undefined

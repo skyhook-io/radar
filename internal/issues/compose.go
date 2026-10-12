@@ -142,7 +142,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		}
 		return correlationAllowed
 	}
-	canList := f.CanListResource
+	canList := func(group, resource, namespace string) bool {
+		return f.CanReadEvidence != nil && f.CanReadEvidence(EvidenceRead{Group: group, Resource: resource, Namespace: namespace, Verb: "list"})
+	}
 	finalizerObservations := map[string]finalizerObservation{}
 	emit := func(ps []k8s.Detection, source Source) {
 		for _, pr := range ps {
@@ -165,7 +167,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		}
 	}
 	emit(p.DetectProblems(f.Namespaces), SourceProblem) // hardcoded per-kind checks
-	if canList != nil {
+	if f.CanReadEvidence != nil {
 		emit(p.DetectDynamicTerminatingProblems(f.Namespaces, canList), SourceProblem)
 	}
 	emit(p.DetectCAPIProblems(f.Namespaces), SourceProblem)   // Cluster API
@@ -183,6 +185,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// symptoms against parent rollups across member pods — both need the flat
 	// rows, so they run BEFORE grouping and BEFORE the public filters.
 	out = applyClusterScopedAccess(out, f)
+	out = applySubjectAccess(out, f.CanReadSubject)
+	out = applyOwnerAccess(out, f)
+	out = applyEvidenceAccess(out, f.CanReadEvidence, f.AllowUnfilteredEvidence, f.OnEvidenceWithheld)
 	out = redactUnreadableRelatedRefs(out, f.CanReadRelated)
 	out = dedupePodSchedulingOverProblem(out)
 	// Same-resource structural-root → symptom: fold a pod's runtime symptom into

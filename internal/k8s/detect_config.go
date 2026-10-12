@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/logsafe"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -244,7 +245,7 @@ func detectSuspiciousCoreDNS(cache *ResourceCache, now time.Time) []Detection {
 			Severity:          "warning",
 			Reason:            reason,
 			Message:           "CoreDNS Corefile contains a rule that can override Kubernetes service DNS responses.",
-			Age:               FormatAge(time.Duration(age) * time.Second),
+			Age:               timeutil.FormatAgeShort(time.Duration(age) * time.Second),
 			AgeSeconds:        age,
 			ResourceCreatedAt: cm.CreationTimestamp.Time,
 			OnsetUnknown:      true,
@@ -341,7 +342,7 @@ func detectDuplicateEnvVars(cache *ResourceCache, namespace string, now time.Tim
 			Severity:          "warning",
 			Reason:            "DuplicateEnvVar",
 			Message:           check.Message,
-			Age:               FormatAge(time.Duration(check.AgeSeconds) * time.Second),
+			Age:               timeutil.FormatAgeShort(time.Duration(check.AgeSeconds) * time.Second),
 			AgeSeconds:        check.AgeSeconds,
 			ResourceCreatedAt: check.ResourceCreatedAt,
 			OnsetUnknown:      true,
@@ -444,7 +445,7 @@ func detectEnvServiceRefs(cache *ResourceCache, namespace string, now time.Time)
 			Severity:          envServiceRefSeverity(check.Status),
 			Reason:            envServiceRefReason(check.Status),
 			Message:           check.Message,
-			Age:               FormatAge(time.Duration(check.AgeSeconds) * time.Second),
+			Age:               timeutil.FormatAgeShort(time.Duration(check.AgeSeconds) * time.Second),
 			AgeSeconds:        check.AgeSeconds,
 			ResourceCreatedAt: check.ResourceCreatedAt,
 			OnsetUnknown:      true,

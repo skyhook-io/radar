@@ -1,6 +1,7 @@
 import { Clock, Pause } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink, ConditionsSection } from '../../ui/drawer-components'
-import { formatAge, cronToHuman } from '../resource-utils'
+import { cronToHuman } from '../resource-utils'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface CronWorkflowRendererProps {
   data: any
@@ -45,7 +46,7 @@ export function CronWorkflowRenderer({ data, onNavigate }: CronWorkflowRendererP
           <Property label="Timezone" value={spec.timezone || 'Cluster default'} />
           <Property label="Suspend" value={isSuspended ? 'Yes' : 'No'} />
           <Property label="Concurrency" value={spec.concurrencyPolicy || 'Allow'} />
-          <Property label="Last Scheduled" value={status.lastScheduledTime ? formatAge(status.lastScheduledTime) : 'Never'} />
+          <Property label="Last Scheduled" value={<TimeValue timestamp={status.lastScheduledTime} fallback="Never" />} />
           <Property label="Active Workflows" value={active.length} />
         </PropertyList>
       </Section>

@@ -168,6 +168,9 @@ spec:
             {{- if .Values.auth.oidc.redirectURL }}
             - {{ printf "--auth-oidc-redirect-url=%s" .Values.auth.oidc.redirectURL | quote }}
             {{- end }}
+            {{- if .Values.auth.oidc.usernameClaim }}
+            - {{ printf "--auth-oidc-username-claim=%s" .Values.auth.oidc.usernameClaim | quote }}
+            {{- end }}
             {{- if .Values.auth.oidc.groupsClaim }}
             - {{ printf "--auth-oidc-groups-claim=%s" .Values.auth.oidc.groupsClaim | quote }}
             {{- end }}

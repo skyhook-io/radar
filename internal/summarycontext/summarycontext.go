@@ -186,12 +186,11 @@ func CanonicalSingular(kind string) string {
 // engine emits "Application", silently zeroing issueCount on every CRD
 // row. Bucketing is O(N) over the at-most-namespace-bounded issue set,
 // which the consumer materialises anyway.
-func BuildIssueIndex(p issues.Provider, namespaces []string) IssueIndex {
-	filters := issues.Filters{
-		SkipPodTemplateContext: true,
-		Namespaces:             namespaces,
-		Limit:                  issues.NoLimit,
-	}
+func BuildIssueIndex(p issues.Provider, filters issues.Filters) IssueIndex {
+	filters.SkipPodTemplateContext = true
+	filters.Limit = issues.NoLimit
+	filters.Grouped = false
+
 	// Compose FLAT (uncapped): every evidence row carries the grouped issue ID
 	// (enrichIdentity keys it on owner-else-self + category) and its resolved
 	// Owner. Counting DISTINCT grouped issue IDs per resource — keyed on each

@@ -172,6 +172,20 @@ Use CSS classes from `components.css` for status cells in table rows:
 | `.border-r-subtle` | Right border |
 | `.border-t-subtle` | Top border |
 
+### Times and Ages
+Every relative time uses the shared tiers — seconds, minutes, hours, days (`45s`, `12m`, `4h`, `212d`) — never months or years, matching kubectl. What the text says depends on what the reader is asking:
+
+| The value answers | Shows | Use |
+|-------------------|-------|-----|
+| When did it happen? ("Started", "Last Reconciled", "Last Seen", "Created") | `5m ago`, `just now` | `<TimeValue>` for a drawer property (adds the exact local time on hover); `formatRelativeAgeTime` in lists and sentences |
+| How long has it existed or lasted? ("Age", "5m old", "Terminating for") | `5m` | `formatAge` / `formatCompactAge` |
+
+A bare `5m` under "Started" or "Finished" reads as a duration, so a moment in a drawer, list or sentence always says "ago".
+
+Table columns are a judgment call per screen, because the header already names the event. Choose what reads clearest there. Columns that mirror `kubectl get` (Age, Last Seen, Last Schedule) stay bare, as kubectl prints them. Radar's own views don't have to look like CLI output: the GitOps fleet's Last Sync and the Leases list's Last Renewed say "ago" because it reads more naturally. Keep sibling columns on one screen consistent with each other.
+
+Go text uses `pkg/timeutil.FormatAgeShort`, with the same tiers.
+
 ## 5. Layout Principles
 
 ### Spacing

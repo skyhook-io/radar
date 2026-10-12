@@ -137,10 +137,13 @@ type FeatureCapabilities struct {
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
 	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
+	ResourceIssueCoverage bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
 	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
 	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
+	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -696,15 +699,19 @@ func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, 
 		return false, true
 	}
 
+	// Split "pods/exec" as k8score.CanI does: webhook authorizers only
+	// recognize a subresource in its own field.
+	baseResource, subresource, _ := strings.Cut(resource, "/")
 	review := &authv1.SubjectAccessReview{
 		Spec: authv1.SubjectAccessReviewSpec{
 			User:   username,
 			Groups: groups,
 			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace: namespace,
-				Group:     group,
-				Verb:      verb,
-				Resource:  resource,
+				Namespace:   namespace,
+				Group:       group,
+				Verb:        verb,
+				Resource:    baseResource,
+				Subresource: subresource,
 			},
 		},
 	}
@@ -733,9 +740,14 @@ func InvalidateUserCapabilitiesCache() {
 }
 
 var (
-	cachedPermResult      *PermissionCheckResult
-	resourcePermsMu       sync.RWMutex
-	resourcePermsExpiry   time.Time
+	cachedPermResult    *PermissionCheckResult
+	resourcePermsMu     sync.RWMutex
+	resourcePermsExpiry time.Time
+	// resourcePermsGen bumps on every invalidation. A probe captures it before
+	// it reads the client and publishes only if it is unchanged - the probe
+	// runs outside the lock, so without this a slow probe against the previous
+	// cluster would overwrite the current one's result with a fresh TTL.
+	resourcePermsGen      uint64
 	resourcePermsTTL      = 60 * time.Second
 	resourcePermsErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
 )
@@ -931,6 +943,12 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // returns per-kind scope plus a uniform projection. Results are cached for
 // 60s (5s on transient errors).
 //
+// The second return reports whether the result describes the cluster and scope
+// still in effect. It is false when the clients were swapped or the cache was
+// invalidated while the probe was in flight: the result is returned anyway so a
+// caller torn down alongside the probe stays consistent with the client it
+// captured, but it was not published and must not be presented as current.
+//
 // Per-kind probe behavior:
 //   - Cluster-wide list?limit=1 first.
 //   - If 403/401 and the kind is namespaceable AND a fallback namespace is set,
@@ -943,7 +961,7 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // This is authoritative because it IS the operation the informer will perform.
 // SelfSubjectAccessReview is one indirection too many — it can disagree with
 // reality on clusters using webhook authorizers (e.g. GKE IAM).
-func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
+func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
 	resourcePermsMu.RLock()
 	if cachedPermResult != nil && time.Now().Before(resourcePermsExpiry) {
 		// Deep-copy so callers can't mutate the cached result.
@@ -966,8 +984,16 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 			ScopeCandidatesTruncated: cachedPermResult.ScopeCandidatesTruncated,
 		}
 		resourcePermsMu.RUnlock()
-		return result
+		return result, true
 	}
+	// Captured before any probe input is read. The publish check retires this
+	// result if the generation moved since, so a writer that changes an input
+	// must do so BEFORE bumping - bumping first leaves a probe that starts in
+	// between holding the old input under the new generation. The namespace
+	// scope setters follow that order. The --namespace and --namespace-scope
+	// inputs do not bump at all; they are written once at startup, before any
+	// probe exists, and moving them later would need the same treatment.
+	probeGen := resourcePermsGen
 	resourcePermsMu.RUnlock()
 
 	// Compute probes WITHOUT holding the write lock — concurrent callers
@@ -975,9 +1001,11 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	// network calls would block InvalidateResourcePermissionsCache() during
 	// context switch.
 
-	if GetClient() == nil || GetDynamicClient() == nil {
+	dyn := GetDynamicClient()
+	if GetClient() == nil || dyn == nil {
 		log.Printf("Warning: K8s client not initialized, returning no resource permissions")
-		return &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}
+		// Current: nothing superseded this, there is simply nothing to probe.
+		return &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}, true
 	}
 
 	forceNamespace := ForceNamespaceScope
@@ -990,10 +1018,21 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		}
 	}
 
-	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace)
+	result, hadErrors := probeResourceAccess(ctx, dyn, scopeNamespaces, forceNamespace)
 	result.ScopeCandidatesTruncated = scopeCandidatesIncomplete
 
 	resourcePermsMu.Lock()
+	if resourcePermsGen != probeGen {
+		currentGen := resourcePermsGen
+		resourcePermsMu.Unlock()
+		// The cluster or the namespace scope changed while this probe was in
+		// flight, so it describes something that is no longer current. Return
+		// it to the caller, since a caller torn down alongside the probe stays
+		// self-consistent with the client it already captured, but leave the
+		// cache to the probe that ran against the current one.
+		log.Printf("[perms] discarding probe result: the cluster or scope changed while it was in flight (generation %d→%d)", probeGen, currentGen)
+		return result, false
+	}
 	cachedPermResult = result
 	ttl := resourcePermsTTL
 	if hadErrors {
@@ -1003,7 +1042,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	resourcePermsExpiry = time.Now().Add(ttl)
 	resourcePermsMu.Unlock()
 
-	return result
+	return result, true
 }
 
 // MaxScopeCandidates was promoted to a package variable in deadlines.go
@@ -1403,5 +1442,13 @@ func GetCachedPermissionResult() *PermissionCheckResult {
 func InvalidateResourcePermissionsCache() {
 	resourcePermsMu.Lock()
 	defer resourcePermsMu.Unlock()
+	invalidateResourcePermissionsCacheLocked()
+}
+
+// invalidateResourcePermissionsCacheLocked drops the cached result and retires
+// every probe already in flight. Callers must hold resourcePermsMu for writing.
+func invalidateResourcePermissionsCacheLocked() {
 	cachedPermResult = nil
+	resourcePermsExpiry = time.Time{}
+	resourcePermsGen++
 }

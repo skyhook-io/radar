@@ -1,8 +1,8 @@
 import { Cpu, Server, Network, Cloud } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
-import { formatAge } from '../resource-utils'
 import { getMachineStatus, getMachineRole, getMachineClusterName, getMachineNodeRef, getMachineVersion, getMachineProviderID, parseProviderID, getProviderFromInfraKind, parseCAPIConditionMessage } from '../resource-utils-capi'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface Props {
   data: any
@@ -59,7 +59,7 @@ export function CAPIMachineRenderer({ data, onNavigate }: Props) {
           {infraProvider && <Property label="Provider" value={infraProvider} />}
           {spec.failureDomain && <Property label="Failure Domain" value={spec.failureDomain} />}
           {readyCond?.lastTransitionTime && (
-            <Property label="Since" value={formatAge(readyCond.lastTransitionTime)} />
+            <Property label="Since" value={<TimeValue timestamp={readyCond.lastTransitionTime} />} />
           )}
         </PropertyList>
       </Section>

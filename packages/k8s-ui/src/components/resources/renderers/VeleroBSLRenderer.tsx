@@ -9,8 +9,6 @@ import {
   getBSLRegion,
   getBSLDefault,
   getBSLAccessMode,
-  getBSLLastValidation,
-  getBSLLastSynced,
   getBSLMessage,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
@@ -111,8 +109,8 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
           <Property label="Phase" value={
             <VeleroPhaseValue status={bslStatus} phase={status.phase || ''} />
           } />
-          <Property label="Last Validation" value={getBSLLastValidation(data)} />
-          <Property label="Last Synced" value={getBSLLastSynced(data)} />
+          <Property label="Last Validation" value={<TimeValue timestamp={data.status?.lastValidationTime} />} />
+          <Property label="Last Synced" value={<TimeValue timestamp={data.status?.lastSyncedTime} />} />
           {status.lastSyncedRevision && (
             <Property label="Last Synced Revision" value={
               <span className="text-sm font-mono text-theme-text-secondary break-all">{status.lastSyncedRevision}</span>
@@ -235,18 +233,18 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
                       recovers. */}
                   {bslStatus.level === 'healthy' ? (
                     <>
-                      Most recent restorable point: <TimeValue timestamp={newest} /> ago
+                      Most recent restorable point: <TimeValue timestamp={newest} />
                     </>
                   ) : bslStatus.level === 'unhealthy' ? (
                     <>
                       Most recent point held here, once this location is reachable again:{' '}
-                      <TimeValue timestamp={newest} /> ago
+                      <TimeValue timestamp={newest} />
                     </>
                   ) : (
                     // Unknown: do not imply it is unreachable, and do not call it
                     // restorable either. Say what the timestamp is.
                     <>
-                      Most recent point held here: <TimeValue timestamp={newest} /> ago
+                      Most recent point held here: <TimeValue timestamp={newest} />
                     </>
                   )}
                 </div>

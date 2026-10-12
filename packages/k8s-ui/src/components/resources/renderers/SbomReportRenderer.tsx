@@ -3,8 +3,8 @@ import { Package, Search } from 'lucide-react'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { Input } from '../../ui/Input'
-import { formatAge } from '../resource-utils'
 import { formatTrivyImage } from './trivy-shared'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface SbomReportRendererProps {
   data: any
@@ -57,7 +57,7 @@ export function SbomReportRenderer({ data }: SbomReportRendererProps) {
           <Property label="Components" value={String(componentsCount)} />
           {depsCount > 0 && <Property label="Dependencies" value={String(depsCount)} />}
           <Property label="Scanner" value={scanner.name ? `${scanner.name} ${scanner.version || ''}`.trim() : '-'} />
-          <Property label="Scanned" value={report.updateTimestamp ? formatAge(report.updateTimestamp) + ' ago' : '-'} />
+          <Property label="Scanned" value={<TimeValue timestamp={report.updateTimestamp} />} />
         </PropertyList>
       </Section>
 

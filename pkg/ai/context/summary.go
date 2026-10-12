@@ -16,8 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/cronsched"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 // ResourceSummary is the typed output for Summary-level minification.
@@ -26,8 +28,8 @@ type ResourceSummary struct {
 	Kind      string `json:"kind"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
-	// Status is the DISPLAY state, computed the way `kubectl get` computes its
-	// STATUS column: what is true about this object right now.
+	// Status is the display state, including intentional lifecycle states;
+	// Ready preserves the observed readiness separately.
 	Status string `json:"status,omitempty"`
 	Ready  string `json:"ready,omitempty"`
 	// Issue is the diagnostic hint — a reason worth looking at. It is
@@ -466,7 +468,7 @@ func summarizeJob(job *batchv1.Job) *ResourceSummary {
 	// Duration
 	if job.Status.StartTime != nil && job.Status.CompletionTime != nil {
 		d := job.Status.CompletionTime.Sub(job.Status.StartTime.Time)
-		s.Duration = formatDuration(d)
+		s.Duration = timeutil.FormatAgeShort(d)
 	}
 
 	return s
@@ -545,6 +547,7 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 	// Status and pressure conditions
 	for _, c := range node.Status.Conditions {
 		if c.Type == corev1.NodeReady {
+			s.Ready = string(c.Status)
 			if c.Status == corev1.ConditionTrue {
 				s.Status = "Ready"
 			} else {
@@ -564,15 +567,21 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 		}
 	}
 
-	// Cordoned/unschedulable status
+	lifecycle := health.NodeLifecycle(node, time.Now())
+	s.Status = lifecycle.Label
+	if !lifecycle.ReadinessFailed {
+		s.Issue = ""
+	}
+	if lifecycle.Delayed {
+		if s.Issue != "" {
+			s.Issue += "; Removal delayed"
+		} else {
+			s.Issue = "Removal delayed"
+		}
+	}
 	if node.Spec.Unschedulable {
 		unschedulable := true
 		s.Unschedulable = &unschedulable
-		if s.Status != "" {
-			s.Status += ",SchedulingDisabled"
-		} else {
-			s.Status = "SchedulingDisabled"
-		}
 	}
 
 	return s
@@ -897,18 +906,5 @@ func age(created time.Time) string {
 		return ""
 	}
 	d := time.Since(created)
-	return formatDuration(d)
-}
-
-func formatDuration(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return timeutil.FormatAgeShort(d)
 }

@@ -1,12 +1,16 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { TrafficSourcesResponse, TrafficFlowsResponse } from '../types'
+import { useCallback, useMemo } from 'react'
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import type { TrafficSourcesResponse, TrafficFlowsResponse, TrafficRecordsResponse } from '../types'
+import { fetchJSON as fetchApiJSON, useRadarFeature } from './client'
+import { shouldRetryRadarQuery } from './radarFeatures'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
 import { readErrorBody } from './httpErrors'
 
-async function fetchJSON<T>(path: string): Promise<T> {
+async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(apiUrl(path), {
     credentials: getCredentialsMode(),
     headers: getAuthHeaders(),
+    signal,
   })
   if (!response.ok) {
     const error = await readErrorBody(response)
@@ -26,39 +30,194 @@ export interface TrafficConnectionInfo {
   error?: string
 }
 
-// Get available traffic sources and recommendations
-export function useTrafficSources() {
-  return useQuery<TrafficSourcesResponse>({
+// Get available traffic sources and recommendations. A detection up to a
+// couple of minutes old is reused when it found a source: a full one probes
+// every source in turn and takes seconds, and the page that linked here has
+// usually just made one. One that found none is redone, since it is about to
+// be shown as setup advice. detectAgain always detects afresh.
+export async function fetchTrafficSources(queryClient: QueryClient, fresh: boolean, signal?: AbortSignal): Promise<TrafficSourcesResponse> {
+  let sources = await fetchJSON<TrafficSourcesResponse>(fresh ? '/traffic/sources' : '/traffic/sources?recent=1', signal)
+  if (!fresh && !sources.detected.some(s => s.status === 'available')) {
+    sources = await fetchJSON<TrafficSourcesResponse>('/traffic/sources', signal)
+  }
+  // A detection is also the newest answer to "is traffic available".
+  queryClient.setQueryData(['traffic-sources', 'recent'], sources)
+  return sources
+}
+
+export async function detectTrafficSourcesAgain(queryClient: QueryClient): Promise<TrafficSourcesResponse> {
+  // A pending fetch of the same key would otherwise be returned in its place.
+  await queryClient.cancelQueries({ queryKey: ['traffic-sources'], exact: true })
+  return queryClient.fetchQuery({
     queryKey: ['traffic-sources'],
-    queryFn: () => fetchJSON('/traffic/sources'),
-    staleTime: 30000, // 30 seconds
-    retry: 1,
+    queryFn: ({ signal }) => fetchTrafficSources(queryClient, true, signal),
+    staleTime: 0,
   })
 }
 
-// Get traffic flows
-export interface UseTrafficFlowsOptions {
+export function useTrafficSources() {
+  const queryClient = useQueryClient()
+  const query = useQuery<TrafficSourcesResponse>({
+    queryKey: ['traffic-sources'],
+    queryFn: ({ signal }) => fetchTrafficSources(queryClient, false, signal),
+    staleTime: 30000, // 30 seconds
+    retry: 1,
+  })
+  const detectAgain = useCallback(() => detectTrafficSourcesAgain(queryClient), [queryClient])
+  return { ...query, detectAgain }
+}
+
+// Whether this cluster has a traffic source: true only once one is detected
+// as available, so a page offering traffic never offers it on a guess. Accepts
+// a detection up to a couple of minutes old (?recent=1), so browsing workloads
+// does not probe every source on each page.
+export function useTrafficAvailable(enabled = true): boolean {
+  // A workload focus needs the server to name each pod's workload, which
+  // shipped with flow records. An older Radar leaves Hubble pods unnamed, so
+  // the focus it opened would match nothing.
+  const resolvesWorkloads = useRadarFeature('trafficRecords').support === 'supported'
+  const { data } = useQuery<TrafficSourcesResponse>({
+    queryKey: ['traffic-sources', 'recent'],
+    queryFn: () => fetchJSON('/traffic/sources?recent=1'),
+    staleTime: 2 * 60_000,
+    retry: false,
+    enabled: enabled && resolvesWorkloads,
+  })
+  return resolvesWorkloads && !!data?.detected?.some(s => s.status === 'available')
+}
+
+// What the flows and records queries share: the namespaces in view, the
+// window, and the traffic the view hides. The hidden traffic is sent so the
+// source can drop it before it counts against its limits; the view still
+// filters it too.
+export interface TrafficScope {
   namespaces?: string[]
   since?: string // Duration like "5m", "1h"
+  excludeNamespaces?: readonly string[]
+  excludeHost?: boolean
+}
+
+function trafficScopeParams({ namespaces = [], since, excludeNamespaces, excludeHost }: TrafficScope): URLSearchParams {
+  const params = new URLSearchParams()
+  // With several namespaces in view the server reads them from the saved pick.
+  if (namespaces.length === 1) params.set('namespace', namespaces[0])
+  if (since) params.set('since', since)
+  if (excludeNamespaces?.length) params.set('excludeNamespaces', excludeNamespaces.join(','))
+  if (excludeHost) params.set('excludeHost', 'true')
+  return params
+}
+
+function trafficScopeKey({ namespaces = [], since, excludeNamespaces, excludeHost }: TrafficScope) {
+  return [namespaces, since, excludeNamespaces ?? [], !!excludeHost]
+}
+
+// Get traffic flows
+export interface UseTrafficFlowsOptions extends TrafficScope {
+  /** One graph node per pod instead of per workload. */
+  byPod?: boolean
   enabled?: boolean
 }
 
 export function useTrafficFlows(options: UseTrafficFlowsOptions = {}) {
-  const { namespaces = [], since, enabled = true } = options
-
-  const params = new URLSearchParams()
-  // Traffic backend only supports single namespace, use first if provided
-  if (namespaces.length === 1) params.set('namespace', namespaces[0])
-  if (since) params.set('since', since)
+  const { enabled = true, byPod = false } = options
+  const params = trafficScopeParams(options)
+  if (byPod) params.set('groupBy', 'pod')
   const queryString = params.toString()
 
   return useQuery<TrafficFlowsResponse>({
-    queryKey: ['traffic-flows', namespaces, since],
+    queryKey: ['traffic-flows', ...trafficScopeKey(options), byPod],
     queryFn: () => fetchJSON(`/traffic/flows${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled,
     retry: 1,
   })
+}
+
+/** An endpoint as the server's aggregation keys it. */
+export interface TrafficEndpointRef {
+  namespace?: string
+  name: string
+  kind?: string
+  workloadKind?: string
+}
+
+/** One edge of the server's aggregation, keyed as the server keys it. */
+export interface TrafficEndpointPair {
+  source: TrafficEndpointRef
+  destination: TrafficEndpointRef
+  port: number
+  directionUnknown?: boolean
+}
+
+/** The selection rides in the query string, URL-encoded. Proxies in front of
+ *  Radar commonly refuse request lines over 8 KiB (ingress-nginx's default),
+ *  so a larger selection is not sent at all. */
+const MAX_TRAFFIC_MATCH_CHARS = 6_000
+
+/** A selection as the server matches it: its edges, or a node as the one
+ *  endpoint it is, which every one of its edges has at an end. */
+export type TrafficMatch = { pairs: TrafficEndpointPair[] } | { endpoints: TrafficEndpointRef[] }
+
+// Every pair encodes to more than this many characters, so a selection with
+// more pairs than the request can hold is rejected without serializing it.
+const MIN_MATCH_PAIR_CHARS = 40
+
+/** The whole query string's limit: the selection plus the scope beside it,
+ *  under the 8 KiB request line proxies commonly allow. */
+const MAX_TRAFFIC_QUERY_CHARS = 7_000
+
+function encodedMatch(match: TrafficMatch): string | null {
+  if ('pairs' in match && match.pairs.length * MIN_MATCH_PAIR_CHARS > MAX_TRAFFIC_MATCH_CHARS) return null
+  const json = JSON.stringify(match)
+  return encodeURIComponent(json).length > MAX_TRAFFIC_MATCH_CHARS ? null : json
+}
+
+export interface UseTrafficRecordsOptions extends TrafficScope {
+  /** The selection, or null for no selection. */
+  match: TrafficMatch | null
+  /** Namespaces also excluded when the request has room for them; the list
+   *  filters them out anyway. */
+  optionalExcludeNamespaces?: readonly string[]
+  enabled?: boolean
+}
+
+// The newest records behind a graph selection. The flows response carries only
+// a capped sample of records, so a selected edge is looked up on its own —
+// otherwise a quiet edge on a busy cluster would show nothing.
+export function useTrafficRecords(options: UseTrafficRecordsOptions) {
+  const { enabled = true } = options
+  const { guard, gatedKey, support } = useRadarFeature('trafficRecords')
+  // Serialized when the selection changes (each refresh), not on every
+  // render: a merged edge can carry tens of thousands of pairs.
+  const match = useMemo(() => (options.match ? encodedMatch(options.match) : null), [options.match])
+  const optional = options.optionalExcludeNamespaces ?? []
+  let scope: TrafficScope = optional.length > 0
+    ? { ...options, excludeNamespaces: [...(options.excludeNamespaces ?? []), ...optional] }
+    : options
+  let params = trafficScopeParams(scope)
+  if (match) params.set('match', match)
+  if (optional.length > 0 && params.toString().length > MAX_TRAFFIC_QUERY_CHARS) {
+    scope = options
+    params = trafficScopeParams(scope)
+    if (match) params.set('match', match)
+  }
+  const tooLarge = options.match !== null && (match === null || params.toString().length > MAX_TRAFFIC_QUERY_CHARS)
+  // The view this answers, apart from the optional exclusions.
+  const view = JSON.stringify([...trafficScopeKey(options), match])
+
+  const query = useQuery<TrafficRecordsResponse>({
+    queryKey: ['traffic-flows', 'records', ...trafficScopeKey(scope), match, ...gatedKey],
+    queryFn: () => guard(() => fetchApiJSON<TrafficRecordsResponse>(`/traffic/flows/records?${params.toString()}`)),
+    staleTime: 5000,
+    enabled: enabled && match !== null && !tooLarge && support !== 'unsupported',
+    meta: { view },
+    // Kept while only the optional exclusions change (a namespace hidden in
+    // the sidebar, which the list filters out anyway). Not across another
+    // selection, window or scope: those records would show under this one.
+    placeholderData: (prev, prevQuery) => (prevQuery?.meta?.view === view ? prev : undefined),
+    retry: shouldRetryRadarQuery,
+  })
+  return { ...query, tooLarge, supported: support !== 'unsupported' }
 }
 
 // Get active traffic source

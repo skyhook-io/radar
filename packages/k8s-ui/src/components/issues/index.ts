@@ -24,5 +24,7 @@ export {
   ISSUE_SEVERITY_FILL_CLASS,
   ISSUE_SEVERITY_RAIL_CLASS,
   categoryLabel,
+  issueTitle,
+  issueReasonTitle,
   groupLabel,
 } from './severity';

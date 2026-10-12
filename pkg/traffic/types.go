@@ -79,6 +79,8 @@ const (
 	EndpointKindHost = "Host"
 	// EndpointKindUnknown: the plugin reported no usable identity.
 	EndpointKindUnknown = "Unknown"
+	// EndpointKindWorkload: the pods of one workload, as the graph shows them.
+	EndpointKindWorkload = "Workload"
 )
 
 // Endpoint represents a source or destination in a flow.
@@ -89,7 +91,40 @@ type Endpoint struct {
 	IP        string            `json:"ip,omitempty"`       // IP address
 	Labels    map[string]string `json:"labels,omitempty"`   // K8s labels
 	Workload  string            `json:"workload,omitempty"` // Parent workload name (Deployment, etc.)
-	Port      int               `json:"port,omitempty"`     // Port number
+	// WorkloadKind is the kind of that workload — Deployment, StatefulSet,
+	// CronJob, … — when it was resolved from the pod's owners.
+	WorkloadKind string `json:"workloadKind,omitempty"`
+	Port         int    `json:"port,omitempty"` // Port number
+}
+
+// graphEndpoint is the endpoint as the graph draws it: a pod with a known
+// workload becomes that workload, so a Deployment with fifty replicas is one
+// node rather than fifty, the way metric-based sources report it already.
+// Records keep their pods; only the aggregation and selection matching use
+// this. An endpoint already named after its workload (Istio and Beyla report
+// workloads as pods) is left as its source reported it.
+func graphEndpoint(e Endpoint) Endpoint {
+	if e.Kind != EndpointKindPod || e.Workload == "" || e.Namespace == "" || e.Workload == e.Name {
+		return e
+	}
+	return Endpoint{
+		Name:         e.Workload,
+		Namespace:    e.Namespace,
+		Kind:         EndpointKindWorkload,
+		Workload:     e.Workload,
+		WorkloadKind: e.WorkloadKind,
+	}
+}
+
+// GraphFlows maps each flow's endpoints to graphEndpoint, returning copies.
+func GraphFlows(flows []Flow) []Flow {
+	out := make([]Flow, len(flows))
+	for i, f := range flows {
+		f.Source = graphEndpoint(f.Source)
+		f.Destination = graphEndpoint(f.Destination)
+		out[i] = f
+	}
+	return out
 }
 
 // FlowOptions contains options for querying flows.
@@ -98,6 +133,103 @@ type FlowOptions struct {
 	Since     time.Duration // Look back period (default: 5 minutes)
 	Follow    bool          // Stream new flows
 	Limit     int           // Max flows to return (0 = no limit)
+	// Namespaces keeps flows with either endpoint in one of these namespaces
+	// (nil = all). A source that can filter on several namespaces at once uses
+	// it in place of Namespace, so a multi-namespace view stops spending the
+	// source's limits on traffic it is about to discard.
+	Namespaces []string
+	// ExcludeNamespaces drops flows with either endpoint in one of these
+	// namespaces, and ExcludeHost flows to or from a node or the host network.
+	// Both are what the view hides anyway; pushing them to the source keeps
+	// that traffic from using up the source's limits.
+	ExcludeNamespaces []string
+	ExcludeHost       bool
+	// Match narrows the query to the traffic behind one selection in the graph.
+	// A source may use it to fetch less; the result still has to be filtered
+	// with Match.Matches, since a source's own filters can be coarser.
+	Match *FlowMatch
+}
+
+// Excludes reports whether a flow falls under ExcludeNamespaces or ExcludeHost.
+func (o FlowOptions) Excludes(f Flow) bool {
+	if o.ExcludeHost && (f.Source.Kind == EndpointKindHost || f.Destination.Kind == EndpointKindHost) {
+		return true
+	}
+	for _, ns := range o.ExcludeNamespaces {
+		if (f.Source.Namespace != "" && f.Source.Namespace == ns) || (f.Destination.Namespace != "" && f.Destination.Namespace == ns) {
+			return true
+		}
+	}
+	return false
+}
+
+// EndpointRef names an endpoint the way aggregation keys it: namespace and
+// name. Kind is carried so a source can tell which references it can filter
+// on natively (a pod) from ones it cannot (an external address, the host).
+type EndpointRef struct {
+	Namespace    string `json:"namespace,omitempty"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind,omitempty"`
+	WorkloadKind string `json:"workloadKind,omitempty"`
+}
+
+// matches compares a reference with an endpoint: a workload reference with
+// the workload the graph draws the endpoint as, so it matches the records of
+// each of its pods; any other reference with the endpoint as reported.
+func (r EndpointRef) matches(e Endpoint) bool {
+	if r.Namespace != e.Namespace {
+		return false
+	}
+	if r.Kind == EndpointKindWorkload {
+		return r.Name == graphEndpoint(e).Name
+	}
+	return r.Name == e.Name
+}
+
+// EndpointPair is one edge of the aggregation, keyed as AggregateFlows keys
+// it: the two endpoints, the port (zero when the source reports none), and
+// whether the direction is known.
+type EndpointPair struct {
+	Source           EndpointRef `json:"source"`
+	Destination      EndpointRef `json:"destination"`
+	Port             int         `json:"port"`
+	DirectionUnknown bool        `json:"directionUnknown,omitempty"`
+}
+
+// FlowMatch selects the flows behind a graph node or edge: those between one
+// of the pairs, in the direction the aggregation recorded them, or with one
+// of the endpoints at either end. A node is sent as its endpoint: a busy
+// one has too many edges to name each.
+type FlowMatch struct {
+	Pairs     []EndpointPair `json:"pairs,omitempty"`
+	Endpoints []EndpointRef  `json:"endpoints,omitempty"`
+}
+
+// Matches reports whether a flow belongs to the selection.
+func (m *FlowMatch) Matches(f Flow) bool {
+	if m == nil {
+		return true
+	}
+	for _, p := range m.Pairs {
+		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) &&
+			p.Port == f.Port && p.DirectionUnknown == f.DirectionUnknown {
+			return true
+		}
+	}
+	for _, e := range m.Endpoints {
+		if e.matches(f.Source) || e.matches(f.Destination) {
+			return true
+		}
+	}
+	return false
+}
+
+// Size is how many pairs and endpoints the selection carries.
+func (m *FlowMatch) Size() int {
+	if m == nil {
+		return 0
+	}
+	return len(m.Pairs) + len(m.Endpoints)
 }
 
 // FlowsResponse contains the flows and metadata.
@@ -119,6 +251,10 @@ type FlowsResponse struct {
 	// missing; after it, nothing was cut. Nil when the whole window is covered.
 	CoveredSince  *time.Time `json:"coveredSince,omitempty"`
 	NodeFlowLimit int        `json:"nodeFlowLimit,omitempty"`
+	// FlowLimit is set when the source kept only its newest FlowLimit flows in
+	// total, so the oldest part of the window was dropped; CoveredSince then
+	// accounts for it too.
+	FlowLimit int `json:"flowLimit,omitempty"`
 }
 
 // Warning kinds for FlowsResponse.WarningKind.

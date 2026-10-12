@@ -2,9 +2,9 @@ import { AlertTriangle, Info, Clock, Target, Server, Hash } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Badge } from '../../ui/Badge'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
-import { formatAge } from '../resource-utils'
 import type { NavigateToResource } from '../../../utils/navigation'
 import { apiVersionToGroup, kindToPluralWithGroup } from '../../../utils/navigation'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface EventRendererProps {
   data: any
@@ -118,10 +118,10 @@ export function EventRenderer({ data, onNavigate }: EventRendererProps) {
         <PropertyList>
           {count > 1 && <Property label="Count" value={count} />}
           {firstTimestamp && (
-            <Property label="First Seen" value={formatAge(firstTimestamp)} />
+            <Property label="First Seen" value={<TimeValue timestamp={firstTimestamp} />} />
           )}
           {lastTimestamp && (
-            <Property label="Last Seen" value={formatAge(lastTimestamp)} />
+            <Property label="Last Seen" value={<TimeValue timestamp={lastTimestamp} />} />
           )}
           {firstTimestamp && lastTimestamp && firstTimestamp !== lastTimestamp && (
             <Property label="Duration" value={calculateDuration(firstTimestamp, lastTimestamp)} />

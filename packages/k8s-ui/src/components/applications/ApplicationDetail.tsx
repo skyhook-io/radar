@@ -89,7 +89,7 @@ import {
   overlayProvenance,
 } from "../../utils/applications";
 import { PaneLoader } from "../ui/PaneLoader";
-import { midTruncate } from "../../utils/format";
+import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
 import { VersionTooltip, AppIdentityTooltip, RolloutSummaryTooltip } from "./AppTooltips";
 import {
   ProvenanceBadge,
@@ -253,6 +253,9 @@ export type ApplicationDetailProps = {
   // The retained ring itself was row-capped: the OLDEST part of the retention
   // window is not loaded, independent of the per-query event limit.
   historyRingTruncated?: boolean;
+  // The host's note about how far back history goes, or the stretch before
+  // the limit reads as "no history".
+  historyRetentionNote?: ReactNode;
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
   onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
@@ -346,6 +349,7 @@ export function ApplicationDetail({
   historyCoverageRecordCount,
   historyRuntimeLimited,
   historyRingTruncated,
+  historyRetentionNote,
   onHistoryRangeChange,
   onOpenTimeline,
   onOpenSource,
@@ -784,6 +788,7 @@ export function ApplicationDetail({
             historyCoverageRecordCount={historyCoverageRecordCount}
             historyRuntimeLimited={historyRuntimeLimited}
             historyRingTruncated={historyRingTruncated}
+            historyRetentionNote={historyRetentionNote}
             onHistoryRangeChange={onHistoryRangeChange}
             onOpenTimeline={onOpenTimeline}
             onOpenSource={onOpenSource}
@@ -832,6 +837,7 @@ function ApplicationWorkspace({
   historyCoverageRecordCount,
   historyRuntimeLimited,
   historyRingTruncated,
+  historyRetentionNote,
   onHistoryRangeChange,
   onOpenTimeline,
   onOpenSource,
@@ -884,6 +890,9 @@ function ApplicationWorkspace({
   historyCoverageRecordCount?: number;
   historyRuntimeLimited?: boolean;
   historyRingTruncated?: boolean;
+  // The host's note about how far back history goes, or the stretch before
+  // the limit reads as "no history".
+  historyRetentionNote?: ReactNode;
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
   onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
@@ -953,6 +962,7 @@ function ApplicationWorkspace({
           coverageRecordCount={historyCoverageRecordCount}
           runtimeLimited={historyRuntimeLimited}
           ringTruncated={historyRingTruncated}
+          retentionNote={historyRetentionNote}
           workloads={workloads}
           onSelectWorkload={onSelectWorkload}
           onNavigateToResource={onNavigateToResource}
@@ -1827,7 +1837,7 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
   return {
     latestValue: latest?.latestRunPhase || latest?.label || "None",
     latestDetail: latest
-      ? `${latest.latestRunName || latest.workload.name}${latestRunTimestamp(latest) ? ` · ${relativeTime(latestRunTimestamp(latest)!)} ` : ""}`.trim()
+      ? `${latest.latestRunName || latest.workload.name}${latestRunTimestamp(latest) ? ` · ${formatRelativeAgeTime(latestRunTimestamp(latest)!)} ` : ""}`.trim()
       : "No retained runs",
     retainedValue:
       retained > 0 ? `${succeeded} succeeded / ${failed} failed` : "0 retained",
@@ -1842,7 +1852,7 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
           : `${schedules.length} schedules`,
     scheduleDetail:
       schedules.length === 1 && latest?.lastSuccessfulAt
-        ? `last success ${relativeTime(latest.lastSuccessfulAt)}`
+        ? `last success ${formatRelativeAgeTime(latest.lastSuccessfulAt)}`
         : undefined,
     scheduleMono: schedules.length === 1,
   };
@@ -1856,17 +1866,6 @@ function activeWorkloadNames(activity: AppBatchActivity[]): string {
   return `${active.slice(0, 2).join(", ")} +${active.length - 2} more`;
 }
 
-function relativeTime(value: string): string {
-  const t = Date.parse(value);
-  if (Number.isNaN(t)) return value;
-  const diff = Date.now() - t;
-  if (diff < 60_000) return "just now";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
 
 function ApplicationLatestHistory({
   history,
@@ -2093,7 +2092,7 @@ function workloadRuntimeDetail(workload: AppWorkload): string {
   const at =
     batch.latestStartedAt || batch.latestFinishedAt || batch.lastScheduledAt;
   if (batch.latestRunName)
-    return `${midTruncate(batch.latestRunName, 28)}${at ? ` · ${relativeTime(at)}` : ""}`;
+    return `${midTruncate(batch.latestRunName, 28)}${at ? ` · ${formatRelativeAgeTime(at)}` : ""}`;
   if (batch.schedule) return `Schedule ${batch.schedule}`;
   return "No retained runs";
 }
@@ -2201,6 +2200,7 @@ function ApplicationHistoryView({
   coverageRecordCount,
   runtimeLimited,
   ringTruncated,
+  retentionNote,
   workloads,
   onSelectWorkload,
   onNavigateToResource,
@@ -2219,6 +2219,7 @@ function ApplicationHistoryView({
   coverageRecordCount?: number;
   runtimeLimited?: boolean;
   ringTruncated?: boolean;
+  retentionNote?: ReactNode;
   workloads: AppWorkload[];
   onSelectWorkload: (workload: AppWorkload) => void;
   onNavigateToResource?: (resource: ResourceRef) => void;
@@ -2428,6 +2429,7 @@ function ApplicationHistoryView({
                 application activity in this range may not be included.
               </div>
             )}
+            {retentionNote && <div>{retentionNote}</div>}
             {ringTruncated && (
               <div>
                 {mode === "retained"

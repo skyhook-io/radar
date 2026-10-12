@@ -55,6 +55,7 @@ import { useTimelineSource } from "../../context/TimelineSource";
 import { apiVersionToGroup, buildWorkloadPath, kindToPluralWithGroup } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
+import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
 import { isOpenCostWorkloadKind } from "../cost/kinds";
 
 type ApplicationRouteView = ApplicationView | "cost";
@@ -302,6 +303,7 @@ function AppDetailRoute({
         : historyRangeOptions[0].value;
   const historyTimelineEnabled =
     !selectedWorkloadKey && selectedView === "history";
+  const retentionNote = useTimelineRetentionNote();
   const historyTimelineQuery = timelineSource.useEvents({
     namespaces: appHistoryNamespaces,
     timeRange: historyRange,
@@ -665,6 +667,7 @@ function AppDetailRoute({
         historyCoverageRecordCount={historyTimelineQuery.coverage?.length ?? 0}
         historyRuntimeLimited={historyRuntimeLimited}
         historyRingTruncated={historyTimelineQuery.truncated ?? false}
+        historyRetentionNote={retentionNote}
         onHistoryRangeChange={setRetainedHistoryRange}
         onOpenTimeline={openApplicationTimeline}
         onOpenSource={openSource}

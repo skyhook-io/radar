@@ -174,7 +174,9 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
 	}
 	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
-	resolver.canListResource = s.changeAuthorizerForCtx(r.Context())
+	resolver.canReadClusterScoped = s.issueClusterScopedAccess(r)
+	resolver.canReadSubject = s.issueSubjectAccess(r)
+	resolver.canReadEvidence = s.issueEvidenceAccess(r)
 	memoKey := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces)
 	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
 		return s.gitopsIssuesMemo.load(memoKey, resolver.composeIssues)
@@ -843,11 +845,13 @@ func namespaceAllowedForGitOps(allowed []string, namespace string) bool {
 // pkg/gitops/insights API. Per-request: ctx + namespace allowlist captured
 // once at construction; lookups are namespace-filtered to enforce RBAC.
 type insightsResolver struct {
-	ctx               context.Context
-	cache             *k8s.ResourceCache
-	allowedNamespaces []string
-	canAccess         func(group, kind, namespace, name string) bool
-	canListResource   func(group, resource, namespace string) bool
+	ctx                  context.Context
+	cache                *k8s.ResourceCache
+	allowedNamespaces    []string
+	canAccess            func(group, kind, namespace, name string) bool
+	canReadClusterScoped func(kind, group string) bool
+	canReadSubject       func(issues.Ref) bool
+	canReadEvidence      func(issues.EvidenceRead) bool
 
 	// The cluster-wide issue set is composed at most once per insights request
 	// (lazily, only if a degraded managed resource asks for it) and reused
@@ -1042,6 +1046,9 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 		r.composedFlat, r.composedGrouped = r.composeIssues()
 	})
 	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, issues.RelatedIssueOptions{
+		CanReadClusterScoped: r.canReadClusterScoped,
+		CanReadSubject:       r.canReadSubject,
+		CanReadEvidence:      r.canReadEvidence,
 		CanReadRelated: func(ref issues.Ref) bool {
 			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 		},
@@ -1148,9 +1155,11 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 	flat := issues.Compose(issues.NewCacheProvider(), issues.Filters{
 		SkipPodTemplateContext: true,
-		CanListResource:        r.canListResource,
 		Namespaces:             r.allowedNamespaces,
 		Limit:                  issues.NoLimit,
+		CanReadClusterScoped:   r.canReadClusterScoped,
+		CanReadSubject:         r.canReadSubject,
+		CanReadEvidence:        r.canReadEvidence,
 		CanReadRelated: func(ref issues.Ref) bool {
 			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 		},
@@ -1186,7 +1195,7 @@ func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstruct
 	if !r.namespaceAllowed(owner.Namespace) {
 		return ""
 	}
-	if r.canListResource != nil && !r.canListResource("", "pods", owner.Namespace) {
+	if r.canReadEvidence != nil && !r.canReadEvidence(issues.EvidenceRead{Resource: "pods", Namespace: owner.Namespace, Verb: "list"}) {
 		return ""
 	}
 	if r.canAccess != nil && !r.canAccess("", "Pod", owner.Namespace, "") {

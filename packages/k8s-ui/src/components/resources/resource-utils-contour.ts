@@ -32,3 +32,15 @@ export function getHTTPProxyIncludeCount(resource: any): number {
 export function hasHTTPProxyTLS(resource: any): boolean {
   return !!resource.spec?.virtualhost?.tls
 }
+
+// Contour reads tls.secretName as "namespace/name" when another namespace
+// delegates the Secret with a TLSCertificateDelegation; a bare name, or an
+// empty namespace, is in the proxy's own namespace.
+export function getHTTPProxyTLSSecret(resource: any): { namespace: string; name: string } | null {
+  const ref: string | undefined = resource.spec?.virtualhost?.tls?.secretName
+  if (!ref) return null
+  const ownNamespace = resource.metadata?.namespace ?? ''
+  const slash = ref.indexOf('/')
+  if (slash < 0) return { namespace: ownNamespace, name: ref }
+  return { namespace: ref.slice(0, slash) || ownNamespace, name: ref.slice(slash + 1) }
+}

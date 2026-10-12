@@ -143,20 +143,20 @@ func TestIssuesDynamicTerminationAuthorization(t *testing.T) {
 		}
 	}
 	p := NewCacheProvider()
-	scoped := Compose(p, Filters{Namespaces: []string{"visible"}, Grouped: true, CanReadRelated: func(r Ref) bool { return r.Namespace == "visible" }, CanListResource: func(_, _, namespace string) bool { return namespace == "visible" }})
+	scoped := Compose(p, Filters{Namespaces: []string{"visible"}, Grouped: true, CanReadRelated: func(r Ref) bool { return r.Namespace == "visible" }, CanReadEvidence: func(read EvidenceRead) bool { return read.Namespace == "visible" }})
 	if len(scoped) != 1 || scoped[0].Name != "public" || scoped[0].Category != issuesapi.CategoryTerminationStuck || scoped[0].Severity != SeverityWarning {
 		t.Fatalf("scoped=%+v", scoped)
 	}
 	if !strings.Contains(scoped[0].Cause, "external cleanup pending") || !strings.Contains(scoped[0].Cause, "controller unknown") || strings.Contains(scoped[0].Action, "patch_resource") || !strings.Contains(scoped[0].Action, "couldn't identify") {
 		t.Fatalf("unknown controller guidance: %+v", scoped[0])
 	}
-	denied := Compose(p, Filters{CanReadClusterScoped: func(string, string) bool { return false }, CanListResource: func(_, _, namespace string) bool { return namespace != "" }})
+	denied := Compose(p, Filters{CanReadClusterScoped: func(string, string) bool { return false }, CanReadEvidence: func(read EvidenceRead) bool { return read.Namespace != "" }})
 	for _, issue := range denied {
 		if issue.Namespace == "" {
 			t.Fatalf("cluster denial leaked: %+v", issue)
 		}
 	}
-	deniedKinds := Compose(p, Filters{Namespaces: []string{"visible", "hidden"}, CanListResource: func(string, string, string) bool { return false }})
+	deniedKinds := Compose(p, Filters{Namespaces: []string{"visible", "hidden"}, CanReadEvidence: func(EvidenceRead) bool { return false }})
 	if len(deniedKinds) != 2 {
 		t.Fatalf("existing deleting condition rows were hidden: %+v", deniedKinds)
 	}
@@ -184,7 +184,7 @@ func TestIssuesDynamicTerminationAuthorization(t *testing.T) {
 			t.Fatalf("implicit CR scan: %+v", issue)
 		}
 	}
-	all := Compose(p, Filters{Grouped: true, CanListResource: func(string, string, string) bool { return true }})
+	all := Compose(p, Filters{Grouped: true, CanReadEvidence: func(EvidenceRead) bool { return true }})
 	if len(all) != 3 {
 		t.Fatalf("all=%+v", all)
 	}
@@ -230,7 +230,7 @@ func TestTerminatingGuidanceAndNoise(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &observingFinalizerProvider{observation: tc.observation}
 			p.terminatingProblems = []k8s.Detection{{Kind: "Widget", Group: "crossplane.io", Namespace: "test", Name: "deleting", Reason: "Terminating stuck", Severity: "critical", TerminatingFinalizers: tc.finalizers, TerminatingRemovals: map[string]issuesapi.FinalizerRemoval{"crossplane.io/cleanup": removal}}}
-			out := Compose(p, Filters{CanListResource: func(string, string, string) bool { return true }})
+			out := Compose(p, Filters{CanReadEvidence: func(EvidenceRead) bool { return true }})
 			if len(out) != 1 || out[0].Severity != tc.wantSeverity || !strings.Contains(out[0].Action, tc.wantAction) || p.calls != tc.wantCalls {
 				t.Fatalf("out=%+v calls=%d", out, p.calls)
 			}
@@ -687,7 +687,7 @@ func TestStuckDeletionCleanupNeedsNoRecognizedController(t *testing.T) {
 			}
 		}
 		out := map[string]Issue{}
-		for _, issue := range Compose(NewCacheProvider(), Filters{CanListResource: func(string, string, string) bool { return true }}) {
+		for _, issue := range Compose(NewCacheProvider(), Filters{CanReadEvidence: func(EvidenceRead) bool { return true }}) {
 			if issue.Category == issuesapi.CategoryTerminationStuck {
 				if _, dup := out[issue.Kind]; dup {
 					t.Fatalf("duplicate %s row", issue.Kind)
@@ -801,5 +801,73 @@ func TestStuckDeletionCleanupNeedsNoRecognizedController(t *testing.T) {
 	rabbitmq := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "rabbitmq-cluster-operator", Namespace: "rabbitmq"}, Spec: appsv1.DeploymentSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "rabbitmq-cluster-operator"}}}}
 	if issue := compose(t, rabbitmq)["ExampleCluster"]; offersRemoval(issue) || issue.Severity != SeverityWarning || !strings.Contains(issue.Cause, "name-only candidate: rabbitmq-cluster-operator is scaled to 0 replicas") || !strings.Contains(issue.Action, "rabbitmq-cluster-operator resembles its API group by name only") {
 		t.Errorf("name collision with a stopped operator: severity=%s cause=%s action=%s", issue.Severity, issue.Cause, issue.Action)
+	}
+}
+
+func TestTerminationCompositionHonorsControllerEvidence(t *testing.T) {
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	t.Cleanup(k8s.ResetResourceCache)
+	gvr := schema.GroupVersionResource{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmagents"}
+	agent := &unstructured.Unstructured{}
+	agent.SetAPIVersion(gvr.Group + "/" + gvr.Version)
+	agent.SetKind("VMAgent")
+	agent.SetNamespace("team")
+	agent.SetName("stuck")
+	agent.SetUID("vmagent-uid")
+	agent.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-24 * time.Hour)))
+	agent.SetDeletionTimestamp(&metav1.Time{Time: time.Now().Add(-2 * time.Hour)})
+	agent.SetFinalizers([]string{"apps.victoriametrics.com/finalizer"})
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "VMAgentList"}, agent)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "VMAgent", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	dc := k8s.GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !dc.WaitForSync(gvr, 2*time.Second) {
+		t.Fatal("VMAgent cache did not sync")
+	}
+	controller := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-controller", Namespace: "operators", Labels: map[string]string{"app.kubernetes.io/name": "victoria-metrics-operator"}},
+		Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "vm-controller"}}},
+	}
+	ready := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-controller-pod", Namespace: "operators", Labels: map[string]string{"app": "vm-controller"}},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}},
+	}
+	crashing := ready.DeepCopy()
+	crashing.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}
+	scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}, "daemonsets": {Enabled: true}}
+	for _, tc := range []struct {
+		name        string
+		objects     []runtime.Object
+		all         bool
+		want        Severity
+		wantCleanup bool
+	}{
+		{"namespace only with a hidden healthy controller", []runtime.Object{controller, ready}, false, SeverityWarning, false},
+		{"namespace only with a hidden crashing controller", []runtime.Object{controller, crashing}, false, SeverityWarning, false},
+		{"namespace only with no controller", nil, false, SeverityWarning, false},
+		{"full inventory with a healthy controller", []runtime.Object{controller, ready}, true, SeverityWarning, false},
+		{"full inventory with a crashing controller", []runtime.Object{controller, crashing}, true, SeverityCritical, false},
+		{"full inventory with no controller", nil, true, SeverityWarning, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(tc.objects...), scopes); err != nil {
+				t.Fatal(err)
+			}
+			out := Compose(NewCacheProvider(), Filters{
+				Namespaces:      []string{"team"},
+				CanReadEvidence: func(read EvidenceRead) bool { return tc.all || read.Namespace == "team" },
+			})
+			if len(out) != 1 || out[0].Category != issuesapi.CategoryTerminationStuck || out[0].Severity != tc.want || (out[0].ConditionalCleanup != nil) != tc.wantCleanup {
+				t.Fatalf("termination verdict=%+v", out)
+			}
+			if !tc.all && (strings.Contains(out[0].Cause, "private-controller") || strings.Contains(out[0].Cause, "operators") || strings.Contains(out[0].Cause, "CrashLoopBackOff")) {
+				t.Fatalf("unreadable controller evidence leaked: %+v", out[0])
+			}
+		})
 	}
 }

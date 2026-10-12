@@ -19,10 +19,12 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -89,6 +91,10 @@ type DashboardProblem struct {
 	DurationSeconds int64  `json:"durationSeconds"` // For sorting by problem age
 	OnsetUnknown    bool   `json:"onsetUnknown,omitempty"`
 	PodCount        int    `json:"podCount,omitempty"` // For workload rollups: number of affected pods
+	// requiredReads are the detection's evidence, checked like an issue's;
+	// degraded is what a caller who can't make them sees instead.
+	requiredReads []issues.EvidenceRead
+	degraded      *issues.DegradedFinding
 }
 
 // mergeResourceCounts adds src's per-namespace counts into dst. Cluster-scoped
@@ -196,12 +202,7 @@ type ResourceCount struct {
 	Unavailable int `json:"unavailable,omitempty"`
 }
 
-type NodeCount struct {
-	Total    int `json:"total"`
-	Ready    int `json:"ready"`
-	NotReady int `json:"notReady"`
-	Cordoned int `json:"cordoned"`
-}
+type NodeCount = health.NodeFleetCounts
 
 type JobCount struct {
 	Total     int `json:"total"`
@@ -365,6 +366,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// callers iterateNamespaces is [""], so this collapses to a single
 	// cluster-wide call.
 	t := time.Now()
+	// Problems follow the issues' read rules: a cluster-scoped problem needs
+	// list on its kind, and a Secret's own problem and one drawn from Secrets
+	// need Secret access.
+	canReadClusterScoped := s.issueClusterScopedAccess(r)
+	canReadSubject, canReadEvidence := s.issueSubjectAccess(r), s.issueEvidenceAccess(r)
 	for _, ns := range iterateNamespaces {
 		h, probs := s.getDashboardHealth(cache, ns)
 		resp.Health.Healthy += h.Healthy
@@ -373,6 +379,19 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		for _, p := range probs {
 			if p.Kind == "Node" && !canReadNodes {
 				continue
+			}
+			if p.Namespace == "" && !canReadClusterScoped(p.Kind, p.Group) {
+				continue
+			}
+			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
+				continue
+			}
+			switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
+			case issues.EvidenceWithheld:
+				continue
+			case issues.EvidenceDegraded:
+				p.Message = p.degraded.Message
+				p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
 			}
 			resp.Problems = append(resp.Problems, p)
 		}
@@ -404,19 +423,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if canReadNodes {
 		if nodeLister := cache.Nodes(); nodeLister != nil {
 			nodeList, _ := nodeLister.List(labels.Everything())
-			resp.ResourceCounts.Nodes.Total = len(nodeList)
-			for _, n := range nodeList {
-				h := health.Node(n)
-				if h.Ready {
-					if h.Unschedulable {
-						resp.ResourceCounts.Nodes.Cordoned++
-					} else {
-						resp.ResourceCounts.Nodes.Ready++
-					}
-				} else {
-					resp.ResourceCounts.Nodes.NotReady++
-				}
-			}
+			resp.ResourceCounts.Nodes = health.CountNodeFleet(nodeList, time.Now())
 		}
 	}
 	if canReadNamespaces {
@@ -584,9 +591,9 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 				return "pods"
 			}()),
 			Message:         k8s.Truncate(strings.Join(reasonParts, ", "), 200),
-			Age:             k8s.FormatAge(g.newestAge),
+			Age:             timeutil.FormatAgeShort(g.newestAge),
 			AgeSeconds:      int64(g.newestAge.Seconds()),
-			Duration:        k8s.FormatAge(g.newestDur),
+			Duration:        timeutil.FormatAgeShort(g.newestDur),
 			DurationSeconds: int64(g.newestDur.Seconds()),
 			PodCount:        g.podCount,
 		})
@@ -686,6 +693,8 @@ func detectionToDashboardProblem(p k8s.Detection) DashboardProblem {
 		Duration:        p.Duration,
 		DurationSeconds: p.DurationSeconds,
 		OnsetUnknown:    p.OnsetUnknown,
+		requiredReads:   p.RequiredReads,
+		degraded:        p.Degraded,
 	}
 }
 
@@ -738,9 +747,9 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		Severity:        severity,
 		Reason:          reason,
 		Message:         k8s.Truncate(message, 200),
-		Age:             k8s.FormatAge(ageDur),
+		Age:             timeutil.FormatAgeShort(ageDur),
 		AgeSeconds:      int64(ageDur.Seconds()),
-		Duration:        k8s.FormatAge(durDur),
+		Duration:        timeutil.FormatAgeShort(durDur),
 		DurationSeconds: int64(durDur.Seconds()),
 	}
 }

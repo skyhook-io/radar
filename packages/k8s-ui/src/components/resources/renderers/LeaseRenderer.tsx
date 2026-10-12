@@ -1,22 +1,10 @@
 import { Timer } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 interface LeaseRendererProps {
   data: any
-}
-
-function formatRelativeTime(timestamp: string): string {
-  const diff = Date.now() - new Date(timestamp).getTime()
-  if (diff < 0) return 'just now'
-  const seconds = Math.floor(diff / 1000)
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
 }
 
 export function LeaseRenderer({ data }: LeaseRendererProps) {
@@ -68,7 +56,7 @@ export function LeaseRenderer({ data }: LeaseRendererProps) {
             value={
               spec.acquireTime ? (
                 <span title={new Date(spec.acquireTime).toLocaleString()}>
-                  {formatRelativeTime(spec.acquireTime)}
+                  {formatRelativeAgeTime(spec.acquireTime)}
                 </span>
               ) : undefined
             }
@@ -81,7 +69,7 @@ export function LeaseRenderer({ data }: LeaseRendererProps) {
                   className={clsx(renewColor)}
                   title={new Date(renewTime).toLocaleString()}
                 >
-                  {formatRelativeTime(renewTime)}
+                  {formatRelativeAgeTime(renewTime)}
                 </span>
               ) : undefined
             }

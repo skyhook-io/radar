@@ -561,6 +561,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/gitops/destination/{kind}/{namespace}/{name}", s.handleGitOpsDestination)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
 			r.Get("/gitops/managed-resources", s.handleGitOpsManagedResources)
+			r.Post("/gitops/write-evidence", s.handleGitOpsWriteEvidence)
 
 			// RBAC reverse-lookup endpoints. Two shapes for /subject:
 			// ServiceAccount carries a namespace (3 segments after kind);
@@ -794,6 +795,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Traffic routes (non-streaming)
 			r.Get("/traffic/sources", s.handleGetTrafficSources)
 			r.Get("/traffic/flows", s.handleGetTrafficFlows)
+			r.Get("/traffic/flows/records", s.handleGetTrafficRecords)
 			r.Get("/traffic/source", s.handleGetActiveTrafficSource)
 			r.Post("/traffic/source", s.handleSetTrafficSource)
 			r.Post("/traffic/connect", s.handleTrafficConnect)
@@ -1343,10 +1345,13 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		YAMLSchemas:           true,
 		WorkloadImages:        true,
 		ResourceIssues:        true,
+		ResourceIssueCoverage: true,
 		PodEnvironment:        true,
 		PolicyResource:        true,
 		WorkloadHistory:       true,
 		ServiceEndpointSlices: true,
+		TrafficRecords:        true,
+		GitOpsWriteEvidence:   true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
@@ -1401,7 +1406,17 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		caps.Resources = result.Perms
 		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 	} else if k8s.GetResourceCache() != nil {
-		if result := k8s.CheckResourcePermissions(r.Context()); result != nil {
+		result, isCurrent := k8s.CheckResourcePermissions(r.Context())
+		// Prefer what the cache holds; fall back to the probe's own result only
+		// when it describes the cluster still in effect. A probe superseded by a
+		// context switch describes the cluster it probed, not the one being
+		// rendered, and rendering it would report the previous cluster's
+		// permissions - leaving resources unset is the "no probe data yet"
+		// signal documented above.
+		if cached := k8s.GetCachedPermissionResult(); cached != nil {
+			result, isCurrent = cached, true
+		}
+		if result != nil && isCurrent {
 			caps.Resources = result.Perms
 			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 		}
@@ -3474,7 +3489,12 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 	s.writeJSON(w, history)
 }
 
-func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHistory, namespace, name string, health k8s.MetricsCollectionHealth, includeAPIServiceConditionMessage bool) *k8s.PodMetricsHistory {
+type podMetricsHistoryWithAvailability struct {
+	*k8s.PodMetricsHistory
+	MetricsAPIReachable bool `json:"metricsAPIReachable"`
+}
+
+func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHistory, namespace, name string, health k8s.MetricsCollectionHealth, includeAPIServiceConditionMessage bool) *podMetricsHistoryWithAvailability {
 	if history == nil {
 		history = &k8s.PodMetricsHistory{
 			Namespace:  namespace,
@@ -3485,7 +3505,10 @@ func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHisto
 	if health.PodMetrics.ConsecutiveErrors > 0 {
 		history.CollectionError, history.RawCollectionError, history.MetricsUnavailableDiagnosis, history.MetricsUnavailable = metricsHistoryCollectionError(ctx, "Pod", health.PodMetrics.LastError, includeAPIServiceConditionMessage)
 	}
-	return history
+	return &podMetricsHistoryWithAvailability{
+		PodMetricsHistory:   history,
+		MetricsAPIReachable: health.PodMetrics.LastSuccess != "" && health.PodMetrics.ConsecutiveErrors == 0,
+	}
 }
 
 // handleNodeMetricsHistory returns historical metrics for a specific node

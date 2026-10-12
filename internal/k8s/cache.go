@@ -356,7 +356,11 @@ func InitResourceCache(ctx context.Context) error {
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
 		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		permResult := CheckResourcePermissions(rbacCtx)
+		// A superseded result is still wired from rather than discarded: this
+		// runs under contextOpMu, so the operation that superseded the probe is
+		// already tearing this cache down, and the ctx.Err() check below drops
+		// out of the boot path that does not hold that lock.
+		permResult, _ := CheckResourcePermissions(rbacCtx)
 		cancel()
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 
@@ -912,7 +916,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
-	healthState := classifyTimelineHealth(kind, obj, time.Now())
+	healthState := classifyTimelineChangeHealth(kind, oldObj, obj, time.Now())
 
 	// Feed the tombstone on every add/update/delete. While the object is live
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event

@@ -10,6 +10,7 @@ import {
   Filter,
   Info,
   Puzzle,
+  Boxes,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE } from '@skyhook-io/k8s-ui/utils/badge-colors'
@@ -41,6 +42,8 @@ interface TrafficFilterSidebarProps {
   setShowNamespaceGroups: (v: boolean) => void
   collapseInternet: boolean
   setCollapseInternet: (v: boolean) => void
+  groupByWorkload: boolean
+  setGroupByWorkload: (v: boolean) => void
   addonMode: AddonMode
   setAddonMode: (v: AddonMode) => void
 
@@ -83,6 +86,9 @@ interface TrafficFilterSidebarProps {
   namespaces: Array<{ name: string; nodeCount: number }>
   hiddenNamespaces: Set<string>
   onToggleNamespace: (ns: string) => void
+  /** Set while the view is focused on an endpoint: the namespace choices are
+   *  kept but not applied, so a neighbor in a hidden namespace still shows. */
+  namespacesPausedFor?: string
 
 }
 
@@ -150,6 +156,8 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
   setShowNamespaceGroups,
   collapseInternet,
   setCollapseInternet,
+  groupByWorkload,
+  setGroupByWorkload,
   addonMode,
   setAddonMode,
   aggregateExternal,
@@ -177,6 +185,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
   namespaces,
   hiddenNamespaces,
   onToggleNamespace,
+  namespacesPausedFor,
 }: TrafficFilterSidebarProps) {
   const [namespacesExpanded, setNamespacesExpanded] = useState(false)
 
@@ -297,6 +306,13 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
               enabled={collapseInternet}
               onToggle={() => setCollapseInternet(!collapseInternet)}
               icon={Globe}
+            />
+            <ToggleOption
+              label="Group by Workload"
+              description="Draw a workload's pods as one node. Off, each pod gets its own node"
+              enabled={groupByWorkload}
+              onToggle={() => setGroupByWorkload(!groupByWorkload)}
+              icon={Boxes}
             />
           </div>
         </div>
@@ -494,7 +510,12 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
                 </button>
               </div>
             </div>
-            <div className="space-y-0.5">
+            {namespacesPausedFor && (
+              <p className="mb-1.5 text-[10px] text-theme-text-tertiary">
+                Paused while focused on {namespacesPausedFor}: its neighbors show whatever their namespace.
+              </p>
+            )}
+            <div className={clsx('space-y-0.5', namespacesPausedFor && 'opacity-50 pointer-events-none')} aria-disabled={!!namespacesPausedFor}>
               {visibleNamespaces.map(({ name, nodeCount }) => {
                 const isHidden = hiddenNamespaces.has(name)
                 return (

@@ -46,6 +46,7 @@ import type {
 import type { ClusterLoadState } from "./types/clusterLoadState";
 import { TimelineSourceProvider } from "./context/TimelineSource";
 import type { TimelineSourceConfig } from "./api/timelineSource";
+import { TimelineRetentionNoteProvider } from "./context/TimelineCustomization";
 import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
 import type {
   RenderDiagnoseAction,
@@ -180,6 +181,12 @@ export interface RadarAppProps {
    * React hook-order violation). Set it once at mount when possible.
    */
   timelineSource?: TimelineSourceConfig;
+  /**
+   * A note shown above the timeline and the Applications history, saying how
+   * far back history goes. Omitted → no note. Set it only when the timeline server
+   * actually limits history, or the note misstates what is shown.
+   */
+  timelineRetentionNote?: React.ReactNode;
 }
 
 // Default QueryClient with the same shape Radar's standalone binary uses.
@@ -236,6 +243,7 @@ export function RadarApp({
   onClusterLoadStateChange,
   onInvestigationFocus,
   timelineSource,
+  timelineRetentionNote,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
   // before children construct URLs. getApiBase() / getAuthHeaders() /
@@ -266,24 +274,26 @@ export function RadarApp({
             <RadarUpgradeHostProvider value={upgradeHost}>
               <FilterLocationBridge>
                 <TimelineSourceProvider config={timelineSource}>
-                  <DiagnoseCustomizationProvider
-                    value={renderDiagnoseAction ?? defaultDiagnoseAction}
-                    consentCopy={diagnoseConsent}
-                    renderRunActions={renderInvestigationRunActions}
-                    renderRefusalAction={renderInvestigationRefusalAction}
-                  >
-                    <DiagnoseProvider
-                      browserURLState={router !== "memory"}
-                      forceRouterURLState={router === "memory"}
-                      onFocusedRun={onInvestigationFocus}
+                  <TimelineRetentionNoteProvider value={timelineRetentionNote}>
+                    <DiagnoseCustomizationProvider
+                      value={renderDiagnoseAction ?? defaultDiagnoseAction}
+                      consentCopy={diagnoseConsent}
+                      renderRunActions={renderInvestigationRunActions}
+                      renderRefusalAction={renderInvestigationRefusalAction}
                     >
-                      <App
-                        manageDocumentTitle={manageDocumentTitle}
-                        documentTitleSuffix={documentTitleSuffix}
-                        onClusterLoadStateChange={onClusterLoadStateChange}
-                      />
-                    </DiagnoseProvider>
-                  </DiagnoseCustomizationProvider>
+                      <DiagnoseProvider
+                        browserURLState={router !== "memory"}
+                        forceRouterURLState={router === "memory"}
+                        onFocusedRun={onInvestigationFocus}
+                      >
+                        <App
+                          manageDocumentTitle={manageDocumentTitle}
+                          documentTitleSuffix={documentTitleSuffix}
+                          onClusterLoadStateChange={onClusterLoadStateChange}
+                        />
+                      </DiagnoseProvider>
+                    </DiagnoseCustomizationProvider>
+                  </TimelineRetentionNoteProvider>
                 </TimelineSourceProvider>
               </FilterLocationBridge>
             </RadarUpgradeHostProvider>

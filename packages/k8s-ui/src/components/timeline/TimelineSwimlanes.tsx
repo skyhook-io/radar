@@ -62,6 +62,7 @@ import {
 } from './shared'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { clampLensToSelection, formatLensDuration, MIN_WINDOW_MS, type ScrubberRange } from './scrubber-math'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 // Predefined zoom levels (window widths in hours): 15m, 30m, 1h, 2h, 4h, 8h,
 // 12h, 1d, 2d, 3d, 7d. Hoisted so the controlled-window adapter can size the
@@ -2884,15 +2885,6 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
   const markerClasses = getMarkerStyle()
 
   // Build tooltip text - focus on what happened, explain the color meaning
-  const getRelativeTime = (timestamp: string) => {
-    const diff = Date.now() - new Date(timestamp).getTime()
-    const mins = Math.floor(diff / 60000)
-    if (mins < 1) return 'just now'
-    if (mins < 60) return `${mins}m ago`
-    const hours = Math.floor(mins / 60)
-    if (hours < 24) return `${hours}h ago`
-    return `${Math.floor(hours / 24)}d ago`
-  }
 
   // Get human-readable operation label with color indicator
   const getOperationLabel = () => {
@@ -2922,7 +2914,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
     const msg = event.message.length > 110 ? event.message.slice(0, 110) + '…' : event.message
     tooltipLines.push(msg)
   }
-  tooltipLines.push(getRelativeTime(event.timestamp))
+  tooltipLines.push(formatRelativeAgeTime(event.timestamp))
   if (isHistoricalEvent(event)) tooltipLines.push('(from metadata)')
 
   const tooltipText = tooltipLines.join(' · ')

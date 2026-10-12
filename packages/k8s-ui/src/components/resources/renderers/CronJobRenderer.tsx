@@ -1,6 +1,8 @@
 import { Clock, Pause } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
-import { formatAge, cronToHuman } from '../resource-utils'
+import { cronToHuman } from '../resource-utils'
+import { TimeValue } from '../../ui/ScheduleValue'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 interface CronJobRendererProps {
   data: any
@@ -53,7 +55,7 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
         <AlertBanner
           variant="error"
           title="Recent Jobs Failing"
-          message={<>Jobs have been scheduled but haven't succeeded recently. Last success: {formatAge(status.lastSuccessfulTime)}. Check job history and pod logs.</>}
+          message={<>Jobs have been scheduled but haven't succeeded recently. Last success: {formatRelativeAgeTime(status.lastSuccessfulTime, 'never')}. Check job history and pod logs.</>}
         />
       )}
 
@@ -62,8 +64,8 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
           <Property label="Schedule" value={spec.schedule} />
           <Property label="Human" value={cronToHuman(spec.schedule)} />
           <Property label="Suspend" value={spec.suspend ? 'Yes' : 'No'} />
-          <Property label="Last Schedule" value={status.lastScheduleTime ? formatAge(status.lastScheduleTime) : 'Never'} />
-          <Property label="Last Success" value={status.lastSuccessfulTime ? formatAge(status.lastSuccessfulTime) : 'Never'} />
+          <Property label="Last Schedule" value={<TimeValue timestamp={status.lastScheduleTime} fallback="Never" />} />
+          <Property label="Last Success" value={<TimeValue timestamp={status.lastSuccessfulTime} fallback="Never" />} />
           <Property label="Active Jobs" value={status.active?.length || 0} />
         </PropertyList>
       </Section>

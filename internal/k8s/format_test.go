@@ -2,26 +2,7 @@ package k8s
 
 import (
 	"testing"
-	"time"
 )
-
-func TestFormatAge(t *testing.T) {
-	tests := []struct {
-		d    time.Duration
-		want string
-	}{
-		{30 * time.Second, "30s"},
-		{5 * time.Minute, "5m"},
-		{3 * time.Hour, "3h"},
-		{48 * time.Hour, "2d"},
-	}
-	for _, tt := range tests {
-		got := FormatAge(tt.d)
-		if got != tt.want {
-			t.Errorf("FormatAge(%v) = %q, want %q", tt.d, got, tt.want)
-		}
-	}
-}
 
 func TestTruncate(t *testing.T) {
 	tests := []struct {

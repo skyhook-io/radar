@@ -1,7 +1,7 @@
 import { Activity, BarChart3, Server } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
-import { formatAge } from '../resource-utils'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface AnalysisRunRendererProps {
   data: any
@@ -60,8 +60,8 @@ export function AnalysisRunRenderer({ data, onNavigate }: AnalysisRunRendererPro
           <Property label="Phase" value={<Badge severity={phaseSeverity(phase)}>{phase}</Badge>} />
           {labels['rollout-type'] && <Property label="Triggered as" value={labels['rollout-type']} />}
           {labels['step-index'] && <Property label="Canary step" value={labels['step-index']} />}
-          <Property label="Started" value={status.startedAt ? formatAge(status.startedAt) : undefined} />
-          <Property label="Completed" value={status.completedAt ? formatAge(status.completedAt) : undefined} />
+          <Property label="Started" value={status.startedAt ? <TimeValue timestamp={status.startedAt} /> : undefined} />
+          <Property label="Completed" value={status.completedAt ? <TimeValue timestamp={status.completedAt} /> : undefined} />
           <Property label="Message" value={status.message} />
           {ownerRollout && (
             <Property

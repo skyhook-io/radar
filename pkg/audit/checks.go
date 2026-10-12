@@ -149,6 +149,12 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// operators see the same "long enough to flag" semantics across surfaces.
 	findings = append(findings, checkCrossplaneStuck(tr, input)...)
 
+	// --- GKE: Persistent Disk volumes that can be scheduled onto nodes that
+	// attach only Hyperdisk. Self-gates on nil evidence (not GKE, or the
+	// reader can't list nodes/PVs/StorageClasses) and on the absence of
+	// Hyperdisk-only nodes.
+	findings = append(findings, checkPDVolumeHyperdiskPlacement(tr, input)...)
+
 	// --- GitOps coverage: workloads not tracked by a GitOps controller ---
 	// Self-gates on input.GitOpsToolsPresent; a no-GitOps cluster records
 	// nothing, so the check is absent from CheckCounts rather than reported as a
@@ -874,27 +880,17 @@ func checkServiceNoMatchingPods(tr *evalTracker, services []*corev1.Service, pod
 func checkIngressNoMatchingService(tr *evalTracker, ingresses []*networkingv1.Ingress, servicesByName map[string]bool) []Finding {
 	var findings []Finding
 	for _, ing := range ingresses {
-		eligible := false
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service == nil {
-					continue
-				}
-				eligible = true
-				svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-				if !servicesByName[svcKey] {
-					findings = append(findings, Finding{
-						Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name,
-						CheckID: "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
-						Message: fmt.Sprintf("Ingress references non-existent Service %q", path.Backend.Service.Name),
-					})
-				}
+		backends := configrefs.IngressBackendServices(ing)
+		for _, name := range backends {
+			if !servicesByName[ing.Namespace+"/"+name] {
+				findings = append(findings, Finding{
+					Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name,
+					CheckID: "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
+					Message: fmt.Sprintf("Ingress references non-existent Service %q", name),
+				})
 			}
 		}
-		if eligible {
+		if len(backends) > 0 {
 			tr.record("ingressNoMatchingService", ing.Namespace)
 		}
 	}

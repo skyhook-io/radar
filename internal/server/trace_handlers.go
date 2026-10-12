@@ -78,6 +78,11 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		Dynamic:   k8s.GetDynamicResourceCache(),
 		Discovery: k8s.GetResourceDiscovery(),
 		Issues:    issues.NewCacheProvider(),
+		IssueAccess: trace.IssueAccess{
+			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadSubject:       s.issueSubjectAccess(r),
+			CanReadEvidence:      s.issueEvidenceAccess(r),
+		},
 		// Probes call services/proxy + pods/proxy on this client. Use the
 		// per-request impersonated identity (or the SA when auth is disabled)
 		// so the apiserver enforces the caller's RBAC on the proxy verbs -

@@ -87,7 +87,7 @@ func suggestedOperationCompare(history []HelmRevision, operation HelmOperation) 
 			"Compare the previous completed revision with the failed upgrade revision.",
 		)
 	case helmhistory.KindPending:
-		if strings.EqualFold(operation.PendingStatus, "pending-install") {
+		if strings.EqualFold(operation.PendingStatus, "pending-install") || strings.EqualFold(operation.PendingStatus, "uninstalling") {
 			return nil
 		}
 		previous := previousCompletedRevision(history, operation.Revision)
