@@ -569,6 +569,9 @@ permission-filtered, with field paths and a bounded visible-only count; they
 describe declarations rather than proving a successful mount or active read.
 Capped results round-robin readable resource kinds, preserving examples of
 workload templates, revision templates and admitted Pods even with many replicas.
+If any consumer inventory fails, `omitted` marks `referencedBy` as `unavailable`.
+References from inventories that loaded remain available; an empty result with
+this omission does not establish that no consumers exist.
 
 ### Write Tools
 

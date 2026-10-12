@@ -2167,10 +2167,13 @@ func TestBuild_ReverseReferencesRetainAdmittedPodsAndReplicaSetTemplates(t *test
 	if denied.ReferencedBy == nil || denied.ReferencedBy.Total != 2 || len(denied.ReferencedBy.Items) != 2 || !hasOmitted(denied.Omitted, "referencedBy") {
 		t.Fatalf("visible-only identity consumer count = %+v omitted=%+v", denied.ReferencedBy, denied.Omitted)
 	}
-	custom := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Secret", "metadata": map[string]any{"name": "admitted-registry", "namespace": "team"}}}
-	if rc := Build(context.Background(), custom, Options{Provider: provider}); rc.ReferencedBy != nil {
-		t.Fatalf("same-named custom resource joined to core Pod references: %+v", rc.ReferencedBy)
+	for _, target := range []struct{ kind, name string }{{"PersistentVolumeClaim", "data"}, {"ServiceAccount", "runner"}} {
+		custom := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": target.kind, "metadata": map[string]any{"name": target.name, "namespace": "team"}}}
+		if rc := Build(context.Background(), custom, Options{Provider: provider}); rc.ReferencedBy != nil {
+			t.Fatalf("foreign %s borrowed core declarations: %+v", target.kind, rc.ReferencedBy)
+		}
 	}
+
 }
 
 func TestBuild_ReferencedByCapPreservesTemplateAndPodKinds(t *testing.T) {
