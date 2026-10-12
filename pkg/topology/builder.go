@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -6015,11 +6016,15 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// A DomainMapping publishes its Knative Service on a custom domain, even
 	// one that is otherwise cluster-local. It may name the Service or the
 	// Route the Service generates, which shares its name.
-	domainMappedKnativeServices := map[string]bool{}
+	domainMappedKnativeServices := map[string][]string{} // ns/name -> mapped domains
+	// Whether the absence of a mapping is known; only then can a node be
+	// labelled cluster-local.
+	domainMappingsKnown := true
 	if trafficDynamicCache != nil && trafficResourceDiscovery != nil && len(trafficKnativeServices) > 0 {
 		if dmGVR, ok := trafficResourceDiscovery.GetGVRWithGroup("DomainMapping", "serving.knative.dev"); ok {
 			dms, err := trafficDynamicCache.ListNamespaces(dmGVR, opts.Namespaces)
 			if err != nil {
+				domainMappingsKnown = false
 				log.Printf("WARNING [topology/traffic] Failed to list KNative DomainMappings: %v", err)
 				warnings = append(warnings, fmt.Sprintf("Failed to list KNative DomainMappings: %v", err))
 			}
@@ -6035,7 +6040,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				if ns == "" {
 					ns = dm.GetNamespace()
 				}
-				domainMappedKnativeServices[ns+"/"+name] = true
+				domainMappedKnativeServices[ns+"/"+name] = append(domainMappedKnativeServices[ns+"/"+name], dm.GetName())
 			}
 		}
 	}
@@ -6693,7 +6698,9 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 
 		// Get URL from status (set by KNative Route)
 		url, _, _ := unstructured.NestedString(ksvc.Object, "status", "url")
-		if domainMappedKnativeServices[ns+"/"+name] || !knativeServiceIsClusterLocal(ksvc, url) {
+		mappedDomains := slices.Sorted(slices.Values(domainMappedKnativeServices[ns+"/"+name]))
+		clusterLocal := knativeServiceIsClusterLocal(ksvc, url)
+		if len(mappedDomains) > 0 || !clusterLocal {
 			publicKnativeServiceIDs = append(publicKnativeServiceIDs, ksvcID)
 		}
 		latestRevision, _, _ := unstructured.NestedString(ksvc.Object, "status", "latestReadyRevisionName")
@@ -6730,6 +6737,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"apiVersion":     ksvc.GetAPIVersion(),
 			},
 		})
+		if internalURL, _, _ := unstructured.NestedString(ksvc.Object, "status", "address", "url"); internalURL != "" {
+			nodes[len(nodes)-1].Data["internalUrl"] = internalURL
+		}
+		if len(mappedDomains) > 0 {
+			nodes[len(nodes)-1].Data["mappedDomains"] = mappedDomains
+		} else if clusterLocal && domainMappingsKnown {
+			nodes[len(nodes)-1].Data["visibility"] = "cluster-local"
+		}
 
 		// KnativeService → revision private services (the ones that actually select pods)
 		for _, tt := range trafficTargets {

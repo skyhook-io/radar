@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"fmt"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -77,4 +78,44 @@ func TestTrafficInternetReachesOnlyPublicKnativeServices(t *testing.T) {
 			t.Errorf("cluster-local %s drawn as reachable from the Internet", private)
 		}
 	}
+
+	// The node says why it has, or lacks, an Internet edge.
+	for name, want := range map[string]string{"billing": "cluster-local", "jobs": "cluster-local", "reports": "cluster-local", "admin": "cluster-local", "web": "", "shop": "", "pending": "", "api": "", "search": ""} {
+		if got, _ := nodeByID(topo.Nodes, "knativeservice/team/"+name).Data["visibility"].(string); got != want {
+			t.Errorf("%s visibility = %q, want %q", name, got, want)
+		}
+	}
+	for name, want := range map[string]string{"api": "[api.example.com]", "search": "[search.example.com]", "billing": "[]"} {
+		got, _ := nodeByID(topo.Nodes, "knativeservice/team/"+name).Data["mappedDomains"].([]string)
+		if fmt.Sprint(got) != want {
+			t.Errorf("%s mappedDomains = %v, want %s", name, got, want)
+		}
+	}
+
+	if got := nodeByID(topo.Nodes, "knativeservice/team/web").Data["internalUrl"]; got != "http://web.team.svc.cluster.local" {
+		t.Errorf("web internalUrl = %v, want its status.address.url", got)
+	}
+
+	// When DomainMappings can't be listed, a private-looking Service may still
+	// be mapped, so it isn't labelled cluster-local.
+	failing := &failingDomainMappings{genericIdentityDynamic: dynamic, gvr: dmGVR}
+	topo, err = NewBuilder(&mockProvider{}).WithDynamic(failing).Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := nodeByID(topo.Nodes, "knativeservice/team/billing").Data["visibility"]; got != nil {
+		t.Errorf("visibility with unreadable DomainMappings = %v, want unset", got)
+	}
+}
+
+type failingDomainMappings struct {
+	*genericIdentityDynamic
+	gvr schema.GroupVersionResource
+}
+
+func (d *failingDomainMappings) ListNamespaces(gvr schema.GroupVersionResource, namespaces []string) ([]*unstructured.Unstructured, error) {
+	if gvr == d.gvr {
+		return nil, fmt.Errorf("forbidden")
+	}
+	return d.genericIdentityDynamic.ListNamespaces(gvr, namespaces)
 }
