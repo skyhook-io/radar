@@ -1,4 +1,4 @@
-package insights
+package finalizers
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestFinalizerOwnerMatchesWorkload(t *testing.T) {
+func TestOwnerMatchesWorkload(t *testing.T) {
 	vm := &unstructured.Unstructured{}
 	vm.SetAPIVersion("operator.victoriametrics.com/v1beta1")
 	argo := &unstructured.Unstructured{}
@@ -41,7 +41,7 @@ func TestFinalizerOwnerMatchesWorkload(t *testing.T) {
 		{name: "argo cd server shares the image", finalizer: "resources-finalizer.argocd.argoproj.io", root: argo, workload: "web", template: containers("quay.io/argoproj/argocd:v2.13.0", "/usr/local/bin/argocd-server")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			owner := ResolveFinalizerOwner(tt.finalizer, tt.root)
+			owner := ResolveOwner(tt.finalizer, tt.root)
 			if owner == nil {
 				t.Fatal("expected a catalog owner")
 			}
@@ -56,7 +56,7 @@ func TestFinalizerOwnerMatchesWorkload(t *testing.T) {
 func TestVictoriaMetricsReloaderImageIsNotOperator(t *testing.T) {
 	root := &unstructured.Unstructured{}
 	root.SetAPIVersion("operator.victoriametrics.com/v1beta1")
-	owner := ResolveFinalizerOwner("apps.victoriametrics.com/finalizer", root)
+	owner := ResolveOwner("apps.victoriametrics.com/finalizer", root)
 	for _, tc := range []struct {
 		name       string
 		containers []corev1.Container
@@ -95,7 +95,7 @@ func TestImageRepositoryPath(t *testing.T) {
 		"mcr.microsoft.com/aks/karpenter/controller:v1.0.0":        "aks/karpenter/controller",
 		"mirror.example.com/dockerhub/victoriametrics/operator:v1": "dockerhub/victoriametrics/operator",
 	} {
-		if got := ImageRepositoryPath(image); got != want {
+		if got := imageRepositoryPath(image); got != want {
 			t.Errorf("%s: got %q want %q", image, got, want)
 		}
 	}
@@ -103,7 +103,7 @@ func TestImageRepositoryPath(t *testing.T) {
 
 // A first-label name match is too weak to identify an owner: it may only
 // name a candidate.
-func TestFinalizerControllerCandidate(t *testing.T) {
+func TestControllerCandidate(t *testing.T) {
 	root := &unstructured.Unstructured{}
 	for _, tt := range []struct {
 		name, group, finalizer, workload string
@@ -121,17 +121,17 @@ func TestFinalizerControllerCandidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			root.SetAPIVersion(tt.group + "/v1")
 			workload := &metav1.ObjectMeta{Name: tt.workload, Labels: tt.labels}
-			if got := FinalizerControllerCandidate(tt.finalizer, root, workload); got != tt.want {
+			if got := ControllerCandidate(tt.finalizer, root, workload); got != tt.want {
 				t.Fatalf("got %v want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestResolveKarpenterProviderFinalizerOwner(t *testing.T) {
+func TestResolveKarpenterProviderOwner(t *testing.T) {
 	for _, key := range []string{"karpenter.sh/termination", "karpenter.sh/custom", "karpenter.k8s.aws/termination", "karpenter.azure.com/termination"} {
 		t.Run(key, func(t *testing.T) {
-			owner := ResolveFinalizerOwner(key, &unstructured.Unstructured{})
+			owner := ResolveOwner(key, &unstructured.Unstructured{})
 			if owner == nil || owner.Controller != "karpenter" || owner.Namespace != "" || owner.SelectorKey != "app.kubernetes.io/name" || owner.SelectorValue != "karpenter" || owner.OffClusterOfferings == "" || !owner.ReleasesInfrastructure {
 				t.Fatalf("got owner %+v", owner)
 			}
@@ -139,14 +139,14 @@ func TestResolveKarpenterProviderFinalizerOwner(t *testing.T) {
 	}
 }
 
-func TestFinalizerOwnerOffClusterAndInfrastructure(t *testing.T) {
-	argo := ResolveFinalizerOwner("resources-finalizer.argocd.argoproj.io", &unstructured.Unstructured{})
+func TestOwnerOffClusterAndInfrastructure(t *testing.T) {
+	argo := ResolveOwner("resources-finalizer.argocd.argoproj.io", &unstructured.Unstructured{})
 	if argo == nil || argo.OffClusterOfferings != "Amazon EKS Capabilities" || argo.ReleasesInfrastructure {
 		t.Fatalf("argo=%+v", argo)
 	}
 	vm := &unstructured.Unstructured{}
 	vm.SetAPIVersion("operator.victoriametrics.com/v1beta1")
-	for _, owner := range []*FinalizerOwner{ResolveFinalizerOwner("apps.victoriametrics.com/finalizer", vm), ResolveFinalizerOwner("finalizers.helm.toolkit.fluxcd.io", vm)} {
+	for _, owner := range []*Owner{ResolveOwner("apps.victoriametrics.com/finalizer", vm), ResolveOwner("finalizers.helm.toolkit.fluxcd.io", vm)} {
 		if owner == nil || owner.OffClusterOfferings != "" || owner.ReleasesInfrastructure {
 			t.Fatalf("in-cluster catalog entry=%+v", owner)
 		}
@@ -167,26 +167,101 @@ func TestInfrastructureOperatorFinalizersAreNotIdentified(t *testing.T) {
 	} {
 		root := &unstructured.Unstructured{}
 		root.SetAPIVersion(group + "/v1")
-		if owner := ResolveFinalizerOwner(finalizer, root); owner != nil {
+		if owner := ResolveOwner(finalizer, root); owner != nil {
 			t.Errorf("%s resolved to %+v", finalizer, owner)
 		}
 		for _, workload := range []string{"crossplane", "capi-controller-manager", "cnrm-controller-manager", "ack-s3-controller", "strimzi-cluster-operator"} {
-			if FinalizerControllerCandidate(finalizer, root, &metav1.ObjectMeta{Name: workload}) {
+			if ControllerCandidate(finalizer, root, &metav1.ObjectMeta{Name: workload}) {
 				t.Errorf("%s matched workload %s", finalizer, workload)
 			}
 		}
 	}
 }
 
-func TestFluxImageFinalizerOwnerByKind(t *testing.T) {
+func TestFluxImageOwnerByKind(t *testing.T) {
 	for kind, want := range map[string]string{"ImageUpdateAutomation": "image-automation-controller", "ImagePolicy": "image-reflector-controller", "ImageRepository": "image-reflector-controller"} {
 		root := &unstructured.Unstructured{}
 		root.SetAPIVersion("image.toolkit.fluxcd.io/v1beta2")
 		root.SetKind(kind)
 		for _, finalizer := range []string{"finalizers.fluxcd.io", "finalizers.image.toolkit.fluxcd.io"} {
-			if owner := ResolveFinalizerOwner(finalizer, root); owner == nil || owner.Controller != want || owner.SelectorValue != want {
+			if owner := ResolveOwner(finalizer, root); owner == nil || owner.Controller != want || owner.SelectorValue != want {
 				t.Errorf("%s %s: got %+v, want %s", kind, finalizer, owner, want)
 			}
 		}
+	}
+}
+
+// TestResolveOwner pins the static finalizer→controller mapping.
+// New Flux/Argo versions may introduce new keys; this test catches
+// regressions when entries get accidentally renamed.
+func TestResolveOwner(t *testing.T) {
+	mkObj := func(api string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": api,
+			"kind":       "Whatever",
+		}}
+	}
+	tests := []struct {
+		name      string
+		finalizer string
+		obj       *unstructured.Unstructured
+		want      string // expected Controller name; "" means nil owner
+	}{
+		{"argo standard", "resources-finalizer.argocd.argoproj.io", mkObj(""), "argocd-application-controller"},
+		{"argo legacy cascade", "foreground-cascade.argocd.argoproj.io", mkObj(""), "argocd-application-controller"},
+		{"flux generic on Kustomization", "finalizers.fluxcd.io", mkObj("kustomize.toolkit.fluxcd.io/v1"), "kustomize-controller"},
+		{"flux generic on HelmRelease", "finalizers.fluxcd.io", mkObj("helm.toolkit.fluxcd.io/v2"), "helm-controller"},
+		{"flux generic on GitRepository", "finalizers.fluxcd.io", mkObj("source.toolkit.fluxcd.io/v1"), "source-controller"},
+		{"flux specific kustomize", "finalizers.kustomize.toolkit.fluxcd.io", mkObj(""), "kustomize-controller"},
+		{"flux specific helm", "finalizers.helm.toolkit.fluxcd.io", mkObj(""), "helm-controller"},
+		{"flux specific source", "finalizers.source.toolkit.fluxcd.io", mkObj(""), "source-controller"},
+		{"unknown finalizer returns nil", "example.com/cleanup", mkObj(""), ""},
+		{"unknown apiVersion for generic flux returns nil", "finalizers.fluxcd.io", mkObj("custom.example.com/v1"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveOwner(tt.finalizer, tt.obj)
+			if tt.want == "" {
+				if got != nil {
+					t.Fatalf("expected nil owner, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected owner with controller %q, got nil", tt.want)
+			}
+			if got.Controller != tt.want {
+				t.Fatalf("Controller = %q, want %q", got.Controller, tt.want)
+			}
+		})
+	}
+}
+
+func TestCatalogConditionalCleanupPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		finalizer, group, kind string
+		allow                  bool
+	}{
+		{"apps.victoriametrics.com/finalizer", "operator.victoriametrics.com", "VMAgent", true},
+		{"finalizers.kustomize.toolkit.fluxcd.io", "kustomize.toolkit.fluxcd.io", "Kustomization", true},
+		{"finalizers.helm.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io", "HelmRelease", true},
+		{"finalizers.source.toolkit.fluxcd.io", "source.toolkit.fluxcd.io", "GitRepository", true},
+		{"finalizers.notification.toolkit.fluxcd.io", "notification.toolkit.fluxcd.io", "Alert", true},
+		{"finalizers.image.toolkit.fluxcd.io", "image.toolkit.fluxcd.io", "ImageRepository", true},
+		{"finalizers.image.toolkit.fluxcd.io", "image.toolkit.fluxcd.io", "ImageUpdateAutomation", true},
+		{"resources-finalizer.argocd.argoproj.io", "argoproj.io", "Application", false},
+		{"karpenter.sh/termination", "karpenter.sh", "NodeClaim", false},
+		{"karpenter.k8s.aws/termination", "karpenter.k8s.aws", "EC2NodeClass", false},
+		{"karpenter.azure.com/termination", "karpenter.azure.com", "AKSNodeClass", false},
+	} {
+		t.Run(tc.finalizer+"/"+tc.kind, func(t *testing.T) {
+			root := &unstructured.Unstructured{}
+			root.SetAPIVersion(tc.group + "/v1")
+			root.SetKind(tc.kind)
+			owner := ResolveOwner(tc.finalizer, root)
+			if owner == nil || owner.AllowConditionalCleanup != tc.allow {
+				t.Fatalf("owner=%+v, want cleanup opt-in %v", owner, tc.allow)
+			}
+		})
 	}
 }

@@ -23,8 +23,10 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
+	"github.com/skyhook-io/radar/pkg/finalizers"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -1159,7 +1161,7 @@ func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 // FinalizerOwnerStatus implements gitopsinsights.Resolver.
 //
 // Looks up the controller responsible for a finalizer (via the static
-// catalog in pkg/gitops/insights/finalizers.go) and reports the
+// catalog in pkg/finalizers/catalog.go) and reports the
 // aggregate health of its pods in the install namespace. Returns ""
 // when the finalizer isn't recognized, the install namespace is empty
 // (e.g. operator deployed Flux into a non-default namespace), or the
@@ -1174,7 +1176,7 @@ func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 //	"source-controller is degraded (1/2 pods ready)"
 //	"helm-controller is not running in namespace flux-system (controller may not be installed, or runs under a different namespace)"
 func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstructured.Unstructured) string {
-	owner := gitopsinsights.ResolveFinalizerOwner(finalizer, root)
+	owner := finalizers.ResolveOwner(finalizer, root)
 	if owner == nil || owner.Namespace == "" {
 		return ""
 	}
@@ -1211,7 +1213,7 @@ func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstruct
 		}
 		return owner.Controller + " is not running in namespace " + owner.Namespace + " (controller may not be installed, or runs under a different namespace)"
 	}
-	return gitopsinsights.SummarizeControllerHealth(owner.Controller, matched)
+	return health.SummarizeControllerHealth(owner.Controller, matched)
 }
 
 func (r *insightsResolver) namespaceAllowed(namespace string) bool {

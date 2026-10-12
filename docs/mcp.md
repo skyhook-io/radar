@@ -507,7 +507,8 @@ problem and health summary, MCP `get_dashboard` and `cluster://health` do not
 include this CR scan.
 
 The cause names the finalizers and elapsed deletion age, plus one controller
-observation per finalizer. Controllers are identified from a catalog (Argo CD,
+observation per finalizer. Controllers are identified from the catalog in
+`pkg/finalizers/catalog.go` (Argo CD,
 Flux, VictoriaMetrics and Karpenter): a workload matches by its name or labels,
 or by its pod template's labels or container image, and pods match by the
 catalog label or image. Images match on the repository path the vendor
@@ -529,7 +530,7 @@ cleanup. Each observation lands in one of these states:
 |---|---|---|
 | A recognized controller pod is ready | Warning when every recognized pod is ready; otherwise unchanged | Check the controller's logs, permissions and deletion-blocking references. No cleanup. |
 | Recognized and installed, but no pod is ready: CrashLoopBackOff, image pull failure, Pending, or no pods for its desired replicas | Critical at 30 minutes | Fix the controller; it finishes the deletion once running. No cleanup: removal would skip the cleanup it still intends to do |
-| **No recognized controller found**: a complete search found nothing by name, labels or image, or every recognized copy is scaled to 0 replicas | Warning | Restore the controller if it should be running (it may also be installed in a way Radar doesn't recognize, or stopped for now). A `conditional_cleanup` is attached, never the action |
+| **No recognized controller found**: a complete search found nothing by name, labels or image, or every recognized copy is scaled to 0 replicas | Warning | Restore the controller if it should be running (it may also be installed in a way Radar doesn't recognize, or stopped for now). For catalog entries that explicitly opt in, a `conditional_cleanup` is attached, never the action. Other entries advise restoring the controller and warn that removal skips cleanup |
 | Identified, but its state can't be checked: no running pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), even when an in-cluster copy is scaled to 0; workloads not searchable cluster-wide; or the Pod cache not ready or pods unreadable | Warning | Check that controller first. No cleanup |
 | **Controller unknown**: no catalog entry, at most a name-only candidate | Warning | The finalizer's domain usually names its controller; find and check it first. No cleanup |
 

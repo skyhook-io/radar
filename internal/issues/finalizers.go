@@ -7,7 +7,8 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
+	"github.com/skyhook-io/radar/pkg/finalizers"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
@@ -45,7 +46,8 @@ type finalizerObservation struct {
 	State string
 	// ReleasesInfrastructure means removal strands nodes or cloud resources
 	// even while the controller is stopped.
-	ReleasesInfrastructure bool
+	ReleasesInfrastructure  bool
+	AllowConditionalCleanup bool
 }
 
 // matchedWorkload is what a controller workload declares about its pods.
@@ -86,7 +88,7 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 	root := &unstructured.Unstructured{}
 	root.SetAPIVersion(ref.Group + "/v1")
 	root.SetKind(ref.Kind)
-	owner := gitopsinsights.ResolveFinalizerOwner(finalizer, root)
+	owner := finalizers.ResolveOwner(finalizer, root)
 	if p.cache == nil || p.cache.KindReadinessFor("pods") != k8score.KindReady {
 		if owner != nil {
 			// The catalog identity is static; only the controller's state is
@@ -208,13 +210,13 @@ func (inv *controllerInventory) observe(controller, namespace string, selector l
 		active = append(active, pod)
 	}
 	if len(active) > 0 {
-		health := gitopsinsights.SummarizeControllerPods(active)
-		if health.Ready > 0 {
+		podHealth := health.SummarizeControllerPods(active)
+		if podHealth.Ready > 0 {
 			return finalizerObservation{
 				Controller: controller,
-				Text:       gitopsinsights.SummarizeControllerHealth(controller, active) + " " + scopeOf(namespace),
+				Text:       health.SummarizeControllerHealth(controller, active) + " " + scopeOf(namespace),
 				Running:    true,
-				Healthy:    health.Ready == health.Total && health.Crashing == 0,
+				Healthy:    podHealth.Ready == podHealth.Total && podHealth.Crashing == 0,
 			}, false
 		}
 	}
@@ -225,7 +227,7 @@ func (inv *controllerInventory) observe(controller, namespace string, selector l
 	case workload != nil && workload.scalable && workload.desired == 0:
 		return finalizerObservation{Controller: controller, NotFound: true, ScaledDown: true, Text: fmt.Sprintf("%s is scaled to 0 replicas %s", controller, scopeOf(namespace))}, false
 	case len(active) > 0:
-		return down(gitopsinsights.DescribeControllerHealth(active))
+		return down(health.DescribeControllerHealth(active))
 	case workload != nil && workload.scalable:
 		replicas := "replicas"
 		if workload.desired == 1 {
@@ -241,7 +243,7 @@ func (inv *controllerInventory) observe(controller, namespace string, selector l
 // catalogController observes a catalog owner's controller wherever it runs:
 // workloads recognized by name, labels, pod template labels or image, and
 // catalog pods outside them (another install, a bare pod).
-func (inv *controllerInventory) catalogController(owner *gitopsinsights.FinalizerOwner) finalizerObservation {
+func (inv *controllerInventory) catalogController(owner *finalizers.Owner) finalizerObservation {
 	var observations []finalizerObservation
 	searched := inv.eachWorkload(func(obj metav1.Object, selector *metav1.LabelSelector, template corev1.PodTemplateSpec, workload matchedWorkload) {
 		if selector == nil || !owner.MatchesWorkload(obj, template) {
@@ -280,6 +282,7 @@ func (inv *controllerInventory) catalogController(owner *gitopsinsights.Finalize
 		result = mergeControllerObservations(observations)
 	}
 	result.ReleasesInfrastructure = owner.ReleasesInfrastructure
+	result.AllowConditionalCleanup = owner.AllowConditionalCleanup
 	if (result.NotFound || result.Down) && !searched {
 		result.NotFound, result.ScaledDown, result.Down = false, false, false
 		result.Text += workloadsUnsearched
@@ -340,7 +343,7 @@ func mergeControllerObservations(observations []finalizerObservation) finalizerO
 func (inv *controllerInventory) candidate(finalizer string, root *unstructured.Unstructured) finalizerObservation {
 	var names, states []string
 	inv.eachWorkload(func(obj metav1.Object, selector *metav1.LabelSelector, _ corev1.PodTemplateSpec, workload matchedWorkload) {
-		if !gitopsinsights.FinalizerControllerCandidate(finalizer, root, obj) {
+		if !finalizers.ControllerCandidate(finalizer, root, obj) {
 			return
 		}
 		names = append(names, obj.GetName())
@@ -408,16 +411,16 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 		case observation.Down:
 			down = true
 			fixes = append(fixes, fmt.Sprintf("Fix %s, which is %s; it will finish the deletion once running. Removing finalizer %q would skip its cleanup.", observation.Controller, observation.State, finalizer))
-		case observation.NotFound && observation.ReleasesInfrastructure:
+		case observation.NotFound && (observation.ReleasesInfrastructure || !observation.AllowConditionalCleanup):
 			unconfirmed = append(unconfirmed, fmt.Sprintf("Get %s running again rather than removing finalizer %q.", observation.Controller, finalizer))
 		case observation.NotFound && observation.ScaledDown:
 			restores = append(restores, fmt.Sprintf("No running controller found for finalizer %q: %s. If it was stopped temporarily, scale it back up; it will finish the deletion.", finalizer, observation.Text))
-			if removal, ok := pr.TerminatingRemovals[finalizer]; ok {
+			if removal, ok := pr.TerminatingRemovals[finalizer]; ok && observation.AllowConditionalCleanup {
 				cleanups = append(cleanups, finalizerCleanup{condition: observation.Controller + " was scaled to 0 on purpose and won't be restarted", removal: removal})
 			}
 		case observation.NotFound:
 			restores = append(restores, fmt.Sprintf("No recognized controller found for finalizer %q. If %s should be running, restore it; it will finish the deletion. It may also be installed under a name, labels or image Radar doesn't recognize, or run outside this cluster.", finalizer, observation.Controller))
-			if removal, ok := pr.TerminatingRemovals[finalizer]; ok {
+			if removal, ok := pr.TerminatingRemovals[finalizer]; ok && observation.AllowConditionalCleanup {
 				cleanups = append(cleanups, finalizerCleanup{condition: observation.Controller + " was uninstalled on purpose", removal: removal})
 			}
 		case observation.Controller != "":

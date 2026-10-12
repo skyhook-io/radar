@@ -1,4 +1,4 @@
-package insights
+package health
 
 import (
 	"fmt"
