@@ -1,6 +1,7 @@
 import { dedupeResourceRefs, omitResourceRefs } from '../../utils/resource-refs'
+import { customResourceDefinitionRef, getCRDDefinitionsSnapshot, subscribeCRDDefinitions } from '../../utils/navigation'
 import { Disclosure } from './Disclosure'
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useState, useSyncExternalStore } from 'react'
 import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatDuration, formatResources } from '../resources/resource-utils'
@@ -541,13 +542,16 @@ export function AnnotationsSection({ data }: { data: any }) {
   )
 }
 
-export function MetadataSection({ data }: { data: any }) {
+export function MetadataSection({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
+  useSyncExternalStore(subscribeCRDDefinitions, getCRDDefinitionsSnapshot, getCRDDefinitionsSnapshot)
   const meta = data.metadata
   if (!meta) return null
+  const definition = customResourceDefinitionRef(data.apiVersion, data.kind)
 
   return (
     <Section title="Metadata" defaultExpanded>
       <PropertyList>
+        {definition && <Property label="Definition" value={<ResourceLink {...definition} onNavigate={onNavigate} />} />}
         <Property label="UID" value={meta.uid} />
         <Property label="Resource Version" value={meta.resourceVersion} />
         <Property label="Generation" value={meta.generation} />

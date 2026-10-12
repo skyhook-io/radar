@@ -2037,8 +2037,9 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 
 type apiResourceResponse struct {
 	k8score.APIResource
-	Featured    bool                                `json:"featured,omitempty"`
-	Observation *k8score.DynamicResourceObservation `json:"observation,omitempty"`
+	DefinitionName string                              `json:"definitionName,omitempty"`
+	Featured       bool                                `json:"featured,omitempty"`
+	Observation    *k8score.DynamicResourceObservation `json:"observation,omitempty"`
 }
 
 func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObservation, allowed []string) k8score.DynamicResourceObservation {
@@ -2083,14 +2084,32 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]apiResourceResponse, 0, len(resources))
 	dynamicCache := k8s.GetDynamicResourceCache()
+	// IsCRD is a discovery/category heuristic (also true for aggregated APIs).
+	// Definition links require an observed CRD, read under the existing list
+	// permission. Use only watched inventory: discovery never starts per-kind
+	// object reads or a new CRD informer for this optional navigation metadata.
+	definitionNames := make(map[string]string)
+	canReadDefinitions := dynamicCache != nil && s.canRead(r, crdGVR.Group, crdGVR.Resource, "", "list") && s.canRead(r, crdGVR.Group, crdGVR.Resource, "", "get")
+	if canReadDefinitions {
+		if definitions, err := dynamicCache.ListWatchedReadOnly(crdGVR); err == nil {
+			for _, definition := range definitions {
+				group, _, _ := unstructured.NestedString(definition.Object, "spec", "group")
+				kind, _, _ := unstructured.NestedString(definition.Object, "spec", "names", "kind")
+				plural, _, _ := unstructured.NestedString(definition.Object, "spec", "names", "plural")
+				definitionNames[group+"/"+kind+"/"+plural] = definition.GetName()
+			}
+		}
+	}
 	var visibleNamespaces []string
 	visibleNamespacesResolved := false
 	for _, resource := range resources {
 		response := apiResourceResponse{
-			APIResource: resource,
-			Featured:    isFeaturedKubernetesAPI(resource.Group, resource.Kind),
+			APIResource:    resource,
+			Featured:       isFeaturedKubernetesAPI(resource.Group, resource.Kind),
+			DefinitionName: definitionNames[resource.Group+"/"+resource.Kind+"/"+resource.Name],
 		}
-		if resource.IsCRD && dynamicCache != nil {
+		isDefinitionsInventory := resource.Group == crdGVR.Group && resource.Name == crdGVR.Resource
+		if dynamicCache != nil && ((resource.IsCRD && !isDefinitionsInventory) || (isDefinitionsInventory && canReadDefinitions)) {
 			observation := dynamicCache.Observation(schema.GroupVersionResource{
 				Group:    resource.Group,
 				Version:  resource.Version,
@@ -2107,6 +2126,11 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 		}
 		result = append(result, response)
 	}
+	if discovery != k8s.GetResourceDiscovery() {
+		s.writeError(w, http.StatusServiceUnavailable, "Resource discovery changed, please retry shortly")
+		return
+	}
+
 	s.writeJSON(w, result)
 }
 

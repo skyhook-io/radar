@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
@@ -10,7 +10,7 @@ import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
-import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
+import { resetNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -338,6 +338,7 @@ interface AppProps {
 }
 
 function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
+  useLayoutEffect(() => () => resetNavigationMap(), [])
   const navigate = useNavigate()
   const location = useLocation()
   const navigationType = useNavigationType()
@@ -447,12 +448,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // A status cached by another screen must not start recording inside a host.
   useUsageRecording(usageView(location.pathname, mainView, upgradeReadinessRoute), navCustomization.embedded ? undefined : usageData.data)
 
-  // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
-  // mount) so the omnibar can open a CRD hit with an irregular plural from any
-  // view — kindToPlural would otherwise English-guess the route before a
-  // resources view has run initNavigationMap().
+  // The omnibar needs discovered plurals even before ResourcesView mounts.
   const { data: navApiResources } = useAPIResources()
-  useEffect(() => { if (navApiResources) initNavigationMap(navApiResources) }, [navApiResources])
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
   // chip isn't a dead control next to the cluster switcher.
@@ -1193,6 +1190,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: (context) => {
+      resetNavigationMap()
+
       // Clear all React Query caches when cluster context changes
       // This ensures helm releases, resources, etc. are refetched from the new cluster
       // removeQueries clears cached data, invalidateQueries triggers refetch

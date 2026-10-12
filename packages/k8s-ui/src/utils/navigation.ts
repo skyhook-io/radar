@@ -68,6 +68,17 @@ let discoveredKindToPlural: Record<string, string> | null = null
 let discoveredGroupKindToPlural: Record<string, string> | null = null
 let discoveredGroupPluralToKind: Record<string, string> | null = null
 let discoveredGroupKindNamespaced: Record<string, boolean> | null = null
+let discoveredCRDNames: Record<string, string> | null = null
+const crdDefinitionListeners = new Set<() => void>()
+
+export function subscribeCRDDefinitions(listener: () => void): () => void {
+  crdDefinitionListeners.add(listener)
+  return () => { crdDefinitionListeners.delete(listener) }
+}
+
+export function getCRDDefinitionsSnapshot(): Readonly<Record<string, string>> | null {
+  return discoveredCRDNames
+}
 
 /**
  * Initialize navigation maps from discovered API resources.
@@ -84,10 +95,12 @@ export function initNavigationMap(resources: APIResource[]) {
   const gk2p: Record<string, string> = {}
   const gp2k: Record<string, string> = { ...BUILTIN_GROUP_PLURAL_TO_KIND }
   const scopes: Record<string, boolean> = {}
+  const crdNames: Record<string, string> = {}
   const coreKinds = new Set(Object.keys(k2p))
   for (const r of resources) {
     const plural = r.name.toLowerCase()
     const kindLower = r.kind.toLowerCase()
+    if (r.definitionName) crdNames[`${r.group}/${r.kind}`] = r.definitionName
     // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
     // (e.g. "pods" → "Pod") so a colliding API resource (metrics.k8s.io exposes
     // "pods" with kind "PodMetrics") cannot hijack the core mapping.
@@ -111,15 +124,19 @@ export function initNavigationMap(resources: APIResource[]) {
   discoveredGroupKindToPlural = gk2p
   discoveredGroupPluralToKind = gp2k
   discoveredGroupKindNamespaced = scopes
+  discoveredCRDNames = crdNames
+  crdDefinitionListeners.forEach(listener => listener())
 }
 
-/** Reset navigation maps to builtin-only state. For testing. */
+/** Reset navigation maps to builtin-only state on cluster changes. */
 export function resetNavigationMap() {
   discoveredPluralToKind = null
   discoveredKindToPlural = null
   discoveredGroupKindToPlural = null
   discoveredGroupPluralToKind = null
   discoveredGroupKindNamespaced = null
+  discoveredCRDNames = null
+  crdDefinitionListeners.forEach(listener => listener())
 }
 
 function getPluralToKind(): Record<string, string> {
@@ -223,6 +240,13 @@ export function knownKindForPluralWithGroup(plural: string, group: string): stri
   const groupPlural = `${group}/${plural.toLowerCase()}`
   return discoveredGroupPluralToKind?.[groupPlural]
     ?? BUILTIN_GROUP_PLURAL_TO_KIND[groupPlural]
+}
+
+/** Return a CRD definition only when exact group/kind discovery identifies a CRD. */
+export function customResourceDefinitionRef(apiVersion: string | undefined, kind: string | undefined): ResourceRef | null {
+  if (!apiVersion || !kind) return null
+  const name = discoveredCRDNames?.[`${apiVersionToGroup(apiVersion)}/${kind}`]
+  return name ? { kind: 'CustomResourceDefinition', group: 'apiextensions.k8s.io', namespace: '', name } : null
 }
 
 /**
