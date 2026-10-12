@@ -211,3 +211,14 @@ describe('routing version skew', () => {
     for (const label of ['Services', 'Gateways', 'Routes', 'Pods', 'old-route', 'old-target']) expect(html).toContain(label)
   })
 })
+
+describe('related resource chips', () => {
+  it('tells a Knative Service apart from a core Service', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{
+      services: [{ kind: 'Service', namespace: 'team', name: 'web-private' }],
+      routedFrom: [{ kind: 'Service', group: 'serving.knative.dev', namespace: 'team', name: 'web' }],
+    }} onNavigate={() => {}} />)
+    expect(html).toContain('>svc<!-- -->/</span>web-private<')
+    expect(html).toContain('>ksvc<!-- -->/</span>web<')
+  })
+})

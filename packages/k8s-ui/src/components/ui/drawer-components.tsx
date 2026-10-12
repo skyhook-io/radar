@@ -968,7 +968,7 @@ export interface ResourceRefBadgeProps {
 /** Reusable chip/badge for showing a related resource with click-to-navigate */
 export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: ResourceRefBadgeProps) {
   const kindClass = getKindColor(resourceRef.kind)
-  const kindName = formatKindForRef(resourceRef.kind)
+  const kindName = formatKindForRef(resourceRef.kind, resourceRef.group)
   const content = wrapAtSeparator ? (
     <>
       <span className="shrink-0 opacity-60">{kindName}/</span>
@@ -1031,8 +1031,10 @@ export function ResourceLink({ name, kind, namespace = '', group, label, onNavig
   )
 }
 
-function formatKindForRef(kind: string): string {
+function formatKindForRef(kind: string, group?: string): string {
   const k = kind.toLowerCase()
+  // A Knative Service shares its kind with core Services; use Knative's own short name.
+  if (k === 'service' && group === 'serving.knative.dev') return 'ksvc'
   const shortNames: Record<string, string> = {
     deployment: 'deploy',
     daemonset: 'ds',
