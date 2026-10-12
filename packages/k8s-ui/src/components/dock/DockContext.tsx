@@ -16,6 +16,10 @@ export interface DockTab {
   podName?: string
   containerName?: string
   containers?: string[]
+  /** Terminal: run this command instead of a shell (one argv element, e.g. "psql"). */
+  shell?: string
+  /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
+  sessionNote?: string
   // Workload logs props
   workloadKind?: string
   workloadName?: string
@@ -87,7 +91,8 @@ export function DockProvider({ children }: { children: ReactNode }) {
       }
       return t.namespace === tabData.namespace &&
              t.podName === tabData.podName &&
-             t.containerName === tabData.containerName
+             t.containerName === tabData.containerName &&
+             t.shell === tabData.shell
     })
 
     if (existingTab) {
@@ -207,14 +212,19 @@ export function useOpenTerminal() {
     orgId?: string
     clusterId?: string
     clusterName?: string
+    shell?: string
+    sessionNote?: string
+    title?: string
   }) => {
     addTab({
       type: 'terminal',
-      title: `${opts.podName}/${opts.containerName}`,
+      title: opts.title ?? `${opts.podName}/${opts.containerName}`,
       namespace: opts.namespace,
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      shell: opts.shell,
+      sessionNote: opts.sessionNote,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,

@@ -29,3 +29,11 @@ command remains pending for the next connection.
 `YamlEditor` and `YamlDiffEditor` bundle Monaco, its editor worker, and the YAML language worker into the consuming application. They make no runtime CDN or internet requests, so they work in air-gapped environments.
 
 Consumers must use a bundler that supports module workers created with `new Worker(new URL(..., import.meta.url), { type: 'module' })`. The source package is compatible with Vite and webpack 5. Monaco and `monaco-yaml` are intentionally pinned as a compatible pair because their worker-factory APIs must move together. The package declares that exact Monaco version as a peer so the host and YAML runtime share one Monaco instance.
+
+## Optional flow controls
+
+`CreateResourceDialog` defaults to Apply. Guided flows can set `initialMode="create"` and `lockMode` to require creation, and use `onBack(draftYaml)` to retain edits when returning to setup. Cancel closes the dialog. After a successful write, `onCreated(result, submittedYaml)` receives the first result and the exact submitted manifest; dry runs do not invoke it. `result.uid`, when supplied by Radar, identifies the persisted object. Locked partial creates stay in Create mode and explain which recovery is required.
+
+`useOpenTerminal` accepts `shell` (one executable name, without arguments), `title`, and `sessionNote`. Dock hosts must forward these fields to their terminal renderer; Radar does so. The shared `TerminalTab` accepts `command` to describe that executable, pin the container, and suppress shell debug advice, plus `note` for session context. `createSession` remains responsible for launching the command. Omitted options retain the normal shell session.
+
+`AreaChart` supports optional `shadedRanges`, controlled `selection`, and `onSelectRange`. Range timestamps use Unix seconds. Dragging selects a range; with positive `stepSeconds`, clicking selects one interval and arrow keys plus Enter select an interval from the keyboard. Shaded range labels appear on hover. `AlertBanner.action` places a host-supplied control alongside the title. Omitting these props preserves existing charts and banners.

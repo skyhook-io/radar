@@ -187,3 +187,24 @@ it.each(['local', 'pod'])('allows Retry after a %s terminal creation error', asy
   await act(async () => Socket.instances[0].onopen?.())
   expect(element.textContent).not.toContain('creation failed')
 })
+
+
+it.each([undefined, 'psql'])('keeps shell defaults and command-specific unavailable guidance (%s)', async command => {
+  const createSession = vi.fn(async () => ({ wsUrl: 'ws://localhost' }))
+  const createDebugContainer = vi.fn()
+  await act(async () => root.render(<TerminalTab namespace="app" podName="worker" containerName="app" containers={['app', 'sidecar']} createSession={createSession} createDebugContainer={createDebugContainer} command={command} note={command ? 'Database session' : undefined} />))
+  expect(createSession).toHaveBeenCalledWith('app')
+  expect(element.querySelector('select') !== null).toBe(!command)
+  if (command) expect(element.textContent).toContain('Database session')
+  await act(async () => Socket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'error', errorType: 'shell_not_found', data: 'executable file not found' }) }))
+  if (command) {
+    expect(element.textContent).toContain('Command not available')
+    expect(element.textContent).toContain('psql')
+    expect(element.textContent).not.toContain('debug container')
+    expect(element.textContent).not.toContain('/bin/sh')
+  } else {
+    expect(element.textContent).toContain('Shell not available')
+    expect(element.textContent).toContain('/bin/sh')
+    expect(element.textContent).toContain('Start debug container')
+  }
+})

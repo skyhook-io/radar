@@ -19,6 +19,10 @@ export interface TerminalTabProps {
   createSession: (containerName: string) => Promise<{ wsUrl: string }>
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
+  /** Optional: a short line in the toolbar describing the session. */
+  note?: string
+  /** Executable supplied by the host session callback; pins its target container. */
+  command?: string
 }
 
 export function TerminalTab({
@@ -29,6 +33,8 @@ export function TerminalTab({
   isActive = true,
   createSession,
   createDebugContainer,
+  note,
+  command,
 }: TerminalTabProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
@@ -269,8 +275,9 @@ export function TerminalTab({
           )}
         />
         <span className="text-xs text-theme-text-tertiary">{podName}</span>
+        {note && <span className="truncate text-xs text-theme-text-secondary">{note}</span>}
 
-        {containers.length > 1 && (
+        {!command && containers.length > 1 && (
           <div className="relative">
             <select
               value={selectedContainer}
@@ -303,15 +310,19 @@ export function TerminalTab({
         <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-slate-900">
           {errorType === 'shell_not_found' ? (
             <>
-              <div className="text-amber-400 mb-2 text-sm">Shell not available</div>
-              <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
+              <div className="text-amber-400 mb-2 text-sm">{command ? 'Command not available' : 'Shell not available'}</div>
+              {command ? (
+                <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
+                  Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
+                </div>
+              ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
                 Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> doesn&apos;t
                 have a shell (/bin/sh). This is common with distroless or minimal container images
                 {containers.length > 1 ? ' — try another container above, or' : '. You can'} create a
                 debug container to troubleshoot.
-              </div>
+              </div>}
               <div className="flex gap-2">
-                {createDebugContainerRef.current && (
+                {!command && createDebugContainerRef.current && (
                   <button
                     onClick={handleCreateDebugContainer}
                     disabled={isCreatingDebug}

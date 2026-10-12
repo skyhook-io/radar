@@ -49,3 +49,11 @@ export function CustomIcon() {
     </div>
   )
 }
+
+export function WithAction() {
+  return (
+    <div style={wrap}>
+      <AlertBanner variant="warning" title="Metrics are unavailable" message="Check the connection to resume charts." action={<button type="button" className="text-xs font-medium text-accent-text hover:underline">Open Metrics settings →</button>} />
+    </div>
+  )
+}

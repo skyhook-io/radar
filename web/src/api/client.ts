@@ -4609,6 +4609,7 @@ export interface ApplyResourceResult {
   namespace: string;
   kind: string;
   apiVersion: string;
+  uid?: string;
   created: boolean;
 }
 

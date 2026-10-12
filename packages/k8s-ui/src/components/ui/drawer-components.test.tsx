@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
+import { AlertBanner, EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
 
 const problems = [
   { color: 'red' as const, message: 'Application is Degraded' },
@@ -220,5 +220,19 @@ describe('related resource chips', () => {
     }} onNavigate={() => {}} />)
     expect(html).toContain('>svc<!-- -->/</span>web-private<')
     expect(html).toContain('>ksvc<!-- -->/</span>web<')
+  })
+})
+
+
+describe('AlertBanner optional actions', () => {
+  it('retains the title-only default without introducing a layout wrapper', () => {
+    const html = renderToString(<AlertBanner variant="info" title="Paused" />)
+    expect(html).toMatch(/<div class="text-sm font-medium [^"]*">Paused<\/div>/)
+    expect(html).not.toContain('justify-between'); expect(html).not.toContain('flex-1')
+  })
+  it.each([undefined, 'Check connection'])('places the optional action next to the title, retaining the body (%s)', message => {
+    const html = renderToString(<AlertBanner variant="warning" title="Metrics unavailable" message={message} action={<button>Open settings</button>} />)
+    expect(html).toContain('Metrics unavailable'); expect(html).toContain('<button>Open settings</button>')
+    expect(html).toContain('flex-wrap'); if (message) expect(html).toContain(message)
   })
 })
