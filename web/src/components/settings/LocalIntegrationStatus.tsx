@@ -31,8 +31,7 @@ export function LocalIntegrationStatus({ kind, profile, argo, busy, changedAt }:
     } else if (kind === 'cost' && cost.data) {
       status = cost.data.available ? `Available · ${costSourceLabel(cost.data.source)}`
         : ['no_prometheus', 'no_cost_source', 'no_metrics'].includes(cost.data.reason ?? '') ? 'No cost data' : 'Unavailable'
-      detail = cost.data.reason ? costIntegrationUnavailableMessage(cost.data.reason)
-        ?? (cost.data.reason === 'query_error' ? 'The active cost source query failed.' : undefined) : undefined
+      detail = cost.data.reason ? costIntegrationUnavailableMessage(cost.data.reason) : undefined
     }
   }
   const lastDetail = useRef({ text: detail, visible: !!detail })

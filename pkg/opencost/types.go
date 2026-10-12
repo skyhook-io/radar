@@ -12,7 +12,7 @@ const (
 	ReasonNoPrometheus        = "no_prometheus"  // Prometheus/VictoriaMetrics not found in cluster
 	ReasonNoCostSource        = "no_cost_source" // neither OpenCost metrics nor Kubecost is available
 	ReasonNoMetrics           = "no_metrics"     // Prometheus found but OpenCost metrics not present
-	ReasonQueryError          = "query_error"    // Prometheus found but cost queries failed
+	ReasonQueryError          = "query_error"    // The selected source connection or cost queries failed
 	ReasonAccessDenied        = "access_denied"  // user cannot access the requested resource
 	ReasonNotFound            = "not_found"      // requested resource no longer exists
 	ReasonSourceUnavailable   = "source_unavailable"

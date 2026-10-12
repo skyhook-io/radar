@@ -512,7 +512,7 @@ function applicationCostKey(ref: { kind: string; namespace: string; name: string
 function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'no_prometheus') return 'Metrics backend not found'
   if (reason === 'no_cost_source') return 'Cost source not found'
-  if (reason === 'query_error') return 'Cost query failed'
+  if (reason === 'query_error') return 'Cost data unavailable'
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
   if (reason === 'configuration_mismatch') return 'Kubecost settings are not valid for this cluster'

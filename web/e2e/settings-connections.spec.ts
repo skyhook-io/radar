@@ -567,7 +567,7 @@ test('Cost explains query failures beside the connection status', async ({ page 
   await fixture(page)
   await page.route('**/api/opencost/summary', route => route.fulfill({ json: { available: false, source: 'kubecost', reason: 'query_error' } }))
   const dialog = await openSettings(page, 'Cost')
-  await expect(dialog.getByRole('group', { name: 'Current connection', exact: true })).toContainText('The active cost source query failed.')
+  await expect(dialog.getByRole('group', { name: 'Current connection', exact: true })).toContainText('The selected cost source could not provide data.')
 })
 
 for (const integration of integrations) {

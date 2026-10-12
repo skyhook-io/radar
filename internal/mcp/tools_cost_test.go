@@ -180,6 +180,12 @@ func TestCostRemediationDistinguishesSources(t *testing.T) {
 	if strings.Contains(noSource, "Prometheus is reachable") {
 		t.Errorf("no_cost_source must not claim Prometheus is reachable: %q", noSource)
 	}
+	for _, reason := range []string{pkgopencost.ReasonQueryError, pkgopencost.ReasonSourceUnavailable} {
+		remediation := costRemediation(reason)
+		if !strings.Contains(remediation, "connection or query") || !strings.Contains(remediation, "Metrics connection status") || strings.Contains(remediation, "is installed") {
+			t.Errorf("failure must cover an unreachable source without claiming installation: %q", remediation)
+		}
+	}
 	// Either source can reject credentials, so naming only one misdirects.
 	auth := costRemediation(pkgopencost.ReasonAuthentication)
 	if !strings.Contains(auth, "Kubecost") || !strings.Contains(auth, "Prometheus") {

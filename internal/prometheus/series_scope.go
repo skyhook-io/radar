@@ -146,7 +146,7 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 		for i, label := range partitionLabels {
 			matchers[i] = label + `=""`
 		}
-		iso := SeriesIsolation{Mode: SeriesIsolationUnverified, Note: "Matched to volume stats without cluster identity labels, like this namespace's kube-state-metrics Pod evidence. Radar cannot distinguish unlabeled stats from another cluster"}
+		iso := SeriesIsolation{Mode: SeriesIsolationUnverified, Note: "Matched to stats without cluster identity labels, like this namespace's kube-state-metrics Pod evidence. Radar cannot distinguish unlabeled stats from another cluster"}
 		return decideVerifiedScope(ctx, client, probe, strings.Join(matchers, ","), iso)
 	}
 	return decideScope(ctx, client, probe, verified)
