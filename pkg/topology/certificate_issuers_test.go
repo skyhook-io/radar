@@ -212,3 +212,34 @@ func TestIssuanceIssuerSkipsUnrepresentedAndReplacedSources(t *testing.T) {
 		t.Fatalf("replaced source triggered issuer lookup: %+v %v %v", nodes, p.listCalls, warnings)
 	}
 }
+
+func TestLateIssuanceIssuerJoinDoesNotReopenGenericEnrollment(t *testing.T) {
+	issuerGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
+	requestGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificaterequests"}
+	owner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "operator", UID: "operator"}
+	nodes := []Node{{ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", uid: "operator", Data: map[string]any{"namespace": "team"}}}
+	var issuers []*unstructured.Unstructured
+	for i := range 100 {
+		name := fmt.Sprintf("issuer-%d", i)
+		issuer := genericIdentityObject(issuerGVR, "Issuer", "team", name, owner)
+		issuers = append(issuers, issuer)
+		if i < 50 {
+			nodes = append(nodes, Node{ID: "issuer/team/" + name + "/cert-manager.io", Kind: "Issuer", Name: name, Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
+		}
+	}
+	target := genericIdentityObject(issuerGVR, "Issuer", "team", "ca", owner)
+	issuers = append(issuers, target)
+	request := genericIdentityObject(requestGVR, "CertificateRequest", "team", "request")
+	request.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
+	nodes = append(nodes, Node{ID: "certificaterequest/team/request/cert-manager.io", Kind: "CertificateRequest", Name: "request", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
+	provider := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: map[string]schema.GroupVersionResource{"Issuer": issuerGVR, "CertificateRequest": requestGVR}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{issuerGVR: issuers, requestGVR: {request}}}, listCalls: map[string]int{}}
+	nodes, edges, warnings := (&Builder{dynamic: provider}).addIssuanceIssuerEdges(nodes, nil, DefaultBuildOptions())
+	if len(nodes) != 53 || len(edges) != 2 || len(warnings) != 0 {
+		t.Fatalf("late repair enrolled another generic batch: nodes=%d edges=%+v warnings=%v", len(nodes), edges, warnings)
+	}
+	for _, edge := range edges {
+		if edge.Type == EdgeManages && edge.Target != "issuer/team/ca/cert-manager.io" {
+			t.Fatalf("late repair changed an unrelated issuer: %+v", edge)
+		}
+	}
+}

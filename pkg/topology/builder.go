@@ -8822,10 +8822,10 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 	if b.dynamic == nil {
 		return nodes, edges
 	}
-	return b.addGenericCRDNodesForResources(nodes, edges, opts, b.dynamic.GetWatchedResources())
+	return b.addGenericCRDNodesForResources(nodes, edges, opts, b.dynamic.GetWatchedResources(), nil)
 }
 
-func (b *Builder) addGenericCRDNodesForResources(nodes []Node, edges []Edge, opts BuildOptions, resources []schema.GroupVersionResource) ([]Node, []Edge) {
+func (b *Builder) addGenericCRDNodesForResources(nodes []Node, edges []Edge, opts BuildOptions, resources []schema.GroupVersionResource, selectedIdentities map[string]bool) ([]Node, []Edge) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
 	if dynamicCache == nil || resourceDiscovery == nil {
@@ -8934,6 +8934,9 @@ func (b *Builder) addGenericCRDNodesForResources(nodes []Node, edges []Edge, opt
 
 			name := resource.GetName()
 			resourceKey := resourceid.ResourceKey(gvr.Group, kind, ns, name)
+			if selectedIdentities != nil && !selectedIdentities[resourceKey] {
+				continue
+			}
 			nodeID, existing := existingResourceIDs[resourceKey]
 			if !existing {
 				nodeID = fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
