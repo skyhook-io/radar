@@ -955,9 +955,36 @@ func TestFluxHelmIgnoresUnrelatedHelmController(t *testing.T) {
 			}
 			provider := NewCacheProvider()
 			observation := provider.FinalizerOwnerStatus("finalizers.helm.toolkit.fluxcd.io", Ref{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}, nil)
-			if !observation.NotFound || observation.Running || observation.Down || !strings.Contains(observation.Text, "no recognized controller found") {
+			if observation.NotFound || observation.Running || observation.Down || !strings.Contains(observation.Text, "unconfirmed image identity") {
 				t.Fatalf("unrelated Helm controller must not establish Flux health: %+v", observation)
 			}
 		})
+	}
+}
+
+func TestUnconfirmedHelmImagesNeverOfferCleanup(t *testing.T) {
+	for _, image := range []string{"registry.corp/helm-controller:v1", "ghcr.io/vendor/distroless/helm-controller:v1"} {
+		for _, bare := range []bool{false, true} {
+			t.Run(image+map[bool]string{false: "/workload", true: "/bare-pod"}[bare], func(t *testing.T) {
+				t.Cleanup(k8s.ResetResourceCache)
+				identity := map[string]string{"app": "helm-controller"}
+				template := corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: identity}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: image}}}}
+				pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helm-controller-pod", Namespace: "operators", Labels: identity}, Spec: template.Spec, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}}
+				objects := []runtime.Object{pod}
+				if !bare {
+					objects = append(objects, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "helm-controller", Namespace: "operators", Labels: identity}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: identity}, Template: template}})
+				}
+				scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}, "daemonsets": {Enabled: true}}
+				if err := k8s.InitScopedTestResourceCache(fake.NewClientset(objects...), scopes); err != nil {
+					t.Fatal(err)
+				}
+				key := "finalizers.helm.toolkit.fluxcd.io"
+				problem := k8s.Detection{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Severity: "critical", TerminatingFinalizers: []string{key}, TerminatingRemovals: map[string]issuesapi.FinalizerRemoval{key: {Finalizer: key, PatchResource: []byte(`{}`)}}}
+				problem = enrichTerminatingProblem(problem, NewCacheProvider(), nil, map[string]finalizerObservation{})
+				if problem.Severity != "high" || problem.ConditionalCleanup != nil || !strings.Contains(problem.Cause, "unconfirmed image identity") || !strings.Contains(problem.Action, "can't confirm") {
+					t.Fatalf("a matching name with an unknown image must block absence and cleanup: %+v", problem)
+				}
+			})
+		}
 	}
 }

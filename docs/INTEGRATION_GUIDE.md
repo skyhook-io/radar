@@ -104,7 +104,9 @@ finding; it does not require a per-kind detector, renderer or new informer.
   default entrypoints, Helm-renamed installs, mirrors, digest pins and managed
   sidecars that share the repository. When unrelated controllers share a catalog
   name or label, set `requireImageMatch` so that identity alone cannot attribute
-  them (Flux Helm versus other Helm controllers).
+  them (Flux Helm versus other Helm controllers). `MatchesWorkloadIdentity`
+  retains such uncertain matches so they block absence and cleanup without
+  establishing a running or down controller.
 - [ ] Review what removing the finalizer skips. Set `AllowConditionalCleanup`
   explicitly; its default is false. Leave it false when cleanup semantics are
   unreviewed, the controller can run off-cluster, or removal strands infrastructure.

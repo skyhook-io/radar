@@ -217,7 +217,13 @@ var (
 // recognized by the workload's name or labels, or by its pod template's
 // labels or container image.
 func (o *Owner) MatchesWorkload(workload metav1.Object, template corev1.PodTemplateSpec) bool {
-	return (!o.requireImageMatch && (workload.GetLabels()[o.SelectorKey] == o.SelectorValue || controllerNameMatches(workload.GetName(), o.Controller))) || o.MatchesPod(template.Labels, template.Spec)
+	return (!o.requireImageMatch && o.MatchesWorkloadIdentity(workload, template)) || o.MatchesPod(template.Labels, template.Spec)
+}
+
+// MatchesWorkloadIdentity only checks names and labels. When an image is
+// required, this resemblance must not establish ownership or absence.
+func (o *Owner) MatchesWorkloadIdentity(workload metav1.Object, template corev1.PodTemplateSpec) bool {
+	return workload.GetLabels()[o.SelectorKey] == o.SelectorValue || controllerNameMatches(workload.GetName(), o.Controller) || template.Labels[o.SelectorKey] == o.SelectorValue
 }
 
 // MatchesPod reports whether a pod (or pod template) runs this owner's

@@ -243,8 +243,15 @@ func (inv *controllerInventory) observe(controller, namespace string, selector l
 // catalog pods outside them (another install, a bare pod).
 func (inv *controllerInventory) catalogController(owner *finalizers.Owner) finalizerObservation {
 	var observations []finalizerObservation
+	unconfirmed := finalizerObservation{Controller: owner.Controller, Text: owner.Controller + " state unknown (matching name or labels, but unconfirmed image identity)"}
 	searched := inv.eachWorkload(func(obj metav1.Object, selector *metav1.LabelSelector, template corev1.PodTemplateSpec, workload matchedWorkload) {
-		if selector == nil || !owner.MatchesWorkload(obj, template) {
+		if !owner.MatchesWorkload(obj, template) {
+			if owner.MatchesWorkloadIdentity(obj, template) {
+				observations = append(observations, unconfirmed)
+			}
+			return
+		}
+		if selector == nil {
 			return
 		}
 		sel, err := metav1.LabelSelectorAsSelector(selector)
@@ -257,7 +264,13 @@ func (inv *controllerInventory) catalogController(owner *finalizers.Owner) final
 	// Searched even when a matched workload is healthy: a failing copy
 	// elsewhere must keep the controller from reading as healthy.
 	catalog, empty := inv.observe(owner.Controller, "", labels.Everything(), func(pod *corev1.Pod) bool {
-		return owner.MatchesPod(pod.Labels, pod.Spec)
+		if owner.MatchesPod(pod.Labels, pod.Spec) {
+			return true
+		}
+		if pod.Labels[owner.SelectorKey] == owner.SelectorValue {
+			observations = append(observations, unconfirmed)
+		}
+		return false
 	}, nil)
 	var result finalizerObservation
 	switch {

@@ -515,7 +515,8 @@ observation per finalizer. Controllers are identified from the catalog in
 Flux, VictoriaMetrics and Karpenter): a workload matches by its name or labels,
 or by its pod template's labels or container image, and pods match by the
 catalog label or image. Flux Helm requires its published image path: unrelated
-projects use the same `helm-controller` name and labels. Images match on the
+projects use the same `helm-controller` name and labels. A matching name or label
+with an unrecognized image leaves identity unconfirmed and blocks cleanup. Images match on the
 repository path the vendor
 publishes (`victoriametrics/operator`, `fluxcd/<controller>`,
 `argoproj/argocd` running `argocd-application-controller`,
@@ -567,8 +568,9 @@ operator workloads. Kubernetes protection finalizers (`*.k8s.io/*` and
 finalizers named for `in-use` or `protection`, such as Kueue's
 `resource-in-use`) are in-use guards: resolve the referencing objects instead of
 removing them. Deletion-related Ready=False conditions fold into the terminating
-issue. Controller inventories need exact Pod and workload list permissions;
-inaccessible inventory is never read as a missing controller.
+issue. Controller inventories follow namespace access for namespaced reads
+and exact Pod/workload list permissions for cluster-wide searches; inaccessible
+inventory is never read as a missing controller.
 
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
