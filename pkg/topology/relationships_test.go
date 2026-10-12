@@ -484,7 +484,7 @@ func TestGetRelationships_ServiceEntrypointsSkipKnativeService(t *testing.T) {
 		},
 		Edges: []Edge{
 			{ID: "ingress-to-knative", Source: "ingress/demo/web", Target: "knativeservice/demo/web", Type: EdgeRoutesTo},
-			{ID: "knative-to-service", Source: "knativeservice/demo/web", Target: "service/demo/web", Type: EdgeExposes},
+			{ID: "service-to-knative", Source: "service/demo/web", Target: "knativeservice/demo/web", Type: EdgeExposes},
 		},
 	}
 

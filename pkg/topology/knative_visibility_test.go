@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -118,4 +121,48 @@ func (d *failingDomainMappings) ListNamespaces(gvr schema.GroupVersionResource, 
 		return nil, fmt.Errorf("forbidden")
 	}
 	return d.genericIdentityDynamic.ListNamespaces(gvr, namespaces)
+}
+
+func TestKnativeFrontDoorServiceExposesTheKnativeService(t *testing.T) {
+	ksvcGVR := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "services"}
+	dynamic := &genericIdentityDynamic{
+		watched: []schema.GroupVersionResource{ksvcGVR},
+		kinds:   map[schema.GroupVersionResource]string{ksvcGVR: "Service"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{ksvcGVR: {
+			genericIdentityObject(ksvcGVR, "Service", "team", "web"),
+			genericIdentityObject(ksvcGVR, "Service", "team", "api"),
+		}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	frontDoor := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team", OwnerReferences: []metav1.OwnerReference{
+		{APIVersion: "serving.knative.dev/v1", Kind: "Route", Name: "web", UID: "route-uid"},
+	}}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: "kourier-internal.kourier-system.svc.cluster.local"}}
+	// Shares a Knative Service's name but isn't Knative's: no relationship.
+	unrelated := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "api"}}}
+	topo, err := NewBuilder(&mockProvider{services: []*corev1.Service{frontDoor, unrelated}}).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	edges := map[string]EdgeType{}
+	for _, e := range topo.Edges {
+		edges[e.Source+" -> "+e.Target] = e.Type
+	}
+	if edges["service/team/web -> knativeservice/team/web"] != EdgeExposes {
+		t.Errorf("front-door Service should expose the Knative Service; edges: %v", edges)
+	}
+	for _, wrong := range []string{"knativeservice/team/web -> service/team/web", "knativeservice/team/api -> service/team/api", "service/team/api -> knativeservice/team/api"} {
+		if _, ok := edges[wrong]; ok {
+			t.Errorf("unexpected edge %s", wrong)
+		}
+	}
+
+	idx := IndexByResource(topo)
+	ksvcRel := GetRelationshipsWithObject("services", "team", "web", genericIdentityObject(ksvcGVR, "Service", "team", "web"), topo, nil, nil, idx)
+	if ksvcRel == nil || len(ksvcRel.Services) != 1 || ksvcRel.Services[0].Group != "" || len(ksvcRel.Backends) != 0 {
+		t.Errorf("Knative Service should list its front door under Services, not Routes To: %+v", ksvcRel)
+	}
+	svcRel := GetRelationshipsWithIndex("services", "team", "web", topo, nil, nil, idx)
+	if svcRel == nil || len(svcRel.Backends) != 1 || svcRel.Backends[0].Group != "serving.knative.dev" {
+		t.Errorf("front-door Service should list the Knative Service under Routes To: %+v", svcRel)
+	}
 }

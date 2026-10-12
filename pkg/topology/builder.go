@@ -4903,17 +4903,27 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// KnativeService → K8s Services (EdgeExposes)
 	// Connects to: same-name service (ExternalName DNS alias) + per-revision private services (actual pod routing)
+	knativeFrontDoors := map[string]bool{}
+	for _, svc := range services {
+		for _, owner := range svc.OwnerReferences {
+			if owner.Kind == "Route" && resourceid.GroupFromAPIVersion(owner.APIVersion) == "serving.knative.dev" && owner.Name == svc.Name {
+				knativeFrontDoors[svc.Namespace+"/"+svc.Name] = true
+			}
+		}
+	}
 	for _, ksvc := range knativeServiceResources {
 		ksvcNs := ksvc.GetNamespace()
 		ksvcName := ksvc.GetName()
 		ksvcID := knativeServiceIDs[ksvcNs+"/"+ksvcName]
 
-		// Same-name service (ExternalName)
-		if svcID, ok := serviceIDs[ksvcNs+"/"+ksvcName]; ok {
+		// The same-name core Service is the Route's front door: an ExternalName
+		// alias for the ingress that callers address. Traffic enters through it,
+		// so it exposes the Knative Service, not the other way round.
+		if svcID, ok := serviceIDs[ksvcNs+"/"+ksvcName]; ok && knativeFrontDoors[ksvcNs+"/"+ksvcName] {
 			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", ksvcID, svcID),
-				Source: ksvcID,
-				Target: svcID,
+				ID:     fmt.Sprintf("%s-to-%s", svcID, ksvcID),
+				Source: svcID,
+				Target: ksvcID,
 				Type:   EdgeExposes,
 			})
 		}
