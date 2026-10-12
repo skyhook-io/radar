@@ -10,7 +10,7 @@ This package is source-only — it ships TypeScript + TSX files under `src/`. Co
 npm install @skyhook-io/radar-app
 ```
 
-Peer deps: `react >=19`, `react-dom >=19`, `react-router-dom >=7`, `@tanstack/react-query >=5`, `@skyhook-io/k8s-ui >=1.5.0`, plus `clsx`, `tailwind-merge`, `lucide-react`, `@xyflow/react`, `elkjs`.
+Peer deps: `react >=19`, `react-dom >=19`, `react-router-dom >=7`, `@tanstack/react-query >=5`, `@skyhook-io/k8s-ui >=1.18.0`, plus `clsx`, `tailwind-merge`, `lucide-react`, `@xyflow/react`, `elkjs`.
 
 ## Use
 
@@ -66,3 +66,5 @@ Host apps can override Radar's runtime behavior without passing props:
 - `setCredentialsMode(mode)` — fetch credentials mode (`same-origin` | `include` | `omit`).
 
 Call these before mounting `<RadarApp>`.
+
+The shared terminal flow props require k8s-ui 1.18.0 or newer. The shared component and host/navigation changes must both land before k8s-ui 1.18.0 is released; release that package before the radar-app version that depends on it. If a package is released earlier, adjust this floor to the release containing these props.

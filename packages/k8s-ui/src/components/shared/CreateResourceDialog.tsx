@@ -90,6 +90,7 @@ export function CreateResourceDialog({
   const [yamlValid, setYamlValid] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [partialCreates, setPartialCreates] = useState<ApplyResult[]>([])
   const [preview, setPreview] = useState<{
     yaml: string
     mode: 'apply' | 'create'
@@ -98,6 +99,7 @@ export function CreateResourceDialog({
     nonAtomic: boolean
     context?: string
   } | null>(null)
+  const closeTimer = useRef<number | undefined>(undefined)
   const [drag, setDrag] = useState<FileDragState>('none')
   const [pendingImport, setPendingImport] = useState<{ fileName: string; yaml: string } | null>(null)
   const [importing, setImporting] = useState<string | null>(null)
@@ -123,7 +125,11 @@ export function CreateResourceDialog({
     scheduledFrames.current.clear()
   }, [])
 
-  useEffect(() => retireDeferredImports, [retireDeferredImports])
+  const cancelScheduledClose = useCallback(() => {
+    window.clearTimeout(closeTimer.current)
+    closeTimer.current = undefined
+  }, [])
+  useEffect(() => () => { retireDeferredImports(); cancelScheduledClose() }, [retireDeferredImports, cancelScheduledClose])
 
   const scheduleFrame = useCallback((generation: number, run: () => void) => {
     const id = requestAnimationFrame(() => {
@@ -136,12 +142,14 @@ export function CreateResourceDialog({
 
   useEffect(() => {
     if (!open) return
+    cancelScheduledClose()
     setYaml(initialYaml)
     setMode(initialMode)
     setDryRun(false)
     setForce(false)
     setYamlValid(true)
     setError(null)
+    setPartialCreates([])
     setSuccess(null)
     setPreview(null)
     setDrag('none')
@@ -149,19 +157,21 @@ export function CreateResourceDialog({
     setImporting(null)
     dragDepth.current = 0
     retireDeferredImports()
-  }, [open, initialYaml, initialMode, retireDeferredImports])
+  }, [open, initialYaml, initialMode, retireDeferredImports, cancelScheduledClose])
 
   const pending = isApplying || isPreviewing
   const closeNow = useCallback(() => {
+    cancelScheduledClose()
     retireDeferredImports()
     setError(null)
+    setPartialCreates([])
     setSuccess(null)
     setPreview(null)
     setPendingImport(null)
     setImporting(null)
     setYaml('')
     onClose()
-  }, [onClose, retireDeferredImports])
+  }, [onClose, retireDeferredImports, cancelScheduledClose])
   const handleClose = useCallback(() => {
     if (!pending) closeNow()
   }, [closeNow, pending])
@@ -187,7 +197,7 @@ export function CreateResourceDialog({
         closeNow()
         onCreated(results[0], submittedYaml)
       } else {
-        window.setTimeout(closeNow, 1200)
+        closeTimer.current = window.setTimeout(closeNow, 1200)
       }
     },
     [closeNow, onCreated],
@@ -243,6 +253,7 @@ export function CreateResourceDialog({
         return
       }
       setError(null)
+      setPartialCreates([])
       setSuccess(null)
       if (needsReplaceConfirmation(yamlRef.current, initialYaml)) {
         setPendingImport({ fileName: result.fileName, yaml: result.yaml })
@@ -293,6 +304,7 @@ export function CreateResourceDialog({
       return
     }
     setError(null)
+    setPartialCreates([])
     setSuccess(null)
     try {
       if (onPreview) {
@@ -323,6 +335,7 @@ export function CreateResourceDialog({
   const handleApplyReviewed = useCallback(async () => {
     if (!preview) return
     setError(null)
+    setPartialCreates([])
     try {
       const reviewedResourceVersions = reviewedResourceVersionsForPreview(preview.documents)
       const results = await onApply({
@@ -342,21 +355,12 @@ export function CreateResourceDialog({
         Array.isArray(caught.appliedResults)
           ? caught.appliedResults
           : []
-      if (preview.mode === 'create' && appliedResults.length > 0 && lockMode) {
-        setYaml(preview.yaml)
-        setPreview(null)
-        setError(
-          `${message} Some documents were created before it stopped. This dialog only creates, so remove the created ones from the manifest before creating the rest.`,
-        )
-        return
-      }
       if (preview.mode === 'create' && appliedResults.length > 0) {
         setYaml(preview.yaml)
-        setMode('apply')
+        if (!lockMode) setMode('apply')
         setPreview(null)
-        setError(
-          `${message} Radar switched to Apply mode so you can review and continue from the current cluster state.`,
-        )
+        setPartialCreates(appliedResults)
+        setError(message)
         return
       }
       setError(message)
@@ -411,6 +415,7 @@ export function CreateResourceDialog({
           onClose={handleClose}
           onBack={() => {
             setError(null)
+            setPartialCreates([])
             setPreview(null)
           }}
           onApply={handleApplyReviewed}
@@ -493,7 +498,7 @@ export function CreateResourceDialog({
           </div>
 
           {(error || previewError) && (
-            <ApplyErrorBanner error={error || previewError || 'Preview failed'} />
+            <ApplyErrorBanner error={error || previewError || 'Preview failed'} partialCreates={partialCreates} strictCreate={lockMode && mode === 'create'} />
           )}
           {success && (
             <div className="mx-5 mb-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
@@ -577,6 +582,7 @@ export function CreateResourceDialog({
                 <button
                   type="button"
                   onClick={() => {
+                    cancelScheduledClose()
                     retireDeferredImports()
                     onBack(yamlRef.current)
                   }}
@@ -630,10 +636,10 @@ export function CreateResourceDialog({
   )
 }
 
-function ApplyErrorBanner({ error }: { error: string }) {
+function ApplyErrorBanner({ error, partialCreates, strictCreate }: { error: string; partialCreates: ApplyResult[]; strictCreate: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const { panelId, buttonProps } = useDisclosure(expanded)
-  const parsed = formatApplyError(error)
+  const parsed = formatApplyError(error, { allowApply: !strictCreate })
   const hasFriendly = Boolean(parsed.suggestion)
   return (
     <div className="mx-5 mb-2 rounded-md border border-red-500/30 bg-red-500/10 text-xs">
@@ -641,6 +647,10 @@ function ApplyErrorBanner({ error }: { error: string }) {
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <span className="font-medium">{parsed.summary}</span>
+          {partialCreates.length > 0 && <p className="mt-1">
+            Created before it stopped: {partialCreates.map(result => `${result.kind} ${result.namespace ? `${result.namespace}/` : ''}${result.name}`).join(', ')}.
+            {' '}{strictCreate ? 'This dialog only creates, so remove the created ones from the manifest before creating the rest.' : 'Radar switched to Apply mode so you can review and continue from the current cluster state.'}
+          </p>}
           {parsed.suggestion && (
             <p className="mt-1 text-red-500/80 dark:text-red-400/80">{parsed.suggestion}</p>
           )}

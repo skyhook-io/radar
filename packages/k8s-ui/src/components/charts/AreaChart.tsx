@@ -61,6 +61,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   const svgRef = useRef<SVGSVGElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
+  const [keyboardFocus, setKeyboardFocus] = useState(false)
   const [labelsFit, setLabelsFit] = useState(true)
   const [renderedWidth, setRenderedWidth] = useState(0)
   const multiSeries = series.length > 1
@@ -338,7 +339,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   }
   const handleKeyDown = (e: React.KeyboardEvent<SVGRectElement>) => {
     if (!chartData || !onSelectRange) return
-    if (e.key === 'Escape') { cancelDrag(); return }
+    if (e.key === 'Escape') { cancelDrag(); setHoverX(null); return }
     if (!stepSeconds || stepSeconds <= 0) return
     const x = hoverX ?? marginLeft
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -628,6 +629,11 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
           role={onSelectRange && stepSeconds && stepSeconds > 0 ? 'button' : undefined}
           aria-label={onSelectRange && stepSeconds && stepSeconds > 0 ? 'Select chart interval: use arrow keys to move, then Enter to select' : undefined}
           onKeyDown={handleKeyDown}
+          onFocus={() => setKeyboardFocus(true)}
+          onBlur={() => { setKeyboardFocus(false); setHoverX(null); cancelDrag() }}
+          stroke={keyboardFocus ? 'currentColor' : undefined}
+          strokeWidth={keyboardFocus ? 2 : undefined}
+          className={keyboardFocus ? 'text-accent' : undefined}
           style={{ cursor: onSelectRange ? 'col-resize' : 'crosshair', touchAction: onSelectRange ? 'none' : undefined }}
         />
       </svg>

@@ -53,7 +53,7 @@ describe('CreateResourceDialog lockMode', () => {
   it('stays strict create after a partial create, with no Apply or Force', async () => {
     const onPreview = vi.fn(async () => ({ documents: [], nonAtomic: true }))
     const onApply = vi.fn(async () => {
-      throw Object.assign(new Error('second document failed'), { appliedResults: [{ kind: 'ConfigMap', name: 'settings' }] })
+      throw Object.assign(new Error('document 2: failed to create resource: configmaps "second" already exists'), { appliedResults: [{ kind: 'ConfigMap', name: 'settings' }] })
     })
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -69,8 +69,12 @@ describe('CreateResourceDialog lockMode', () => {
     await act(async () => button('Create reviewed resources')!.click())
 
     expect(document.body.textContent).toContain('This dialog only creates')
+    expect(document.body.textContent).toContain('ConfigMap settings')
     expect(document.querySelector('[aria-label="Apply mode"]')).toBeNull()
     expect(document.body.textContent).not.toContain('Force')
+    expect(document.body.textContent).not.toContain('Switch to Apply mode')
+    const recovery = [...document.querySelectorAll('p')].find(p => p.textContent?.includes('Created before it stopped'))!
+    expect(recovery.closest('[inert]')).toBeNull()
 
     await act(async () => button('Review')!.click())
     expect(onPreview).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'create', force: false }))
@@ -99,7 +103,7 @@ it.each([false, true])('returns the exact submitted YAML after a successful writ
 
 it('keeps ordinary Apply, Force and unlocked partial-create recovery', async () => {
   const onPreview = vi.fn(async () => ({ documents: [], nonAtomic: true }))
-  const onApply = vi.fn(async () => { throw Object.assign(new Error('second document failed'), { appliedResults: [{ kind: 'ConfigMap', name: 'first' }] }) })
+  const onApply = vi.fn(async () => { throw Object.assign(new Error('document 2: failed to create resource: configmaps "second" already exists'), { appliedResults: [{ kind: 'ConfigMap', name: 'first' }] }) })
   const host = document.createElement('div'); document.body.appendChild(host)
   const root = createRoot(host)
   await act(async () => root.render(<CreateResourceDialog open onClose={() => {}} initialYaml="kind: ConfigMap" onApply={onApply} isApplying={false} onPreview={onPreview} />))
@@ -163,4 +167,25 @@ it('resets to the selected initial mode on reopen and cancel deliberately abando
   await act(async () => button('Cancel')!.click())
   expect(onClose).toHaveBeenCalledOnce(); expect(onBack).not.toHaveBeenCalled()
   await act(async () => root.unmount())
+})
+
+
+it.each(['back', 'reopen', 'cancel'])('retires a successful-write close timer when the user chooses %s', async choice => {
+  vi.useFakeTimers()
+  const onClose = vi.fn(), onBack = vi.fn()
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host)
+  const props = { open: true, initialYaml: 'kind: ConfigMap', onClose, onBack, onApply: vi.fn(async () => [{ kind: 'ConfigMap', namespace: 'app', name: 'settings', created: true }]), isApplying: false }
+  try {
+    await act(async () => root.render(<CreateResourceDialog {...props} />))
+    await act(async () => button('Apply')!.click())
+    if (choice === 'back') await act(async () => button('Back')!.click())
+    else if (choice === 'cancel') await act(async () => button('Cancel')!.click())
+    else {
+      await act(async () => root.render(<CreateResourceDialog {...props} open={false} />))
+      await act(async () => root.render(<CreateResourceDialog {...props} />))
+    }
+    await act(async () => vi.advanceTimersByTime(1200))
+    expect(onClose).toHaveBeenCalledTimes(choice === 'cancel' ? 1 : 0)
+    expect(onBack).toHaveBeenCalledTimes(choice === 'back' ? 1 : 0)
+  } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers() }
 })

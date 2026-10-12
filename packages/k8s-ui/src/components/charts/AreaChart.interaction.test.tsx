@@ -60,3 +60,17 @@ it('does not treat secondary pointer buttons as a selection', async () => {
   await pointer(plot, 'pointerdown', 84, 2); await pointer(plot, 'pointerup', 960, 2)
   expect(selected).not.toHaveBeenCalled()
 })
+
+it('shows keyboard focus and clears its tooltip after blur or Escape', async () => {
+  const plot = await render({ onSelectRange: vi.fn(), stepSeconds: 60 })
+  await act(async () => plot.dispatchEvent(new FocusEvent('focusin', { bubbles: true })))
+  expect(plot.getAttribute('stroke')).toBe('currentColor')
+  await act(async () => plot.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' })))
+  expect(host.querySelector('.pointer-events-none.absolute')).not.toBeNull()
+  await act(async () => plot.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+  expect(plot.getAttribute('stroke')).toBeNull()
+  expect(host.querySelector('.pointer-events-none.absolute')).toBeNull()
+  await act(async () => plot.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' })))
+  await act(async () => plot.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' })))
+  expect(host.querySelector('.pointer-events-none.absolute')).toBeNull()
+})
