@@ -76,8 +76,14 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 	if len(anchors) == 0 {
 		return workloadPartitionProof{}, nil
 	}
-	// An unlabeled proof is valid only within its anchor namespace.
-	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d#%s", generation, epoch, scope.Namespace), func() (any, error) {
+	sort.Slice(anchors, func(i, j int) bool {
+		if anchors[i].Name != anchors[j].Name {
+			return anchors[i].Name < anchors[j].Name
+		}
+		return anchors[i].UID < anchors[j].UID
+	})
+	// Missing evidence depends on the exact Pods checked, even in one namespace.
+	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d#%s#%v", generation, epoch, scope.Namespace, anchors), func() (any, error) {
 		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout+8*time.Second)
 		defer cancel()
 		if _, _, err := c.EnsureConnected(flightCtx); err != nil {
@@ -101,6 +107,9 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 		defer c.mu.Unlock()
 		if c.discoveryGen != generation || c.connectionEpoch != epoch || c.retired {
 			return nil, fmt.Errorf("metrics connection changed")
+		}
+		if len(proof.scope.ClusterLabels) == 0 && !proof.unlabeled {
+			return proof, nil
 		}
 		ttl := 5 * time.Minute
 		if len(proof.scope.ClusterLabels) == 0 {

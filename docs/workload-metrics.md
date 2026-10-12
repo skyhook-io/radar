@@ -242,11 +242,12 @@ are checked. Its original expiry is not extended. Connection changes invalidate
 all attribution and their old churn timers. Sources covering a subset report partial coverage.
 
 Historical partition proof has a separate connection-wide five-minute cache
-when Pod UID evidence establishes positive cluster labels. Empty or unlabeled
-proof is cached for 30 seconds, only for its anchor namespace. Concurrent probes
-are coalesced per connection generation and namespace; a late empty or unlabeled
-probe cannot replace a still-valid labeled proof. Labeled proof from one
-namespace can be reused; charts still query only their own authorized namespace.
+when Pod UID evidence establishes positive cluster labels. Unlabeled proof is
+cached for 30 seconds, only for its anchor namespace. Empty proof is not cached:
+other Pods in the namespace may establish identity. Concurrent probes are
+coalesced per connection generation, namespace and checked Pod names/UIDs;
+a late empty or unlabeled probe cannot replace a still-valid labeled proof.
+Labeled proof from one namespace can be reused; charts still query only their own authorized namespace.
 Unlabeled evidence does not establish scope for historical workload charts.
 At zero Pods, bounded anchors can come from other Pods in that same namespace.
 A cold connection with no anchors and no assertion cannot establish scope.

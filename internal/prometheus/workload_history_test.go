@@ -340,7 +340,7 @@ func TestHistoricalPartitionSurvivesLeaderCancellation(t *testing.T) {
 	}
 }
 
-func TestHistoricalPartitionCachesEmptyProofBriefly(t *testing.T) {
+func TestHistoricalPartitionDoesNotCacheEmptyProof(t *testing.T) {
 	var probes atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -348,37 +348,30 @@ func TestHistoricalPartitionCachesEmptyProofBriefly(t *testing.T) {
 			_, _ = w.Write([]byte(authProbeBody))
 			return
 		}
-		if strings.Contains(r.Form.Get("query"), "kube_pod_info") {
-			probes.Add(1)
+		var rows []prom.Series
+		if probes.Add(1) > 1 {
+			rows = []prom.Series{{Labels: map[string]string{"namespace": "shop", "pod": "api-0", "uid": "uid", "cluster": "east"}}}
 		}
-		_, _ = w.Write(attributionEvidence(nil, ""))
+		_, _ = w.Write(attributionEvidence(rows, ""))
 	}))
 	defer upstream.Close()
 	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
 	scope := PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "uid"}}}
-	for range 2 {
-		config, err := c.historicalClusterScope(context.Background(), scope, nil)
-		if err != nil || len(config.ClusterLabels) != 0 {
-			t.Fatalf("empty proof=%+v err=%v", config, err)
-		}
+	config, err := c.historicalClusterScope(context.Background(), scope, nil)
+	if err != nil || len(config.ClusterLabels) != 0 || c.workloadPartition != nil {
+		t.Fatalf("empty proof cached: config=%+v memo=%+v err=%v", config, c.workloadPartition, err)
 	}
-	if probes.Load() != 1 || c.workloadPartition == nil || time.Until(c.workloadPartition.expires) > 30*time.Second {
-		t.Fatalf("negative proof not cached briefly: probes=%d memo=%+v", probes.Load(), c.workloadPartition)
+	config, err = c.historicalClusterScope(context.Background(), scope, nil)
+	if err != nil || config.ClusterLabels["cluster"] != "east" || probes.Load() != 2 {
+		t.Fatalf("new evidence not checked: config=%+v probes=%d err=%v", config, probes.Load(), err)
 	}
-	c.workloadPartition.expires = time.Now().Add(-time.Second)
-	if _, err := c.historicalClusterScope(context.Background(), scope, nil); err != nil {
-		t.Fatal(err)
-	}
-	if probes.Load() != 2 {
-		t.Fatalf("expired proof not retried: %d probes", probes.Load())
-	}
-	c.cancelWorkloadAttributionsLocked()
-	if c.workloadPartition != nil {
-		t.Fatal("connection reset retained negative proof")
+	config, err = c.historicalClusterScope(context.Background(), PodScope{Namespace: "other"}, nil)
+	if err != nil || config.ClusterLabels["cluster"] != "east" || probes.Load() != 2 {
+		t.Fatalf("positive proof not reused: config=%+v probes=%d err=%v", config, probes.Load(), err)
 	}
 }
 
-func TestHistoricalPartitionNegativeMemoStaysInNamespace(t *testing.T) {
+func TestHistoricalPartitionEmptyProbeDoesNotSuppressOtherNamespaces(t *testing.T) {
 	var probes atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -405,7 +398,7 @@ func TestHistoricalPartitionNegativeMemoStaysInNamespace(t *testing.T) {
 			t.Fatalf("empty namespace gained a proof: %+v", got)
 		}
 		if namespace == "other" && got.ClusterLabels["cluster"] != "west" {
-			t.Fatalf("negative memo suppressed another namespace's proof: %+v", got)
+			t.Fatalf("empty probe suppressed another namespace's proof: %+v", got)
 		}
 		if namespace == "empty" && probes.Load() == 2 && got.ClusterLabels["cluster"] != "west" {
 			t.Fatalf("positive proof not reused across namespaces: %+v", got)
@@ -516,5 +509,65 @@ func TestUnlabeledPartitionRequiresPodUID(t *testing.T) {
 	partition, _ := identifyPartitionWithUnlabeled([]prom.WorkloadPodIdentity{{Name: "api-0"}}, rows, true)
 	if len(partition) != 0 {
 		t.Fatalf("missing Pod UID became an unlabeled proof: %v", partition)
+	}
+}
+
+func TestHistoricalPartitionFlightsUsePodUIDs(t *testing.T) {
+	for _, labeled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("labeled=%t", labeled), func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			var probes atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = r.ParseForm()
+				if r.Form.Get("query") == "up" {
+					_, _ = w.Write([]byte(authProbeBody))
+					return
+				}
+				if probes.Add(1) == 1 {
+					close(started)
+					<-release
+				}
+				labels := map[string]string{"namespace": "shop", "pod": "api-0", "uid": "current"}
+				if labeled {
+					labels["cluster"] = "east"
+				}
+				_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: labels}}, ""))
+			}))
+			defer upstream.Close()
+			defer func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			}()
+			c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+			done := make(chan error, 1)
+			go func() {
+				proof, err := c.historicalClusterProof(context.Background(), PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "previous"}}}, nil)
+				if err == nil && (proof.unlabeled || len(proof.scope.ClusterLabels) != 0) {
+					err = fmt.Errorf("previous Pod gained current Pod's proof: %+v", proof)
+				}
+				done <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("previous Pod's probe did not start")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			proof, err := c.historicalClusterProof(ctx, PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "current"}}}, nil)
+			if err != nil || proof.unlabeled == labeled || (proof.scope.ClusterLabels["cluster"] == "east") != labeled || probes.Load() != 2 {
+				t.Fatalf("current Pod inherited or waited for another UID's probe: %+v probes=%d err=%v", proof, probes.Load(), err)
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if memo := c.workloadPartition; memo == nil || memo.unlabeled == labeled || (memo.scope.ClusterLabels["cluster"] == "east") != labeled {
+				t.Fatalf("late empty probe evicted valid evidence: %+v", memo)
+			}
+		})
 	}
 }

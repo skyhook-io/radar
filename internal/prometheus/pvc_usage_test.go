@@ -461,8 +461,16 @@ func TestPVCScopePromQL(t *testing.T) {
 }
 
 func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
-	for _, localPresent := range []bool{true, false} {
-		t.Run(fmt.Sprintf("local present=%t", localPresent), func(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		localPresent, priorEmpty bool
+	}{
+		{name: "local stats", localPresent: true},
+		{name: "foreign-only stats"},
+		{name: "local stats after empty workload probe", localPresent: true, priorEmpty: true},
+		{name: "foreign-only stats after empty workload probe", priorEmpty: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			cs := fake.NewClientset(
 				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "db", Name: "pg-0", UID: "local-uid"}},
 				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "other-pod", UID: "other-uid"}},
@@ -481,10 +489,18 @@ func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
 				}
 				if strings.Contains(query, "kube_pod_info") {
 					proofs++
+					if strings.Contains(query, `pod=~"new-0"`) {
+						_, _ = w.Write(attributionEvidence(nil, ""))
+						return
+					}
 					if !strings.Contains(query, `namespace="db"`) || !strings.Contains(query, `pod=~"pg-0"`) || strings.Contains(query, "other-pod") {
 						t.Errorf("proof escaped claim namespace: %s", query)
 					}
 					_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: map[string]string{"namespace": "db", "pod": "pg-0", "uid": "local-uid"}}}, ""))
+					return
+				}
+				if strings.HasPrefix(query, "max(count by (") {
+					_, _ = w.Write(attributionEvidence([]prom.Series{vec(nil, 1)}, ""))
 					return
 				}
 				unlabeled := true
@@ -498,11 +514,11 @@ func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
 				if unlabeled {
 					value = 100
 					if strings.Contains(query, "used_bytes") {
-						value = 10
+						value = 95
 					}
 				}
 				result := "[]"
-				if !unlabeled || localPresent {
+				if !unlabeled || tc.localPresent {
 					if strings.HasPrefix(query, "count(") {
 						value = 1
 					}
@@ -517,17 +533,25 @@ func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
 				return group == "" && resource == "persistentvolumeclaims" && namespace == "db" && verb == "get"
 			})
 			defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+			wantProofs := 1
+			if tc.priorEmpty {
+				wantProofs++
+				proof, err := GetClient().historicalClusterScope(context.Background(), PodScope{Namespace: "db", Identities: []prom.WorkloadPodIdentity{{Name: "new-0", UID: "new-uid"}}}, nil)
+				if err != nil || len(proof.ClusterLabels) != 0 {
+					t.Fatalf("unrelated workload probe: %+v err=%v", proof, err)
+				}
+			}
 			w := httptest.NewRecorder()
 			metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/db/pg-data", nil))
 			var response PVCUsageResponse
 			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
-			if w.Code != 200 || proofs != 1 {
+			if w.Code != 200 || proofs != wantProofs {
 				t.Fatalf("status=%d proofs=%d body=%s", w.Code, proofs, w.Body.String())
 			}
-			if localPresent {
-				if response.Status != PVCUsageAvailable || !response.HasData || response.Used != 10 || response.Capacity != 100 {
+			if tc.localPresent {
+				if response.Status != PVCUsageAvailable || !response.HasData || response.Used != 95 || response.Capacity != 100 || response.Ratio != 0.95 {
 					t.Fatalf("cache-backed proof selected foreign values: %+v", response)
 				}
 			} else if response.Status != PVCUsageScopeMismatch || response.HasData {
