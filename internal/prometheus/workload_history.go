@@ -23,6 +23,7 @@ type workloadPartitionMemo struct {
 	expires    time.Time
 	scope      prom.WorkloadMetricsScope
 	namespace  string
+	identities string
 	unlabeled  bool
 }
 
@@ -53,7 +54,7 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 	c.mu.RLock()
 	generation := c.discoveryGen
 	epoch := c.connectionEpoch
-	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired && (len(memo.scope.ClusterLabels) > 0 || memo.namespace == scope.Namespace) {
+	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired && len(memo.scope.ClusterLabels) > 0 {
 		proof := workloadPartitionProof{scope: memo.scope, unlabeled: memo.unlabeled}
 		c.mu.RUnlock()
 		return proof, nil
@@ -82,8 +83,17 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 		}
 		return anchors[i].UID < anchors[j].UID
 	})
+	identities := fmt.Sprint(anchors)
+	c.mu.RLock()
+	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired &&
+		(len(memo.scope.ClusterLabels) > 0 || (memo.namespace == scope.Namespace && memo.identities == identities)) {
+		proof := workloadPartitionProof{scope: memo.scope, unlabeled: memo.unlabeled}
+		c.mu.RUnlock()
+		return proof, nil
+	}
+	c.mu.RUnlock()
 	// Missing evidence depends on the exact Pods checked, even in one namespace.
-	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d#%s#%v", generation, epoch, scope.Namespace, anchors), func() (any, error) {
+	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d#%s#%s", generation, epoch, scope.Namespace, identities), func() (any, error) {
 		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout+8*time.Second)
 		defer cancel()
 		if _, _, err := c.EnsureConnected(flightCtx); err != nil {
@@ -118,7 +128,7 @@ func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cac
 		memo := c.workloadPartition
 		if len(proof.scope.ClusterLabels) > 0 || memo == nil || memo.generation != generation ||
 			len(memo.scope.ClusterLabels) == 0 || !time.Now().Before(memo.expires) {
-			c.workloadPartition = &workloadPartitionMemo{generation: generation, expires: time.Now().Add(ttl), scope: proof.scope, namespace: scope.Namespace, unlabeled: proof.unlabeled}
+			c.workloadPartition = &workloadPartitionMemo{generation: generation, expires: time.Now().Add(ttl), scope: proof.scope, namespace: scope.Namespace, identities: identities, unlabeled: proof.unlabeled}
 		}
 		return proof, nil
 	})

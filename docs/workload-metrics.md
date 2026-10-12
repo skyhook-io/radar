@@ -243,7 +243,8 @@ all attribution and their old churn timers. Sources covering a subset report par
 
 Historical partition proof has a separate connection-wide five-minute cache
 when Pod UID evidence establishes positive cluster labels. Unlabeled proof is
-cached for 30 seconds, only for its anchor namespace. Empty proof is not cached:
+cached for 30 seconds for the same checked Pod names/UIDs in its anchor
+namespace. Empty proof is not cached:
 other Pods in the namespace may establish identity. Concurrent probes are
 coalesced per connection generation, namespace and checked Pod names/UIDs;
 a late empty or unlabeled probe cannot replace a still-valid labeled proof.
@@ -270,7 +271,10 @@ both metric families before combining their values.
 
 An operator override takes precedence. Otherwise, Radar uses Pod UIDs in the
 PVC's namespace to match kube-state-metrics evidence to the connected cluster.
-Positive cluster labels pin queries to those labels. If the matched Pod evidence
+Positive cluster labels pin queries to those labels. The selected PVC stats
+must still contain at most one recognized labeled identity across the claim
+set, including across query batches; a shared label alone is not unique identity.
+If the matched Pod evidence
 has no recognized cluster labels, PVC queries exclude stats carrying those
 labels. That remains **unverified**: another cluster's unlabeled stats cannot be
 distinguished from this cluster's. It does not enable unscoped workload history.

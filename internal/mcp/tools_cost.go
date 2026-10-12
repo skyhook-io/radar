@@ -1056,7 +1056,7 @@ func costRemediation(reason string) string {
 	case pkgopencost.ReasonConfigMismatch:
 		return "The configured cost source does not match the connected cluster. Check Radar's cost settings against the current kubeconfig context."
 	case pkgopencost.ReasonDeploymentConfig:
-		return "Radar's cost-source configuration is invalid. Check its deployment environment variables or Helm cost values."
+		return "Radar's operator-supplied cost or metrics configuration is invalid. Check local launch flags or the deployment environment variables and Helm values."
 	case pkgopencost.ReasonMetricsSettings:
 		return "This kubeconfig context's saved metrics settings need review in Radar's Settings (for example after the cluster behind the context changed); Radar does not use them until the user reviews them."
 	case pkgopencost.ReasonCostSettings:

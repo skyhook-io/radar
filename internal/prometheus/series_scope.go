@@ -64,6 +64,7 @@ type scopeProbe struct {
 	window                  time.Duration
 	allowUnlabeledProof     bool
 	allowUnlabeledDuplicate bool
+	singlePartition         bool
 	unverifiedNote          string
 }
 
@@ -90,8 +91,8 @@ func (client *Client) ResolvePVCScope(ctx context.Context, namespace string, cla
 func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
 	return scopeProbe{
 		metric: "kubelet_volume_stats_capacity_bytes", additionalMetrics: []string{"kubelet_volume_stats_used_bytes"},
-		key: "persistentvolumeclaim", selectors: ClaimSelectors(namespace, claims), window: window,
-		allowUnlabeledProof: true, allowUnlabeledDuplicate: true,
+		selectors: ClaimSelectors(namespace, claims), window: window,
+		allowUnlabeledProof: true, allowUnlabeledDuplicate: true, singlePartition: true,
 		unverifiedNote: "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)",
 	}
 }
@@ -160,21 +161,24 @@ func decideScope(ctx context.Context, q seriesQuerier, probe scopeProbe, verifie
 		}
 		return decideVerifiedScope(ctx, q, probe, m, verifiedIsolation(verified))
 	}
-	// Unproven: nothing is pinned. One object (Pod, claim) whose series carry
-	// more than one set of partition labels over the range may be two
-	// clusters' objects of the same name, so that is refused.
-	for _, sel := range probe.selectors {
-		identities := "count by (" + probe.key + "," + strings.Join(partitionLabels, ",") + ") (" + probe.over(sel) + ")"
-		if probe.allowUnlabeledDuplicate {
-			// A second scrape without cluster labels is not a second identity.
-			identities += " unless on (" + strings.Join(partitionLabels, ",") + ") vector(1)"
-		}
-		res, err := q.Query(ctx, "max(count by ("+probe.key+") ("+identities+"))")
-		if err != nil {
+	if probe.singlePartition {
+		if _, err := readScopePartition(ctx, q, probe, ""); err != nil {
 			return "", SeriesIsolation{}, err
 		}
-		if len(res.Series) > 0 && len(res.Series[0].DataPoints) > 0 && res.Series[0].DataPoints[0].Value > 1 {
-			return "", SeriesIsolation{}, ErrScopeAmbiguous
+	} else {
+		for _, sel := range probe.selectors {
+			identities := "count by (" + probe.key + "," + strings.Join(partitionLabels, ",") + ") (" + probe.over(sel) + ")"
+			if probe.allowUnlabeledDuplicate {
+				// A second scrape without cluster labels is not a second identity.
+				identities += " unless on (" + strings.Join(partitionLabels, ",") + ") vector(1)"
+			}
+			res, err := q.Query(ctx, "max(count by ("+probe.key+") ("+identities+"))")
+			if err != nil {
+				return "", SeriesIsolation{}, err
+			}
+			if len(res.Series) > 0 && len(res.Series[0].DataPoints) > 0 && res.Series[0].DataPoints[0].Value > 1 {
+				return "", SeriesIsolation{}, ErrScopeAmbiguous
+			}
 		}
 	}
 	note := "Matched by namespace and Pod names. Radar couldn't confirm these series belong to this exact cluster (no cluster label it could check)"
@@ -189,13 +193,23 @@ func verifiedIsolation(labels map[string]string) SeriesIsolation {
 }
 
 func decideVerifiedScope(ctx context.Context, q seriesQuerier, probe scopeProbe, m string, iso SeriesIsolation) (string, SeriesIsolation, error) {
-	for _, sel := range probe.selectors {
-		scoped, err := q.Query(ctx, "count("+probe.over(withScope(sel, m))+")")
+	if probe.singlePartition {
+		present, err := readScopePartition(ctx, q, probe, m)
 		if err != nil {
 			return "", SeriesIsolation{}, err
 		}
-		if len(scoped.Series) > 0 {
+		if present {
 			return m, iso, nil
+		}
+	} else {
+		for _, sel := range probe.selectors {
+			scoped, err := q.Query(ctx, "count("+probe.over(withScope(sel, m))+")")
+			if err != nil {
+				return "", SeriesIsolation{}, err
+			}
+			if len(scoped.Series) > 0 {
+				return m, iso, nil
+			}
 		}
 	}
 	for _, sel := range probe.selectors {
@@ -208,4 +222,33 @@ func decideVerifiedScope(ctx context.Context, q seriesQuerier, probe scopeProbe,
 		}
 	}
 	return m, iso, nil
+}
+
+func readScopePartition(ctx context.Context, q seriesQuerier, probe scopeProbe, matchers string) (bool, error) {
+	var partition string
+	for _, sel := range probe.selectors {
+		identities := "count by (" + strings.Join(partitionLabels, ",") + ") (" + probe.over(withScope(sel, matchers)) + ")"
+		if probe.allowUnlabeledDuplicate && matchers == "" {
+			identities += " unless on (" + strings.Join(partitionLabels, ",") + ") vector(1)"
+		}
+		res, err := q.Query(ctx, "topk(2,"+identities+")")
+		if err != nil {
+			return false, err
+		}
+		if len(res.Series) > 1 {
+			return false, ErrScopeAmbiguous
+		}
+		for _, row := range res.Series {
+			values := make([]string, len(partitionLabels))
+			for i, label := range partitionLabels {
+				values[i] = strconv.Quote(row.Labels[label])
+			}
+			key := strings.Join(values, ",")
+			if partition != "" && partition != key {
+				return false, ErrScopeAmbiguous
+			}
+			partition = key
+		}
+	}
+	return partition != "", nil
 }

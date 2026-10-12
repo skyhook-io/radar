@@ -571,3 +571,33 @@ func TestHistoricalPartitionFlightsUsePodUIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestHistoricalPartitionUnlabeledMemoChecksPodUIDs(t *testing.T) {
+	var probes atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.Form.Get("query") == "up" {
+			_, _ = w.Write([]byte(authProbeBody))
+			return
+		}
+		labels := map[string]string{"namespace": "shop", "pod": "api-0", "uid": "previous"}
+		if probes.Add(1) > 1 {
+			labels["uid"], labels["cluster"] = "current", "east"
+		}
+		_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: labels}}, ""))
+	}))
+	defer upstream.Close()
+	c := &Client{baseURL: upstream.URL, httpClient: upstream.Client()}
+	scope := PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "previous"}}}
+	for range 2 {
+		proof, err := c.historicalClusterProof(context.Background(), scope, nil)
+		if err != nil || !proof.unlabeled || probes.Load() != 1 {
+			t.Fatalf("same Pod did not reuse unlabeled evidence: %+v probes=%d err=%v", proof, probes.Load(), err)
+		}
+	}
+	scope.Identities[0].UID = "current"
+	proof, err := c.historicalClusterProof(context.Background(), scope, nil)
+	if err != nil || proof.unlabeled || proof.scope.ClusterLabels["cluster"] != "east" || probes.Load() != 2 {
+		t.Fatalf("new Pod inherited stale unlabeled proof: %+v probes=%d err=%v", proof, probes.Load(), err)
+	}
+}

@@ -516,7 +516,7 @@ function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
   if (reason === 'configuration_mismatch') return 'Kubecost settings are not valid for this cluster'
-  if (reason === 'deployment_configuration_error') return 'Radar cost deployment is misconfigured'
+  if (reason === 'deployment_configuration_error') return 'Radar configuration is invalid'
   if (reason === 'metrics_settings_error') return 'Saved metrics settings need review'
   if (reason === 'cost_settings_error') return 'Saved cost settings need review'
   return 'No workload cost metrics'

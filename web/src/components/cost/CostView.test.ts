@@ -17,7 +17,8 @@ describe('costUnavailableMessage', () => {
     expect(costUnavailableMessage('source_unavailable')).toContain('Settings → Cost')
     expect(costUnavailableMessage('authentication_error')).toContain('API key')
     expect(costUnavailableMessage('configuration_mismatch')).toContain('not valid for this cluster')
-    expect(costUnavailableMessage('deployment_configuration_error')).toContain('Helm cost values')
+    expect(costUnavailableMessage('deployment_configuration_error')).toContain('launch flags')
+    expect(costUnavailableMessage('deployment_configuration_error')).toContain('Helm values')
   })
 
   it('distinguishes a scoped empty result from missing source data', () => {

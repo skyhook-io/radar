@@ -124,7 +124,7 @@ export function costIntegrationUnavailableMessage(
     case 'cost_settings_error':
       return 'This cluster’s saved cost settings need review before cost data can load. Review them in Settings → Cost.'
     case 'deployment_configuration_error':
-      return 'Cost collection is misconfigured by this Radar deployment. Update its environment variables or Helm cost values, then restart Radar.'
+      return "Radar's operator-supplied cost or metrics configuration is invalid. Check local launch flags or the deployment environment variables and Helm values."
     case 'authentication_error':
       return settingsAvailable
         ? 'Kubecost rejected the configured API key. Update it in Settings → Cost.'

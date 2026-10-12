@@ -48,8 +48,8 @@ func TestPVCUsageAvailability(t *testing.T) {
 					return
 				}
 				calls++
-				if strings.HasPrefix(query, "max(count by (") {
-					_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"1"]}]}}`))
+				if strings.HasPrefix(query, "topk(2,") {
+					_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"cluster":"single"},"value":[1700000000,"1"]}]}}`))
 					return
 				}
 				value, kind := tc.capacity, "capacity"
@@ -114,8 +114,12 @@ func TestQueryPVCUsageHoldsToOneClusterIdentity(t *testing.T) {
 	q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
 		east := strings.Contains(query, `cluster="east"`)
 		switch {
-		case strings.HasPrefix(query, "max(count by ("):
-			return &prom.QueryResult{Series: []prom.Series{vec(nil, 2)}}, nil
+		case strings.HasPrefix(query, "topk(2,"):
+			rows := []prom.Series{vec(map[string]string{"cluster": "east"}, 1)}
+			if !east {
+				rows = append(rows, vec(map[string]string{"cluster": "west"}, 1))
+			}
+			return &prom.QueryResult{Series: rows}, nil
 		case strings.Contains(query, "used_bytes") && east:
 			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"persistentvolumeclaim": "pg-1"}, 95*gi)}}, nil
 		case strings.Contains(query, "capacity_bytes") && east:
@@ -149,8 +153,8 @@ func TestPVCUsageHandlerRefusesMergedClusters(t *testing.T) {
 			return
 		}
 		result := `[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"1024"]}]`
-		if strings.HasPrefix(query, "max(count by (") {
-			result = `[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"2"]}]`
+		if strings.HasPrefix(query, "topk(2,") {
+			result = `[{"metric":{"cluster":"east"},"value":[1700000000,"1"]},{"metric":{"cluster":"west"},"value":[1700000000,"1"]}]`
 		}
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 	}))
@@ -189,13 +193,19 @@ func TestPVCUsageSingleClusterScrapes(t *testing.T) {
 					_, _ = w.Write([]byte(authProbeBody))
 					return
 				}
-				value := 1024
-				if strings.HasPrefix(query, "max(count by (") {
-					value = tc.labelledIdentities + tc.unlabelled
-					if strings.Contains(query, "unless on (cluster,cluster_name,k8s_cluster_name,kubernetes_cluster,cluster_id) vector(1)") {
-						value = tc.labelledIdentities
+				if strings.HasPrefix(query, "topk(2,") {
+					rows := []prom.Series{}
+					for i := 0; i < tc.labelledIdentities; i++ {
+						rows = append(rows, vec(map[string]string{"cluster": fmt.Sprint(i)}, 1))
 					}
-				} else if strings.Contains(query, "used_bytes") {
+					if !strings.Contains(query, "unless on (") && tc.unlabelled > 0 {
+						rows = append(rows, vec(nil, 1))
+					}
+					_, _ = w.Write(attributionEvidence(rows, ""))
+					return
+				}
+				value := 1024
+				if strings.Contains(query, "used_bytes") {
 					value = 256
 				}
 				_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"disk"},"value":[1700000000,"%d"]}]}}`, value)
@@ -327,13 +337,12 @@ func TestPVCUsageRefusesSplitMetricPartitions(t *testing.T) {
 			_, _ = w.Write([]byte(authProbeBody))
 			return
 		}
+		if strings.HasPrefix(query, "topk(2,") {
+			_, _ = w.Write(attributionEvidence([]prom.Series{vec(map[string]string{"cluster": "east"}, 1), vec(map[string]string{"cluster": "west"}, 1)}, ""))
+			return
+		}
 		value := "100"
-		if strings.HasPrefix(query, "max(count by (") {
-			value = "1"
-			if strings.Contains(query, "kubelet_volume_stats_capacity_bytes") && strings.Contains(query, "kubelet_volume_stats_used_bytes") {
-				value = "2"
-			}
-		} else if strings.Contains(query, "used_bytes") {
+		if strings.Contains(query, "used_bytes") {
 			value = "95"
 		}
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"persistentvolumeclaim":"data"},"value":[100,%q]}]}}`, value)
@@ -386,10 +395,14 @@ func TestPVCScopePromQL(t *testing.T) {
 		for _, window := range []time.Duration{0, time.Hour} {
 			probe := pvcScopeProbe("db", []string{tc.claim}, window)
 			q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
-				tests = append(tests, map[string]any{
-					"expr": query, "eval_time": "10m",
-					"exp_samples": []map[string]any{{"labels": "{}", "value": tc.identities}},
-				})
+				samples := []map[string]any{{"labels": "{}", "value": tc.identities}}
+				if strings.HasPrefix(query, "topk(2,") {
+					samples = []map[string]any{{"labels": `{cluster="east"}`, "value": 1}}
+					if tc.split {
+						samples = append(samples, map[string]any{"labels": `{cluster="west"}`, "value": 1})
+					}
+				}
+				tests = append(tests, map[string]any{"expr": query, "eval_time": "10m", "exp_samples": samples})
 				return &prom.QueryResult{}, nil
 			}}
 			if _, _, err := decideScope(context.Background(), q, probe, nil); err != nil {
@@ -431,7 +444,16 @@ func TestPVCScopePromQL(t *testing.T) {
 			q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
 				result := &prom.QueryResult{}
 				samples := []map[string]any{}
-				if !tc.missing || !strings.Contains(query, matchers) {
+				if strings.HasPrefix(query, "topk(2,") {
+					if !tc.missing {
+						labels, expected := map[string]string{}, "{}"
+						if tc.cluster != "" {
+							labels["cluster"], expected = tc.cluster, fmt.Sprintf(`{cluster=%q}`, tc.cluster)
+						}
+						result.Series = []prom.Series{vec(labels, 1)}
+						samples = append(samples, map[string]any{"labels": expected, "value": 1})
+					}
+				} else if !tc.missing || !strings.Contains(query, matchers) {
 					result.Series = []prom.Series{vec(nil, 1)}
 					samples = append(samples, map[string]any{"labels": "{}", "value": 1})
 				}
@@ -456,6 +478,26 @@ func TestPVCScopePromQL(t *testing.T) {
 			return &prom.QueryResult{}, nil
 		}}
 		queryPVCUsage(context.Background(), q, "db", []string{tc.claim}, matchers)
+	}
+	for _, clusterID := range []string{"east", "west"} {
+		for _, metric := range []string{"kubelet_volume_stats_capacity_bytes", "kubelet_volume_stats_used_bytes"} {
+			input = append(input, map[string]string{"series": fmt.Sprintf(`%s{namespace="db",persistentvolumeclaim="collision",cluster="shared",cluster_id=%q}`, metric, clusterID), "values": "100+0x10"})
+		}
+	}
+	for _, window := range []time.Duration{0, time.Hour} {
+		q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
+			samples := []map[string]any{{"labels": "{}", "value": 2}}
+			rows := []prom.Series{vec(nil, 2)}
+			if strings.HasPrefix(query, "topk(2,") {
+				samples = []map[string]any{{"labels": `{cluster="shared",cluster_id="east"}`, "value": 1}, {"labels": `{cluster="shared",cluster_id="west"}`, "value": 1}}
+				rows = []prom.Series{vec(map[string]string{"cluster": "shared", "cluster_id": "east"}, 1), vec(map[string]string{"cluster": "shared", "cluster_id": "west"}, 1)}
+			}
+			tests = append(tests, map[string]any{"expr": query, "eval_time": "10m", "exp_samples": samples})
+			return &prom.QueryResult{Series: rows}, nil
+		}}
+		if _, _, err := decideScope(context.Background(), q, pvcScopeProbe("db", []string{"collision"}, window), map[string]string{"cluster": "shared"}); !errors.Is(err, ErrScopeAmbiguous) {
+			t.Fatalf("shared label hid distinct cluster IDs: %v", err)
+		}
 	}
 	promtest.Run(t, image, input, tests)
 }
@@ -506,6 +548,18 @@ func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
 				unlabeled := true
 				for _, label := range partitionLabels {
 					unlabeled = unlabeled && strings.Contains(query, label+`=""`)
+				}
+				if strings.HasPrefix(query, "topk(2,") {
+					rows := []prom.Series{}
+					if !unlabeled || tc.localPresent {
+						labels := map[string]string{}
+						if !unlabeled {
+							labels["cluster"] = "foreign"
+						}
+						rows = append(rows, vec(labels, 1))
+					}
+					_, _ = w.Write(attributionEvidence(rows, ""))
+					return
 				}
 				value := 1000
 				if strings.Contains(query, "used_bytes") {
@@ -558,5 +612,37 @@ func TestPVCUsageHandlerUsesNamespaceCacheProof(t *testing.T) {
 				t.Fatalf("cache-backed proof accepted foreign-only stats: %+v", response)
 			}
 		})
+	}
+}
+
+func TestPVCScopeRefusesResidualAndBatchPartitions(t *testing.T) {
+	for _, verified := range []bool{false, true} {
+		for _, window := range []time.Duration{0, time.Hour} {
+			claims := []string{"disk"}
+			var labels map[string]string
+			if verified {
+				labels = map[string]string{"cluster": "shared"}
+			} else {
+				claims = make([]string, pvcUsageBatchSize+1)
+				for i := range claims {
+					claims[i] = fmt.Sprintf("claim%03d", i)
+				}
+			}
+			q := &fakeScanQuerier{queryFn: func(query string) (*prom.QueryResult, error) {
+				rows := []prom.Series{vec(nil, 1)}
+				if strings.HasPrefix(query, "topk(2,") {
+					rows = []prom.Series{vec(map[string]string{"cluster": "shared", "cluster_id": "east"}, 1)}
+					if verified {
+						rows = append(rows, vec(map[string]string{"cluster": "shared", "cluster_id": "west"}, 1))
+					} else if strings.Contains(query, "claim100") {
+						rows[0].Labels["cluster_id"] = "west"
+					}
+				}
+				return &prom.QueryResult{Series: rows}, nil
+			}}
+			if _, _, err := decideScope(context.Background(), q, pvcScopeProbe("db", claims, window), labels); !errors.Is(err, ErrScopeAmbiguous) {
+				t.Fatalf("mixed partition accepted (verified=%t, window=%s): %v", verified, window, err)
+			}
+		}
 	}
 }
