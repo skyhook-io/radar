@@ -21,6 +21,7 @@ import {
   type IssueSeverity,
   type SummaryTone,
 } from "@skyhook-io/k8s-ui";
+import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
 
@@ -99,6 +100,13 @@ export interface IssueSubject {
   name: string;
 }
 
+/** The subject's kind, with its API group when that isn't the built-in kind's (a Knative Service). */
+export function issueSubjectKindLabel(subject: IssueSubject): string {
+  return subject.group && subject.group !== builtinGroupForKind(subject.kind)
+    ? `${subject.kind} (${subject.group})`
+    : subject.kind;
+}
+
 export type IssueSubjectState =
   | { state: "hidden" }
   | { state: "checking" }
@@ -127,9 +135,7 @@ export function issueSubjectState(
   const data = related.data;
   if (related.isLoading || !data) return { state: "checking" };
   if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0 };
-  if (data.coverage === "unknownKind") {
-    return { state: "unconfirmed", why: `this cluster has no ${subject.kind} kind${subject.group ? ` in ${subject.group}` : ""}` };
-  }
+  if (data.coverage === "unknownKind") return { state: "unconfirmed", why: "this cluster has no such kind" };
   if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind}` };
   if (data.coverage === "syncing") return { state: "unconfirmed", why: `Radar is still loading ${subject.kind}` };
   const withheld = data.withheld?.issues ?? 0;
@@ -314,7 +320,7 @@ export function IssuesPane({
           {subjectState.state === "hidden" ? (
             <>
               <span>
-                {subject.kind}{" "}
+                {issueSubjectKindLabel(subject)}{" "}
                 <span className="font-mono">{subject.namespace}/{subject.name}</span>{" "}
                 is in namespace <span className="font-mono">{subject.namespace}</span>, which your
                 namespace filter hides.
@@ -334,7 +340,7 @@ export function IssuesPane({
           ) : (
             <span>
               {subjectState.state === "checking" ? "Checking issues about" : "Showing issues about"}{" "}
-              {subject.kind}{" "}
+              {issueSubjectKindLabel(subject)}{" "}
               <span className="font-mono">
                 {subject.namespace ? `${subject.namespace}/` : ""}
                 {subject.name}

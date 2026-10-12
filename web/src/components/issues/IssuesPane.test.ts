@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Issue } from "@skyhook-io/k8s-ui";
 import type { SubjectIssuesResponse } from "../../api/client";
 import { writeViewParams } from "../../utils/navigation";
-import { capacityHrefForIssue, issueSubjectFromParams, issueSubjectState } from "./IssuesPane";
+import { capacityHrefForIssue, issueSubjectFromParams, issueSubjectKindLabel, issueSubjectState } from "./IssuesPane";
 
 function issue(partial: Partial<Issue>): Issue {
   return {
@@ -161,6 +161,12 @@ describe('issue subject links', () => {
       expect(issueSubjectFromParams(params)).toEqual(subject)
     }
   })
+  it('names the API group when the kind could be another resource', () => {
+    expect(issueSubjectKindLabel({ kind: 'Service', group: 'serving.knative.dev', namespace: 'web', name: 'api' })).toBe('Service (serving.knative.dev)')
+    expect(issueSubjectKindLabel({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' })).toBe('Cluster (postgresql.cnpg.io)')
+    expect(issueSubjectKindLabel({ kind: 'Service', group: '', namespace: 'web', name: 'api' })).toBe('Service')
+    expect(issueSubjectKindLabel({ kind: 'Deployment', group: 'apps', namespace: 'web', name: 'api' })).toBe('Deployment')
+  })
   it('never reads the view filter as the subject namespace', () => {
     expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&namespace=pg&name=pg-main'))).toBeNull()
   })
@@ -180,7 +186,7 @@ describe('issueSubjectState', () => {
     expect(issueSubjectState(subject, [], loaded({ coverage: 'syncing' }))).toEqual({ state: 'unconfirmed', why: 'Radar is still loading Cluster' })
   })
   it('says when the cluster has no such kind, as for a link made on another cluster', () => {
-    expect(issueSubjectState(subject, [], loaded({ coverage: 'unknownKind' }))).toEqual({ state: 'unconfirmed', why: 'this cluster has no Cluster kind in postgresql.cnpg.io' })
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'unknownKind' }))).toEqual({ state: 'unconfirmed', why: 'this cluster has no such kind' })
   })
   it('reads an empty answer as unconfirmed when RBAC withheld issues about it', () => {
     expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })
