@@ -172,6 +172,11 @@ func TestClassifyTimelineChangeHealthPod(t *testing.T) {
 	}
 	errored := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}}
 	completed := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Completed", ExitCode: 0}}
+	policy := func(p *corev1.Pod, rp corev1.RestartPolicy) *corev1.Pod { p.Spec.RestartPolicy = rp; return p }
+	restarted := func(p *corev1.Pod) *corev1.Pod {
+		p.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, StartedAt: metav1.NewTime(now.Add(-time.Hour))}}
+		return p
+	}
 	cases := []struct {
 		name     string
 		old, new *corev1.Pod
@@ -185,6 +190,9 @@ func TestClassifyTimelineChangeHealthPod(t *testing.T) {
 		{"starting and still not ready keeps the startup grace", pod(readyAt(corev1.ConditionFalse, now.Add(-40*time.Second)), runningAt(now.Add(-30*time.Second)), 0), pod(readyAt(corev1.ConditionFalse, now.Add(-40*time.Second)), runningAt(now.Add(-30*time.Second)), 0), timeline.HealthHealthy},
 		{"a later change while readiness is still lost stays degraded", pod(readyAt(corev1.ConditionFalse, now.Add(-2*time.Minute)), running, 0), pod(readyAt(corev1.ConditionFalse, now.Add(-2*time.Minute)), running, 0), timeline.HealthDegraded},
 		{"added after readiness was lost is degraded", nil, pod(readyAt(corev1.ConditionFalse, now.Add(-2*time.Minute)), running, 0), timeline.HealthDegraded},
+		{"a clean exit completes a Job Pod", pod(ready(corev1.ConditionTrue), running, 0), policy(pod(ready(corev1.ConditionFalse), completed, 0), corev1.RestartPolicyOnFailure), timeline.HealthHealthy},
+		{"a clean exit in a restarting Pod is not completion", pod(ready(corev1.ConditionTrue), running, 0), policy(pod(ready(corev1.ConditionFalse), completed, 0), corev1.RestartPolicyAlways), timeline.HealthDegraded},
+		{"restarted after losing readiness and still not ready stays degraded", policy(restarted(pod(readyAt(corev1.ConditionFalse, now.Add(-time.Minute)), runningAt(now.Add(-30*time.Second)), 1)), corev1.RestartPolicyAlways), policy(restarted(pod(readyAt(corev1.ConditionFalse, now.Add(-time.Minute)), runningAt(now.Add(-30*time.Second)), 1)), corev1.RestartPolicyAlways), timeline.HealthDegraded},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

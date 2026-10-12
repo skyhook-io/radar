@@ -69,7 +69,8 @@ func classifyTimelineChangeHealth(kind string, oldObj, newObj any, now time.Time
 		if t := cs.State.Terminated; t != nil {
 			if t.ExitCode != 0 {
 				level = health.WorseOf(level, health.LevelUnhealthy)
-			} else {
+			} else if pod.Spec.RestartPolicy != corev1.RestartPolicyAlways {
+				// Under restartPolicy Always a clean exit is a restart, not completion.
 				completing = true
 			}
 		}
@@ -85,8 +86,9 @@ func classifyTimelineChangeHealth(kind string, oldObj, newObj any, now time.Time
 	return levelToTimeline(level)
 }
 
-// timelinePodLostReadiness reports readiness that went false after a running
-// container had started: lost, not still to come at startup.
+// timelinePodLostReadiness reports readiness that went false after a container
+// had started, in its current run or the one before a restart: lost, not
+// still to come at startup.
 func timelinePodLostReadiness(p *corev1.Pod) bool {
 	var since time.Time
 	for _, c := range p.Status.Conditions {
@@ -99,6 +101,9 @@ func timelinePodLostReadiness(p *corev1.Pod) bool {
 	}
 	for _, cs := range p.Status.ContainerStatuses {
 		if r := cs.State.Running; r != nil && !r.StartedAt.IsZero() && r.StartedAt.Time.Before(since) {
+			return true
+		}
+		if t := cs.LastTerminationState.Terminated; t != nil && !t.StartedAt.IsZero() && t.StartedAt.Time.Before(since) {
 			return true
 		}
 	}
