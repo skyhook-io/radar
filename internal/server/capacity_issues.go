@@ -113,13 +113,14 @@ func (s *Server) capacityIssuesForRequest(r *http.Request) capacityIssueProjecti
 		return newCapacityIssueProjection(nil, false)
 	}
 	namespaces := s.capacityNamespacesForUser(r)
-	return newCapacityIssueProjection(capacityVisibleIssues(flat, namespaces, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueEvidenceAccess(r)), true)
+	return newCapacityIssueProjection(capacityVisibleIssues(flat, namespaces, s.issueClusterScopedAccess(r), s.issueSubjectAccess(r), s.issueRelatedResourceAccess(r), s.issueEvidenceAccess(r)), true)
 }
 
 func capacityVisibleIssues(
 	in []issues.Issue,
 	namespaces []string,
 	canReadClusterScoped func(kind, group string) bool,
+	canReadSubject func(issues.Ref) bool,
 	canReadRelated func(issues.Ref) bool,
 	canReadEvidence func(issues.EvidenceRead) bool,
 ) []issues.Issue {
@@ -127,9 +128,11 @@ func capacityVisibleIssues(
 	for _, namespace := range namespaces {
 		allowed[namespace] = struct{}{}
 	}
-	inNamespace := func(ref issues.Ref) bool {
+	// The same rule Compose applies to a namespaced row and its owner, within
+	// the namespaces Capacity reads for this caller.
+	readable := func(ref issues.Ref) bool {
 		_, ok := allowed[ref.Namespace]
-		return namespaces == nil || ok
+		return (namespaces == nil || ok) && (canReadSubject == nil || canReadSubject(ref))
 	}
 	out := make([]issues.Issue, 0, len(in))
 	for _, issue := range in {
@@ -140,16 +143,14 @@ func capacityVisibleIssues(
 		// The memo composes user-agnostically; per-user redaction of
 		// referenced-by-NodePool context and owners happens here, at read time.
 		issue = issues.RedactIssueRelatedRefs(issue, canReadRelated)
-		issue = issues.WithReadableOwner(issue, inNamespace, canReadClusterScoped)
+		issue = issues.WithReadableOwner(issue, readable, canReadClusterScoped)
 		if issue.Namespace == "" {
 			if canReadClusterScoped == nil || canReadClusterScoped(issue.Kind, issue.Group) {
 				out = append(out, issue)
 			}
 			continue
 		}
-		if namespaces == nil {
-			out = append(out, issue)
-		} else if _, ok := allowed[issue.Namespace]; ok {
+		if readable(issues.Ref{Group: issue.Group, Kind: issue.Kind, Namespace: issue.Namespace, Name: issue.Name}) {
 			out = append(out, issue)
 		}
 	}
