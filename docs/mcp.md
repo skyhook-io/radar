@@ -514,7 +514,9 @@ observation per finalizer. Controllers are identified from the catalog in
 `pkg/finalizers/catalog.go` (Argo CD,
 Flux, VictoriaMetrics and Karpenter): a workload matches by its name or labels,
 or by its pod template's labels or container image, and pods match by the
-catalog label or image. Images match on the repository path the vendor
+catalog label or image. Flux Helm requires its published image path: unrelated
+projects use the same `helm-controller` name and labels. Images match on the
+repository path the vendor
 publishes (`victoriametrics/operator`, `fluxcd/<controller>`,
 `argoproj/argocd` running `argocd-application-controller`,
 `karpenter/controller`), ignoring registry host, tag and digest, so a renamed

@@ -448,17 +448,10 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 	if pr.Severity == "critical" && (healthy || (!running && !down && len(guards) == 0)) {
 		pr.Severity = "high"
 	}
-	if running {
-		pr.Action = "A matching controller is running and may be working on cleanup. Check its logs, permissions, and deletion-blocking references before taking further action."
-		if len(fixes) > 0 {
-			pr.Action += " " + strings.Join(fixes, " ")
-		}
-		if len(guards) > 0 {
-			pr.Action += " Kubernetes protection finalizers are in-use guards; resolve objects referencing this resource rather than bypassing them."
-		}
-		return pr
-	}
 	parts := slices.Concat(fixes, restores)
+	if running {
+		parts = append([]string{"A matching controller is running and may be working on cleanup. Check its logs, permissions, and deletion-blocking references before taking further action."}, parts...)
+	}
 	var cautions []string
 	if len(unidentified) > 0 {
 		subject := "finalizer " + unidentified[0]
@@ -477,7 +470,9 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 	if len(parts) > 0 {
 		pr.Action = strings.Join(parts, " ")
 	}
-	pr.ConditionalCleanup = conditionalFinalizerCleanup(cleanups)
+	if !running {
+		pr.ConditionalCleanup = conditionalFinalizerCleanup(cleanups)
+	}
 	return pr
 }
 

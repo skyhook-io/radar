@@ -909,3 +909,55 @@ func TestControllerObservationMemoDistinguishesFluxImageOwners(t *testing.T) {
 		t.Fatalf("image automation and reflector are different owners, got %d observations", p.calls)
 	}
 }
+
+func TestMixedFinalizersRetainOtherControllerGuidance(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		other finalizerObservation
+		want  string
+	}{
+		{"restore", finalizerObservation{Controller: "stopped-controller", NotFound: true}, "Get stopped-controller running again"},
+		{"unconfirmed", finalizerObservation{Controller: "hidden-controller"}, "can't confirm with your access"},
+		{"candidate", finalizerObservation{Candidate: "possible-controller"}, "resembles its API group"},
+		{"unidentified", finalizerObservation{}, "couldn't identify which controller"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &observingFinalizerProvider{byFinalizer: map[string]finalizerObservation{
+				"example.org/healthy": {Controller: "healthy-controller", Running: true, Healthy: true},
+				"example.org/other":   tc.other,
+			}}
+			problem := k8s.Detection{Kind: "Widget", Severity: "critical", TerminatingFinalizers: []string{"example.org/healthy", "example.org/other"}}
+			problem = enrichTerminatingProblem(problem, p, nil, map[string]finalizerObservation{})
+			if problem.Severity != "high" || problem.ConditionalCleanup != nil || !strings.Contains(problem.Action, tc.want) || !strings.Contains(problem.Action, "matching controller is running") {
+				t.Fatalf("retain every finalizer's guidance without cleanup: %+v", problem)
+			}
+		})
+	}
+}
+
+func TestFluxHelmIgnoresUnrelatedHelmController(t *testing.T) {
+	for _, state := range []struct {
+		name   string
+		status corev1.ContainerStatus
+	}{
+		{"healthy", corev1.ContainerStatus{Ready: true}},
+		{"crashing", corev1.ContainerStatus{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			t.Cleanup(k8s.ResetResourceCache)
+			identity := map[string]string{"app": "helm-controller"}
+			template := corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: identity}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "rancher/helm-controller:v0.16.0"}}}}
+			deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "helm-controller", Namespace: "kube-system", Labels: identity}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: identity}, Template: template}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "helm-controller-pod", Namespace: "kube-system", Labels: identity}, Spec: template.Spec, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{state.status}}}
+			scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}, "daemonsets": {Enabled: true}}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(deployment, pod), scopes); err != nil {
+				t.Fatal(err)
+			}
+			provider := NewCacheProvider()
+			observation := provider.FinalizerOwnerStatus("finalizers.helm.toolkit.fluxcd.io", Ref{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}, nil)
+			if !observation.NotFound || observation.Running || observation.Down || !strings.Contains(observation.Text, "no recognized controller found") {
+				t.Fatalf("unrelated Helm controller must not establish Flux health: %+v", observation)
+			}
+		})
+	}
+}

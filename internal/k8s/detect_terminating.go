@@ -37,15 +37,21 @@ func DetectDynamicTerminatingProblems(dynamic *DynamicResourceCache, discovery *
 			continue
 		}
 		allowedNamespaces := map[string]bool{}
+		syncedNamespaces := map[string]bool{}
 		for _, obj := range items {
-			if !dynamic.IsNamespaceSynced(gvr, obj.GetNamespace()) {
-				continue
-			}
 			if len(selected) > 0 && !selected[obj.GetNamespace()] {
 				continue
 			}
 			det, ok := terminatingProblem(kind, gvr.Group, obj, now)
 			if !ok {
+				continue
+			}
+			synced, checked := syncedNamespaces[obj.GetNamespace()]
+			if !checked {
+				synced = dynamic.IsNamespaceSynced(gvr, obj.GetNamespace())
+				syncedNamespaces[obj.GetNamespace()] = synced
+			}
+			if !synced {
 				continue
 			}
 			if canList != nil {

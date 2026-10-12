@@ -265,3 +265,29 @@ func TestCatalogConditionalCleanupPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestFluxHelmControllerRequiresPublishedImage(t *testing.T) {
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("helm.toolkit.fluxcd.io/v2")
+	owner := ResolveOwner("finalizers.helm.toolkit.fluxcd.io", root)
+	for _, tc := range []struct {
+		name, image string
+		want        bool
+	}{
+		{"unrelated k3s controller", "rancher/helm-controller:v0.16.0", false},
+		{"unrelated private controller", "private.example/team/helm-controller:v1", false},
+		{"Flux controller", "ghcr.io/fluxcd/helm-controller:v1.1.0", true},
+		{"Flux controller mirrored", "mirror.example/fluxcd/helm-controller@sha256:abc", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			identity := metav1.ObjectMeta{Name: "helm-controller", Labels: map[string]string{"app": "helm-controller"}}
+			template := corev1.PodTemplateSpec{ObjectMeta: identity, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: tc.image}}}}
+			if got := owner.MatchesWorkload(&identity, template); got != tc.want {
+				t.Fatalf("workload match = %v, want %v", got, tc.want)
+			}
+			if got := owner.MatchesPod(identity.Labels, template.Spec); got != tc.want {
+				t.Fatalf("pod match = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

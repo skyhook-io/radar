@@ -46,7 +46,8 @@ type Owner struct {
 	Images []string
 	// matchesImageRole distinguishes components sharing a repository. A nil
 	// predicate means every container from Images is this controller.
-	matchesImageRole func(corev1.Container) bool
+	matchesImageRole  func(corev1.Container) bool
+	requireImageMatch bool
 }
 
 // ResolveOwner returns a best-guess Owner for the
@@ -175,6 +176,8 @@ var (
 		SelectorValue:           "helm-controller",
 		AllowConditionalCleanup: true,
 		Images:                  []string{"fluxcd/helm-controller"},
+		// Other projects also publish a controller named helm-controller.
+		requireImageMatch: true,
 	}
 	fluxSourceController = Owner{
 		Controller:              "source-controller",
@@ -214,13 +217,13 @@ var (
 // recognized by the workload's name or labels, or by its pod template's
 // labels or container image.
 func (o *Owner) MatchesWorkload(workload metav1.Object, template corev1.PodTemplateSpec) bool {
-	return workload.GetLabels()[o.SelectorKey] == o.SelectorValue || controllerNameMatches(workload.GetName(), o.Controller) || o.MatchesPod(template.Labels, template.Spec)
+	return (!o.requireImageMatch && (workload.GetLabels()[o.SelectorKey] == o.SelectorValue || controllerNameMatches(workload.GetName(), o.Controller))) || o.MatchesPod(template.Labels, template.Spec)
 }
 
 // MatchesPod reports whether a pod (or pod template) runs this owner's
 // controller, recognized by the catalog label or a container image.
 func (o *Owner) MatchesPod(labels map[string]string, spec corev1.PodSpec) bool {
-	if labels[o.SelectorKey] == o.SelectorValue {
+	if !o.requireImageMatch && labels[o.SelectorKey] == o.SelectorValue {
 		return true
 	}
 	for _, container := range spec.Containers {
