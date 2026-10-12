@@ -291,7 +291,7 @@ radar --prometheus-url https://metrics.example.com \
 | PVC state | Meaning | Remedy |
 |---|---|---|
 | `ambiguous_scope` | The claim's stats have multiple labeled identities; Radar cannot choose this cluster's value | Configure the actual cluster labels on the volume stats using `--prometheus-cluster-label` or Helm's `traffic.prometheusClusterLabels` |
-| `scope_mismatch` | Pod evidence selected labels, or their absence, that do not match any volume stats, although unscoped stats exist | Check that KSM and kubelet jobs use consistent cluster labels; if the volume stats carry different labels, configure their exact identity after verifying ownership |
+| `scope_mismatch` | Pod evidence selected labels, or their absence, that do not match any volume stats, although unscoped stats exist | Align cluster labels across KSM, workload and kubelet jobs; an override affects all these charts, so its labels must exist on every affected source. For a backend dedicated to this cluster, an operator can assert single-cluster scope |
 | `no_series` | No complete used/capacity pair matches the selected scope | Check kubelet scraping, driver support and configured label constraints; this does not prove the volume is empty |
 
 Scope controls are process-level operator configuration, not Settings fields.
@@ -299,7 +299,9 @@ Desktop does not expose them; use standalone CLI Radar if an override is needed.
 For a backend actually dedicated to this cluster, `--prometheus-single-cluster`
 (Helm: `traffic.prometheusSingleCluster`) can assert that scope. Do not use that
 assertion to bypass ambiguity in a shared backend. A wrong exact-label override
-can select no stats even when other jobs have those labels.
+can select no stats even when other jobs have those labels. An override chosen
+only for the volume-stat job can also empty workload charts; use consistent
+identity labels across their metric sources.
 
 ## Optional operator override
 

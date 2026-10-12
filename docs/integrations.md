@@ -1240,8 +1240,9 @@ absent, it tries the current allocation and asset APIs of a Kubecost 3 Aggregato
 If discovered Prometheus candidates are unreachable, or detection reaches its
 deadline, a working Kubecost is selected provisionally. The next Cost request
 after one minute rechecks Prometheus; usable OpenCost metrics take priority again.
-If no Kubecost is discovered during this provisional attempt, Prometheus's failure
-remains visible and is retried. Explicit Prometheus configuration/query errors
+If no Kubecost is discovered during this provisional attempt, Cost remains
+unavailable and is retried; Settings → Metrics shows the concrete Prometheus
+connection failure, including any NetworkPolicy attribution. Explicit Prometheus configuration/query errors
 remain visible rather than triggering a new source switch. Source selection
 can also be pinned to `prometheus` or `kubecost` in Settings → Cost or Helm. Local CLI/Desktop
 save the choice per context in `clusters.json`; shared installations use operator configuration. When

@@ -196,7 +196,11 @@ describe('PVC scope remedies', () => {
       expect(html).toContain('not available in Settings or Desktop')
       expect(html).not.toContain('Configure metrics')
       expect(html).not.toContain('verified labels')
-      if (scope === 'scope_mismatch') expect(html).toContain('consistent cluster labels')
+      if (scope === 'scope_mismatch') {
+        expect(html).toContain('align cluster labels')
+        expect(html).toContain('affects all these charts')
+        expect(html).toContain('dedicated to this cluster')
+      }
     }
   })
 

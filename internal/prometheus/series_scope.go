@@ -59,9 +59,12 @@ type scopeProbe struct {
 	metric            string
 	additionalMetrics []string
 	// key is the label one Kubernetes object's series share (pod, claim).
-	key       string
-	selectors []string
-	window    time.Duration
+	key                     string
+	selectors               []string
+	window                  time.Duration
+	allowUnlabeledProof     bool
+	allowUnlabeledDuplicate bool
+	unverifiedNote          string
 }
 
 func (p scopeProbe) over(sel string) string {
@@ -88,6 +91,8 @@ func pvcScopeProbe(namespace string, claims []string, window time.Duration) scop
 	return scopeProbe{
 		metric: "kubelet_volume_stats_capacity_bytes", additionalMetrics: []string{"kubelet_volume_stats_used_bytes"},
 		key: "persistentvolumeclaim", selectors: ClaimSelectors(namespace, claims), window: window,
+		allowUnlabeledProof: true, allowUnlabeledDuplicate: true,
+		unverifiedNote: "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)",
 	}
 }
 
@@ -136,7 +141,7 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 			errorlog.Record("prometheus", "warning", "series scope proof failed for namespace %s: %v", namespace, err)
 		}
 	}
-	if unlabeled && probe.key == "persistentvolumeclaim" {
+	if unlabeled && probe.allowUnlabeledProof {
 		matchers := make([]string, len(partitionLabels))
 		for i, label := range partitionLabels {
 			matchers[i] = label + `=""`
@@ -160,7 +165,7 @@ func decideScope(ctx context.Context, q seriesQuerier, probe scopeProbe, verifie
 	// clusters' objects of the same name, so that is refused.
 	for _, sel := range probe.selectors {
 		identities := "count by (" + probe.key + "," + strings.Join(partitionLabels, ",") + ") (" + probe.over(sel) + ")"
-		if probe.key == "persistentvolumeclaim" {
+		if probe.allowUnlabeledDuplicate {
 			// A second scrape without cluster labels is not a second identity.
 			identities += " unless on (" + strings.Join(partitionLabels, ",") + ") vector(1)"
 		}
@@ -173,8 +178,8 @@ func decideScope(ctx context.Context, q seriesQuerier, probe scopeProbe, verifie
 		}
 	}
 	note := "Matched by namespace and Pod names. Radar couldn't confirm these series belong to this exact cluster (no cluster label it could check)"
-	if probe.key == "persistentvolumeclaim" {
-		note = "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)"
+	if probe.unverifiedNote != "" {
+		note = probe.unverifiedNote
 	}
 	return "", SeriesIsolation{Mode: SeriesIsolationUnverified, Note: note}, nil
 }

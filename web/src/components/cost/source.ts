@@ -107,6 +107,10 @@ export function costIntegrationUnavailableMessage(
   settingsAvailable = true,
 ): string | undefined {
   switch (reason) {
+    case 'query_error':
+      return settingsAvailable
+        ? 'The selected cost source could not provide data. Check its connection in Settings → Metrics (OpenCost) or Settings → Cost (Kubecost).'
+        : 'The selected cost source could not provide data. Ask your operator to check its connection and query health.'
     case 'no_cost_source':
       return settingsAvailable
         ? 'No compatible cost source was found. Connect OpenCost metrics in Settings → Metrics or configure Kubecost in Settings → Cost.'

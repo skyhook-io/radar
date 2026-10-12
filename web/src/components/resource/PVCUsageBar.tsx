@@ -53,7 +53,7 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
     : scopeFailure
       ? usage.status === 'ambiguous_scope'
         ? 'An operator can set this cluster’s exact metrics labels with --prometheus-cluster-label, or traffic.prometheusClusterLabels in Helm. These scope controls are not available in Settings or Desktop.'
-        : 'Ask your operator to check that kube-state-metrics and volume stats use consistent cluster labels. For a shared backend, configure this cluster’s exact volume-stat labels with --prometheus-cluster-label, or traffic.prometheusClusterLabels in Helm. These scope controls are not available in Settings or Desktop.'
+        : 'Ask your operator to align cluster labels across kube-state-metrics, workload metrics and volume stats. --prometheus-cluster-label (Helm: traffic.prometheusClusterLabels) affects all these charts; its labels must exist on every affected source. For a backend dedicated to this cluster, an operator can use --prometheus-single-cluster instead. These scope controls are not available in Settings or Desktop.'
       : !canConfigure && !roleLoading
         ? !isConnected || statusError
           ? 'Ask your operator to check the metrics connection for this cluster.'

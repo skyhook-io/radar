@@ -568,10 +568,8 @@ function ApplicationCostUnavailable({
     costIntegrationUnavailableMessage(state, settingsAvailable) ??
     (state === 'no_prometheus'
       ? 'No compatible metrics backend was found. OpenCost application cost requires OpenCost metrics in a PromQL-compatible backend.'
-      : state === 'query_error'
-        ? 'Cost data is temporarily unavailable. A metrics backend was found, but application cost queries failed.'
-        : state === 'history_unsupported'
-          ? 'Historical application cost is not available for Kubecost yet.'
+      : state === 'history_unsupported'
+        ? 'Historical application cost is not available for Kubecost yet.'
         : state === 'access_denied'
           ? 'Cost data is unavailable because these workloads are not accessible with your current permissions.'
           : state === 'not_found'

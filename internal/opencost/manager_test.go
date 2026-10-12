@@ -912,11 +912,12 @@ func TestCostDetectionCandidateFailuresRemainUnreachable(t *testing.T) {
 
 func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 	for _, tc := range []struct {
-		name              string
-		blocked, kubecost bool
+		name, prometheusName string
+		blocked, kubecost    bool
 	}{
 		{name: "unreachable", kubecost: true},
 		{name: "NetworkPolicy blocked", blocked: true, kubecost: true},
+		{name: "Kubecost-named Prometheus", prometheusName: "kubecost-prometheus-server", blocked: true, kubecost: true},
 		{name: "no Kubecost"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -949,8 +950,12 @@ func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 			previousTransport := http.DefaultTransport
 			http.DefaultTransport = transport
 			defer func() { http.DefaultTransport = previousTransport; transport.CloseIdleConnections() }()
+			serviceName := tc.prometheusName
+			if serviceName == "" {
+				serviceName = "prometheus-server"
+			}
 			objects := []runtime.Object{
-				&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}}},
+				&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: serviceName, Labels: map[string]string{"app.kubernetes.io/name": "prometheus"}}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}}},
 			}
 			if tc.blocked {
 				t.Setenv("MY_POD_NAME", "radar-0")
@@ -962,7 +967,7 @@ func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 					&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "radar", Name: "radar-0"}, Status: corev1.PodStatus{PodIP: "10.0.1.5"}},
 					&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-0"}, Status: corev1.PodStatus{PodIP: "10.0.2.9"}},
 					&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "deny-prom"}, Spec: networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}}},
-					&discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-endpoints", Labels: map[string]string{discoveryv1.LabelServiceName: "prometheus-server"}}, AddressType: discoveryv1.AddressTypeIPv4, Ports: []discoveryv1.EndpointPort{{Name: &portName, Port: &port, Protocol: &protocol}}, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.0.2.9"}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "monitoring", Name: "prometheus-0"}}}},
+					&discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-endpoints", Labels: map[string]string{discoveryv1.LabelServiceName: serviceName}}, AddressType: discoveryv1.AddressTypeIPv4, Ports: []discoveryv1.EndpointPort{{Name: &portName, Port: &port, Protocol: &protocol}}, Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.0.2.9"}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "monitoring", Name: "prometheus-0"}}}},
 				)
 			}
 			cs := fakeclientset.NewClientset(objects...)
@@ -981,6 +986,9 @@ func TestAutoUnreachablePrometheusUsesProvisionalKubecost(t *testing.T) {
 			_, _, probeErr := prometheuspkg.GetClient().EnsureConnected(ctx)
 			if !prometheuspkg.IsUnreachable(probeErr) || errors.Is(probeErr, prometheuspkg.ErrPrometheusNotFound) {
 				t.Fatalf("probe: %v", probeErr)
+			}
+			if reason := ConnectionFailureReason(probeErr); reason != "query_error" {
+				t.Fatalf("Prometheus discovery misclassified as another source: %s: %v", reason, probeErr)
 			}
 			if tc.blocked && !strings.Contains(probeErr.Error(), "NetworkPolicy monitoring/deny-prom") {
 				t.Fatalf("missing policy attribution: %v", probeErr)
