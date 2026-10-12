@@ -96,6 +96,9 @@ export function DockProvider({ children }: { children: ReactNode }) {
     })
 
     if (existingTab) {
+      if (tabData.type === 'terminal' && tabData.sessionNote !== undefined) {
+        setTabs(prev => prev.map(tab => tab.id === existingTab.id ? { ...tab, sessionNote: tabData.sessionNote } : tab))
+      }
       setActiveTabId(existingTab.id)
       setIsExpanded(true)
       return existingTab.id
@@ -202,7 +205,7 @@ export function useDockReservedHeight(): number {
 // Convenience hooks for adding specific tab types
 
 export function useOpenTerminal() {
-  const { addTab } = useDock()
+  const { addTab, setTabTitle } = useDock()
 
   return (opts: {
     namespace: string
@@ -216,7 +219,7 @@ export function useOpenTerminal() {
     sessionNote?: string
     title?: string
   }) => {
-    addTab({
+    const id = addTab({
       type: 'terminal',
       title: opts.title ?? `${opts.podName}/${opts.containerName}`,
       namespace: opts.namespace,
@@ -229,6 +232,7 @@ export function useOpenTerminal() {
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,
     })
+    if (opts.title !== undefined) setTabTitle(id, opts.title)
   }
 }
 

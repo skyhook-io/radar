@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { LocalTerminalTab, type LocalTerminalTabProps } from './LocalTerminalTab'
 import { TerminalTab } from './TerminalTab'
+import { DockProvider, useDock, useOpenTerminal } from './DockContext'
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -207,4 +208,22 @@ it.each([undefined, 'psql'])('keeps shell defaults and command-specific unavaila
     expect(element.textContent).toContain('/bin/sh')
     expect(element.textContent).toContain('Start debug container')
   }
+})
+
+
+it('refreshes command session context when reusing its tab without reconnecting', async () => {
+  let open!: ReturnType<typeof useOpenTerminal>
+  const createSession = vi.fn(async () => ({ wsUrl: 'ws://localhost' }))
+  function Host() {
+    open = useOpenTerminal()
+    const { tabs } = useDock()
+    return <>{tabs.map(tab => <TerminalTab key={tab.id} namespace={tab.namespace!} podName={tab.podName!} containerName={tab.containerName!} containers={tab.containers!} command={tab.shell} note={tab.sessionNote} createSession={createSession} />)}</>
+  }
+  await act(async () => root.render(<DockProvider><Host /></DockProvider>))
+  const base = { namespace: 'app', podName: 'worker', containerName: 'app', containers: ['app'], shell: 'psql', title: 'Primary', sessionNote: 'Read-write' }
+  await act(async () => open(base))
+  await act(async () => Socket.instances[0].onopen?.())
+  await act(async () => open({ ...base, title: 'Standby', sessionNote: 'Read-only' }))
+  expect(element.textContent).toContain('Read-only'); expect(element.textContent).not.toContain('Read-write')
+  expect(Socket.instances).toHaveLength(1); expect(createSession).toHaveBeenCalledOnce()
 })

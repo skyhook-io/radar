@@ -18,7 +18,14 @@ it('reuses normal terminals and separates explicit executables and cluster ident
     await act(async () => open({ ...base, shell: 'psql', title: 'Database', sessionNote: 'Primary' }))
     expect(dock.tabs).toHaveLength(2)
     expect(dock.tabs[1]).toMatchObject({ shell: 'psql', title: 'Database', sessionNote: 'Primary' })
-    await act(async () => open({ ...base, shell: 'psql' })); expect(dock.tabs).toHaveLength(2)
+    const commandId = dock.tabs[1].id
+    await act(async () => open({ ...base, shell: 'psql', title: 'Database standby', sessionNote: 'Standby' }))
+    expect(dock.tabs).toHaveLength(2)
+    expect(dock.tabs[1]).toMatchObject({ id: commandId, title: 'Database standby', sessionNote: 'Standby' })
+    const defaultId = dock.tabs[0].id
+    await act(async () => dock.setTabTitle(defaultId, 'My shell'))
+    await act(async () => open(base))
+    expect(dock.tabs[0].title).toBe('My shell')
     await act(async () => open({ ...base, clusterId: 'second', shell: 'psql' })); expect(dock.tabs).toHaveLength(3)
     await act(async () => open({ ...base, orgId: 'other' })); expect(dock.tabs).toHaveLength(4)
   } finally { await act(async () => root.unmount()); host.remove() }
