@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -2044,5 +2045,53 @@ func TestPodSpecReferencePathsContainerAndVolumeProvenance(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("reference paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuild_PodSpecConsumersRequireCoreTargetGroup(t *testing.T) {
+	var spec corev1.PodSpec
+	if err := json.Unmarshal([]byte(`{
+ "containers":[{"name":"app","envFrom":[{"configMapRef":{"name":"env-config"}},{"secretRef":{"name":"env-secret"}}],"env":[{"name":"C","valueFrom":{"configMapKeyRef":{"name":"key-config","key":"key"}}},{"name":"S","valueFrom":{"secretKeyRef":{"name":"key-secret","key":"key"}}}]}],
+ "initContainers":[{"name":"init","envFrom":[{"configMapRef":{"name":"init-config"}},{"secretRef":{"name":"init-secret"}}]}],
+ "ephemeralContainers":[{"name":"debug","envFrom":[{"configMapRef":{"name":"debug-config"}},{"secretRef":{"name":"debug-secret"}}]}],
+ "imagePullSecrets":[{"name":"pull"}],
+ "volumes":[
+ {"name":"config","configMap":{"name":"volume-config"}},
+ {"name":"secret","secret":{"secretName":"volume-secret"}},
+ {"name":"projected","projected":{"sources":[{"configMap":{"name":"projected-config"}},{"secret":{"name":"projected-secret"}}]}},
+ {"name":"csi","csi":{"driver":"example.com","nodePublishSecretRef":{"name":"csi"}}},
+ {"name":"flex","flexVolume":{"driver":"example.com","secretRef":{"name":"flex"}}},
+ {"name":"azure","azureFile":{"secretName":"azure","shareName":"data"}},
+ {"name":"ceph","cephfs":{"secretRef":{"name":"ceph"}}},
+ {"name":"rbd","rbd":{"secretRef":{"name":"rbd"}}},
+ {"name":"cinder","cinder":{"secretRef":{"name":"cinder"}}},
+ {"name":"scale","scaleIO":{"secretRef":{"name":"scale"}}},
+ {"name":"iscsi","iscsi":{"secretRef":{"name":"iscsi"}}},
+ {"name":"storage","storageos":{"secretRef":{"name":"storage"}}}
+ ]}`), &spec); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "consumer", Namespace: "team"}, Spec: spec}
+	provider := mockResourceProvider{pods: []*corev1.Pod{pod}}
+	refs := configrefs.PodSpecReferences("team", spec)
+	if len(refs) != 22 {
+		t.Fatalf("fixture references = %d, want 22", len(refs))
+	}
+	for _, ref := range refs {
+		t.Run(ref.Kind+"/"+ref.Name, func(t *testing.T) {
+			for _, version := range []string{"v1", "foreign.example/v1"} {
+				obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": version, "kind": ref.Kind, "metadata": map[string]any{"name": ref.Name, "namespace": "team"}}}
+				rc := Build(context.Background(), obj, Options{Tier: TierBasic, Provider: provider})
+				if version != "v1" {
+					if rc.ReferencedBy != nil {
+						t.Fatalf("foreign target acquired core consumers: %+v", rc.ReferencedBy)
+					}
+					continue
+				}
+				if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 || !reflect.DeepEqual(rc.ReferencedBy.Items[0].Paths, []string{"spec." + ref.Path}) {
+					t.Fatalf("core target lost consumer provenance: %+v", rc.ReferencedBy)
+				}
+			}
+		})
 	}
 }
