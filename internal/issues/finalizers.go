@@ -517,7 +517,7 @@ func conditionalFinalizerCleanup(cleanups []finalizerCleanup) *issuesapi.Conditi
 	return &issuesapi.ConditionalCleanup{
 		Condition:     fmt.Sprintf("If %s (and nothing else should finalize this object), remove %s", strings.Join(conditions, " and "), object),
 		AgentGuidance: "Not the next step: restore the controller first (see action). Propose this only after the user confirms the condition, as a step whose precondition is that condition, never as the recommended fix. Preview with dry_run=true or --dry-run=server, and apply one removal at a time only after the user reviews the preview.",
-		Caution:       "Removing a finalizer skips the cleanup its controller would have done and can leave external resources behind. Both commands are dry runs: after reviewing, apply with dry_run=false or without --dry-run=server. Re-read the object after each removal before preparing the next patch: finalizer indices change.",
+		Caution:       "Removing a finalizer skips its controller's cleanup. Kubernetes and external resources can remain; dependents with their own finalizers can stay stuck deleting. Both commands are dry runs: after reviewing, apply with dry_run=false or without --dry-run=server. Re-read the object after each removal before preparing the next patch: finalizer indices change.",
 		Removals:      removals,
 	}
 }

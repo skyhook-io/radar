@@ -572,6 +572,13 @@ issue. Controller inventories follow namespace access for namespaced reads
 and exact Pod/workload list permissions for cluster-wide searches; inaccessible
 inventory is never read as a missing controller.
 
+Conditional removal releases this object's finalizer, not its dependents'
+finalizers. Older VictoriaMetrics operators also place finalizers on managed
+Deployments, Services, Secrets and RBAC objects. Removing the parent CR can
+leave those objects deleting and their Pods running; restoring the operator
+after the parent is gone may not clean them up. Restore the controller before
+bypassing its cleanup, or review any remaining dependents separately.
+
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
 Resource context distinguishes observed dependency references (`dependencies` and
