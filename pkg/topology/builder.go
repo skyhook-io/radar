@@ -8022,7 +8022,7 @@ func matchesSelector(labels, selector map[string]string) bool {
 		return false
 	}
 	for k, v := range selector {
-		if labels[k] != v {
+		if lv, ok := labels[k]; !ok || lv != v {
 			return false
 		}
 	}
@@ -9122,7 +9122,7 @@ func matchesStringMap(labels map[string]string, selector map[string]any) bool {
 		if !ok {
 			return false // non-string selector value cannot match string labels
 		}
-		if labels[k] != sv {
+		if lv, ok := labels[k]; !ok || lv != sv {
 			return false
 		}
 	}

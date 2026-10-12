@@ -111,3 +111,22 @@ func TestTrafficSummaryCountsOnlySelectedPods(t *testing.T) {
 		}
 	}
 }
+
+func TestTrafficEmptyValueSelectorNeedsTheLabel(t *testing.T) {
+	provider := stableCanaryCluster(1, 1)
+	provider.pods[0].Labels["role"] = ""
+	provider.services = append(provider.services, &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "unlabelled-role", Namespace: "team"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "web", "role": ""}},
+	})
+	topo := buildTraffic(t, provider, nil)
+	var got []string
+	for _, edge := range topo.Edges {
+		if edge.Source == "service/team/unlabelled-role" {
+			got = append(got, edge.Target)
+		}
+	}
+	if fmt.Sprint(got) != "[pod/team/stable-0]" {
+		t.Errorf("role=\"\" selects %v, want only the Pod that has role set to empty", got)
+	}
+}

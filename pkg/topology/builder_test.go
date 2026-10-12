@@ -1197,6 +1197,8 @@ func TestMatchesStringMap(t *testing.T) {
 		{"empty labels", map[string]string{}, map[string]any{"app": "web"}, false},
 		{"non-string value rejects", map[string]string{"app": "web"}, map[string]any{"app": 123}, false},
 		{"nil labels", nil, map[string]any{"app": "web"}, false},
+		{"empty value needs the key", map[string]string{"app": "web"}, map[string]any{"role": ""}, false},
+		{"empty value matches an empty label", map[string]string{"role": ""}, map[string]any{"role": ""}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1204,6 +1206,24 @@ func TestMatchesStringMap(t *testing.T) {
 				t.Errorf("matchesStringMap() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMatchesSelectorRequiresTheKey(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		labels   map[string]string
+		selector map[string]string
+		want     bool
+	}{
+		{"exact match", map[string]string{"app": "web"}, map[string]string{"app": "web"}, true},
+		{"empty value needs the key", map[string]string{"app": "web"}, map[string]string{"app": "web", "role": ""}, false},
+		{"empty value matches an empty label", map[string]string{"app": "web", "role": ""}, map[string]string{"app": "web", "role": ""}, true},
+		{"empty selector selects nothing", map[string]string{"app": "web"}, map[string]string{}, false},
+	} {
+		if got := matchesSelector(tt.labels, tt.selector); got != tt.want {
+			t.Errorf("%s: matchesSelector() = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 
