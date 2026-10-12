@@ -796,7 +796,7 @@ export function useResourceIssues(
 // the caller's RBAC withheld. Polls like the page list.
 export interface SubjectIssuesResponse {
   issues: Issue[];
-  coverage: "ok" | "syncing" | "notWatched";
+  coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
   withheld?: { issues: number };
   visibility?: { state?: string; impact?: string };
 }

@@ -127,7 +127,10 @@ export function issueSubjectState(
   const data = related.data;
   if (related.isLoading || !data) return { state: "checking" };
   if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0 };
-  if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind} yet; opening its list starts it` };
+  if (data.coverage === "unknownKind") {
+    return { state: "unconfirmed", why: `this cluster has no ${subject.kind} kind${subject.group ? ` in ${subject.group}` : ""}` };
+  }
+  if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind}` };
   if (data.coverage === "syncing") return { state: "unconfirmed", why: `Radar is still loading ${subject.kind}` };
   const withheld = data.withheld?.issues ?? 0;
   if (withheld > 0) {

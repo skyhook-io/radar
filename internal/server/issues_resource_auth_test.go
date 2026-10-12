@@ -16,6 +16,9 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -160,7 +163,26 @@ func TestIssuesListWithholdsSecretsTheCallerCantRead(t *testing.T) {
 
 func TestResourceIssuesCoverageOfAnUnwatchedKind(t *testing.T) {
 	if got := resourceIssuesCoverage("Widget", "example.com", "pg"); got != resourceIssuesCoverageNotWatched {
-		t.Fatalf("coverage %q, want notWatched for a kind Radar has not discovered", got)
+		t.Fatalf("coverage %q, want notWatched before discovery is ready", got)
+	}
+}
+
+// A link made on one cluster can open on another that has no such kind; that
+// is not a kind Radar could start watching.
+func TestResourceIssuesCoverageOfAKindTheClusterDoesNotServe(t *testing.T) {
+	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{appGVR: "ApplicationList"})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if got := resourceIssuesCoverage("Widget", "example.com", "pg"); got != resourceIssuesCoverageUnknownKind {
+		t.Fatalf("coverage %q, want unknownKind for a kind discovery doesn't serve", got)
+	}
+	if got := resourceIssuesCoverage("Application", "argoproj.io", "pg"); got != resourceIssuesCoverageNotWatched {
+		t.Fatalf("coverage %q, want notWatched for a served kind with no watch", got)
 	}
 }
 

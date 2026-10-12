@@ -176,8 +176,11 @@ describe('issueSubjectState', () => {
     expect(issueSubjectState({ ...subject, kind: 'ClusterImageCatalog', namespace: '' }, ['app'], loaded({}))).toEqual({ state: 'none' })
   })
   it('reads an empty answer as unconfirmed when Radar does not read the kind', () => {
-    expect(issueSubjectState(subject, [], loaded({ coverage: 'notWatched' }))).toEqual({ state: 'unconfirmed', why: "Radar isn't watching Cluster yet; opening its list starts it" })
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'notWatched' }))).toEqual({ state: 'unconfirmed', why: "Radar isn't watching Cluster" })
     expect(issueSubjectState(subject, [], loaded({ coverage: 'syncing' }))).toEqual({ state: 'unconfirmed', why: 'Radar is still loading Cluster' })
+  })
+  it('says when the cluster has no such kind, as for a link made on another cluster', () => {
+    expect(issueSubjectState(subject, [], loaded({ coverage: 'unknownKind' }))).toEqual({ state: 'unconfirmed', why: 'this cluster has no Cluster kind in postgresql.cnpg.io' })
   })
   it('reads an empty answer as unconfirmed when RBAC withheld issues about it', () => {
     expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })

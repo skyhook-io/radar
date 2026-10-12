@@ -338,8 +338,10 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 // ResourceIssuesResponse is /api/issues/resource with ?coverage=1.
 type ResourceIssuesResponse struct {
 	Issues []issues.Issue `json:"issues"`
-	// Whether the issues engine reads the subject's kind: ok, syncing, or
-	// notWatched. Anything but ok makes an empty list unknown, not none.
+	// Whether the issues engine reads the subject's kind: ok, syncing,
+	// notWatched, or unknownKind (discovery doesn't serve the kind, as when a
+	// link made on one cluster opens on another). Anything but ok makes an
+	// empty list unknown, not none.
 	Coverage   string                  `json:"coverage"`
 	Withheld   *ResourceIssuesWithheld `json:"withheld,omitempty"`
 	Visibility *k8s.VisibilitySummary  `json:"visibility,omitempty"`
@@ -354,9 +356,10 @@ type ResourceIssuesWithheld struct {
 }
 
 const (
-	resourceIssuesCoverageOK         = "ok"
-	resourceIssuesCoverageSyncing    = "syncing"
-	resourceIssuesCoverageNotWatched = "notWatched"
+	resourceIssuesCoverageOK          = "ok"
+	resourceIssuesCoverageSyncing     = "syncing"
+	resourceIssuesCoverageNotWatched  = "notWatched"
+	resourceIssuesCoverageUnknownKind = "unknownKind"
 )
 
 // clusterScopedSubjectIssuesWithheld counts the issues about a cluster-scoped
@@ -422,7 +425,7 @@ func resourceIssuesCoverage(kind, group, namespace string) string {
 	}
 	gvr, ok := disc.GetGVRWithGroup(kind, group)
 	if !ok {
-		return resourceIssuesCoverageNotWatched
+		return resourceIssuesCoverageUnknownKind
 	}
 	if dyn.IsNamespaceSynced(gvr, namespace) {
 		return resourceIssuesCoverageOK
