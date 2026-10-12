@@ -118,3 +118,75 @@ func TestServersTransportResolvesWhereTraefikDoes(t *testing.T) {
 		}
 	}
 }
+
+func TestTraefikTLSMaterialEdgesFollowTraefiksFields(t *testing.T) {
+	routeGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "ingressroutes"}
+	httpGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "serverstransports"}
+	tcpGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "serverstransporttcps"}
+	storeGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "tlsstores"}
+
+	httpTransport := genericIdentityObject(httpGVR, "ServersTransport", "team", "mtls")
+	httpTransport.Object["spec"] = map[string]any{
+		"rootCAs":             []any{map[string]any{"configMap": "ca-bundle"}, map[string]any{"secret": "ca-secret"}},
+		"certificatesSecrets": []any{"client-cert"},
+	}
+	// ServersTransportTCP keeps its TLS material under spec.tls.
+	tcpTransport := genericIdentityObject(tcpGVR, "ServersTransportTCP", "team", "tcp-tls")
+	tcpTransport.Object["spec"] = map[string]any{
+		"tls": map[string]any{
+			"rootCAs":             []any{map[string]any{"configMap": "tcp-ca-bundle"}},
+			"rootCAsSecrets":      []any{"tcp-ca"},
+			"certificatesSecrets": []any{"tcp-client"},
+		},
+		"certificatesSecrets": []any{"not-a-tcp-field"},
+	}
+	store := genericIdentityObject(storeGVR, "TLSStore", "team", "default")
+	store.Object["spec"] = map[string]any{
+		"defaultCertificate": map[string]any{"secretName": "default-cert"},
+		"certificates":       []any{map[string]any{"secretName": "extra-cert"}},
+	}
+	route := genericIdentityObject(routeGVR, "IngressRoute", "team", "web")
+	route.Object["spec"] = map[string]any{
+		"routes": []any{map[string]any{"match": "Host(`web.example.com`)", "services": []any{map[string]any{"name": "web", "port": int64(80)}}}},
+		"tls":    map[string]any{"secretName": "web-cert", "store": map[string]any{"name": "default"}},
+	}
+	dynamic := &genericIdentityDynamic{
+		watched: []schema.GroupVersionResource{routeGVR, httpGVR, tcpGVR, storeGVR},
+		kinds:   map[schema.GroupVersionResource]string{routeGVR: "IngressRoute", httpGVR: "ServersTransport", tcpGVR: "ServersTransportTCP", storeGVR: "TLSStore"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			routeGVR: {route}, httpGVR: {httpTransport}, tcpGVR: {tcpTransport}, storeGVR: {store},
+		},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	provider := &mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team"}}}}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	edges := map[string]EdgeType{}
+	for _, edge := range topo.Edges {
+		edges[edge.Source+" -> "+edge.Target] = edge.Type
+	}
+	for _, want := range []string{
+		"configmap/team/ca-bundle -> serverstransport/team/mtls",
+		"secret/team/ca-secret -> serverstransport/team/mtls",
+		"secret/team/client-cert -> serverstransport/team/mtls",
+		"configmap/team/tcp-ca-bundle -> serverstransporttcp/team/tcp-tls",
+		"secret/team/tcp-ca -> serverstransporttcp/team/tcp-tls",
+		"secret/team/tcp-client -> serverstransporttcp/team/tcp-tls",
+		"secret/team/default-cert -> tlsstore/team/default",
+		"secret/team/extra-cert -> tlsstore/team/default",
+	} {
+		if edges[want] != EdgeConfigures {
+			t.Errorf("missing configures edge %s", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"secret/team/not-a-tcp-field -> serverstransporttcp/team/tcp-tls",
+		"tlsstore/team/default -> ingressroute/team/web",
+	} {
+		if _, ok := edges[unwanted]; ok {
+			t.Errorf("unexpected edge %s", unwanted)
+		}
+	}
+}

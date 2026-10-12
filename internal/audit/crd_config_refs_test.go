@@ -44,7 +44,7 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			ns:   "edge",
 			obj: map[string]any{"spec": map[string]any{
 				"rootCAsSecrets":      []any{"root-ca"},
-				"certificatesSecrets": []any{map[string]any{"name": "client-cert"}},
+				"certificatesSecrets": []any{"client-cert"},
 			}},
 			want: refs(secret("edge", "root-ca"), secret("edge", "client-cert")),
 		},
@@ -60,6 +60,23 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 				}},
 			}},
 			want: refs(secret("edge", "basic-users"), secret("edge", "digest-users"), secret("edge", "forward-ca")),
+		},
+		{
+			name: "traefik tcp transport and tls store certificates",
+			gvr:  gvr("traefik.io", "v1alpha1", "serverstransporttcps"),
+			ns:   "edge",
+			obj: map[string]any{"spec": map[string]any{"tls": map[string]any{
+				"rootCAs":             []any{map[string]any{"configMap": "ca-bundle"}, map[string]any{"secret": "ca"}},
+				"certificatesSecrets": []any{"client"},
+			}}},
+			want: refs(secret("edge", "ca"), secret("edge", "client"), configMap("edge", "ca-bundle")),
+		},
+		{
+			name: "traefik tls store certificates",
+			gvr:  gvr("traefik.io", "v1alpha1", "tlsstores"),
+			ns:   "edge",
+			obj:  map[string]any{"spec": map[string]any{"defaultCertificate": map[string]any{"secretName": "default"}, "certificates": []any{map[string]any{"secretName": "extra"}}}},
+			want: refs(secret("edge", "default"), secret("edge", "extra")),
 		},
 		{
 			name: "contour httpproxy tls",

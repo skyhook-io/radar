@@ -49,7 +49,7 @@ func TestProjectionConfigurationDirection(t *testing.T) {
 			if mode == ViewModeResources {
 				pairs = append(pairs, [][2]string{
 					{"middleware/demo/child", "middleware/demo/chain"}, {"serverstransport/demo/transport", "ingressroute/demo/web"},
-					{"tlsoption/demo/option", "ingressroute/demo/web"}, {"tlsstore/demo/store", "ingressroute/demo/web"},
+					{"tlsoption/demo/option", "ingressroute/demo/web"},
 					{"certificate/demo/cert", "ingressroute/demo/web"}, {"secret/demo/ca", "serverstransport/demo/transport"},
 					{"secret/demo/ca", "tlsoption/demo/option"}, {"secret/demo/tls", "tlsstore/demo/store"},
 					{"secret/demo/tls", "httpproxy/demo/proxy"}, {"certificate/demo/cert", "httpproxy/demo/proxy"},
