@@ -491,95 +491,54 @@ API group is part of a resource's identity. Radar infers the canonical group for
 
 This selects the Argo Rollout workload path; it does not imply that `diagnose` supports arbitrary custom resource shapes.
 
-Watched custom resources that remain present after deletion started appear in
-`issues` as `termination_stuck`: warning after 10 minutes and critical at 30,
-with deletion time as the onset. For operator finalizers, it reaches critical
-only when a recognized controller is installed but not fully ready (see the
-table below). A fully ready controller for any finalizer keeps a mixed-finalizer
-finding at warning, even when another controller is down; repair advice for
-that controller remains. In-use guards also reach critical at 30 minutes unless
-that mixed-finalizer exception applies. Garbage-collection-only finalizers
-reach critical at 30 minutes.
-Radar only reads already
-watched CRD caches; absence of an issue does not establish that unwatched kinds
-are healthy. Namespaced subjects follow namespace access; Secret subjects also
-need Secret access, and cluster-scoped subjects need list on their exact kind.
-Controller inventory follows the same evidence read rules: namespace access for
-namespaced workloads and exact list permission for a cluster-wide search. An
-incomplete controller search cannot establish absence or authorize cleanup. The home page's Active Issues panel and
-issue count read the same issues and show these rows; the `/api/dashboard`
-problem and health summary, MCP `get_dashboard` and `cluster://health` do not
-include this CR scan.
+Watched, synchronized custom resources that remain deleting appear in `issues`
+as `termination_stuck`, timed from the deletion request. Radar starts no new
+watches for this scan; an empty result does not establish that unwatched kinds
+are healthy. These findings also feed Active Issues and AI resource/search
+summaries, but not dashboard health summaries or `cluster://health`.
 
-The cause names the finalizers and elapsed deletion age, plus one controller
-observation per finalizer. Controllers are identified from the catalog in
-`pkg/finalizers/catalog.go` (Argo CD,
-Flux, VictoriaMetrics and Karpenter): a workload matches by its name or labels,
-or by its pod template's labels or container image, and pods match by the
-catalog label or image. Flux Helm requires its published image path: unrelated
-projects use the same `helm-controller` name and labels. A matching name or label
-with an unrecognized image leaves identity unconfirmed and blocks cleanup. Images match on the
-repository path the vendor
-publishes (`victoriametrics/operator`, `fluxcd/<controller>`,
-`argoproj/argocd` running `argocd-application-controller`,
-`karpenter/controller`), ignoring registry host, tag and digest, so a renamed
-install (a Helm `nameOverride`) or a mirror that preserves the vendor path
-as trailing segments (including a proxy-cache prefix) is still
-recognized. Image matching excludes containers named `config-reloader` and
-`victoriametrics/operator` tags starting with `config-reloader`: these run in
-managed workloads, sharing the operator's image repository. A matched workload
-with replicas but no pods counts as installed.
-Every recognized copy counts toward health: a healthy workload does not hide a
-failing copy elsewhere. For a finalizer outside the catalog, a workload whose
-name matches the API group's first label plus `-operator` is named as a
-candidate only; it never decides the controller's state, the severity, or a
-cleanup. Each observation lands in one of these states:
+Findings start at warning after 10 minutes. At 30 minutes, controller-owned
+finalizers follow this policy:
 
-| Observation | Severity | Action |
+| Controller evidence | Severity | Next step |
 |---|---|---|
-| A recognized controller pod is ready | Warning when every recognized pod is ready; otherwise unchanged | Check the controller's logs, permissions and deletion-blocking references. No cleanup. |
-| Recognized and installed, but no pod is ready: CrashLoopBackOff, image pull failure, Pending, or no pods for its desired replicas | Critical at 30 minutes | Fix the controller; it finishes the deletion once running. No cleanup: removal would skip the cleanup it still intends to do |
-| **No recognized controller found**: a complete search found nothing by name, labels or image, or every recognized copy is scaled to 0 replicas | Warning | Restore the controller if it should be running (it may also be installed in a way Radar doesn't recognize, or stopped for now). For catalog entries that explicitly opt in, a `conditional_cleanup` is attached, never the action. Other entries advise restoring the controller and warn that removal skips cleanup |
-| Identified, but its state can't be checked: no running pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), even when an in-cluster copy is scaled to 0; workloads not searchable cluster-wide; or the Pod cache not ready or pods unreadable | Warning | Check that controller first. No cleanup |
-| **Controller unknown**: no catalog entry, at most a name-only candidate | Warning | The finalizer's domain usually names its controller; find and check it first. No cleanup |
+| Recognized controller is fully ready | Warning | Check logs, permissions and deletion-blocking dependencies. No removal. |
+| Recognized controller is installed but not fully ready | Critical | Repair the controller so it can resume cleanup. No removal. |
+| No recognized controller, or all recognized copies are scaled to zero | Warning | Restore it if it should be running. Removal may be offered conditionally. |
+| Owner or controller state cannot be established | Warning | Identify and check the controller. No removal. |
 
-Real infrastructure operators such as Crossplane, Cluster API, Config Connector,
-ACK and Strimzi are not in the catalog, so their stuck deletions stay at warning
-with no cleanup: their controllers may still be deleting cloud resources, and
-removing a finalizer skips that cleanup and can orphan infrastructure, volumes
-or nodes. Calling a controller down or not found needs a complete search:
-Deployments, StatefulSets and DaemonSets readable and cached cluster-wide, and
-Pods searched cluster-wide. A down copy in the visible namespaces doesn't rule
-out a healthy one elsewhere.
+A fully ready controller for any finalizer keeps a mixed-finalizer finding at
+warning; repair advice for other controllers remains. In-use guards and
+GC-only finalizers can reach critical at 30 minutes. Resolve their dependencies
+rather than removing them; orphaning preserves dependents.
 
-`conditional_cleanup` holds the one step Radar can't recommend outright:
-`condition` ("If victoria-metrics-operator was uninstalled on purpose (and
-nothing else should finalize this object), remove the finalizer"),
-`agent_guidance` (propose it only after the user confirms the condition, as a
-step with that precondition, never as the recommended fix), `caution`, and one
-entry per finalizer in `removals`. Each removal is a JSON Patch that tests the
-object UID and the finalizer value at its index before removing it, given as
-`patch_resource` tool input with `dry_run=true` and as
-`kubectl patch --type=json --dry-run=server`. Review the dry run before an
-explicit apply, and re-read the object after each removal: the next finalizer's
-index may change. The Issues view shows it as a collapsed section labeled with
-the condition. Garbage-collection finalizers never get a cleanup: foreground
-deletion points at dependents, and orphaning keeps them, so neither scans
-operator workloads. Kubernetes protection finalizers (`*.k8s.io/*` and
-`*.kubernetes.io/*`, including slashless Gateway guards, and `*.x-k8s.io`
-finalizers named for `in-use` or `protection`, such as Kueue's
-`resource-in-use`) are in-use guards: resolve the referencing objects instead of
-removing them. Deletion-related Ready=False conditions fold into the terminating
-issue. Controller inventories follow namespace access for namespaced reads
-and exact Pod/workload list permissions for cluster-wide searches; inaccessible
-inventory is never read as a missing controller.
+The catalog recognizes Argo CD, Flux, VictoriaMetrics and Karpenter through
+known finalizer keys and workload identities. Name-only guesses for uncataloged
+finalizers never establish ownership. Renamed installs and mirrors can be
+recognized through published images; controller-specific identity rules are in
+[`pkg/finalizers/catalog.go`](../pkg/finalizers/catalog.go).
 
-Conditional removal releases this object's finalizer, not its dependents'
-finalizers. Older VictoriaMetrics operators also place finalizers on managed
-Deployments, Services, Secrets and RBAC objects. Removing the parent CR can
-leave those objects deleting and their Pods running; restoring the operator
-after the parent is gone may not clean them up. Restore the controller before
-bypassing its cleanup, or review any remaining dependents separately.
+Ordinary namespaced subjects require namespace access; Secrets also require
+Secret access, and cluster-scoped subjects require list on their exact kind.
+Controller evidence follows namespace access for namespaced reads and exact-kind
+list for cluster-wide searches. A missing or down controller requires complete
+cluster-wide Pod, Deployment,
+StatefulSet and DaemonSet visibility. Incomplete inventory cannot enable removal.
+A negative search is not proof of an uninstall; a controller may run elsewhere
+or use an identity Radar does not recognize.
+
+Only Flux and VictoriaMetrics currently opt into `conditional_cleanup`, separate
+from `action`. It contains `condition`, `agent_guidance`, `caution`, and `removals`
+with one entry per finalizer (`finalizer`, `patch_resource`, `kubectl`). An agent
+may propose removal only after the user confirms intentional uninstall or a
+permanent stop. The UI keeps these commands in a collapsed conditional section.
+
+Each command defaults to a server dry run and tests the object's UID and the
+finalizer at its index. Review the preview before applying; re-read after every
+removal because indices change. Removal bypasses controller cleanup and can
+leave Kubernetes resources, infrastructure or storage behind. Dependents with
+their own finalizers can remain stuck even after the controller is restored;
+older VictoriaMetrics operators place such finalizers on managed objects.
 
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 

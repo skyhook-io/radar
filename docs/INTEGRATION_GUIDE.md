@@ -90,46 +90,26 @@ shared renderers.
 
 ### Finalizer controller recognition
 
-Stuck-deletion detection already covers any watched, synced CRD in
-`internal/k8s/detect_terminating.go`. Adding a controller owner enriches that
-finding; it does not require a per-kind detector, renderer or new informer.
+Stuck-deletion detection covers already-watched, synchronized CRDs. Adding an
+owner enriches those findings; it needs no per-kind detector or renderer.
 
-- [ ] Add the vendor's documented finalizer keys to `ResolveOwner` in
-  [`pkg/finalizers/catalog.go`](../pkg/finalizers/catalog.go). Use API group and
-  kind to disambiguate shared keys. A similar workload name is only a candidate,
-  never proof of ownership.
-- [ ] Record the controller's names, labels and published image repository paths.
-  For shared images, attach an entry-specific `matchesImageRole` predicate beside
-  the catalog entry; keep vendor exceptions out of the shared matcher. Check
-  default entrypoints, Helm-renamed installs, mirrors, digest pins and managed
-  sidecars that share the repository. When unrelated controllers share a catalog
-  name or label, set `requireImageMatch` so that identity alone cannot attribute
-  them (Flux Helm versus other Helm controllers). `MatchesWorkloadIdentity`
-  retains such uncertain matches so they block absence and cleanup without
-  establishing a running or down controller.
-- [ ] Review what removing the finalizer skips. Set `AllowConditionalCleanup`
-  explicitly; its default is false. Leave it false when cleanup semantics are
-  unreviewed, the controller can run off-cluster, or removal strands infrastructure.
-  Record known `OffClusterOfferings` and `ReleasesInfrastructure` independently.
-  An opt-in still requires a complete search plus the user's confirmation of
-  intentional uninstall or permanent scale-down; it never makes removal the
-  recommended next step.
-- [ ] Add owner/key and positive/negative identity fixtures in
-  [`pkg/finalizers/catalog_test.go`](../pkg/finalizers/catalog_test.go). Add
-  inventory-to-guidance cases in
-  [`internal/issues/finalizers_test.go`](../internal/issues/finalizers_test.go):
-  healthy, installed but down, no recognized controller, scaled to zero,
-  unreadable/partial inventory and unrelated workloads. Exercise cleanup
-  eligibility separately from controller recognition.
-- [ ] Keep cluster reads, exact list authorization, coverage and health aggregation
-  in `internal/issues/finalizers.go`; pure pod health helpers live in `pkg/health`.
-  Severity and restore-first guidance belong to the issues engine. Normal catalog
-  additions should not change those policies or REST/MCP/UI payloads.
-- [ ] Verify one real stuck deletion with the vendor controller, including the
-  intentional-uninstall path if enabling conditional cleanup. Update the
-  [stuck-deletion contract](mcp.md#read-tools) when behavior
-  or supported controller coverage changes; distinguish live evidence from
-  synthetic fixtures.
+- [ ] Add documented keys and controller names, labels and image paths in
+  [`pkg/finalizers/catalog.go`](../pkg/finalizers/catalog.go). Disambiguate shared
+  keys by API group/kind, and shared images or identities by role/image checks.
+  Name guesses for uncataloged finalizers remain candidates, never owners.
+- [ ] Review cleanup semantics before setting `AllowConditionalCleanup` (false
+  by default). Leave it disabled for unreviewed cleanup, off-cluster controllers
+  or infrastructure cleanup; record those limits on the entry.
+- [ ] Add identity fixtures in
+  [`pkg/finalizers/catalog_test.go`](../pkg/finalizers/catalog_test.go) and
+  guidance/eligibility cases in
+  [`internal/issues/finalizers_test.go`](../internal/issues/finalizers_test.go),
+  including unrelated workloads and incomplete visibility.
+- [ ] Keep reads and policy in `internal/issues/finalizers.go`, pod health in
+  `pkg/health`. Catalog additions should not change the shared API/UI machinery.
+- [ ] Verify a real stuck deletion, including intentional uninstall if enabling
+  removal. Update the [MCP contract](mcp.md#read-tools) when supported behavior
+  changes; distinguish controller evidence from synthetic fixtures.
 
 ### MCP / AI context
 
