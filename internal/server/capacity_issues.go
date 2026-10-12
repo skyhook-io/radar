@@ -136,10 +136,12 @@ func capacityVisibleIssues(
 	}
 	out := make([]issues.Issue, 0, len(in))
 	for _, issue := range in {
-		// The memo keeps findings with inventory dependencies for this check.
-		if !issues.CanReadIssueEvidence(issue, canReadEvidence, false) || !issues.CanReadIssueRelatedRefs(issue, canReadRelated) {
+		// The memo keeps findings with inventory dependencies in full for this check.
+		shown, ok := issues.ForEvidence(issue, canReadEvidence, false)
+		if !ok || !issues.CanReadIssueRelatedRefs(shown, canReadRelated) {
 			continue
 		}
+		issue = shown
 		// The memo composes user-agnostically; per-user redaction of
 		// referenced-by-NodePool context and owners happens here, at read time.
 		issue = issues.RedactIssueRelatedRefs(issue, canReadRelated)

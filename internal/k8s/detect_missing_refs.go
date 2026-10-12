@@ -725,8 +725,8 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 					fmt.Sprintf("TLS Secret %q doesn't exist, so the controller may serve its default/self-signed cert and HTTPS clients see warnings.", tls.SecretName),
 					fmt.Sprintf("Point tls[].secretName at an existing kubernetes.io/tls Secret in namespace %q, remove the tls entry, or create TLS Secret %q if this host still needs TLS.", ing.Namespace, tls.SecretName))
 				p.Severity = "warning"
-				// Whether the Secret exists is the Secret's to tell.
-				p.RequiredReads = secretReads(ing.Namespace)
+				// Not gated on Secret access: the name is the Ingress's own, and
+				// whether it exists is all this finding says.
 				out = append(out, p)
 			}
 		}

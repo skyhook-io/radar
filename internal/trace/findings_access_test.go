@@ -13,8 +13,9 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// A missing TLS Secret is learned from the Secret: its hop finding shows for a
-// caller who can read Secrets (or with auth off) and not for one who can't.
+// Hop findings follow the caller's issue access: a missing TLS Secret names only
+// what the Ingress names, so it shows with namespace access, and a caller who
+// can't open the Ingress gets no finding about it.
 func TestHopFindingsUseTheCallersIssueAccess(t *testing.T) {
 	ing := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Name: "front", Namespace: "shop", CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))},
@@ -31,6 +32,8 @@ func TestHopFindingsUseTheCallersIssueAccess(t *testing.T) {
 	}
 	denySecrets := allowAll
 	denySecrets.CanReadEvidence = func(read issues.EvidenceRead) bool { return read.Resource != "secrets" }
+	denyIngress := allowAll
+	denyIngress.CanReadSubject = func(ref issues.Ref) bool { return ref.Kind != "Ingress" }
 
 	hasTLS := func(access IssueAccess) bool {
 		for _, f := range hopFindings(Deps{Issues: issues.NewCacheProvider(), IssueAccess: access}, ref) {
@@ -40,10 +43,10 @@ func TestHopFindingsUseTheCallersIssueAccess(t *testing.T) {
 		}
 		return false
 	}
-	if !hasTLS(allowAll) {
-		t.Fatal("a caller who can read Secrets lost the missing-TLS finding")
+	if !hasTLS(allowAll) || !hasTLS(denySecrets) {
+		t.Fatal("a caller who can open the Ingress lost the missing-TLS finding")
 	}
-	if hasTLS(denySecrets) {
-		t.Fatal("a caller without Secret access got the missing-TLS finding")
+	if hasTLS(denyIngress) {
+		t.Fatal("a caller who can't open the Ingress got its finding")
 	}
 }

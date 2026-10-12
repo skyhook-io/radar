@@ -414,7 +414,21 @@ type EvidenceRead struct {
 	Verb      string
 }
 
+// DegradedFinding is a finding as told to a caller who can't make its
+// RequiredReads: what is wrong and what to do, without the facts only those
+// reads reveal.
+type DegradedFinding struct {
+	Message string
+	Cause   string
+	Action  string
+}
+
 type Issue struct {
+	// Degraded replaces the message, cause and action for a caller who can't
+	// make RequiredReads, and the onset is withheld with it. Without it such a
+	// caller doesn't get the finding.
+	Degraded *DegradedFinding `json:"-"`
+
 	// RequiredReads describe the inventories behind a cross-resource finding.
 	// They are retained internally so cached and grouped projections can authorize it.
 	RequiredReads []EvidenceRead `json:"-"`

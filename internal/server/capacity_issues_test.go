@@ -220,6 +220,11 @@ func TestCapacityVisibleIssuesAuthorizesEvidence(t *testing.T) {
 	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, nil, func(issues.EvidenceRead) bool { return true }); len(got) != 1 {
 		t.Fatalf("authorized evidence withheld: %+v", got)
 	}
+	issue.Message = "pods team-a/a and team-a/b are pending"
+	issue.Degraded = &issues.DegradedFinding{Message: "pods are pending"}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, nil, func(issues.EvidenceRead) bool { return false }); len(got) != 1 || got[0].Message != "pods are pending" {
+		t.Fatalf("a finding with a degraded form = %+v, want it degraded", got)
+	}
 }
 
 // The memo is composed for every user, so an owner the caller can't read is

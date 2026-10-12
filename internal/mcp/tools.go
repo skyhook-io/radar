@@ -2345,8 +2345,10 @@ type mcpProblem struct {
 	// ageSeconds is for sort tiebreak; not serialized so it doesn't widen
 	// the wire shape callers depend on.
 	ageSeconds int64 `json:"-"`
-	// requiredReads are the detection's evidence, checked like an issue's.
+	// requiredReads are the detection's evidence, checked like an issue's;
+	// degraded is what a caller who can't make them sees instead.
 	requiredReads []issues.EvidenceRead
+	degraded      *issues.DegradedFinding
 }
 
 // problemSeverityRank maps the Problem.Severity vocabulary onto sort order.
@@ -2570,6 +2572,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			LastTerminatedReason: p.LastTerminatedReason,
 			ageSeconds:           p.AgeSeconds,
 			requiredReads:        p.RequiredReads,
+			degraded:             p.Degraded,
 		})
 	}
 
@@ -2629,6 +2632,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			Age:           p.Age,
 			ageSeconds:    p.AgeSeconds,
 			requiredReads: p.RequiredReads,
+			degraded:      p.Degraded,
 		})
 	}
 
@@ -2664,8 +2668,11 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		if p.Namespace != "" && !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
 			continue
 		}
-		if !issues.CanReadIssueEvidence(issues.Issue{RequiredReads: p.requiredReads}, canReadEvidence, false) {
+		switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
+		case issues.EvidenceWithheld:
 			continue
+		case issues.EvidenceDegraded:
+			p.Message = p.degraded.Message
 		}
 		readable = append(readable, p)
 	}

@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +13,9 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -319,16 +323,60 @@ func TestResourceIssuesUnresolvedKindUsesPreflight(t *testing.T) {
 	}
 }
 
-// A missing TLS Secret is learned from the Secret, so the Ingress's issue and
-// dashboard problem reach only a caller who can read Secrets there.
-func TestSecretDerivedFindingsNeedSecretAccess(t *testing.T) {
+// A finding drawn from a Secret's history is told to a caller who can't read
+// the Secret without that history: the Pod may hold a stale value and needs a
+// restart, but not which Secret, which key, or when it changed. A missing TLS
+// Secret names only what the Ingress names, so it needs only namespace access.
+func TestSecretDerivedFindingsDegradeWithoutSecretAccess(t *testing.T) {
 	restoreFixtureCache(t)
 	k8s.ResetResourceCache()
-	created := metav1.NewTime(time.Now().Add(-time.Hour))
+	now := time.Now().UTC().Truncate(time.Second)
+	started := metav1.NewTime(now.Add(-2 * time.Minute))
+	secretEnv := []corev1.EnvVar{{
+		Name: "DB_PASSWORD",
+		ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "db-conn"}, Key: "password",
+		}},
+	}}
+	controller := true
 	client := fake.NewClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "shop", UID: "dep", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+			Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "worker"}}},
+		},
+		&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-abc", Namespace: "shop", UID: "rs",
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "worker", UID: "dep", Controller: &controller}},
+		}},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "worker-abc-1", Namespace: "shop", CreationTimestamp: started,
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "worker-abc", UID: "rs", Controller: &controller}},
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Env: secretEnv}}},
+			Status: corev1.PodStatus{
+				Phase:      corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app", Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: started}},
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "api-0", Namespace: "shop", CreationTimestamp: started},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Env: secretEnv}}},
+			Status: corev1.PodStatus{
+				Phase:      corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: started}},
+				}},
+			},
+		},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-conn", Namespace: "shop"}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}}},
 		&networkingv1.Ingress{
-			ObjectMeta: metav1.ObjectMeta{Name: "front", Namespace: "shop", CreationTimestamp: created},
+			ObjectMeta: metav1.ObjectMeta{Name: "front", Namespace: "shop", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
 			Spec: networkingv1.IngressSpec{
 				TLS: []networkingv1.IngressTLS{{Hosts: []string{"shop.example.com"}, SecretName: "shop-tls"}},
 				DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
@@ -340,12 +388,33 @@ func TestSecretDerivedFindingsNeedSecretAccess(t *testing.T) {
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	t.Cleanup(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
+			t.Fatalf("re-init global store: %v", err)
+		}
+	})
+	if err := timeline.RecordEvent(context.Background(), timeline.TimelineEvent{
+		ID: "db-conn-change", Timestamp: now.Add(-time.Minute), Source: timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(), Kind: "Secret", Namespace: "shop", Name: "db-conn",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", NewValue: []string{"password"}}}},
+	}); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"shop"}}
 	perms.SetCanI("get", "", "secrets", "shop", false)
 	s.permCache.Set("pg-user", nil, perms)
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("pg-user", nil, perms)
 
-	tlsIssue := func() bool {
+	findings := func() (stale *issues.Issue, tls bool) {
 		w := resourceIssuesRequest(t, s, "/api/issues?namespaces=shop")
 		var resp struct {
 			Issues []issues.Issue `json:"issues"`
@@ -353,35 +422,65 @@ func TestSecretDerivedFindingsNeedSecretAccess(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode %d: %v (%s)", w.Code, err, w.Body.String())
 		}
-		for _, i := range resp.Issues {
-			if i.Kind == "Ingress" && i.Name == "front" && i.Reason == "Missing TLS Secret" {
-				return true
+		for i := range resp.Issues {
+			switch resp.Issues[i].Reason {
+			case "StaleSecretEnv":
+				if resp.Issues[i].Kind == "Pod" && resp.Issues[i].Name == "api-0" {
+					stale = &resp.Issues[i]
+				}
+			case "Missing TLS Secret":
+				tls = true
 			}
 		}
-		return false
+		return stale, tls
 	}
-	env := newAuthTestServer(t)
-	env.srv.permCache.Set("pg-user", nil, perms)
-	tlsProblem := func() bool {
+	dashboard := func() (stale *DashboardProblem, tls bool) {
 		resp := env.authGet(t, "/api/dashboard?namespaces=shop", "pg-user", "")
 		defer resp.Body.Close()
 		var body DashboardResponse
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatalf("decode dashboard %d: %v", resp.StatusCode, err)
 		}
-		for _, p := range body.Problems {
-			if p.Reason == "Missing TLS Secret" {
-				return true
+		for i := range body.Problems {
+			switch body.Problems[i].Reason {
+			case "StaleSecretEnv":
+				if body.Problems[i].Kind == "Deployment" && body.Problems[i].Name == "worker" {
+					stale = &body.Problems[i]
+				}
+			case "Missing TLS Secret":
+				tls = true
 			}
 		}
-		return false
+		return stale, tls
 	}
-	if tlsIssue() || tlsProblem() {
-		t.Fatal("a caller without Secret access learned whether the TLS Secret exists")
+	revealsTheSecret := func(text string) bool {
+		return strings.Contains(text, "db-conn") || strings.Contains(text, "password")
 	}
+
+	stale, tls := findings()
+	if stale == nil {
+		t.Fatal("a caller without Secret access lost the stale-env finding instead of a degraded one")
+	}
+	if revealsTheSecret(stale.Message+stale.RawMessage+stale.Cause+stale.Action) || !stale.FirstSeen.IsZero() || !stale.OnsetUnknown ||
+		!strings.Contains(stale.Cause, "shown only to callers who can read the Secret") || !strings.Contains(stale.Action, "Restart the pod") {
+		t.Fatalf("degraded issue = %+v", stale)
+	}
+	problem, dashTLS := dashboard()
+	if problem == nil || revealsTheSecret(problem.Message) || !strings.Contains(problem.Message, "may hold stale Secret-backed environment values") ||
+		problem.Duration != "" || !problem.OnsetUnknown {
+		t.Fatalf("degraded dashboard problem = %+v", problem)
+	}
+	if !tls || !dashTLS {
+		t.Fatal("a caller with namespace access lost the missing-TLS finding")
+	}
+
 	perms.SetCanI("get", "", "secrets", "shop", true)
-	if !tlsIssue() || !tlsProblem() {
-		t.Fatal("a caller with Secret access lost the missing-TLS finding")
+	stale, _ = findings()
+	if stale == nil || !strings.Contains(stale.Message, "Secret/db-conn key password") || stale.FirstSeen.IsZero() {
+		t.Fatalf("a caller with Secret access lost the full finding: %+v", stale)
+	}
+	if problem, _ := dashboard(); problem == nil || !strings.Contains(problem.Message, "before Radar observed") || problem.Duration == "" {
+		t.Fatalf("a caller with Secret access lost the full dashboard problem: %+v", problem)
 	}
 }
 

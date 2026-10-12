@@ -91,8 +91,10 @@ type DashboardProblem struct {
 	DurationSeconds int64  `json:"durationSeconds"` // For sorting by problem age
 	OnsetUnknown    bool   `json:"onsetUnknown,omitempty"`
 	PodCount        int    `json:"podCount,omitempty"` // For workload rollups: number of affected pods
-	// requiredReads are the detection's evidence, checked like an issue's.
+	// requiredReads are the detection's evidence, checked like an issue's;
+	// degraded is what a caller who can't make them sees instead.
 	requiredReads []issues.EvidenceRead
+	degraded      *issues.DegradedFinding
 }
 
 // mergeResourceCounts adds src's per-namespace counts into dst. Cluster-scoped
@@ -381,9 +383,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			if p.Namespace == "" && !canReadClusterScoped(p.Kind, p.Group) {
 				continue
 			}
-			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) ||
-				!issues.CanReadIssueEvidence(issues.Issue{RequiredReads: p.requiredReads}, canReadEvidence, false) {
+			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
 				continue
+			}
+			switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
+			case issues.EvidenceWithheld:
+				continue
+			case issues.EvidenceDegraded:
+				p.Message = p.degraded.Message
+				p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
 			}
 			resp.Problems = append(resp.Problems, p)
 		}
@@ -686,6 +694,7 @@ func detectionToDashboardProblem(p k8s.Detection) DashboardProblem {
 		DurationSeconds: p.DurationSeconds,
 		OnsetUnknown:    p.OnsetUnknown,
 		requiredReads:   p.RequiredReads,
+		degraded:        p.Degraded,
 	}
 }
 

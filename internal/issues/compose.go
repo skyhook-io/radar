@@ -175,7 +175,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	out = applyClusterScopedAccess(out, f)
 	out = applySubjectAccess(out, f.CanReadSubject)
 	out = applyOwnerAccess(out, f)
-	out = filterEvidenceAccess(out, f.CanReadEvidence, f.AllowUnfilteredEvidence, f.OnEvidenceWithheld)
+	out = applyEvidenceAccess(out, f.CanReadEvidence, f.AllowUnfilteredEvidence, f.OnEvidenceWithheld)
 	out = redactUnreadableRelatedRefs(out, f.CanReadRelated)
 	out = dedupePodSchedulingOverProblem(out)
 	// Same-resource structural-root → symptom: fold a pod's runtime symptom into

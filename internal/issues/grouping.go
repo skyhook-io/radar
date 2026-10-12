@@ -78,14 +78,16 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		}
 		return opts.CanReadSubject == nil || opts.CanReadSubject(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name})
 	}
-	canReadEvidence := func(i Issue) bool {
-		if CanReadIssueEvidence(i, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
-			return true
-		}
-		if opts.OnEvidenceWithheld != nil {
+	forEvidence := func(i Issue) (Issue, bool) {
+		shown, ok := ForEvidence(i, opts.CanReadEvidence, opts.AllowUnfilteredEvidence)
+		if !ok && opts.OnEvidenceWithheld != nil {
 			opts.OnEvidenceWithheld(i)
 		}
-		return false
+		return shown, ok
+	}
+	canReadEvidence := func(i Issue) bool {
+		_, ok := forEvidence(i)
+		return ok
 	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
 	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
@@ -115,8 +117,11 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 	}
 	var out []Issue
 	for _, g := range grouped {
-		if matched[g.ID] && canReadSubject(g) && canReadEvidence(g) {
-			out = append(out, g)
+		if !matched[g.ID] || !canReadSubject(g) {
+			continue
+		}
+		if shown, ok := forEvidence(g); ok {
+			out = append(out, shown)
 		}
 	}
 	return out
@@ -200,6 +205,7 @@ func foldGroup(members []Issue) Issue {
 		// links / change context.
 		DiagnosticContext: rep.DiagnosticContext,
 		ChangeContext:     rep.ChangeContext,
+		Degraded:          rep.Degraded,
 	}
 	reads := map[EvidenceRead]bool{}
 	for _, member := range members {
