@@ -63,24 +63,20 @@ assert_not_contains '--opencost-currency='          "default OpenCost currency f
 echo
 
 render "VictoriaMetrics defaults — no collection of credential-bearing objects"
-assert_not_contains 'operator.victoriametrics.com'    "VictoriaMetrics collector grant is opt-in"
+assert_not_contains 'operator.victoriametrics.com'    "no VictoriaMetrics grant without cluster-wide Secrets reads"
 echo
 
-render "VictoriaMetrics enabled — only reviewed workload resources" --set rbac.crdGroups.victoriaMetrics=true
+render "Secrets enabled — only reviewed VictoriaMetrics workload resources" --set rbac.secrets=true
 assert_contains 'apiGroups: \["operator.victoriametrics.com"\]' "VictoriaMetrics operator group"
 assert_contains 'resources: \["vmagents", "vmclusters", "vmsingles"\]' "finite workload allowlist"
 assert_not_contains 'resources:.*(vmusers|vmauths|vmalerts|vmalertmanagers|vmrules|vmscrapeconfigs)' "no credential/configuration kinds"
 echo
 
-render "VictoriaMetrics disabled — no operator grant" --set rbac.crdGroups.victoriaMetrics=false
-assert_not_contains 'operator.victoriametrics.com'    "explicit false preserved"
+render "Secrets disabled — no VictoriaMetrics operator grant" --set rbac.secrets=false
+assert_not_contains 'operator.victoriametrics.com'    "explicit false matches defaults"
 echo
 
-render "VictoriaMetrics absent — no operator grant" --set rbac.crdGroups.victoriaMetrics=null
-assert_not_contains 'operator.victoriametrics.com'    "absent key stays off"
-echo
-
-render "Wildcard collection overrides VictoriaMetrics opt-out" --set rbac.crdGroups.all=true --set rbac.crdGroups.victoriaMetrics=false
+render "Wildcard collection includes VictoriaMetrics" --set rbac.crdGroups.all=true
 assert_contains 'apiGroups: \["\*"\]'               "wildcard includes every API group"
 assert_contains 'resources: \["\*"\]'               "wildcard includes core Secrets and excluded CRDs"
 echo
@@ -102,14 +98,21 @@ assert_differs() {
 
 rbac_checksum "checksum/rbac — defaults"
 DEFAULT_CHECKSUM=$CHECKSUM
+DEFAULT_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules' <<< "$OUT")
 if [[ "$DEFAULT_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]; then pass "pod template carries an RBAC checksum"
 else fail "pod template carries an RBAC checksum — got: $DEFAULT_CHECKSUM"; fi
-rbac_checksum "checksum/rbac — VictoriaMetrics opt-in" --set rbac.crdGroups.victoriaMetrics=true
-OPT_IN_CHECKSUM=$CHECKSUM
-assert_differs "$OPT_IN_CHECKSUM" "$DEFAULT_CHECKSUM" "enabling the opt-in rolls the pod"
-rbac_checksum "checksum/rbac — VictoriaMetrics opt-in turned back off" --set rbac.crdGroups.victoriaMetrics=false
-assert_differs "$CHECKSUM" "$OPT_IN_CHECKSUM"         "disabling the opt-in rolls the pod"
-assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "explicit false matches the default"
+rbac_checksum "checksum/rbac — Secrets reads enabled" --set rbac.secrets=true
+SECRETS_CHECKSUM=$CHECKSUM
+assert_differs "$SECRETS_CHECKSUM" "$DEFAULT_CHECKSUM" "enabling Secrets and VictoriaMetrics reads rolls the pod"
+ADDED_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] == "operator.victoriametrics.com" or (.apiGroups[0] == "" and .resources[0] == "secrets" and .resourceNames == null)))' <<< "$OUT")
+assert_same "$ADDED_RULES" '[{"apiGroups":[""],"resources":["secrets"],"verbs":["get","list","watch"]},{"apiGroups":["operator.victoriametrics.com"],"resources":["vmagents","vmclusters","vmsingles"],"verbs":["get","list","watch"]}]' "enabling Secrets adds exactly the Secrets and VictoriaMetrics read rules"
+REMAINING_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] != "operator.victoriametrics.com" and (.apiGroups[0] != "" or .resources[0] != "secrets" or .resourceNames != null)))' <<< "$OUT")
+assert_same "$REMAINING_RULES" "$DEFAULT_RULES" "enabling Secrets leaves every other collector rule unchanged"
+rbac_checksum "checksum/rbac — Secrets reads turned back off" --set rbac.secrets=false
+assert_differs "$CHECKSUM" "$SECRETS_CHECKSUM"         "disabling Secrets and VictoriaMetrics reads rolls the pod"
+assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "explicit false matches the default checksum"
+DISABLED_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules' <<< "$OUT")
+assert_same "$DISABLED_RULES" "$DEFAULT_RULES"         "explicit false matches all default collector rules"
 rbac_checksum "checksum/rbac — unrelated values" \
   --set image.tag=v0.0.0-test \
   --set resources.limits.memory=2Gi \

@@ -524,6 +524,23 @@ inspection of the Operator's Kubernetes resources and scrape configuration.
 
 ---
 
+## VictoriaMetrics chart reads
+
+The Helm chart grants Radar cluster-wide `get/list/watch` on VMAgent, VMCluster
+and VMSingle (`vmagents`, `vmclusters`, `vmsingles` in
+`operator.victoriametrics.com`) whenever it grants cluster-wide Secrets reads:
+`rbac.secrets: true`, `rbac.helm: true`, auth enabled (`auth.mode != none`), or
+cloud mode. These objects can carry inline credentials, so they share the same
+grant decision as Secrets. There is no separate VictoriaMetrics setting.
+
+This rule excludes VMUser/VMAuth, alerting and scrape/probe resources, and the
+Logs, Traces, Distributed and Anomaly families. The wildcard
+`rbac.crdGroups.all: true` still grants `get/list/watch` on every API group and
+resource, including core Secrets and these excluded kinds. See the
+[chart reference](../deploy/helm/radar/README.md#crd-access).
+
+---
+
 ## Trivy Operator
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.

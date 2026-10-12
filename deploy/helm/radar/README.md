@@ -413,7 +413,7 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. Common CRD groups are enabled by default, with credential-bearing exceptions such as VictoriaMetrics requiring opt-in. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default. Granting RBAC for CRDs that don't exist has no effect.
 
 **Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
@@ -467,33 +467,18 @@ retain their finite grants.
 | `trivy` | `aquasecurity.github.io` |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
-| `victoriaMetrics` (default `false`) | `operator.victoriametrics.com`: only `vmagents`, `vmclusters`, `vmsingles` |
 
-**VictoriaMetrics collection:** opt in after reviewing the configuration in these
-objects and who can read them through Radar:
+**VictoriaMetrics collection:** the chart grants Radar cluster-wide `get/list/watch`
+on VMAgent, VMCluster and VMSingle (`vmagents`, `vmclusters`, `vmsingles` in
+`operator.victoriametrics.com`) whenever it grants cluster-wide Secrets reads:
+`rbac.secrets: true`, `rbac.helm: true`, auth enabled (`auth.mode != none`), or
+cloud mode. These objects can carry inline credentials, so they share the same
+grant decision as Secrets. There is no separate VictoriaMetrics setting.
 
-```bash
---set rbac.crdGroups.victoriaMetrics=true
-```
-
-The collector can then read VMAgent, VMCluster and VMSingle to inspect the metrics
-stack. This is **not a credential-free resource set**: VMAgent and VMSingle accept
-inline scrape configuration and API-server bearer tokens; VMAgent remote-write
-headers can carry Authorization values. All three accept literal flags, environment
-values and license keys. Use Secret references where supported and keep inline
-credentials out of these objects before enabling collection in shared namespaces.
-
-Collector grants are not Kubernetes caller grants: this flag does not expand the
-Radar Cloud integration-read roles. However, once these objects are collected,
-anyone who can read them through Radar can see their full configuration,
-including any inline credentials. Setting the flag back to `false` ends this
-only when the Radar pod restarts, which `helm upgrade` does automatically.
-
-All other VictoriaMetrics operator kinds are excluded from this flag, including
-VMUser/VMAuth, alerting resources, every scrape/probe resource, and the Logs,
-Traces, Distributed and Anomaly families. They can contain inline credentials,
-literal request headers or unrestricted configuration. `crdGroups.all=true` or
-adding `operator.victoriametrics.com` to `additionalCrdGroups` grants them anyway;
+This rule excludes all other VictoriaMetrics operator kinds, including
+VMUser/VMAuth, alerting and scrape/probe resources, and the Logs, Traces,
+Distributed and Anomaly families. `crdGroups.all=true` or adding
+`operator.victoriametrics.com` to `additionalCrdGroups` grants them anyway;
 permissions are additive, and these exclusions are not deny rules.
 
 **Disable groups:** `--set rbac.crdGroups.calico=false`

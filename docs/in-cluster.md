@@ -446,7 +446,7 @@ Radar doesn't attach image-pull secrets to debug containers or pods — ephemera
 
 ### CRD Permissions
 
-Radar reads CRDs from many popular tools. Each CRD group can be toggled individually:
+Radar reads CRDs from many popular tools. Common CRD groups can be toggled individually:
 
 ```yaml
 rbac:
@@ -464,7 +464,6 @@ rbac:
     prometheus: true    # monitoring.coreos.com
     traefik: true       # traefik.io
     velero: true        # velero.io
-    victoriaMetrics: false  # opt-in: vmagents, vmclusters, vmsingles (operator.victoriametrics.com)
     # ... and 25+ more (see values.yaml for full list)
   additionalCrdGroups: []   # Add custom API groups
   additionalRules: []       # Arbitrary extra ClusterRole rules
@@ -472,7 +471,7 @@ rbac:
 
 Calico access is read-only (`get`, `list`, and `watch`) for both API groups and is enabled by default. Set `rbac.crdGroups.calico=false` to disable it. If chart-managed Calico access is disabled, grant only the resources you need through `rbac.additionalRules`; both groups may be required while a cluster exposes modern and legacy Calico APIs.
 
-VictoriaMetrics access is opt-in because VMAgent, VMCluster and VMSingle can carry inline credentials. Read the [chart reference](../deploy/helm/radar/README.md#crd-access) before enabling it.
+The chart grants cluster-wide `get/list/watch` on VictoriaMetrics VMAgent, VMCluster and VMSingle whenever it grants cluster-wide Secrets reads: `rbac.secrets: true`, `rbac.helm: true`, auth enabled (`auth.mode != none`), or cloud mode. These objects can carry inline credentials, so they share the same grant decision as Secrets; there is no separate VictoriaMetrics setting. All other VictoriaMetrics kinds are excluded from this rule. See the [chart reference](../deploy/helm/radar/README.md#crd-access) for exclusions and wildcard grants.
 
 Radar decides what it can read at startup, so RBAC changes take effect when the Radar pod restarts. `helm upgrade` rolls the pod whenever `rbac` values change; restart Radar yourself after changing its RBAC outside Helm.
 
@@ -630,7 +629,6 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.viewNodeRuntime` | Inspect kubelet metrics and effective configuration for upgrade impact | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | `get/list/watch` on every API group and resource, including core Secrets; overrides per-group flags | `false` |
-| `rbac.crdGroups.victoriaMetrics` | Read VMAgent, VMCluster and VMSingle, which can contain inline credentials | `false` |
 
 **Response compression:** Radar gzip-compresses HTTP responses by default (streaming endpoints like SSE are excluded). The level defaults to `1` (best speed), since on large clusters peak response size coincides with peak CPU. Set the `RADAR_COMPRESS_LEVEL` environment variable (via the chart's pod `env`) to `0` to disable, or `2`-`9` to trade CPU for smaller bodies on bandwidth-bound deployments.
 

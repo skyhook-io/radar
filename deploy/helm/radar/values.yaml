@@ -94,6 +94,7 @@ rbac:
   # no-auth installs. The grant is cluster-wide get/list/watch on all Secrets, and
   # setting this to false does not remove it in those modes: read the rendered
   # ClusterRole.
+  # Also grants VictoriaMetrics VMAgent, VMCluster and VMSingle reads (inline credentials).
   secrets: false
 
   # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
@@ -158,7 +159,7 @@ rbac:
   # metrics panels. Safe to enable — read-only on the aggregated metrics API.
   metrics: true
 
-  # CRD access - common groups enabled by default; credential-bearing exceptions are opt-in
+  # CRD access - common groups enabled by default
   # Granting RBAC for CRDs that don't exist has no effect.
   crdGroups:
     # Grants get/list/watch on */*: every API group and resource, including
@@ -220,13 +221,6 @@ rbac:
     trivy: true             # aquasecurity.github.io
     velero: true            # velero.io
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
-    # operator.victoriametrics.com: only vmagents, vmclusters and vmsingles.
-    # Opt-in: inline scrape config, remote-write headers, extraArgs and license
-    # keys can contain credentials. Anyone who can read collected objects
-    # through Radar sees that configuration; this flag adds no Kubernetes
-    # caller grants.
-    # All other kinds, including vmusers/vmauths, remain excluded.
-    victoriaMetrics: false
     volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh
 
   # Additional CRD API groups for custom/unlisted CRDs
