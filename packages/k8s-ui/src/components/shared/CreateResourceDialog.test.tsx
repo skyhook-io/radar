@@ -189,3 +189,24 @@ it.each(['back', 'reopen', 'cancel'])('retires a successful-write close timer wh
     expect(onBack).toHaveBeenCalledTimes(choice === 'back' ? 1 : 0)
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers() }
 })
+
+
+it.each([false, true])('shows real partial-create recovery without a preview (locked=%s)', async lockMode => {
+  const onApply = vi.fn(async () => { throw Object.assign(new Error('document 2: configmaps "second" already exists'), { appliedResults: [{ kind: 'ConfigMap', namespace: 'app', name: 'first', uid: 'real-first-uid' }] }) })
+  const onCreated = vi.fn()
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host)
+  try {
+    await act(async () => root.render(<CreateResourceDialog open onClose={() => {}} initialYaml="kind: ConfigMap" initialMode="create" lockMode={lockMode} onApply={onApply} isApplying={false} onCreated={onCreated} />))
+    await act(async () => button('Create')!.click())
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
+    expect(onCreated).not.toHaveBeenCalled()
+    if (lockMode) {
+      expect(document.querySelector('[aria-label="Apply mode"]')).toBeNull()
+      expect(document.body.textContent).not.toContain('Switch to Apply mode')
+      expect(document.body.textContent).toContain('This dialog only creates')
+    } else {
+      expect(document.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('apply')
+      expect(document.body.textContent).toContain('Radar switched to Apply mode')
+    }
+  } finally { await act(async () => root.unmount()); host.remove() }
+})

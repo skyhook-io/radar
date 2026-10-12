@@ -298,6 +298,16 @@ export function CreateResourceDialog({
     [loadFiles],
   )
 
+  const recoverPartialCreate = useCallback((caught: unknown, submittedYaml: string, appliedMode: 'apply' | 'create', wasDryRun: boolean) => {
+    const appliedResults = caught instanceof Error && 'appliedResults' in caught && Array.isArray(caught.appliedResults) ? caught.appliedResults : []
+    if (appliedMode !== 'create' || wasDryRun || appliedResults.length === 0) return false
+    setYaml(submittedYaml)
+    if (!lockMode) setMode('apply')
+    setPreview(null)
+    setPartialCreates(appliedResults)
+    return true
+  }, [lockMode])
+
   const handleSubmit = useCallback(async () => {
     if (!yaml.trim()) {
       setError('YAML content is required')
@@ -329,8 +339,9 @@ export function CreateResourceDialog({
       finishApply(results, mode, dryRun, yaml)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unknown error')
+      if (!onPreview) recoverPartialCreate(caught, yaml, mode, dryRun)
     }
-  }, [yaml, mode, dryRun, force, onApply, onPreview, finishApply])
+  }, [yaml, mode, dryRun, force, onApply, onPreview, finishApply, recoverPartialCreate])
 
   const handleApplyReviewed = useCallback(async () => {
     if (!preview) return
@@ -349,21 +360,8 @@ export function CreateResourceDialog({
       finishApply(results, preview.mode, false, preview.yaml)
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Unknown error'
-      const appliedResults =
-        caught instanceof Error &&
-        'appliedResults' in caught &&
-        Array.isArray(caught.appliedResults)
-          ? caught.appliedResults
-          : []
-      if (preview.mode === 'create' && appliedResults.length > 0) {
-        setYaml(preview.yaml)
-        if (!lockMode) setMode('apply')
-        setPreview(null)
-        setPartialCreates(appliedResults)
-        setError(message)
-        return
-      }
       setError(message)
+      if (recoverPartialCreate(caught, preview.yaml, preview.mode, false)) return
       if (onPreview) {
         try {
           const refreshed = await onPreview({
@@ -382,7 +380,7 @@ export function CreateResourceDialog({
         }
       }
     }
-  }, [preview, onApply, onPreview, finishApply, lockMode])
+  }, [preview, onApply, onPreview, finishApply, recoverPartialCreate])
 
   const dialogTitle = title || 'Create Resource'
   const showModeControls = !lockMode
