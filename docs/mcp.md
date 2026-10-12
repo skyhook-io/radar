@@ -520,7 +520,8 @@ repository path the vendor
 publishes (`victoriametrics/operator`, `fluxcd/<controller>`,
 `argoproj/argocd` running `argocd-application-controller`,
 `karpenter/controller`), ignoring registry host, tag and digest, so a renamed
-install (a Helm `nameOverride`) or a mirror that keeps the path is still
+install (a Helm `nameOverride`) or a mirror that preserves the vendor path
+as trailing segments (including a proxy-cache prefix) is still
 recognized. Image matching excludes containers named `config-reloader` and
 `victoriametrics/operator` tags starting with `config-reloader`: these run in
 managed workloads, sharing the operator's image repository. A matched workload

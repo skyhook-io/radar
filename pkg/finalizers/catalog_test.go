@@ -33,7 +33,7 @@ func TestOwnerMatchesWorkload(t *testing.T) {
 		{name: "catalog name", finalizer: "apps.victoriametrics.com/finalizer", root: vm, workload: "vm-victoria-metrics-operator", want: true},
 		{name: "renamed install by Docker Hub image", finalizer: "apps.victoriametrics.com/finalizer", root: vm, workload: "vmop", labels: renamed, template: containers("victoriametrics/operator:v0.50.0"), want: true},
 		{name: "renamed install by mirrored image", finalizer: "apps.victoriametrics.com/finalizer", root: vm, workload: "vmop", labels: renamed, template: containers("mirror.example.com:5000/victoriametrics/operator:v0.50.0@sha256:0123"), want: true},
-		{name: "mirror that changes the path", finalizer: "apps.victoriametrics.com/finalizer", root: vm, workload: "vmop", labels: renamed, template: containers("mirror.example.com/dockerhub/victoriametrics/operator:v0.50.0")},
+		{name: "mirror that prefixes the path", finalizer: "apps.victoriametrics.com/finalizer", root: vm, workload: "vmop", labels: renamed, template: containers("mirror.example.com/dockerhub/victoriametrics/operator:v0.50.0"), want: true},
 		{name: "renamed install of another image", finalizer: "apps.victoriametrics.com/finalizer", root: vm, workload: "vmop", labels: renamed, template: containers("victoriametrics/vmagent:v1.100.0")},
 		{name: "flux controller by ghcr image", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", root: kustomization, workload: "kc", template: containers("ghcr.io/fluxcd/kustomize-controller:v1.4.0"), want: true},
 		{name: "flux controller image of a sibling", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", root: kustomization, workload: "hc", template: containers("ghcr.io/fluxcd/helm-controller:v1.1.0")},
@@ -278,6 +278,9 @@ func TestFluxHelmControllerRequiresPublishedImage(t *testing.T) {
 		{"unrelated private controller", "private.example/team/helm-controller:v1", false},
 		{"Flux controller", "ghcr.io/fluxcd/helm-controller:v1.1.0", true},
 		{"Flux controller mirrored", "mirror.example/fluxcd/helm-controller@sha256:abc", true},
+		{"Flux controller proxy cache", "harbor.example/ghcr-proxy/fluxcd/helm-controller:v1", true},
+		{"Flux controller prefix mirror", "registry.example/oss/fluxcd/helm-controller:v1", true},
+		{"vendor segment must match", "registry.example/team/notfluxcd/helm-controller:v1", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			identity := metav1.ObjectMeta{Name: "helm-controller", Labels: map[string]string{"app": "helm-controller"}}

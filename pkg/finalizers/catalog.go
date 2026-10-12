@@ -40,7 +40,7 @@ type Owner struct {
 	// unreviewed cleanup semantics, off-cluster controllers or infrastructure.
 	AllowConditionalCleanup bool
 	// Images are the repository paths of the controller's published image,
-	// without registry host, tag or digest, so a mirror that keeps the path
+	// without registry host, tag or digest, so a mirror that prefixes the path
 	// still matches. They recognize installs whose names and labels were
 	// changed (a Helm nameOverride renames both).
 	Images []string
@@ -235,7 +235,10 @@ func (o *Owner) MatchesPod(labels map[string]string, spec corev1.PodSpec) bool {
 }
 
 func (o *Owner) runsImage(container corev1.Container) bool {
-	if !slices.Contains(o.Images, imageRepositoryPath(container.Image)) {
+	repository := imageRepositoryPath(container.Image)
+	if !slices.ContainsFunc(o.Images, func(image string) bool {
+		return repository == image || strings.HasSuffix(repository, "/"+image)
+	}) {
 		return false
 	}
 	return o.matchesImageRole == nil || o.matchesImageRole(container)
