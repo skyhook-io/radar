@@ -15,6 +15,8 @@ type PodSpecReference struct {
 	Optional bool
 }
 
+// PodSpecReferences retains distinct optionality at a shared path because
+// different containers can declare the same target with different requirements.
 func PodSpecReferences(namespace string, spec corev1.PodSpec) []PodSpecReference {
 	seen := map[PodSpecReference]bool{}
 	add := func(kind, name, path string, optional *bool) {
@@ -110,7 +112,10 @@ func PodSpecReferences(namespace string, spec corev1.PodSpec) []PodSpecReference
 		result = append(result, ref)
 	}
 	slices.SortFunc(result, func(a, b PodSpecReference) int {
-		if order := cmp.Compare(a.Key(), b.Key()); order != 0 {
+		if order := cmp.Compare(a.Kind, b.Kind); order != 0 {
+			return order
+		}
+		if order := cmp.Compare(a.Name, b.Name); order != 0 {
 			return order
 		}
 		if order := cmp.Compare(a.Path, b.Path); order != 0 {

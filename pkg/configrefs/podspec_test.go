@@ -85,12 +85,29 @@ func TestPodSpecReferencesHistoricalVolumeSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := PodSpecReferences("ns", spec)
-	if len(got) != 8 {
-		t.Fatalf("historical volume references = %#v, want all eight", got)
+	want := []PodSpecReference{
+		{Ref{"Secret", "ns", "azure"}, "volumes[].azureFile.secretName", false},
+		{Ref{"Secret", "ns", "ceph"}, "volumes[].cephfs.secretRef.name", false},
+		{Ref{"Secret", "ns", "cinder"}, "volumes[].cinder.secretRef.name", false},
+		{Ref{"Secret", "ns", "flex"}, "volumes[].flexVolume.secretRef.name", false},
+		{Ref{"Secret", "ns", "iscsi"}, "volumes[].iscsi.secretRef.name", false},
+		{Ref{"Secret", "ns", "rbd"}, "volumes[].rbd.secretRef.name", false},
+		{Ref{"Secret", "ns", "scale"}, "volumes[].scaleIO.secretRef.name", false},
+		{Ref{"Secret", "ns", "storage"}, "volumes[].storageos.secretRef.name", false},
 	}
-	for _, ref := range got {
-		if ref.Kind != "Secret" || ref.Namespace != "ns" || ref.Name == "" || ref.Path == "" {
-			t.Fatalf("invalid reference: %#v", ref)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("historical volume references = %#v, want %#v", got, want)
+	}
+}
+
+func TestPodSpecReferencesPreservesDistinctOptionality(t *testing.T) {
+	optional := true
+	spec := corev1.PodSpec{Containers: []corev1.Container{
+		{EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Optional: &optional}}}},
+		{EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}},
+	}}
+	want := []PodSpecReference{{Ref{"ConfigMap", "ns", "settings"}, "containers[].envFrom[].configMapRef.name", false}, {Ref{"ConfigMap", "ns", "settings"}, "containers[].envFrom[].configMapRef.name", true}}
+	if got := PodSpecReferences("ns", spec); !reflect.DeepEqual(got, want) {
+		t.Fatalf("distinct declaration requirements = %#v, want %#v", got, want)
 	}
 }

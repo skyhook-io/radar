@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -2073,9 +2072,29 @@ func TestBuild_PodSpecConsumersRequireCoreTargetGroup(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "consumer", Namespace: "team"}, Spec: spec}
 	provider := mockResourceProvider{pods: []*corev1.Pod{pod}}
-	refs := configrefs.PodSpecReferences("team", spec)
-	if len(refs) != 22 {
-		t.Fatalf("fixture references = %d, want 22", len(refs))
+	refs := []struct{ Kind, Name, Path string }{
+		{"ConfigMap", "env-config", "containers[].envFrom[].configMapRef.name"},
+		{"Secret", "env-secret", "containers[].envFrom[].secretRef.name"},
+		{"ConfigMap", "key-config", "containers[].env[].valueFrom.configMapKeyRef.name"},
+		{"Secret", "key-secret", "containers[].env[].valueFrom.secretKeyRef.name"},
+		{"ConfigMap", "init-config", "initContainers[].envFrom[].configMapRef.name"},
+		{"Secret", "init-secret", "initContainers[].envFrom[].secretRef.name"},
+		{"ConfigMap", "debug-config", "ephemeralContainers[].envFrom[].configMapRef.name"},
+		{"Secret", "debug-secret", "ephemeralContainers[].envFrom[].secretRef.name"},
+		{"ConfigMap", "volume-config", "volumes[].configMap.name"},
+		{"Secret", "volume-secret", "volumes[].secret.secretName"},
+		{"ConfigMap", "projected-config", "volumes[].projected.sources[].configMap.name"},
+		{"Secret", "projected-secret", "volumes[].projected.sources[].secret.name"},
+		{"Secret", "pull", "imagePullSecrets[].name"},
+		{"Secret", "csi", "volumes[].csi.nodePublishSecretRef.name"},
+		{"Secret", "flex", "volumes[].flexVolume.secretRef.name"},
+		{"Secret", "azure", "volumes[].azureFile.secretName"},
+		{"Secret", "ceph", "volumes[].cephfs.secretRef.name"},
+		{"Secret", "rbd", "volumes[].rbd.secretRef.name"},
+		{"Secret", "cinder", "volumes[].cinder.secretRef.name"},
+		{"Secret", "scale", "volumes[].scaleIO.secretRef.name"},
+		{"Secret", "iscsi", "volumes[].iscsi.secretRef.name"},
+		{"Secret", "storage", "volumes[].storageos.secretRef.name"},
 	}
 	for _, ref := range refs {
 		t.Run(ref.Kind+"/"+ref.Name, func(t *testing.T) {
