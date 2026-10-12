@@ -169,9 +169,7 @@ func (inv *controllerInventory) eachWorkload(visit func(obj metav1.Object, selec
 // empty then reports that it found no active pods.
 func (inv *controllerInventory) observe(controller, namespace string, selector labels.Selector, match func(*corev1.Pod) bool, workload *matchedWorkload) (observation finalizerObservation, empty bool) {
 	unreadable := func(detail string) (finalizerObservation, bool) {
-		o := unknownController(detail)
-		o.Controller = controller
-		return o, false
+		return finalizerObservation{Controller: controller, Text: controller + " state unknown (" + detail + ")"}, false
 	}
 	if !inv.allowed("", "pods", namespace) {
 		return unreadable("controller pod inventory is unreadable")
@@ -386,6 +384,9 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 	shown := 0
 	var fixes, restores, guards, unconfirmed, candidates, unidentified []string
 	var cleanups []finalizerCleanup
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion(pr.Group + "/v1")
+	root.SetKind(pr.Kind)
 	for _, finalizer := range pr.TerminatingFinalizers {
 		if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
 			continue
@@ -396,7 +397,10 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 		}
 		observation := finalizerObservation{Text: "controller unknown"}
 		if available {
-			key := pr.Group + "/" + pr.Kind + "/" + finalizer
+			key := pr.Group + "/" + finalizer
+			if owner := finalizers.ResolveOwner(finalizer, root); owner != nil {
+				key = "controller/" + owner.Controller
+			}
 			var cached bool
 			observation, cached = memo[key]
 			if !cached {
@@ -424,7 +428,7 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 				cleanups = append(cleanups, finalizerCleanup{condition: observation.Controller + " was uninstalled on purpose", removal: removal})
 			}
 		case observation.Controller != "":
-			unconfirmed = append(unconfirmed, fmt.Sprintf("Radar can't confirm from this cluster whether %s, which owns finalizer %q, is running; check it first.", observation.Controller, finalizer))
+			unconfirmed = append(unconfirmed, fmt.Sprintf("Radar can't confirm with your access to this cluster whether %s, which owns finalizer %q, is running; check it first.", observation.Controller, finalizer))
 		case observation.Candidate != "":
 			candidates = append(candidates, fmt.Sprintf("Radar couldn't confirm which controller owns finalizer %q; %s resembles its API group by name only. Check whether it handles this finalizer first.", finalizer, observation.Candidate))
 		default:
@@ -446,6 +450,9 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 	}
 	if running {
 		pr.Action = "A matching controller is running and may be working on cleanup. Check its logs, permissions, and deletion-blocking references before taking further action."
+		if len(fixes) > 0 {
+			pr.Action += " " + strings.Join(fixes, " ")
+		}
 		if len(guards) > 0 {
 			pr.Action += " Kubernetes protection finalizers are in-use guards; resolve objects referencing this resource rather than bypassing them."
 		}

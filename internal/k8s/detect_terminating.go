@@ -25,7 +25,7 @@ func DetectDynamicTerminatingProblems(dynamic *DynamicResourceCache, discovery *
 	for _, gvr := range dynamic.WatchedGVRs() {
 		kind := discovery.GetKindForGVR(gvr)
 		resource, found := discovery.GetResourceWithGroup(kind, gvr.Group)
-		if !found || !resource.IsCRD || !dynamic.IsSynced(gvr) {
+		if !found || !resource.IsCRD {
 			continue
 		}
 		if len(selected) > 0 && !resource.Namespaced {
@@ -38,6 +38,9 @@ func DetectDynamicTerminatingProblems(dynamic *DynamicResourceCache, discovery *
 		}
 		allowedNamespaces := map[string]bool{}
 		for _, obj := range items {
+			if !dynamic.IsNamespaceSynced(gvr, obj.GetNamespace()) {
+				continue
+			}
 			if len(selected) > 0 && !selected[obj.GetNamespace()] {
 				continue
 			}

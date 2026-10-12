@@ -2,17 +2,23 @@ package k8s
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	jsonpatch "github.com/evanphx/json-patch"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestDynamicTerminatingProblems(t *testing.T) {
@@ -208,5 +214,58 @@ func TestIsProtectionFinalizer(t *testing.T) {
 		if got := IsProtectionFinalizer(finalizer); got != want {
 			t.Errorf("IsProtectionFinalizer(%q) = %v, want %v", finalizer, got, want)
 		}
+	}
+}
+
+func TestDynamicTerminationUsesEachNamespacesSync(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "partial.radar.test", Version: "v1", Resource: "widgets"}
+	now := time.Now()
+	widget := &unstructured.Unstructured{}
+	widget.SetAPIVersion(gvr.Group + "/" + gvr.Version)
+	widget.SetKind("Widget")
+	widget.SetName("stuck")
+	widget.SetNamespace("ready")
+	widget.SetUID("partial-widget")
+	widget.SetCreationTimestamp(metav1.NewTime(now.Add(-24 * time.Hour)))
+	widget.SetDeletionTimestamp(&metav1.Time{Time: now.Add(-2 * time.Hour)})
+	widget.SetFinalizers([]string{"partial.radar.test/cleanup"})
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, widget)
+	var stalledLists atomic.Int32
+	client.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		switch action.GetNamespace() {
+		case "":
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("namespace scoped"))
+		case "stalled":
+			if stalledLists.Add(1) > 1 {
+				return true, nil, errors.New("namespace informer unavailable")
+			}
+		}
+		return false, nil, nil
+	})
+	coreDiscovery, err := k8score.NewResourceDiscovery(fake.NewClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreDiscovery.AddAPIResource(APIResource{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}})
+	coreCache, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: client, Discovery: coreDiscovery, NamespaceFallbacks: []string{"ready", "stalled"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(coreCache.Stop)
+	if err := coreCache.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !coreCache.IsNamespaceSynced(gvr, "ready") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !coreCache.IsNamespaceSynced(gvr, "ready") || coreCache.IsSynced(gvr) {
+		t.Fatal("expected one synced namespace and one stalled informer")
+	}
+	dynamic := &DynamicResourceCache{DynamicResourceCache: coreCache}
+	discovery := &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
+	out := DetectDynamicTerminatingProblems(dynamic, discovery, []string{"ready"}, now, nil)
+	if len(out) != 1 || out[0].Namespace != "ready" || out[0].Name != "stuck" {
+		t.Fatalf("the synced namespace's deletion must remain visible: %+v", out)
 	}
 }

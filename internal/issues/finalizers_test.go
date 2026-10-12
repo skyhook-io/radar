@@ -63,12 +63,12 @@ func TestFinalizerOwnerObservation(t *testing.T) {
 		{name: "karpenter", finalizer: "karpenter.sh/termination", group: "karpenter.sh", want: "karpenter is healthy (1 pod ready)"},
 		{name: "karpenter AWS provider", finalizer: "karpenter.k8s.aws/termination", group: "karpenter.k8s.aws", want: "karpenter is healthy (1 pod ready)"},
 		{name: "karpenter Azure provider", finalizer: "karpenter.azure.com/termination", group: "karpenter.azure.com", want: "karpenter is healthy (1 pod ready)"},
-		{name: "workloads readable pods denied", finalizer: "widgets.example.com/cleanup", group: "widgets.example.com", want: "controller unknown (controller pod inventory is unreadable)", access: func(_, resource, _ string) bool { return resource != "pods" }},
+		{name: "workloads readable pods denied", finalizer: "widgets.example.com/cleanup", group: "widgets.example.com", want: "state unknown (controller pod inventory is unreadable)", access: func(_, resource, _ string) bool { return resource != "pods" }},
 		{name: "pods readable workloads denied", finalizer: "widgets.example.com/cleanup", group: "widgets.example.com", want: "controller unknown", access: func(_, resource, _ string) bool { return resource == "pods" }},
 		{name: "unknown", finalizer: "unknown.example.com/cleanup", group: "unknown.example.com", want: "controller unknown"},
-		{name: "catalog unreadable", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", want: "controller unknown", access: func(string, string, string) bool { return false }},
+		{name: "catalog unreadable", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", want: "kustomize-controller state unknown", access: func(string, string, string) bool { return false }},
 		{name: "hidden heuristic workload", finalizer: "widgets.example.com/cleanup", group: "widgets.example.com", want: "controller unknown", access: func(_, _, namespace string) bool { return namespace == "visible" }},
-		{name: "hidden catalog custom workload", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", want: "controller unknown", access: func(_, _, namespace string) bool { return namespace == "visible" }},
+		{name: "hidden catalog custom workload", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", want: "victoria-metrics-operator state unknown", access: func(_, _, namespace string) bool { return namespace == "visible" }},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -94,14 +94,14 @@ func TestFinalizerOwnerObservation(t *testing.T) {
 	if got := p.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", Ref{Group: "operator.victoriametrics.com"}, nil).Text; !strings.Contains(got, "no recognized controller found") || !strings.Contains(got, "across the watched cluster") {
 		t.Fatal(got)
 	}
-	if got := p.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", Ref{Group: "operator.victoriametrics.com"}, func(_, _, namespace string) bool { return namespace == "visible" }).Text; !strings.Contains(got, "controller unknown") {
+	if got := p.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", Ref{Group: "operator.victoriametrics.com"}, func(_, _, namespace string) bool { return namespace == "visible" }).Text; !strings.Contains(got, "victoria-metrics-operator state unknown") {
 		t.Fatal(got)
 	}
 	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(), map[string]k8score.ResourceScope{"pods": {Enabled: true, Namespace: "visible"}}); err != nil {
 		t.Fatal(err)
 	}
 	p = NewCacheProvider()
-	if got := p.FinalizerOwnerStatus("finalizers.helm.toolkit.fluxcd.io", Ref{Group: "helm.toolkit.fluxcd.io"}, nil).Text; !strings.Contains(got, "controller unknown") {
+	if got := p.FinalizerOwnerStatus("finalizers.helm.toolkit.fluxcd.io", Ref{Group: "helm.toolkit.fluxcd.io"}, nil).Text; !strings.Contains(got, "helm-controller state unknown") {
 		t.Fatal(got)
 	}
 }
@@ -193,11 +193,15 @@ func TestIssuesDynamicTerminationAuthorization(t *testing.T) {
 type observingFinalizerProvider struct {
 	fakeProvider
 	observation finalizerObservation
+	byFinalizer map[string]finalizerObservation
 	calls       int
 }
 
-func (p *observingFinalizerProvider) FinalizerOwnerStatus(string, Ref, func(string, string, string) bool) finalizerObservation {
+func (p *observingFinalizerProvider) FinalizerOwnerStatus(finalizer string, _ Ref, _ func(string, string, string) bool) finalizerObservation {
 	p.calls++
+	if observation, ok := p.byFinalizer[finalizer]; ok {
+		return observation
+	}
 	return p.observation
 }
 
@@ -869,5 +873,39 @@ func TestTerminationCompositionHonorsControllerEvidence(t *testing.T) {
 				t.Fatalf("unreadable controller evidence leaked: %+v", out[0])
 			}
 		})
+	}
+}
+
+func TestMixedFinalizersRetainDownControllerGuidance(t *testing.T) {
+	p := &observingFinalizerProvider{byFinalizer: map[string]finalizerObservation{
+		"example.org/healthy":  {Controller: "healthy-controller", Running: true, Healthy: true, Text: "healthy-controller is healthy"},
+		"example.org/crashing": {Controller: "crashing-controller", Down: true, State: "CrashLoopBackOff", Text: "crashing-controller is CrashLoopBackOff"},
+	}}
+	problem := k8s.Detection{Kind: "Widget", Severity: "critical", TerminatingFinalizers: []string{"example.org/healthy", "example.org/crashing"}}
+	problem = enrichTerminatingProblem(problem, p, nil, map[string]finalizerObservation{})
+	if problem.Severity != "high" || problem.ConditionalCleanup != nil || !strings.Contains(problem.Action, "Fix crashing-controller") || !strings.Contains(problem.Action, "matching controller is running") {
+		t.Fatalf("retain the mixed-finalizer warning policy and both next steps: %+v", problem)
+	}
+}
+
+func TestControllerObservationMemoSharedByCatalogOwner(t *testing.T) {
+	p := &observingFinalizerProvider{observation: finalizerObservation{Controller: "victoria-metrics-operator", Running: true, Healthy: true}}
+	memo := map[string]finalizerObservation{}
+	for _, kind := range []string{"VMAgent", "VMSingle", "VMCluster"} {
+		enrichTerminatingProblem(k8s.Detection{Group: "operator.victoriametrics.com", Kind: kind, TerminatingFinalizers: []string{"apps.victoriametrics.com/finalizer"}}, p, nil, memo)
+	}
+	if p.calls != 1 {
+		t.Fatalf("one catalog owner must be observed once per composition, got %d", p.calls)
+	}
+}
+
+func TestControllerObservationMemoDistinguishesFluxImageOwners(t *testing.T) {
+	p := &observingFinalizerProvider{}
+	memo := map[string]finalizerObservation{}
+	for _, kind := range []string{"ImageUpdateAutomation", "ImageRepository"} {
+		enrichTerminatingProblem(k8s.Detection{Group: "image.toolkit.fluxcd.io", Kind: kind, TerminatingFinalizers: []string{"finalizers.fluxcd.io"}}, p, nil, memo)
+	}
+	if p.calls != 2 {
+		t.Fatalf("image automation and reflector are different owners, got %d observations", p.calls)
 	}
 }
