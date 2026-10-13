@@ -108,3 +108,19 @@ func TryClusterConfiguration(fn func() error) error {
 	}
 	return fn()
 }
+
+// CaptureClusterReads copies clients, caches and OperationContext consistently
+// with context switches, auth recovery and configuration updates. The callback
+// must only copy dependencies: I/O would delay those operations. Startup and
+// shutdown are not serialized here; callers must still check connection readiness.
+func CaptureClusterReads(capture func()) bool {
+	if activeContextOperations.Load() != 0 || !contextOpMu.TryRLock() {
+		return false
+	}
+	defer contextOpMu.RUnlock()
+	if activeContextOperations.Load() != 0 {
+		return false
+	}
+	capture()
+	return true
+}
