@@ -362,8 +362,16 @@ export function adaptDiagnose(
   if (
     apiVersionToGroup(resource.apiVersion) === "kafka.strimzi.io" &&
     (resource.kind === "KafkaConnector" || resource.kind === "KafkaConnect")
-  )
+  ) {
+    if (
+      resource.kind === "KafkaConnector" &&
+      source.confirmedSuccess &&
+      bundleRelevance === "target" &&
+      value.connectorRecoveryObserved === true
+    )
+      builder.coverSemantic(source, "issue");
     return;
+  }
 
   if (Array.isArray(blockersRaw)) {
     for (const { blocker, pods, foldedInto } of blockerGroups) {
@@ -482,8 +490,7 @@ export function adaptDiagnose(
     bundleRelevance === "target" &&
     isDiagnosableWorkloadKind(resource.kind)
   ) {
-    if (relatedValid && context?.relatedApplicationFindings === undefined)
-      builder.coverSemantic(source, "issue");
+    if (relatedValid) builder.coverSemantic(source, "issue");
     if (blockersValid) builder.coverSemantic(source, "startup");
     if (
       crashesValid &&

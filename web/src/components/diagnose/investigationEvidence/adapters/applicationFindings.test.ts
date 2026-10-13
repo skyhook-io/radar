@@ -101,6 +101,7 @@ describe("cached application findings", () => {
         },
         {
           verify: true,
+          status: "done",
           timeline: [
             tool("verify", "diagnose", {
               resource: deployment,
@@ -158,6 +159,91 @@ describe("cached application findings", () => {
         }),
       ]);
       expect(groupsOf(result.groups, "receipt")).toHaveLength(0);
+    },
+  );
+
+  it("still retires the parent's own repaired issue while retaining connector proof", () => {
+    const result = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("read", "diagnose", {
+              resource: deployment,
+              relatedIssues: [criticalIssue],
+              resourceContext: context,
+            }),
+          ],
+        },
+        {
+          verify: true,
+          status: "done",
+          timeline: [
+            tool("verify", "diagnose", {
+              resource: deployment,
+              relatedIssues: [],
+              resourceContext: {
+                ...context,
+                relatedApplicationFindings: {
+                  ...context.relatedApplicationFindings,
+                  findings: [],
+                },
+              },
+            }),
+          ],
+        },
+      ],
+      target,
+    );
+    expect(
+      groupsOf(result.groups, "issue").find(
+        (group) => group.identity === `issue:${criticalIssue.id}`,
+      )?.historical,
+    ).toBe(true);
+    expect(
+      groupsOf(result.groups, "issue").find(
+        (group) => group.identity === `issue:${connector.id}`,
+      )?.historical,
+    ).toBe(false);
+  });
+
+  it.each([true, false])(
+    "retires a connector target only with explicit observed recovery (%s)",
+    (recovered) => {
+      const resource = {
+        apiVersion: "kafka.strimzi.io/v1",
+        kind: "KafkaConnector",
+        metadata: { namespace: "shop", name: "sink" },
+      };
+      const result = projectInvestigationEvidence(
+        [
+          {
+            timeline: [
+              tool("read", "get_resource", {
+                resource: deployment,
+                resourceContext: context,
+              }),
+            ],
+          },
+          {
+            verify: true,
+            status: "done",
+            timeline: [
+              tool("verify", "diagnose", {
+                resource,
+                resourceContext: { tier: "basic" },
+                connectorRecoveryObserved: recovered,
+              }),
+            ],
+          },
+        ],
+        {
+          group: "kafka.strimzi.io",
+          kind: "KafkaConnector",
+          namespace: "shop",
+          name: "sink",
+        },
+      );
+      expect(groupsOf(result.groups, "issue")[0].historical).toBe(recovered);
     },
   );
 

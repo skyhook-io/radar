@@ -47,15 +47,17 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 	// Connector configuration and raw exception traces can contain credentials.
 	// Diagnosis needs only identity and the existing curated issue projection.
 	resp := struct {
-		Resource        any                              `json:"resource"`
-		ResourceContext *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
-		RelatedIssues   []issues.Issue                   `json:"relatedIssues,omitempty"`
-		Coverage        string                           `json:"coverage"`
+		ConnectorRecoveryObserved bool                             `json:"connectorRecoveryObserved,omitempty"`
+		Resource                  any                              `json:"resource"`
+		ResourceContext           *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
+		RelatedIssues             []issues.Issue                   `json:"relatedIssues,omitempty"`
+		Coverage                  string                           `json:"coverage"`
 	}{
-		Coverage:        "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
-		Resource:        map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
-		ResourceContext: &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx))},
-		RelatedIssues:   issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name),
+		ConnectorRecoveryObserved: kind == "KafkaConnector" && issues.StrimziConnectorRecoveryObserved(obj),
+		Coverage:                  "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
+		Resource:                  map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
+		ResourceContext:           &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx))},
+		RelatedIssues:             issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name),
 	}
 	return toJSONResult(resp)
 }

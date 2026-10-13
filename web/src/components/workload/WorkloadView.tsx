@@ -1313,7 +1313,7 @@ export function WorkloadView({
                   }) : undefined}
                 />
                 <p className="text-xs text-theme-text-secondary">
-                  Associated with KafkaConnect {resourceResponse.relatedApplicationFindings.source.name}; these findings do not establish a problem in this resource.
+                  Associated with {resourceResponse.relatedApplicationFindings.source.kind} {resourceResponse.relatedApplicationFindings.source.name}; these are connector-level findings. This resource's status is reported separately.
                   {' '}{resourceResponse.relatedApplicationFindings.coverage}
                   {resourceResponse.relatedApplicationFindings.truncated && ' Additional connector evidence may be omitted.'}
                 </p>

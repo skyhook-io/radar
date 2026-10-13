@@ -162,3 +162,53 @@ func (p strimziScopedProvider) ListDynamic(gvr schema.GroupVersionResource, ns s
 	}
 	return out, nil
 }
+
+func TestStrimziConnectorRecoveryObserved(t *testing.T) {
+	recovered := func() *unstructured.Unstructured {
+		u := strimziConnectorFixture()
+		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Ready", "status": "True"}}, "status", "conditions")
+		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"id": int64(0), "state": "RUNNING"}}, "status", "connectorStatus", "tasks")
+		return u
+	}
+	if !StrimziConnectorRecoveryObserved(recovered()) {
+		t.Fatal("explicit current recovery omitted")
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*unstructured.Unstructured)
+	}{
+		{"stale", func(u *unstructured.Unstructured) { u.SetGeneration(3) }},
+		{"missing status", func(u *unstructured.Unstructured) { unstructured.RemoveNestedField(u.Object, "status") }},
+		{"missing conditions", func(u *unstructured.Unstructured) { unstructured.RemoveNestedField(u.Object, "status", "conditions") }},
+		{"missing tasks", func(u *unstructured.Unstructured) {
+			unstructured.RemoveNestedField(u.Object, "status", "connectorStatus", "tasks")
+		}},
+		{"empty tasks", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{}, "status", "connectorStatus", "tasks")
+		}},
+		{"malformed tasks", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{nil}, "status", "connectorStatus", "tasks")
+		}},
+		{"failed task", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"state": "FAILED"}}, "status", "connectorStatus", "tasks")
+		}},
+		{"paused", func(u *unstructured.Unstructured) {
+			u.SetAnnotations(map[string]string{"strimzi.io/pause-reconciliation": "true"})
+		}},
+		{"paused condition", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "ReconciliationPaused", "status": "True"}}, "status", "conditions")
+		}},
+		{"not ready", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "NotReady", "status": "True"}}, "status", "conditions")
+		}},
+		{"terminating", func(u *unstructured.Unstructured) { now := metav1.Now(); u.SetDeletionTimestamp(&now) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := recovered()
+			tc.change(u)
+			if StrimziConnectorRecoveryObserved(u) {
+				t.Fatal("incomplete observation cleared failure")
+			}
+		})
+	}
+}

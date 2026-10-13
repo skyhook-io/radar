@@ -1294,7 +1294,7 @@ Optional write tool (off by default):
 
 See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors) for the Issues/API/MCP coverage, required read access, and operator-snapshot limitations.
 
-`diagnose` accepts KafkaConnector and KafkaConnect in `kafka.strimzi.io`. Related connector findings in resource context retain their canonical connector identity and the read's run-scoped evidence citation. They do not change the parent's health or issue count. The Findings pane separates them from parent status and shows cached inspection limits; a later parent diagnosis cannot establish connector recovery merely by omitting the snapshot.
+`diagnose` accepts KafkaConnector and KafkaConnect in `kafka.strimzi.io`. Related connector findings in resource context retain their canonical connector identity and the read's run-scoped evidence citation. They do not change the parent's health or issue count. The Findings pane renders connector Issue cards with their own subject and cached inspection limits; a later parent diagnosis cannot establish connector recovery merely by omitting the snapshot. Direct connector verification retires captured failure evidence only when a current Ready/RUNNING snapshot explicitly reports RUNNING tasks; missing, paused, stale or malformed status remains unknown.
 
 ## Available Resources
 

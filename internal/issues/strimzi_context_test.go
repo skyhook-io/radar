@@ -3,6 +3,7 @@ package issues
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -54,6 +55,16 @@ func TestStrimziContextExactAuthorizedAndImmutable(t *testing.T) {
 	if out.Findings[0].ID != direct[0].ID {
 		t.Fatal("canonical finding identity changed")
 	}
+	canonical := Compose(&fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}: {rows[0]}}, kinds: map[schema.GroupVersionResource]string{schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}: "KafkaConnector"}, namespaced: map[schema.GroupVersionResource]bool{schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}: true}}, Filters{})
+	if len(canonical) != 1 {
+		t.Fatalf("canonical findings: %+v", canonical)
+	}
+	// Each projection records its own read time.
+	canonical[0].LastSeen = out.Findings[0].LastSeen
+	if !reflect.DeepEqual(out.Findings[0], canonical[0]) {
+		t.Fatalf("canonical shape differs: related=%+v issues=%+v", out.Findings, canonical)
+	}
+
 }
 func TestStrimziContextOwnerUIDAndMissing(t *testing.T) {
 	connect := contextStrimzi("KafkaConnect", "app", "connect")
@@ -146,5 +157,53 @@ func TestStrimziCandidateBudgetPrecedesAuthorizationAndRelevance(t *testing.T) {
 				t.Fatalf("oversized namespace triggered permission checks: %d", calls)
 			}
 		})
+	}
+}
+
+func TestStrimziContextModernOwnerChain(t *testing.T) {
+	connect := contextStrimzi("KafkaConnect", "app", "connect")
+	podset := contextStrimzi("StrimziPodSet", "app", "workers")
+	podset.SetAPIVersion("core.strimzi.io/v1beta2")
+	yes, no := true, false
+	podset.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: connect.GetAPIVersion(), Kind: "KafkaConnect", Name: "connect", UID: connect.GetUID(), Controller: &no}})
+	pod := contextStrimzi("Pod", "app", "worker")
+	pod.SetAPIVersion("v1")
+	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: podset.GetAPIVersion(), Kind: "StrimziPodSet", Name: "workers", UID: podset.GetUID(), Controller: &yes}})
+	refs := map[Ref]runtime.Object{
+		{Group: "core.strimzi.io", Kind: "StrimziPodSet", Namespace: "app", Name: "workers"}: podset,
+		{Group: strimziGroup, Kind: "KafkaConnect", Namespace: "app", Name: "connect"}:       connect,
+	}
+	reader := strimziContextReader{get: func(ref Ref) (runtime.Object, error) {
+		if obj, ok := refs[ref]; ok {
+			return obj, nil
+		}
+		return nil, fmt.Errorf("not watched")
+	}, list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+		return []*unstructured.Unstructured{contextConnector("app", "sink", "connect")}, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
+	}}
+	if got := strimziEvidence(pod, nil, reader); got == nil || len(got.Findings) != 1 {
+		t.Fatalf("real chain lost: %+v", got)
+	}
+	podset.SetUID("replacement")
+	if got := strimziEvidence(pod, nil, reader); got != nil {
+		t.Fatal("stale intermediary UID accepted")
+	}
+	podset.SetUID("workers-uid")
+	owners := pod.GetOwnerReferences()
+	owners[0].APIVersion = "collision.io/v1"
+	pod.SetOwnerReferences(owners)
+	if got := strimziEvidence(pod, nil, reader); got != nil {
+		t.Fatal("wrong owner group accepted")
+	}
+	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: podset.GetAPIVersion(), Kind: "StrimziPodSet", Name: "workers", UID: podset.GetUID(), Controller: &yes}})
+	owners = podset.GetOwnerReferences()
+	owners = append(owners, metav1.OwnerReference{APIVersion: "v1", Kind: "ConfigMap", Name: "other", UID: "other", Controller: &no})
+	podset.SetOwnerReferences(owners)
+	if got := strimziEvidence(pod, nil, reader); got != nil {
+		t.Fatal("ambiguous non-controller ownership accepted")
+	}
+	connector := contextConnector("app", "sink", "connect")
+	if got := strimziEvidence(connector, nil, reader); got == nil || got.Source.Name != "connect" || len(got.Findings) != 0 {
+		t.Fatalf("direct connector association duplicated findings: %+v", got)
 	}
 }

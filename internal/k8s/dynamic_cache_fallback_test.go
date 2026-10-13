@@ -93,6 +93,8 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 		kind       string
 		objectName string
 	}{
+		{name: "StrimziPodSet v1", group: "core.strimzi.io", version: "v1", resource: "strimzipodsets", kind: "StrimziPodSet", objectName: "connect"},
+		{name: "StrimziPodSet v1beta2", group: "core.strimzi.io", version: "v1beta2", resource: "strimzipodsets", kind: "StrimziPodSet", objectName: "connect"},
 		{name: "strimzi KafkaConnect v1", group: "kafka.strimzi.io", version: "v1", resource: "kafkaconnects", kind: "KafkaConnect", objectName: "connect"},
 		{name: "strimzi KafkaConnect v1beta2", group: "kafka.strimzi.io", version: "v1beta2", resource: "kafkaconnects", kind: "KafkaConnect", objectName: "connect"},
 		{

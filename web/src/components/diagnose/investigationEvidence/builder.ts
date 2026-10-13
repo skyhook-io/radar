@@ -316,7 +316,8 @@ export function projectInvestigationEvidence(
         // A parent diagnosis cannot clear a connector snapshot it did not read.
         if (
           observation.data.type === "issue" &&
-          observation.data.applicationSource
+          observation.data.applicationSource &&
+          observation.relevance !== "target"
         )
           return undefined;
         return semanticCoverageKey(group.kind);

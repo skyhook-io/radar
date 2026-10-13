@@ -152,6 +152,7 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	for _, row := range matched {
 		checked++
 		findings := detectStrimziConnectorIssues(gvr, row)
+		findings, _ = filterShapedIssues(findings, Filters{})
 		if len(findings) == 0 {
 			continue
 		}
