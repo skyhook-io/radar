@@ -49,6 +49,7 @@ radar/
 │   │   ├── tools_workloads.go # Workload-specific MCP tools
 │   │   └── resources.go       # MCP resource definitions
 │   ├── opencost/              # OpenCost integration (cost analysis)
+│   ├── podlogs/               # Shared Pod metadata, log snapshots and stream replay tracking
 │   ├── prometheus/            # Prometheus client integration
 │   ├── server/
 │   │   ├── server.go          # chi router, main REST endpoints (SOURCE OF TRUTH for routes)
@@ -122,8 +123,10 @@ radar/
 │   │   │   ├── timeline/      # Timeline view (activity & changes)
 │   │   │   ├── topology/      # Graph visualization
 │   │   │   ├── traffic/       # Traffic flow visualization
+│   │   │   ├── workspace/     # Shared workspace notices, empty states and table styles
 │   │   │   ├── workload/      # Workload detail view
 │   │   │   └── ui/            # Base shadcn/ui components
+│   │   ├── integrations/      # Resource host adapters and workspace routing
 │   │   ├── context/           # React contexts (connection, theme, context-switch)
 │   │   ├── contexts/          # React contexts (capabilities)
 │   │   ├── hooks/             # Custom React hooks

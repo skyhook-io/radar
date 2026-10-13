@@ -332,6 +332,9 @@ func resolvedCurrency(resolve func() string) string {
 }
 
 func ConnectionFailureReason(err error) string {
+	if prometheuspkg.IsUnreachable(err) {
+		return pkgopencost.ReasonQueryError
+	}
 	if errors.Is(err, ErrNoCostSource) {
 		return pkgopencost.ReasonNoCostSource
 	}

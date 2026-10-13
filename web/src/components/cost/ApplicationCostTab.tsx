@@ -3,6 +3,7 @@ import { AlertCircle, Coins, HelpCircle, Loader2, TrendingUp } from 'lucide-reac
 import type { AppRow, AppWorkload } from '@skyhook-io/k8s-ui'
 import {
   COST_DISCOVERY_GRACE_MS,
+  crossOriginRefusalMessage,
   useOpenCostApplicationCost,
   useOpenCostApplicationCostTrend,
   type CostTimeRange,
@@ -149,7 +150,8 @@ export function ApplicationCostTab({
         />
       )
     }
-    return <ApplicationCostUnavailable state={state} settingsAvailable={settingsAvailable} />
+    const refusal = crossOriginRefusalMessage(currentQuery.error) ?? crossOriginRefusalMessage(trendQuery.error)
+    return <ApplicationCostUnavailable state={state} message={refusal} settingsAvailable={settingsAvailable} />
   }
 
   const current = currentQuery.data
@@ -512,11 +514,11 @@ function applicationCostKey(ref: { kind: string; namespace: string; name: string
 function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'no_prometheus') return 'Metrics backend not found'
   if (reason === 'no_cost_source') return 'Cost source not found'
-  if (reason === 'query_error') return 'Cost query failed'
+  if (reason === 'query_error') return 'Cost data unavailable'
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
   if (reason === 'configuration_mismatch') return 'Kubecost settings are not valid for this cluster'
-  if (reason === 'deployment_configuration_error') return 'Radar cost deployment is misconfigured'
+  if (reason === 'deployment_configuration_error') return 'Radar configuration is invalid'
   if (reason === 'metrics_settings_error') return 'Saved metrics settings need review'
   if (reason === 'cost_settings_error') return 'Saved cost settings need review'
   return 'No workload cost metrics'
@@ -568,10 +570,8 @@ function ApplicationCostUnavailable({
     costIntegrationUnavailableMessage(state, settingsAvailable) ??
     (state === 'no_prometheus'
       ? 'No compatible metrics backend was found. OpenCost application cost requires OpenCost metrics in a PromQL-compatible backend.'
-      : state === 'query_error'
-        ? 'Cost data is temporarily unavailable. A metrics backend was found, but application cost queries failed.'
-        : state === 'history_unsupported'
-          ? 'Historical application cost is not available for Kubecost yet.'
+      : state === 'history_unsupported'
+        ? 'Historical application cost is not available for Kubecost yet.'
         : state === 'access_denied'
           ? 'Cost data is unavailable because these workloads are not accessible with your current permissions.'
           : state === 'not_found'

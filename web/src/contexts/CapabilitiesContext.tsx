@@ -155,7 +155,7 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
   const { data: nsCaps, error, isPending } = useNamespaceCapabilities(namespace, globalCaps)
 
   if (error) {
-    console.warn(`Failed to fetch namespace capabilities for ${namespace}, using global:`, error)
+    console.warn('Failed to fetch namespace capabilities, using global:', namespace, error)
   }
 
   return useMemo(() => ({

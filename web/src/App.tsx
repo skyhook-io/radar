@@ -23,7 +23,6 @@ import { HelmView } from './components/helm/HelmView'
 import { HelmCompareRoute } from './components/helm/HelmCompareRoute'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
-import { CapacityView } from './components/capacity/CapacityView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
@@ -38,9 +37,10 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
-import { CNPGView } from './components/cnpg/CNPGView'
-import { CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, parseCNPGRoute } from './components/cnpg/routes'
-import { currentPageLabel } from './components/cnpg/paths'
+import { resourceExpandedPath } from './integrations/resourceHosts'
+import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
+import { WorkspaceScreen } from './integrations/workspaceScreens'
+import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
@@ -75,7 +75,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams } from './utils/navigation'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -83,7 +83,7 @@ import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
-  'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute',
+  'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute', 'UDPRoute',
   'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
   'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'PersistentVolumeClaim', 'Namespace',
   'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
@@ -141,8 +141,8 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'helm') return 'helm'
   if (path === 'traffic') return 'traffic'
   if (path === 'cost') return 'cost'
-  if (path === 'capacity') return 'capacity'
-  if (path === 'cnpg') return 'cnpg'
+  const workspace = workspaceForPath(pathname)
+  if (workspace) return workspace.id
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -167,13 +167,14 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 
 // The screen a crash is counted under. Fixed names, because release builds
 // shorten component names and the component stack can't say which screen.
-const CRASH_LABELS: Record<ExtendedMainView, string> = {
+const CRASH_LABELS = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
-}
+  ...workspaceLabels,
+} satisfies Record<ExtendedMainView, string>
 
 // The namespace scope filter is meaningful only on namespaced surfaces. On
 // cluster-scoped views it does nothing, so we disable it with an explanation
@@ -203,12 +204,8 @@ function namespaceFilterDisabled(
       tooltip: 'Cost is reported per namespace across the whole cluster — the namespace filter doesn’t apply here.',
     }
   }
-  if (view === 'capacity') {
-    return {
-      disabled: true,
-      tooltip: 'Capacity is reported across the cluster — the namespace filter doesn’t apply here.',
-    }
-  }
+  const workspace = workspaceForView(view)
+  if (workspace?.namespaceScope === 'cluster') return { disabled: true, tooltip: workspace.namespaceFilterTooltip }
   if (view === 'checks' && pathname.startsWith('/checks/upgrade')) {
     return {
       disabled: true,
@@ -281,18 +278,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
   if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
 
   // The landing view reads "Overview" rather than "Home" in the tab.
-  if (view === 'capacity') {
-    if (pathSegments[1] === 'pools') return decode(pathSegments[2] ?? '') || 'Capacity'
-    if (pathSegments[1] === 'demand') return 'Capacity Demand'
-    if (pathSegments[1] === 'activity') return 'Capacity Activity'
-  }
-
-  if (view === 'cnpg') {
-    const route = parseCNPGRoute(pathname)
-    if (route.detail) return route.detail.name
-    const screen = CNPG_SCREENS.find((s) => s.id === route.screen)
-    return `CloudNativePG ${screen?.label ?? 'Overview'}`
-  }
+  const workspace = workspaceForView(view)
+  if (workspace) return workspace.pageTitle(pathname)
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -452,6 +439,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
+  const activeWorkspace = workspaceForView(mainView)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
 
   // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
@@ -1248,10 +1236,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         const nextParams = new URLSearchParams()
         const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
         if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
-        // A CNPG detail keeps the context it belongs to, so it can say it is
-        // not in the new one instead of loading a same-named object.
-        const pinnedCtx = new URLSearchParams(location.search).get('ctx')
-        if (pinnedCtx && location.pathname.startsWith('/cnpg/')) nextParams.set('ctx', pinnedCtx)
+        for (const [key, value] of workspaceContextSwitchSearch(location.pathname, new URLSearchParams(location.search))) nextParams.set(key, value)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -1432,6 +1417,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       { onSuccess: () => setNamespaces([]) },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
+  const issuesShowNamespace = useMemo(() => {
+    if (namespaceScope?.cacheScoped) {
+      if (!namespaceScope.namespaceRescope) return undefined
+      return {
+        mode: 'switch' as const,
+        show: (ns: string) => { setNamespaces([ns]); setActiveNamespace.mutate({ namespaces: [ns] }) },
+      }
+    }
+    return {
+      mode: 'add' as const,
+      show: (ns: string) => {
+        const next = namespaces.includes(ns) ? namespaces : [...namespaces, ns]
+        setNamespaces(next)
+        setActiveNamespace.mutate({ namespaces: next })
+      },
+    }
+  }, [namespaceScope?.cacheScoped, namespaceScope?.namespaceRescope, namespaces, setActiveNamespace])
   const initialBookmarkReconciledRef = useRef(false)
   const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
   const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
@@ -1510,32 +1512,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (skipUrlWriteAfterPopRef.current) return
     const currentSearch = window.location.search
     const params = new URLSearchParams(currentSearch)
-
-    // Update namespaces param
-    if (namespaces.length > 0) {
-      params.set('namespaces', namespaces.join(','))
-    } else {
-      params.delete('namespaces')
-    }
-    // Remove legacy 'namespace' param if present
-    params.delete('namespace')
-
-    // Topology-specific params: only set when on topology view, clean up otherwise
-    if (mainView === 'topology') {
-      if (topologyMode !== 'resources') {
-        params.set('mode', topologyMode)
-      } else {
-        params.delete('mode')
-      }
-      if (groupingMode !== 'none' && (namespaces.length === 0 || groupingMode !== 'namespace')) {
-        params.set('group', groupingMode)
-      } else {
-        params.delete('group')
-      }
-    } else {
-      params.delete('mode')
-      params.delete('group')
-    }
+    writeViewParams(params, namespaces, mainView === 'topology' ? { mode: topologyMode, grouping: groupingMode } : null)
 
     // Only update if params actually changed vs current URL
     if (params.toString() !== new URLSearchParams(currentSearch).toString()) {
@@ -1778,7 +1755,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView === 'cnpg' ? 'resources' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : activeWorkspace?.navView ?? mainView
 
   return (
     <PortForwardProvider>
@@ -2328,12 +2305,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
-        {!viewsSyncGated && mainView === 'capacity' && (
-          <CapacityView onOpenResource={navigateToResource} />
-        )}
-
-        {!viewsSyncGated && mainView === 'cnpg' && (
-          <CNPGView
+        {!viewsSyncGated && activeWorkspace && (
+          <WorkspaceScreen
+            workspace={activeWorkspace}
             namespaces={namespaces}
             selectedResource={routeSelectedResource}
             onOpenResource={navigateToResource}
@@ -2372,6 +2346,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <IssuesPane
             namespaces={namespaces}
             onNavigateToResource={navigateFromIssue}
+            showNamespace={issuesShowNamespace}
           />
         )}
 
@@ -2410,10 +2385,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(res, opts) => {
-            const cnpgPlural = cnpgDetailKindFor(res.kind, res.group)
-            if (cnpgPlural) {
+            const detailPath = resourceExpandedPath(res, connection.context || undefined, opts?.yaml ? 'yaml' : undefined)
+            if (detailPath) {
               navigate(
-                cnpgDetailPath({ plural: cnpgPlural, namespace: res.namespace, name: res.name }, connection.context || undefined, opts?.yaml ? 'yaml' : undefined),
+                detailPath,
                 { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } },
               )
               return

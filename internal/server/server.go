@@ -84,6 +84,7 @@ type Server struct {
 	startupLog              bool
 	remoteAccessHint        bool
 	devMode                 bool
+	trustedOrigins          map[string]struct{} // normalized; see browserOriginAllowed
 	staticFS                fs.FS
 	startTime               time.Time
 	listener                net.Listener
@@ -200,6 +201,7 @@ type Config struct {
 	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
 	RemoteAccessHint        bool                        // Explain the explicit shared-listener opt-in (native CLI only)
 	DevMode                 bool                        // Serve frontend from filesystem instead of embedded
+	TrustedOrigins          []string                    // Extra origins allowed to make changes, from ParseTrustedOrigins
 	StaticFS                embed.FS                    // Embedded frontend files
 	StaticRoot              string                      // Path within StaticFS
 	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
@@ -263,6 +265,15 @@ func New(cfg Config) *Server {
 		yamlSchemaCache:         make(map[string][]byte),
 		yamlSchemaPathCache:     make(map[string]yamlSchemaPathCacheEntry),
 		yamlSchemaBundleCache:   make(map[string]yamlSchemaBundleCacheEntry),
+	}
+	if len(cfg.TrustedOrigins) > 0 {
+		s.trustedOrigins = make(map[string]struct{}, len(cfg.TrustedOrigins))
+		for _, origin := range cfg.TrustedOrigins {
+			if normalized, ok := normalizeOrigin(origin); ok {
+				s.trustedOrigins[normalized] = struct{}{}
+			}
+		}
+		log.Printf("Trusting these origins to make changes in addition to Radar's own address: %s", strings.Join(cfg.TrustedOrigins, ", "))
 	}
 	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
@@ -489,6 +500,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		r.Use(s.requireSameOrigin)
 		// Streaming endpoints (SSE/WebSocket) - no timeout
 		r.Get("/events/stream", s.handleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
@@ -1345,6 +1357,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		YAMLSchemas:           true,
 		WorkloadImages:        true,
 		ResourceIssues:        true,
+		ResourceIssueCoverage: true,
 		PodEnvironment:        true,
 		PolicyResource:        true,
 		WorkloadHistory:       true,
@@ -3488,7 +3501,12 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 	s.writeJSON(w, history)
 }
 
-func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHistory, namespace, name string, health k8s.MetricsCollectionHealth, includeAPIServiceConditionMessage bool) *k8s.PodMetricsHistory {
+type podMetricsHistoryWithAvailability struct {
+	*k8s.PodMetricsHistory
+	MetricsAPIReachable bool `json:"metricsAPIReachable"`
+}
+
+func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHistory, namespace, name string, health k8s.MetricsCollectionHealth, includeAPIServiceConditionMessage bool) *podMetricsHistoryWithAvailability {
 	if history == nil {
 		history = &k8s.PodMetricsHistory{
 			Namespace:  namespace,
@@ -3499,7 +3517,10 @@ func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHisto
 	if health.PodMetrics.ConsecutiveErrors > 0 {
 		history.CollectionError, history.RawCollectionError, history.MetricsUnavailableDiagnosis, history.MetricsUnavailable = metricsHistoryCollectionError(ctx, "Pod", health.PodMetrics.LastError, includeAPIServiceConditionMessage)
 	}
-	return history
+	return &podMetricsHistoryWithAvailability{
+		PodMetricsHistory:   history,
+		MetricsAPIReachable: health.PodMetrics.LastSuccess != "" && health.PodMetrics.ConsecutiveErrors == 0,
+	}
 }
 
 // handleNodeMetricsHistory returns historical metrics for a specific node

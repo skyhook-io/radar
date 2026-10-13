@@ -61,7 +61,7 @@ func collectUpgradeHelmManifests(ctx context.Context, namespaces []string) ([]up
 	}
 	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(ctx, namespaces, username, groups)
 	if err != nil {
-		if !helm.IsForbiddenError(err) {
+		if !helm.IsForbiddenError(err) && !errors.Is(ctx.Err(), context.Canceled) {
 			log.Printf("[upgrade-impact] failed to inspect Helm manifests: %v", err)
 		}
 		if len(unavailableNamespaces) == 0 {

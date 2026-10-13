@@ -320,6 +320,11 @@ func TestDetectMissingRefs(t *testing.T) {
 		if p.Severity != wantSev {
 			t.Errorf("reason %q: severity = %q, want %q: %+v", p.Reason, p.Severity, wantSev, p)
 		}
+		// A missing reference names what the resource's own spec names, so it
+		// is told with namespace access, a missing TLS Secret included.
+		if len(p.RequiredReads) != 0 {
+			t.Errorf("reason %q: RequiredReads = %+v, want none", p.Reason, p.RequiredReads)
+		}
 	}
 
 	// Every dangling-ref finding must carry a structured cause + next-step action

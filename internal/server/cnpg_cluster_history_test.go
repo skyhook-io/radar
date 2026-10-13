@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 )
@@ -197,14 +198,14 @@ func TestAnnotateCNPGLogEntry(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			entry := workloadLogEntry{Content: tc.content}
+			entry := podlogs.Entry{Content: tc.content}
 			annotateCNPGLogEntry(&entry)
 			if entry.Level != tc.level || entry.Logger != tc.logger || entry.Message != tc.message || entry.Content != tc.content {
 				t.Fatalf("got level=%q logger=%q message=%q content-changed=%v", entry.Level, entry.Logger, entry.Message, entry.Content != tc.content)
 			}
 		})
 	}
-	raw, _ := json.Marshal(workloadLogEntry{Pod: "p", Content: "x"})
+	raw, _ := json.Marshal(podlogs.Entry{Pod: "p", Content: "x"})
 	if strings.Contains(string(raw), "level") || strings.Contains(string(raw), "message") {
 		t.Fatalf("unparsed entries grew fields: %s", raw)
 	}
@@ -221,7 +222,7 @@ func TestParseCNPGLogQuery(t *testing.T) {
 	if err != nil || q.sinceSeconds == nil || *q.sinceSeconds != 90 || q.container != "postgres" || q.tailLines != 200 {
 		t.Fatalf("query = %+v err=%v", q, err)
 	}
-	if q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:58:29.9Z"}) || !q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:58:30Z"}) {
+	if q.keep(podlogs.Entry{Timestamp: "2026-09-28T11:58:29.9Z"}) || !q.keep(podlogs.Entry{Timestamp: "2026-09-28T11:58:30Z"}) {
 		t.Fatal("sinceTime overlap not trimmed")
 	}
 	req = httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:58:30Z&sinceSeconds=5", nil)

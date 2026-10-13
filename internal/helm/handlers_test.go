@@ -2,6 +2,7 @@ package helm
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,8 +10,96 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"helm.sh/helm/v3/pkg/storage/driver"
+	authv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
+
+func TestChartSourceRoutesAndWriteAuthorization(t *testing.T) {
+	old := globalClient
+	globalClient = nil
+	defer func() { globalClient = old }()
+	router := chi.NewRouter()
+	NewHandlers(nil).RegisterRoutes(router)
+
+	get := httptest.NewRequest(http.MethodGet, "/helm/releases/default/example/source", nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET source status = %d, want registered route status %d", getRec.Code, http.StatusServiceUnavailable)
+	}
+
+	// Both writes change a release Secret, so a caller whose RBAC denies
+	// secrets/create in the release namespace is refused before any client
+	// or network work.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
+			writeK8sStatus(t, w, http.StatusNotFound, "NotFound", "unexpected test request")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		writeTestJSON(t, w, authv1.SubjectAccessReview{
+			TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"},
+			Status:   authv1.SubjectAccessReviewStatus{Allowed: false},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	if err != nil {
+		t.Fatalf("create test client: %v", err)
+	}
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+	prevStatus := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prevStatus) })
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPut, "/helm/releases/default/example/source", `{"type":"repository","reference":"repo","url":"https://example.test"}`},
+		{http.MethodPost, "/helm/repositories", `{"name":"repo","url":"https://example.test","namespace":"default","releaseName":"example"}`},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "chart-source-viewer", Groups: []string{"radar:viewer"}}))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s = %d, want RBAC-gated 403 (body %s)", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestChartSourceErrorStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "invalid source", err: fmt.Errorf("%w: bad selection", errInvalidChartSource), want: http.StatusBadRequest},
+		{name: "invalid repository", err: fmt.Errorf("%w: bad URL", errInvalidRepositoryRequest), want: http.StatusBadRequest},
+		{name: "alias conflict", err: fmt.Errorf("%w: alias owned", errRepositoryConflict), want: http.StatusConflict},
+		{name: "missing release", err: fmt.Errorf("get release: %w", driver.ErrReleaseNotFound), want: http.StatusNotFound},
+		{name: "kubernetes denial", err: fmt.Errorf("update release: %w", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "sh.helm.release.v1.example.v1", errors.New("denied"))), want: http.StatusForbidden},
+		{name: "repository 401", err: errors.New("failed to fetch https://charts.example.test/index.yaml : 401 Unauthorized"), want: http.StatusInternalServerError},
+		{name: "storage failure", err: errors.New("storage unavailable"), want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chartSourceErrorStatus(tc.err); got != tc.want {
+				t.Fatalf("chartSourceErrorStatus(%v) = %d, want %d", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestDecodeOptionalApplyValuesRequest(t *testing.T) {
 	cases := []struct {

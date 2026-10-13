@@ -406,7 +406,7 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 		return managementEdgeTypes()
 	// Network-shaped resources: routing topology.
 	case KindService, KindIngress, KindGateway, KindGatewayClass,
-		KindHTTPRoute, KindGRPCRoute, KindTCPRoute, KindTLSRoute,
+		KindHTTPRoute, KindGRPCRoute, KindTCPRoute, KindTLSRoute, KindUDPRoute,
 		KindVirtualService, KindIstioGateway, KindHTTPProxy,
 		KindIngressRoute, KindIngressRouteTCP, KindIngressRouteUDP:
 		return networkingEdgeTypes()

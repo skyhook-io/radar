@@ -54,6 +54,8 @@ Helm rewrites `Info.Deleted` at the start of every uninstall attempt, before the
 
 The issue suggests checking pre-delete hook Jobs and surviving resources with finalizers before retrying the uninstall (Helm re-runs an uninstall stuck in this state). When a hook is the blocker, `helm uninstall --no-hooks` completes the uninstall, but Helm does not remove the Jobs and Pods the hook created, and resources held by finalizers stay Terminating. Radar no longer ties either to the release afterwards, so the issue tells the operator to delete the hook's leftovers and check for Terminating resources. These are investigation steps, not verified blocker diagnoses.
 
+To find them, Radar first lists only the labels of the Helm release Secrets the caller can read. Helm labels each one with the release name, revision and status. Radar then reads in full only the releases whose newest revision is failed or pending, plus any release with the same name in the same read. If any release Secret lacks those labels, Radar reads them all in full, as before. Releases stored with Helm's ConfigMap or SQL drivers are not read for issues. `/api/issues` waits for this read, and the read stops as soon as the caller disconnects.
+
 ## Failed Upgrades And Rollback Inference
 
 Helm history does not persist whether `helm upgrade --atomic` was set. Radar infers an atomic-style rollback from the revision sequence:
@@ -69,7 +71,8 @@ Radar surfaces that as a Helm operation instead of making the operator infer it 
 The Helm Compare page is optimized for incident debugging. It starts with the rendered Kubernetes manifest diff as the source of truth, then keeps supporting evidence below it:
 
 - Rendered resources: a compact index of Kubernetes object identities and meaningful in-place field changes.
-- Values: user-supplied values diff; the UI shows the user's own values, while MCP applies key-aware redaction.
+- Effective values: revision-aware computed values diff, including each revision's chart defaults and user overrides.
+- User overrides: diff of values explicitly supplied to each revision; the UI shows the user's own values, while MCP applies key-aware redaction.
 - Hooks: stable hook definition diff, ignoring runtime timestamps and volatile hook status.
 - Notes: release notes diff.
 

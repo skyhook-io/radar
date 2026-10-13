@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -226,14 +227,21 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 
 	// 2. Topology-derived: Exposes, SelectedBy, ScaledBy
 	if rel != nil {
-		exposes := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes))
-		exposes = append(exposes, rel.Services...)
-		exposes = append(exposes, rel.Ingresses...)
-		exposes = append(exposes, rel.Gateways...)
-		exposes = append(exposes, rel.Routes...)
-		rc.Exposes = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(exposes),
-			"exposes", omitted)
+		exposedBy := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes)+len(rel.RoutedFrom))
+		exposedBy = append(exposedBy, rel.Services...)
+		exposedBy = append(exposedBy, rel.Ingresses...)
+		exposedBy = append(exposedBy, rel.Gateways...)
+		exposedBy = append(exposedBy, rel.Routes...)
+		exposedBy = append(exposedBy, rel.RoutedFrom...)
+		backends := append([]topology.ResourceRef(nil), rel.Backends...)
+		// Deployment and Node Pods are containment shortcuts, not routing targets.
+		if !(ident.Kind == "Deployment" && ident.Group == "apps") && !(ident.Kind == "Node" && ident.Group == "") {
+			backends = append(backends, rel.Pods...)
+		}
+		rc.ExposedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposedBy), "exposedBy", omitted)
+		rc.Backends = filterRefs(ctx, opts.AccessChecker, toContextRefs(backends), "backends", omitted)
+		exposes := append(exposedBy, backends...)
+		rc.Exposes = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposes), "exposes", omitted)
 
 		selected := make([]topology.ResourceRef, 0, len(rel.PDBs)+len(rel.NetworkPolicies))
 		selected = append(selected, rel.PDBs...)
@@ -241,6 +249,12 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.SelectedBy = filterRefs(ctx, opts.AccessChecker,
 			toContextRefs(selected),
 			"selectedBy", omitted)
+
+		rc.Protects = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Protects), "protects", omitted)
+		rc.HealthChecks = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.HealthChecks), "healthChecks", omitted)
+		rc.StagedPolicies = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.StagedPolicies), "stagedPolicies", omitted)
+		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
+		rc.MonitorTargets = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
 
 		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
 			toContextRefs(rel.Dependencies), "dependencies", omitted)
@@ -565,7 +579,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	}
 
 	ident, ok := identityOf(obj)
-	if !ok || ident.Namespace == "" {
+	if !ok || ident.Group != "" || ident.Namespace == "" {
 		return nil
 	}
 
@@ -701,69 +715,17 @@ func referenceUseForPodSpec(kind, group, namespace, name string, spec corev1.Pod
 
 func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTarget) []string {
 	pathSet := map[string]struct{}{}
-	add := func(path string) {
-		pathSet[path] = struct{}{}
-	}
-
-	for _, v := range spec.Volumes {
-		if target.kind == "ConfigMap" && v.ConfigMap != nil && v.ConfigMap.Name == target.name {
-			add(pathPrefix + ".volumes[].configMap.name")
-		}
-		if target.kind == "Secret" && v.Secret != nil && v.Secret.SecretName == target.name {
-			add(pathPrefix + ".volumes[].secret.secretName")
-		}
-		if v.Projected != nil {
-			for _, src := range v.Projected.Sources {
-				if target.kind == "ConfigMap" && src.ConfigMap != nil && src.ConfigMap.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].configMap.name")
-				}
-				if target.kind == "Secret" && src.Secret != nil && src.Secret.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].secret.name")
-				}
-			}
+	for _, ref := range configrefs.PodSpecReferences(target.namespace, spec) {
+		if ref.Kind == target.kind && ref.Name == target.name {
+			pathSet[pathPrefix+"."+ref.Path] = struct{}{}
 		}
 	}
-	if target.kind == "Secret" {
-		for _, pullSecret := range spec.ImagePullSecrets {
-			if pullSecret.Name == target.name {
-				add(pathPrefix + ".imagePullSecrets[].name")
-			}
-		}
-	}
-
-	scanContainerReferencePaths(spec.InitContainers, pathPrefix, target, add)
-	scanContainerReferencePaths(spec.Containers, pathPrefix, target, add)
-
 	paths := make([]string, 0, len(pathSet))
 	for path := range pathSet {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 	return paths
-}
-
-func scanContainerReferencePaths(containers []corev1.Container, pathPrefix string, target refTarget, add func(string)) {
-	for _, c := range containers {
-		for _, ef := range c.EnvFrom {
-			if target.kind == "ConfigMap" && ef.ConfigMapRef != nil && ef.ConfigMapRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].configMapRef.name")
-			}
-			if target.kind == "Secret" && ef.SecretRef != nil && ef.SecretRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].secretRef.name")
-			}
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom == nil {
-				continue
-			}
-			if target.kind == "ConfigMap" && e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.configMapKeyRef.name")
-			}
-			if target.kind == "Secret" && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.secretKeyRef.name")
-			}
-		}
-	}
 }
 
 func hasControllerOwner(refs []metav1.OwnerReference) bool {
@@ -1027,14 +989,8 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	}
 
 	svcSet := newRefSet()
-	addIngressBackendService(svcSet, ing.Namespace, ing.Spec.DefaultBackend)
-	for _, rule := range ing.Spec.Rules {
-		if rule.HTTP == nil {
-			continue
-		}
-		for _, path := range rule.HTTP.Paths {
-			addIngressBackendService(svcSet, ing.Namespace, &path.Backend)
-		}
+	for _, name := range configrefs.IngressBackendServices(ing) {
+		svcSet.add(name, ing.Namespace)
 	}
 	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
@@ -1048,13 +1004,6 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 		return nil
 	}
 	return out
-}
-
-func addIngressBackendService(dst *refSet, namespace string, backend *networkingv1.IngressBackend) {
-	if backend == nil || backend.Service == nil {
-		return
-	}
-	dst.add(backend.Service.Name, namespace)
 }
 
 func buildNodeSummary(obj runtime.Object) *NodeSummary {

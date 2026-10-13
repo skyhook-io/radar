@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -498,48 +496,6 @@ func closeWithin(t *testing.T, stream *podFileStream, limit time.Duration) error
 	case <-time.After(limit):
 		t.Fatal("Close() did not return")
 		return nil
-	}
-}
-
-// Running a command in a pod and writing a file to the user's disk is exactly
-// what a page on another site must not be able to trigger.
-func TestPodFileSaveRejectsCrossOriginRequests(t *testing.T) {
-	s := &Server{saveFileStreamFunc: func(string, io.Reader) (string, error) {
-		t.Error("a cross-origin request reached the save callback")
-		return "", nil
-	}}
-
-	// host is the authority the browser connected to (r.Host). A same-origin
-	// POST must pass the CSRF gate even when that authority is not loopback; a
-	// foreign or loopback-lookalike origin must still be rejected.
-	const host = "192.168.1.100:9280"
-	cases := []struct {
-		origin     string
-		wantStatus int
-	}{
-		{"https://evil.example.com", http.StatusForbidden},
-		{"http://192.168.1.100.evil.com", http.StatusForbidden},
-		{"http://127.0.0.1:9280", http.StatusForbidden}, // loopback origin, non-loopback host
-		{"http://192.168.1.100:9280", 0},                // same-origin non-loopback listener
-		{"", 0},                                         // same-origin or a non-browser caller
-	}
-	for _, c := range cases {
-		req := httptest.NewRequest(http.MethodPost, "/api/pods/ns/pod/files/save?container=c&path=/f", nil)
-		req.Host = host
-		if c.origin != "" {
-			req.Header.Set("Origin", c.origin)
-		}
-		rec := httptest.NewRecorder()
-		s.handlePodFileSave(rec, req)
-
-		blockedAsCrossOrigin := rec.Code == http.StatusForbidden &&
-			strings.Contains(rec.Body.String(), "cross-origin request rejected")
-		if c.wantStatus == http.StatusForbidden && !blockedAsCrossOrigin {
-			t.Errorf("Origin %q got status %d body %q, want the cross-origin rejection", c.origin, rec.Code, rec.Body.String())
-		}
-		if c.wantStatus == 0 && blockedAsCrossOrigin {
-			t.Errorf("Origin %q was rejected as cross-origin", c.origin)
-		}
 	}
 }
 

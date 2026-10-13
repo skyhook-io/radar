@@ -127,7 +127,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// (CanReadClusterScoped) already constrains which cluster-scoped
 	// kinds are reachable.
 	if r.URL.Query().Get("context") != "none" {
-		if builder := s.newSearchSummaryContextBuilder(scanNamespaces); builder != nil {
+		if builder := s.newSearchSummaryContextBuilder(r, scanNamespaces); builder != nil {
 			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 		}
 	}

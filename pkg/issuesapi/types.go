@@ -3,7 +3,10 @@
 // shape without importing Radar's internal issue detection implementation.
 package issuesapi
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Severity string
 
@@ -407,20 +410,72 @@ type OnsetCoverage struct {
 	Unknown int `json:"unknown"`
 }
 
+type EvidenceRead struct {
+	Group     string
+	Resource  string
+	Namespace string
+	Verb      string
+}
+
+// DegradedFinding is a finding as told to a caller who can't make its
+// RequiredReads: what is wrong and what to do, without the facts only those
+// reads reveal.
+type DegradedFinding struct {
+	Message string
+	Cause   string
+	Action  string
+}
+
+// ConditionalCleanup is a step that is right only when Condition holds. It is
+// kept out of Action, the issue's next step: consumers show it as conditional,
+// and an agent proposes it only after the user confirms Condition.
+type ConditionalCleanup struct {
+	// Condition is the lead-in a reader confirms before acting, such as "If
+	// victoria-metrics-operator was uninstalled on purpose (and nothing else
+	// should finalize this object), remove the finalizer".
+	Condition string `json:"condition"`
+	// AgentGuidance tells an agent when it may propose the cleanup and how.
+	AgentGuidance string `json:"agent_guidance"`
+	// Caution is what applying the cleanup costs.
+	Caution  string             `json:"caution"`
+	Removals []FinalizerRemoval `json:"removals"`
+}
+
+// FinalizerRemoval removes one finalizer by index. The JSON Patch first tests
+// the object's UID and the finalizer at that index, so it fails instead of
+// removing another entry when the object was recreated or its finalizers
+// changed.
+type FinalizerRemoval struct {
+	Finalizer string `json:"finalizer"`
+	// PatchResource is input for Radar's patch_resource tool, with dry_run=true.
+	PatchResource json.RawMessage `json:"patch_resource"`
+	// Kubectl is the same patch as a server-side dry run; dropping
+	// --dry-run=server applies it.
+	Kubectl string `json:"kubectl"`
+}
+
 type Issue struct {
-	Severity      Severity      `json:"severity"`
-	Source        Source        `json:"source"`
-	Category      Category      `json:"category"`
-	CategoryGroup CategoryGroup `json:"category_group"`
-	ID            string        `json:"id"`
-	GroupingScope Scope         `json:"grouping_scope"`
-	Kind          string        `json:"kind"`
-	Group         string        `json:"group,omitempty"`
-	Namespace     string        `json:"namespace,omitempty"`
-	Name          string        `json:"name"`
-	Reason        string        `json:"reason"`
-	Message       string        `json:"message,omitempty"`
-	RawMessage    string        `json:"raw_message,omitempty"`
+	// Degraded replaces the message, cause and action for a caller who can't
+	// make RequiredReads, and the onset is withheld with it. Without it such a
+	// caller doesn't get the finding.
+	Degraded *DegradedFinding `json:"-"`
+
+	// RequiredReads describe the inventories behind a cross-resource finding.
+	// They are retained internally so cached and grouped projections can authorize it.
+	RequiredReads []EvidenceRead `json:"-"`
+	Severity      Severity       `json:"severity"`
+	Source        Source         `json:"source"`
+	Category      Category       `json:"category"`
+	CategoryGroup CategoryGroup  `json:"category_group"`
+	ID            string         `json:"id"`
+	GroupingScope Scope          `json:"grouping_scope"`
+	Kind          string         `json:"kind"`
+	Group         string         `json:"group,omitempty"`
+	Namespace     string         `json:"namespace,omitempty"`
+	Name          string         `json:"name"`
+	Reason        string         `json:"reason"`
+	Message       string         `json:"message,omitempty"`
+	RawMessage    string         `json:"raw_message,omitempty"`
 	// Cause / Action / Remediation* carry parsed domain diagnosis. They give the
 	// Issues page + MCP a plain-English cause + next step when a detector has
 	// enough evidence. All optional — empty for issues without a parser.
@@ -430,6 +485,9 @@ type Issue struct {
 	Action            string `json:"action,omitempty"`
 	RemediationKind   string `json:"remediation_kind,omitempty"`
 	RemediationTarget string `json:"remediation_target,omitempty"`
+	// ConditionalCleanup is a cleanup that applies only under its stated
+	// condition; it is never part of Action.
+	ConditionalCleanup *ConditionalCleanup `json:"conditional_cleanup,omitempty"`
 	// OperationRetryCount is the controller-operation retry count (e.g. Argo's
 	// "(retried N times)") — distinct from RestartCount, which is pod/container
 	// restarts. Stuck means the issue is not expected to self-recover (retries

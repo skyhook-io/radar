@@ -1059,6 +1059,34 @@ func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 	if len(detections) != 1 || detections[0].OwnerGroup != "apps" || detections[0].OwnerKind != "Deployment" || detections[0].OwnerName != "catalog" {
 		t.Fatalf("stale pod detection did not resolve stable workload owner: %+v", detections)
 	}
+	// The finding rests on the Secret's change history.
+	if reads := detections[0].RequiredReads; len(reads) != 1 || reads[0].Resource != "secrets" || reads[0].Namespace != "shop" {
+		t.Fatalf("RequiredReads = %+v, want the namespace's Secrets", reads)
+	}
+	assertStaleSecretEnvDegraded(t, detections[0], "Restart the pod")
+}
+
+// assertStaleSecretEnvDegraded checks the form a caller who can't read the
+// Secret gets: still actionable, and nothing learned from the Secret.
+func assertStaleSecretEnvDegraded(t *testing.T, d Detection, action string) {
+	t.Helper()
+	degraded := d.Degraded
+	if degraded == nil {
+		t.Fatalf("StaleSecretEnv has no degraded form: %+v", d)
+	}
+	if !strings.Contains(degraded.Message, "stale Secret-backed environment values") || !strings.HasPrefix(degraded.Action, action) ||
+		!strings.Contains(degraded.Cause, "shown only to callers who can read the Secret") {
+		t.Fatalf("degraded form isn't actionable: %+v", degraded)
+	}
+	text := degraded.Message + degraded.Cause + degraded.Action
+	for _, leak := range []string{"db-conn", "password", "DB_PASSWORD", d.OnsetAt.Format(time.RFC3339), "Secret/"} {
+		if strings.Contains(text, leak) {
+			t.Fatalf("degraded form reveals %q: %+v", leak, degraded)
+		}
+	}
+	if strings.ContainsAny(degraded.Message, "0123456789") {
+		t.Fatalf("degraded form counts what changed: %q", degraded.Message)
+	}
 }
 
 func TestStaleSecretEnvSubjectResolvesRolloutCreation(t *testing.T) {
@@ -1157,6 +1185,10 @@ func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.
 		if detections[0].AgeSeconds != int64(time.Hour.Seconds()) || !detections[0].ResourceCreatedAt.Equal(deploymentCreatedAt) {
 			t.Fatalf("aggregated workload resource age/context = %q/%v, want 1h/%v", detections[0].Age, detections[0].ResourceCreatedAt, deploymentCreatedAt)
 		}
+		if reads := detections[0].RequiredReads; len(reads) != 1 || reads[0].Resource != "secrets" || reads[0].Namespace != "shop" {
+			t.Fatalf("aggregated workload RequiredReads = %+v, want the namespace's Secrets", reads)
+		}
+		assertStaleSecretEnvDegraded(t, detections[0], "Confirm no rollout")
 	})
 
 	t.Run("post-change sibling suppresses an in-progress rollout", func(t *testing.T) {

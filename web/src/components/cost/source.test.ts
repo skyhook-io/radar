@@ -58,3 +58,13 @@ describe('cost source presentation', () => {
     expect(costIntegrationUnavailableMessage('authentication_error', false)).not.toContain('Settings')
   })
 })
+
+it('gives connection guidance without claiming an unreachable source ran a query', () => {
+  const standalone = costIntegrationUnavailableMessage('query_error', true)
+  expect(standalone).toContain('Settings → Metrics')
+  expect(standalone).toContain('Settings → Cost')
+  expect(standalone).not.toContain('query failed')
+  const embedded = costIntegrationUnavailableMessage('query_error', false)
+  expect(embedded).toContain('Ask your operator')
+  expect(embedded).not.toContain('Settings')
+})

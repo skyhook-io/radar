@@ -78,6 +78,26 @@ shared renderers.
   never both; don't inadvertently remove useful vendor fields. Reuse printer-column
   evaluation rather than writing another JSONPath parser.
 
+### Workspace and resource hosts
+
+`web/src/integrations/resourceHosts.tsx` registers host renderer wrappers and
+resource-specific summary, log and destination callbacks. Keep each adapter beside
+its integration. Match exact group + resource identity; use the loaded object's
+`apiVersion` for detail facts. Renderer overrides are composed once, with duplicate
+ownership rejected. Generic detail pages and drawers call these seams rather than
+importing integration screens.
+
+`workspaceRoutes.ts` owns route metadata (title, navigation placement, namespace
+view scope and context-switch query policy); `workspaceScreens.tsx` mounts the
+integration screen. Capacity remains cluster-wide. Shared workspace notices, empty
+states and table styles live in `web/src/components/workspace/`; certainty glyphs
+live in k8s-ui's `components/facts/certainty.tsx`.
+
+A host can supply k8s-ui `ResourcesView.renderKindView` to replace one kind's table
+while retaining the sidebar and drawer. Return `null` or `false` for the ordinary table. A
+replacement disables row/search/bulk shortcuts and column-preference loading/saving;
+sidebar kind navigation stays available. The caller owns fetching and capability decisions.
+
 ### Issues
 
 - [ ] Inspect generic detection in `internal/issues/source_conditions.go`, nearby
@@ -87,6 +107,29 @@ shared renderers.
 - [ ] Check detector ownership and fallback suppression: avoid duplicate failures
   or the generic pass reintroducing warnings for intentional states. Don't suppress
   a whole API group when only some kinds are covered.
+
+### Finalizer controller recognition
+
+Stuck-deletion detection covers already-watched, synchronized CRDs. Adding an
+owner enriches those findings; it needs no per-kind detector or renderer.
+
+- [ ] Add documented keys and controller names, labels and image paths in
+  [`pkg/finalizers/catalog.go`](../pkg/finalizers/catalog.go). Disambiguate shared
+  keys by API group/kind, and shared images or identities by role/image checks.
+  Name guesses for uncataloged finalizers remain candidates, never owners.
+- [ ] Review cleanup semantics before setting `AllowConditionalCleanup` (false
+  by default). Leave it disabled for unreviewed cleanup, off-cluster controllers
+  or infrastructure cleanup; record those limits on the entry.
+- [ ] Add identity fixtures in
+  [`pkg/finalizers/catalog_test.go`](../pkg/finalizers/catalog_test.go) and
+  guidance/eligibility cases in
+  [`internal/issues/finalizers_test.go`](../internal/issues/finalizers_test.go),
+  including unrelated workloads and incomplete visibility.
+- [ ] Keep reads and policy in `internal/issues/finalizers.go`, pod health in
+  `pkg/health`. Catalog additions should not change the shared API/UI machinery.
+- [ ] Verify a real stuck deletion, including intentional uninstall if enabling
+  removal. Update the [MCP contract](mcp.md#read-tools) when supported behavior
+  changes; distinguish controller evidence from synthetic fixtures.
 
 ### MCP / AI context
 

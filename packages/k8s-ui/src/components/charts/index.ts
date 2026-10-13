@@ -1,4 +1,5 @@
 export { AreaChart } from './AreaChart'
+export type { ChartTimeRange } from './AreaChart'
 export { MetricsSummary } from './MetricsSummary'
 export { SeriesLegend } from './SeriesLegend'
 export {

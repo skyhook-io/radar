@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,12 +20,28 @@ import (
 
 var ErrPrometheusNotFound = errors.New("no Prometheus service found in cluster")
 
-// errPrometheusUnreachable is ErrPrometheusNotFound for the case where
-// discovery enumerated a candidate and could not reach it. It wraps the
-// sentinel with an identical message so every errors.Is caller and every
-// message a user sees stay the same, while Availability can tell an
-// unreachable installation from a cluster that has none.
-var errPrometheusUnreachable = fmt.Errorf("%w", ErrPrometheusNotFound)
+var errPrometheusUnreachable = errors.New("No working Prometheus endpoint found.\nCandidate services could not be reached")
+
+// prometheusUnreachableError carries a complete sentence for an unreachable
+// installation. Unlike fmt's %w it does not append the wrapped sentinel's
+// text, which would contradict the sentence.
+type prometheusUnreachableError struct {
+	msg   string
+	cause error
+}
+
+func (e *prometheusUnreachableError) Error() string { return e.msg }
+func (e *prometheusUnreachableError) Unwrap() error { return e.cause }
+
+func unreachableBecause(cause error, format string, args ...any) error {
+	return &prometheusUnreachableError{msg: fmt.Sprintf(format, args...), cause: errors.Join(errPrometheusUnreachable, cause)}
+}
+
+// IsUnreachable identifies completed auto-discovery with candidates but no
+// usable endpoint. A manual URL failure or an interrupted discovery is separate.
+func IsUnreachable(err error) bool {
+	return errors.Is(err, errPrometheusUnreachable)
+}
 
 // errDiscoverySuperseded is returned when a configuration change (Reset /
 // SetManualURL / SetHeaders) invalidated a discovery mid-flight. The result is
@@ -220,6 +238,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// machine). Serial by necessity — port-forwarding mutates the owner's shared
 	// forward state.
 	var lastErr error
+	var denied []string
 	for _, cand := range candidates {
 		// Bail promptly if the run was superseded mid-fallback (Reset / context
 		// switch) rather than churning the rest of the list while holding the gate.
@@ -275,7 +294,10 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 				logDiscoveryEnded(start, err)
 				return "", "", err
 			}
-			lastErr = fmt.Errorf("port-forward to %s/%s failed: %w", cand.Namespace, cand.Name, pfErr)
+			lastErr = unreachableBecause(pfErr, "No working Prometheus endpoint found.\nCandidate %s/%s: port-forward failed: %v", cand.Namespace, cand.Name, pfErr)
+			if strings.Contains(strings.ToLower(pfErr.Error()), "forbidden") {
+				denied = append(denied, deniedGrant(pfErr))
+			}
 			if !discoveryDiagnosticsSuppressed(ctx) {
 				errorlog.Record("prometheus", "error", "port-forward to %s/%s failed: %v", cand.Namespace, cand.Name, pfErr)
 			}
@@ -305,9 +327,9 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			logDiscoveryEnded(start, err)
 			return "", "", err
 		}
-		lastErr = fmt.Errorf("Prometheus at %s/%s not responding after port-forward", cand.Namespace, cand.Name)
+		lastErr = prometheusCandidateProbeError(cand.Namespace, cand.Name)
 		if !discoveryDiagnosticsSuppressed(ctx) {
-			errorlog.Record("prometheus", "error", "Prometheus at %s/%s not responding after port-forward", cand.Namespace, cand.Name)
+			errorlog.Record("prometheus", "error", "Candidate %s/%s did not respond after port-forward", cand.Namespace, cand.Name)
 		}
 	}
 
@@ -319,10 +341,46 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		return "", "", err
 	}
 	log.Printf("[prometheus] discovery failed after %s: no reachable Prometheus among %d candidate(s)", took(start), len(candidates))
-	if lastErr != nil {
-		return "", "", lastErr
+	// With several candidates the last one's failure describes whichever
+	// Service happened to rank last, often not a Prometheus at all.
+	switch {
+	case lastErr == nil:
+		return "", "", errPrometheusUnreachable
+	case len(candidates) == 1 && len(denied) == 1:
+		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\nCandidate %s/%s: port-forward denied (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
+	case len(candidates) > 1 && len(denied) == len(candidates):
+		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates: port-forward denied (%s)", len(candidates), deniedGrantsPhrase(denied))
+	case len(candidates) > 1:
+		return "", "", unreachableBecause(lastErr, "No working Prometheus endpoint found.\n%d candidates did not answer through a port-forward", len(candidates))
 	}
-	return "", "", errPrometheusUnreachable
+	return "", "", lastErr
+}
+
+// A port-forward can be refused at any of its steps: reading the Service,
+// listing its Pods, or creating pods/portforward. The API server's Forbidden
+// message names the verb and resource that was refused.
+var forbiddenOperationRe = regexp.MustCompile(`cannot (\w+) resource "([^"]+)"`)
+
+// deniedGrant is the grant a Forbidden port-forward error names, or "" when
+// the message does not say.
+func deniedGrant(err error) string {
+	if m := forbiddenOperationRe.FindStringSubmatch(err.Error()); m != nil {
+		return m[1] + " " + m[2]
+	}
+	return ""
+}
+
+func deniedGrantsPhrase(grants []string) string {
+	var named []string
+	for _, g := range grants {
+		if g != "" && !slices.Contains(named, g) {
+			named = append(named, g)
+		}
+	}
+	if len(named) == 0 {
+		return "permission denied"
+	}
+	return "needs " + strings.Join(named, ", ")
 }
 
 // logDiscoveryEnded logs a discovery that ended on a context error, telling a
@@ -524,4 +582,8 @@ func (c *Client) markConnected(addr, basePath, identity string, gen uint64) bool
 	c.lastDiscoverErr = nil
 	c.lastDiscoverAt = time.Time{}
 	return true
+}
+
+func prometheusCandidateProbeError(namespace, name string) error {
+	return unreachableBecause(nil, "No working Prometheus endpoint found.\nCandidate %s/%s did not respond after port-forward", namespace, name)
 }

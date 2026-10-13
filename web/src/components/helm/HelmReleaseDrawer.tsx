@@ -37,6 +37,10 @@ interface HelmReleaseDrawerProps {
   rightInset?: number
 }
 
+export function effectiveHelmStorageNamespace(release: SelectedHelmRelease): string {
+  return release.storageNamespace || release.namespace
+}
+
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks'
 
 interface UpgradePreviewRequest {
@@ -51,7 +55,7 @@ interface ParsedUpgradeValues {
 }
 
 type UpgradeSourceIssue = NonNullable<UpgradeInfo['sourceIssue']>
-type ActionableUpgradeSourceIssue = Exclude<UpgradeSourceIssue, 'ambiguous_repository'>
+type ActionableUpgradeSourceIssue = UpgradeSourceIssue
 
 function getUpgradeSourceIssue(upgradeInfo: UpgradeInfo): UpgradeSourceIssue | undefined {
   return upgradeInfo.sourceIssue
@@ -63,6 +67,10 @@ function getUpgradeSourceIssueLabel(issue: UpgradeSourceIssue) {
       return 'upgrade source blocked'
     case 'ambiguous_repository':
       return 'upgrade source ambiguous'
+    case 'ambiguous_source':
+      return 'upgrade source ambiguous'
+    case 'source_unavailable':
+      return 'recorded source unavailable'
     case 'untracked':
       return 'upgrade source not tracked'
   }
@@ -77,6 +85,10 @@ function getUpgradeSourceIssueTooltip(issue: UpgradeSourceIssue, error: string |
       return 'A configured Helm repo index failed. Fix or refresh that repo, or register an OCI prefix if this chart came from OCI.'
     case 'ambiguous_repository':
       return 'Multiple configured Helm repos match this chart. Fix the repo list or source metadata so Radar can identify one source.'
+    case 'ambiguous_source':
+      return 'Multiple configured sources match this chart. Select the original source explicitly.'
+    case 'source_unavailable':
+      return 'The recorded source is not configured or cannot verify the installed chart version on this Radar installation.'
     case 'untracked':
       return "Radar can't tell where this chart was installed from. Register an OCI chart source to track upgrades."
   }
@@ -96,12 +108,34 @@ function parseUpgradeValuesYaml(raw: string): ParsedUpgradeValues {
 }
 
 export function isUpgradeSourceIssueActionable(issue: UpgradeInfo['sourceIssue']): issue is ActionableUpgradeSourceIssue {
-  return Boolean(issue && issue !== 'ambiguous_repository')
+  return Boolean(issue)
+}
+
+export interface UpgradePickerVersion {
+  version: string
+  // False for the installed version once the repository no longer publishes it:
+  // it is shown for orientation but can't be picked.
+  selectable: boolean
+}
+
+// Versions for the upgrade picker, newest first as the server returns them.
+// When the repository dropped the installed version, it is slotted in by
+// version order as a non-selectable entry so the user still sees where they are.
+// Returns null when there is nothing to choose between.
+export function upgradePickerVersions(available: string[] | undefined, current: string | undefined): UpgradePickerVersion[] | null {
+  if (!available) return null
+  const entries: UpgradePickerVersion[] = available.map(version => ({ version, selectable: true }))
+  if (current && !available.includes(current)) {
+    const olderIndex = available.findIndex(v => compareVersions(v, current) === -1)
+    entries.splice(olderIndex === -1 ? entries.length : olderIndex, 0, { version: current, selectable: false })
+  }
+  return entries.length > 1 ? entries : null
 }
 
 const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
+export const DEFAULT_SHOW_EFFECTIVE_VALUES = false
 
 export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
   const navigate = useNavigate()
@@ -111,7 +145,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? DEFAULT_WIDTH : window.innerWidth))
   const [isResizing, setIsResizing] = useState(false)
   const [selectedRevision, setSelectedRevision] = useState<number | undefined>(undefined)
-  const [showAllValues, setShowAllValues] = useState(false)
+  const [showEffectiveValues, setShowEffectiveValues] = useState(DEFAULT_SHOW_EFFECTIVE_VALUES)
   const [rollbackRevision, setRollbackRevision] = useState<number | null>(null)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
@@ -128,7 +162,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
   const targetVersionRef = useRef('')
   const editedUpgradeYamlRef = useRef('')
-  const helmNamespace = release.storageNamespace || release.namespace
+  const helmNamespace = effectiveHelmStorageNamespace(release)
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct(helmNamespace)
 
   const { data: releaseDetail, isLoading, error: releaseError, refetch: refetchRelease } = useHelmRelease(
@@ -145,10 +179,10 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   )
 
   // Fetch values
-  const { data: values, isLoading: valuesLoading } = useHelmValues(
+  const { data: values, isLoading: valuesLoading, error: valuesError, refetch: refetchValues } = useHelmValues(
     helmNamespace,
     release.name,
-    showAllValues,
+    true,
     true,
     selectedRevision,
   )
@@ -179,7 +213,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     error: availableVersionsError,
   } = useHelmReleaseVersions(helmNamespace, release.name, showUpgradeConfirm)
   const targetVersion = selectedVersion ?? upgradeInfo?.latestVersion ?? ''
-  const selectableVersions = availableVersions && availableVersions.length > 1 ? availableVersions : null
+  const selectableVersions = upgradePickerVersions(availableVersions, upgradeInfo?.currentVersion)
   // Semver compare, not list-position: the installed version may be older than
   // the newest-N versions the picker shows, so it isn't always in the list.
   const isDowngrade = Boolean(
@@ -735,8 +769,9 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               <ValuesViewer
                 values={values}
                 isLoading={valuesLoading}
-                showAllValues={showAllValues}
-                onToggleAllValues={setShowAllValues}
+                error={valuesError}
+                showEffectiveValues={showEffectiveValues}
+                onToggleEffectiveValues={setShowEffectiveValues}
                 onCopy={(text) => copyToClipboard(text, 'values')}
                 copied={copied === 'values'}
                 namespace={helmNamespace}
@@ -744,6 +779,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 revision={selectedRevision}
                 currentRevision={releaseDetail.revision}
                 onApplySuccess={() => refetch()}
+                onRetry={() => void refetchValues()}
               />
             )}
             {activeTab === 'resources' && (
@@ -853,11 +889,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 disabled={isUpgrading || isPreviewingUpgrade}
                 className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
               >
-                {selectableVersions.map((v) => (
-                  <option key={v} value={v}>
+                {selectableVersions.map(({ version: v, selectable }) => (
+                  <option key={v} value={v} disabled={!selectable}>
                     {v}
                     {v === upgradeInfo?.latestVersion ? ' (latest)' : ''}
-                    {v === upgradeInfo?.currentVersion ? ' (current)' : ''}
+                    {v === upgradeInfo?.currentVersion ? (selectable ? ' (current)' : ' (current, no longer in the repository)') : ''}
                   </option>
                 ))}
               </select>
@@ -986,6 +1022,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         open={showTrackSource}
         onClose={() => setShowTrackSource(false)}
         chartName={releaseDetail?.chart}
+        namespace={helmNamespace}
+        releaseName={release.name}
         sourceIssue={upgradeSourceIssue}
         sourceError={upgradeInfo?.error}
       />

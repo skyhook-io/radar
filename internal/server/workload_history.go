@@ -421,8 +421,8 @@ func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref, obj me
 
 // attachedRefs lists the resources whose own history belongs with a
 // workload's: the Services exposing it, the Ingresses and routes in front of
-// those, and the ConfigMaps, Secrets, scalers, PDBs, NetworkPolicies and PVCs
-// attached to it. Only the workload's
+// those, and the ConfigMaps, Secrets, scalers, PDBs, NetworkPolicies, staged
+// policies and PVCs attached to it. Only the workload's
 // namespace counts; a Service's other backends are never included.
 func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Ref {
 	if rel == nil {
@@ -432,7 +432,7 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 	seen := map[resourceid.Ref]bool{}
 	// Gateways are left out: one usually fronts many unrelated Services.
 	for _, list := range [][]topology.ResourceRef{
-		rel.Services, rel.Ingresses, rel.Routes, rel.ConfigRefs, rel.Scalers, rel.PDBs, rel.NetworkPolicies, rel.StorageRefs,
+		rel.Services, rel.Ingresses, rel.Routes, rel.ConfigRefs, rel.Scalers, rel.PDBs, rel.NetworkPolicies, rel.StagedPolicies, rel.StorageRefs,
 	} {
 		for _, ref := range list {
 			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" {

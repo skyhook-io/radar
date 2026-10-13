@@ -139,6 +139,11 @@ func (s *Server) handleTraceInCluster(w http.ResponseWriter, r *http.Request) {
 		Issues:            issues.NewCacheProvider(),
 		Client:            k8s.ClientFromContext(r.Context()),
 		AllowedNamespaces: namespaces,
+		IssueAccess: trace.IssueAccess{
+			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadSubject:       s.issueSubjectAccess(r),
+			CanReadEvidence:      s.issueEvidenceAccess(r),
+		},
 	}
 	// Probe must run so routes carry their per-route InClusterRequest; an
 	// in-cluster test with no probed routes would be a silent no-op.

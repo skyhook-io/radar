@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { PaneLoader, TimelineList, formatAge, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { useCNPGClusterActivity } from '../../api/cnpg'
-import { Notice } from '../capacity/shared'
+import { Notice } from '../workspace/layout'
 import { Segments } from './shared'
 
 const RANGES = [

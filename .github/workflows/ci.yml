@@ -75,6 +75,11 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Evaluate PVC scope PromQL in Prometheus
+        env:
+          RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
+        run: go test ./internal/prometheus -run '^TestPVCScopePromQL$' -count=1
+
       - name: Run PostgreSQL integration tests
         env:
           RADAR_TEST_POSTGRES_DSN: postgres://radar:radar@localhost:5432/radar?sslmode=disable
@@ -249,6 +254,11 @@ jobs:
             echo "ERROR: helm template should have failed with no existingSecret set"
             exit 1
           fi
+
+      # Cross-render assertions helm-unittest can't express (it renders each
+      # test in isolation), e.g. checksum/rbac changing only with rbac values.
+      - name: Chart template smoke tests
+        run: ./scripts/test-chart.sh
 
       - name: Intall helmfile
         uses: helmfile/helmfile-action@v2.2.0

@@ -411,7 +411,7 @@ func isMissingRefEchoCondition(i Issue) bool {
 		return false
 	}
 	switch i.Kind {
-	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute":
 		return strings.HasPrefix(i.Reason, "ResolvedRefs:")
 	default:
 		return false

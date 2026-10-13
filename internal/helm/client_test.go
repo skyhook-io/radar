@@ -407,11 +407,11 @@ func TestHelmReleaseRowsFromStorageSnapshot_AttachesLastOperation(t *testing.T) 
 	}
 
 	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -446,12 +446,12 @@ func TestHelmReleaseRowsFromStorageSnapshot_AttachesLastOperation(t *testing.T) 
 func TestHelmReleaseRowsFromStorageSnapshot_KeepsHealthyRowsCompact(t *testing.T) {
 	rel := helmTestRelease("healthy", "demo", 1, release.StatusDeployed, "Install complete")
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", rel, false))
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -475,15 +475,39 @@ func TestHelmReleaseRowsFromStorageSnapshot_SkipsMalformedReleaseSecret(t *testi
 		},
 	}
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", malformed, false))
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 0 {
 		t.Fatalf("len(rows) = %d, want 0 for malformed release secret", len(rows))
+	}
+}
+
+func TestHelmReleaseStorageSnapshotFromSecrets_KeepsRecordedChartSource(t *testing.T) {
+	rel := helmTestRelease("web", "demo", 1, release.StatusDeployed, "Install complete")
+	secret := helmReleaseSecret(t, "demo", rel, false)
+	recorded := &ChartSourceCandidate{Type: "repository", Reference: "podinfo", URL: "https://stefanprodan.github.io/podinfo"}
+	for k, v := range chartSourceLabels(recorded) {
+		secret.Labels[k] = v
+	}
+
+	snapshot, err := helmReleaseStorageSnapshotFromSecrets(context.Background(), []corev1.Secret{*secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.latest) != 1 {
+		t.Fatalf("len(latest) = %d, want 1", len(snapshot.latest))
+	}
+	source, ok := chartSourceFromRelease(snapshot.latest[0])
+	if !ok {
+		t.Fatalf("recorded chart source not visible on the decoded release; labels = %#v", snapshot.latest[0].Labels)
+	}
+	if source.Reference != "podinfo" || source.URL != recorded.URL {
+		t.Fatalf("source = %#v, want podinfo at %s", source, recorded.URL)
 	}
 }
 
@@ -504,12 +528,12 @@ func TestHelmReleaseRowsFromStorageSnapshot_CapsOperations(t *testing.T) {
 		secrets = append(secrets, helmReleaseSecret(t, "demo", rel, false))
 	}
 	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -543,12 +567,12 @@ func TestHelmReleaseRowsFromStorageSnapshot_UsesDetailHistoryWindow(t *testing.T
 		secrets = append(secrets, helmReleaseSecret(t, "demo", rel, false))
 	}
 	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -592,7 +616,119 @@ func TestComputeValuesDiffIsStableForReorderedMaps(t *testing.T) {
 	}
 }
 
-func TestGetValuesWithAllValuesKeepsComputedWhenUserValuesReadFails(t *testing.T) {
+func TestComputeValuesDiffDistinguishesOverridesFromEffectiveValues(t *testing.T) {
+	tests := []struct {
+		name                 string
+		left                 *HelmValues
+		right                *HelmValues
+		wantOverridesChanged bool
+		wantEffectiveChanged bool
+	}{
+		{
+			name: "chart defaults change with identical overrides",
+			left: &HelmValues{
+				UserSupplied: map[string]any{"replicaCount": 2},
+				Computed:     map[string]any{"replicaCount": 2, "image": map[string]any{"tag": "1.0.0"}},
+			},
+			right: &HelmValues{
+				UserSupplied: map[string]any{"replicaCount": 2},
+				Computed:     map[string]any{"replicaCount": 2, "image": map[string]any{"tag": "2.0.0"}},
+			},
+			wantEffectiveChanged: true,
+		},
+		{
+			name: "override change affects effective values",
+			left: &HelmValues{
+				UserSupplied: map[string]any{"replicaCount": 1},
+				Computed:     map[string]any{"replicaCount": 1},
+			},
+			right: &HelmValues{
+				UserSupplied: map[string]any{"replicaCount": 3},
+				Computed:     map[string]any{"replicaCount": 3},
+			},
+			wantOverridesChanged: true,
+			wantEffectiveChanged: true,
+		},
+		{
+			name: "overrides and effective values are identical",
+			left: &HelmValues{
+				UserSupplied: map[string]any{"replicaCount": 2},
+				Computed:     map[string]any{"replicaCount": 2},
+			},
+			right: &HelmValues{
+				UserSupplied: map[string]any{"replicaCount": 2},
+				Computed:     map[string]any{"replicaCount": 2},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			overridesDiff, err := computeValuesDiff(tt.left, tt.right, 1, 2, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			effectiveDiff, err := computeValuesDiff(tt.left, tt.right, 1, 2, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := diffHasBodyChange(overridesDiff); got != tt.wantOverridesChanged {
+				t.Fatalf("overrides changed = %v, want %v\n%s", got, tt.wantOverridesChanged, overridesDiff)
+			}
+			if got := diffHasBodyChange(effectiveDiff); got != tt.wantEffectiveChanged {
+				t.Fatalf("effective values changed = %v, want %v\n%s", got, tt.wantEffectiveChanged, effectiveDiff)
+			}
+		})
+	}
+}
+
+func TestGetValuesWithUsesEachRevisionChartDefaults(t *testing.T) {
+	actionConfig := &action.Configuration{
+		KubeClient: &kubefake.PrintingKubeClient{Out: io.Discard},
+		Releases:   helmstorage.Init(storagedriver.NewMemory()),
+	}
+
+	for revision, tag := range []string{"1.0.0", "2.0.0"} {
+		rel := helmTestRelease("values-demo", "demo", revision+1, release.StatusDeployed, "deployed")
+		rel.Chart = &chart.Chart{
+			Metadata: &chart.Metadata{Name: "values-demo"},
+			Values: map[string]any{
+				"image": map[string]any{"repository": "example/app", "tag": tag},
+			},
+		}
+		rel.Config = map[string]any{"replicaCount": 2}
+		if err := actionConfig.Releases.Create(rel); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	left, err := getValuesWith(actionConfig, "values-demo", true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := getValuesWith(actionConfig, "values-demo", true, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	overridesDiff, err := computeValuesDiff(left, right, 1, 2, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diffHasBodyChange(overridesDiff) {
+		t.Fatalf("overrides differ even though both revisions stored the same overrides:\n%s", overridesDiff)
+	}
+
+	effectiveDiff, err := computeValuesDiff(left, right, 1, 2, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !diffHasBodyChange(effectiveDiff) {
+		t.Fatalf("effective values do not reflect revision-specific chart defaults:\n%s", effectiveDiff)
+	}
+}
+
+func TestGetValuesWithAllValuesLoadsOverridesAndComputedFromOneRead(t *testing.T) {
 	rel := helmTestRelease("values-demo", "demo", 1, release.StatusDeployed, "deployed")
 	rel.Chart = &chart.Chart{
 		Metadata: &chart.Metadata{Name: "values-demo"},
@@ -609,7 +745,7 @@ func TestGetValuesWithAllValuesKeepsComputedWhenUserValuesReadFails(t *testing.T
 			"tag": "2.0.0",
 		},
 	}
-	driver := &failSecondReadDriver{inner: storagedriver.NewMemory()}
+	driver := &countingReadDriver{inner: storagedriver.NewMemory(), failAfter: 1}
 	actionConfig := &action.Configuration{
 		KubeClient: &kubefake.PrintingKubeClient{Out: io.Discard},
 		Releases:   helmstorage.Init(driver),
@@ -636,8 +772,32 @@ func TestGetValuesWithAllValuesKeepsComputedWhenUserValuesReadFails(t *testing.T
 	if got := image["tag"]; got != "2.0.0" {
 		t.Fatalf("Computed[image][tag] = %#v, want user override", got)
 	}
-	if len(values.UserSupplied) != 0 {
-		t.Fatalf("UserSupplied = %#v, want empty when secondary read fails", values.UserSupplied)
+	userImage, ok := values.UserSupplied["image"].(map[string]any)
+	if !ok || userImage["tag"] != "2.0.0" {
+		t.Fatalf("UserSupplied[image] = %#v, want preserved override", values.UserSupplied["image"])
+	}
+	if driver.reads != 1 {
+		t.Fatalf("release reads = %d, want 1", driver.reads)
+	}
+}
+
+func TestGetValuesWithReturnsEmptyOverridesAsEmptyMap(t *testing.T) {
+	rel := helmTestRelease("empty-values", "demo", 1, release.StatusDeployed, "deployed")
+	rel.Config = nil
+	actionConfig := &action.Configuration{
+		KubeClient: &kubefake.PrintingKubeClient{Out: io.Discard},
+		Releases:   helmstorage.Init(storagedriver.NewMemory()),
+	}
+	if err := actionConfig.Releases.Create(rel); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := getValuesWith(actionConfig, rel.Name, false, rel.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.UserSupplied == nil || len(values.UserSupplied) != 0 {
+		t.Fatalf("UserSupplied = %#v, want a non-nil empty map", values.UserSupplied)
 	}
 }
 
@@ -1148,40 +1308,41 @@ spec:
 	}
 }
 
-type failSecondReadDriver struct {
-	inner *storagedriver.Memory
-	reads int
+type countingReadDriver struct {
+	inner     *storagedriver.Memory
+	reads     int
+	failAfter int
 }
 
-func (d *failSecondReadDriver) Name() string {
+func (d *countingReadDriver) Name() string {
 	return d.inner.Name()
 }
 
-func (d *failSecondReadDriver) Create(key string, rls *release.Release) error {
+func (d *countingReadDriver) Create(key string, rls *release.Release) error {
 	return d.inner.Create(key, rls)
 }
 
-func (d *failSecondReadDriver) Update(key string, rls *release.Release) error {
+func (d *countingReadDriver) Update(key string, rls *release.Release) error {
 	return d.inner.Update(key, rls)
 }
 
-func (d *failSecondReadDriver) Delete(key string) (*release.Release, error) {
+func (d *countingReadDriver) Delete(key string) (*release.Release, error) {
 	return d.inner.Delete(key)
 }
 
-func (d *failSecondReadDriver) Get(key string) (*release.Release, error) {
+func (d *countingReadDriver) Get(key string) (*release.Release, error) {
 	d.reads++
-	if d.reads > 1 {
-		return nil, fmt.Errorf("forced second read failure")
+	if d.failAfter > 0 && d.reads > d.failAfter {
+		return nil, fmt.Errorf("forced read failure after %d reads", d.failAfter)
 	}
 	return d.inner.Get(key)
 }
 
-func (d *failSecondReadDriver) List(filter func(*release.Release) bool) ([]*release.Release, error) {
+func (d *countingReadDriver) List(filter func(*release.Release) bool) ([]*release.Release, error) {
 	return d.inner.List(filter)
 }
 
-func (d *failSecondReadDriver) Query(labels map[string]string) ([]*release.Release, error) {
+func (d *countingReadDriver) Query(labels map[string]string) ([]*release.Release, error) {
 	return d.inner.Query(labels)
 }
 
@@ -1533,11 +1694,11 @@ func assertStorageNamespaceFromSecret(t *testing.T, gzipped bool) {
 	rel := helmTestRelease("podinfo", "demo-flux-helm", 1, release.StatusDeployed, "Install complete")
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "flux-system", rel, gzipped))
 
-	storageNamespaces, err := helmReleaseStorageNamespacesWithClient(client)
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := storageNamespaces[releaseStorageKey(rel)]; got != "flux-system" {
+	if got := snapshot.storageNamespaces[releaseStorageKey(rel)]; got != "flux-system" {
 		t.Fatalf("storage namespace = %q, want flux-system", got)
 	}
 }
@@ -1656,7 +1817,7 @@ generated: "2026-05-05T00:00:00Z"
 }
 
 func TestListReleasesAcrossNamespacesEmptySerializesAsArray(t *testing.T) {
-	releases, err := (&Client{}).ListReleasesAcrossNamespaces([]string{}, "", nil)
+	releases, err := (&Client{}).ListReleasesAcrossNamespaces(context.Background(), []string{}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2061,11 +2222,11 @@ func TestHelmReleaseUninstallTimestampFromStorage(t *testing.T) {
 			rel.Info.LastDeployed = helmtime.Time{Time: now.Add(-90 * 24 * time.Hour)}
 			rel.Info.Deleted = helmtime.Time{Time: tt.deleted}
 			client := fake.NewSimpleClientset(helmReleaseSecret(t, "helm-storage", rel, true))
-			snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+			snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+			rows := helmReleaseRowsForTest(t, snapshot)
 			if len(rows) != 1 {
 				t.Fatalf("rows = %#v", rows)
 			}
@@ -2101,4 +2262,13 @@ func TestHelmReleaseDeploymentTimestampPreserved(t *testing.T) {
 			}
 		})
 	}
+}
+
+func helmReleaseRowsForTest(t *testing.T, snapshot *helmReleaseStorageSnapshot) []HelmRelease {
+	t.Helper()
+	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
 }

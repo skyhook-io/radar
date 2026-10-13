@@ -1289,52 +1289,6 @@ func TestDedupeIssues_PerResourceIssuesAreDistinct(t *testing.T) {
 	}
 }
 
-// TestResolveFinalizerOwner pins the static finalizer→controller mapping.
-// New Flux/Argo versions may introduce new keys; this test catches
-// regressions when entries get accidentally renamed.
-func TestResolveFinalizerOwner(t *testing.T) {
-	mkObj := func(api string) *unstructured.Unstructured {
-		return &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": api,
-			"kind":       "Whatever",
-		}}
-	}
-	tests := []struct {
-		name      string
-		finalizer string
-		obj       *unstructured.Unstructured
-		want      string // expected Controller name; "" means nil owner
-	}{
-		{"argo standard", "resources-finalizer.argocd.argoproj.io", mkObj(""), "argocd-application-controller"},
-		{"argo legacy cascade", "foreground-cascade.argocd.argoproj.io", mkObj(""), "argocd-application-controller"},
-		{"flux generic on Kustomization", "finalizers.fluxcd.io", mkObj("kustomize.toolkit.fluxcd.io/v1"), "kustomize-controller"},
-		{"flux generic on HelmRelease", "finalizers.fluxcd.io", mkObj("helm.toolkit.fluxcd.io/v2"), "helm-controller"},
-		{"flux generic on GitRepository", "finalizers.fluxcd.io", mkObj("source.toolkit.fluxcd.io/v1"), "source-controller"},
-		{"flux specific kustomize", "finalizers.kustomize.toolkit.fluxcd.io", mkObj(""), "kustomize-controller"},
-		{"flux specific helm", "finalizers.helm.toolkit.fluxcd.io", mkObj(""), "helm-controller"},
-		{"flux specific source", "finalizers.source.toolkit.fluxcd.io", mkObj(""), "source-controller"},
-		{"unknown finalizer returns nil", "example.com/cleanup", mkObj(""), ""},
-		{"unknown apiVersion for generic flux returns nil", "finalizers.fluxcd.io", mkObj("custom.example.com/v1"), ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ResolveFinalizerOwner(tt.finalizer, tt.obj)
-			if tt.want == "" {
-				if got != nil {
-					t.Fatalf("expected nil owner, got %+v", got)
-				}
-				return
-			}
-			if got == nil {
-				t.Fatalf("expected owner with controller %q, got nil", tt.want)
-			}
-			if got.Controller != tt.want {
-				t.Fatalf("Controller = %q, want %q", got.Controller, tt.want)
-			}
-		})
-	}
-}
-
 // TestBuildIssues_LifecycleVsCriticalOperation pins what happens when a
 // Terminating resource also has a critical operation failure. The
 // backend severity-stable sort puts critical (rank 0) above alert (rank

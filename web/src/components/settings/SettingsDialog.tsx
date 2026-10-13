@@ -1317,7 +1317,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       : cost?.reason === 'access_denied'
         ? 'Your current permissions do not allow cost data.'
         : cost?.reason
-          ? costIntegrationUnavailableMessage(cost.reason) ?? 'The active cost source query failed.'
+          ? costIntegrationUnavailableMessage(cost.reason) ?? 'The active cost source could not provide data.'
           : undefined
 
   const rows: OverviewRow[] = [

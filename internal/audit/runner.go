@@ -38,7 +38,16 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	if scope != nil && scope.Namespaces != nil && len(namespaces) == 0 {
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
+	storage := collectStorageInput(cache, namespaces, scope)
+	// Read consumers after storage coverage checks, so a snapshot taken before
+	// initial informer sync cannot be treated as evidence of absence.
 	input := CollectTypedInput(cache, namespaces)
+	input.PersistentVolumeClaims = storage.PersistentVolumeClaims
+	input.PersistentVolumes = storage.PersistentVolumes
+	input.StorageClasses = storage.StorageClasses
+	input.Events = storage.Events
+	input.PVCConsumerNamespaces = storage.PVCConsumerNamespaces
+	input.PVDeletionEventsComplete = storage.PVDeletionEventsComplete
 	if !scope.hasSecretSubjects(namespaces) {
 		input.Secrets = nil
 	} else if scope != nil {

@@ -244,6 +244,10 @@ func attributionJob(rows []prom.Series, pods []prom.WorkloadPodIdentity, beyla b
 }
 
 func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map[string]string, []prom.WorkloadPodIdentity) {
+	return identifyPartitionWithUnlabeled(pods, rows, false)
+}
+
+func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom.Series, includeUnlabeled bool) (map[string]string, []prom.WorkloadPodIdentity) {
 	var candidates []map[string]string
 	seen := map[string]bool{}
 	addCandidate := func(candidate map[string]string) {
@@ -255,7 +259,7 @@ func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map
 	}
 	for _, row := range rows {
 		for _, pod := range pods {
-			if row.Labels["pod"] != pod.Name || row.Labels["uid"] != pod.UID {
+			if pod.UID == "" || row.Labels["pod"] != pod.Name || row.Labels["uid"] != pod.UID {
 				continue
 			}
 			for _, label := range partitionLabels {
@@ -269,6 +273,13 @@ func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map
 				}
 			}
 		}
+	}
+	if includeUnlabeled && len(candidates) == 0 {
+		candidate := make(map[string]string, len(partitionLabels))
+		for _, label := range partitionLabels {
+			candidate[label] = ""
+		}
+		addCandidate(candidate)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if len(candidates[i]) != len(candidates[j]) {
@@ -284,6 +295,9 @@ func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map
 		var population []string
 		conflict := false
 		for _, pod := range pods {
+			if pod.UID == "" {
+				continue
+			}
 			found := false
 			for _, row := range rows {
 				if row.Labels["pod"] != pod.Name {

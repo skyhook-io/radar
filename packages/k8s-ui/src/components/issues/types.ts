@@ -141,6 +141,26 @@ export interface IssueRecentChange {
   consumed_by?: string[];
 }
 
+/** One finalizer removal: a JSON Patch that tests the object UID and the
+ *  finalizer at its index before removing it, previewed as dry runs. */
+export interface IssueFinalizerRemoval {
+  finalizer: string;
+  /** patch_resource tool input, with dry_run=true. */
+  patch_resource: Record<string, unknown>;
+  /** The same patch as a kubectl server-side dry run. */
+  kubectl: string;
+}
+
+export interface IssueConditionalCleanup {
+  /** Lead-in the reader must confirm, e.g. "If victoria-metrics-operator was
+   *  uninstalled on purpose (…), remove the finalizer". */
+  condition: string;
+  /** For agents: when the cleanup may be proposed. */
+  agent_guidance: string;
+  caution: string;
+  removals: IssueFinalizerRemoval[];
+}
+
 /** "No tracked non-status changes in the window" — the claim is scoped by
  *  window_seconds so a change just outside it can't be misread as absent. */
 export interface IssueNoRecentChanges {
@@ -188,6 +208,9 @@ export interface Issue {
   action?: string;
   remediation_kind?: string;
   remediation_target?: string;
+  /** A cleanup that is right only when its condition holds — never part of
+   *  `action`. Shown collapsed, labeled with the condition. */
+  conditional_cleanup?: IssueConditionalCleanup;
   /** Controller-operation retry count (e.g. Argo's "(retried N times)") —
    *  distinct from restart_count (pod restarts). stuck = not expected to
    *  self-recover. */

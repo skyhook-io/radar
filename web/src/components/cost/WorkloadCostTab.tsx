@@ -363,10 +363,8 @@ function WorkloadCostUnavailable({
     costIntegrationUnavailableMessage(state, settingsAvailable) ??
     (state === 'no_prometheus'
       ? 'No compatible metrics backend was found. OpenCost workload cost requires OpenCost metrics in a PromQL-compatible backend.'
-      : state === 'query_error'
-        ? 'Cost data is temporarily unavailable. A metrics backend was found, but workload cost queries failed.'
-        : state === 'history_unsupported'
-          ? 'Historical workload cost is not available for Kubecost yet.'
+      : state === 'history_unsupported'
+        ? 'Historical workload cost is not available for Kubecost yet.'
         : state === 'access_denied'
           ? 'You do not have access to view cost for this workload.'
           : state === 'not_found'

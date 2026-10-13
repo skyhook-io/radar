@@ -133,13 +133,13 @@ func TestAvailabilityConfiguredFailedWhenInClusterCandidateUnreachable(t *testin
 	}
 
 	got := c.Availability(context.Background())
-	if got.State != AvailabilityConfiguredFailed || !errors.Is(got.Err, ErrPrometheusNotFound) {
-		t.Fatalf("Availability() = %+v, want configured_failed carrying ErrPrometheusNotFound", got)
+	if got.State != AvailabilityConfiguredFailed || !errors.Is(got.Err, errPrometheusUnreachable) || errors.Is(got.Err, ErrPrometheusNotFound) {
+		t.Fatalf("Availability() = %+v, want configured_failed carrying unreachable without not-found", got)
 	}
 
 	// The five-second discovery-error cache must classify the same way.
 	cached := c.Availability(context.Background())
-	if cached.State != AvailabilityConfiguredFailed || !errors.Is(cached.Err, ErrPrometheusNotFound) {
+	if cached.State != AvailabilityConfiguredFailed || !errors.Is(cached.Err, errPrometheusUnreachable) || errors.Is(cached.Err, ErrPrometheusNotFound) {
 		t.Fatalf("cached Availability() = %+v, want configured_failed", cached)
 	}
 }

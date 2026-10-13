@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
+import { AlertBanner, EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
 
 const problems = [
   { color: 'red' as const, message: 'Application is Degraded' },
@@ -125,5 +125,114 @@ describe('namespace deletion condition polarity', () => {
     expect(defaultConditionTone({ type, status: 'True' })).toBe('fail')
     expect(defaultConditionTone({ type, status: 'False' })).toBe('ok')
     expect(defaultConditionTone({ type, status: 'Unknown' })).toBe('unknown')
+  })
+})
+
+describe('monitors projection', () => {
+  it('renders Monitored By alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ monitors: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Monitored By')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('monitorTargets projection', () => {
+  it('renders Monitors alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ monitorTargets: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Monitors')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('backends projection', () => {
+  it('renders Routes To alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ backends: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Routes To')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('routedFrom projection', () => {
+  it('renders Routed From alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ routedFrom: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Routed From')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('protects projection', () => {
+  it('renders Selects alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ protects: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Selects')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('healthChecks projection', () => {
+  it('renders Health Checks alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ healthChecks: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Health Checks')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('stagedPolicies projection', () => {
+  it('renders Staged Policies alone and deduplicates by API group', () => {
+    const ref = { kind: 'Widget', group: 'one.example', namespace: 'demo', name: 'shared' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ stagedPolicies: [ref, ref, { ...ref, group: 'two.example' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('Staged Policies')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+
+describe('routing version skew', () => {
+  it('keeps older Services, Gateways, Routes and Pods fields visible', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ services: [{kind: 'Service', namespace: 'demo', name: 'web'}], gateways: [{kind: 'HTTPRoute', group: 'gateway.networking.k8s.io', namespace: 'demo', name: 'old-route'}], routes: [{kind: 'IngressRoute', group: 'traefik.io', namespace: 'demo', name: 'route'}], pods: [{kind: 'Deployment', group: 'apps', namespace: 'demo', name: 'old-target'}] }} />)
+    for (const label of ['Services', 'Gateways', 'Routes', 'Pods', 'old-route', 'old-target']) expect(html).toContain(label)
+  })
+})
+
+describe('related resource chips', () => {
+  it('tells a Knative Service apart from a core Service', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{
+      services: [{ kind: 'Service', namespace: 'team', name: 'web-private' }],
+      routedFrom: [{ kind: 'Service', group: 'serving.knative.dev', namespace: 'team', name: 'web' }],
+    }} onNavigate={() => {}} />)
+    expect(html).toContain('>svc<!-- -->/</span>web-private<')
+    expect(html).toContain('>ksvc<!-- -->/</span>web<')
+  })
+})
+
+
+describe('AlertBanner optional actions', () => {
+  it('retains the title-only default without introducing a layout wrapper', () => {
+    const html = renderToString(<AlertBanner variant="info" title="Paused" />)
+    expect(html).toMatch(/<div class="text-sm font-medium [^"]*">Paused<\/div>/)
+    expect(html).not.toContain('justify-between'); expect(html).not.toContain('flex-1')
+  })
+  it.each([undefined, 'Check connection'])('places the optional action next to the title, retaining the body (%s)', message => {
+    const html = renderToString(<AlertBanner variant="warning" title="Metrics unavailable" message={message} action={<button>Open settings</button>} />)
+    expect(html).toContain('Metrics unavailable'); expect(html).toContain('<button>Open settings</button>')
+    expect(html).toContain('flex-wrap'); if (message) expect(html).toContain(message)
   })
 })

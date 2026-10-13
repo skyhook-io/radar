@@ -38,6 +38,7 @@ const RELATED_RUNTIME_KINDS = new Set([
   'HTTPRoute',
   'GRPCRoute',
   'TCPRoute',
+  'UDPRoute',
   'TLSRoute',
   'ConfigMap',
   'Secret',

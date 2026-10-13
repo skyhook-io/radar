@@ -48,6 +48,7 @@ function getKindColor(kind: string): string {
     case 'GRPCRoute':
     case 'TCPRoute':
     case 'TLSRoute':
+    case 'UDPRoute':
       return 'text-purple-300'
     case 'Service':
       return 'text-blue-400'

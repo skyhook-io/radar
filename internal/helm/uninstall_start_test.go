@@ -1,6 +1,7 @@
 package helm
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -21,11 +22,11 @@ func freshUninstallStarts(t *testing.T) {
 
 func uninstallRowFromStorage(t *testing.T, rel *release.Release) HelmRelease {
 	t.Helper()
-	snapshot, err := helmReleaseStorageSnapshotWithClient(fake.NewSimpleClientset(helmReleaseSecret(t, "helm-storage", rel, true)), "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), fake.NewSimpleClientset(helmReleaseSecret(t, "helm-storage", rel, true)), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+	rows := helmReleaseRowsForTest(t, snapshot)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %#v", rows)
 	}

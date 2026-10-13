@@ -1,0 +1,34 @@
+suite: RBAC checksum rolls Radar when its grants change
+templates:
+  - deployment.yaml
+tests:
+  - it: annotates the pod template with a checksum of the rbac values
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/rbac"]
+          pattern: ^[0-9a-f]{64}$
+
+  - it: keeps the checksum in cloud mode, which renders no operator settings
+    set:
+      cloud.enabled: true
+      cloud.token: test-token
+      cloud.url: wss://hub.example.com
+      cloud.clusterName: example
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/rbac"]
+          pattern: ^[0-9a-f]{64}$
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/operator-settings"]
+
+  - it: keeps user pod annotations alongside the checksum
+    set:
+      podAnnotations:
+        example.com/team: platform
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["example.com/team"]
+          value: platform
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/rbac"]
+          pattern: ^[0-9a-f]{64}$

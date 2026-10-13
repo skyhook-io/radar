@@ -16,7 +16,7 @@ export {
   issueSortAnchor,
   compareIssueSortAnchors,
 } from './types';
-export type { Issue, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField } from './types';
+export type { Issue, IssueConditionalCleanup, IssueFinalizerRemoval, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField } from './types';
 export {
   ISSUE_SEVERITY_LABEL,
   ISSUE_SEVERITY_BADGE_CLASS,
@@ -24,5 +24,7 @@ export {
   ISSUE_SEVERITY_FILL_CLASS,
   ISSUE_SEVERITY_RAIL_CLASS,
   categoryLabel,
+  issueTitle,
+  issueReasonTitle,
   groupLabel,
 } from './severity';

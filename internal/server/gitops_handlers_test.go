@@ -6,96 +6,20 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
-
-// makePodWithStatus constructs a minimal Pod with the container statuses
-// summarizeControllerHealth inspects. Phase + ContainerStatuses are the
-// only fields the function reads.
-func makePodWithStatus(phase corev1.PodPhase, statuses ...corev1.ContainerStatus) *corev1.Pod {
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "pod"},
-		Status:     corev1.PodStatus{Phase: phase, ContainerStatuses: statuses},
-	}
-}
-
-// TestSummarizeControllerHealth pins the exact wording of the
-// finalizer-owner status string. The output is concatenated into the
-// lifecycle Issue's Cause field surfaced to operators, so a copy-paste
-// regression that changed "1 pod ready" to "1 pods ready" or "Healthy"
-// to "healthy" is part of the user-visible contract — assertions are
-// exact-match on purpose.
-func TestSummarizeControllerHealth(t *testing.T) {
-	ready := corev1.ContainerStatus{Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
-	notReady := corev1.ContainerStatus{Ready: false}
-	crashing := corev1.ContainerStatus{Ready: false, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}
-	erroring := corev1.ContainerStatus{Ready: false, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "Error"}}}
-
-	tests := []struct {
-		name string
-		pods []*corev1.Pod
-		want string
-	}{
-		{
-			name: "single ready pod uses singular form",
-			pods: []*corev1.Pod{makePodWithStatus(corev1.PodRunning, ready)},
-			want: "argocd-application-controller is healthy (1 pod ready)",
-		},
-		{
-			name: "two ready pods uses plural form",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodRunning, ready),
-				makePodWithStatus(corev1.PodRunning, ready),
-			},
-			want: "argocd-application-controller is healthy (2 pods ready)",
-		},
-		{
-			name: "any crashloop pod dominates aggregate",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodRunning, ready),
-				makePodWithStatus(corev1.PodRunning, crashing),
-			},
-			want: "argocd-application-controller is CrashLoopBackOff (1/2 pods)",
-		},
-		{
-			name: "Error reason surfaces alongside crashing count",
-			pods: []*corev1.Pod{makePodWithStatus(corev1.PodRunning, erroring)},
-			want: "argocd-application-controller is Error (1/1 pods)",
-		},
-		{
-			name: "all pending and zero ready reports pending",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodPending),
-				makePodWithStatus(corev1.PodPending),
-			},
-			want: "argocd-application-controller is pending start (2/2 pods Pending)",
-		},
-		{
-			name: "partial ready falls back to degraded",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodRunning, ready),
-				makePodWithStatus(corev1.PodRunning, notReady),
-			},
-			want: "argocd-application-controller is degraded (1/2 pods ready)",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := summarizeControllerHealth("argocd-application-controller", tt.pods)
-			if got != tt.want {
-				t.Fatalf("summarizeControllerHealth =\n  got:  %q\n  want: %q", got, tt.want)
-			}
-		})
-	}
-}
 
 // TestWriteGitOpsErrorStatusMapping pins the typed-sentinel → HTTP
 // status mapping that every GitOps mutating handler depends on. The
@@ -266,5 +190,60 @@ func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	}
 	if len(got.Warnings) == 0 || !strings.Contains(got.Warnings[0], "hidden by RBAC") {
 		t.Fatalf("expected RBAC warning, got %#v", got.Warnings)
+	}
+}
+
+func TestGitOpsFinalizerEmptyOwnerNamespace(t *testing.T) {
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Pods() == nil {
+		t.Fatal("test cache unavailable")
+	}
+	resolver := &insightsResolver{cache: cache, canAccess: func(string, string, string, string) bool {
+		t.Fatal("empty namespace catalog owner reached inventory access")
+		return true
+	}}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("operator.victoriametrics.com/v1")
+	if got := resolver.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", root); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGitOpsFinalizerHealthDuringControllerRollout(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}}
+	pod.SetName("rollout-source-controller")
+	pod.SetNamespace("flux-system")
+	pod.SetLabels(map[string]string{"app": "source-controller"})
+	pod.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("source.toolkit.fluxcd.io/v1")
+	if got := resolver.FinalizerOwnerStatus("finalizers.source.toolkit.fluxcd.io", root); got != "source-controller is healthy (1 pod ready)" {
+		t.Fatalf("rollout changed GitOps controller health text: %q", got)
+	}
+}
+
+func TestGitOpsFinalizerOwnerMayRunOffCluster(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("argoproj.io/v1alpha1")
+	if got := resolver.FinalizerOwnerStatus("resources-finalizer.argocd.argoproj.io", root); !strings.Contains(got, "argocd-application-controller has no pods in namespace argocd (it may run outside the cluster under Amazon EKS Capabilities") {
+		t.Fatalf("managed Argo CD read as missing: %q", got)
 	}
 }

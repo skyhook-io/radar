@@ -120,7 +120,7 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.websocketOriginAllowed(r) {
+	if !s.browserOriginAllowed(r) {
 		s.writeError(w, http.StatusForbidden, "local terminal origin is not allowed")
 		return
 	}

@@ -1056,7 +1056,7 @@ func costRemediation(reason string) string {
 	case pkgopencost.ReasonConfigMismatch:
 		return "The configured cost source does not match the connected cluster. Check Radar's cost settings against the current kubeconfig context."
 	case pkgopencost.ReasonDeploymentConfig:
-		return "The cost source is installed but misconfigured. Check the OpenCost/Kubecost deployment's own configuration."
+		return "Radar's operator-supplied cost or metrics configuration is invalid. Check local launch flags or the deployment environment variables and Helm values."
 	case pkgopencost.ReasonMetricsSettings:
 		return "This kubeconfig context's saved metrics settings need review in Radar's Settings (for example after the cluster behind the context changed); Radar does not use them until the user reviews them."
 	case pkgopencost.ReasonCostSettings:
@@ -1066,7 +1066,7 @@ func costRemediation(reason string) string {
 	case pkgopencost.ReasonNotFound:
 		return "The requested resource no longer exists."
 	case pkgopencost.ReasonQueryError, pkgopencost.ReasonSourceUnavailable:
-		return "The cost source is installed but the query failed. Check that OpenCost/Kubecost pods are healthy."
+		return "The selected cost source's connection or query failed. For OpenCost metrics, check Radar's Metrics connection status; for Kubecost, check its URL, network path and backend health."
 	default:
 		return ""
 	}

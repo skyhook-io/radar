@@ -18,6 +18,7 @@ import (
 // inject fakes without standing up an informer stack.
 type Provider interface {
 	DetectProblems(namespaces []string) []k8s.Detection
+	DetectDynamicTerminatingProblems(namespaces []string, canList func(group, resource, namespace string) bool) []k8s.Detection
 	DetectCAPIProblems(namespaces []string) []k8s.Detection
 	// DetectGitOpsProblems returns failing ArgoCD Applications and Flux
 	// Kustomizations/HelmReleases — the reconciler-health failure class the
@@ -141,6 +142,10 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		}
 		return correlationAllowed
 	}
+	canList := func(group, resource, namespace string) bool {
+		return f.CanReadEvidence != nil && f.CanReadEvidence(EvidenceRead{Group: group, Resource: resource, Namespace: namespace, Verb: "list"})
+	}
+	finalizerObservations := map[string]finalizerObservation{}
 	emit := func(ps []k8s.Detection, source Source) {
 		for _, pr := range ps {
 			if pr.Severity == "info" {
@@ -155,10 +160,16 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 					pr.Cause, pr.Action = "", ""
 				}
 			}
+			if len(pr.TerminatingFinalizers) > 0 {
+				pr = enrichTerminatingProblem(pr, p, canList, finalizerObservations)
+			}
 			out = append(out, fromProblem(pr, now, source))
 		}
 	}
-	emit(p.DetectProblems(f.Namespaces), SourceProblem)       // hardcoded per-kind checks
+	emit(p.DetectProblems(f.Namespaces), SourceProblem) // hardcoded per-kind checks
+	if f.CanReadEvidence != nil {
+		emit(p.DetectDynamicTerminatingProblems(f.Namespaces, canList), SourceProblem)
+	}
 	emit(p.DetectCAPIProblems(f.Namespaces), SourceProblem)   // Cluster API
 	emit(p.DetectGitOpsProblems(f.Namespaces), SourceProblem) // Argo/Flux reconciler health
 	emit(p.DetectMissingRefs(f.Namespaces), SourceMissingRef) // dangling by-name refs
@@ -166,6 +177,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f)
 	out = append(out, karpenterIssues...)
 	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects)...) // generic CRD .status.conditions
+	out = foldDeletingConditions(out)
 	out = elevateAdmissionWebhookBackendSeverity(out, p)
 
 	// ---- 2. Evidence-level transforms (operate on flat rows) ---------
@@ -173,6 +185,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// symptoms against parent rollups across member pods — both need the flat
 	// rows, so they run BEFORE grouping and BEFORE the public filters.
 	out = applyClusterScopedAccess(out, f)
+	out = applySubjectAccess(out, f.CanReadSubject)
+	out = applyOwnerAccess(out, f)
+	out = applyEvidenceAccess(out, f.CanReadEvidence, f.AllowUnfilteredEvidence, f.OnEvidenceWithheld)
 	out = redactUnreadableRelatedRefs(out, f.CanReadRelated)
 	out = dedupePodSchedulingOverProblem(out)
 	// Same-resource structural-root → symptom: fold a pod's runtime symptom into

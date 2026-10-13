@@ -263,6 +263,7 @@ trend charts remain unavailable for Kubecost.
 | `service.type` | Service type | `ClusterIP` |
 | `service.port` | Service port | `9280` |
 | `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
+| `trustedOrigins` | Origins besides Radar's own address that may use Radar's API, including changes and pod terminals, e.g. `http://radar.internal`. Set only if changes fail with "Radar refused this request" because a proxy rewrites `Host` | `[]` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `ingress.enabled` | Enable ingress | `false` |
@@ -287,8 +288,8 @@ trend charts remain unavailable for Kubecost.
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
-| `traffic.prometheusSingleCluster` | Optional workload-metrics override: assert that the backend contains only this cluster. Replaces automatic matching; does not scope rightsizing or other metrics features | `false` |
-| `traffic.prometheusClusterLabels` | Optional exact label/value constraints for workload metrics in a shared store, ANDed. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
+| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics and PVC usage, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
 | `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
@@ -366,6 +367,11 @@ The Secret is managed independently of Helm, so credential rotation does not req
 
 The chart creates a ClusterRole with read-only access to common Kubernetes resources.
 
+Grant changes take effect when the Radar pod restarts: Radar decides what it can
+read at startup and keeps serving objects it already cached after a grant is
+removed. `helm upgrade` rolls the pod whenever `rbac` values change. If you change
+Radar's RBAC outside Helm, restart Radar.
+
 ### Default Permissions (Core K8s Resources)
 
 Always granted (required for basic functionality):
@@ -408,13 +414,17 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. All common CRD groups are enabled by default. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default. Granting RBAC for CRDs that don't exist has no effect.
 
-**Wildcard option:** Grant read access to ALL CRDs with one setting:
+**Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
 --set rbac.crdGroups.all=true
 ```
-This overrides individual settings below. Simpler but broader — some orgs may not allow this.
+This grants `get/list/watch` on `*/*`, including **core Secrets** and all
+credential-bearing CRDs. It overrides individual flags and resource exclusions,
+including VictoriaMetrics exclusions. Kubernetes RBAC cannot express wildcard
+reads minus Secrets. These are collector permissions; the Cloud caller roles
+retain their finite grants.
 
 | Option | API Groups |
 |--------|------------|
@@ -458,6 +468,19 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 | `trivy` | `aquasecurity.github.io` |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
+
+**VictoriaMetrics collection:** the chart grants Radar cluster-wide `get/list/watch`
+on VMAgent, VMCluster and VMSingle (`vmagents`, `vmclusters`, `vmsingles` in
+`operator.victoriametrics.com`) whenever it grants cluster-wide Secrets reads:
+`rbac.secrets: true`, `rbac.helm: true`, auth enabled (`auth.mode != none`), or
+cloud mode. These objects can carry inline credentials, so they share the same
+grant decision as Secrets. There is no separate VictoriaMetrics setting.
+
+This rule excludes all other VictoriaMetrics operator kinds, including
+VMUser/VMAuth, alerting and scrape/probe resources, and the Logs, Traces,
+Distributed and Anomaly families. `crdGroups.all=true` or adding
+`operator.victoriametrics.com` to `additionalCrdGroups` grants them anyway;
+permissions are additive, and these exclusions are not deny rules.
 
 **Disable groups:** `--set rbac.crdGroups.calico=false`
 

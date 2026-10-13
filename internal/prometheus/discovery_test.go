@@ -3,8 +3,10 @@ package prometheus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,7 +17,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 )
 
 const healthyProbeBody = `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`
@@ -275,8 +283,7 @@ func TestDiscover_StaleFlightGenerationDoesNotCommit(t *testing.T) {
 // the direct Service-address probe discovery must fail closed rather than burn
 // ~10s per candidate on a port-forward it cannot open. A well-known Prometheus
 // exists (so enumeration yields a candidate) but its cluster address is
-// unreachable from the test — the fixed code returns ErrPrometheusNotFound; the
-// pre-fix code fell through to the port-forward fallback and returned its error.
+// unreachable from the test.
 func TestDiscover_InClusterDoesNotFallBackToPortForward(t *testing.T) {
 	cs := fake.NewSimpleClientset(&corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"},
@@ -294,8 +301,8 @@ func TestDiscover_InClusterDoesNotFallBackToPortForward(t *testing.T) {
 	}
 
 	_, _, err := c.discover(context.Background(), c.discoveryGen)
-	if !errors.Is(err, ErrPrometheusNotFound) {
-		t.Fatalf("in-cluster discovery fell back to port-forward: err=%v, want ErrPrometheusNotFound", err)
+	if !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
+		t.Fatalf("in-cluster discovery: err=%v, want unreachable without not-found", err)
 	}
 }
 
@@ -496,5 +503,109 @@ func TestProbeCandidatesWithReasons_DeadlineMarksLaunchedProbesAsTransportFailur
 	}
 	if reasons[maxConcurrentProbes] != "" {
 		t.Fatalf("reasons[%d] = %q, want empty for a probe the pass never launched", maxConcurrentProbes, reasons[maxConcurrentProbes])
+	}
+}
+
+func TestUnreachableErrorsAreOneSentenceAndKeepTheirSentinels(t *testing.T) {
+	for _, err := range []error{
+		errPrometheusUnreachable,
+		unreachableBecause(nil, "Radar found %d services that may be Prometheus but may not port-forward to them (needs create pods/portforward)", 2),
+	} {
+		if !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
+			t.Errorf("%v must be unreachable without not-found", err)
+		}
+		if strings.Contains(err.Error(), ErrPrometheusNotFound.Error()) {
+			t.Errorf("%q claims nothing was found", err)
+		}
+	}
+}
+
+func TestDeniedGrantNamesTheRefusedStep(t *testing.T) {
+	listPods := fmt.Errorf("failed to find pod for service prom: %w", errors.New(`pods is forbidden: User "u" cannot list resource "pods" in API group "" in the namespace "monitoring"`))
+	portForward := fmt.Errorf("port-forward failed: %w", errors.New(`pods "prom-0" is forbidden: User "u" cannot create resource "pods/portforward" in API group "" in the namespace "monitoring"`))
+	if got := deniedGrantsPhrase([]string{deniedGrant(listPods)}); got != "needs list pods" {
+		t.Errorf("list pods refusal = %q", got)
+	}
+	if got := deniedGrantsPhrase([]string{deniedGrant(portForward), deniedGrant(portForward), deniedGrant(listPods)}); got != "needs create pods/portforward, list pods" {
+		t.Errorf("mixed = %q", got)
+	}
+	if got := deniedGrantsPhrase([]string{deniedGrant(errors.New("forbidden"))}); got != "permission denied" {
+		t.Errorf("unnamed = %q", got)
+	}
+}
+
+func TestPrometheusRejectedCandidateWording(t *testing.T) {
+	err := prometheusCandidateProbeError("cert-manager", "cert-manager")
+	if !strings.HasPrefix(err.Error(), "No working Prometheus endpoint found") || !strings.Contains(err.Error(), "Candidate cert-manager/cert-manager") {
+		t.Fatal(err)
+	}
+	if strings.Contains(err.Error(), "Prometheus at cert-manager") {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(err.Error(), "\n"); len(lines) != 2 || !strings.HasPrefix(lines[1], "Candidate cert-manager/cert-manager") {
+		t.Fatalf("candidate details must follow the heading: %q", err.Error())
+	}
+}
+
+func TestDiscoverCandidateFailuresAreNotAbsent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		count  int
+		denied bool
+	}{
+		{"single candidate failure", 1, false},
+		{"multi-candidate failure", 2, false},
+		{"single denied candidate", 1, true},
+		{"multiple denied candidates", 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "unreachable", 503) }))
+			defer upstream.Close()
+			proxy, _ := url.Parse(upstream.URL)
+			transport := &http.Transport{Proxy: http.ProxyURL(proxy)}
+			defer transport.CloseIdleConnections()
+			objects := []runtime.Object{&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-server"},
+				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "prometheus"}, Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}},
+			}}
+			if tc.count == 2 {
+				objects = append(objects, &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{Namespace: "monitoring", Name: "prometheus-operated"},
+					Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "prometheus"}, Ports: []corev1.ServicePort{{Name: "http", Port: 9090}}},
+				})
+			}
+			cs := fake.NewSimpleClientset(objects...)
+			if tc.denied {
+				cs.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+					return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New(`cannot list resource "pods"`))
+				})
+			}
+			portforward.SetK8sClients(cs, &rest.Config{})
+			defer portforward.SetK8sClients(nil, nil)
+			c := &Client{k8sClient: cs, contextName: "test", httpClient: &http.Client{Transport: transport}}
+			_, _, err := c.discover(context.Background(), 0)
+			if err == nil || !errors.Is(err, errPrometheusUnreachable) || errors.Is(err, ErrPrometheusNotFound) {
+				t.Fatalf("failure classification: %v", err)
+			}
+			if !strings.Contains(err.Error(), "No working Prometheus endpoint found") {
+				t.Fatal(err)
+			}
+			if tc.denied && !strings.Contains(err.Error(), "needs list pods") {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestUnreachablePreservesCandidateCause(t *testing.T) {
+	cause := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("denied"))
+	err := unreachableBecause(cause, "candidate could not be read")
+	if !IsUnreachable(err) || !apierrors.IsForbidden(err) || !errors.Is(err, cause) || errors.Is(err, ErrPrometheusNotFound) {
+		t.Fatalf("lost candidate failure classification: %v", err)
+	}
+	for _, err := range []error{ErrPrometheusNotFound, context.Canceled, context.DeadlineExceeded, errDiscoverySuperseded, errors.New("manual URL failed")} {
+		if IsUnreachable(err) {
+			t.Fatalf("classified incomplete discovery or configuration as unreachable: %v", err)
+		}
 	}
 }

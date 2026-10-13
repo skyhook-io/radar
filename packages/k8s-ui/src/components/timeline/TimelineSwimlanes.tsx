@@ -675,7 +675,7 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
     // Core workloads
     Deployment: 50, Rollout: 50, StatefulSet: 50, DaemonSet: 50,
     Service: 45, Ingress: 45, Gateway: 45,
-    HTTPRoute: 42, GRPCRoute: 42, TCPRoute: 42, TLSRoute: 42,
+    HTTPRoute: 42, GRPCRoute: 42, TCPRoute: 42, TLSRoute: 42, UDPRoute: 42,
     Job: 40, CronJob: 40, Workflow: 40, CronWorkflow: 40,
     Pod: 30,
     HorizontalPodAutoscaler: 25,

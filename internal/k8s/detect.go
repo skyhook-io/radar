@@ -80,8 +80,14 @@ type NodeStartupCorroboration struct {
 // successor to the v0 standalone "problems" feature, NOT a parallel surface to
 // issues.
 type Detection struct {
-	NodeStartupCorroboration   *NodeStartupCorroboration `json:"-"`
-	MessageBeforeCorroboration string                    `json:"-"`
+	TerminatingFinalizers []string `json:"-"`
+	// TerminatingRemovals maps each operator finalizer to a dry-run removal.
+	// Issue composition offers one only as a ConditionalCleanup, after finding
+	// no running copy of the finalizer's catalog controller.
+	TerminatingRemovals        map[string]issuesapi.FinalizerRemoval `json:"-"`
+	ConditionalCleanup         *issuesapi.ConditionalCleanup         `json:"-"`
+	NodeStartupCorroboration   *NodeStartupCorroboration             `json:"-"`
+	MessageBeforeCorroboration string                                `json:"-"`
 	Kind                       string
 	Namespace                  string
 	Name                       string
@@ -112,6 +118,12 @@ type Detection struct {
 	// RestartLoop is set on a Pod crashloop row emitted because a container is
 	// in an active restart loop (see activeRestartLoop). Nil otherwise.
 	RestartLoop *issuesapi.RestartLoop
+	// RequiredReads names the inventories a detection read beyond its own
+	// resource whose access is checked per kind, such as a Secret's history.
+	// A caller who can't make them gets Degraded instead, or nothing when
+	// Degraded is nil.
+	RequiredReads []issuesapi.EvidenceRead   `json:"-"`
+	Degraded      *issuesapi.DegradedFinding `json:"-"`
 	// OwnerKind + OwnerName name the topmost stable controller of a Pod
 	// problem (Pod→Deployment, not the intermediate ReplicaSet), resolved
 	// via topOwnerForPod when the Pod is detected. Empty for non-Pod and
@@ -1699,7 +1711,7 @@ func terminatingProblemSince(kind, group string, obj metav1.Object, now, started
 	finalizers := obj.GetFinalizers()
 	usesShortWarningWindow := group == "" &&
 		(kind == "ConfigMap" || kind == "Secret") &&
-		hasNonGarbageCollectionFinalizer(finalizers)
+		HasNonGarbageCollectionFinalizer(finalizers)
 	warningAfter := terminatingWarningAfter
 	if usesShortWarningWindow {
 		warningAfter = configMapSecretTerminatingWarningAfter
@@ -1745,7 +1757,7 @@ func terminatingProblemSince(kind, group string, obj metav1.Object, now, started
 	return detection, true
 }
 
-func hasNonGarbageCollectionFinalizer(finalizers []string) bool {
+func HasNonGarbageCollectionFinalizer(finalizers []string) bool {
 	for _, finalizer := range finalizers {
 		// Garbage collection may legitimately wait for dependents to finish
 		// terminating, so it keeps the generic grace period.

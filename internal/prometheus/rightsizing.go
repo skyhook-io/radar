@@ -1011,7 +1011,7 @@ type PVCUsageResponse struct {
 	Capacity  int64   `json:"capacity"` // bytes
 	Ratio     float64 `json:"ratio"`    // 0.0 - 1.0
 	HasData   bool    `json:"hasData"`
-	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed
+	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed, ambiguous_scope, scope_mismatch
 }
 
 // handlePVCUsage returns current usage for a PVC, computed from
@@ -1032,50 +1032,32 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns := prom.SanitizeLabelValue(namespace)
-	pvc := prom.SanitizeLabelValue(name)
-
-	// kubelet's native label is `persistentvolumeclaim`; clusters with custom
-	// relabeling that renamed it will return no series.
-	usedQuery := fmt.Sprintf(`max(kubelet_volume_stats_used_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
-	capQuery := fmt.Sprintf(`max(kubelet_volume_stats_capacity_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
-
-	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: "query_failed"}
-
-	usedRes, err := client.Query(r.Context(), usedQuery)
-	if err != nil {
-		errorlog.Record("prometheus", "warning", "pvc used-bytes query failed for %s/%s: %v", namespace, name, err)
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-	capRes, err := client.Query(r.Context(), capQuery)
-	if err != nil {
-		errorlog.Record("prometheus", "warning", "pvc capacity-bytes query failed for %s/%s: %v", namespace, name, err)
+	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: PVCUsageQueryFailed}
+	matchers, _, err := client.resolveScope(r.Context(), namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
+	if failed, bad := pvcScopeFailure(err); bad {
+		if failed.Status == PVCUsageQueryFailed {
+			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for %s/%s: %v", namespace, name, err)
+		}
+		resp.Status = failed.Status
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
-	if usedRes == nil || capRes == nil || len(usedRes.Series) == 0 || len(capRes.Series) == 0 ||
-		len(usedRes.Series[0].DataPoints) == 0 || len(capRes.Series[0].DataPoints) == 0 {
-		resp.Status = "no_series"
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-
-	used := firstValue(usedRes)
-	capacity := firstValue(capRes)
-	if used == nil || capacity == nil || math.IsInf(*used, 0) || math.IsInf(*capacity, 0) ||
-		*used < 0 || *capacity < 1 || *used >= math.Exp2(63) || *capacity >= math.Exp2(63) {
+	batch := queryPVCUsage(r.Context(), client, namespace, []string{name}, matchers)
+	if batch.Status != PVCUsageAvailable {
+		errorlog.Record("prometheus", "warning", "pvc usage query failed for %s/%s: %s", namespace, name, batch.Error)
+		resp.Status = batch.Status
+	} else if usage, ok := batch.Usage[name]; ok {
+		resp.Used = usage.UsedBytes
+		resp.Capacity = usage.CapacityBytes
+		resp.Ratio = usage.Ratio
+		resp.HasData = true
+		resp.Status = PVCUsageAvailable
+	} else if batch.Invalid[name] {
 		resp.Status = "invalid_data"
-		writeJSON(w, http.StatusOK, resp)
-		return
+	} else {
+		resp.Status = "no_series"
 	}
-
-	resp.Used = int64(*used)
-	resp.Capacity = int64(*capacity)
-	resp.Ratio = *used / *capacity
-	resp.HasData = true
-	resp.Status = "available"
 	writeJSON(w, http.StatusOK, resp)
 }
 

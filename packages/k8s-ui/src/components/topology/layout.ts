@@ -864,7 +864,7 @@ function computeWorkloadCards(
 const KIND_PRIORITY: Record<string, number> = {
   'Deployment': 1, 'Rollout': 1, 'StatefulSet': 2, 'DaemonSet': 3,
   'CronJob': 4, 'CronWorkflow': 4, 'Job': 5, 'Workflow': 5, 'Service': 6, 'Gateway': 7,
-  'HTTPRoute': 6, 'GRPCRoute': 6, 'TCPRoute': 6, 'TLSRoute': 6, 'Ingress': 7,
+  'HTTPRoute': 6, 'GRPCRoute': 6, 'TCPRoute': 6, 'TLSRoute': 6, 'UDPRoute': 6, 'Ingress': 7,
   'CalicoNetworkPolicy': 10, 'CalicoGlobalNetworkPolicy': 10,
   'CalicoStagedNetworkPolicy': 10, 'CalicoStagedGlobalNetworkPolicy': 10,
   'CalicoStagedKubernetesNetworkPolicy': 10,

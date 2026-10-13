@@ -43,7 +43,7 @@ func traceServiceEntry(ctx context.Context, deps Deps, t *Trace) {
 		t.Downstream = []Hop{{
 			Resource: svcRef,
 			Edge:     "entry:Service",
-			Findings: hopFindings(deps.Issues, svcRef),
+			Findings: hopFindings(deps, svcRef),
 		}, {
 			Resource: ResourceRef{Kind: "ExternalName", Name: svc.Spec.ExternalName},
 			Edge:     "Service->ExternalName",
@@ -65,7 +65,7 @@ func traceServiceEntry(ctx context.Context, deps Deps, t *Trace) {
 			Resource: svcRef,
 			Edge:     "entry:Service",
 			Meta:     map[string]any{"selectorless": true},
-			Findings: append(hopFindings(deps.Issues, svcRef), Finding{
+			Findings: append(hopFindings(deps, svcRef), Finding{
 				Code:     "svc:selectorless",
 				Severity: SeverityInfo,
 				Message:  "Service has no selector; endpoints are managed manually and pod health is not derivable",
@@ -79,7 +79,7 @@ func traceServiceEntry(ctx context.Context, deps Deps, t *Trace) {
 	svcHop := Hop{
 		Resource: svcRef,
 		Edge:     "entry:Service",
-		Findings: hopFindings(deps.Issues, svcRef),
+		Findings: hopFindings(deps, svcRef),
 		Meta:     map[string]any{},
 		Config:   serviceConfig(svc),
 	}
@@ -873,7 +873,7 @@ func podFanoutFindings(deps Deps, pods []*corev1.Pod) []Finding {
 		}
 		ref := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		cause, command := podDiagnosis(pod)
-		for _, f := range hopFindings(deps.Issues, ref) {
+		for _, f := range hopFindings(deps, ref) {
 			prev, ok := seen[f.Code]
 			if !ok || severityRank(f.Severity) > severityRank(prev.Severity) {
 				podRef := ref
@@ -1126,7 +1126,7 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 		out = append(out, Hop{
 			Resource: ref,
 			Edge:     "Ingress->Service",
-			Findings: hopFindings(deps.Issues, ref),
+			Findings: hopFindings(deps, ref),
 			// Config is what probeIngress reads to decide which hostnames
 			// to DNS / TCP / TLS / HTTP probe. Omitting it left upstream
 			// Ingress hops out of the active layer entirely even though
@@ -1219,7 +1219,7 @@ func routeUpstreamsForService(deps Deps, svc *corev1.Service, kind string) (hops
 		out = append(out, Hop{
 			Resource: ref,
 			Edge:     kind + "->Service",
-			Findings: hopFindings(deps.Issues, ref),
+			Findings: hopFindings(deps, ref),
 		})
 	}
 	if outOfScope > 0 {
@@ -1317,7 +1317,7 @@ func traceIngressEntry(ctx context.Context, deps Deps, t *Trace) {
 	hops := []Hop{{
 		Resource: ingRef,
 		Edge:     "entry:Ingress",
-		Findings: hopFindings(deps.Issues, ingRef),
+		Findings: hopFindings(deps, ingRef),
 		Config:   ingressConfig(ing),
 	}}
 	// An Ingress is only routing rules - surface WHO actually serves them (the
@@ -1357,7 +1357,7 @@ func traceIngressEntry(ctx context.Context, deps Deps, t *Trace) {
 		svcHop := Hop{
 			Resource: svcRef,
 			Edge:     "Ingress->Service",
-			Findings: hopFindings(deps.Issues, svcRef),
+			Findings: hopFindings(deps, svcRef),
 		}
 		svc, svcErr := deps.Cache.Services().Services(ing.Namespace).Get(name)
 		if svcErr == nil {
@@ -1578,7 +1578,7 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 	hops := []Hop{{
 		Resource: routeRef,
 		Edge:     "entry:" + kind,
-		Findings: hopFindings(deps.Issues, routeRef),
+		Findings: hopFindings(deps, routeRef),
 		Config:   routeConfig(route),
 	}}
 
@@ -1613,7 +1613,7 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 		svcHop := Hop{
 			Resource: svcRef,
 			Edge:     kind + "->Service",
-			Findings: hopFindings(deps.Issues, svcRef),
+			Findings: hopFindings(deps, svcRef),
 		}
 		svc, svcErr := deps.Cache.Services().Services(b.Namespace).Get(b.Name)
 		if svcErr == nil {
@@ -1947,7 +1947,7 @@ func routeParentGateways(deps Deps, route *unstructured.Unstructured) []Hop {
 			continue
 		}
 		gw, gwErr := deps.Dynamic.Get(gvr, ns, name)
-		findings := hopFindings(deps.Issues, ref)
+		findings := hopFindings(deps, ref)
 		// Only escalate to "missing-parent" on a confirmed NotFound. The
 		// dynamic cache wraps its own sentinel rather than apimachinery's
 		// StatusError, so check both: apierrors.IsNotFound for the direct
@@ -2030,7 +2030,7 @@ func traceGatewayEntry(ctx context.Context, deps Deps, t *Trace) {
 	hops := []Hop{{
 		Resource: gwRef,
 		Edge:     "entry:Gateway",
-		Findings: hopFindings(deps.Issues, gwRef),
+		Findings: hopFindings(deps, gwRef),
 		Config:   gatewayConfig(gw),
 	}}
 
@@ -2060,16 +2060,20 @@ func traceGatewayEntry(ctx context.Context, deps Deps, t *Trace) {
 		hop := Hop{
 			Resource: ref,
 			Edge:     "Gateway->" + ref.Kind,
-			Findings: hopFindings(deps.Issues, ref),
+			Findings: hopFindings(deps, ref),
 		}
 		// L4 routes are inventoried so the attachment list never claims
 		// HTTP-only completeness, but radar doesn't walk their backends or
 		// probe them - say so instead of leaving an unexplained bare hop.
-		if ref.Kind == "TCPRoute" || ref.Kind == "TLSRoute" {
+		if ref.Kind == "TCPRoute" || ref.Kind == "TLSRoute" || ref.Kind == "UDPRoute" {
+			listener := "The Gateway listener's TCP reachability is still probed."
+			if ref.Kind == "UDPRoute" {
+				listener = "UDP listeners aren't probed either."
+			}
 			hop.Findings = append(hop.Findings, Finding{
 				Code:     "gateway:l4-route-not-traced",
 				Severity: SeverityInfo,
-				Message:  fmt.Sprintf("This %s is attached to the Gateway but its backends are not traced or tested - radar doesn't walk L4 routes. The Gateway listener's TCP reachability is still probed.", ref.Kind),
+				Message:  fmt.Sprintf("This %s is attached to the Gateway but its backends are not traced or tested - radar doesn't walk L4 routes. %s", ref.Kind, listener),
 			})
 			sortFindingsBySeverity(hop.Findings)
 		}
@@ -2149,10 +2153,10 @@ func gatewayConfig(gw *unstructured.Unstructured) *HopConfig {
 }
 
 // gatewayRouteKinds is the full set of Gateway API route kinds radar
-// inventories on a Gateway trace. TCPRoute/TLSRoute attachments are listed so
+// inventories on a Gateway trace. TCPRoute/TLSRoute/UDPRoute attachments are listed so
 // the inventory never claims HTTP-only completeness, even though their
 // backends aren't traced (see the l4-route note in traceGatewayEntry).
-var gatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"}
+var gatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"}
 
 // attachedRoutes enumerates every route attached to the Gateway. The third
 // return value reports whether the enumeration was authoritative: false means

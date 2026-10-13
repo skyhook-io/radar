@@ -67,12 +67,22 @@ func normalizeOCIPrefix(raw string) (string, error) {
 // hosted-mode hardening tracked separately. Does NOT defend against a DNS name
 // that resolves into these ranges.
 func rejectLinkLocalHost(ref string) error {
-	host := ref
-	if i := strings.IndexAny(host, "/"); i >= 0 {
-		host = host[:i]
+	authority := ref
+	if i := strings.IndexAny(authority, "/"); i >= 0 {
+		authority = authority[:i]
 	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
+	host := authority
+	if strings.HasPrefix(authority, "[") {
+		if end := strings.Index(authority, "]"); end > 1 {
+			host = authority[1:end]
+		}
+	} else if h, _, err := net.SplitHostPort(authority); err == nil {
 		host = h
+	}
+	// An IPv6 zone (fe80::1%eth0, or %25eth0 before URL decoding) is not part
+	// of the address; net.ParseIP rejects it, which would skip the check.
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		host = host[:i]
 	}
 	if ip := net.ParseIP(host); ip != nil && (ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
 		return fmt.Errorf("registry host %q is in the link-local range and not allowed", host)
@@ -163,6 +173,23 @@ type ociUpgradeMatch struct {
 // without a live registry.
 type ociTagLister interface {
 	Tags(ref string) ([]string, error)
+}
+
+// cachedTagLister shares one batch's successful tag listings between releases.
+type cachedTagLister struct {
+	inner ociTagLister
+	cache map[string][]string
+}
+
+func (l cachedTagLister) Tags(ref string) ([]string, error) {
+	if tags, ok := l.cache[ref]; ok {
+		return tags, nil
+	}
+	tags, err := l.inner.Tags(ref)
+	if err == nil {
+		l.cache[ref] = tags
+	}
+	return tags, err
 }
 
 // newRegistryClientConcrete builds the timeout-bounded helm OCI registry client

@@ -14,4 +14,12 @@ describe('detectLogLevel with CloudNativePG records', () => {
     expect(detectLogLevel(JSON.stringify({ level: 'error', msg: 'request failed', record: { error_severity: 20 } }))).toBe('error')
     expect(detectLogLevel(JSON.stringify({ level: 'error', msg: 'x', record: { error_severity: 'minor' } }))).toBe('error')
   })
+
+  it.each([
+    { msg: 'record' },
+    { logger: 'worker', msg: 'record' },
+    { logger: 'postgres', msg: 'wrapper message' },
+  ])('does not override an unrelated workload severity: %j', (fields) => {
+    expect(detectLogLevel(JSON.stringify({ level: 'info', ...fields, record: { error_severity: 'FATAL', message: 'unrelated nested text' } }))).toBe('info')
+  })
 })

@@ -53,7 +53,7 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 	if namespaces != nil && len(namespaces) == 0 {
 		return toJSONResult([]helm.HelmRelease{})
 	}
-	releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
+	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, username, groups)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}

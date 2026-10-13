@@ -69,6 +69,17 @@ type Deps struct {
 	// caller can see that a cross-namespace dependency exists without
 	// leaking the dependent's shape or live state. See NamespaceAllowed.
 	AllowedNamespaces []string
+	// IssueAccess authorizes the issues shown as hop findings, the same way
+	// every issue surface does. A zero value fails closed for findings that
+	// rest on evidence (such as a missing TLS Secret).
+	IssueAccess IssueAccess
+}
+
+// IssueAccess carries the caller's issue authorizers into the trace walk.
+type IssueAccess struct {
+	CanReadClusterScoped func(kind, group string) bool
+	CanReadSubject       func(issues.Ref) bool
+	CanReadEvidence      func(issues.EvidenceRead) bool
 }
 
 // NamespaceAllowed reports whether the caller's RBAC scope permits

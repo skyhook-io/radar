@@ -1268,15 +1268,18 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 	gwGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 	httpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 	tcpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tcproutes"}
+	udpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "udproutes"}
 	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
 			gwGVR:   "GatewayList",
 			httpGVR: "HTTPRouteList",
 			tcpGVR:  "TCPRouteList",
+			udpGVR:  "UDPRouteList",
 		},
 		attachedHTTPRoute("web", "ns", "gw", "ns"),
 		attachedL4Route("TCPRoute", "db-route", "ns", "gw", "ns"),
+		attachedL4Route("UDPRoute", "dns-route", "ns", "gw", "ns"),
 	)
 	if err := dynClient.Tracker().Create(gwGVR, gatewayObject("gw", "ns"), "ns"); err != nil {
 		t.Fatalf("tracker create gateway: %v", err)
@@ -1285,11 +1288,12 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true, Verbs: []string{"list", "watch"}},
 		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
 		{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "TCPRoute", Name: "tcproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "UDPRoute", Name: "udproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
 	}); err != nil {
 		t.Fatalf("InitTestDynamicResourceCache: %v", err)
 	}
 	dynCache := k8s.GetDynamicResourceCache()
-	for _, gvr := range []schema.GroupVersionResource{gwGVR, httpGVR, tcpGVR} {
+	for _, gvr := range []schema.GroupVersionResource{gwGVR, httpGVR, tcpGVR, udpGVR} {
 		if err := dynCache.EnsureWatching(gvr); err != nil {
 			t.Fatalf("EnsureWatching %s: %v", gvr.Resource, err)
 		}
@@ -1304,11 +1308,13 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 		t.Fatalf("BuildTraceWithOptions: %v", err)
 	}
 
-	var l4, http *Hop
+	var l4, udp, http *Hop
 	for i := range tr.Downstream {
 		switch tr.Downstream[i].Resource.Kind {
 		case "TCPRoute":
 			l4 = &tr.Downstream[i]
+		case "UDPRoute":
+			udp = &tr.Downstream[i]
 		case "HTTPRoute":
 			http = &tr.Downstream[i]
 		}
@@ -1328,6 +1334,12 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 	}
 	if f.Severity != SeverityInfo {
 		t.Errorf("l4 not-traced note severity = %q, want info (presence is not a problem)", f.Severity)
+	}
+	if udp == nil {
+		t.Fatalf("UDPRoute attachment missing from the Gateway inventory; got %+v", tr.Downstream)
+	}
+	if uf := findingByCode(udp.Findings, "gateway:l4-route-not-traced"); uf == nil || !strings.Contains(uf.Message, "UDP listeners aren't probed") || strings.Contains(uf.Message, "TCP reachability") {
+		t.Errorf("UDPRoute note must not claim a TCP probe, got %+v", udp.Findings)
 	}
 	if findingCodePresent(http.Findings, "gateway:l4-route-not-traced") {
 		t.Errorf("HTTPRoute hop must not carry the l4 note, got %+v", http.Findings)

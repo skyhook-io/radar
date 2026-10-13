@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -286,7 +287,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"capabilities, hostPath/hostNetwork, secret-in-ConfigMap), Reliability (single " +
 			"replicas, missing PDB, missing TopologySpread, podHARisk, Service/Ingress " +
 			"without matching backends, stuckTerminating, deprecatedAPIVersion), and " +
-			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets). " +
+			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets, " +
+			"stale PVCs/PVs). " +
 			"Each finding has remediation guidance. " +
 			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
 			"(badly configured but working), a crashing pod can have zero (cleanly " +
@@ -390,6 +392,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"`diagnostic_context.role` marks roots, rollups, symptoms, or context; " +
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
+			"`conditional_cleanup` is never the next step: propose it only after the user confirms its `condition`, per `agent_guidance`. " +
 			"`incident_parent` is one unambiguous best root; absence may mean competing roots. " +
 			"When present, `timing_summary` reconciles timing fields whose scopes differ; otherwise " +
 			"read `first_seen` as 'active at least since' and `issue_timing` as timing evidence, " +
@@ -965,7 +968,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		if clusterScoped {
 			idxNamespaces = nil
 		}
-		if builder := newResourceSummaryContextBuilder(idxNamespaces); builder != nil {
+		if builder := newResourceSummaryContextBuilder(ctx, idxNamespaces); builder != nil {
 			summarycontext.AttachToTypedList(results, objs, builder)
 		}
 	}
@@ -1005,7 +1008,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		if clusterScoped {
 			idxNamespaces = nil
 		}
-		if builder := newResourceSummaryContextBuilder(idxNamespaces); builder != nil {
+		if builder := newResourceSummaryContextBuilder(ctx, idxNamespaces); builder != nil {
 			summarycontext.AttachToUnstructuredList(allItems, rawItems, builder)
 		}
 	}
@@ -2345,6 +2348,10 @@ type mcpProblem struct {
 	// ageSeconds is for sort tiebreak; not serialized so it doesn't widen
 	// the wire shape callers depend on.
 	ageSeconds int64 `json:"-"`
+	// requiredReads are the detection's evidence, checked like an issue's;
+	// degraded is what a caller who can't make them sees instead.
+	requiredReads []issues.EvidenceRead
+	degraded      *issues.DegradedFinding
 }
 
 // problemSeverityRank maps the Problem.Severity vocabulary onto sort order.
@@ -2567,6 +2574,8 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			RestartCount:         p.RestartCount,
 			LastTerminatedReason: p.LastTerminatedReason,
 			ageSeconds:           p.AgeSeconds,
+			requiredReads:        p.RequiredReads,
+			degraded:             p.Degraded,
 		})
 	}
 
@@ -2616,15 +2625,17 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			continue
 		}
 		allProblems = append(allProblems, mcpProblem{
-			Kind:       p.Kind,
-			Namespace:  p.Namespace,
-			Name:       p.Name,
-			Group:      p.Group,
-			Severity:   p.Severity,
-			Reason:     p.Reason,
-			Message:    p.Message,
-			Age:        p.Age,
-			ageSeconds: p.AgeSeconds,
+			Kind:          p.Kind,
+			Namespace:     p.Namespace,
+			Name:          p.Name,
+			Group:         p.Group,
+			Severity:      p.Severity,
+			Reason:        p.Reason,
+			Message:       p.Message,
+			Age:           p.Age,
+			ageSeconds:    p.AgeSeconds,
+			requiredReads: p.RequiredReads,
+			degraded:      p.Degraded,
 		})
 	}
 
@@ -2647,6 +2658,28 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// Without this, the cap drops critical missing-refs in favour of
 	// medium-severity workload problems that happened to be appended
 	// earlier — the agent gets a non-representative subset.
+	// Problems follow the issues' read rules: a cluster-scoped problem needs
+	// list on its kind, and a Secret's own problem and one drawn from Secrets
+	// need Secret access.
+	canReadClusterScoped := issueClusterScopedAccess(ctx)
+	canReadSubject, canReadEvidence := issueSubjectAccess(ctx), issueEvidenceAccess(ctx)
+	readable := allProblems[:0]
+	for _, p := range allProblems {
+		if p.Namespace == "" && !canReadClusterScoped(p.Kind, p.Group) {
+			continue
+		}
+		if p.Namespace != "" && !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
+			continue
+		}
+		switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
+		case issues.EvidenceWithheld:
+			continue
+		case issues.EvidenceDegraded:
+			p.Message = p.degraded.Message
+		}
+		readable = append(readable, p)
+	}
+	allProblems = readable
 	sortMCPDashboardProblems(allProblems)
 	d.TotalProblems = len(allProblems)
 	d.ProblemsBySeverity = countBySeverity(allProblems)
@@ -2745,13 +2778,15 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		if namespaces != nil && len(namespaces) == 0 {
 			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
+			releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, username, groups)
 			if err != nil {
 				// Not fatal for the dashboard — a viewer with no helm access
 				// still sees everything else. Surface to LLM consumers via
 				// Unavailable so they don't confidently report "Total=0
 				// releases" when in fact the read failed.
-				log.Printf("[mcp] Dashboard helm list failed: %v", err)
+				if !errors.Is(ctx.Err(), context.Canceled) {
+					log.Printf("[mcp] Dashboard helm list failed: %v", err)
+				}
 				d.HelmReleases.Unavailable = true
 				if helm.IsForbiddenError(err) {
 					d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope."
@@ -3030,7 +3065,9 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		CanReadClusterScoped: func(kind, group string) bool {
 			return canReadClusterScopedKind(ctx, kind, group, "list")
 		},
-		CanReadRelated: issueRelatedResourceAccess(ctx),
+		CanReadRelated:  issueRelatedResourceAccess(ctx),
+		CanReadSubject:  issueSubjectAccess(ctx),
+		CanReadEvidence: issueEvidenceAccess(ctx),
 	}
 	if input.Filter != "" {
 		f, err := filter.CachedIssueFilter(input.Filter)
@@ -3117,9 +3154,9 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 	if helmNamespaces == nil {
 		helmNamespaces = resolveHelmListNamespaces(ctx, "")
 	}
-	releases, err := helmClient.ListReleasesAcrossNamespaces(helmNamespaces, username, groups)
+	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
 	if err != nil {
-		if !helm.IsForbiddenError(err) {
+		if !errors.Is(ctx.Err(), context.Canceled) && !helm.IsForbiddenError(err) {
 			log.Printf("[mcp] Failed to list Helm releases for issue stream: %v", err)
 		}
 		return nil
@@ -3345,7 +3382,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	// builder routes per-hit by scope; CanReadClusterScoped above
 	// already gates which cluster-scoped kinds are reachable.
 	if input.Context != "none" {
-		if builder := newSearchSummaryContextBuilder(scanNamespaces); builder != nil {
+		if builder := newSearchSummaryContextBuilder(ctx, scanNamespaces); builder != nil {
 			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 		}
 	}

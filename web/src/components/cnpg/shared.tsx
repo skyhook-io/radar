@@ -11,7 +11,8 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { EmptyState, Notice, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
+import { ScreenEmptyState as EmptyState, Notice } from '../workspace/layout'
+import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
 import { sameResource } from './routes'
 
 export interface CNPGScreenProps {

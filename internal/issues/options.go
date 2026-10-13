@@ -41,6 +41,22 @@ type Filters struct {
 	// assert an issue on another subject, such as a NodeClass referenced by a
 	// NodePool. Nil preserves internal/no-auth composition.
 	CanReadRelated func(Ref) bool
+	// CanReadSubject authorizes a namespaced row's own resource the way the
+	// resource drawer does: namespace access, plus a per-kind check for the
+	// kinds Radar authorizes per kind (Secrets). It runs on the flat rows
+	// before grouping, so a denied row never becomes another issue's member,
+	// fan-out count or diagnostic link. Cluster-scoped rows are
+	// CanReadClusterScoped's. Nil preserves internal/no-auth composition.
+	CanReadSubject func(Ref) bool
+	// CanReadEvidence authorizes the exact inventory operations retained on
+	// cross-resource findings, including after grouping or memoization.
+	CanReadEvidence func(EvidenceRead) bool
+	// AllowUnfilteredEvidence is only for internal composition whose results
+	// are authorized again before reaching a caller.
+	AllowUnfilteredEvidence bool
+	// OnEvidenceWithheld, when set, sees each finding the evidence check
+	// removed, so a caller can say an answer is incomplete without naming it.
+	OnEvidenceWithheld func(Issue)
 	// Grouped folds the flat rows into the public grouped model
 	// (GroupIssues) before the cap, so the limit counts issue groups, not
 	// replica fan-out. The public /api/issues + MCP issues set this; flat
@@ -62,8 +78,12 @@ type RelatedIssueOptions struct {
 	// folded into per-issue signals such as capacity relevance. Omitting it here
 	// would let a caller who cannot list NodePools read that state through the
 	// per-resource path. Nil preserves auth-mode=none and internal composition.
-	CanReadClusterScoped func(kind, group string) bool
-	CanReadRelated       func(Ref) bool
+	CanReadClusterScoped    func(kind, group string) bool
+	CanReadRelated          func(Ref) bool
+	CanReadSubject          func(Ref) bool
+	CanReadEvidence         func(EvidenceRead) bool
+	AllowUnfilteredEvidence bool
+	OnEvidenceWithheld      func(Issue)
 }
 
 const (

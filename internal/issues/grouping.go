@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -19,11 +20,15 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
 	flat := Compose(p, Filters{
-		SkipPodTemplateContext: true,
-		Namespaces:             opts.Namespaces,
-		Limit:                  NoLimit,
-		CanReadClusterScoped:   opts.CanReadClusterScoped,
-		CanReadRelated:         opts.CanReadRelated,
+		SkipPodTemplateContext:  true,
+		Namespaces:              opts.Namespaces,
+		Limit:                   NoLimit,
+		CanReadClusterScoped:    opts.CanReadClusterScoped,
+		CanReadRelated:          opts.CanReadRelated,
+		CanReadSubject:          opts.CanReadSubject,
+		CanReadEvidence:         opts.CanReadEvidence,
+		AllowUnfilteredEvidence: opts.AllowUnfilteredEvidence,
+		OnEvidenceWithheld:      opts.OnEvidenceWithheld,
 	})
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
@@ -36,6 +41,18 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 			Ref{Group: group, Kind: kind, Namespace: namespace, Name: name})
 	}
 	return matched
+}
+
+// Concerns reports whether an issue is about the resource: its own subject,
+// or the owner a member row folds into (a Pod row under its Deployment). The
+// group is compared the way RelatedIssuesFrom compares it.
+func Concerns(i Issue, group, kind, namespace, name string) bool {
+	wantGroup := resolveGroup(group, kind)
+	same := func(g, k, ns, n string) bool {
+		return strings.EqualFold(k, kind) && ns == namespace && n == name && resolveGroup(g, k) == wantGroup
+	}
+	return same(i.Group, i.Kind, i.Namespace, i.Name) ||
+		(i.Owner.Kind != "" && same(i.Owner.Group, i.Owner.Kind, i.Owner.Namespace, i.Owner.Name))
 }
 
 // RelatedIssuesFrom is the matching half of RelatedIssues over an
@@ -55,9 +72,27 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 	match := func(g, k, ns, n string) bool {
 		return strings.EqualFold(k, kind) && ns == namespace && n == name && resolveGroup(g, k) == wantGroup
 	}
+	// A precomposed pair may come from a shared memo; authorize again here.
+	canReadSubject := func(i Issue) bool {
+		if i.Namespace == "" {
+			return opts.CanReadClusterScoped == nil || opts.CanReadClusterScoped(i.Kind, i.Group)
+		}
+		return opts.CanReadSubject == nil || opts.CanReadSubject(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name})
+	}
+	forEvidence := func(i Issue) (Issue, bool) {
+		shown, ok := ForEvidence(i, opts.CanReadEvidence, opts.AllowUnfilteredEvidence)
+		if !ok && opts.OnEvidenceWithheld != nil {
+			opts.OnEvidenceWithheld(i)
+		}
+		return shown, ok
+	}
+	canReadEvidence := func(i Issue) bool {
+		_, ok := forEvidence(i)
+		return ok
+	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
 	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
-		if match(g.Group, g.Kind, g.Namespace, g.Name) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) {
+		if match(g.Group, g.Kind, g.Namespace, g.Name) && canReadSubject(g) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) && canReadEvidence(g) {
 			matched[g.ID] = true
 		}
 		if g.DiagnosticContext != nil {
@@ -77,14 +112,17 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		}
 	}
 	for _, f := range flat { // as ANY evidence row (uncapped)
-		if match(f.Group, f.Kind, f.Namespace, f.Name) && CanReadIssueRelatedRefs(f, opts.CanReadRelated) {
+		if match(f.Group, f.Kind, f.Namespace, f.Name) && canReadSubject(f) && CanReadIssueRelatedRefs(f, opts.CanReadRelated) && canReadEvidence(f) {
 			matched[f.ID] = true
 		}
 	}
 	var out []Issue
 	for _, g := range grouped {
-		if matched[g.ID] {
-			out = append(out, g)
+		if !matched[g.ID] || !canReadSubject(g) {
+			continue
+		}
+		if shown, ok := forEvidence(g); ok {
+			out = append(out, shown)
 		}
 	}
 	return out
@@ -168,6 +206,16 @@ func foldGroup(members []Issue) Issue {
 		// links / change context.
 		DiagnosticContext: rep.DiagnosticContext,
 		ChangeContext:     rep.ChangeContext,
+		Degraded:          rep.Degraded,
+	}
+	reads := map[EvidenceRead]bool{}
+	for _, member := range members {
+		for _, read := range member.RequiredReads {
+			if !reads[read] {
+				reads[read] = true
+				g.RequiredReads = append(g.RequiredReads, read)
+			}
+		}
 	}
 	// A parsed diagnosis (cause/action/remediation) describes ONE resource's
 	// failure. Carry it onto the grouped row only when it is true for the
@@ -177,6 +225,7 @@ func foldGroup(members []Issue) Issue {
 	if dg, ok := agreedDiagnosis(members); ok {
 		g.Cause = dg.Cause
 		g.Action = dg.Action
+		g.ConditionalCleanup = dg.ConditionalCleanup
 		g.RemediationKind = dg.RemediationKind
 		g.RemediationTarget = dg.RemediationTarget
 		g.OperationRetryCount = dg.OperationRetryCount
@@ -303,7 +352,7 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 			picked = m
 			continue
 		}
-		if m.Cause != picked.Cause || m.Action != picked.Action ||
+		if m.Cause != picked.Cause || m.Action != picked.Action || !reflect.DeepEqual(m.ConditionalCleanup, picked.ConditionalCleanup) ||
 			m.RemediationKind != picked.RemediationKind || m.RemediationTarget != picked.RemediationTarget ||
 			m.OperationRetryCount != picked.OperationRetryCount || m.Stuck != picked.Stuck {
 			return Issue{}, false
@@ -313,7 +362,7 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 }
 
 func hasDiagnosis(i Issue) bool {
-	return i.Cause != "" || i.Action != "" || i.RemediationKind != "" || i.RemediationTarget != "" ||
+	return i.Cause != "" || i.Action != "" || i.ConditionalCleanup != nil || i.RemediationKind != "" || i.RemediationTarget != "" ||
 		i.OperationRetryCount != 0 || i.Stuck
 }
 

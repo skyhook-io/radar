@@ -345,6 +345,15 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 	return err
 }
 
+// HasCoveringInformer reports whether an informer serves reads of gvr in ns
+// ("" for all namespaces), synced or not.
+func (d *DynamicResourceCache) HasCoveringInformer(gvr schema.GroupVersionResource, ns string) bool {
+	if d == nil {
+		return false
+	}
+	return d.hasCoveringInformer(gvr, ns)
+}
+
 // hasCoveringInformer reports whether an existing informer already serves
 // reads for (gvr, ns), and must agree with readEntries: a cluster-wide
 // informer covers every namespace; a specific ns is also covered by its own

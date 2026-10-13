@@ -49,13 +49,21 @@ export function normalizeLevel(raw: unknown): LogLevel | null {
   return 'unknown'
 }
 
-// PostgreSQL's error_severity values (every DEBUGn is written as DEBUG);
-// anything else under `record` isn't PostgreSQL's.
+// PostgreSQL writes every DEBUGn severity as DEBUG.
 const POSTGRES_SEVERITIES: Record<string, LogLevel> = {
   DEBUG: 'debug', LOG: 'info', INFO: 'info', NOTICE: 'info', WARNING: 'warn', ERROR: 'error', FATAL: 'error', PANIC: 'error',
 }
 
 const LEVEL_FIELD_KEYS = ['level', 'lvl', 'severity', 'levelname', 'log.level'] as const
+
+export function selectPostgresRecord(obj: Record<string, unknown>): { record: Record<string, unknown>; raw: string; level: LogLevel } | null {
+  const record = obj.record
+  if (obj.logger !== 'postgres' || obj.msg !== 'record' || !record || typeof record !== 'object' || Array.isArray(record)) return null
+  const fields = record as Record<string, unknown>
+  const raw = fields.error_severity
+  const level = typeof raw === 'string' ? POSTGRES_SEVERITIES[raw.trim().toUpperCase()] : undefined
+  return typeof raw === 'string' && level ? { record: fields, raw, level } : null
+}
 
 /**
  * Pick the level field of a structured record. Shared by detection and the
@@ -65,12 +73,8 @@ const LEVEL_FIELD_KEYS = ['level', 'lvl', 'severity', 'levelname', 'log.level'] 
 export function selectLevelField(obj: Record<string, unknown>): { raw: unknown; level: LogLevel } | null {
   // CloudNativePG wraps each PostgreSQL line in an instance-manager record
   // whose own level is usually info; the database's severity is nested.
-  const pgRecord = obj.record
-  if (pgRecord && typeof pgRecord === 'object' && !Array.isArray(pgRecord)) {
-    const raw = (pgRecord as Record<string, unknown>).error_severity
-    const level = typeof raw === 'string' ? POSTGRES_SEVERITIES[raw.trim().toUpperCase()] : undefined
-    if (level) return { raw, level }
-  }
+  const pgRecord = selectPostgresRecord(obj)
+  if (pgRecord) return { raw: pgRecord.raw, level: pgRecord.level }
   for (const key of LEVEL_FIELD_KEYS) {
     const level = normalizeLevel(obj[key])
     if (level) return { raw: obj[key], level }

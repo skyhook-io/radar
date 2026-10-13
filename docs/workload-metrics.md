@@ -241,9 +241,10 @@ evidence is retained only for unchanged name/UID pairs while replacement Pods
 are checked. Its original expiry is not extended. Connection changes invalidate
 all attribution and their old churn timers. Sources covering a subset report partial coverage.
 
-Historical partition proof has a separate connection-wide five-minute positive
-cache and one coalesced probe per connection generation. Proof from an authorized
-namespace can be reused; charts still query only their own authorized namespace.
+Historical charts reuse cluster labels established by Pod UID evidence for up to
+five minutes across namespaces, while querying only authorized namespaces.
+Missing evidence is not cached, and unlabeled evidence cannot establish cluster
+identity for workload history.
 At zero Pods, bounded anchors can come from other Pods in that same namespace.
 A cold connection with no anchors and no assertion cannot establish scope.
 UID joins inside a store cannot prove which cluster Radar is connected to.
@@ -251,9 +252,38 @@ The UI points to operator configuration in **About these metrics** when this pre
 
 Current UID-filtered charts exclude previous incarnations of same-name Pods.
 Historical charts describe the logical cluster/namespace/kind/name workload,
-including recreation under that name, not workload-UID lifetimes. Network/storage
-and other existing surfaces keep their previous query behavior. Template overlays
+including recreation under that name, not workload-UID lifetimes. PVC usage has
+the separate scope checks described below; existing network/filesystem I/O and
+restart charts keep their previous query behavior. Template overlays
 are current per-Pod settings, not historical capacity.
+
+## PVC usage scope
+
+The PVC detail drawer reads used space and capacity from kubelet's
+`kubelet_volume_stats_used_bytes` and `kubelet_volume_stats_capacity_bytes`.
+A shared Prometheus can hold the same namespace and claim name from several
+clusters. Automatic matching checks both metric families for conflicting
+recognized cluster identities before combining their values. Missing, failed or
+invalid measurements are unknown, not zero.
+
+Operator overrides take precedence and are trusted without that check.
+Otherwise, Radar matches current Pod UIDs to kube-state-metrics in the PVC's
+namespace and uses the cluster labels that evidence establishes. Conflicting recognized identities still
+withhold the measurement, even if they share a matched label.
+
+If that Pod evidence has no recognized cluster labels, Radar selects unlabeled
+volume stats. Without usable Pod evidence, it falls back to namespace and claim
+names, refusing multiple labeled identities but allowing a labeled scrape plus
+an unlabeled duplicate. These paths remain **unverified**; successful values
+are not distinguished from verified ones in the PVC gauge. Two unlabeled
+clusters cannot be separated automatically. Cluster names that repeat across projects/locations also need
+additional configured labels, even when automatic matching finds a cluster label.
+
+| PVC state | Meaning | Remedy |
+|---|---|---|
+| `ambiguous_scope` | Stats contain conflicting recognized cluster identities | Set exact cluster labels using the [operator override](#optional-operator-override) |
+| `scope_mismatch` | Pod-matched labels, or their absence, exclude the available volume stats | Align cluster labels across kube-state-metrics, workload metrics and kubelet stats |
+| `no_series` | No complete used/capacity pair matches the scope | Check kubelet scraping, driver support and configured labels; the volume is not necessarily empty |
 
 ## Optional operator override
 
@@ -273,15 +303,26 @@ radar --prometheus-url https://metrics.example.com --prometheus-cluster-label cl
 ```
 
 Repeat `--prometheus-cluster-label` for additional exact label constraints. The
-matchers are combined with AND, not OR. An empty value is rejected because it
-would also match series without that label. A tenant header alone does not prove
-single-cluster isolation. Use existing `--prometheus-header-from-env` for credentials.
+matchers are combined with AND, not OR. Use every dimension needed to identify
+the cluster. For [Google Managed Service for Prometheus](https://docs.cloud.google.com/stackdriver/docs/managed-prometheus/query-cm),
+for example, include project and location when cluster names can repeat:
+
+```sh
+radar --prometheus-url https://metrics.example.com \
+  --prometheus-cluster-label project_id=my-project \
+  --prometheus-cluster-label location=us-central1 \
+  --prometheus-cluster-label cluster=production
+```
+
+Labels must exist on each affected metric source. An empty value is rejected
+because it would also match series without that label. A tenant header alone
+does not prove single-cluster isolation. Use `--prometheus-header-from-env` for credentials.
 
 These assertions are process-local, apply to the startup Kubernetes connection,
 and are not saved to the config file. Changing context, endpoint or headers discards
-the assertion and returns to automatic matching. Restart to supply a fresh assertion. Existing resource
-charts retain their existing query behavior; this is not a retrofit of cluster
-isolation onto every metrics API.
+the assertion and returns to automatic matching. Restart to supply a fresh assertion.
+The assertions also scope PVC usage. They do not scope rightsizing, node/HPA
+or the workload network/filesystem charts.
 
 Helm installations can provision the assertion with
 `traffic.prometheusSingleCluster: true` or `traffic.prometheusClusterLabels`,

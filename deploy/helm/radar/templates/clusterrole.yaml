@@ -80,6 +80,10 @@ rules:
     resources:
       - secrets
     verbs: ["get", "list", "watch"]
+  # These objects can carry inline credentials, so they share the Secrets grant.
+  - apiGroups: ["operator.victoriametrics.com"]
+    resources: ["vmagents", "vmclusters", "vmsingles"]
+    verbs: ["get", "list", "watch"]
   {{- end }}
 
   # Workload resources (read-only)
@@ -233,7 +237,7 @@ rules:
 
   # CRD access
   {{- if .Values.rbac.crdGroups.all }}
-  # Wildcard access to all CRDs (rbac.crdGroups.all=true)
+  # Wildcard reads include core Secrets and credential-bearing CRDs.
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]

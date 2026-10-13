@@ -200,6 +200,32 @@ export function servicePortsTooltip(ports: ServicePortEntry[]): React.ReactNode 
 }
 
 // Default dimensions for unknown CRD kinds
+// A domain-mapped Knative Service shows its custom domain as the subtitle; the
+// tooltip lists every mapped domain, then the Service's own URL when it is
+// public, and its cluster-internal address.
+export function knativeDomainsTooltipLines(nodeData: Record<string, unknown>): { text: string; secondary?: boolean }[] {
+  const mapped = (nodeData.mappedDomains as string[] | undefined) || [];
+  if (mapped.length === 0) return [];
+  const url = nodeData.url as string | undefined;
+  const internalUrl = nodeData.internalUrl as string | undefined;
+  const lines: { text: string; secondary?: boolean }[] = mapped.map((domain) => ({ text: domain }));
+  if (url && url !== internalUrl) lines.push({ text: `Service URL: ${url}`, secondary: true });
+  if (internalUrl) lines.push({ text: `Internal: ${internalUrl}`, secondary: true });
+  return lines;
+}
+
+function knativeDomainsTooltip(nodeData: Record<string, unknown>): React.ReactNode | null {
+  const lines = knativeDomainsTooltipLines(nodeData);
+  if (lines.length === 0) return null;
+  return (
+    <div className="space-y-0.5">
+      {lines.map((line) => (
+        <div key={line.text} className={line.secondary ? 'text-theme-text-tertiary' : undefined}>{line.text}</div>
+      ))}
+    </div>
+  );
+}
+
 export const DEFAULT_NODE_DIMENSIONS = { width: 260, height: 84 };
 
 const NODE_NAME_LENGTH_LIMITS: Partial<Record<NodeKind, number>> = {
@@ -218,6 +244,7 @@ export const NODE_DIMENSIONS: Record<
   HTTPRoute: { width: 300, height: 84 },
   GRPCRoute: { width: 300, height: 84 },
   TCPRoute: { width: 300, height: 84 },
+  UDPRoute: { width: 300, height: 84 },
   TLSRoute: { width: 300, height: 84 },
   Service: { width: 260, height: 84 },
   Deployment: { width: 280, height: 84 },
@@ -440,7 +467,8 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
     case "HTTPRoute":
     case "GRPCRoute":
     case "TCPRoute":
-    case "TLSRoute": {
+    case "TLSRoute":
+    case "UDPRoute": {
       const hostnames = nodeData.hostnames as string[];
       const rulesCount = (nodeData.rulesCount as number) || 0;
       const host = hostnames?.length ? hostnames[0] : "";
@@ -488,6 +516,10 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       return `${count} pods (${healthy} healthy)`;
     }
     case "KnativeService": {
+      const mapped = (nodeData.mappedDomains as string[] | undefined) || [];
+      if (mapped.length > 0) {
+        return mapped.length > 1 ? `${mapped[0]} +${mapped.length - 1}` : mapped[0];
+      }
       const url = nodeData.url as string;
       if (url) {
         // Show just the hostname from the URL for compactness
@@ -558,7 +590,10 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const subtitle = getSubtitle(kind, nodeData)
   const portsTooltip = kind === 'Service'
     ? servicePortsTooltip((nodeData.ports as ServicePortEntry[] | undefined) || [])
-    : null
+    : kind === 'KnativeService'
+      ? knativeDomainsTooltip(nodeData)
+      : null
+  const clusterLocal = kind === 'KnativeService' && nodeData.visibility === 'cluster-local'
   const isInternet = kind === 'Internet'
   const isPodGroup = kind === 'PodGroup'
   const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'ServiceAccount' || kind === 'SealedSecret' || kind === 'ServiceMonitor' || kind === 'PodMonitor' || kind === 'HorizontalPodAutoscaler'
@@ -662,6 +697,13 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                           : <Layers className="h-2.5 w-2.5" aria-hidden />}
                     {!isSmallNode && (deploymentMembership === 'runtime-only' ? 'Runtime only' : `${deploymentSourceLabel ?? 'Source'} only`)}
                   </span>
+                </Tooltip>
+              )}
+              {clusterLocal && (
+                <Tooltip content="Reachable only inside the cluster, so it has no Internet edge" position="right">
+                  <Badge tone="note" size="sm" className="!text-[9px] !px-1 !py-0.5 normal-case tracking-normal cursor-help">
+                    Cluster-local
+                  </Badge>
                 </Tooltip>
               )}
               {trafficRole && (

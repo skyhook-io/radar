@@ -459,6 +459,9 @@ func probeHop(ctx context.Context, h *Hop, vantage probe.Vantage, client kuberne
 		// tested - say so instead of leaving the hop's coverage unexplained.
 		return []probe.Result{probe.Skipped(probe.LayerTCP, "", vantage,
 			"L4 route - radar doesn't trace or test TCPRoute/TLSRoute backends; the parent Gateway listener's TCP reachability is still probed")}
+	case "UDPRoute":
+		return []probe.Result{probe.Skipped(probe.LayerTCP, "", vantage,
+			"UDP route - radar doesn't trace or test UDPRoute backends, and UDP listeners aren't probed")}
 	}
 	return nil
 }

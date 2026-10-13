@@ -22,6 +22,14 @@ type workloadPartitionMemo struct {
 	generation uint64
 	expires    time.Time
 	scope      prom.WorkloadMetricsScope
+	namespace  string
+	identities string
+	unlabeled  bool
+}
+
+type workloadPartitionProof struct {
+	scope     prom.WorkloadMetricsScope
+	unlabeled bool
 }
 
 type workloadHistoryPlan struct {
@@ -35,23 +43,28 @@ func (p workloadHistoryPlan) awaitingAttribution(state string) bool {
 }
 
 func (c *Client) historicalClusterScope(ctx context.Context, scope PodScope, cache *k8s.ResourceCache) (prom.WorkloadMetricsScope, error) {
+	proof, err := c.historicalClusterProof(ctx, scope, cache)
+	return proof.scope, err
+}
+
+func (c *Client) historicalClusterProof(ctx context.Context, scope PodScope, cache *k8s.ResourceCache) (workloadPartitionProof, error) {
 	if config, _, configured := c.workloadMetricsConfig(); configured {
-		return config, nil
+		return workloadPartitionProof{scope: config}, nil
 	}
 	c.mu.RLock()
 	generation := c.discoveryGen
 	epoch := c.connectionEpoch
-	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired {
-		config := memo.scope
+	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired && len(memo.scope.ClusterLabels) > 0 {
+		proof := workloadPartitionProof{scope: memo.scope, unlabeled: memo.unlabeled}
 		c.mu.RUnlock()
-		return config, nil
+		return proof, nil
 	}
 	c.mu.RUnlock()
 	anchors := append([]prom.WorkloadPodIdentity(nil), scope.Identities...)
 	if len(anchors) == 0 && cache != nil && cache.Pods() != nil {
 		pods, err := cache.Pods().Pods(scope.Namespace).List(labels.Everything())
 		if err != nil {
-			return prom.WorkloadMetricsScope{}, err
+			return workloadPartitionProof{}, err
 		}
 		sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
 		for _, pod := range pods {
@@ -62,10 +75,25 @@ func (c *Client) historicalClusterScope(ctx context.Context, scope PodScope, cac
 		}
 	}
 	if len(anchors) == 0 {
-		return prom.WorkloadMetricsScope{}, nil
+		return workloadPartitionProof{}, nil
 	}
-	// One proof flight per connection; waiters never gain access to its anchor namespace.
-	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d", generation, epoch), func() (any, error) {
+	sort.Slice(anchors, func(i, j int) bool {
+		if anchors[i].Name != anchors[j].Name {
+			return anchors[i].Name < anchors[j].Name
+		}
+		return anchors[i].UID < anchors[j].UID
+	})
+	identities := fmt.Sprint(anchors)
+	c.mu.RLock()
+	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired &&
+		(len(memo.scope.ClusterLabels) > 0 || (memo.namespace == scope.Namespace && memo.identities == identities)) {
+		proof := workloadPartitionProof{scope: memo.scope, unlabeled: memo.unlabeled}
+		c.mu.RUnlock()
+		return proof, nil
+	}
+	c.mu.RUnlock()
+	// Missing evidence depends on the exact Pods checked, even in one namespace.
+	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d#%s#%s", generation, epoch, scope.Namespace, identities), func() (any, error) {
 		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout+8*time.Second)
 		defer cancel()
 		if _, _, err := c.EnsureConnected(flightCtx); err != nil {
@@ -81,7 +109,7 @@ func (c *Client) historicalClusterScope(ctx context.Context, scope PodScope, cac
 		c.mu.RUnlock()
 		probeCtx, probeCancel := context.WithTimeout(flightCtx, 8*time.Second)
 		defer probeCancel()
-		config, err := probeHistoricalPartition(probeCtx, prom.NewClient(tr), scope.Namespace, anchors)
+		proof, err := probeHistoricalPartition(probeCtx, prom.NewClient(tr), scope.Namespace, anchors)
 		if err != nil {
 			return nil, err
 		}
@@ -90,23 +118,32 @@ func (c *Client) historicalClusterScope(ctx context.Context, scope PodScope, cac
 		if c.discoveryGen != generation || c.connectionEpoch != epoch || c.retired {
 			return nil, fmt.Errorf("metrics connection changed")
 		}
-		if len(config.ClusterLabels) > 0 {
-			c.workloadPartition = &workloadPartitionMemo{generation: generation, expires: time.Now().Add(5 * time.Minute), scope: config}
+		if len(proof.scope.ClusterLabels) == 0 && !proof.unlabeled {
+			return proof, nil
 		}
-		return config, nil
+		ttl := 5 * time.Minute
+		if len(proof.scope.ClusterLabels) == 0 {
+			ttl = 30 * time.Second
+		}
+		memo := c.workloadPartition
+		if len(proof.scope.ClusterLabels) > 0 || memo == nil || memo.generation != generation ||
+			len(memo.scope.ClusterLabels) == 0 || !time.Now().Before(memo.expires) {
+			c.workloadPartition = &workloadPartitionMemo{generation: generation, expires: time.Now().Add(ttl), scope: proof.scope, namespace: scope.Namespace, identities: identities, unlabeled: proof.unlabeled}
+		}
+		return proof, nil
 	})
 	select {
 	case <-ctx.Done():
-		return prom.WorkloadMetricsScope{}, ctx.Err()
+		return workloadPartitionProof{}, ctx.Err()
 	case result := <-ch:
 		if result.Err != nil {
-			return prom.WorkloadMetricsScope{}, result.Err
+			return workloadPartitionProof{}, result.Err
 		}
-		return result.Val.(prom.WorkloadMetricsScope), nil
+		return result.Val.(workloadPartitionProof), nil
 	}
 }
 
-func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespace string, anchors []prom.WorkloadPodIdentity) (prom.WorkloadMetricsScope, error) {
+func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespace string, anchors []prom.WorkloadPodIdentity) (workloadPartitionProof, error) {
 	names := make([]string, len(anchors))
 	for i, pod := range anchors {
 		names[i] = regexp.QuoteMeta(pod.Name)
@@ -114,13 +151,22 @@ func probeHistoricalPartition(ctx context.Context, client *prom.Client, namespac
 	query := "topk(257,count by (namespace,pod,uid," + strings.Join(partitionLabels, ",") + ") (kube_pod_info{namespace=" + strconv.Quote(namespace) + ",pod=~" + strconv.Quote(strings.Join(names, "|")) + "}))"
 	result, err := client.QueryEvidence(ctx, query)
 	if err != nil {
-		return prom.WorkloadMetricsScope{}, err
+		return workloadPartitionProof{}, err
 	}
 	if result.ResultType != "vector" || len(result.Series) > 256 {
-		return prom.WorkloadMetricsScope{}, nil
+		return workloadPartitionProof{}, nil
 	}
-	partition, _ := identifyPartition(anchors, result.Series)
-	return prom.WorkloadMetricsScope{ClusterLabels: partition}, nil
+	partition, _ := identifyPartitionWithUnlabeled(anchors, result.Series, true)
+	proof := workloadPartitionProof{scope: prom.WorkloadMetricsScope{ClusterLabels: partition}}
+	for _, value := range partition {
+		if value == "" {
+			// Workload history still requires a positive cluster label; only PVC
+			// stats may use UID-backed evidence for an unlabeled partition.
+			proof.scope.ClusterLabels, proof.unlabeled = nil, true
+			break
+		}
+	}
+	return proof, nil
 }
 
 func chooseWorkloadHistory(ctx context.Context, client RangeQuerier, scope PodScope, config prom.WorkloadMetricsScope, start, end time.Time, step time.Duration) workloadHistoryPlan {

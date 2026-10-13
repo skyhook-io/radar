@@ -402,8 +402,6 @@ export function costUnavailableMessage(
       return 'No compatible cost source found — connect OpenCost metrics through a PromQL-compatible backend or configure Kubecost'
     case 'no_metrics':
       return 'Cost data is not ready — the selected source returned no allocation data'
-    case 'query_error':
-      return 'Cost data is temporarily unavailable — the selected source query failed'
     case 'access_denied':
       return 'You do not have access to view cluster cost data'
     default:

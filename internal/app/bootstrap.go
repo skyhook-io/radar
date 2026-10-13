@@ -52,6 +52,7 @@ type AppConfig struct {
 	ListenAddress               string
 	ShowRemoteAccessHint        bool
 	BasePath                    string
+	TrustedOrigins              []string
 	NoBrowser                   bool
 	Browser                     string
 	DevMode                     bool
@@ -512,6 +513,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		PortFallback:          cfg.PortFallback,
 		ListenAddress:         cfg.ListenAddress,
 		BasePath:              cfg.BasePath,
+		TrustedOrigins:        cfg.TrustedOrigins,
 		StartupLog:            true,
 		RemoteAccessHint:      cfg.ShowRemoteAccessHint,
 		DevMode:               cfg.DevMode,

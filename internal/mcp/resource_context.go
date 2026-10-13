@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -122,6 +123,8 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		SkipPodTemplateContext: !includeFacts,
 		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
 		CanReadRelated:         issueRelatedResourceAccess(ctx),
+		CanReadSubject:         issueSubjectAccess(ctx),
+		CanReadEvidence:        issueEvidenceAccess(ctx),
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil, nil
@@ -240,4 +243,68 @@ func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvi
 		return nil, nil, nil, false
 	}
 	return topology, provider, dyn, true
+}
+
+// issueSubjectAccess mirrors the REST drawer gate for an issue's own
+// namespaced resource: namespace access, plus a get for Secrets and
+// LimitRanges. It runs once per composed row, so the caller's namespaces are
+// resolved once.
+func issueSubjectAccess(ctx context.Context) func(issues.Ref) bool {
+	inNamespace := callerNamespaces(ctx)
+	return func(ref issues.Ref) bool {
+		if !inNamespace(ref.Namespace) {
+			return false
+		}
+		switch {
+		case ref.Group == "" && strings.EqualFold(ref.Kind, "Secret"):
+			return canReadInNamespace(ctx, "", "secrets", ref.Namespace, "get")
+		case ref.Group == "" && strings.EqualFold(ref.Kind, "LimitRange"):
+			return canReadInNamespace(ctx, "", "limitranges", ref.Namespace, "get")
+		}
+		return true
+	}
+}
+
+// issueEvidenceAccess authorizes an inventory a finding was derived from at
+// the granularity Radar reads it: a namespaced read needs namespace access
+// (and a Secret read a Secrets check); a cluster-wide read needs the SAR.
+func issueEvidenceAccess(ctx context.Context) func(issues.EvidenceRead) bool {
+	inNamespace := callerNamespaces(ctx)
+	return func(read issues.EvidenceRead) bool {
+		if read.Namespace == "" {
+			return canReadInNamespace(ctx, read.Group, read.Resource, "", read.Verb)
+		}
+		if !inNamespace(read.Namespace) {
+			return false
+		}
+		if read.Group == "" && read.Resource == "secrets" {
+			return canReadInNamespace(ctx, "", "secrets", read.Namespace, read.Verb)
+		}
+		return true
+	}
+}
+
+// callerNamespaces reports whether the caller may read a namespace (the same
+// answer as checkNamespaceAccess), resolving its namespaces on first use.
+func callerNamespaces(ctx context.Context) func(string) bool {
+	var once sync.Once
+	var allowed map[string]bool
+	all := false
+	return func(namespace string) bool {
+		if namespace == "" {
+			return false
+		}
+		once.Do(func() {
+			namespaces := filterNamespacesForUser(ctx, nil)
+			if namespaces == nil {
+				all = true
+				return
+			}
+			allowed = make(map[string]bool, len(namespaces))
+			for _, ns := range namespaces {
+				allowed[ns] = true
+			}
+		})
+		return all || allowed[namespace]
+	}
 }

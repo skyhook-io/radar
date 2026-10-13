@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, Tooltip } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
-import { Notice } from '../capacity/shared'
+import { Notice } from '../workspace/layout'
 import {
   CNPGWorkspaceHeader,
   CoverageNotice,

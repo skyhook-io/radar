@@ -62,6 +62,67 @@ assert_contains 'MY_DEPLOYMENT_NAME'                "identity ships for read-onl
 assert_not_contains '--opencost-currency='          "default OpenCost currency flag omitted"
 echo
 
+render "VictoriaMetrics defaults — no collection of credential-bearing objects"
+assert_not_contains 'operator.victoriametrics.com'    "no VictoriaMetrics grant without cluster-wide Secrets reads"
+echo
+
+render "Secrets enabled — only reviewed VictoriaMetrics workload resources" --set rbac.secrets=true
+assert_contains 'apiGroups: \["operator.victoriametrics.com"\]' "VictoriaMetrics operator group"
+assert_contains 'resources: \["vmagents", "vmclusters", "vmsingles"\]' "finite workload allowlist"
+assert_not_contains 'resources:.*(vmusers|vmauths|vmalerts|vmalertmanagers|vmrules|vmscrapeconfigs)' "no credential/configuration kinds"
+echo
+
+render "Secrets disabled — no VictoriaMetrics operator grant" --set rbac.secrets=false
+assert_not_contains 'operator.victoriametrics.com'    "explicit false matches defaults"
+echo
+
+render "Wildcard collection includes VictoriaMetrics" --set rbac.crdGroups.all=true
+assert_contains 'apiGroups: \["\*"\]'               "wildcard includes every API group"
+assert_contains 'resources: \["\*"\]'               "wildcard includes core Secrets and excluded CRDs"
+echo
+
+# A grant change only reaches Radar through a new pod: it decides what it can
+# watch at startup and keeps serving its cache after a grant is revoked.
+# helm-unittest renders each test in isolation, so comparing renders lives here
+# instead of as pinned hashes that every rbac default change would break.
+rbac_checksum() {
+  render "$@"
+  CHECKSUM=$(yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations["checksum/rbac"]' <<< "$OUT")
+}
+assert_same() {
+  if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 — $1 != $2"; fi
+}
+assert_differs() {
+  if [[ "$1" != "$2" ]]; then pass "$3"; else fail "$3 — both $1"; fi
+}
+
+rbac_checksum "checksum/rbac — defaults"
+DEFAULT_CHECKSUM=$CHECKSUM
+DEFAULT_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules' <<< "$OUT")
+if [[ "$DEFAULT_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]; then pass "pod template carries an RBAC checksum"
+else fail "pod template carries an RBAC checksum — got: $DEFAULT_CHECKSUM"; fi
+rbac_checksum "checksum/rbac — Secrets reads enabled" --set rbac.secrets=true
+SECRETS_CHECKSUM=$CHECKSUM
+assert_differs "$SECRETS_CHECKSUM" "$DEFAULT_CHECKSUM" "enabling Secrets and VictoriaMetrics reads rolls the pod"
+ADDED_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] == "operator.victoriametrics.com" or (.apiGroups[0] == "" and .resources[0] == "secrets" and .resourceNames == null)))' <<< "$OUT")
+assert_same "$ADDED_RULES" '[{"apiGroups":[""],"resources":["secrets"],"verbs":["get","list","watch"]},{"apiGroups":["operator.victoriametrics.com"],"resources":["vmagents","vmclusters","vmsingles"],"verbs":["get","list","watch"]}]' "enabling Secrets adds exactly the Secrets and VictoriaMetrics read rules"
+REMAINING_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules | map(select(.apiGroups[0] != "operator.victoriametrics.com" and (.apiGroups[0] != "" or .resources[0] != "secrets" or .resourceNames != null)))' <<< "$OUT")
+assert_same "$REMAINING_RULES" "$DEFAULT_RULES" "enabling Secrets leaves every other collector rule unchanged"
+rbac_checksum "checksum/rbac — Secrets reads turned back off" --set rbac.secrets=false
+assert_differs "$CHECKSUM" "$SECRETS_CHECKSUM"         "disabling Secrets and VictoriaMetrics reads rolls the pod"
+assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "explicit false matches the default checksum"
+DISABLED_RULES=$(yq -o=json -I=0 'select(.kind == "ClusterRole" and .metadata.name == "radar") | .rules' <<< "$OUT")
+assert_same "$DISABLED_RULES" "$DEFAULT_RULES"         "explicit false matches all default collector rules"
+rbac_checksum "checksum/rbac — unrelated values" \
+  --set image.tag=v0.0.0-test \
+  --set resources.limits.memory=2Gi \
+  --set podAnnotations.team=platform
+assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "non-RBAC changes do not roll the pod"
+rbac_checksum "checksum/rbac — cloud mode" \
+  --set cloud.enabled=true --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
+assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "checksum renders in cloud mode too"
+echo
+
 render "cost.currency — explicit OpenCost currency label" --set cost.currency=GBP
 assert_contains '--opencost-currency=GBP'           "OpenCost currency flag rendered"
 echo

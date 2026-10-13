@@ -264,6 +264,20 @@ func TestAttachedRefs_IncludesIngressesAndRoutesButNotGateways(t *testing.T) {
 	}
 }
 
+func TestAttachedRefs_IncludesStagedPolicies(t *testing.T) {
+	rel := &topology.Relationships{
+		NetworkPolicies: []topology.ResourceRef{{Kind: "NetworkPolicy", Namespace: "default", Name: "enforced", Group: "projectcalico.org"}},
+		StagedPolicies:  []topology.ResourceRef{{Kind: "StagedNetworkPolicy", Namespace: "default", Name: "trial", Group: "projectcalico.org"}},
+	}
+	want := []resourceid.Ref{
+		resourceid.NewRef("projectcalico.org", "NetworkPolicy", "default", "enforced"),
+		resourceid.NewRef("projectcalico.org", "StagedNetworkPolicy", "default", "trial"),
+	}
+	if got := attachedRefs(rel, "default"); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("attachedRefs = %v, want %v", got, want)
+	}
+}
+
 func TestChildNamePatterns_MatchWhatTheControllerNamesAndNotSiblings(t *testing.T) {
 	for _, tc := range []struct {
 		group, kind, name, childKind, child string

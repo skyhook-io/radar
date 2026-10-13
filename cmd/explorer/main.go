@@ -105,6 +105,7 @@ func main() {
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
 	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen IP address (IPv4 or IPv6), or localhost; loopback is local-only, other addresses (including 0.0.0.0) expose shared access")
 	basePath := flag.String("base-path", "", "URL path prefix to serve Radar under, e.g. /radar (empty = root). Use when an ingress forwards a subpath without stripping it.")
+	trustedOrigins := flag.String("trusted-origins", os.Getenv("RADAR_TRUSTED_ORIGINS"), "Comma-separated origins, besides the address Radar is opened at, that may use Radar's API, including changes and terminals (e.g. http://radar.internal). Set this when a proxy in front of Radar rewrites the Host header and changes fail with \"Radar refused this request\". Exact origins only, no wildcards. Does not apply to /mcp (see RADAR_MCP_TRUSTED_ORIGINS). Env: RADAR_TRUSTED_ORIGINS")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
 	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
 	devMode := flag.Bool("dev", false, "Development mode (serve frontend from filesystem)")
@@ -129,9 +130,9 @@ func main() {
 	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + conclusions) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
-	workloadSingleCluster := flag.Bool("prometheus-single-cluster", false, "Optional workload-metrics scope override: assert that the backend contains only this Kubernetes cluster. Replaces automatic matching; not saved, and cleared when the cluster, backend or credentials change. Does not scope other metrics features.")
+	workloadSingleCluster := flag.Bool("prometheus-single-cluster", false, "Optional workload/PVC metrics scope override: assert that the backend contains only this Kubernetes cluster. Replaces automatic matching; not saved, and cleared when the cluster, backend or credentials change. Does not scope rightsizing, node/HPA or legacy network/storage metrics.")
 	workloadClusterLabels := map[string]string{}
-	flag.Func("prometheus-cluster-label", "Optional workload-metrics scope override: exact label=value identifying this cluster, e.g. cluster=production (repeatable, ANDed). Alternative to --prometheus-single-cluster, with the same lifetime and workload-only scope; leave both unset for automatic matching.", func(raw string) error {
+	flag.Func("prometheus-cluster-label", "Optional workload/PVC metrics scope override: exact label=value identifying this cluster, e.g. cluster=production (repeatable, ANDed). Alternative to --prometheus-single-cluster, with the same lifetime and scope; leave both unset for automatic matching.", func(raw string) error {
 		key, value, ok := strings.Cut(raw, "=")
 		if !ok {
 			return fmt.Errorf("expected label=value")
@@ -277,6 +278,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --base-path %q: %v", *basePath, err)
 	}
+	parsedTrustedOrigins, err := server.ParseTrustedOrigins(*trustedOrigins)
+	if err != nil {
+		log.Printf("WARNING: ignoring --trusted-origins (RADAR_TRUSTED_ORIGINS) entries Radar cannot use; changes from those addresses will still be refused:\n%v", err)
+	}
 	// Radar Hub forwards root-relative paths over the tunnel and the ordinary
 	// listener is health-only at the literal /api/health, so a prefixed router
 	// would 404 both. Fail loudly instead of coming up broken. Both Cloud
@@ -364,6 +369,7 @@ func main() {
 		ListenAddress:               normalizedListenAddress,
 		ShowRemoteAccessHint:        true,
 		BasePath:                    normalizedBasePath,
+		TrustedOrigins:              parsedTrustedOrigins,
 		NoBrowser:                   *noBrowser,
 		Browser:                     *browser,
 		DevMode:                     *devMode,
