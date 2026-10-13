@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useId } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertBanner } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { SelectMenu } from '@skyhook-io/k8s-ui/components/ui/SelectMenu'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
-import { fetchJSON, useClusterInfo, useCapabilities } from '../../api/client'
+import { TimeValue } from '@skyhook-io/k8s-ui/components/ui/ScheduleValue'
+import { ApiError, fetchJSON, useClusterInfo, useCapabilities, useRadarFeature } from '../../api/client'
 import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidates } from '../../api/application-evidence'
 
 const vaultNames: Record<string, string> = { initialized: 'Initialized', sealed: 'Sealed', standby: 'Standby', performanceStandby: 'Performance standby' }
@@ -33,20 +34,21 @@ interface Props { kind: string; group?: string; namespace: string; name: string;
 export function ApplicationEvidenceAction(props: Props) {
   const { data: cluster } = useClusterInfo()
   const { data: capabilities } = useCapabilities()
+  const { guard, gatedKey, support } = useRadarFeature('applicationEvidence')
   const context = cluster?.context
   const subjectKey = `${context}:${props.kind}:${props.group}:${props.namespace}:${props.name}:${props.uid}`
   const [permissionRetryTarget, setPermissionRetryTarget] = useState<string>()
   const retryPermissions = permissionRetryTarget === subjectKey
   const { data, error, refetch, isFetching } = useQuery({
-    queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid, retryPermissions],
-    queryFn: ({ signal }) => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name, retryPermissions: String(retryPermissions) })}`, signal),
-    enabled: !!context && !!props.uid && !!props.namespace && capabilities?.deployment?.mode === 'local',
+    queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid, retryPermissions, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name, retryPermissions: String(retryPermissions) })}`, signal)),
+    enabled: support !== 'unsupported' && !!context && !!props.uid && !!props.namespace && capabilities?.deployment?.mode === 'local',
     placeholderData: previous => previous,
-    retry: false,
+    retry: (failures, failure) => failures < 1 && failure instanceof ApiError && (failure.status === 503 || failure.status === 409),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
-  if (!context || !props.namespace || capabilities?.deployment?.mode !== 'local') return null
+  if (support === 'unsupported' || !context || !props.namespace || capabilities?.deployment?.mode !== 'local') return null
   if (retryPermissions && error) return <div className="mt-3"><AlertBanner variant="warning" title="Permission check failed" message={<>{error instanceof Error ? error.message : 'Could not verify application evidence permissions.'} <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={() => void refetch()}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></>} /></div>
   if (!data?.enabled || !data.context || data.context !== context || data.subjectUID !== props.uid) return null
   const retry = () => { if (retryPermissions) void refetch(); else setPermissionRetryTarget(subjectKey) }
@@ -58,15 +60,19 @@ export function ApplicationEvidenceAction(props: Props) {
 
 function EvidenceControl({ data, refreshing, onTargetChanged }: { data: AvailableCandidates; refreshing: boolean; onTargetChanged: () => void }) {
   const [snapshot, setSnapshot] = useState<AvailableCandidates>()
+  const [open, setOpen] = useState(false)
+  const [session, setSession] = useState(0)
   if (!snapshot && data.candidates.length === 0) return null
   const names = [...new Set(data.candidates.map(item => applicationNames[item.application]))].join(', ')
   return <div className="mt-3">
-    {data.candidates.length > 0 && <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => setSnapshot(data)}>Collect {names} evidence</button>}
-    {snapshot && <EvidenceDialog data={snapshot} onTargetChanged={onTargetChanged} onClose={() => setSnapshot(undefined)} />}
+    {data.candidates.length > 0 && <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => { setSnapshot(data); setSession(value => value + 1); setOpen(true) }}>Collect {names} evidence</button>}
+    {snapshot && <EvidenceDialog key={session} open={open} data={snapshot} onTargetChanged={onTargetChanged} onClose={() => setOpen(false)} />}
   </div>
 }
 
-function EvidenceDialog({ data, onClose, onTargetChanged }: { data: AvailableCandidates; onClose: () => void; onTargetChanged: () => void }) {
+function EvidenceDialog({ open, data, onClose, onTargetChanged }: { open: boolean; data: AvailableCandidates; onClose: () => void; onTargetChanged: () => void }) {
+  const titleId = useId()
+  const targetId = useId()
   const [selected, setSelected] = useState(0)
   const [result, setResult] = useState<ApplicationEvidenceResult>()
   const [error, setError] = useState<string>()
@@ -95,23 +101,24 @@ function EvidenceDialog({ data, onClose, onTargetChanged }: { data: AvailableCan
       if (!controller.signal.aborted) setPending(false)
     }
   }
-  return <DialogPortal open onClose={onClose} className="w-[min(92vw,640px)] max-h-[85vh] overflow-y-auto p-5">
-    <h2 className="text-lg font-semibold text-theme-text-primary">Collect application evidence</h2>
+  const close = () => { request.current?.abort(); onClose() }
+  return <DialogPortal ariaLabelledBy={titleId} open={open} onClose={close} className="w-[min(92vw,640px)] max-h-[85vh] overflow-y-auto p-5">
+    <h2 id={titleId} className="text-lg font-semibold text-theme-text-primary">Collect application evidence</h2>
     <p className="mt-2 text-sm text-theme-text-secondary">Read one Pod’s application endpoint through a temporary Kubernetes port-forward using your current permissions.</p>
     <p className="mt-2 break-all text-xs text-theme-text-tertiary">Context: {data.context}</p>
-    <label className="mt-4 block text-sm text-theme-text-primary" htmlFor="application-evidence-target">Pod endpoint</label>
-    <SelectMenu id="application-evidence-target" ariaLabel="Pod endpoint" className="mt-1" value={String(selected)} disabled={pending}
+    <label className="mt-4 block text-sm text-theme-text-primary" htmlFor={targetId}>Pod endpoint</label>
+    <SelectMenu id={targetId} ariaLabel="Pod endpoint" className="mt-1" value={String(selected)} disabled={pending}
       options={data.candidates.map((item, index) => ({ value: String(index), label: `${applicationNames[item.application]} · ${item.target.namespace}/${item.target.pod} · ${item.target.container}` }))}
       onChange={value => { setSelected(Number(value)); setResult(undefined); setError(undefined); setCopied(false) }} />
     <p className="mt-2 text-sm text-theme-text-secondary">Collects: {candidate.expectedEvidence.join(', ')}.</p>
     <p className="mt-1 text-xs text-theme-text-tertiary">{candidate.coverage}</p>
-    {(data.truncated || data.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">This is a limited set of candidate endpoints; it does not cover every replica.</p>}
+    {(data.truncated || data.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">Discovery or permission limits may exclude endpoints. Collection covers only the selected Pod.</p>}
     <p className="mt-2 text-xs text-theme-text-tertiary">Collection may be unavailable if the endpoint requires credentials or cannot be reached. Results describe this Pod at collection time.</p>
     {error && <div role="alert" className="mt-4"><AlertBanner variant="error" title="Could not complete the request" message={error} /></div>}
     {result && <ApplicationEvidenceObservation result={result} />}
     <div className="mt-5 flex flex-wrap justify-end gap-2">
       {result && <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}
-      <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={onClose}>{pending ? 'Cancel' : 'Close'}</button>
+      <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={close}>{pending ? 'Cancel' : 'Close'}</button>
       <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending || result?.reason === 'target_changed'} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
     </div>
   </DialogPortal>
@@ -120,10 +127,10 @@ function EvidenceDialog({ data, onClose, onTargetChanged }: { data: AvailableCan
 export function ApplicationEvidenceObservation({ result }: { result: ApplicationEvidenceResult }) {
   const facts = result.outcome === 'observed' ? result.facts : undefined
   const nats = facts?.nats
-  return <section aria-label="Application observations" className="mt-4 rounded border border-theme-border p-3 text-sm text-theme-text-primary">
+  return <section aria-label="Application observations" className="card-inner mt-4 p-3 text-sm text-theme-text-primary">
     <h3 className="font-semibold">{result.outcome === 'observed' ? 'Endpoint observations' : 'Evidence unavailable'}</h3>
     <p className="mt-1 break-all text-xs text-theme-text-secondary">{result.target.namespace}/{result.target.pod}{result.target.container && ` · ${result.target.container}`}</p>
-    <p className="mt-1 text-xs text-theme-text-tertiary">{new Date(result.observedAt).toLocaleString()} · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · HTTP ${result.httpStatus}`}</p>
+    <p className="mt-1 text-xs text-theme-text-tertiary"><TimeValue timestamp={result.observedAt} /> · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · HTTP ${result.httpStatus}`}</p>
     {result.reason && <p className="mt-2">{unavailableReasons[result.reason] ?? `Collection unavailable (${result.reason}).`} No conclusion about application health can be drawn from unavailable evidence.</p>}
     {facts?.rabbitmq && <dl className="mt-3 grid grid-cols-2 gap-2"><dt>Disk alarm</dt><dd>{facts.rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd><dt>Memory alarm</dt><dd>{facts.rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd></dl>}
     {facts?.vault && <dl className="mt-3 grid grid-cols-2 gap-2">{Object.entries(facts.vault).map(([key, value]) => <div key={key} className="contents"><dt>{vaultNames[key]}</dt><dd>{value ? 'Yes' : 'No'}</dd></div>)}</dl>}

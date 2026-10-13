@@ -166,6 +166,7 @@ export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
+ applicationEvidence?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
