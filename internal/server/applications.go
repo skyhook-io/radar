@@ -297,7 +297,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, resp)
+	s.writeJSON(w, s.filterApplicationAuthenticationRefs(r, resp))
 }
 
 // handleApplicationHistory serves a focused app-level change narrative.
@@ -2709,3 +2709,42 @@ func namespaceFromKey(key string) string {
 
 // (worstAppHealth / appHealthRank removed — the app rollup now uses
 // packages.WorseHealth, the single rollup ordering.)
+
+// Applications rows are shared across callers, so authentication references are authorized on a copy after the cache.
+func (s *Server) filterApplicationAuthenticationRefs(r *http.Request, shared *applicationsResponse) *applicationsResponse {
+	if auth.UserFromContext(r.Context()) == nil {
+		return shared
+	}
+	out := *shared
+	out.Applications = append([]appRow(nil), shared.Applications...)
+	for i := range out.Applications {
+		row := &out.Applications[i]
+		if row.Relationships == nil {
+			continue
+		}
+		rel := *row.Relationships
+		refs := make(map[string]topology.ResourceRef, len(rel.configRefs))
+		withheld := false
+		for key, ref := range rel.configRefs {
+			if ref.Group == "keda.sh" && (ref.Kind == "TriggerAuthentication" || ref.Kind == "ClusterTriggerAuthentication") {
+				resource := "triggerauthentications"
+				if ref.Kind == "ClusterTriggerAuthentication" {
+					resource = "clustertriggerauthentications"
+				}
+				if !s.canRead(r, ref.Group, resource, ref.Namespace, "get") {
+					withheld = true
+					continue
+				}
+			}
+			refs[key] = ref
+		}
+		if !withheld {
+			continue
+		}
+		rel.configRefs = refs
+		rel.ConfigRefs = sortedRefs(refs, 20)
+		rel.Configs = len(refs)
+		row.Relationships = &rel
+	}
+	return &out
+}
