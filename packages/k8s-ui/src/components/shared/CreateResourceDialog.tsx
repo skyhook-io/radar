@@ -302,11 +302,11 @@ export function CreateResourceDialog({
     const appliedResults = caught instanceof Error && 'appliedResults' in caught && Array.isArray(caught.appliedResults) ? caught.appliedResults : []
     if (appliedMode !== 'create' || wasDryRun || appliedResults.length === 0) return false
     setYaml(submittedYaml)
-    if (!lockMode) setMode('apply')
+    if (!lockMode && onPreview) setMode('apply')
     setPreview(null)
     setPartialCreates(appliedResults)
     return true
-  }, [lockMode])
+  }, [lockMode, onPreview])
 
   const handleSubmit = useCallback(async () => {
     if (!yaml.trim()) {
@@ -434,8 +434,8 @@ export function CreateResourceDialog({
             </Tooltip>
           </div>
 
-          <div className="min-h-0 flex-1 px-5 py-3">
-            <div className="mb-2 flex items-center gap-2">
+          <div className="flex min-h-0 flex-1 flex-col px-5 py-3">
+            <div className="mb-2 flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -462,7 +462,7 @@ export function CreateResourceDialog({
             </div>
 
             <div
-              className="relative h-[400px]"
+              className="relative h-[400px] min-h-0"
               onDragEnter={handleDragEnter}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -471,7 +471,7 @@ export function CreateResourceDialog({
               <YamlEditor
                 value={yaml}
                 onChange={setYaml}
-                height="400px"
+                height="100%"
                 onValidate={handleValidate}
                 schemaLoader={schemaLoader}
               />
@@ -496,7 +496,7 @@ export function CreateResourceDialog({
           </div>
 
           {(error || previewError) && (
-            <ApplyErrorBanner error={error || previewError || 'Preview failed'} partialCreates={partialCreates} strictCreate={lockMode && mode === 'create'} />
+            <ApplyErrorBanner error={error || previewError || 'Preview failed'} partialCreates={partialCreates} strictCreate={lockMode && mode === 'create'} hasPreview={Boolean(onPreview)} />
           )}
           {success && (
             <div className="mx-5 mb-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
@@ -634,20 +634,20 @@ export function CreateResourceDialog({
   )
 }
 
-function ApplyErrorBanner({ error, partialCreates, strictCreate }: { error: string; partialCreates: ApplyResult[]; strictCreate: boolean }) {
+function ApplyErrorBanner({ error, partialCreates, strictCreate, hasPreview }: { error: string; partialCreates: ApplyResult[]; strictCreate: boolean; hasPreview: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const { panelId, buttonProps } = useDisclosure(expanded)
-  const parsed = formatApplyError(error, { allowApply: !strictCreate })
+  const parsed = formatApplyError(error, { allowApply: !strictCreate && partialCreates.length === 0 })
   const hasFriendly = Boolean(parsed.suggestion)
   return (
-    <div className="mx-5 mb-2 rounded-md border border-red-500/30 bg-red-500/10 text-xs">
+    <div className="mx-5 mb-2 max-h-[30vh] shrink-0 overflow-y-auto rounded-md border border-red-500/30 bg-red-500/10 text-xs">
       <div className="flex items-start gap-2 px-3 py-2 text-red-600 dark:text-red-400">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <span className="font-medium">{parsed.summary}</span>
           {partialCreates.length > 0 && <p className="mt-1">
             Created before it stopped: {partialCreates.map(result => `${result.kind} ${result.namespace ? `${result.namespace}/` : ''}${result.name}`).join(', ')}.
-            {' '}{strictCreate ? 'This dialog only creates, so remove the created ones from the manifest before creating the rest.' : 'Radar switched to Apply mode so you can review and continue from the current cluster state.'}
+            {' '}{!strictCreate && hasPreview ? 'Radar switched to Apply mode so you can review and continue from the current cluster state.' : `${strictCreate ? 'This dialog only creates. ' : ''}Remove the created objects from the manifest before retrying Create.`}
           </p>}
           {parsed.suggestion && (
             <p className="mt-1 text-red-500/80 dark:text-red-400/80">{parsed.suggestion}</p>

@@ -118,6 +118,7 @@ it('keeps ordinary Apply, Force and unlocked partial-create recovery', async () 
   await act(async () => button('Create reviewed resources')!.click())
   expect(document.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('apply')
   expect(document.body.textContent).toContain('Radar switched to Apply mode')
+  expect(document.body.textContent).not.toContain('Switch to Apply mode')
   expect(document.body.textContent).toContain('Force')
   await act(async () => root.unmount())
 })
@@ -200,13 +201,21 @@ it.each([false, true])('shows real partial-create recovery without a preview (lo
     await act(async () => button('Create')!.click())
     expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
     expect(onCreated).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain('Switch to Apply mode')
+    expect(document.body.textContent).not.toContain('Radar switched to Apply mode')
+    expect(document.body.textContent).toContain('Remove the created objects from the manifest before retrying Create.')
     if (lockMode) {
       expect(document.querySelector('[aria-label="Apply mode"]')).toBeNull()
-      expect(document.body.textContent).not.toContain('Switch to Apply mode')
       expect(document.body.textContent).toContain('This dialog only creates')
     } else {
-      expect(document.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('apply')
-      expect(document.body.textContent).toContain('Radar switched to Apply mode')
+      expect(document.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('create')
+    }
+    await act(async () => button('Create')!.click())
+    expect(onApply).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'create', dryRun: false }))
+    if (!lockMode) {
+      await act(async () => button('apply')!.click())
+      await act(async () => button('Apply')!.click())
+      expect(onApply).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'apply', dryRun: false }))
     }
   } finally { await act(async () => root.unmount()); host.remove() }
 })

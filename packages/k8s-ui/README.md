@@ -32,7 +32,7 @@ Consumers must use a bundler that supports module workers created with `new Work
 
 ## Optional flow controls
 
-`CreateResourceDialog` defaults to Apply. Guided flows can set `initialMode="create"` and `lockMode` to require creation, and use `onBack(draftYaml)` to retain edits when returning to setup. Cancel closes the dialog. After a successful write, `onCreated(result, submittedYaml)` receives the first result and the exact submitted manifest; dry runs do not invoke it. `result.uid`, when supplied by Radar, identifies the persisted object. Locked partial creates stay in Create mode and explain which recovery is required.
+`CreateResourceDialog` defaults to Apply. Guided flows can set `initialMode="create"` and `lockMode` to require creation, and use `onBack(draftYaml)` to retain edits when returning to setup. Cancel closes the dialog. After a successful write, `onCreated(result, submittedYaml)` receives the first result and the exact submitted manifest; dry runs do not invoke it. `result.uid`, when supplied by Radar, identifies the persisted object. Partial creates name the objects already created. Unlocked flows switch to Apply for review when preview is available; direct creation keeps Create selected so a retry cannot silently update existing objects.
 
 `useOpenTerminal` accepts `shell` (one executable name, without arguments), `title`, and `sessionNote`. Dock hosts must forward these fields to their terminal renderer; Radar does so. The shared `TerminalTab` accepts `command` to describe that executable, pin the container, and suppress shell debug advice, plus `note` for session context. `createSession` remains responsible for launching the command. Omitted options retain the normal shell session.
 
