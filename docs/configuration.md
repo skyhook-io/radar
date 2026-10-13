@@ -726,6 +726,64 @@ freshness; the existing scan memo can lag evidence changes by up to five seconds
 The per-resource audit endpoint remains a findings array and has no completeness
 metadata. Use the scan response or AI resource context when that distinction matters.
 
+### Storage review checks
+
+Three snapshot checks in **Efficiency**, at **Medium** posture priority
+(`warning` in the raw scan):
+
+| Check ID | Flags | Threshold |
+|---|---|---|
+| `pvcNoConsumer` | Bound PVC with no consumer observed | More than 24 h since `Unused=True` when its transition time is known; otherwise PVC older than 24 h |
+| `pvcLongPending` | Pending PVC with no consumer observed, including WaitForFirstConsumer claims | PVC older than 24 h |
+| `releasedPV` | Released PV kept with Retain, or not yet deleted with Delete; Failed PV (reclaim failed after its claim was deleted) | Retain: 24 h after release, or release time unknown. Delete: 1 h grace when release time is known, or immediately on a `VolumeFailedDelete` warning from the last 24 h. Failed: immediately |
+
+A consumer is any Pod (completed ones included) or a Deployment, ReplicaSet,
+StatefulSet, DaemonSet, Job or CronJob template. Templates count at zero
+replicas, and every StatefulSet claim-template ordinal counts, including those
+left after a scale-down. Generic ephemeral Pod volumes also count. A Pending
+PVC clone counts as a consumer of its source claim when `dataSource` or
+`dataSourceRef` names a core PersistentVolumeClaim. `dataSource` uses the
+destination's namespace; `dataSourceRef` uses its explicit namespace when set,
+otherwise the destination's namespace. A Bound clone does not count.
+Clone destinations count even if owned, young or deleting.
+Claims with a controller owner reference are excluded from audit subjects.
+CRD consumers (such as virtual machines), snapshot operations and external consumers
+may not be seen:
+**no consumer observed is not a statement that storage is safe to delete**.
+
+On Kubernetes 1.37+, the PVC protection controller sets an `Unused` condition on
+Bound claims (feature gate `PersistentVolumeClaimUnusedSinceTime`, beta, on by
+default). Radar uses it when present:
+
+- `Unused=False` (a running Pod uses the claim) counts as a consumer, even if
+  Radar did not observe the Pod.
+- With `Unused=True`, the 24 h floor counts from when the claim became unused
+  rather than from its creation, and the finding reports the condition's time.
+  That time is approximate: Kubernetes notes it can be off in either direction
+  because of controller delays. Right after the feature is
+  enabled (for example, after an upgrade to 1.37), every unused claim's
+  timestamp is the enable time, so long-unused claims are held back for 24 h
+  and then reported with that shorter age.
+- Observed Pods and templates still count as consumers, including a
+  zero-replica StatefulSet.
+- No condition, or status `Unknown`, keeps the creation-age behavior. Absence
+  never means a claim is unused. `pvcLongPending` doesn't use the condition.
+
+The namespace picker selects PVC subjects. PVs and StorageClasses need the
+caller's cluster-scoped list grant; without the PV grant, PVs are not subjects
+of that caller's scan. `pvc-consumers`, `persistentvolumeclaims`,
+`persistentvolumes`, `pv-deletion-events` and `pv-release-time` appear in `missingInputs` only
+when that input's absence left a subject unevaluated. A gap that still lets a
+finding fire is stated in the finding instead, such as **reclaim policy not
+visible**, **StorageClass binding mode not visible** or **Deletion warning
+events not fully visible**.
+
+- Bound PVs count as passing `releasedPV` subjects; Available and Pending PVs are not counted.
+- Deleting claims and volumes (`metadata.deletionTimestamp` set) are `stuckTerminating` subjects, not storage-check subjects: that check flags them after 5 minutes. When the blocking finalizer is `kubernetes.io/pvc-protection` or `kubernetes.io/pv-protection`, the finding explains what holds the deletion and what happens when it is released, and warns against removing the finalizer by hand. A deletion can't be cancelled, so it doesn't tell you to complete it either.
+- In a namespace whose consumer inventories are unreadable or unsynced, an eligible claim with an observed consumer or a Bound claim with `Unused=False` still passes; any other eligible claim is neither a finding nor a pass (`pvc-consumers`).
+- A Released Delete PV within its 1 h grace, with incomplete event coverage (complete only when the caller can see all namespaces) and no observed current warning, is unknown: neither evaluated nor passed (`pv-deletion-events`).
+- PV thresholds use time since `status.lastPhaseTransitionTime`, which also excludes warnings from before the current phase. Without a nonzero transition time, release duration is unknown: a Released Delete PV without a recent deletion warning is neither evaluated nor passed (`pv-release-time`); a recent warning still establishes failure. A Released Retain PV is flagged with **release time unknown** and **PV age**, without implying the 24 h grace elapsed.
+
 ## Radar Cloud
 
 Radar is free and fully functional without an account. A Cloud button in the

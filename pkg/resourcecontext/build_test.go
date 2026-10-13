@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2026,5 +2027,90 @@ func TestProjectionContextMonitoringAndPolicyPermissions(t *testing.T) {
 	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "example.io", kind: "Widget", namespace: "demo"}})
 	if len(denied.Monitors)+len(denied.MonitorTargets)+len(denied.Protects)+len(denied.HealthChecks)+len(denied.StagedPolicies)+len(denied.ExposedBy) != 0 {
 		t.Fatalf("new context refs ignored permissions: %+v", denied)
+	}
+}
+
+func TestPodSpecReferencePathsContainerAndVolumeProvenance(t *testing.T) {
+	spec := corev1.PodSpec{
+		InitContainers:      []corev1.Container{{EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "credential"}}}}}},
+		EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "credential"}}}}}}},
+		Volumes:             []corev1.Volume{{VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{NodePublishSecretRef: &corev1.LocalObjectReference{Name: "credential"}}}}},
+	}
+	got := podSpecReferencePaths(spec, "spec", refTarget{kind: "Secret", namespace: "team", name: "credential"})
+	want := []string{
+		"spec.ephemeralContainers[].envFrom[].secretRef.name",
+		"spec.initContainers[].envFrom[].secretRef.name",
+		"spec.volumes[].csi.nodePublishSecretRef.name",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reference paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuild_PodSpecConsumersRequireCoreTargetGroup(t *testing.T) {
+	var spec corev1.PodSpec
+	if err := json.Unmarshal([]byte(`{
+ "containers":[{"name":"app","envFrom":[{"configMapRef":{"name":"env-config"}},{"secretRef":{"name":"env-secret"}}],"env":[{"name":"C","valueFrom":{"configMapKeyRef":{"name":"key-config","key":"key"}}},{"name":"S","valueFrom":{"secretKeyRef":{"name":"key-secret","key":"key"}}}]}],
+ "initContainers":[{"name":"init","envFrom":[{"configMapRef":{"name":"init-config"}},{"secretRef":{"name":"init-secret"}}]}],
+ "ephemeralContainers":[{"name":"debug","envFrom":[{"configMapRef":{"name":"debug-config"}},{"secretRef":{"name":"debug-secret"}}]}],
+ "imagePullSecrets":[{"name":"pull"}],
+ "volumes":[
+ {"name":"config","configMap":{"name":"volume-config"}},
+ {"name":"secret","secret":{"secretName":"volume-secret"}},
+ {"name":"projected","projected":{"sources":[{"configMap":{"name":"projected-config"}},{"secret":{"name":"projected-secret"}}]}},
+ {"name":"csi","csi":{"driver":"example.com","nodePublishSecretRef":{"name":"csi"}}},
+ {"name":"flex","flexVolume":{"driver":"example.com","secretRef":{"name":"flex"}}},
+ {"name":"azure","azureFile":{"secretName":"azure","shareName":"data"}},
+ {"name":"ceph","cephfs":{"secretRef":{"name":"ceph"}}},
+ {"name":"rbd","rbd":{"secretRef":{"name":"rbd"}}},
+ {"name":"cinder","cinder":{"secretRef":{"name":"cinder"}}},
+ {"name":"scale","scaleIO":{"secretRef":{"name":"scale"}}},
+ {"name":"iscsi","iscsi":{"secretRef":{"name":"iscsi"}}},
+ {"name":"storage","storageos":{"secretRef":{"name":"storage"}}}
+ ]}`), &spec); err != nil {
+		t.Fatal(err)
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "consumer", Namespace: "team"}, Spec: spec}
+	provider := mockResourceProvider{pods: []*corev1.Pod{pod}}
+	refs := []struct{ Kind, Name, Path string }{
+		{"ConfigMap", "env-config", "containers[].envFrom[].configMapRef.name"},
+		{"Secret", "env-secret", "containers[].envFrom[].secretRef.name"},
+		{"ConfigMap", "key-config", "containers[].env[].valueFrom.configMapKeyRef.name"},
+		{"Secret", "key-secret", "containers[].env[].valueFrom.secretKeyRef.name"},
+		{"ConfigMap", "init-config", "initContainers[].envFrom[].configMapRef.name"},
+		{"Secret", "init-secret", "initContainers[].envFrom[].secretRef.name"},
+		{"ConfigMap", "debug-config", "ephemeralContainers[].envFrom[].configMapRef.name"},
+		{"Secret", "debug-secret", "ephemeralContainers[].envFrom[].secretRef.name"},
+		{"ConfigMap", "volume-config", "volumes[].configMap.name"},
+		{"Secret", "volume-secret", "volumes[].secret.secretName"},
+		{"ConfigMap", "projected-config", "volumes[].projected.sources[].configMap.name"},
+		{"Secret", "projected-secret", "volumes[].projected.sources[].secret.name"},
+		{"Secret", "pull", "imagePullSecrets[].name"},
+		{"Secret", "csi", "volumes[].csi.nodePublishSecretRef.name"},
+		{"Secret", "flex", "volumes[].flexVolume.secretRef.name"},
+		{"Secret", "azure", "volumes[].azureFile.secretName"},
+		{"Secret", "ceph", "volumes[].cephfs.secretRef.name"},
+		{"Secret", "rbd", "volumes[].rbd.secretRef.name"},
+		{"Secret", "cinder", "volumes[].cinder.secretRef.name"},
+		{"Secret", "scale", "volumes[].scaleIO.secretRef.name"},
+		{"Secret", "iscsi", "volumes[].iscsi.secretRef.name"},
+		{"Secret", "storage", "volumes[].storageos.secretRef.name"},
+	}
+	for _, ref := range refs {
+		t.Run(ref.Kind+"/"+ref.Name, func(t *testing.T) {
+			for _, version := range []string{"v1", "foreign.example/v1"} {
+				obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": version, "kind": ref.Kind, "metadata": map[string]any{"name": ref.Name, "namespace": "team"}}}
+				rc := Build(context.Background(), obj, Options{Tier: TierBasic, Provider: provider})
+				if version != "v1" {
+					if rc.ReferencedBy != nil {
+						t.Fatalf("foreign target acquired core consumers: %+v", rc.ReferencedBy)
+					}
+					continue
+				}
+				if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 || !reflect.DeepEqual(rc.ReferencedBy.Items[0].Paths, []string{"spec." + ref.Path}) {
+					t.Fatalf("core target lost consumer provenance: %+v", rc.ReferencedBy)
+				}
+			}
+		})
 	}
 }

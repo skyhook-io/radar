@@ -75,7 +75,8 @@ export function HelmCompareRoute() {
   const right = revisions.find((r) => r.revision === revision2)
 
   const manifestDiff = useHelmManifestDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
-  const valuesDiff = useHelmValuesDiff(helmNamespace, releaseName, revision1, revision2, false, pairReady)
+  const overridesDiff = useHelmValuesDiff(helmNamespace, releaseName, revision1, revision2, false, pairReady)
+  const effectiveValuesDiff = useHelmValuesDiff(helmNamespace, releaseName, revision1, revision2, true, pairReady)
   const notesDiff = useHelmNotesDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
   const hooksDiff = useHelmHooksDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
   const resourceDiff = useHelmResourceDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
@@ -219,7 +220,8 @@ export function HelmCompareRoute() {
                   ['summary', 'Summary'],
                   ['manifest', 'Manifest'],
                   ['resources', 'Resources'],
-                  ['values', 'Values'],
+                  ['effective-values', 'Effective Values'],
+                  ['overrides', 'User Overrides'],
                   ['hooks', 'Hooks'],
                   ['notes', 'Notes'],
                 ].map(([id, label]) => (
@@ -256,9 +258,12 @@ export function HelmCompareRoute() {
                     manifestDiff={manifestDiff.data?.diff}
                     manifestLoading={manifestDiff.isLoading}
                     manifestError={manifestDiff.error}
-                    valuesDiff={valuesDiff.data?.diff}
-                    valuesLoading={valuesDiff.isLoading}
-                    valuesError={valuesDiff.error}
+                    overridesDiff={overridesDiff.data?.diff}
+                    overridesLoading={overridesDiff.isLoading}
+                    overridesError={overridesDiff.error}
+                    effectiveValuesDiff={effectiveValuesDiff.data?.diff}
+                    effectiveValuesLoading={effectiveValuesDiff.isLoading}
+                    effectiveValuesError={effectiveValuesDiff.error}
                     notesDiff={notesDiff.data?.diff}
                     notesLoading={notesDiff.isLoading}
                     notesError={notesDiff.error}
@@ -293,14 +298,25 @@ export function HelmCompareRoute() {
                 />
 
                 <DiffSection
-                  id="values"
+                  id="effective-values"
                   icon={Settings}
-                  title="User-supplied values diff"
-                  description="Only values explicitly supplied to the release are compared here; computed chart defaults can still affect the rendered manifest."
-                  diff={valuesDiff.data?.diff || ''}
-                  isLoading={valuesDiff.isLoading}
-                  error={valuesDiff.error}
-                  emptyLabel="No user-supplied value changes found."
+                  title="Effective values diff"
+                  description="Computed values for each revision are compared here, including that revision's chart defaults and user overrides."
+                  diff={effectiveValuesDiff.data?.diff || ''}
+                  isLoading={effectiveValuesDiff.isLoading}
+                  error={effectiveValuesDiff.error}
+                  emptyLabel="No effective value changes found."
+                />
+
+                <DiffSection
+                  id="overrides"
+                  icon={Settings}
+                  title="User overrides diff"
+                  description="Only values explicitly supplied to each release revision are compared here."
+                  diff={overridesDiff.data?.diff || ''}
+                  isLoading={overridesDiff.isLoading}
+                  error={overridesDiff.error}
+                  emptyLabel="No user override changes found."
                 />
 
                 <HooksDiffSection diff={hooksDiff.data} isLoading={hooksDiff.isLoading} error={hooksDiff.error} />
@@ -485,7 +501,7 @@ function formatRevisionOption(revision: HelmRevision): string {
   return `rev ${revision.revision} - ${revision.status} - ${revision.chart}`
 }
 
-function CompareSummary({
+export function CompareSummary({
   left,
   right,
   revision1,
@@ -493,9 +509,12 @@ function CompareSummary({
   manifestDiff,
   manifestLoading,
   manifestError,
-  valuesDiff,
-  valuesLoading,
-  valuesError,
+  overridesDiff,
+  overridesLoading,
+  overridesError,
+  effectiveValuesDiff,
+  effectiveValuesLoading,
+  effectiveValuesError,
   notesDiff,
   notesLoading,
   notesError,
@@ -513,9 +532,12 @@ function CompareSummary({
   manifestDiff?: string
   manifestLoading: boolean
   manifestError: unknown
-  valuesDiff?: string
-  valuesLoading: boolean
-  valuesError: unknown
+  overridesDiff?: string
+  overridesLoading: boolean
+  overridesError: unknown
+  effectiveValuesDiff?: string
+  effectiveValuesLoading: boolean
+  effectiveValuesError: unknown
   notesDiff?: string
   notesLoading: boolean
   notesError: unknown
@@ -527,7 +549,8 @@ function CompareSummary({
   resourceError: unknown
 }) {
   const manifestStats = diffStats(manifestDiff || '')
-  const valuesStats = diffStats(valuesDiff || '')
+  const overridesStats = diffStats(overridesDiff || '')
+  const effectiveValuesStats = diffStats(effectiveValuesDiff || '')
   const notesStats = diffStats(notesDiff || '')
   const hookChanged = hooksDiff ? hooksDiff.added.length + hooksDiff.removed.length + hooksDiff.modified.length : 0
   const resourceChanged = resourceDiff ? resourceDiff.added.length + resourceDiff.removed.length + resourceDiff.modified.length : 0
@@ -566,12 +589,20 @@ function CompareSummary({
           sectionId="resources"
         />
         <SignalPill
-          label="Values"
-          loading={valuesLoading}
-          error={valuesError}
-          tone={valuesStats.changed ? 'info' : 'neutral'}
-          value={valuesStats.changed ? `${valuesStats.additions} add / ${valuesStats.removals} remove` : 'same'}
-          sectionId="values"
+          label="Effective values"
+          loading={effectiveValuesLoading}
+          error={effectiveValuesError}
+          tone={effectiveValuesStats.changed ? 'info' : 'neutral'}
+          value={effectiveValuesStats.changed ? `${effectiveValuesStats.additions} add / ${effectiveValuesStats.removals} remove` : 'same'}
+          sectionId="effective-values"
+        />
+        <SignalPill
+          label="Overrides"
+          loading={overridesLoading}
+          error={overridesError}
+          tone={overridesStats.changed ? 'info' : 'neutral'}
+          value={overridesStats.changed ? `${overridesStats.additions} add / ${overridesStats.removals} remove` : 'same'}
+          sectionId="overrides"
         />
         <SignalPill
           label="Hooks"

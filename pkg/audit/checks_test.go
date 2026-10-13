@@ -2308,6 +2308,43 @@ func TestCheckStuckTerminating(t *testing.T) {
 // coverage for that kind without any other test catching it. One
 // terminating fixture per kind, all set 45min old → all should report
 // danger-tier with their correct Kind field.
+// The storage protection finalizers hold deletion while the object is in use;
+// the finding must say so instead of reading like a stalled controller.
+func TestCheckStuckTerminating_StorageProtectionFinalizers(t *testing.T) {
+	dt := metav1.NewTime(time.Now().Add(-45 * time.Minute))
+	input := &CheckInput{
+		PersistentVolumeClaims: []*corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app", DeletionTimestamp: &dt, Finalizers: []string{"kubernetes.io/pvc-protection"}}}},
+		PersistentVolumes:      []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "pv-data", DeletionTimestamp: &dt, Finalizers: []string{"kubernetes.io/pv-protection", "external-provisioner.volume.kubernetes.io/finalizer"}}}},
+	}
+	want := map[string]string{
+		"PersistentVolumeClaim/data": "holds deletion while a Pod uses the claim",
+		"PersistentVolume/pv-data":   "holds deletion while the volume is bound to a claim",
+	}
+	tr := newEvalTracker()
+	findings := checkStuckTerminating(tr, input)
+	if len(findings) != len(want) {
+		t.Fatalf("findings = %+v", findings)
+	}
+	for _, f := range findings {
+		if !strings.Contains(f.Message, want[f.Kind+"/"+f.Name]) {
+			t.Errorf("%s/%s message = %q", f.Kind, f.Name, f.Message)
+		}
+	}
+	for _, f := range findings {
+		for _, unsafe := range []string{"stop those Pods", "delete or release that claim"} {
+			if strings.Contains(f.Message, unsafe) {
+				t.Errorf("%s/%s must not tell the user to complete the deletion: %q", f.Kind, f.Name, f.Message)
+			}
+		}
+	}
+	if remediation := CheckRegistry["stuckTerminating"].Remediation; !strings.Contains(remediation, "Never clear storage finalizers by hand") {
+		t.Errorf("the shared remediation shown with these findings must exempt storage finalizers: %q", remediation)
+	}
+	if !strings.Contains(findings[1].Message, "external-provisioner.volume.kubernetes.io/finalizer") {
+		t.Errorf("other finalizers must still be named: %q", findings[1].Message)
+	}
+}
+
 func TestCheckStuckTerminating_AllKinds(t *testing.T) {
 	now := time.Now()
 	dt := metav1.NewTime(now.Add(-45 * time.Minute))
@@ -2332,6 +2369,8 @@ func TestCheckStuckTerminating_AllKinds(t *testing.T) {
 		ConfigMaps:               []*corev1.ConfigMap{{ObjectMeta: meta("cm-x")}},
 		Secrets:                  []*corev1.Secret{{ObjectMeta: meta("secret-x")}},
 		ServiceAccounts:          []*corev1.ServiceAccount{{ObjectMeta: meta("sa-x")}},
+		PersistentVolumeClaims:   []*corev1.PersistentVolumeClaim{{ObjectMeta: meta("pvc-x")}},
+		PersistentVolumes:        []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "pv-x", DeletionTimestamp: &dt, Finalizers: []string{"example.io/cleanup"}}}},
 	}
 
 	// Call the check directly. RunChecks would run the full chain
@@ -2360,6 +2399,8 @@ func TestCheckStuckTerminating_AllKinds(t *testing.T) {
 		"ConfigMap/cm-x":                SeverityDanger,
 		"Secret/secret-x":               SeverityDanger,
 		"ServiceAccount/sa-x":           SeverityDanger,
+		"PersistentVolumeClaim/pvc-x":   SeverityDanger,
+		"PersistentVolume/pv-x":         SeverityDanger,
 	}
 	for k, want := range wantPairs {
 		got, ok := byKindAndName[k]

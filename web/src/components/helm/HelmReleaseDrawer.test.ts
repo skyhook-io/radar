@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { isUpgradeSourceIssueActionable } from './HelmReleaseDrawer'
+import { DEFAULT_SHOW_EFFECTIVE_VALUES, isUpgradeSourceIssueActionable } from './HelmReleaseDrawer'
+
+describe('Helm values view', () => {
+  it('opens on user overrides', () => {
+    expect(DEFAULT_SHOW_EFFECTIVE_VALUES).toBe(false)
+  })
+})
 
 describe('isUpgradeSourceIssueActionable', () => {
   it('keeps classic repository ambiguity informational', () => {

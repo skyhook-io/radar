@@ -32,6 +32,7 @@ import (
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
@@ -737,30 +738,28 @@ func (c *Client) GetValuesRevisionAsUser(namespace, name string, allValues bool,
 }
 
 func getValuesWith(actionConfig *action.Configuration, name string, allValues bool, revision int) (*HelmValues, error) {
-	getValuesAction := action.NewGetValues(actionConfig)
-	getValuesAction.AllValues = allValues
-	getValuesAction.Version = revision
-
-	values, err := getValuesAction.Run(name)
+	getAction := action.NewGet(actionConfig)
+	getAction.Version = revision
+	rel, err := getAction.Run(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get helm release values: %w", err)
 	}
 
+	userSupplied := rel.Config
+	if userSupplied == nil {
+		userSupplied = map[string]any{}
+	}
+	result := &HelmValues{UserSupplied: userSupplied}
+
 	if allValues {
-		result := &HelmValues{
-			Computed:     values,
-			UserSupplied: map[string]any{},
+		computed, err := chartutil.CoalesceValues(rel.Chart, rel.Config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute helm release values: %w", err)
 		}
-		getValuesAction.AllValues = false
-		getValuesAction.Version = revision
-		userValues, err := getValuesAction.Run(name)
-		if err == nil {
-			result.UserSupplied = userValues
-		}
-		return result, nil
+		result.Computed = computed
 	}
 
-	return &HelmValues{UserSupplied: values}, nil
+	return result, nil
 }
 
 // GetValuesDiff returns a values diff between two revisions.

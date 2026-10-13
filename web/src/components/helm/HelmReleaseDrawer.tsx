@@ -102,6 +102,7 @@ export function isUpgradeSourceIssueActionable(issue: UpgradeInfo['sourceIssue']
 const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
+export const DEFAULT_SHOW_EFFECTIVE_VALUES = false
 
 export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
   const navigate = useNavigate()
@@ -111,7 +112,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? DEFAULT_WIDTH : window.innerWidth))
   const [isResizing, setIsResizing] = useState(false)
   const [selectedRevision, setSelectedRevision] = useState<number | undefined>(undefined)
-  const [showAllValues, setShowAllValues] = useState(false)
+  const [showEffectiveValues, setShowEffectiveValues] = useState(DEFAULT_SHOW_EFFECTIVE_VALUES)
   const [rollbackRevision, setRollbackRevision] = useState<number | null>(null)
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false)
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
@@ -145,10 +146,10 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   )
 
   // Fetch values
-  const { data: values, isLoading: valuesLoading } = useHelmValues(
+  const { data: values, isLoading: valuesLoading, error: valuesError, refetch: refetchValues } = useHelmValues(
     helmNamespace,
     release.name,
-    showAllValues,
+    true,
     true,
     selectedRevision,
   )
@@ -735,8 +736,9 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               <ValuesViewer
                 values={values}
                 isLoading={valuesLoading}
-                showAllValues={showAllValues}
-                onToggleAllValues={setShowAllValues}
+                error={valuesError}
+                showEffectiveValues={showEffectiveValues}
+                onToggleEffectiveValues={setShowEffectiveValues}
                 onCopy={(text) => copyToClipboard(text, 'values')}
                 copied={copied === 'values'}
                 namespace={helmNamespace}
@@ -744,6 +746,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 revision={selectedRevision}
                 currentRevision={releaseDetail.revision}
                 onApplySuccess={() => refetch()}
+                onRetry={() => void refetchValues()}
               />
             )}
             {activeTab === 'resources' && (

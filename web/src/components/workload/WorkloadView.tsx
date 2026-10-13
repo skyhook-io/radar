@@ -1,8 +1,4 @@
-import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
-import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
-import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
-import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
-import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
+import { resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
@@ -11,13 +7,11 @@ import { clsx } from 'clsx'
 import { Terminal, Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
-  isApiGroup,
   EditableYamlView,
   FetchResult,
   Section,
   type WorkloadTabType,
   type WorkloadExtraTab,
-  type RendererOverrides,
   type GitOpsOwnerRef,
   type HelmOwnerRef,
   type AppRow,
@@ -129,37 +123,7 @@ import {
 } from '../curl/ServiceCurlButton'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
-import { PodRenderer } from '../resources/renderers/PodRenderer'
-import { KarpenterNodePoolRenderer } from '../resources/renderers/KarpenterNodePoolRenderer'
-import { NodeRenderer } from '../resources/renderers/NodeRenderer'
-import { ServiceRenderer } from '../resources/renderers/ServiceRenderer'
-import { WorkloadRenderer } from '../resources/renderers/WorkloadRenderer'
-import { CompositeRenderer } from '../resources/CompositeRenderer'
-import { ServiceAccountRenderer } from '../resources/renderers/ServiceAccountRenderer'
-import { RoleRenderer } from '../resources/renderers/RoleRenderer'
-import { RoleBindingRenderer } from '../resources/renderers/RoleBindingRenderer'
-import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
-import { CAPIClusterRenderer } from '../resources/renderers/CAPIClusterRenderer'
-import { HPARenderer } from '../resources/renderers/HPARenderer'
-import { PVCRenderer } from '../resources/renderers/PVCRenderer'
-import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
-import { KyvernoPolicyCoverage } from '../resources/renderers/KyvernoPolicyCoverage'
-import { KyvernoPolicyQueued } from '../resources/renderers/KyvernoPolicyQueued'
-import { CNPGObjectStoreRenderer } from '../resources/renderers/CNPGObjectStoreRenderer'
-import { VeleroBSLRenderer } from '../resources/renderers/VeleroBSLRenderer'
-import { VeleroBackupRenderer } from '../resources/renderers/VeleroBackupRenderer'
-import { VeleroRestoreRenderer } from '../resources/renderers/VeleroRestoreRenderer'
-import { CNPGClusterRenderer } from '../resources/renderers/CNPGClusterRenderer'
-import { CNPGImageCatalogRenderer } from '../resources/renderers/CNPGImageCatalogRenderer'
-import {
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-} from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
-import { renderCNPGSummary } from '../cnpg/CNPGSummaryHost'
-import { CNPGClusterLogs } from '../cnpg/CNPGClusterLogs'
-import { cnpgDetailKindFor, cnpgDetailPath } from '../cnpg/routes'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
@@ -184,41 +148,6 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
     return group === 'jobset.x-k8s.io' && isJobSetV1Alpha2({ kind, apiVersion })
   }
   return true
-}
-
-// Stable reference — web renderer wrappers inject platform hooks internally
-const rendererOverrides: RendererOverrides = {
-  RayJobRenderer,
-  JobRenderer,
-  JobSetRenderer,
-  RayServiceRenderer,
-  RayClusterRenderer,
-  KueueWorkloadRenderer,
-  CAPIClusterRenderer,
-  PodRenderer,
-  KarpenterNodePoolRenderer,
-  NodeRenderer,
-  ServiceRenderer,
-  WorkloadRenderer,
-  CompositeRenderer,
-  ServiceAccountRenderer,
-  RoleRenderer,
-  RoleBindingRenderer,
-  NamespaceRenderer,
-  HPARenderer,
-  PVCRenderer,
-  RolloutRenderer,
-  KyvernoPolicyCoverage,
-  KyvernoPolicyQueued,
-  CNPGObjectStoreRenderer,
-  VeleroBSLRenderer,
-  VeleroBackupRenderer,
-  VeleroRestoreRenderer,
-  CNPGClusterRenderer,
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-  CNPGImageCatalogRenderer,
 }
 
 // ============================================================================
@@ -289,16 +218,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     )
   }
 
-  const cnpgPlural = cnpgDetailKindFor(kind, group)
-  if (cnpgPlural) {
-    const params = new URLSearchParams(searchParams)
-    params.delete('apiGroup')
-    const tab = params.get('tab')
-    if (cnpgPlural === 'clusters' && (tab === 'timeline' || tab === 'events')) params.set('tab', 'activity')
-    const base = cnpgDetailPath({ plural: cnpgPlural, namespace, name })
-    const qs = params.toString()
-    return <Navigate replace to={qs ? `${base}?${qs}` : base} state={location.state} />
-  }
+  const detailPath = resourceDetailRedirect({ kind, group, namespace, name }, searchParams)
+  if (detailPath) return <Navigate replace to={detailPath} state={location.state} />
 
   return (
     <WorkloadView
@@ -1249,9 +1170,7 @@ export function WorkloadView({
             onSelectRun={handleSelectedRunChange}
           />
         )}
-        renderSummary={({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
-          renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
-        }
+        {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
@@ -1316,7 +1235,7 @@ export function WorkloadView({
         onDuplicate={handleDuplicate}
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
-        rendererOverrides={rendererOverrides}
+        rendererOverrides={resourceRendererOverrides}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1541,9 +1460,8 @@ function LogsTabContent({
     )
   }
 
-  if (kind === 'Cluster' && isApiGroup(resource?.apiVersion, 'postgresql.cnpg.io')) {
-    return <CNPGClusterLogs namespace={namespace} name={name} />
-  }
+  const integrationLogs = resourceLogs({ kind, group, namespace, name }, resource)
+  if (integrationLogs) return integrationLogs
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {

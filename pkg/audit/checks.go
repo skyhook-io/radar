@@ -166,6 +166,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// and on ScheduledBackup absence-authority — records nothing rather than
 	// reporting a missing input.
 	findings = append(findings, checkCNPGDeclarativeBackup(tr, input)...)
+	findings = append(findings, checkStorage(tr, input, time.Now())...)
 
 	return buildResults(findings, tr, missingInputs)
 }
@@ -206,6 +207,16 @@ func (t *evalTracker) record(checkID, namespace string) {
 func (t *evalTracker) recordAll(ids []string, namespace string) {
 	for _, id := range ids {
 		t.record(id, namespace)
+	}
+}
+
+// skip reports input as missing because its absence left a subject
+// unevaluated. An evidence gap that still lets the check emit its finding
+// belongs in that finding's message, not here: consumers read every missing
+// input as checks that could not run.
+func (t *evalTracker) skip(input string) {
+	if !slices.Contains(t.missingInputs, input) {
+		t.missingInputs = append(t.missingInputs, input)
 	}
 }
 
@@ -987,9 +998,7 @@ func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.D
 		}
 		if incomplete[d.Namespace] {
 			// An unresolved ReplicaSet may own another replica of this Deployment.
-			if !slices.Contains(tr.missingInputs, "replicaset-ownership") {
-				tr.missingInputs = append(tr.missingInputs, "replicaset-ownership")
-			}
+			tr.skip("replicaset-ownership")
 			continue
 		}
 		count := 0
@@ -1053,10 +1062,7 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 			complete = evidence.ReflectionsComplete[kind]
 		}
 		if !complete {
-			missing := strings.ToLower(kind) + "-references"
-			if !slices.Contains(tr.missingInputs, missing) {
-				tr.missingInputs = append(tr.missingInputs, missing)
-			}
+			tr.skip(strings.ToLower(kind) + "-references")
 			return false
 		}
 		tr.record("orphanConfigMapSecret", ns)
@@ -1382,49 +1388,17 @@ func podIsTerminal(pod *corev1.Pod) bool {
 }
 
 func collectPodSpecRefs(ns string, spec corev1.PodSpec, saByKey map[string]*corev1.ServiceAccount, cms, secrets map[string]bool) {
-	for _, c := range spec.InitContainers {
-		collectContainerRefs(ns, c, cms, secrets)
-	}
-	for _, c := range spec.Containers {
-		collectContainerRefs(ns, c, cms, secrets)
-	}
-	for _, c := range spec.EphemeralContainers {
-		collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
-	}
-	for _, v := range spec.Volumes {
-		collectVolumeRefs(ns, v, cms, secrets)
-	}
-	for _, ips := range spec.ImagePullSecrets {
-		addRef(secrets, ns, ips.Name)
+	for _, ref := range configrefs.PodSpecReferences(ns, spec) {
+		switch ref.Kind {
+		case "ConfigMap":
+			addRef(cms, ns, ref.Name)
+		case "Secret":
+			addRef(secrets, ns, ref.Name)
+		}
 	}
 	// ServiceAccount admission defaults imagePullSecrets only when the PodSpec leaves them empty.
 	if len(spec.ImagePullSecrets) == 0 {
 		collectServiceAccountImagePullSecrets(ns, spec, saByKey, secrets)
-	}
-}
-
-func collectContainerRefs(ns string, c corev1.Container, cms, secrets map[string]bool) {
-	collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
-}
-
-func collectEnvRefs(ns string, envs []corev1.EnvVar, envFroms []corev1.EnvFromSource, cms, secrets map[string]bool) {
-	for _, env := range envs {
-		if env.ValueFrom != nil {
-			if env.ValueFrom.ConfigMapKeyRef != nil {
-				addRef(cms, ns, env.ValueFrom.ConfigMapKeyRef.Name)
-			}
-			if env.ValueFrom.SecretKeyRef != nil {
-				addRef(secrets, ns, env.ValueFrom.SecretKeyRef.Name)
-			}
-		}
-	}
-	for _, envFrom := range envFroms {
-		if envFrom.ConfigMapRef != nil {
-			addRef(cms, ns, envFrom.ConfigMapRef.Name)
-		}
-		if envFrom.SecretRef != nil {
-			addRef(secrets, ns, envFrom.SecretRef.Name)
-		}
 	}
 }
 
@@ -1438,52 +1412,6 @@ func collectServiceAccountImagePullSecrets(ns string, spec corev1.PodSpec, saByK
 	}
 	for _, ips := range sa.ImagePullSecrets {
 		addRef(secrets, ns, ips.Name)
-	}
-}
-
-func collectVolumeRefs(ns string, v corev1.Volume, cms, secrets map[string]bool) {
-	if v.ConfigMap != nil {
-		addRef(cms, ns, v.ConfigMap.Name)
-	}
-	if v.Secret != nil {
-		addRef(secrets, ns, v.Secret.SecretName)
-	}
-	if v.Projected != nil {
-		for _, src := range v.Projected.Sources {
-			if src.ConfigMap != nil {
-				addRef(cms, ns, src.ConfigMap.Name)
-			}
-			if src.Secret != nil {
-				addRef(secrets, ns, src.Secret.Name)
-			}
-		}
-	}
-	if v.CSI != nil && v.CSI.NodePublishSecretRef != nil {
-		addRef(secrets, ns, v.CSI.NodePublishSecretRef.Name)
-	}
-	if v.FlexVolume != nil && v.FlexVolume.SecretRef != nil {
-		addRef(secrets, ns, v.FlexVolume.SecretRef.Name)
-	}
-	if v.AzureFile != nil {
-		addRef(secrets, ns, v.AzureFile.SecretName)
-	}
-	if v.CephFS != nil && v.CephFS.SecretRef != nil {
-		addRef(secrets, ns, v.CephFS.SecretRef.Name)
-	}
-	if v.RBD != nil && v.RBD.SecretRef != nil {
-		addRef(secrets, ns, v.RBD.SecretRef.Name)
-	}
-	if v.Cinder != nil && v.Cinder.SecretRef != nil {
-		addRef(secrets, ns, v.Cinder.SecretRef.Name)
-	}
-	if v.ScaleIO != nil && v.ScaleIO.SecretRef != nil {
-		addRef(secrets, ns, v.ScaleIO.SecretRef.Name)
-	}
-	if v.ISCSI != nil && v.ISCSI.SecretRef != nil {
-		addRef(secrets, ns, v.ISCSI.SecretRef.Name)
-	}
-	if v.StorageOS != nil && v.StorageOS.SecretRef != nil {
-		addRef(secrets, ns, v.StorageOS.SecretRef.Name)
 	}
 }
 
@@ -1803,6 +1731,18 @@ func checkStuckTerminating(tr *evalTracker, input *CheckInput) []Finding {
 		if len(finalizers) > 0 {
 			note = " — finalizers: " + strings.Join(finalizers, ", ")
 		}
+		// The storage protection finalizers hold deletion while the object is
+		// in use; they don't point at a stalled controller. Deletion can't be
+		// cancelled, and letting it complete may delete the data, so the note
+		// says what releases the hold without telling anyone to release it.
+		for _, f := range finalizers {
+			switch f {
+			case "kubernetes.io/pvc-protection":
+				note += ". kubernetes.io/pvc-protection holds deletion while a Pod uses the claim; when no Pod does, the claim is deleted and its volume follows its reclaim policy. Back up the data before then if the deletion was unintended, and don't remove the finalizer by hand"
+			case "kubernetes.io/pv-protection":
+				note += ". kubernetes.io/pv-protection holds deletion while the volume is bound to a claim; Kubernetes removes it once the volume is no longer bound. Don't remove the finalizer by hand"
+			}
+		}
 		findings = append(findings, Finding{
 			Kind:      kind,
 			Namespace: obj.GetNamespace(),
@@ -1848,6 +1788,12 @@ func checkStuckTerminating(tr *evalTracker, input *CheckInput) []Finding {
 	}
 	for _, sa := range input.ServiceAccounts {
 		emit("ServiceAccount", sa)
+	}
+	for _, pvc := range input.PersistentVolumeClaims {
+		emit("PersistentVolumeClaim", pvc)
+	}
+	for _, pv := range input.PersistentVolumes {
+		emit("PersistentVolume", pv)
 	}
 	return findings
 }

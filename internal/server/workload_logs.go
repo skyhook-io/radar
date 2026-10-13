@@ -28,55 +28,11 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 )
-
-// WorkloadPodContainerInfo contains compact per-container runtime status for the UI.
-type WorkloadPodContainerInfo struct {
-	Name         string `json:"name"`
-	Init         bool   `json:"init,omitempty"`
-	Ready        bool   `json:"ready"`
-	RestartCount int32  `json:"restartCount"`
-}
-
-// WorkloadPodInfo contains compact runtime status about a pod for workload views.
-type WorkloadPodInfo struct {
-	Name                  string                     `json:"name"`
-	Containers            []string                   `json:"containers"`
-	Ready                 bool                       `json:"ready"`
-	Phase                 string                     `json:"phase,omitempty"`
-	NodeName              string                     `json:"nodeName,omitempty"`
-	HealthLevel           string                     `json:"healthLevel,omitempty"`
-	Reason                string                     `json:"reason,omitempty"`
-	Message               string                     `json:"message,omitempty"`
-	RestartCount          int32                      `json:"restartCount,omitempty"`
-	LastTerminationReason string                     `json:"lastTerminationReason,omitempty"`
-	CreatedAt             string                     `json:"createdAt,omitempty"`
-	ContainerStatuses     []WorkloadPodContainerInfo `json:"containerStatuses,omitempty"`
-	StepID                string                     `json:"stepID,omitempty"`
-	StepName              string                     `json:"stepName,omitempty"`
-	StepPhase             string                     `json:"stepPhase,omitempty"`
-	RevisionIdentity      string                     `json:"revisionIdentity,omitempty"`
-	UpdatedRevision       *bool                      `json:"updatedRevision,omitempty"`
-}
-
-// workloadLogEntry is an internal structure for log lines from pods
-type workloadLogEntry struct {
-	Pod         string `json:"pod"`
-	Container   string `json:"container"`
-	Timestamp   string `json:"timestamp"`
-	Content     string `json:"content"`
-	SourceLabel string `json:"sourceLabel,omitempty"`
-	// Parsed from a structured line by sources that know their log format.
-	Level   string `json:"level,omitempty"`
-	Logger  string `json:"logger,omitempty"`
-	Message string `json:"message,omitempty"`
-	// follow identifies the follow request that read the line, so a stream
-	// loop can tell a resumed follow's replay from lines it has not sent.
-	follow int
-}
 
 type workloadLogMetadata struct {
 	EmptyReason  string `json:"emptyReason,omitempty"`
@@ -388,8 +344,8 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	container := r.URL.Query().Get("container")
-	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 100)
-	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
+	tailLines := podlogs.ParseTailLines(r.URL.Query().Get("tailLines"), 100)
+	sinceSeconds := podlogs.ParseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
 
 	pods, err := s.getWorkloadPods(kind, namespace, name)
 	if err != nil {
@@ -400,8 +356,8 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	if len(pods) == 0 {
 		metadata := s.describeWorkloadLogEmpty(r.Context(), kind, namespace, name)
 		response := map[string]any{
-			"pods": []WorkloadPodInfo{},
-			"logs": []workloadLogEntry{},
+			"pods": []podlogs.PodInfo{},
+			"logs": []podlogs.Entry{},
 		}
 		addWorkloadLogMetadata(response, metadata)
 		s.writeJSON(w, response)
@@ -415,12 +371,12 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Collect logs from all pods concurrently
-	snapshot := collectLogsFromPods(r.Context(), client, namespace, pods, container, tailLines, sinceSeconds, false)
+	snapshot := podlogs.CollectPods(r.Context(), client, namespace, pods, container, tailLines, sinceSeconds, false)
 
-	sortLogsByTimestamp(snapshot.Logs)
+	podlogs.Sort(snapshot.Logs)
 
 	s.writeJSON(w, map[string]any{
-		"pods":   buildPodInfos(pods),
+		"pods":   podlogs.BuildPodInfos(pods),
 		"logs":   snapshot.Logs,
 		"notice": snapshot.Notice,
 	})
@@ -437,8 +393,8 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	}
 
 	container := r.URL.Query().Get("container")
-	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 50)
-	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
+	tailLines := podlogs.ParseTailLines(r.URL.Query().Get("tailLines"), 50)
+	sinceSeconds := podlogs.ParseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -472,7 +428,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 
 	// Get initial pods
 	pods := cache.GetPodsForWorkload(namespace, selector)
-	podInfos := buildPodInfos(pods)
+	podInfos := podlogs.BuildPodInfos(pods)
 
 	// Send connected event with pod list
 	connected := map[string]any{
@@ -498,16 +454,16 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	defer cancel()
 
 	// Channel for aggregated log lines
-	logCh := make(chan workloadLogEntry, 1000)
-	unavailableCh := make(chan string)
-	unavailable := unavailableSources{}
+	logCh := make(chan podlogs.Entry, 1000)
+	unavailableCh := make(chan podLogSourceFailure)
+	unavailable := podlogs.UnavailableSources{}
 
 	// Track active streams
-	var activeStreams sync.Map // podName/containerName -> cancel func
+	var activeStreams sync.Map // podName/containerName -> stream handle
 	var streamWg sync.WaitGroup
 	// A container's follow ends when it exits and the next discovery pass
 	// reopens it, so each container resumes after the last line it sent.
-	cursors := map[string]*logStreamCursor{}
+	cursors := map[string]*podlogs.StreamCursor{}
 	follows := 0
 
 	// Start streaming from each pod/container
@@ -516,24 +472,30 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			containers := k8s.GetContainersForPod(pod, container, true)
 			for _, c := range containers {
 				key := pod.Name + "/" + c
-				if _, exists := activeStreams.Load(key); exists {
-					continue // Already streaming
+				if value, exists := activeStreams.Load(key); exists {
+					handle := value.(*podLogStreamHandle)
+					if handle.uid == pod.UID {
+						continue
+					}
+					handle.cancel()
 				}
 
 				follows++
 				follow := follows
-				opts := cursorFor(cursors, key, pod.UID, follow).restartOptions(c, tailLines, sinceSeconds)
+				opts := podlogs.CursorFor(cursors, key, pod.UID, follow).RestartOptions(c, tailLines, sinceSeconds)
 				streamCtx, streamCancel := context.WithCancel(ctx)
-				activeStreams.Store(key, streamCancel)
+				handle := &podLogStreamHandle{uid: pod.UID, cancel: streamCancel}
+				activeStreams.Store(key, handle)
 
 				streamWg.Add(1)
 				go func(podName, key string, streamCtx context.Context) {
 					defer streamWg.Done()
-					defer activeStreams.Delete(key)
+					defer streamCancel()
+					defer activeStreams.CompareAndDelete(key, handle)
 
 					if err := streamPodLogs(streamCtx, client, namespace, podName, opts, follow, logCh); err != nil {
 						select {
-						case unavailableCh <- key:
+						case unavailableCh <- podLogSourceFailure{key: key, uid: handle.uid}:
 						case <-streamCtx.Done():
 						}
 					}
@@ -550,9 +512,9 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	defer discoveryTicker.Stop()
 
 	// Track known pods for detecting changes
-	knownPods := make(map[string]bool)
+	knownPods := make(map[string]types.UID)
 	for _, p := range pods {
-		knownPods[p.Name] = true
+		knownPods[p.Name] = p.UID
 	}
 
 	// Main loop: forward logs and handle pod discovery
@@ -564,19 +526,21 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 
 		case entry := <-logCh:
 			key := entry.Pod + "/" + entry.Container
-			if unavailable.remove(key) {
-				unavailable.send(w, flusher)
+			cursor := cursors[key]
+			if cursor != nil && cursor.FromCurrentPod(entry) && unavailable.Remove(key) {
+				sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
 			}
-			if cursor := cursors[key]; cursor != nil && !cursor.admit(entry) {
+			if cursor != nil && !cursor.Admit(entry) {
 				continue
 			}
 			sendSSEEvent(w, flusher, "log", entry)
 
-		case key := <-unavailableCh:
+		case failure := <-unavailableCh:
+			key := failure.key
 			// A stream canceled during pod removal can still deliver its report.
 			podName, _, _ := strings.Cut(key, "/")
-			if knownPods[podName] && unavailable.add(key) {
-				unavailable.send(w, flusher)
+			if uid, known := knownPods[podName]; known && uid == failure.uid && unavailable.Add(key) {
+				sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
 			}
 
 		case <-discoveryTicker.C:
@@ -596,11 +560,18 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 
 			// Check for new pods
 			for _, p := range currentPods {
-				if !knownPods[p.Name] {
-					knownPods[p.Name] = true
+				if previousUID, seen := knownPods[p.Name]; !seen || previousUID != p.UID {
+					if seen {
+						stopPodLogStreams(&activeStreams, cursors, p.Name)
+						if unavailable.RemovePod(p.Name) {
+							sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
+						}
+						sendSSEEvent(w, flusher, "pod_removed", map[string]string{"pod": p.Name, "reason": "replaced"})
+					}
+					knownPods[p.Name] = p.UID
 					// Notify frontend about new pod
 					sendSSEEvent(w, flusher, "pod_added", map[string]any{
-						"pods": []WorkloadPodInfo{buildPodInfo(p, time.Now())},
+						"pods": []podlogs.PodInfo{podlogs.BuildPodInfo(p, time.Now())},
 					})
 				}
 			}
@@ -609,23 +580,9 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			for podName := range knownPods {
 				if !currentPodNames[podName] {
 					delete(knownPods, podName)
-					// Cancel streams for this pod
-					activeStreams.Range(func(key, value any) bool {
-						if strings.HasPrefix(key.(string), podName+"/") {
-							if cancelFn, ok := value.(context.CancelFunc); ok {
-								cancelFn()
-							}
-							activeStreams.Delete(key)
-						}
-						return true
-					})
-					for key := range cursors {
-						if strings.HasPrefix(key, podName+"/") {
-							delete(cursors, key)
-						}
-					}
-					if unavailable.removePod(podName) {
-						unavailable.send(w, flusher)
+					stopPodLogStreams(&activeStreams, cursors, podName)
+					if unavailable.RemovePod(podName) {
+						sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unavailable.Notice()})
 					}
 					// Notify frontend
 					sendSSEEvent(w, flusher, "pod_removed", map[string]string{
@@ -668,90 +625,12 @@ func shouldWaitForPodsInLogStream(kind string, metadata workloadLogMetadata) boo
 	return kind == "job" || kind == "jobs" || kind == "workflow" || kind == "workflows"
 }
 
-// logStreamCursor remembers where one container's follow left off, so a
-// stream that ends while its Pod is still an instance resumes instead of
-// replaying lines the client already has. Only the stream loop touches it.
-type logStreamCursor struct {
-	// uid is the Pod the cursor belongs to; a replacement Pod with the same
-	// name starts a new cursor.
-	uid types.UID
-	// firstFollow is the first follow opened for this cursor. Lines read by an
-	// earlier follow belong to the previous Pod and are passed through.
-	firstFollow int
-	last        time.Time
-	// delivered counts the lines sent at timestamp last, per content. The pod
-	// log API's sinceTime is second-granular, so a resumed follow replays that
-	// second, and some runtimes stamp several lines written together with one
-	// timestamp. So the n-th time a follow reads a (timestamp, content) is new
-	// only when fewer than n were sent.
-	delivered map[string]int
-	// seen counts the lines at timestamp last that follow seenIn has read.
-	seen   map[string]int
-	seenIn int
-}
-
-// cursorFor returns the cursor for a container, starting a new one when the
-// Pod behind the name has changed.
-func cursorFor(cursors map[string]*logStreamCursor, key string, uid types.UID, follow int) *logStreamCursor {
-	if c := cursors[key]; c != nil && c.uid == uid {
-		return c
-	}
-	c := &logStreamCursor{uid: uid, firstFollow: follow}
-	cursors[key] = c
-	return c
-}
-
-// restartOptions returns the follow request for the next (re)start: the
-// caller's window the first time, and from the last delivered second after.
-func (c *logStreamCursor) restartOptions(container string, tailLines int64, sinceSeconds *int64) corev1.PodLogOptions {
-	opts := corev1.PodLogOptions{Container: container, Timestamps: true, Follow: true}
-	if c.last.IsZero() {
-		opts.TailLines = &tailLines
-		opts.SinceSeconds = sinceSeconds
-		return opts
-	}
-	since := metav1.NewTime(c.last.Truncate(time.Second))
-	opts.SinceTime = &since
-	return opts
-}
-
-// admit reports whether an entry is new, recording it when it is. Lines
-// arrive in order per container, so anything before the last delivered
-// timestamp was already sent.
-func (c *logStreamCursor) admit(entry workloadLogEntry) bool {
-	if entry.follow < c.firstFollow {
-		return true
-	}
-	ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
-	if err != nil {
-		return true
-	}
-	switch {
-	case ts.Before(c.last):
-		return false
-	case ts.After(c.last):
-		c.last = ts
-		c.delivered = map[string]int{}
-		c.seen = map[string]int{}
-		c.seenIn = entry.follow
-	case entry.follow != c.seenIn:
-		c.seen = map[string]int{}
-		c.seenIn = entry.follow
-	}
-	c.seen[entry.Content]++
-	if c.seen[entry.Content] <= c.delivered[entry.Content] {
-		return false
-	}
-	c.delivered[entry.Content] = c.seen[entry.Content]
-	return true
-}
-
 // streamPodLogs streams logs from a single pod/container to the log channel
 //
 // It returns k8score.ErrLogsUnavailable when the node answers with its notice
 // instead of logs. Every other ending, including a failed open the next
 // discovery pass retries, returns nil.
-func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, follow int, logCh chan<- workloadLogEntry) error {
+func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, follow int, logCh chan<- podlogs.Entry) error {
 	containerName := opts.Container
 	stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, &opts).Stream(ctx)
 	if err != nil {
@@ -772,6 +651,23 @@ func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, 
 			if k8score.IsLogsUnavailableNotice(line) {
 				return k8score.ErrLogsUnavailable
 			}
+
+			line = strings.TrimSuffix(line, "\n")
+
+			if line != "" && (err == nil || err == io.EOF) {
+				ts, content := podlogs.ParseLine(line)
+				select {
+				case logCh <- podlogs.Entry{
+					Pod:       podName,
+					Container: containerName,
+					Timestamp: ts,
+					Content:   content,
+					Follow:    follow,
+				}:
+				case <-ctx.Done():
+					return nil
+				}
+			}
 			if err != nil {
 				if err == io.EOF || ctx.Err() != nil {
 					return nil
@@ -779,51 +675,15 @@ func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, 
 				log.Printf("[workload-logs] Read error for %s/%s: %v", podName, containerName, err)
 				return nil
 			}
-
-			line = strings.TrimSuffix(line, "\n")
-			if line == "" {
-				continue
-			}
-
-			ts, content := parseLogLine(line)
-			select {
-			case logCh <- workloadLogEntry{
-				Pod:       podName,
-				Container: containerName,
-				Timestamp: ts,
-				Content:   content,
-				follow:    follow,
-			}:
-			case <-ctx.Done():
-				return nil
-			}
 		}
 	}
 }
 
-// isPodReady checks if all containers in a pod are ready
-func isPodReady(pod *corev1.Pod) bool {
-	if pod.Status.Phase != corev1.PodRunning {
-		return false
-	}
-	for _, cs := range pod.Status.ContainerStatuses {
-		if !cs.Ready {
-			return false
-		}
-	}
-	return true
-}
-
-// buildPodInfos converts pods to WorkloadPodInfo slice
-func buildPodInfos(pods []*corev1.Pod) []WorkloadPodInfo {
-	return buildPodInfosForRevision(pods, workloadRevisionTarget{})
-}
-
-func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget) []WorkloadPodInfo {
-	infos := make([]WorkloadPodInfo, 0, len(pods))
+func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget) []podlogs.PodInfo {
+	infos := make([]podlogs.PodInfo, 0, len(pods))
 	now := time.Now()
 	for _, pod := range pods {
-		info := buildPodInfo(pod, now)
+		info := podlogs.BuildPodInfo(pod, now)
 		if target.label != "" && target.value != "" {
 			if identity := pod.Labels[target.label]; identity != "" {
 				updated := identity == target.value
@@ -838,7 +698,7 @@ func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget)
 
 const maxWorkloadPodResponseLimit = 200
 
-func limitWorkloadPodInfos(infos []WorkloadPodInfo, limit int) ([]WorkloadPodInfo, bool) {
+func limitWorkloadPodInfos(infos []podlogs.PodInfo, limit int) ([]podlogs.PodInfo, bool) {
 	sort.SliceStable(infos, func(i, j int) bool {
 		leftRank := health.Rank(health.Level(infos[i].HealthLevel))
 		rightRank := health.Rank(health.Level(infos[j].HealthLevel))
@@ -854,89 +714,6 @@ func limitWorkloadPodInfos(infos []WorkloadPodInfo, limit int) ([]WorkloadPodInf
 		return infos, false
 	}
 	return infos[:limit], true
-}
-
-// buildPodInfo converts a single pod to WorkloadPodInfo
-func buildPodInfo(pod *corev1.Pod, now time.Time) WorkloadPodInfo {
-	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
-	containerStatuses := make([]WorkloadPodContainerInfo, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
-	for _, c := range pod.Spec.InitContainers {
-		containers = append(containers, c.Name)
-	}
-	for _, c := range pod.Spec.Containers {
-		containers = append(containers, c.Name)
-	}
-	for _, cs := range pod.Status.InitContainerStatuses {
-		containerStatuses = append(containerStatuses, WorkloadPodContainerInfo{
-			Name:         cs.Name,
-			Init:         true,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
-	}
-	for _, cs := range pod.Status.ContainerStatuses {
-		containerStatuses = append(containerStatuses, WorkloadPodContainerInfo{
-			Name:         cs.Name,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
-	}
-	verdict := health.Pod(pod, now)
-	displayLevel := health.PodDisplayLevel(pod, now)
-	if displayLevel != verdict.Level {
-		verdict.Level = displayLevel
-		if verdict.Reason == "" {
-			verdict.Reason = health.PodProblemReason(pod, now)
-		}
-		if verdict.Message == "" {
-			verdict.Message = health.PodProblemMessage(pod)
-		}
-	}
-	restartCount, lastTerminationReason := health.PodRestartContext(pod)
-	createdAt := ""
-	if !pod.CreationTimestamp.IsZero() {
-		createdAt = pod.CreationTimestamp.Time.Format(time.RFC3339)
-	}
-	annotations := pod.GetAnnotations()
-	labels := pod.GetLabels()
-	return WorkloadPodInfo{
-		Name:                  pod.Name,
-		Containers:            containers,
-		Ready:                 isPodReady(pod),
-		Phase:                 string(pod.Status.Phase),
-		NodeName:              pod.Spec.NodeName,
-		HealthLevel:           string(verdict.Level),
-		Reason:                verdict.Reason,
-		Message:               verdict.Message,
-		RestartCount:          restartCount,
-		LastTerminationReason: lastTerminationReason,
-		CreatedAt:             createdAt,
-		ContainerStatuses:     containerStatuses,
-		StepID:                annotations["workflows.argoproj.io/node-id"],
-		StepName:              annotations["workflows.argoproj.io/node-name"],
-		StepPhase:             labels["workflows.argoproj.io/phase"],
-	}
-}
-
-// sortLogsByTimestamp sorts log entries by timestamp using efficient sort
-func sortLogsByTimestamp(logs []workloadLogEntry) {
-	sort.SliceStable(logs, func(i, j int) bool {
-		left, le := time.Parse(time.RFC3339Nano, logs[i].Timestamp)
-		right, re := time.Parse(time.RFC3339Nano, logs[j].Timestamp)
-		if le == nil && re == nil && !left.Equal(right) {
-			return left.Before(right)
-		}
-		if (le == nil) != (re == nil) {
-			return le != nil
-		}
-		if le != nil && logs[i].Timestamp != logs[j].Timestamp {
-			return logs[i].Timestamp < logs[j].Timestamp
-		}
-		if logs[i].Pod != logs[j].Pod {
-			return logs[i].Pod < logs[j].Pod
-		}
-		return logs[i].Container < logs[j].Container
-	})
 }
 
 // workloadError represents a typed error for workload operations
@@ -1769,238 +1546,4 @@ func applyTerminalWorkflowEmptyState(metadata *workloadLogMetadata, workflow map
 // writeWorkloadError writes an error response based on workloadError
 func (s *Server) writeWorkloadError(w http.ResponseWriter, err *workloadError) {
 	s.writeError(w, err.statusCode, err.message)
-}
-
-// parseSinceSeconds parses sinceSeconds query parameter, returning nil if not set
-func parseSinceSeconds(str string) *int64 {
-	if str == "" {
-		return nil
-	}
-	if s, err := strconv.ParseInt(str, 10, 64); err == nil && s > 0 {
-		return &s
-	}
-	return nil
-}
-
-// parseTailLines parses tailLines query parameter with a default value
-func parseTailLines(str string, defaultVal int64) int64 {
-	if str == "" {
-		return defaultVal
-	}
-	if t, err := strconv.ParseInt(str, 10, 64); err == nil && t > 0 {
-		return t
-	}
-	return defaultVal
-}
-
-// collectLogsFromPods fetches logs from all pods concurrently. Non-nil even
-// when nothing is retrievable (e.g. every pod is crashlooping) — a nil slice
-// marshals as JSON null and consumers expect an array.
-type workloadLogSnapshot struct {
-	SourcePods map[string]bool
-	Logs       []workloadLogEntry
-	Notice     string
-}
-
-const maxSnapshotSources = 40
-const maxSnapshotSourceBytes int64 = 64 * 1024
-
-func collectLogsFromPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []*corev1.Pod, container string, tailLines int64, sinceSeconds *int64, bounded bool) workloadLogSnapshot {
-	type source struct {
-		pod, container string
-		running        bool
-		created        time.Time
-	}
-	sources := []source{}
-	for _, pod := range pods {
-		for _, c := range k8s.GetContainersForPod(pod, container, true) {
-			if bounded {
-				started := false
-				for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses, pod.Status.EphemeralContainerStatuses} {
-					for _, status := range statuses {
-						if status.Name == c && (status.State.Running != nil || status.State.Terminated != nil) {
-							started = true
-						}
-					}
-				}
-				if !started {
-					continue
-				}
-			}
-			sources = append(sources, source{pod.Name, c, pod.Status.Phase == corev1.PodRunning, pod.CreationTimestamp.Time})
-		}
-	}
-	sort.Slice(sources, func(i, j int) bool {
-		if bounded && sources[i].running != sources[j].running {
-			return sources[i].running
-		}
-		if bounded && !sources[i].created.Equal(sources[j].created) {
-			return sources[i].created.After(sources[j].created)
-		}
-		if sources[i].pod != sources[j].pod {
-			return sources[i].pod < sources[j].pod
-		}
-		return sources[i].container < sources[j].container
-	})
-	total := len(sources)
-	if bounded && len(sources) > maxSnapshotSources {
-		sources = sources[:maxSnapshotSources]
-	}
-	if bounded {
-		tailLines = min(tailLines, 1000)
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-	}
-	result := workloadLogSnapshot{Logs: []workloadLogEntry{}, SourcePods: map[string]bool{}}
-	for _, src := range sources {
-		result.SourcePods[src.pod] = true
-	}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	concurrency := len(sources)
-	if bounded {
-		concurrency = min(concurrency, 8)
-	}
-	sem := make(chan struct{}, concurrency)
-	errors_ := []string{}
-	truncated := 0
-	for _, src := range sources {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				mu.Lock()
-				errors_ = append(errors_, src.pod+"/"+src.container+": request cancelled")
-				mu.Unlock()
-				return
-			}
-			entries, clipped, err := fetchPodContainerLogs(ctx, client, namespace, src.pod, src.container, tailLines, sinceSeconds, bounded)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				errors_ = append(errors_, src.pod+"/"+src.container+": "+err.Error())
-			}
-			if clipped {
-				truncated++
-			}
-			result.Logs = append(result.Logs, entries...)
-		}()
-	}
-	wg.Wait()
-	notices := []string{}
-	if total > len(sources) {
-		notices = append(notices, fmt.Sprintf("Showing %d of %d container sources. Narrow the scope to see other sources.", len(sources), total))
-	}
-	if truncated > 0 {
-		notices = append(notices, fmt.Sprintf("%d sources reached the 64 KiB snapshot limit.", truncated))
-	}
-	if len(errors_) > 0 {
-		notices = append(notices, unreadableSourcesNotice(errors_))
-	}
-	result.Notice = strings.Join(notices, " ")
-	return result
-}
-
-// unavailableSources tracks the stream sources, keyed pod/container, whose node
-// answered with its notice instead of logs. A live view reopens each source
-// every discovery pass, so the same answer repeats; the methods report whether
-// the set changed so the notice is only sent when it does. Only the stream's
-// main loop may touch it.
-type unavailableSources map[string]bool
-
-func (u unavailableSources) add(key string) bool {
-	if u[key] {
-		return false
-	}
-	u[key] = true
-	return true
-}
-
-func (u unavailableSources) remove(key string) bool {
-	if !u[key] {
-		return false
-	}
-	delete(u, key)
-	return true
-}
-
-func (u unavailableSources) removePod(podName string) bool {
-	changed := false
-	for key := range u {
-		if strings.HasPrefix(key, podName+"/") {
-			delete(u, key)
-			changed = true
-		}
-	}
-	return changed
-}
-
-// send emits the current set as a notice event; an empty notice clears it.
-func (u unavailableSources) send(w http.ResponseWriter, flusher http.Flusher) {
-	failures := make([]string, 0, len(u))
-	for key := range u {
-		failures = append(failures, key+": "+k8score.ErrLogsUnavailable.Error())
-	}
-	sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unreadableSourcesNotice(failures)})
-}
-
-// Each failure reads "pod/container: reason".
-func unreadableSourcesNotice(failures []string) string {
-	if len(failures) == 0 {
-		return ""
-	}
-	sort.Strings(failures)
-	noun := "sources"
-	if len(failures) == 1 {
-		noun = "source"
-	}
-	return fmt.Sprintf("%d %s could not be read: %s", len(failures), noun, strings.Join(failures[:min(3, len(failures))], "; "))
-}
-
-func fetchPodContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, bounded bool) ([]workloadLogEntry, bool, error) {
-	var limit *int64
-	if bounded {
-		n := maxSnapshotSourceBytes + 1
-		limit = &n
-	}
-	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
-		TailLines: &tailLines, SinceSeconds: sinceSeconds, Timestamps: true, LimitBytes: limit,
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	defer stream.Close()
-	var reader io.Reader = stream
-	if limit != nil {
-		reader = io.LimitReader(stream, *limit)
-	}
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, false, err
-	}
-	if k8score.IsLogsUnavailableNotice(string(content)) {
-		return nil, false, k8score.ErrLogsUnavailable
-	}
-	clipped := bounded && int64(len(content)) > maxSnapshotSourceBytes
-	if clipped {
-		content = content[:maxSnapshotSourceBytes]
-		if last := strings.LastIndexByte(string(content), '\n'); last >= 0 {
-			content = content[:last+1]
-		} else {
-			content = nil
-		}
-	}
-	entries := []workloadLogEntry{}
-	for _, line := range strings.Split(string(content), "\n") {
-		if line == "" {
-			continue
-		}
-		ts, text := parseLogLine(line)
-		entries = append(entries, workloadLogEntry{Pod: podName, Container: containerName, Timestamp: ts, Content: text})
-	}
-	return entries, clipped, nil
 }

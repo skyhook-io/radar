@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	"net/http/httptest"
 	"reflect"
 	"strconv"
@@ -81,7 +82,7 @@ func TestBuildPodInfosForRevisionAttributesOnlyKnownIdentities(t *testing.T) {
 }
 
 func TestLimitWorkloadPodInfosBoundsProblemFirst(t *testing.T) {
-	infos := []WorkloadPodInfo{
+	infos := []podlogs.PodInfo{
 		{Name: "healthy", HealthLevel: string(health.LevelHealthy)},
 		{Name: "degraded-low-restarts", HealthLevel: string(health.LevelDegraded), RestartCount: 1},
 		{Name: "unhealthy", HealthLevel: string(health.LevelUnhealthy)},

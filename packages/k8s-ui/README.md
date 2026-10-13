@@ -30,6 +30,17 @@ command remains pending for the next connection.
 
 Consumers must use a bundler that supports module workers created with `new Worker(new URL(..., import.meta.url), { type: 'module' })`. The source package is compatible with Vite and webpack 5. Monaco and `monaco-yaml` are intentionally pinned as a compatible pair because their worker-factory APIs must move together. The package declares that exact Monaco version as a peer so the host and YAML runtime share one Monaco instance.
 
+## Resource kind views and certainty
+
+`ResourcesView.renderKindView(kind)` optionally replaces a kind's table while
+keeping the sidebar and resource drawer. Return `null` or `false` to use the table. Hosts
+own data fetching; row/search/bulk shortcuts and column preferences are inactive
+while a replacement is shown. Sidebar kind navigation remains available.
+
+`CertaintyGlyph` displays `=`, `≥`, `≤` or `?` for an exact, lower-bound,
+upper-bound or unknown value, with an accessible label and optional evidence
+tooltip. `certaintyGlyph` and `certaintyValueLabel` expose the same vocabulary.
+
 ## Optional flow controls
 
 `CreateResourceDialog` defaults to Apply. Guided flows can set `initialMode="create"` and `lockMode` to require creation, and use `onBack(draftYaml)` to retain edits when returning to setup. Cancel closes the dialog. After a successful write, `onCreated(result, submittedYaml)` receives the first result and the exact submitted manifest; dry runs do not invoke it. `result.uid`, when supplied by Radar, identifies the persisted object. Partial creates name the objects already created. Unlocked flows switch to Apply for review when preview is available; direct creation keeps Create selected so a retry cannot silently update existing objects.

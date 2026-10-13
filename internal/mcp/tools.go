@@ -287,7 +287,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"capabilities, hostPath/hostNetwork, secret-in-ConfigMap), Reliability (single " +
 			"replicas, missing PDB, missing TopologySpread, podHARisk, Service/Ingress " +
 			"without matching backends, stuckTerminating, deprecatedAPIVersion), and " +
-			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets). " +
+			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets, " +
+			"stale PVCs/PVs). " +
 			"Each finding has remediation guidance. " +
 			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
 			"(badly configured but working), a crashing pod can have zero (cleanly " +

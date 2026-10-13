@@ -13,6 +13,8 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // TestPodLogsStream_FlushesConnectedBeforeFollow asserts the pod-log SSE
@@ -92,5 +94,37 @@ func TestPodLogsStream_FlushesConnectedBeforeFollow(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out: no 200 / connected frame arrived before deadline — pod-log EventSource pends indefinitely")
+	}
+}
+
+func TestPodLogStreamEmitsFinalLineBeforeEnd(t *testing.T) {
+	client := logAPIServer(t, http.StatusOK, "", "2026-10-13T10:00:00Z hi")
+	previous := k8s.SetTestClient(client)
+	defer k8s.SetTestClient(previous)
+	stream := readSSEFor(t, "/api/pods/default/nginx-abc-xyz/logs/stream?container=nginx", 5*time.Second)
+	if strings.Count(stream, `"content":"hi"`) != 1 || !strings.Contains(stream, `"timestamp":"2026-10-13T10:00:00Z"`) {
+		t.Fatalf("final line lost: %s", stream)
+	}
+	if strings.Index(stream, "event: log") > strings.Index(stream, "event: end") {
+		t.Fatalf("stream ended before final line: %s", stream)
+	}
+}
+
+func TestWorkloadLogReaderEmitsFinalLine(t *testing.T) {
+	client := logAPIServer(t, http.StatusOK, "", "2026-10-13T10:00:00Z hi")
+	entries := make(chan podlogs.Entry, 2)
+	if err := streamPodLogs(context.Background(), client, "default", "p", corev1.PodLogOptions{Container: "app", Timestamps: true, Follow: true}, 1, entries); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case entry := <-entries:
+		if entry.Content != "hi" || entry.Timestamp != "2026-10-13T10:00:00Z" {
+			t.Fatalf("entry=%+v", entry)
+		}
+	default:
+		t.Fatal("unterminated final line lost")
+	}
+	if len(entries) != 0 {
+		t.Fatal("final line duplicated")
 	}
 }

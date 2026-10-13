@@ -78,6 +78,26 @@ shared renderers.
   never both; don't inadvertently remove useful vendor fields. Reuse printer-column
   evaluation rather than writing another JSONPath parser.
 
+### Workspace and resource hosts
+
+`web/src/integrations/resourceHosts.tsx` registers host renderer wrappers and
+resource-specific summary, log and destination callbacks. Keep each adapter beside
+its integration. Match exact group + resource identity; use the loaded object's
+`apiVersion` for detail facts. Renderer overrides are composed once, with duplicate
+ownership rejected. Generic detail pages and drawers call these seams rather than
+importing integration screens.
+
+`workspaceRoutes.ts` owns route metadata (title, navigation placement, namespace
+view scope and context-switch query policy); `workspaceScreens.tsx` mounts the
+integration screen. Capacity remains cluster-wide. Shared workspace notices, empty
+states and table styles live in `web/src/components/workspace/`; certainty glyphs
+live in k8s-ui's `components/facts/certainty.tsx`.
+
+A host can supply k8s-ui `ResourcesView.renderKindView` to replace one kind's table
+while retaining the sidebar and drawer. Return `null` or `false` for the ordinary table. A
+replacement disables row/search/bulk shortcuts and column-preference loading/saving;
+sidebar kind navigation stays available. The caller owns fetching and capability decisions.
+
 ### Issues
 
 - [ ] Inspect generic detection in `internal/issues/source_conditions.go`, nearby

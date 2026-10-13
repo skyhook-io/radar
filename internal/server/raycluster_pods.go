@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -73,7 +74,7 @@ func (s *Server) handleRayClusterPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pods = filterRayClusterPods(pods, nodeType, group)
-	infos, truncated := limitWorkloadPodInfos(buildPodInfos(pods), limit)
+	infos, truncated := limitWorkloadPodInfos(podlogs.BuildPodInfos(pods), limit)
 	s.writeJSON(w, map[string]any{"pods": infos, "total": len(pods), "truncated": truncated})
 }
 
