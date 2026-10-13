@@ -359,6 +359,12 @@ export function adaptDiagnose(
     bundleRelevance,
   );
 
+  if (
+    apiVersionToGroup(resource.apiVersion) === "kafka.strimzi.io" &&
+    (resource.kind === "KafkaConnector" || resource.kind === "KafkaConnect")
+  )
+    return;
+
   if (Array.isArray(blockersRaw)) {
     for (const { blocker, pods, foldedInto } of blockerGroups) {
       if (foldedInto) continue;

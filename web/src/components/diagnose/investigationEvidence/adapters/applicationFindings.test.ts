@@ -60,7 +60,9 @@ describe("cached application findings", () => {
         source: { evidenceRef: ref },
         data: { issue: connector, applicationSource: source },
       });
-      expect(investigationEvidenceSubjectRef(finding.latest.data)).toMatchObject({
+      expect(
+        investigationEvidenceSubjectRef(finding.latest.data),
+      ).toMatchObject({
         group: "kafka.strimzi.io",
         kind: "KafkaConnector",
         namespace: "shop",
@@ -76,7 +78,13 @@ describe("cached application findings", () => {
           item.message.includes("do not establish application health"),
         ),
       ).toBe(true);
-      expect(groupsOf(result.groups, "receipt")).toHaveLength(0);
+      expect(
+        groupsOf(result.groups, "receipt").filter(
+          (group) =>
+            group.latest.data.type === "receipt" &&
+            group.latest.data.checked === "issues",
+        ),
+      ).toHaveLength(0);
     },
   );
 
@@ -122,11 +130,36 @@ describe("cached application findings", () => {
       }),
     ]);
     expect(groupsOf(result.groups, "issue")).toHaveLength(0);
-    expect(groupsOf(result.groups, "receipt")).toHaveLength(0);
+    expect(
+      groupsOf(result.groups, "receipt").filter(
+        (group) =>
+          group.latest.data.type === "receipt" &&
+          group.latest.data.checked === "issues",
+      ),
+    ).toHaveLength(0);
     expect(result.limitations).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "truncated" })]),
     );
   });
+
+  it.each(["KafkaConnector", "KafkaConnect"])(
+    "does not invent event or change reads for cached %s diagnosis",
+    (kind) => {
+      const result = project([
+        tool("read", "diagnose", {
+          resource: {
+            apiVersion: "kafka.strimzi.io/v1",
+            kind,
+            metadata: { namespace: "shop", name: "connect" },
+          },
+          resourceContext: { tier: "basic" },
+          coverage:
+            "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
+        }),
+      ]);
+      expect(groupsOf(result.groups, "receipt")).toHaveLength(0);
+    },
+  );
 
   it("rejects malformed findings without projecting partial proof", () => {
     const result = project([
