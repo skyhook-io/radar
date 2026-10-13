@@ -37,36 +37,40 @@ export function ApplicationEvidenceAction(props: Props) {
   const { guard, gatedKey, support } = useRadarFeature('applicationEvidence')
   const context = cluster?.context
   const subjectKey = `${context}:${props.kind}:${props.group}:${props.namespace}:${props.name}:${props.uid}`
-  const [permissionRetryTarget, setPermissionRetryTarget] = useState<string>()
-  const retryPermissions = permissionRetryTarget === subjectKey
-  const { data, error, refetch, isFetching } = useQuery({
-    queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid, retryPermissions, ...gatedKey],
-    queryFn: ({ signal }) => guard(() => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name, retryPermissions: String(retryPermissions) })}`, signal)),
+  const permissionRetryTarget = useRef<string | undefined>(undefined)
+  const { data, dataUpdatedAt, error, refetch, isFetching } = useQuery({
+    queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name, retryPermissions: String(permissionRetryTarget.current === subjectKey) })}`, signal)),
     enabled: support !== 'unsupported' && !!context && !!props.uid && !!props.namespace && capabilities?.deployment?.mode === 'local',
     placeholderData: previous => previous,
     retry: (failures, failure) => failures < 1 && failure instanceof ApiError && (failure.status === 503 || failure.status === 409),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
+  const available = data
+  const retry = () => { permissionRetryTarget.current = subjectKey; void refetch() }
   if (support === 'unsupported' || !context || !props.namespace || capabilities?.deployment?.mode !== 'local') return null
-  if (retryPermissions && error) return <div className="mt-3"><AlertBanner variant="warning" title="Permission check failed" message={<>{error instanceof Error ? error.message : 'Could not verify application evidence permissions.'} <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={() => void refetch()}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></>} /></div>
-  if (!data?.enabled || !data.context || data.context !== context || data.subjectUID !== props.uid) return null
-  const retry = () => { if (retryPermissions) void refetch(); else setPermissionRetryTarget(subjectKey) }
+  const retryError = error && (permissionRetryTarget.current === subjectKey || available?.enabled && available.context === context && available.subjectUID === props.uid) ? <div className="mt-3"><AlertBanner variant="warning" title="Could not refresh application evidence" message={<>{error instanceof Error ? error.message : 'Could not verify application evidence permissions.'} <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></>} /></div> : null
+  if (!available?.enabled || !available.context || available.context !== context || available.subjectUID !== props.uid) return retryError
+  const candidates = error instanceof ApiError && [403, 404, 409, 503].includes(error.status) ? [] : available.candidates
   return <>
-    {data.permissionCheckTimedOut && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified in time. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
-    <EvidenceControl key={`${context}:${props.uid}`} data={{ ...data, context: data.context }} refreshing={isFetching} onTargetChanged={() => { void refetch() }} />
+    {retryError}
+    {!retryError && available.permissionCheckTimedOut && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified in time. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
+    <EvidenceControl key={`${context}:${props.uid}`} data={{ ...available, context: available.context, candidates }} refreshing={isFetching} dataUpdatedAt={dataUpdatedAt} onTargetChanged={() => { void refetch() }} />
   </>
 }
 
-function EvidenceControl({ data, refreshing, onTargetChanged }: { data: AvailableCandidates; refreshing: boolean; onTargetChanged: () => void }) {
+function EvidenceControl({ data, refreshing, dataUpdatedAt, onTargetChanged }: { data: AvailableCandidates; refreshing: boolean; dataUpdatedAt: number; onTargetChanged: () => void }) {
   const [snapshot, setSnapshot] = useState<AvailableCandidates>()
   const [open, setOpen] = useState(false)
   const [session, setSession] = useState(0)
-  if (!snapshot && data.candidates.length === 0) return null
-  const names = [...new Set(data.candidates.map(item => applicationNames[item.application]))].join(', ')
+  const [rejectedAt, setRejectedAt] = useState<number>()
+  const current = { ...data, candidates: rejectedAt !== undefined && (rejectedAt === dataUpdatedAt || refreshing) ? [] : data.candidates }
+  if (!snapshot && current.candidates.length === 0) return null
+  const names = [...new Set(current.candidates.map(item => applicationNames[item.application]))].join(', ')
   return <div className="mt-3">
-    {data.candidates.length > 0 && <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => { setSnapshot(data); setSession(value => value + 1); setOpen(true) }}>Collect {names} evidence</button>}
-    {snapshot && <EvidenceDialog key={session} open={open} data={snapshot} onTargetChanged={onTargetChanged} onClose={() => setOpen(false)} />}
+    {current.candidates.length > 0 && <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => { setSnapshot(current); setSession(value => value + 1); setOpen(true) }}>Collect {names} evidence</button>}
+    {snapshot && <EvidenceDialog key={session} open={open} data={snapshot} onTargetChanged={() => { setRejectedAt(dataUpdatedAt); onTargetChanged() }} onClose={() => setOpen(false)} />}
   </div>
 }
 
