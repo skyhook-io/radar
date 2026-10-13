@@ -572,6 +572,9 @@ workload templates, revision templates and admitted Pods even with many replicas
 If any consumer inventory fails, `omitted` marks `referencedBy` as `unavailable`.
 References from inventories that loaded remain available; an empty result with
 this omission does not establish that no consumers exist.
+Only named PodSpec declarations are included: implicit workload defaults and
+template-generated PVC names are not inferred. An absent omission does not by
+itself establish cache freshness or complete namespace coverage.
 
 ### Write Tools
 
