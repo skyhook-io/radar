@@ -493,7 +493,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 
 ### Local runtime evidence via MCP
 
-With explicit operator consent, Radar can collect a bounded snapshot from a named Pod using existing Kubernetes Pod-read and port-forward permissions:
+Local MCP clients can explicitly collect evidence from one Pod after operator approval:
 
 | Integration | Evidence collected |
 |---|---|
@@ -501,7 +501,7 @@ With explicit operator consent, Radar can collect a bounded snapshot from a name
 | [NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | JetStream consumer pending, acknowledgement-pending and redelivery counts |
 | [Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | Initialized, sealed and standby state |
 
-These are explicit local MCP observations, not automatic Issues detectors or full application-health checks. Recognized images and default plaintext endpoints are required; unavailable evidence never establishes health. No application credentials or new settings are used. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
+These observations describe one Pod endpoint, not overall application health, and do not add automatic Issues detection. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
 
 ---
 
