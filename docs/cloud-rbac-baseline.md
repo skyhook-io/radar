@@ -41,7 +41,7 @@ grant access to the underlying Role or ClusterRole objects.
 | Resources withheld by this add-on | Why / effect |
 |---|---|
 | External Secrets SecretStore and ClusterSecretStore | Provider authentication can contain plaintext credentials, such as Scaleway `secretKey.value`. ExternalSecret/ClusterExternalSecret remain readable; store inspection requires a separate customer grant. |
-| Flux HelmChart, Bucket and ExternalArtifact | New source kinds are withheld pending a full-object credential-field review. Full-object inspection in GitOps trees and diagnosis requires an explicit grant. General topology uses Radar’s documented namespace-level visibility and may show dependency names, labels and status. |
+| Flux HelmChart, Bucket and ExternalArtifact | This add-on does not grant full-object reads. Inspecting these sources in a GitOps tree requires another RBAC grant; topology may still show their names, labels and status to callers with namespace access. |
 | KEDA TriggerAuthentication and ClusterTriggerAuthentication | `spec.hashiCorpVault.credential.token` may hold a Vault token directly. ScaledObject/ScaledJob remain readable. |
 | Kyverno UpdateRequest | Admission context may embed the actual triggering object, including a Secret. Queued-policy-work remains denied without another grant. |
 | CAPI KubeadmConfig, KubeadmConfigTemplate, KubeadmControlPlane, KubeadmControlPlaneTemplate | Bootstrap configuration can contain inline files and credentials; the renderer-only control-plane template is also withheld pending credential-field review. |

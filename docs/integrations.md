@@ -613,21 +613,15 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 
 **Workflow operations**: Reconcile, Reconcile-with-source (Kustomization/HelmRelease), Suspend/Resume.
 
-**Source relationships**: Kustomization source references and HelmRelease
-chart-template sources or modern `chartRef` join cached observed source objects.
-Referenced HelmCharts also join their own local source. These are dependencies,
-not owners: graph walks, REST/MCP context and Related Resources expose both
-directions with exact API group and namespace. Cross-namespace declarations
-stay within Radar's namespace scope; a declared source does not establish that
-the controller permits the reference or has produced an artifact. Source
-parsing is shared with the GitOps resource tree and insight summary. Inline
-HelmReleases follow their controller-recorded `status.helmChart` to the generated
-HelmChart and then its namespace-local source. The inline source declaration
-remains visible alongside that chart, including when the chart is unreadable
-or has not been observed. Native Helm release storage is
-separate from this dependency model.
+**Source relationships**: Topology, Related Resources and REST/MCP context link
+observed Flux sources in both directions within Radar's namespace scope.
+Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
+or `spec.chartRef`. Inline releases also link the generated HelmChart named by
+`status.helmChart`; an observed HelmChart links its source in its own namespace.
+These are dependencies, not owners. A link does not prove that Flux permits the
+reference or has produced an artifact.
 
-Flux source dependency targets use the supported warmup catalog, including HelmChart, Bucket and ExternalArtifact. Startup discovery and permission probes can still occur; graph joins do not issue a per-object API GET. The Cloud integration-read baseline withholds these three new source kinds pending full-object credential-field review; explicit customer RBAC can authorize them.
+For default Radar Cloud read permissions, see the [integration-read policy](cloud-rbac-baseline.md#intentional-exceptions).
 
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 
