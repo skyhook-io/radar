@@ -222,3 +222,58 @@ it.each([false, true])('shows real partial-create recovery without a preview (lo
     }
   } finally { await act(async () => root.unmount()); host.remove() }
 })
+
+it.each([false, true])('retains and accumulates real partial-create results across retries and review Back (review=%s)', async reviewed => {
+  const first = { kind: 'ConfigMap', namespace: 'app', name: 'first', uid: 'first-uid', created: true }
+  const later = { kind: 'Service', namespace: 'app', name: 'later', uid: 'later-uid', created: true }
+  const onApply = vi.fn()
+    .mockRejectedValueOnce(Object.assign(new Error('document 2: configmaps "collision" already exists'), { appliedResults: [first] }))
+    .mockRejectedValueOnce(new Error('document 1: configmaps "first" already exists'))
+    .mockRejectedValueOnce(Object.assign(new Error('document 2: configmaps "collision" already exists'), { appliedResults: [later] }))
+  const onPreview = reviewed ? vi.fn(async () => ({ documents: [], nonAtomic: true })) : undefined
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host)
+  try {
+    await act(async () => root.render(<CreateResourceDialog open onClose={() => {}} initialYaml="kind: ConfigMap" initialMode="create" lockMode onApply={onApply} isApplying={false} onPreview={onPreview} />))
+    const submit = async () => {
+      await act(async () => button(reviewed ? 'Review' : 'Create')!.click())
+      if (reviewed) await act(async () => button('Create reviewed resources')!.click())
+    }
+    await submit()
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
+    if (reviewed) {
+      await act(async () => button('Review')!.click())
+      await act(async () => button('Back to YAML')!.click())
+      expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
+      expect(document.body.textContent).not.toContain('Preview failed')
+    }
+    await submit()
+    if (reviewed) await act(async () => button('Back to YAML')!.click())
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
+    await submit()
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first, Service app/later.')
+    expect(onApply).toHaveBeenCalledTimes(3)
+  } finally { await act(async () => root.unmount()); host.remove() }
+})
+
+it('keeps partial-create history after dry-run success and clears it after a completed write', async () => {
+  const created = { kind: 'ConfigMap', namespace: 'app', name: 'first', uid: 'first-uid', created: true }
+  const onApply = vi.fn()
+    .mockRejectedValueOnce(Object.assign(new Error('document 2: configmaps "collision" already exists'), { appliedResults: [created] }))
+    .mockResolvedValueOnce([created])
+    .mockResolvedValueOnce([created])
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host)
+  try {
+    await act(async () => root.render(<CreateResourceDialog open onClose={() => {}} initialYaml="kind: ConfigMap" initialMode="create" lockMode onApply={onApply} isApplying={false} />))
+    await act(async () => button('Create')!.click())
+    const dryRun = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    await act(async () => dryRun.click())
+    await act(async () => button('Create')!.click())
+    expect(onApply).toHaveBeenLastCalledWith(expect.objectContaining({ dryRun: true }))
+    expect(document.body.textContent).toContain('(dry run)')
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
+    await act(async () => dryRun.click())
+    await act(async () => button('Create')!.click())
+    expect(onApply).toHaveBeenLastCalledWith(expect.objectContaining({ dryRun: false }))
+    expect(document.body.textContent).not.toContain('Created before it stopped')
+  } finally { await act(async () => root.unmount()); host.remove() }
+})

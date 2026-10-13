@@ -89,6 +89,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       minTs = domain.start
       maxTs = domain.end
     }
+    if (!Number.isFinite(minTs) || !Number.isFinite(maxTs)) return null
     if (minTs === maxTs) maxTs = minTs + 60
     if (maxVal === 0 && minVal === 0) {
       // Unit-appropriate floor so the Y-axis isn't misleadingly large.

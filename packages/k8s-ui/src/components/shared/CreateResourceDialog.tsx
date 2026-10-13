@@ -193,6 +193,7 @@ export function CreateResourceDialog({
         setSuccess(`${action} ${results.length} resources${dryRunLabel}`)
       }
       if (wasDryRun) return
+      setPartialCreates([])
       if (onCreated && results.length > 0) {
         closeNow()
         onCreated(results[0], submittedYaml)
@@ -304,7 +305,7 @@ export function CreateResourceDialog({
     setYaml(submittedYaml)
     if (!lockMode && onPreview) setMode('apply')
     setPreview(null)
-    setPartialCreates(appliedResults)
+    setPartialCreates(previous => [...previous, ...appliedResults])
     return true
   }, [lockMode, onPreview])
 
@@ -314,7 +315,6 @@ export function CreateResourceDialog({
       return
     }
     setError(null)
-    setPartialCreates([])
     setSuccess(null)
     try {
       if (onPreview) {
@@ -346,7 +346,6 @@ export function CreateResourceDialog({
   const handleApplyReviewed = useCallback(async () => {
     if (!preview) return
     setError(null)
-    setPartialCreates([])
     try {
       const reviewedResourceVersions = reviewedResourceVersionsForPreview(preview.documents)
       const results = await onApply({
@@ -413,7 +412,6 @@ export function CreateResourceDialog({
           onClose={handleClose}
           onBack={() => {
             setError(null)
-            setPartialCreates([])
             setPreview(null)
           }}
           onApply={handleApplyReviewed}
@@ -495,8 +493,8 @@ export function CreateResourceDialog({
             </div>
           </div>
 
-          {(error || previewError) && (
-            <ApplyErrorBanner error={error || previewError || 'Preview failed'} partialCreates={partialCreates} strictCreate={lockMode && mode === 'create'} hasPreview={Boolean(onPreview)} />
+          {(error || previewError || partialCreates.length > 0) && (
+            <ApplyErrorBanner error={error || previewError || 'Resources were created before the previous attempt stopped.'} partialCreates={partialCreates} strictCreate={lockMode && mode === 'create'} hasPreview={Boolean(onPreview)} />
           )}
           {success && (
             <div className="mx-5 mb-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">

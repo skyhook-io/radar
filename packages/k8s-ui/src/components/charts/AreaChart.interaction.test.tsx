@@ -100,3 +100,19 @@ it('paints selected, shaded and dragged ranges above opaque fills and below char
     expect(band.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   }
 })
+
+it('does not render a selectable empty chart without a finite timestamp domain', async () => {
+  const selected = vi.fn()
+  await render({ series: [{ labels: {}, dataPoints: [] }], onSelectRange: selected, stepSeconds: 60 })
+  expect(host.querySelector('svg')).toBeNull()
+  expect(host.querySelector('[role="button"]')).toBeNull()
+  expect(selected).not.toHaveBeenCalled()
+})
+
+it('keeps an empty chart selectable when an explicit valid domain supplies its bounds', async () => {
+  const selected = vi.fn()
+  const plot = await render({ series: [{ labels: {}, dataPoints: [] }], domain: { start: 1000, end: 1600 }, onSelectRange: selected, stepSeconds: 60 })
+  await pointer(plot, 'pointerdown', 84)
+  await pointer(plot, 'pointerup', 960)
+  expect(selected).toHaveBeenCalledWith({ start: 1000, end: 1600 })
+})
