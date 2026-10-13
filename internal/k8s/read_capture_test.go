@@ -89,3 +89,19 @@ func TestCaptureClusterReadsSerializesDependencyReplacement(t *testing.T) {
 		t.Fatal("capture did not resume after transition")
 	}
 }
+
+func TestClusterConfigurationWaitsForBriefReadCapture(t *testing.T) {
+	contextOpMu.RLock()
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		contextOpMu.RUnlock()
+		close(released)
+	}()
+	called := false
+	err := TryClusterConfiguration(func() error { called = true; return nil })
+	<-released
+	if err != nil || !called {
+		t.Fatalf("configuration refused a brief capture: called=%v err=%v", called, err)
+	}
+}

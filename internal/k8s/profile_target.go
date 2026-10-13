@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -99,8 +100,17 @@ var ErrContextConfigurationBusy = errors.New("cluster connection is changing; tr
 // fn runs holding the context-operation lock, so it must not call
 // RestartTrafficSubsystem synchronously: that acquires the same lock.
 func TryClusterConfiguration(fn func() error) error {
-	if activeContextOperations.Load() != 0 || !contextOpMu.TryLock() {
+	if activeContextOperations.Load() != 0 {
 		return ErrContextConfigurationBusy
+	}
+	// A dependency capture is brief and does not change the connection.
+	// Let it finish rather than refuse an unrelated settings update.
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for !contextOpMu.TryLock() {
+		if activeContextOperations.Load() != 0 || !time.Now().Before(deadline) {
+			return ErrContextConfigurationBusy
+		}
+		time.Sleep(time.Millisecond)
 	}
 	defer contextOpMu.Unlock()
 	if activeContextOperations.Load() != 0 {
