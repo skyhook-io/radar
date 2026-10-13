@@ -1885,19 +1885,19 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 
 ## Local runtime evidence: RabbitMQ, NATS and Vault
 
-Radar's local MCP tool `collect_application_evidence` collects a bounded snapshot from one named Pod after explicit operator consent. These adapters do not require CRDs and do not add automatic Issues detection, application-specific resource renderers, or cluster-wide health conclusions.
+Radar's local MCP tool `collect_application_evidence` reads one Pod's application endpoint after operator approval. It does not add automatic Issues detection or application-specific resource views.
 
 | Integration | Endpoint | Evidence |
 |---|---|---|
-| RabbitMQ | Port 15692, `/metrics` | Source-reported disk and memory alarms for the selected node; both samples must be present and unambiguous. |
-| NATS | Port 8222, `/jsz` | Account-scoped JetStream consumer pending, acknowledgement-pending and redelivery counts, with at most 20 consumer rows and explicit coverage. Pending messages alone do not prove a stuck consumer. |
-| Vault | Port 8200, `/v1/sys/health` | Source HTTP code and initialized/sealed/standby state. A standby is not necessarily faulty; HTTP 200 alone is not a health verdict. |
+| RabbitMQ | Port 15692, `/metrics` | Disk and memory alarms reported by the selected node. |
+| NATS | Port 8222, `/jsz` | JetStream consumer pending, acknowledgement-pending and redelivery counts. |
+| Vault | Port 8200, `/v1/sys/health` | HTTP status and initialized, sealed and standby state. |
 
-Collection uses existing Kubernetes Pod-read and port-forward permissions, a recognized official image (`rabbitmq`, `nats`, or `hashicorp/vault`; repackaged images such as Bitnami are unsupported), and a declared default plaintext port. It introduces no application credentials, Secret reads, exec fallback, or settings. RabbitMQ needs its metrics endpoint enabled; NATS needs monitoring enabled independently of messaging authentication; Vault health is token-free but TLS/proxy requirements may prevent collection.
+Collection requires Kubernetes Pod-read and port-forward permissions, a recognized image (`rabbitmq`, `nats`, or `hashicorp/vault`), and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must be enabled. Custom ports, TLS and endpoints requiring application credentials are unsupported.
 
-Only the full local MCP surface exposes this action. Authenticated, remote, hosted and in-cluster callers and built-in investigations do not receive it. Custom ports, TLS and application authentication are outside this slice. Denied, missing, malformed or oversized evidence returns unavailable rather than healthy or empty. Results describe the selected endpoint at collection time, not the whole cluster.
+Collection is available only through full local MCP, outside built-in investigations and Apply. Authenticated, remote, hosted and in-cluster deployments are unsupported.
 
-See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation, consent, response limits and interpretation.
+Results describe the selected endpoint at collection time. Unavailable evidence does not establish health or absence of problems. See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation and result interpretation.
 
 ## Any Other CRD
 
