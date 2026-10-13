@@ -277,3 +277,25 @@ it('keeps partial-create history after dry-run success and clears it after a com
     expect(document.body.textContent).not.toContain('Created before it stopped')
   } finally { await act(async () => root.unmount()); host.remove() }
 })
+
+it('adds only confirmed creations from an Apply recovery attempt to earlier partial-create facts', async () => {
+  const first = { kind: 'ConfigMap', namespace: 'app', name: 'first', uid: 'first-uid', created: true }
+  const updated = { kind: 'Service', namespace: 'app', name: 'updated', uid: 'updated-uid', created: false }
+  const later = { kind: 'Service', namespace: 'app', name: 'later', uid: 'later-uid', created: true }
+  const onApply = vi.fn()
+    .mockRejectedValueOnce(Object.assign(new Error('document 2 failed'), { appliedResults: [first] }))
+    .mockRejectedValueOnce(Object.assign(new Error('document 3 failed'), { appliedResults: [updated, later] }))
+  const onPreview = vi.fn(async () => ({ documents: [], nonAtomic: true }))
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host)
+  try {
+    await act(async () => root.render(<CreateResourceDialog open onClose={() => {}} initialYaml="kind: ConfigMap" initialMode="create" onApply={onApply} isApplying={false} onPreview={onPreview} />))
+    await act(async () => button('Review')!.click())
+    await act(async () => button('Create reviewed resources')!.click())
+    expect(document.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('apply')
+    await act(async () => button('Review')!.click())
+    await act(async () => button('Apply reviewed changes')!.click())
+    expect(onApply).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'apply' }))
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first, Service app/later.')
+    expect(document.body.textContent).not.toContain('Service app/updated')
+  } finally { await act(async () => root.unmount()); host.remove() }
+})

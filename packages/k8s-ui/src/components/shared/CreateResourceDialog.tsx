@@ -301,11 +301,12 @@ export function CreateResourceDialog({
 
   const recoverPartialCreate = useCallback((caught: unknown, submittedYaml: string, appliedMode: 'apply' | 'create', wasDryRun: boolean) => {
     const appliedResults = caught instanceof Error && 'appliedResults' in caught && Array.isArray(caught.appliedResults) ? caught.appliedResults : []
-    if (appliedMode !== 'create' || wasDryRun || appliedResults.length === 0) return false
+    const createdResults = appliedMode === 'create' ? appliedResults : appliedResults.filter(result => result.created)
+    if (wasDryRun || createdResults.length === 0) return false
     setYaml(submittedYaml)
     if (!lockMode && onPreview) setMode('apply')
     setPreview(null)
-    setPartialCreates(previous => [...previous, ...appliedResults])
+    setPartialCreates(previous => [...previous, ...createdResults])
     return true
   }, [lockMode, onPreview])
 
