@@ -576,11 +576,10 @@ Only named PodSpec declarations are included: implicit workload defaults and
 template-generated PVC names are not inferred. An absent omission does not by
 itself establish cache freshness or complete namespace coverage.
 
-Ingress TLS declarations now use one shared extractor for forward resource
-context, reverse Secret references and resource-view topology. Graph links
-connect only observed same-namespace Secrets and respect Secret visibility;
-reverse context records `spec.tls[].secretName` and gates Ingress reads. An
-empty TLS Secret name does not imply a controller default or a resolved Secret.
+Resource context's `ingressSummary.tlsSecrets` lists named TLS Secrets in the
+Ingress's namespace. A Secret's `referencedBy` includes readable Ingresses with
+the path `spec.tls[].secretName`. Resource-view topology links only observed,
+visible TLS Secrets. Empty Secret names do not resolve controller defaults.
 
 ### Write Tools
 
