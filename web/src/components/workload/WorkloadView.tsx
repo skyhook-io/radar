@@ -2212,7 +2212,7 @@ function FluxSourceConsumersInner({
     }
   }
   for (const h of helmReleases ?? []) {
-    const ref = h?.spec?.chart?.spec?.sourceRef ?? {}
+    const ref = h?.spec?.chartRef ?? h?.spec?.chart?.spec?.sourceRef ?? {}
     const refNs = ref.namespace || h?.metadata?.namespace
     if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
       consumers.push({

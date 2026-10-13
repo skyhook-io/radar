@@ -150,9 +150,8 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 }
 
 func refFromTopologyNode(n topology.Node) ResourceRef {
-	ns, _ := n.Data["namespace"].(string)
-	group, _ := n.Data["group"].(string)
-	return ResourceRef{Group: group, Kind: string(n.Kind), Namespace: ns, Name: n.Name}
+	ref := resourceid.ResolveCurrent(topology.NodeReference(&n), nil).Ref
+	return ResourceRef{Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 }
 
 func infoFromTopology(n topology.Node) []InfoItem {

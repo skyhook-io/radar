@@ -74,12 +74,12 @@ func TestSummaryContextTopologyAfterSwitch(t *testing.T) {
 func TestResourceContextTopologyAfterSwitch(t *testing.T) {
 	freshSummaryCtxTopoMemo(t)
 	useSwitchTestCluster(t, "old-cluster-web")
-	if before, _, _, ok := mcpTopologyForContext("demo"); !ok || !hasNode(before, "old-cluster-web") {
+	if before, _, _, _, ok := mcpTopologyForContext(); !ok || !hasNode(before, "old-cluster-web") {
 		t.Fatalf("seed: expected old-cluster-web in the resource-context topology, got ok=%v", ok)
 	}
 
 	useSwitchTestCluster(t, "new-cluster-api")
-	after, _, _, ok := mcpTopologyForContext("demo")
+	after, _, _, _, ok := mcpTopologyForContext()
 	if !ok {
 		t.Fatal("post-switch topology unavailable")
 	}

@@ -3,15 +3,11 @@ package tree
 import (
 	"strings"
 
-	"github.com/skyhook-io/radar/pkg/resourceid"
-
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
-
-const fluxSourceGroup = "source.toolkit.fluxcd.io"
 
 // HelmRelease, unlike Kustomization, doesn't maintain a status.inventory
 // listing because the Helm controller delegates tracking to Helm's own release
@@ -39,18 +35,11 @@ func fluxRelatedResources(root *unstructured.Unstructured) []relatedResource {
 		Name:      root.GetName(),
 	}
 
-	if ref, ok := fluxSourceRef(root, root.GetNamespace(), "spec", "sourceRef"); ok {
+	for _, source := range gitops.FluxSourceReferences(root) {
 		out = append(out, relatedResource{
-			Ref:  ref,
+			Ref:  ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name},
 			Type: EdgeSource,
-			Data: map[string]any{"relationship": "source"},
-		})
-	}
-	if ref, ok := fluxSourceRef(root, root.GetNamespace(), "spec", "chart", "spec", "sourceRef"); ok {
-		out = append(out, relatedResource{
-			Ref:  ref,
-			Type: EdgeSource,
-			Data: map[string]any{"relationship": "chart source"},
+			Data: map[string]any{"relationship": source.Role},
 		})
 	}
 
@@ -96,6 +85,12 @@ func fluxHelmReleaseManaged(root *unstructured.Unstructured, topo []topology.Nod
 		return nil
 	}
 
+	chartRefs := map[string]bool{}
+	for _, source := range gitops.FluxSourceReferences(root) {
+		if source.Kind == "HelmChart" {
+			chartRefs[refKey(ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name})] = true
+		}
+	}
 	var out []managedResource
 	for _, n := range topo {
 		labels, ok := n.Data["labels"].(map[string]string)
@@ -116,6 +111,11 @@ func fluxHelmReleaseManaged(root *unstructured.Unstructured, topo []topology.Nod
 			continue
 		}
 		ref := refFromTopologyNode(n)
+		// Helm-controller stamps release labels on its artifact producer too;
+		// those labels do not make the chart part of the installed release.
+		if chartRefs[refKey(ref)] {
+			continue
+		}
 		// Don't include the HelmRelease itself if it somehow ended up in the
 		// topology with matching labels (defensive — this shouldn't happen but
 		// would create a self-edge).
@@ -135,30 +135,4 @@ func stringMapFromAny(in map[string]any) map[string]string {
 		}
 	}
 	return out
-}
-
-func fluxSourceRef(root *unstructured.Unstructured, defaultNamespace string, fields ...string) (ResourceRef, bool) {
-	source, ok, _ := unstructured.NestedMap(root.Object, fields...)
-	if !ok {
-		return ResourceRef{}, false
-	}
-	kind := gitops.StringValue(source["kind"])
-	name := gitops.StringValue(source["name"])
-	if kind == "" || name == "" {
-		return ResourceRef{}, false
-	}
-	namespace := gitops.StringValue(source["namespace"])
-	if namespace == "" {
-		namespace = defaultNamespace
-	}
-	group := resourceid.GroupFromAPIVersion(gitops.StringValue(source["apiVersion"]))
-	if group == "" {
-		group = fluxSourceGroup
-	}
-	return ResourceRef{
-		Group:     group,
-		Kind:      kind,
-		Namespace: namespace,
-		Name:      name,
-	}, true
 }

@@ -68,7 +68,7 @@ func TestTopologyMemo_AIContextAfterSwitch(t *testing.T) {
 	useTestResourceCache(t, clusterWithDeployment("old-cluster-web"))
 	s := newMemoTestServer(t)
 
-	before, _, _, ok := s.topologyForContext("demo")
+	before, _, _, _, ok := s.topologyForContext()
 	if !ok || !topologyHasNode(before.Nodes, "old-cluster-web") {
 		t.Fatalf("seed: expected old-cluster-web in the topology, got ok=%v", ok)
 	}
@@ -76,7 +76,7 @@ func TestTopologyMemo_AIContextAfterSwitch(t *testing.T) {
 	useTestResourceCache(t, clusterWithDeployment("new-cluster-api"))
 	s.finalizePostContextSwitch()
 
-	after, _, _, ok := s.topologyForContext("demo")
+	after, _, _, _, ok := s.topologyForContext()
 	if !ok {
 		t.Fatal("post-switch topology unavailable")
 	}
@@ -96,14 +96,14 @@ func TestTopologyMemo_GitOpsTreeAfterSwitch(t *testing.T) {
 	staleReq := &gitopsRequest{Kind: "Deployment", Namespace: "demo", Name: "old-cluster-web", Cache: k8s.GetResourceCache()}
 	// The trees themselves fail (a Deployment is not a GitOps root); only
 	// the topology they build matters here.
-	_, _, _ = s.buildGitOpsTree(context.Background(), staleReq)
+	_, _, _ = s.buildGitOpsTree(httptest.NewRequest(http.MethodGet, "/", nil), staleReq)
 
 	useTestResourceCache(t, clusterWithDeployment("new-cluster-api"))
 	s.finalizePostContextSwitch()
-	_, _, _ = s.buildGitOpsTree(context.Background(), staleReq)
+	_, _, _ = s.buildGitOpsTree(httptest.NewRequest(http.MethodGet, "/", nil), staleReq)
 
 	freshReq := &gitopsRequest{Kind: "Deployment", Namespace: "demo", Name: "new-cluster-api", Cache: k8s.GetResourceCache()}
-	_, _, _ = s.buildGitOpsTree(context.Background(), freshReq)
+	_, _, _ = s.buildGitOpsTree(httptest.NewRequest(http.MethodGet, "/", nil), freshReq)
 
 	// The tree does not expose its topology, so read back what the fresh
 	// request stored under its own cache.

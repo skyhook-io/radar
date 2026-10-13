@@ -599,10 +599,10 @@ func nodeMatchesAPIGroup(n *Node, group string) bool {
 	return false
 }
 
-// nodeReference is what a topology node records about the object it draws.
+// NodeReference is what a topology node records about the object it draws.
 // Nodes built from typed informers carry no apiVersion, so their group is
 // missing rather than known to be core.
-func nodeReference(n *Node) resourceid.Reference {
+func NodeReference(n *Node) resourceid.Reference {
 	apiVersion, _ := n.Data["apiVersion"].(string)
 	return resourceid.ReferenceFromAPIVersion(apiVersion, KubernetesKindForNode(n), nodeNamespaceFromData(n), n.Name)
 }
@@ -610,7 +610,7 @@ func nodeReference(n *Node) resourceid.Reference {
 // nodeGroup is a node's API group resolved against the current cluster; it is
 // "" for the core group and for groups that cannot be established.
 func nodeGroup(n *Node) string {
-	return resourceid.ResolveCurrent(nodeReference(n), nil).Ref.Group
+	return resourceid.ResolveCurrent(NodeReference(n), nil).Ref.Group
 }
 
 // nodeAPIGroupFromData extracts the API group from a Node's Data map.

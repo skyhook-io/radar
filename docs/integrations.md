@@ -606,11 +606,28 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 | GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | OCIRepository | `source.toolkit.fluxcd.io/v1beta2` | Yes | Yes | — |
 | HelmRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
+| Bucket / HelmChart / ExternalArtifact | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
 | HelmRelease | `helm.toolkit.fluxcd.io/v2` | Yes | Yes | Yes |
 | Alert | `notification.toolkit.fluxcd.io/v1beta3` | — | Yes | — |
 
 **Workflow operations**: Reconcile, Reconcile-with-source (Kustomization/HelmRelease), Suspend/Resume.
+
+**Source relationships**: Kustomization source references and HelmRelease
+chart-template sources or modern `chartRef` join cached observed source objects.
+Referenced HelmCharts also join their own local source. These are dependencies,
+not owners: graph walks, REST/MCP context and Related Resources expose both
+directions with exact API group and namespace. Cross-namespace declarations
+stay within Radar's namespace scope; a declared source does not establish that
+the controller permits the reference or has produced an artifact. Source
+parsing is shared with the GitOps resource tree and insight summary. Inline
+HelmReleases follow their controller-recorded `status.helmChart` to the generated
+HelmChart and then its namespace-local source. The inline source declaration
+remains visible alongside that chart, including when the chart is unreadable
+or has not been observed. Native Helm release storage is
+separate from this dependency model.
+
+Flux source dependency targets use the supported warmup catalog, including HelmChart, Bucket and ExternalArtifact. Startup discovery and permission probes can still occur; graph joins do not issue a per-object API GET. The Cloud integration-read baseline withholds these three new source kinds pending full-object credential-field review; explicit customer RBAC can authorize them.
 
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 

@@ -745,6 +745,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "source.toolkit.fluxcd.io"
+    resources: ["helmcharts","buckets","externalartifacts"]
+    scope: Namespaced
+    collection: "flux"
+    decision: withhold
+    reason: "New source kinds remain withheld pending a full-object credential-field review; dependency visibility requires an explicit customer grant."
+    source: "https://fluxcd.io/flux/components/source/"
   - group: "sources.knative.dev"
     resources: ["apiserversources","containersources","pingsources","sinkbindings"]
     scope: Namespaced
