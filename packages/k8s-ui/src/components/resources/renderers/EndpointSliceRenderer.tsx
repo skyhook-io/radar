@@ -18,8 +18,7 @@ function endpointAddressCount(endpoints: any[]): number {
   return endpoints.reduce((total, endpoint) => total + (endpoint.addresses?.length || 0), 0)
 }
 
-function endpointTargetLabel(endpoint: any): string | null {
-  const target = endpoint.targetRef
+function endpointTargetLabel(target: any): string | null {
   if (!target?.kind || !target?.name) return null
   return target.namespace ? `${target.kind} ${target.namespace}/${target.name}` : `${target.kind} ${target.name}`
 }
@@ -86,8 +85,8 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
           <div className="space-y-2">
             {endpoints.map((endpoint: any, index: number) => {
               const ready = isEndpointReady(endpoint)
-              const targetLabel = endpointTargetLabel(endpoint)
               const targetRef = objectReferenceToResourceRef(endpoint.targetRef)
+              const targetLabel = endpointTargetLabel(targetRef || endpoint.targetRef)
               return (
                 <div key={`${endpoint.addresses?.join(',') || 'endpoint'}-${index}`} className="card-inner text-sm space-y-3">
                   <div className="flex items-start justify-between gap-3">

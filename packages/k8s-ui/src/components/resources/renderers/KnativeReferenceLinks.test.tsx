@@ -29,11 +29,19 @@ describe('Knative reference links', () => {
     try {
       await clickSink({ apiVersion: 'serving.knative.dev/v1', kind: 'Service', name: 'knative-backend' })
       expect(onNavigate).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'services', group: 'serving.knative.dev', namespace: 'team', name: 'knative-backend' }))
+      await clickSink({ group: 'serving.knative.dev', kind: 'Service', name: 'group-only-backend' })
+      expect(onNavigate).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'services', group: 'serving.knative.dev', name: 'group-only-backend' }))
       await clickSink({ apiVersion: 'relationships.radar.test/v1', kind: 'Service', name: 'custom-backend' })
       expect(onNavigate).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'virtualservices', group: 'relationships.radar.test', name: 'custom-backend' }))
       await clickSink({ apiVersion: 'v1', kind: 'Service', name: 'core-backend' })
       expect(onNavigate).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'services', name: 'core-backend' }))
       expect(onNavigate.mock.lastCall?.[0].group ?? '').toBe('')
+
+      await act(async () => root.render(<PingSourceRenderer onNavigate={onNavigate} data={{
+        metadata: { namespace: 'team' }, spec: { sink: { ref: { kind: 'Service', name: 'unknown-group' } } },
+      }} />))
+      expect(container.textContent).toContain('unknown-group')
+      expect([...container.querySelectorAll('button')].some(button => button.textContent === 'unknown-group')).toBe(false)
 
       await act(async () => root.render(<DomainMappingRenderer onNavigate={onNavigate} data={{
         metadata: { namespace: 'team', name: 'example.com' },

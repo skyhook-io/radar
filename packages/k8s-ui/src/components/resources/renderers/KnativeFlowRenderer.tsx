@@ -1,7 +1,8 @@
+import { KnativeReferenceLink } from './KnativeReferenceLink'
 import { ListOrdered, GitFork } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
-import { getKnativeConditionStatus, knativeRefLink } from '../resource-utils-knative'
+import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner } from '../../ui/drawer-components'
+import { getKnativeConditionStatus } from '../resource-utils-knative'
 
 interface RendererProps {
   data: any
@@ -13,10 +14,9 @@ function RefDisplay({ ref: destRef, ns, onNavigate }: { ref: any; ns: string; on
 
   if (destRef.ref) {
     return (
-      <ResourceLink
-        name={destRef.ref.name}
-        {...knativeRefLink(destRef.ref, 'Service')}
-        namespace={destRef.ref.namespace || ns}
+      <KnativeReferenceLink
+        reference={destRef.ref}
+        namespace={ns}
         onNavigate={onNavigate}
       />
     )

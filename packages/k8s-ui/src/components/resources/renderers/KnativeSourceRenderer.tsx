@@ -1,7 +1,8 @@
+import { KnativeReferenceLink } from './KnativeReferenceLink'
 import { Clock, Server, Container, Link2 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
-import { getKnativeConditionStatus, knativeRefLink } from '../resource-utils-knative'
+import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner } from '../../ui/drawer-components'
+import { getKnativeConditionStatus } from '../resource-utils-knative'
 
 interface RendererProps {
   data: any
@@ -14,10 +15,9 @@ function SinkProperty({ sink, ns, onNavigate }: { sink: any; ns: string; onNavig
   if (sink.ref) {
     return (
       <Property label="Sink" value={
-        <ResourceLink
-          name={sink.ref.name}
-          {...knativeRefLink(sink.ref, 'Service')}
-          namespace={sink.ref.namespace || ns}
+        <KnativeReferenceLink
+          reference={sink.ref}
+          namespace={ns}
           onNavigate={onNavigate}
         />
       } />
@@ -193,10 +193,9 @@ export function SinkBindingRenderer({ data, onNavigate }: RendererProps) {
               <Property label="Subject API" value={subjectRef.apiVersion} />
               {subjectRef.name && (
                 <Property label="Subject" value={
-                  <ResourceLink
-                    name={subjectRef.name}
-                    {...knativeRefLink(subjectRef, 'Deployment')}
-                    namespace={subjectRef.namespace || ns}
+                  <KnativeReferenceLink
+                    reference={subjectRef}
+                    namespace={ns}
                     onNavigate={onNavigate}
                   />
                 } />

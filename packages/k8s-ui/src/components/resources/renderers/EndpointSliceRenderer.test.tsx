@@ -38,7 +38,7 @@ describe('EndpointSliceRenderer target navigation', () => {
     }
     try {
       await act(async () => root.render(<EndpointSliceRenderer onNavigate={onNavigate} data={{ metadata: { namespace: 'slice-team' }, endpoints: [
-        { addresses: ['10.0.0.1'], nodeName: 'worker', targetRef: { apiVersion: 'custom.example.io/v1', kind: 'Node', name: 'custom-target' } },
+        { addresses: ['10.0.0.1'], nodeName: 'worker', targetRef: { apiVersion: 'custom.example.io/v1', kind: 'Node', namespace: 'irrelevant', name: 'custom-target' } },
         { addresses: ['10.0.0.2'], targetRef: { apiVersion: 'v1', kind: 'Pod', namespace: 'target-team', name: 'backend' } },
         { addresses: ['10.0.0.3'], targetRef: { kind: 'Pod', namespace: 'slice-team', name: 'controller-written', uid: 'pod-uid' } },
         { addresses: ['10.0.0.4'], targetRef: { kind: 'Widget', namespace: 'slice-team', name: 'unknown-api' } },

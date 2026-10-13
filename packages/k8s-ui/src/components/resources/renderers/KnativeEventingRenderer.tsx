@@ -1,7 +1,8 @@
+import { KnativeReferenceLink } from './KnativeReferenceLink'
 import { Radio, Filter, FileType, Inbox, ArrowRightLeft } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
-import { getKnativeConditionStatus, knativeRefLink } from '../resource-utils-knative'
+import { getKnativeConditionStatus } from '../resource-utils-knative'
 
 interface RendererProps {
   data: any
@@ -46,10 +47,9 @@ export function BrokerRenderer({ data, onNavigate }: RendererProps) {
           <PropertyList>
             {delivery.deadLetterSink?.ref && (
               <Property label="Dead Letter" value={
-                <ResourceLink
-                  name={delivery.deadLetterSink.ref.name}
-                  {...knativeRefLink(delivery.deadLetterSink.ref, 'Service')}
-                  namespace={delivery.deadLetterSink.ref.namespace || ns}
+                <KnativeReferenceLink
+                  reference={delivery.deadLetterSink.ref}
+                  namespace={ns}
                   onNavigate={onNavigate}
                 />
               } />
@@ -104,10 +104,9 @@ export function TriggerRenderer({ data, onNavigate }: RendererProps) {
           } />
           <Property label="Subscriber" value={
             subscriberRef ? (
-              <ResourceLink
-                name={subscriberRef.name}
-                {...knativeRefLink(subscriberRef, 'Service')}
-                namespace={subscriberRef.namespace || ns}
+              <KnativeReferenceLink
+                reference={subscriberRef}
+                namespace={ns}
                 onNavigate={onNavigate}
               />
             ) : subscriberUri ? (
@@ -246,9 +245,8 @@ export function SubscriptionRenderer({ data, onNavigate }: RendererProps) {
           } />
           {channelRef && (
             <Property label="Channel" value={
-              <ResourceLink
-                name={channelRef.name}
-                {...knativeRefLink(channelRef, 'Channel')}
+              <KnativeReferenceLink
+                reference={channelRef}
                 namespace={ns}
                 onNavigate={onNavigate}
               />
@@ -256,10 +254,9 @@ export function SubscriptionRenderer({ data, onNavigate }: RendererProps) {
           )}
           <Property label="Subscriber" value={
             subscriberRef ? (
-              <ResourceLink
-                name={subscriberRef.name}
-                {...knativeRefLink(subscriberRef, 'Service')}
-                namespace={subscriberRef.namespace || ns}
+              <KnativeReferenceLink
+                reference={subscriberRef}
+                namespace={ns}
                 onNavigate={onNavigate}
               />
             ) : subscriberUri ? (
@@ -268,10 +265,9 @@ export function SubscriptionRenderer({ data, onNavigate }: RendererProps) {
           } />
           <Property label="Reply" value={
             replyRef ? (
-              <ResourceLink
-                name={replyRef.name}
-                {...knativeRefLink(replyRef, 'Channel')}
-                namespace={replyRef.namespace || ns}
+              <KnativeReferenceLink
+                reference={replyRef}
+                namespace={ns}
                 onNavigate={onNavigate}
               />
             ) : replyUri ? (
@@ -286,10 +282,9 @@ export function SubscriptionRenderer({ data, onNavigate }: RendererProps) {
           <PropertyList>
             {delivery.deadLetterSink.ref && (
               <Property label="Sink" value={
-                <ResourceLink
-                  name={delivery.deadLetterSink.ref.name}
-                  {...knativeRefLink(delivery.deadLetterSink.ref, 'Service')}
-                  namespace={delivery.deadLetterSink.ref.namespace || ns}
+                <KnativeReferenceLink
+                  reference={delivery.deadLetterSink.ref}
+                  namespace={ns}
                   onNavigate={onNavigate}
                 />
               } />

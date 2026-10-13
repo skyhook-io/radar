@@ -1,8 +1,25 @@
+import { apiVersionToGroup, kindToPluralWithGroup } from '../../utils/navigation'
+import type { ResourceRef } from '../../types/core'
+
+/** KReference records apiVersion or an explicit nonempty group. */
+export function getKnativeReference(reference: any, defaultNamespace: string): ResourceRef | undefined {
+  const version = reference?.apiVersion
+  let group = reference?.group
+  if (typeof version === 'string' && version) {
+    const parts = version.split('/')
+    if (parts.length > 2 || parts.some(part => !part)) return undefined
+    const observed = apiVersionToGroup(version)
+    if (group && group !== observed) return undefined
+    group = observed
+  } else if (typeof group !== 'string' || !group) return undefined
+  if (typeof reference?.kind !== 'string' || !reference.kind || typeof reference?.name !== 'string' || !reference.name) return undefined
+  return { group, kind: kindToPluralWithGroup(reference.kind, group), name: reference.name, namespace: reference.namespace || defaultNamespace }
+}
+
 // KNative CRD utility functions
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
-import { apiVersionToGroup, kindToPluralWithGroup } from '../../utils/navigation'
 
 // ============================================================================
 // SHARED HELPERS
@@ -216,11 +233,4 @@ export function getDomainMappingUrl(resource: any): string {
 
 export function getServerlessServiceMode(resource: any): string {
   return resource?.spec?.mode || '-'
-}
-
-/** A Knative KReference names its own API group; the link must keep it, or a
- * Knative Service sink resolves to the core Service of the same name. */
-export function knativeRefLink(ref: { apiVersion?: string; kind?: string }, defaultKind: string): { kind: string; group?: string } {
-  const group = apiVersionToGroup(ref.apiVersion)
-  return { kind: kindToPluralWithGroup(ref.kind || defaultKind, group), group: group || undefined }
 }

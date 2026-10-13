@@ -1,8 +1,9 @@
+import { KnativeReferenceLink } from './KnativeReferenceLink'
 import { Network, ShieldCheck, Server, Globe } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
-import { getKnativeConditionStatus, knativeRefLink } from '../resource-utils-knative'
+import { getKnativeConditionStatus } from '../resource-utils-knative'
 
 interface RendererProps {
   data: any
@@ -165,9 +166,8 @@ export function ServerlessServiceRenderer({ data, onNavigate }: RendererProps) {
           <Property label="Protocol" value={protocolType} />
           {objectRef && (
             <Property label="Target" value={
-              <ResourceLink
-                name={objectRef.name}
-                {...knativeRefLink(objectRef, 'Deployment')}
+              <KnativeReferenceLink
+                reference={objectRef}
                 namespace={ns}
                 onNavigate={onNavigate}
               />
@@ -212,9 +212,8 @@ export function DomainMappingRenderer({ data, onNavigate }: RendererProps) {
           ) : undefined} />
           {ref && (
             <Property label="Target" value={
-              <ResourceLink
-                name={ref.name}
-                {...knativeRefLink(ref, 'Service')}
+              <KnativeReferenceLink
+                reference={ref}
                 namespace={ns}
                 onNavigate={onNavigate}
               />
