@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -1096,6 +1097,7 @@ func (b *Builder) addCalicoPolicyNodes(
 				identity := calicoPolicyIdentity(definition.nodeKind, namespace, policy.GetName())
 				if index, built := policyNodeIndex[identity]; built {
 					recordCalicoPolicyGroup(&nodes[index], apiVersion)
+					nodes[index].uidByGroup[group] = policy.GetUID()
 					continue
 				}
 				nodeData["apiVersions"] = []string{apiVersion}
@@ -1105,7 +1107,7 @@ func (b *Builder) addCalicoPolicyNodes(
 				if definition.staged {
 					status = StatusNeutral
 				}
-				nodes = append(nodes, Node{ID: nodeID, Kind: definition.nodeKind, Name: policy.GetName(), Status: status, Data: nodeData})
+				nodes = append(nodes, Node{ID: nodeID, Kind: definition.nodeKind, Name: policy.GetName(), Status: status, Data: nodeData, uid: policy.GetUID(), ownerReferences: policy.GetOwnerReferences(), observed: true, uidByGroup: map[string]types.UID{group: policy.GetUID()}})
 
 				if definition.staged && !CalicoStagedActionPreviewsProtection(policy) {
 					continue

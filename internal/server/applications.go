@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -287,7 +288,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"), s.newRelationshipReadChecker(r))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -317,7 +318,7 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"), s.newRelationshipReadChecker(r))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -553,31 +554,63 @@ func firstNonEmptyString(values ...string) string {
 // cleanly: every workload becomes its own structural root and carries no
 // satellites — identity then rests on the label overlay alone, raw-always.
 type appGraph struct {
-	topo       *topology.Topology
-	idx        *topology.RelationshipsIndex
-	provider   topology.ResourceProvider
-	dp         topology.DynamicProvider
-	byID       map[string]topology.Node
-	byResource map[string]string
+	topo            *topology.Topology
+	idx             *topology.RelationshipsIndex
+	provider        topology.ResourceProvider
+	dp              topology.DynamicProvider
+	byID            map[string]topology.Node
+	byResource      map[string]string
+	readableParents map[string]bool
 }
 
 // ListApplications builds the structural topology graph, resolves each app
 // workload to its graph root + label overlay, and groups them into logical
 // apps. Add-on machinery is classified (not dropped); nothing is hidden.
 func ListApplications(ctx context.Context, namespaces []string) (*applicationsResponse, error) {
-	return listApplicationsForRequest(ctx, namespaces, true)
+	return listApplicationsForRequest(ctx, namespaces, true, nil)
 }
 
-func listApplicationsForRequest(ctx context.Context, namespaces []string, canListClusterWorkflowTemplates bool) (*applicationsResponse, error) {
+func listApplicationsForRequest(ctx context.Context, namespaces []string, canListClusterWorkflowTemplates bool, checker resourcecontext.RefAccessChecker) (*applicationsResponse, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, errResourceCacheUnavailable
 	}
 	applicationsCacheMu.Lock()
-	cacheKey := fmt.Sprintf("%d|%s", applicationsCacheGeneration, applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates))
+	baseKey := fmt.Sprintf("%d|%s", applicationsCacheGeneration, applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates))
+	entry := applicationsCache[baseKey]
+	applicationsCacheMu.Unlock()
+	g, graphAt := entry.graph, entry.graphAt
+	if g == nil || time.Since(graphAt) >= applicationsGraphCacheTTL {
+		value, err, _ := applicationsBuildSF.Do("graph|"+baseKey, func() (any, error) {
+			applicationsCacheMu.Lock()
+			current := applicationsCache[baseKey]
+			applicationsCacheMu.Unlock()
+			if current.graph != nil && time.Since(current.graphAt) < applicationsGraphCacheTTL {
+				return current, nil
+			}
+			builtGraph := buildAppGraph(cache, namespaces)
+			builtAt := time.Now()
+			current = applicationsCacheEntry{at: builtAt, graph: builtGraph, graphAt: builtAt}
+			applicationsCacheMu.Lock()
+			if len(applicationsCache) >= applicationsCacheMaxEntries {
+				evictOldestApplicationsCacheEntry()
+			}
+			applicationsCache[baseKey] = current
+			applicationsCacheMu.Unlock()
+			return current, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		entry = value.(applicationsCacheEntry)
+		g, graphAt = entry.graph, entry.graphAt
+	}
+	requestGraph, permissions := applicationParentAccess(ctx, g, checker)
+	cacheKey := baseKey + permissions
+	applicationsCacheMu.Lock()
 	entry, hit := applicationsCache[cacheKey]
 	applicationsCacheMu.Unlock()
-	if hit && time.Since(entry.at) < applicationsCacheTTL {
+	if hit && entry.at.After(graphAt) && time.Since(entry.at) < applicationsCacheTTL {
 		return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 	}
 
@@ -585,20 +618,14 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		applicationsCacheMu.Lock()
 		entry, hit := applicationsCache[cacheKey]
 		applicationsCacheMu.Unlock()
-		if hit && time.Since(entry.at) < applicationsCacheTTL {
+		if hit && entry.at.After(graphAt) && time.Since(entry.at) < applicationsCacheTTL {
 			return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 		}
 
 		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 
-		g := entry.graph
-		graphAt := entry.graphAt
-		if g == nil || time.Since(graphAt) >= applicationsGraphCacheTTL {
-			g = buildAppGraph(cache, namespaces)
-			graphAt = time.Now()
-		}
-		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, canListClusterWorkflowTemplates)
+		wls := collectAppWorkloads(buildCtx, cache, namespaces, requestGraph, canListClusterWorkflowTemplates)
 		rows := groupApplications(wls)
 		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, cache)
 		appSetByKey := appSetFanouts(appSetChildren)
@@ -734,12 +761,18 @@ func (g *appGraph) structuralRoot(startID string) (topology.Node, bool) {
 		next := ""
 		incoming, _ := g.idx.EdgesFor(cur)
 		for _, e := range incoming {
-			if e.Type == topology.EdgeManages {
+			if e.Type != topology.EdgeManages {
+				continue
+			}
+			if next == "" {
+				next = e.Source
+			}
+			if e.OwnerController != nil && *e.OwnerController {
 				next = e.Source
 				break
 			}
 		}
-		if next == "" || visited[next] {
+		if next == "" || visited[next] || g.readableParents != nil && !g.readableParents[next] {
 			break
 		}
 		visited[next] = true
@@ -2747,4 +2780,38 @@ func (s *Server) filterApplicationAuthenticationRefs(r *http.Request, shared *ap
 		row.Relationships = &rel
 	}
 	return &out
+}
+
+func applicationParentAccess(ctx context.Context, shared *appGraph, checker resourcecontext.RefAccessChecker) (*appGraph, string) {
+	if checker == nil || shared == nil || shared.topo == nil {
+		return shared, ""
+	}
+	out := *shared
+	out.readableParents = make(map[string]bool)
+	scopes := make(map[string]bool)
+	for _, edge := range shared.topo.Edges {
+		if edge.Type != topology.EdgeManages {
+			continue
+		}
+		parent, ok := shared.byID[edge.Source]
+		if !ok {
+			continue
+		}
+		kind := topology.KubernetesKindForNode(&parent)
+		group := appGraphNodeGroup(&parent, kind)
+		namespace, _ := parent.Data["namespace"].(string)
+		scope := resourceid.ResourceKey(group, kind, namespace, "")
+		allowed, seen := scopes[scope]
+		if !seen {
+			allowed = checker.CanRead(ctx, group, kind, namespace)
+			scopes[scope] = allowed
+		}
+		out.readableParents[parent.ID] = allowed
+	}
+	keys := make([]string, 0, len(scopes))
+	for scope, allowed := range scopes {
+		keys = append(keys, fmt.Sprintf("%s=%t", scope, allowed))
+	}
+	sort.Strings(keys)
+	return &out, "|parents:" + strings.Join(keys, ";")
 }

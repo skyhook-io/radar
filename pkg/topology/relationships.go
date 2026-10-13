@@ -115,6 +115,28 @@ func (r *RelationshipsIndex) podConsumersFor(key string) []ResourceRef {
 	return visible
 }
 
+// ResolveObservedOwner finds an exact group/kind/name owner in the dependent's
+// namespace or an observed cluster-scoped node. The boolean is false for a
+// missing node or a known UID mismatch. Missing UID evidence does not establish
+// replacement; this resolver never fetches an owner or invents an incarnation.
+func (r *RelationshipsIndex) ResolveObservedOwner(ref resourceid.Reference) (*Node, bool) {
+	if r == nil || !ref.HasGroup() {
+		return nil, false
+	}
+	node := r.nodesByResourceKey[resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)]
+	if node == nil && ref.Namespace != "" {
+		node = r.nodesByResourceKey[resourceid.ResourceKey(ref.Group, ref.Kind, "", ref.Name)]
+	}
+	if node == nil {
+		return nil, false
+	}
+	uid := node.uid
+	if node.uidByGroup != nil {
+		uid = node.uidByGroup[ref.Group]
+	}
+	return node, ref.UID == "" || uid == "" || ref.UID == string(uid)
+}
+
 // EdgesFor returns the incoming and outgoing edges touching nodeID. Both
 // slices alias the index's internal storage — callers MUST NOT mutate them.
 // Returns (nil, nil) when the node has no edges or the index is nil.
@@ -453,6 +475,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
+	preferredOwner := preferredOwnerEdge(incomingEdges)
 	for _, edge := range incomingEdges {
 		// Something points TO this resource (incoming edge)
 		ref := refForNodeID(edge.Source)
@@ -462,8 +485,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 		switch edge.Type {
 		case EdgeManages:
-			// Something manages/owns this resource
-			rel.Owner = ref
+			// Preserve the observed controller when multiple parents are present.
+			if preferredOwner != nil && edge.Source == preferredOwner.Source {
+				rel.Owner = ref
+			}
 		case EdgeExposes:
 			if isServiceEntrypointRoute(ref) {
 				rel.Routes = appendResourceRef(rel.Routes, *ref)
@@ -550,6 +575,32 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			default:
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
 			}
+		}
+	}
+
+	queriedObj := obj
+	if queriedObj == nil {
+		queriedObj = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
+	}
+	// Multiple graph parents are valid. Prefer the actual controller owner for
+	// the singular compatibility field, before computing workload shortcuts.
+	if metadata, ok := queriedObj.(metav1.Object); ok {
+		for _, owner := range metadata.GetOwnerReferences() {
+			if owner.Controller == nil || !*owner.Controller {
+				continue
+			}
+			ref := resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace)
+			node, matches := lookupIndex.ResolveObservedOwner(ref)
+			if !matches {
+				continue
+			}
+			for _, edge := range incomingEdges {
+				if edge.Type == EdgeManages && edge.Source == node.ID {
+					rel.Owner = refForNodeID(node.ID)
+					break
+				}
+			}
+			break
 		}
 	}
 
@@ -663,12 +714,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	//
 	// Use the caller-provided obj when available — it is the authoritative
 	// resource (already disambiguated by group at fetch time) and avoids the
-	// group-blind kind/name lookup. Fall back to lookupObjectMetadata only
-	// when obj is nil (back-compat path).
-	queriedObj := obj
-	if queriedObj == nil {
-		queriedObj = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
-	}
+	// group-blind kind/name lookup. queriedObj was resolved once above.
 	if pod, ok := queriedObj.(*corev1.Pod); ok {
 
 		for _, declaration := range configrefs.PodSpecReferences(pod.Namespace, pod.Spec) {

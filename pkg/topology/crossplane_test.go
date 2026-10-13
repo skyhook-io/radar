@@ -69,6 +69,9 @@ func TestBuildCrossplaneV1ClaimChainEdges(t *testing.T) {
 			t.Fatalf("missing Crossplane node %q; nodes=%+v", id, topo.Nodes)
 		}
 	}
+	if findNode(topo, claimID).uid != "claim-uid" || findNode(topo, xrID).uid != "xr-uid" {
+		t.Fatal("observed Crossplane incarnations were discarded")
+	}
 	if !hasKarpenterTopologyEdge(topo, claimID, xrID, EdgeManages) {
 		t.Fatalf("missing claim -> XR manages edge; edges=%+v", topo.Edges)
 	}

@@ -52,7 +52,7 @@ func TestCertificateIssuerEdgesDefaultsScopeAndCachedResolution(t *testing.T) {
 	} {
 		name := fmt.Sprintf("cert-%d", i)
 		certs = append(certs, unstructured.Unstructured{Object: map[string]any{"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": map[string]any{"namespace": "team", "name": name}, "spec": map[string]any{"issuerRef": issuerRef}}})
-		nodes = append(nodes, Node{ID: "certificate/team/" + name, Kind: KindCertificate, Name: name, Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
+		nodes = append(nodes, Node{observed: true, ID: "certificate/team/" + name, Kind: KindCertificate, Name: name, Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
 	}
 	opts := DefaultBuildOptions()
 	opts.Namespaces = []string{"team"}
@@ -89,7 +89,7 @@ func TestCertificateIssuerEdgesReportsUnavailableLookup(t *testing.T) {
 		"metadata": map[string]any{"name": "tls", "namespace": "team"},
 		"spec":     map[string]any{"issuerRef": map[string]any{"name": "ca"}},
 	}}
-	nodes, edges, warnings := addCertificateIssuerEdges([]Node{{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}}}, nil, []unstructured.Unstructured{cert}, p, DefaultBuildOptions())
+	nodes, edges, warnings := addCertificateIssuerEdges([]Node{{observed: true, ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}}}, nil, []unstructured.Unstructured{cert}, p, DefaultBuildOptions())
 	if len(nodes) != 1 || len(edges) != 0 || len(warnings) != 1 || p.getCalls != 0 {
 		t.Fatalf("unavailable lookup: nodes=%d edges=%d warnings=%v gets=%d", len(nodes), len(edges), warnings, p.getCalls)
 	}
@@ -102,8 +102,8 @@ func TestReferencedIssuerRetainsGenericOwnerWithoutDuplicateNodesOrEdges(t *test
 	cert := genericIdentityObject(schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1"}, "Certificate", "team", "tls")
 	cert.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
 	nodes := []Node{
-		{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}},
-		{ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}},
+		{observed: true, ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}},
+		{observed: true, ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}},
 	}
 	nodes, edges, warnings := addCertificateIssuerEdges(nodes, nil, []unstructured.Unstructured{*cert}, p, DefaultBuildOptions())
 	if len(warnings) != 0 {

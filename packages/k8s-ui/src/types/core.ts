@@ -323,6 +323,8 @@ export interface TopologyNode {
 }
 
 export interface TopologyEdge {
+  /** Present only for an observed metadata owner reference. */
+  ownerController?: boolean
   id: string
   source: string
   target: string
