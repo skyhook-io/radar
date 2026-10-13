@@ -299,3 +299,32 @@ it('adds only confirmed creations from an Apply recovery attempt to earlier part
     expect(document.body.textContent).not.toContain('Service app/updated')
   } finally { await act(async () => root.unmount()); host.remove() }
 })
+
+it('keeps created-object facts and the edited draft when canceling a file replacement', async () => {
+  const first = { kind: 'ConfigMap', namespace: 'app', name: 'first', uid: 'first-uid', created: true }
+  const onApply = vi.fn(async () => { throw Object.assign(new Error('document 2 failed'), { appliedResults: [first] }) })
+  const onClose = vi.fn()
+  const host = document.createElement('div'); document.body.appendChild(host); const root = createRoot(host)
+  const edited = 'kind: ConfigMap\nmetadata:\n  name: first\n'
+  try {
+    await act(async () => root.render(<CreateResourceDialog open onClose={onClose} initialYaml="kind: ConfigMap" initialMode="create" lockMode onApply={onApply} isApplying={false} />))
+    const editor = document.querySelector('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(editor, edited)
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => button('Create')!.click())
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
+    const file = new File(['kind: Service'], 'replacement.yaml', { type: 'text/yaml' })
+    Object.defineProperty(file, 'text', { value: async () => 'kind: Service' })
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })))
+    const confirmation = [...document.querySelectorAll('h3')].find(heading => heading.textContent === 'Replace editor contents?')!.closest('[role="dialog"]')!
+    const cancel = [...confirmation.querySelectorAll('button')].find(control => control.textContent?.trim() === 'Cancel')!
+    await act(async () => cancel.click())
+    expect(document.querySelector('textarea')!.value).toBe(edited)
+    expect(document.body.textContent).toContain('Created before it stopped: ConfigMap app/first.')
+    expect(onClose).not.toHaveBeenCalled()
+  } finally { await act(async () => root.unmount()); host.remove() }
+})

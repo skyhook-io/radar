@@ -254,7 +254,6 @@ export function CreateResourceDialog({
         return
       }
       setError(null)
-      setPartialCreates([])
       setSuccess(null)
       if (needsReplaceConfirmation(yamlRef.current, initialYaml)) {
         setPendingImport({ fileName: result.fileName, yaml: result.yaml })
