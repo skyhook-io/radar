@@ -2993,7 +2993,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.writeJSON(w, topology.ResourceWithRelationships{
-			RelatedApplicationFindings: issues.CachedStrimziEvidence(resource, s.strimziEvidenceAccess(r)),
+			RelatedApplicationFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r)),
 			Resource:      resource,
 			Relationships: relationships,
 			HPADiagnosis:  hpaDiagnosisFor(resource),
@@ -3227,7 +3227,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// Pass the already-fetched resource so ManagedBy synthesis uses the
 	// authoritative object instead of a group-blind kind/name lookup.
 	response := topology.ResourceWithRelationships{
-		RelatedApplicationFindings: issues.CachedStrimziEvidence(resource, s.strimziEvidenceAccess(r)),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r)),
 		Resource:                   resource,
 		Relationships:              s.relationshipsFor(r, kind, namespace, name, resource),
 		HPADiagnosis:               hpaDiagnosisFor(resource),

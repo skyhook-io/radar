@@ -313,6 +313,13 @@ export function projectInvestigationEvidence(
   ): string | undefined => {
     switch (group.kind) {
       case "issue":
+        // A parent diagnosis cannot clear a connector snapshot it did not read.
+        if (
+          observation.data.type === "issue" &&
+          observation.data.applicationSource
+        )
+          return undefined;
+        return semanticCoverageKey(group.kind);
       case "startup":
       case "crash":
       case "dns":

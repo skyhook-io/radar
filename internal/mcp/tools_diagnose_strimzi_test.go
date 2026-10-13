@@ -26,7 +26,7 @@ func TestStrimziDiagnoseDispatch(t *testing.T) {
 	}
 }
 
-func TestStrimziEvidenceRequiresExactCRRead(t *testing.T) {
+func TestStrimziEvidenceFollowsNamespacedIssueReadRules(t *testing.T) {
 	k8s.ResetTestDynamicState()
 	t.Cleanup(k8s.ResetTestDynamicState)
 	gvr := schema.GroupVersionResource{Group: "kafka.strimzi.io", Version: "v1", Resource: "kafkaconnectors"}
@@ -38,15 +38,15 @@ func TestStrimziEvidenceRequiresExactCRRead(t *testing.T) {
 	_, perms := resolveUserPerms(ctx)
 	perms.SetCanI("get", gvr.Group, gvr.Resource, "app", false)
 	ref := issues.Ref{Group: gvr.Group, Kind: "KafkaConnector", Namespace: "app", Name: "failed"}
-	if strimziEvidenceAccess(ctx)(ref) {
-		t.Fatal("namespace access exposed denied connector")
+	if !issueRelatedResourceAccess(ctx)(ref) {
+		t.Fatal("curated connector finding did not follow namespace issue access")
 	}
 	perms.SetCanI("get", gvr.Group, gvr.Resource, "app", true)
-	if !strimziEvidenceAccess(ctx)(ref) {
+	if !issueRelatedResourceAccess(ctx)(ref) {
 		t.Fatal("authorized connector omitted")
 	}
 	ref.Namespace = "other"
-	if strimziEvidenceAccess(ctx)(ref) {
+	if issueRelatedResourceAccess(ctx)(ref) {
 		t.Fatal("namespace restriction bypassed")
 	}
 }

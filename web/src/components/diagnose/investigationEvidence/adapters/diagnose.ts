@@ -330,6 +330,7 @@ export function adaptDiagnose(
     source.confirmedSuccess &&
     related.length === 0 &&
     relatedValid &&
+    context?.relatedApplicationFindings === undefined &&
     isDiagnosableWorkloadKind(resource.kind)
   ) {
     const scope = scopeFromArgs(source);
@@ -475,7 +476,8 @@ export function adaptDiagnose(
     bundleRelevance === "target" &&
     isDiagnosableWorkloadKind(resource.kind)
   ) {
-    if (relatedValid) builder.coverSemantic(source, "issue");
+    if (relatedValid && context?.relatedApplicationFindings === undefined)
+      builder.coverSemantic(source, "issue");
     if (blockersValid) builder.coverSemantic(source, "startup");
     if (
       crashesValid &&

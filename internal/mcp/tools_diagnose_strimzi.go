@@ -29,10 +29,6 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 	if !checkNamespaceAccess(ctx, input.Namespace) {
 		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
 	}
-	resource := strings.ToLower(kind) + "s"
-	if !canReadInNamespace(ctx, group, resource, input.Namespace, "get") {
-		return nil, nil, fmt.Errorf("forbidden: cannot get %s.%s", resource, group)
-	}
 	cache, discovery := k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()
 	if cache == nil || discovery == nil {
 		return nil, nil, errNotConnected()
@@ -58,15 +54,8 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 	}{
 		Coverage:        "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
 		Resource:        map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
-		ResourceContext: &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, strimziEvidenceAccess(ctx))},
-		RelatedIssues:   issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx)}, group, kind, input.Namespace, input.Name),
+		ResourceContext: &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx))},
+		RelatedIssues:   issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name),
 	}
 	return toJSONResult(resp)
-}
-
-func strimziEvidenceAccess(ctx context.Context) func(issues.Ref) bool {
-	checker := newMCPRequestScopedChecker(ctx)
-	return func(ref issues.Ref) bool {
-		return checkNamespaceAccess(ctx, ref.Namespace) && checker.CanRead(ctx, ref.Group, ref.Kind, ref.Namespace)
-	}
 }

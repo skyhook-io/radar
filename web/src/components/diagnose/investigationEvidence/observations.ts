@@ -13,6 +13,7 @@ import {
   type DiagnosisChangeContext,
   type DiagnosisEvidenceLimitationBase,
   type DiagnosisPodLogEntry,
+  type DiagnosisResourceRef,
   diagnosisSeverityTone,
 } from "../diagnoseEvidenceTypes";
 import { getCrossplaneConditionTone } from "@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane";
@@ -20,7 +21,14 @@ import { investigationResourceEvidenceSummary } from "../investigationResourceEv
 import { kindToPluralWithGroup } from "../../../utils/navigation";
 import { pluralToKind } from "@skyhook-io/k8s-ui";
 import { stableHash } from "./identity";
-import { nonEmptyString, parseJSON, record, stringArray } from "./parse";
+import {
+  issue,
+  nonEmptyString,
+  parseJSON,
+  record,
+  resourceRef,
+  stringArray,
+} from "./parse";
 import {
   type InvestigationEventEvidence,
   type InvestigationEvidenceGroup,
@@ -734,6 +742,7 @@ export function addResourceObservation(
     },
   });
   addResourceContextLimitations(builder, source, context);
+  addRelatedApplicationFindings(builder, source, context, relevance);
 }
 // The live Pod spec differing from its template is context, not a fault, so
 // it reads as a line on the resource card rather than a finding of its own.
@@ -755,6 +764,7 @@ export function addIssueObservation(
   value: Issue,
   producerRelevance: InvestigationEvidenceRelevance = "broader",
   pods?: string[],
+  applicationSource?: DiagnosisResourceRef,
 ): void {
   const matchesTarget = resourceMatchesTarget(builder.target, {
     kind: value.kind,
@@ -777,6 +787,7 @@ export function addIssueObservation(
     data: {
       type: "issue",
       issue: value,
+      ...(applicationSource ? { applicationSource } : {}),
       relevance,
       ...(pods && pods.length > 0 ? { pods } : {}),
     },
@@ -1015,5 +1026,48 @@ export function invalidPayload(
     section,
     "Radar couldn't summarize this investigation step. Review it in Activity.",
     "unknown",
+  );
+}
+
+function addRelatedApplicationFindings(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  context: InvestigationResourceContext | undefined,
+  relevance: InvestigationEvidenceRelevance,
+): void {
+  const raw = context?.relatedApplicationFindings;
+  if (raw === undefined) return;
+  const value = record(raw);
+  const applicationSource = resourceRef(value?.source);
+  const findingsRaw = value?.findings;
+  const findings = Array.isArray(findingsRaw)
+    ? findingsRaw.map(issue).filter((item): item is Issue => Boolean(item))
+    : [];
+  if (
+    !value ||
+    !applicationSource ||
+    !nonEmptyString(value.coverage) ||
+    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+    (findingsRaw !== undefined &&
+      (!Array.isArray(findingsRaw) || findings.length !== findingsRaw.length))
+  ) {
+    invalidPayload(builder, source, "Related application findings");
+    return;
+  }
+  for (const finding of findings) {
+    addIssueObservation(
+      builder,
+      source,
+      finding,
+      relevance === "target" ? "producer-related" : "broader",
+      undefined,
+      applicationSource,
+    );
+  }
+  builder.limit(
+    source,
+    "Related application findings",
+    value.coverage,
+    value.truncated === true ? "truncated" : "unknown",
   );
 }
