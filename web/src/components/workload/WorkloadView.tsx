@@ -1,3 +1,4 @@
+import { RelatedConnectorFindingsSection } from './RelatedConnectorFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -1302,23 +1303,13 @@ export function WorkloadView({
           <>
             {diagnoseInline}
             {diagnoseHint}
-            {(!!resourceResponse?.relatedApplicationFindings?.findings?.length || resourceResponse?.relatedApplicationFindings?.truncated) && (
-              <div className="space-y-2">
-                <ResourceIssuesSection
-                  heading="Related connector findings"
-                  issues={resourceResponse.relatedApplicationFindings.findings}
-                  onResourceClick={rest.onNavigateToResource ? (ref) => rest.onNavigateToResource?.({
-                    kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                    namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '',
-                  }) : undefined}
-                />
-                <p className="text-xs text-theme-text-secondary">
-                  Associated with {resourceResponse.relatedApplicationFindings.source.kind} {resourceResponse.relatedApplicationFindings.source.name}; these are connector-level findings. This resource's status is reported separately.
-                  {' '}{resourceResponse.relatedApplicationFindings.coverage}
-                  {resourceResponse.relatedApplicationFindings.truncated && ' Additional connector evidence may be omitted.'}
-                </p>
-              </div>
-            )}
+            <RelatedConnectorFindingsSection
+              data={resourceResponse?.relatedApplicationFindings}
+              onResourceClick={rest.onNavigateToResource ? (ref) => rest.onNavigateToResource?.({
+                kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+                namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '',
+              }) : undefined}
+            />
             <AuditOverviewSection
               findings={auditFindings ?? []}
               onViewAll={() => navigateRouter('/checks')}
