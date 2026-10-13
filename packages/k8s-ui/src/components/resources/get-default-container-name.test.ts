@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getDefaultContainerName } from './resource-utils'
+import { getDefaultContainerName, getDefaultRunningContainerName } from './resource-utils'
 
 const podWith = (annotation: string | undefined, ...containers: string[]) => ({
   metadata: annotation
@@ -27,5 +27,29 @@ describe('getDefaultContainerName', () => {
 
   it('returns undefined for a pod with no containers', () => {
     expect(getDefaultContainerName(podWith(undefined))).toBeUndefined()
+  })
+})
+
+describe('getDefaultRunningContainerName', () => {
+  const withStates = (annotation: string | undefined, states: Record<string, 'running' | 'waiting' | 'terminated'>, ...containers: string[]) => ({
+    ...podWith(annotation, ...containers),
+    status: {
+      containerStatuses: Object.entries(states).map(([name, state]) => ({ name, state: { [state]: {} } })),
+    },
+  })
+
+  it('honors a running annotated default', () => {
+    const pod = withStates('app', { 'istio-proxy': 'running', app: 'running' }, 'istio-proxy', 'app')
+    expect(getDefaultRunningContainerName(pod)).toBe('app')
+  })
+
+  it('falls back in spec order when the preferred container is not running', () => {
+    const pod = withStates('app', { sidecar: 'running', app: 'waiting', worker: 'running' }, 'app', 'sidecar', 'worker')
+    expect(getDefaultRunningContainerName(pod)).toBe('sidecar')
+  })
+
+  it('returns undefined when no app container is running', () => {
+    const pod = withStates(undefined, { app: 'terminated' }, 'app')
+    expect(getDefaultRunningContainerName(pod)).toBeUndefined()
   })
 })

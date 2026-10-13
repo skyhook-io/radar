@@ -288,7 +288,7 @@ cmd_install_radar() {
 
   step "Building the current frontend, embedded assets, and linux/${arch} Radar binary"
   (cd "${REPO_ROOT}" && make frontend embed >/dev/null)
-  (cd "${REPO_ROOT}" && GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 go build -o "${tmp}/radar" ./cmd/explorer)
+  (cd "${REPO_ROOT}" && GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 go build -tags withoutebpf -o "${tmp}/radar" ./cmd/explorer)
   printf '%s\n' 'FROM alpine:3.20' 'RUN apk add --no-cache ca-certificates' 'COPY radar /radar' 'ENTRYPOINT ["/radar"]' > "${tmp}/Dockerfile"
   docker build -q -t "${image}" "${tmp}" >/dev/null
   kind load docker-image "${image}" --name "${CLUSTER_NAME}" >/dev/null

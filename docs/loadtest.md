@@ -22,7 +22,7 @@ make loadtest PODS=50000 LOADTEST_PORT=9351
 Or directly:
 
 ```bash
-go run ./cmd/testserver -pods 50000 [-port 9281] [-admin-port 9282] \
+go run -tags withoutebpf ./cmd/testserver -pods 50000 [-port 9281] [-admin-port 9282] \
   [-nodes 50] [-namespaces 10] [-pods-per-app 200]
 ```
 

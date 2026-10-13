@@ -8,7 +8,7 @@ export default defineConfig({
   use: { baseURL: 'http://127.0.0.1:19381', headless: true },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
   webServer: {
-    command: 'go run ../cmd/testserver -port 19381',
+    command: 'go run -tags withoutebpf ../cmd/testserver -port 19381',
     url: 'http://127.0.0.1:19381',
     reuseExistingServer: false,
     timeout: 120000,

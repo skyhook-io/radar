@@ -8,8 +8,8 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 
 const toasts = vi.hoisted(() => ({ errors: [] as string[] }))
-vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@skyhook-io/k8s-ui')>()),
+vi.mock('../components/ui/Toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../components/ui/Toast')>()),
   showApiError: (title: string) => toasts.errors.push(title),
 }))
 

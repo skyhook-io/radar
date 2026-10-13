@@ -26,6 +26,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
+	internalig "github.com/skyhook-io/radar/internal/igdebug"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -34,8 +35,10 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/internal/timeline"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/executioninsight"
 	"github.com/skyhook-io/radar/pkg/health"
+	igdomain "github.com/skyhook-io/radar/pkg/igdebug"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
@@ -54,7 +57,7 @@ import (
 // steers. Put conditional advice in response guidance so it arrives when
 // relevant; otherwise describe only fields whose names are insufficient for
 // correct interpretation, not every response field.
-func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolParamRegistry) {
+func registerTools(server *mcp.Server, includeWrites, includeInstrumentation bool, paramRegistry *toolParamRegistry) {
 	boolPtr := func(b bool) *bool { return &b }
 	// All radar tools operate against the connected cluster (closed world),
 	// not the open internet — set OpenWorldHint=false so MCP clients that
@@ -79,6 +82,10 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	// but NOT destructive - each pod is additive and deletes itself within ~60s - so
 	// DestructiveHint stays false.
 	diagnoseAnno := &mcp.ToolAnnotations{
+		DestructiveHint: boolPtr(false),
+		OpenWorldHint:   boolPtr(false),
+	}
+	instrumentTool := &mcp.ToolAnnotations{
 		DestructiveHint: boolPtr(false),
 		OpenWorldHint:   boolPtr(false),
 	}
@@ -550,6 +557,19 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		return
 	}
 
+	if includeInstrumentation {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name: "inspect_pod_runtime",
+			Description: "Collect short-lived kernel evidence for a Pod through an existing Inspektor Gadget deployment. " +
+				"Use processes to see what is running now, connections to see current TCP/UDP sockets, or dns to capture DNS answers, failures, and latency for up to 30 seconds. " +
+				"Process PIDs are host IDs. " +
+				"This is not a passive read: it temporarily loads a pinned eBPF gadget on the Pod's node, then unloads it. " +
+				"Processes and DNS are container-scoped; connections cover the Pod's shared network namespace, including sidecars, with no container attribution (host-network Pods unsupported). " +
+				"Results carry scope and pinned Pod UID/node/container identity. Requires explicit Gadget proxy RBAC; it never installs Gadget.",
+			Annotations: instrumentTool,
+		}, logToolCall("inspect_pod_runtime", handleInspectPodRuntime))
+	}
+
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
@@ -647,6 +667,14 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 type dashboardInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace. Use when triaging one app/tenant namespace before drilling into individual resources."`
+}
+
+type inspectPodRuntimeInput struct {
+	Namespace string `json:"namespace" jsonschema:"Pod namespace"`
+	Pod       string `json:"pod" jsonschema:"Pod name"`
+	Container string `json:"container,omitempty" jsonschema:"container name; honors the kubectl default-container annotation when running, otherwise the first running app container"`
+	Aspect    string `json:"aspect" jsonschema:"evidence to collect: processes, connections, or dns"`
+	Duration  int    `json:"duration,omitempty" jsonschema:"DNS capture duration in seconds, default 10, maximum 30; omit for snapshots"`
 }
 
 type topResourcesInput struct {
@@ -3418,6 +3446,61 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		})
 	}
 	return toJSONResult(result)
+}
+
+func handleInspectPodRuntime(ctx context.Context, _ *mcp.CallToolRequest, input inspectPodRuntimeInput) (*mcp.CallToolResult, any, error) {
+	if input.Namespace == "" || input.Pod == "" {
+		return nil, nil, fmt.Errorf("namespace and pod are required")
+	}
+	aspect := igdomain.Aspect(input.Aspect)
+	if !aspect.Valid() {
+		return nil, nil, fmt.Errorf("aspect must be processes, connections, or dns")
+	}
+	duration := time.Duration(0)
+	if aspect == igdomain.AspectDNS {
+		if input.Duration == 0 {
+			input.Duration = 10
+		}
+		if input.Duration < 1 || input.Duration > 30 {
+			return nil, nil, fmt.Errorf("duration must be between 1 and 30 seconds")
+		}
+		duration = time.Duration(input.Duration) * time.Second
+	} else if input.Duration != 0 {
+		return nil, nil, fmt.Errorf("duration is only valid for the dns aspect")
+	}
+	_, contextName := k8s.GetConfigSnapshot()
+	owner := igdomain.Owner{User: "local", Context: contextName}
+	if user := pkgauth.UserFromContext(ctx); user != nil {
+		owner.User = user.Username
+	}
+	toolCtx, cancel := context.WithTimeout(ctx, 95*time.Second)
+	defer cancel()
+	service := internalig.Default()
+	run, err := service.Start(toolCtx, igdomain.Request{
+		Owner: owner, Aspect: aspect, Duration: duration,
+		Target: igdomain.Target{Namespace: input.Namespace, Pod: input.Pod, Container: input.Container},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	view, err := service.WaitDone(toolCtx, run.ID, owner)
+	if err != nil {
+		_, _ = service.Stop(run.ID, owner)
+		return nil, nil, fmt.Errorf("live debug capture did not become ready: %w", err)
+	}
+	if view.Result == nil {
+		if view.Error != "" {
+			return nil, nil, errors.New(view.Error)
+		}
+		return nil, nil, fmt.Errorf("live debug capture ended in state %s without a result", view.State)
+	}
+	return toJSONResult(struct {
+		*igdomain.Result
+		State   igdomain.State `json:"state"`
+		Reason  string         `json:"reason,omitempty"`
+		Error   string         `json:"error,omitempty"`
+		Privacy string         `json:"privacy,omitempty"`
+	}{Result: view.Result, State: view.State, Reason: view.Reason, Error: view.Error, Privacy: "DNS output is aggregated; raw packets and process arguments are not returned."})
 }
 
 // searchResponseMCP embeds search.Result so the JSON shape stays identical

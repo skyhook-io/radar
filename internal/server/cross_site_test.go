@@ -149,25 +149,29 @@ func TestRequireSameOriginAllowsCrossSiteReadsFromTunnelAndTrustedOrigins(t *tes
 // identity provider and carries a signed token.
 func TestAPIRoutesAreGuardedOnTheRealRouter(t *testing.T) {
 	writesOutsideAPI := map[string]string{
-		"/*":                               "frontend static files, read only for every method",
-		"/.well-known/*":                   "always 404",
-		"/mcp/.well-known/*":               "always 404",
-		"/mcp-readonly/.well-known/*":      "always 404",
-		"/mcp-investigation/.well-known/*": "always 404",
-		"/mcp/*":                           "MCP, guarded by its own http.CrossOriginProtection",
-		"/mcp-readonly/*":                  "MCP, guarded by its own http.CrossOriginProtection",
-		"/mcp-investigation/*":             "MCP, guarded by its own http.CrossOriginProtection",
+		"/*":                                     "frontend static files, read only for every method",
+		"/.well-known/*":                         "always 404",
+		"/mcp/.well-known/*":                     "always 404",
+		"/mcp-readonly/.well-known/*":            "always 404",
+		"/mcp-investigation-apply/.well-known/*": "always 404",
+		"/mcp-investigation/.well-known/*":       "always 404",
+		"/mcp/*":                                 "MCP, guarded by its own http.CrossOriginProtection",
+		"/mcp-readonly/*":                        "MCP, guarded by its own http.CrossOriginProtection",
+		"/mcp-investigation-apply/*":             "MCP, guarded by its own http.CrossOriginProtection",
+		"/mcp-investigation/*":                   "MCP, guarded by its own http.CrossOriginProtection",
 	}
 	readsOutsideAPI := map[string]string{
-		"/*":                               "frontend static files",
-		"/.well-known/*":                   "always 404",
-		"/mcp/.well-known/*":               "always 404",
-		"/mcp-readonly/.well-known/*":      "always 404",
-		"/mcp-investigation/.well-known/*": "always 404",
-		"/mcp/*":                           "MCP, answers GET with nothing a page can use",
-		"/mcp-readonly/*":                  "MCP, answers GET with nothing a page can use",
-		"/mcp-investigation/*":             "MCP, answers GET with nothing a page can use",
-		"/metrics":                         "Prometheus scrape, no side effects",
+		"/*":                                      "frontend static files",
+		"/.well-known/*":                          "always 404",
+		"/mcp/.well-known/*":                      "always 404",
+		"/mcp-readonly/.well-known/*":             "always 404",
+		"/mcp-investigation-apply/.well-known/*":  "always 404",
+		"/mcp-investigation/.well-known/*":        "always 404",
+		"/mcp/*":                                  "MCP, answers GET with nothing a page can use",
+		"/mcp-readonly/*":                         "MCP, answers GET with nothing a page can use",
+		"/mcp-investigation-apply/*":              "MCP, answers GET with nothing a page can use",
+		"/mcp-investigation/*":                    "MCP, answers GET with nothing a page can use",
+		"/metrics":                                "Prometheus scrape, no side effects",
 		"/.well-known/oauth-authorization-server": "OAuth metadata for MCP clients, static",
 		"/.well-known/oauth-protected-resource":   "OAuth metadata for MCP clients, static",
 		"/debug/pprof/":                           "local profiling, not mounted in cloud mode",
@@ -189,7 +193,7 @@ func TestAPIRoutesAreGuardedOnTheRealRouter(t *testing.T) {
 	param := regexp.MustCompile(`\{[^}]*\}`)
 
 	for _, basePath := range []string{"", "/radar"} {
-		srv := New(Config{DevMode: true, BasePath: basePath, MCPHandler: stub, MCPReadOnlyHandler: stub, MCPInvestigationHandler: stub})
+		srv := New(Config{DevMode: true, BasePath: basePath, MCPHandler: stub, MCPReadOnlyHandler: stub, MCPInvestigationHandler: stub, MCPApplyHandler: stub})
 		ts := httptest.NewServer(srv.Handler())
 		// Under a base path the app routes sit behind a wrapping handler that
 		// chi.Walk cannot see into, so walk a copy of the same route table and

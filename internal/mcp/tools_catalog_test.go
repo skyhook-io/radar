@@ -245,7 +245,8 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 59000
+		// Runtime inspection adds routing and attribution guidance, plus a small margin.
+		maxCatalogBytes         = 60500
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -398,6 +399,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"patch_resource":  true,
 		"manage_node":     true,
 	}
+	instrumentTools := map[string]bool{"inspect_pod_runtime": true}
 
 	seenWriteTools := map[string]bool{}
 	for _, tool := range tools {
@@ -419,13 +421,22 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		}
 		// diagnose is read-only EXCEPT its optional in_cluster=true arg, which creates
 		// ONE transient, self-destructing probe pod - so it is non-read-only but NOT
-		// destructive (additive + self-deleting). It is the only such tool.
+		// destructive (additive + self-deleting).
 		if tool.Name == "diagnose" {
 			if tool.Annotations.ReadOnlyHint {
 				t.Errorf("diagnose must NOT set readOnlyHint=true - in_cluster=true creates a transient pod")
 			}
 			if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
 				t.Errorf("diagnose should set destructiveHint=false (the probe pod self-deletes; nothing existing is mutated)")
+			}
+			continue
+		}
+		if instrumentTools[tool.Name] {
+			if tool.Annotations.ReadOnlyHint {
+				t.Errorf("instrumentation tool %q should not set readOnlyHint=true", tool.Name)
+			}
+			if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+				t.Errorf("instrumentation tool %q should set destructiveHint=false", tool.Name)
 			}
 			continue
 		}
@@ -448,6 +459,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 var writeToolNames = []string{
 	"manage_workload", "manage_rollout", "manage_cronjob", "manage_gitops",
 	"apply_resource", "patch_resource", "manage_node",
+	"inspect_pod_runtime",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the
@@ -618,7 +630,7 @@ func listRegisteredToolsWithRegistry(t *testing.T, includeWrites bool) ([]*mcpsd
 
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar-test", Version: "test"}, nil)
 	registry := newToolParamRegistry()
-	registerTools(server, includeWrites, registry)
+	registerTools(server, includeWrites, includeWrites, registry)
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "radar-test-client", Version: "test"}, nil)
 	ctx := context.Background()
@@ -682,5 +694,41 @@ func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
 	}
 	if len(stale) > 0 {
 		t.Errorf("investigation.ReadOnlyTools names tools that are not registered: %v", stale)
+	}
+}
+
+func TestRuntimeInstrumentationIsNotAnInvestigationApproval(t *testing.T) {
+	if investigation.IsReadOnlyTool("inspect_pod_runtime") || investigation.IsWriteTool("inspect_pod_runtime") {
+		t.Fatal("runtime instrumentation must not inherit a resource fix's approval")
+	}
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "inspect_pod_runtime" {
+			return
+		}
+	}
+	t.Fatal("runtime instrumentation is missing from the full external catalog")
+}
+
+func TestInvestigationApplyCatalogExcludesKernelInstrumentation(t *testing.T) {
+	session := connectTo(t, newServerWithInstrumentation(true, false))
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, tool := range result.Tools {
+		seen[tool.Name] = true
+		if !investigation.IsReadOnlyTool(tool.Name) && !investigation.IsWriteTool(tool.Name) {
+			t.Errorf("Apply transport exposes an unapproved tool: %s", tool.Name)
+		}
+	}
+	for _, name := range investigation.WriteTools {
+		if !seen[name] {
+			t.Errorf("Apply transport is missing resource-write tool: %s", name)
+		}
+	}
+	_, err = session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "inspect_pod_runtime", Arguments: map[string]any{"namespace": "app", "pod": "api", "aspect": "processes"}})
+	if err == nil {
+		t.Fatal("Apply transport accepted a direct runtime capture call")
 	}
 }

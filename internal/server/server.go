@@ -49,6 +49,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/igdebug"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -92,6 +93,7 @@ type Server struct {
 	mcpHandler              http.Handler
 	mcpReadOnlyHandler      http.Handler
 	mcpInvestigationHandler http.Handler
+	mcpApplyHandler         http.Handler
 	diagConfig              *DiagConfig
 	effectiveConfig         *config.Config // running config for GET /api/config
 	stopUsageData           context.CancelFunc
@@ -183,7 +185,8 @@ type Server struct {
 	aiDiagnoser *ai.Diagnoser
 	// aiRuns owns investigations as durable server-side jobs (survive panel close
 	// / navigation / refresh). nil exactly when aiDiagnoser is.
-	aiRuns *ai.RunManager
+	igDebug igDebugService
+	aiRuns  *ai.RunManager
 	// aiInvestigationRefs and aiHistoryDB are what the engine is built with,
 	// kept so it can be built after startup.
 	aiInvestigationRefs *investigationrefs.Registry
@@ -206,6 +209,7 @@ type Config struct {
 	StaticRoot              string                      // Path within StaticFS
 	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
+	MCPApplyHandler         http.Handler                // internal resource-write MCP handler without instrumentation
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
 	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
@@ -248,6 +252,7 @@ func New(cfg Config) *Server {
 		mcpHandler:              cfg.MCPHandler,
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
+		mcpApplyHandler:         cfg.MCPApplyHandler,
 		diagConfig:              cfg.DiagConfig,
 		effectiveConfig:         cfg.EffectiveConfig,
 		promURLFlag:             cfg.PrometheusURLFlag,
@@ -265,6 +270,7 @@ func New(cfg Config) *Server {
 		yamlSchemaCache:         make(map[string][]byte),
 		yamlSchemaPathCache:     make(map[string]yamlSchemaPathCacheEntry),
 		yamlSchemaBundleCache:   make(map[string]yamlSchemaBundleCacheEntry),
+		igDebug:                 igdebug.Default(),
 	}
 	if len(cfg.TrustedOrigins) > 0 {
 		s.trustedOrigins = make(map[string]struct{}, len(cfg.TrustedOrigins))
@@ -300,6 +306,7 @@ func New(cfg Config) *Server {
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
 	// cluster, so an in-flight agent (especially an apply) can't write to it.
 	k8s.OnBeforeContextSwitch(func(_ string) {
+		s.igDebug.OnContextSwitch()
 		if runs := s.aiRunManager(); runs != nil {
 			runs.OnContextSwitch()
 		}
@@ -516,6 +523,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
+		r.Get("/ig/runs/{id}/stream", s.handleIGRunStream)
 
 		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
@@ -534,6 +542,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Use(middleware.Timeout(60 * time.Second))
 
 			r.Get("/health", s.handleHealth)
+			r.Get("/ig/status", s.handleIGStatus)
+			r.Post("/ig/snapshots", s.handleIGSnapshot)
+			r.Post("/ig/runs", s.handleIGStart)
+			r.Get("/ig/runs/{id}", s.handleIGGetRun)
+			r.Post("/ig/runs/{id}/stop", s.handleIGStopRun)
 			r.Get("/agents", s.handleListAgents)
 			// AI investigations as durable server-side jobs (start/list/turn/stop).
 			r.Post("/diagnose/runs", s.handleDiagnoseStart)
@@ -902,6 +915,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-investigation/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp-investigation-apply/.well-known/*", http.NotFoundHandler())
 
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
@@ -909,6 +923,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+	}
+	if s.mcpApplyHandler != nil {
+		r.Mount("/mcp-investigation-apply", s.mcpApplyHandler)
 	}
 	if s.mcpInvestigationHandler != nil {
 		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
@@ -1353,6 +1370,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
+		LiveDebug:             true,
 		YAMLReview:            true,
 		YAMLSchemas:           true,
 		WorkloadImages:        true,

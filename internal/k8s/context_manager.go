@@ -116,6 +116,12 @@ func init() {
 	operationCtx, operationCancel = context.WithCancel(context.Background())
 }
 
+// ContextOperationInProgress includes queued operations so new cluster-bound
+// work cannot enter between teardown and a failed or successful reconnect.
+func ContextOperationInProgress() bool {
+	return activeContextOperations.Load() != 0
+}
+
 // CancelOngoingOperations cancels any in-flight API calls from previous
 // operations (capabilities checks, RBAC checks, etc.) and creates a fresh
 // operation context. Called at the start of context switch and retry, and by
@@ -551,6 +557,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// cluster we're about to connect to. After the preflight above — a failed
 	// preflight leaves the current connection (and its runs) intact.
 	notifyBeforeContextSwitch(newContext)
+	// A failed operation releases the counter before its caller reports failure.
+	// Retire connected readiness here so that gap cannot admit cluster work.
+	SetConnectionStatus(ConnectionStatus{State: StateConnecting, Context: newContext})
 
 	// Cancel any in-flight API calls from the previous context (RBAC checks,
 	// capability probes, etc.) so they don't serialize through the old exec

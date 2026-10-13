@@ -103,7 +103,7 @@ default; explicit `false` is preserved. Review/set opt-outs before the upgrade.
 Upgrading only the binary or using Radar Cloud self-upgrade does not install these RBAC
 objects. No cluster configuration sync or automatic rollout is introduced.
 
-Test with `go test ./internal/k8s -run TestIntegrationRead`, chart lint/unittests,
+Test with `go test -tags withoutebpf ./internal/k8s -run TestIntegrationRead`, chart lint/unittests,
 and the shared UI's `curated-column-ownership.test.ts`. The tests cover exact
 permissions, scope, caller bindings, collection and tier gates, old value trees,
 intentional exceptions, and unchanged existing manifests. A live `can-i` check

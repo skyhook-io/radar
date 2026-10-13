@@ -1,0 +1,34 @@
+[
+  {
+    "id": "44003",
+    "name": "ig-server.ig-spike.svc.cluster.local.",
+    "qtype": "A",
+    "qr": "Q",
+    "runtime": { "containerId": "wanted" },
+    "src": { "addr": "10.0.0.2", "port": 42000, "proto": "UDP" },
+    "dst": { "addr": "10.0.0.10", "port": 53, "proto": "UDP" }
+  },
+  {
+    "id": "44003",
+    "name": "ig-server.ig-spike.svc.cluster.local.",
+    "qtype": "A",
+    "qr": "R",
+    "rcode": "Success",
+    "addresses": "10.0.1.9",
+    "latency_ns_raw": 2500000,
+    "runtime": { "containerId": "wanted" },
+    "src": { "addr": "10.0.0.10", "port": 53, "proto": "UDP" },
+    "dst": { "addr": "10.0.0.2", "port": 42000, "proto": "UDP" }
+  },
+  {
+    "id": "44004",
+    "name": "missing.ig-spike.svc.cluster.local.",
+    "qtype": "A",
+    "qr": "R",
+    "rcode": "NameError",
+    "latency_ns_raw": 800000,
+    "runtime": { "containerId": "wanted" },
+    "src": { "addr": "10.0.0.10", "port": 53, "proto": "UDP" },
+    "dst": { "addr": "10.0.0.2", "port": 42001, "proto": "UDP" }
+  }
+]

@@ -168,9 +168,9 @@ func TestDiagnoseStreamUsesListenerAddress(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				want := "http://" + address + "/radar/mcp"
+				want := "http://" + address + "/radar/mcp-investigation-apply"
 				if !apply {
-					want += "-investigation?scope=" + scope
+					want = "http://" + address + "/radar/mcp-investigation?scope=" + scope
 				}
 				if agent.spec.mcpURL != want {
 					t.Fatalf("agent MCP URL = %q, want %q", agent.spec.mcpURL, want)

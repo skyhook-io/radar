@@ -17,6 +17,8 @@ builds:
     binary: kubectl-radar
     env:
       - CGO_ENABLED=0
+    tags:
+      - withoutebpf
     goos:
       - linux
       - darwin

@@ -775,6 +775,10 @@ func TestContextSwitchLeavesNoPreviousClusterPermissions(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
 
+	previousStatus := GetConnectionStatus()
+	t.Cleanup(func() { SetConnectionStatus(previousStatus) })
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "current"})
+
 	dir := t.TempDir()
 	current := writeKubeconfig(t, dir, "current.yaml", "current", []kubeEntry{
 		{ctxName: "current", userName: "u1", clusterName: "c1"},
@@ -828,7 +832,12 @@ func TestContextSwitchLeavesNoPreviousClusterPermissions(t *testing.T) {
 		contextSwitchMu.Unlock()
 	})
 
-	_ = PerformContextSwitch("target")
+	if err := PerformContextSwitch("target"); err == nil {
+		t.Fatal("switch to unavailable fixture unexpectedly succeeded")
+	}
+	if ContextOperationInProgress() || IsConnected() {
+		t.Fatal("failed teardown exposed connected readiness after releasing the operation")
+	}
 
 	if !cachedAtTeardown.Load() {
 		t.Error("the permission cache was cleared before teardown, while the previous cluster's resource cache was still live")

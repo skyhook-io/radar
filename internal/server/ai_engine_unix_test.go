@@ -42,6 +42,7 @@ func TestListAgentsTurnsInvestigationsOnForACLIInstalledLater(t *testing.T) {
 		authConfig:              auth.Config{Mode: "none"},
 		mcpHandler:              mcp,
 		mcpInvestigationHandler: mcp,
+		mcpApplyHandler:         mcp,
 		aiInvestigationRefs:     investigationrefs.NewRegistry(),
 	}
 	t.Cleanup(func() {
@@ -91,6 +92,7 @@ func TestRefreshAIEngineLeavesUnsupportedDeploymentsOff(t *testing.T) {
 		authConfig:              auth.Config{Mode: "proxy"},
 		mcpHandler:              mcp,
 		mcpInvestigationHandler: mcp,
+		mcpApplyHandler:         mcp,
 		aiInvestigationRefs:     investigationrefs.NewRegistry(),
 	}
 	if listAgentsEnabled(t, s) {
@@ -110,6 +112,7 @@ func TestListAgentsReportsOffOnceTheLastCLIIsRemoved(t *testing.T) {
 		authConfig:              auth.Config{Mode: "none"},
 		mcpHandler:              mcp,
 		mcpInvestigationHandler: mcp,
+		mcpApplyHandler:         mcp,
 		aiInvestigationRefs:     investigationrefs.NewRegistry(),
 	}
 	t.Cleanup(func() {
@@ -163,6 +166,7 @@ func TestDiagnoseStartRefusesAnAgentThatIsNotInstalled(t *testing.T) {
 		authConfig:              auth.Config{Mode: "none"},
 		mcpHandler:              mcp,
 		mcpInvestigationHandler: mcp,
+		mcpApplyHandler:         mcp,
 		aiInvestigationRefs:     investigationrefs.NewRegistry(),
 	}
 	t.Cleanup(func() {

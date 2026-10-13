@@ -12,6 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 func TestRunPodExecHeartbeat(t *testing.T) {
@@ -160,7 +162,7 @@ func TestDefaultExecContainer(t *testing.T) {
 	podWith := func(annotation string, containers ...string) *corev1.Pod {
 		pod := &corev1.Pod{}
 		if annotation != "" {
-			pod.Annotations = map[string]string{defaultContainerAnnotation: annotation}
+			pod.Annotations = map[string]string{k8s.DefaultContainerAnnotation: annotation}
 		}
 		for _, name := range containers {
 			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})

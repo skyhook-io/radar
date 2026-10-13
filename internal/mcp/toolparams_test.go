@@ -24,7 +24,7 @@ func registerToolsOnce(t *testing.T) {
 		return
 	}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar", Version: "test"}, nil)
-	registerTools(server, true, defaultToolParams)
+	registerTools(server, true, true, defaultToolParams)
 }
 
 func TestSubjectPermissionsAliasRepairsTheBenchmarkFailure(t *testing.T) {

@@ -6,7 +6,7 @@ tmp_dir = "tmp"
 
 [build]
   # Build command
-  cmd = "go build -o ./tmp/radar ./cmd/explorer"
+  cmd = "go build -tags withoutebpf -o ./tmp/radar ./cmd/explorer"
   # Binary to run
   bin = "./tmp/radar --dev --no-browser --kubeconfig ~/.kube/config"
   # Watch these extensions

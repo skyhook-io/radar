@@ -509,7 +509,7 @@ cmd_install_radar() {
   TEMP_PATHS+=("${build_dir}")
 
   step "Building current Radar backend for linux/${arch}"
-  (cd "${repo_root}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build -o "${build_dir}/radar" ./cmd/explorer)
+  (cd "${repo_root}" && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build -tags withoutebpf -o "${build_dir}/radar" ./cmd/explorer)
   cat >"${build_dir}/Dockerfile" <<'EOF'
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates

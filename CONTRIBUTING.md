@@ -78,7 +78,7 @@ make deps
 
 # Run in development mode
 # Terminal 1: Backend
-go run ./cmd/explorer --dev --no-browser
+go run -tags withoutebpf ./cmd/explorer --dev --no-browser
 
 # Terminal 2: Frontend with hot reload
 cd web
@@ -89,7 +89,7 @@ npm run dev
 
 ```bash
 # Backend tests
-go test ./...
+go test -tags withoutebpf ./...
 
 # Frontend type check
 cd web

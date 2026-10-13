@@ -298,6 +298,18 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'inspect_pod_runtime',
+    write: true,
+    desc: 'Capture container processes and DNS, or sockets across the Pod network namespace including sidecars, through an existing Inspektor Gadget deployment. Loads a pinned eBPF gadget for the bounded capture, then unloads it.',
+    params: [
+      { arg: 'namespace', required: true, desc: 'pod namespace' },
+      { arg: 'pod', required: true, desc: 'pod name' },
+      { arg: 'container', desc: 'container name (defaults to the first running app container)' },
+      { arg: 'aspect', required: true, desc: 'processes, connections, or dns' },
+      { arg: 'duration', desc: 'DNS capture seconds (default 10, max 30)' },
+    ],
+  },
+  {
     name: 'manage_workload',
     write: true,
     desc: 'Operate on a workload: restart triggers a rolling restart, scale changes the replica count, rollback reverts to a previous revision. Rollout rollback re-runs every canary step — pair it with manage_rollout promote-full, or abort instead.',

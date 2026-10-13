@@ -15,6 +15,10 @@ import (
 )
 
 func newServer(includeWrites bool) *mcpsdk.Server {
+	return newServerWithInstrumentation(includeWrites, includeWrites)
+}
+
+func newServerWithInstrumentation(includeWrites, includeInstrumentation bool) *mcpsdk.Server {
 	paramRegistry := newToolParamRegistry()
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
@@ -30,7 +34,7 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	// name is an unrecoverable dead end for an agent. See toolparams.go.
 	server.AddReceivingMiddleware(paramRepairMiddlewareFor(paramRegistry))
 
-	registerTools(server, includeWrites, paramRegistry)
+	registerTools(server, includeWrites, includeInstrumentation, paramRegistry)
 	registerResources(server)
 
 	return server
@@ -43,6 +47,12 @@ func RunStdio(ctx context.Context) error {
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
 func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+
+// NewInvestigationApplyHandler exposes resource writes without node
+// instrumentation: approving a resource fix does not approve kernel captures.
+func NewInvestigationApplyHandler() http.Handler {
+	return handlerForServer(newServerWithInstrumentation(true, false))
+}
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }

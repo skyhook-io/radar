@@ -30,7 +30,7 @@ func (s *Server) aiRunManager() *ai.RunManager {
 // Hub). An operator-managed shared installation is never a user's own machine.
 func (s *Server) aiDeploymentSupported() bool {
 	return s.configManagement() != "operator" && !s.authConfig.Enabled() && s.mcpHandler != nil &&
-		s.mcpInvestigationHandler != nil && s.aiInvestigationRefs != nil
+		s.mcpInvestigationHandler != nil && s.mcpApplyHandler != nil && s.aiInvestigationRefs != nil
 }
 
 // refreshAIEngine brings the engine in line with the agent CLIs installed now:

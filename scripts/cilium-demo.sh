@@ -271,7 +271,7 @@ cmd_install_radar() {
   trap "rm -rf '${tmp}'" EXIT
 
   step "Building radar for linux/${arch} from the current tree"
-  (cd "${repo_root}" && GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 go build -o "${tmp}/radar" ./cmd/explorer)
+  (cd "${repo_root}" && GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 go build -tags withoutebpf -o "${tmp}/radar" ./cmd/explorer)
 
   step "Building and loading image radar-cilium-demo:dev"
   cat > "${tmp}/Dockerfile" <<'EOF'

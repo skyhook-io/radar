@@ -25,15 +25,15 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test ./...
+        run: go test -tags withoutebpf ./...
 
       - name: Evaluate workload PromQL in Prometheus
         env:
           RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./prom -run '^TestWorkload(History)?PromQL$' -count=1
+        run: go test -tags withoutebpf ./prom -run '^TestWorkload(History)?PromQL$' -count=1
 
       - name: Build
-        run: go build ./...
+        run: go build -tags withoutebpf ./...
 
   backend:
     name: Backend
@@ -73,12 +73,12 @@ jobs:
           fi
 
       - name: Run tests
-        run: go test ./...
+        run: go test -tags withoutebpf ./...
 
       - name: Evaluate PVC scope PromQL in Prometheus
         env:
           RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./internal/prometheus -run '^TestPVCScopePromQL$' -count=1
+        run: go test -tags withoutebpf ./internal/prometheus -run '^TestPVCScopePromQL$' -count=1
 
       - name: Run PostgreSQL integration tests
         env:
@@ -87,10 +87,10 @@ jobs:
           # it, losing the service or the env block above would leave the whole
           # PostgreSQL backend untested while this job still reported green.
           RADAR_REQUIRE_POSTGRES_TESTS: "1"
-        run: go test ./internal/timeline ./internal/k8s
+        run: go test -tags withoutebpf ./internal/timeline ./internal/k8s
 
       - name: Build
-        run: go build -o explorer ./cmd/explorer
+        run: go build -tags withoutebpf -o explorer ./cmd/explorer
 
   frontend:
     name: Frontend

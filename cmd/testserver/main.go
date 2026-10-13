@@ -4,9 +4,9 @@
 //
 // Usage:
 //
-//	go run ./cmd/testserver                 # port 9281, small nginx fixture
-//	go run ./cmd/testserver -port 9999
-//	go run ./cmd/testserver -pods 50000     # load-test population (see below)
+//	go run -tags withoutebpf ./cmd/testserver                 # port 9281, small nginx fixture
+//	go run -tags withoutebpf ./cmd/testserver -port 9999
+//	go run -tags withoutebpf ./cmd/testserver -pods 50000     # load-test population (see below)
 //
 // Load-test mode (-pods > 0): instead of the small nginx fixture, the server
 // seeds a topology-realistic synthetic population (Deployments -> ReplicaSets

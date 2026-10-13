@@ -24,9 +24,10 @@ func TestMCPHandlersRefuseCrossSitePosts(t *testing.T) {
 	}
 	defer lease.Close()
 	handlers := map[string]http.Handler{
-		"/mcp":               NewHandler(),
-		"/mcp-readonly":      NewReadOnlyHandler(),
-		"/mcp-investigation": NewInvestigationHandler(refs),
+		"/mcp":                     NewHandler(),
+		"/mcp-readonly":            NewReadOnlyHandler(),
+		"/mcp-investigation":       NewInvestigationHandler(refs),
+		"/mcp-investigation-apply": NewInvestigationApplyHandler(),
 	}
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
 	for name, handler := range handlers {

@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/igdebug"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
@@ -101,6 +102,7 @@ type AppConfig struct {
 	HubAPIURL                   string // Hub API origin override ("" = hosted default)
 	HubAppURL                   string // Hub frontend origin override ("" = derived)
 	CloudTunnelConfigured       bool   // --cloud-url was set on this process
+	IGGadgetRegistry            string
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -116,6 +118,7 @@ func SetGlobals(cfg AppConfig) {
 	k8s.ListPageSize = cfg.ListPageSize
 	k8s.ForceNamespaceScope = cfg.NamespaceScope
 	server.DefaultPodShellCommand = cfg.PodShellDefault
+	igdebug.SetGadgetRegistry(cfg.IGGadgetRegistry)
 	versionpkg.SetCurrent(cfg.Version)
 }
 
@@ -498,6 +501,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		ReachabilityImage:         cfg.ReachabilityImage,
 		MCP:                       &cfg.MCPEnabled,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
+		IGGadgetRegistry:          cfg.IGGadgetRegistry,
 	}
 
 	serverCfg := server.Config{
@@ -560,6 +564,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		serverCfg.MCPHandler = mcppkg.NewHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
+		serverCfg.MCPApplyHandler = mcppkg.NewInvestigationApplyHandler()
 	}
 
 	return server.New(serverCfg)

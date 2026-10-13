@@ -453,9 +453,9 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	}
 
 	// Read-only investigation turns get the private read-only MCP mount with
-	// evidence correlation; an apply turn (user-confirmed) gets the ordinary full
-	// mount with write tools and no investigation-only result markers.
-	path := "/mcp"
+	// evidence correlation; an apply turn gets resource writes without kernel
+	// instrumentation or investigation-only result markers.
+	path := "/mcp-investigation-apply"
 	evidenceScope := ""
 	var evidenceLease *investigationrefs.Scope
 	if !req.Apply {

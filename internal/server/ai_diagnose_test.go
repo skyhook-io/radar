@@ -138,6 +138,7 @@ func TestListAgents_Eligible(t *testing.T) {
 				authConfig:              auth.Config{Mode: c.mode},
 				mcpHandler:              c.mcp,
 				mcpInvestigationHandler: c.mcp,
+				mcpApplyHandler:         c.mcp,
 				aiInvestigationRefs:     investigationrefs.NewRegistry(),
 			}
 			rec := httptest.NewRecorder()
@@ -166,6 +167,7 @@ func TestListAgents_NoneInstalledIsAnEmptyList(t *testing.T) {
 		authConfig:              auth.Config{Mode: "none"},
 		mcpHandler:              mcp,
 		mcpInvestigationHandler: mcp,
+		mcpApplyHandler:         mcp,
 		aiInvestigationRefs:     investigationrefs.NewRegistry(),
 	}
 	t.Cleanup(func() {
@@ -265,5 +267,20 @@ func TestMergeDetectedWithDrivableUsesTheActualBackendSet(t *testing.T) {
 	}
 	if len(got) != 3 || got[2].Name != "cursor-agent" || !got[2].Supported {
 		t.Fatalf("an override-only backend must still be advertised: %+v", got)
+	}
+}
+
+func TestInvestigationsRequireTheirApplyTransport(t *testing.T) {
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	s := &Server{
+		authConfig: auth.Config{Mode: "none"}, mcpHandler: mcp,
+		mcpInvestigationHandler: mcp, aiInvestigationRefs: investigationrefs.NewRegistry(),
+	}
+	if s.aiDeploymentSupported() {
+		t.Fatal("investigations enabled without the Apply transport")
+	}
+	s.mcpApplyHandler = mcp
+	if !s.aiDeploymentSupported() {
+		t.Fatal("investigations disabled with all required transports")
 	}
 }

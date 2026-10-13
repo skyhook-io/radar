@@ -12,7 +12,7 @@ export default defineConfig({
     { name: 'chromium', use: { browserName: 'chromium' } },
   ],
   webServer: {
-    command: 'go run ../cmd/testserver',
+    command: 'go run -tags withoutebpf ../cmd/testserver',
     port: 9281,
     reuseExistingServer: true,
     timeout: 60000,
