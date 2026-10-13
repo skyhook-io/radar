@@ -2,13 +2,17 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
-	"strings"
-	"testing"
 )
 
 func TestStrimziDiagnoseDispatch(t *testing.T) {
@@ -48,5 +52,49 @@ func TestStrimziEvidenceFollowsNamespacedIssueReadRules(t *testing.T) {
 	ref.Namespace = "other"
 	if issueRelatedResourceAccess(ctx)(ref) {
 		t.Fatal("namespace restriction bypassed")
+	}
+}
+
+func TestStrimziDiagnoseOmitsParentConditionMessages(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	gvr := schema.GroupVersionResource{Group: "kafka.strimzi.io", Version: "v1", Resource: "kafkaconnects"}
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kafka.strimzi.io/v1", "kind": "KafkaConnect",
+		"metadata": map[string]any{"namespace": "alpha", "name": "connect", "generation": int64(1)},
+		"spec":     map[string]any{"config": map[string]any{"password": "raw-condition-sentinel"}},
+		"status":   map[string]any{"observedGeneration": int64(1), "conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed", "message": "raw-condition-sentinel\nexception trace"}}},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "KafkaConnectList"}, obj)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnect", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	cache := k8s.GetDynamicResourceCache()
+	if err := cache.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.WaitForSync(gvr, 5*time.Second) {
+		t.Fatal("fixture cache not synchronized")
+	}
+	result, _, err := handleDiagnose(context.Background(), nil, diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Group: gvr.Group, Kind: "KafkaConnect", Namespace: "alpha", Name: "connect"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := renderContent(result.Content)
+	if strings.Contains(raw, "raw-condition-sentinel") || strings.Contains(raw, "exception trace") {
+		t.Fatalf("raw data leaked: %s", raw)
+	}
+	var body struct {
+		OperatorSnapshot struct {
+			Readiness string `json:"readiness"`
+		}
+		Resource      map[string]any `json:"resource"`
+		RelatedIssues []issues.Issue `json:"relatedIssues"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.OperatorSnapshot.Readiness != "not_ready" || body.Resource["spec"] != nil || body.Resource["status"] != nil || len(body.RelatedIssues) != 0 {
+		t.Fatalf("minimal parent evidence: %s", raw)
 	}
 }

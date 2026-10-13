@@ -57,7 +57,18 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 		Coverage:         "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
 		Resource:         map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
 		ResourceContext:  &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx))},
-		RelatedIssues:    issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name),
+	}
+	if kind == "KafkaConnector" {
+		rows := issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name)
+		for _, row := range rows {
+			if row.Group != group || row.Kind != kind || row.Namespace != input.Namespace || row.Name != input.Name {
+				continue
+			}
+			switch row.Reason {
+			case "StrimziConnectorFailed", "StrimziConnectorTasksFailed", "StrimziConnectorNotReady":
+				resp.RelatedIssues = append(resp.RelatedIssues, row)
+			}
+		}
 	}
 	if kind == "KafkaConnect" {
 		phase := map[string]string{"ready": "Ready", "not_ready": "NotReady", "unknown": "Unknown", "paused": "Paused", "terminating": "Terminating"}[resp.OperatorSnapshot.Readiness]
