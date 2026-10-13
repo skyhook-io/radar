@@ -2,8 +2,7 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"io"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
 	"github.com/skyhook-io/radar/internal/trace"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
 )
 
@@ -59,7 +59,7 @@ type applicationEvidenceRequest struct {
 func (s *Server) applicationEvidenceEnabled(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	ip := net.ParseIP(host)
-	return err == nil && ip != nil && ip.IsLoopback() &&
+	return err == nil && ip != nil && ip.IsLoopback() && requestHostIsLoopback(r) &&
 		deploymentMode() == k8s.DeploymentModeLocal && !s.authConfig.Enabled() &&
 		!s.cloudConnectCfg.CloudTunnelConfigured && !cloud.IsAuthenticatedTunnelRequest(r.Context()) &&
 		auth.UserFromContext(r.Context()) == nil
@@ -106,22 +106,25 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		return
 	}
 	kind, group := strings.TrimSpace(q.Get("kind")), strings.TrimSpace(q.Get("group"))
-	if gvr, ok := k8s.BuiltinGVR(kind, group); ok {
-		kind, _ = k8s.BuiltinKindForResource(gvr.Resource)
-		group = gvr.Group
-	} else if group == "" {
-		if gvr, ok := k8s.BuiltinGVRAnyGroup(kind); ok {
-			kind, _ = k8s.BuiltinKindForResource(gvr.Resource)
-			group = gvr.Group
-		}
+	subjectResolved := true
+	if builtin, ok := resourceid.BuiltinForName(kind); ok && (group == "" || group == builtin.Group) {
+		kind, group = builtin.Kind, builtin.Group
 	} else if discovery := k8s.GetResourceDiscovery(); discovery != nil {
 		if resource, ok := discovery.GetResourceWithGroup(kind, group); ok {
-			kind = resource.Kind
+			resolution := resourceid.ResolveCurrent(resourceid.OptionalGroupReference(group, resource.Kind, q.Get("namespace"), q.Get("name")), discovery)
+			if resolution.OK() && !resolution.Uncertain {
+				kind, group = resolution.Ref.Kind, resolution.Ref.Group
+			} else {
+				subjectResolved = false
+				response.CoverageLimited = true
+			}
 		}
 	}
-	response.CandidateSet = api.resolve(collectionCtx, trace.Deps{
-		Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
-	}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
+	if subjectResolved {
+		response.CandidateSet = api.resolve(collectionCtx, trace.Deps{
+			Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
+		}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
+	}
 	permissionBudget := 500 * time.Millisecond
 	if q.Get("retryPermissions") == "true" {
 		permissionBudget = 2 * time.Second
@@ -163,19 +166,14 @@ func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http
 		s.writeError(w, http.StatusNotFound, "application evidence collection is not available on this deployment")
 		return
 	}
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
-		return
-	}
 	var input applicationEvidenceRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid application evidence request")
-		return
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		s.writeError(w, http.StatusBadRequest, "expected one application evidence request")
+	if err := decodeBoundedJSONBody(w, r, 4096, &input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "application evidence request exceeds 4096 bytes")
+			return
+		}
+		s.writeError(w, http.StatusBadRequest, "invalid application evidence request: "+err.Error())
 		return
 	}
 	if !input.ConfirmNetworkAccess || input.UID == "" || input.Context == "" ||

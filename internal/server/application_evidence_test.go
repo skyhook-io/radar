@@ -16,6 +16,8 @@ import (
 	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
 	"github.com/skyhook-io/radar/internal/trace"
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -25,12 +27,13 @@ const evidenceRequestBody = `{"application":"vault","namespace":"default","pod":
 func evidenceRequest(method, url, body string) *http.Request {
 	r := httptest.NewRequest(method, url, strings.NewReader(body))
 	r.RemoteAddr = "127.0.0.1:12345"
+	r.Host = "localhost"
 	return r
 }
 
 func TestApplicationEvidenceDeploymentGate(t *testing.T) {
 	t.Cleanup(k8s.SetTestLocalMode())
-	for _, mode := range []string{"remote", "auth", "tunnel", "user", "cloud", "in-cluster"} {
+	for _, mode := range []string{"remote", "nonloopback host", "auth", "tunnel", "user", "cloud", "in-cluster"} {
 		t.Run(mode, func(t *testing.T) {
 			s := &Server{}
 			r := evidenceRequest(http.MethodPost, "/api/application-evidence/collect", evidenceRequestBody)
@@ -41,6 +44,8 @@ func TestApplicationEvidenceDeploymentGate(t *testing.T) {
 				old := k8s.ForceInCluster
 				k8s.ForceInCluster = true
 				t.Cleanup(func() { k8s.ForceInCluster = old })
+			case "nonloopback host":
+				r.Host = "evil.example"
 			case "remote":
 				r.RemoteAddr = "192.0.2.1:1234"
 			case "auth":
@@ -75,6 +80,7 @@ func TestApplicationEvidenceRejectsUnapprovedRequests(t *testing.T) {
 		{"no UID", strings.Replace(evidenceRequestBody, "pod-uid", "", 1), "", 400},
 		{"wrong application", strings.Replace(evidenceRequestBody, "vault", "arbitrary", 1), "", 400},
 		{"extra JSON", evidenceRequestBody + `{}`, "", 400},
+		{"oversized", `{"application":"` + strings.Repeat("v", 4096) + `"}`, "", 413},
 		{"custom endpoint", strings.TrimSuffix(evidenceRequestBody, "}") + `,"url":"http://example.com"}`, "", 400},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,7 +90,7 @@ func TestApplicationEvidenceRejectsUnapprovedRequests(t *testing.T) {
 				r.Header.Set("Origin", tc.origin)
 			}
 			w := httptest.NewRecorder()
-			s.handleCollectApplicationEvidence(w, r)
+			s.requireSameOrigin(http.HandlerFunc(s.handleCollectApplicationEvidence)).ServeHTTP(w, r)
 			if w.Code != tc.status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body)
 			}
@@ -306,5 +312,40 @@ func TestApplicationEvidenceRefusesTransitionBeforeSnapshot(t *testing.T) {
 		if w.Code != http.StatusConflict {
 			t.Fatalf("%s: status=%d body=%s", method, w.Code, w.Body)
 		}
+	}
+}
+
+func TestApplicationEvidenceRejectsAmbiguousCustomSubject(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true},
+		{Group: "networking.istio.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	calls := 0
+	api := &applicationEvidenceAPI{
+		operationContext: context.Background,
+		snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: "https://unused.invalid"}, "test-context" },
+		currentContext:   func() string { return "test-context" },
+		resolve: func(_ context.Context, _ trace.Deps, subject collector.Subject) collector.CandidateSet {
+			calls++
+			if subject.Group != "networking.istio.io" {
+				t.Fatalf("wrong group: %+v", subject)
+			}
+			return collector.CandidateSet{Candidates: []collector.Candidate{}}
+		},
+	}
+	s := &Server{applicationEvidence: api}
+	w := httptest.NewRecorder()
+	s.handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, "/api/application-evidence/candidates?kind=Gateway&namespace=default&name=entry", ""))
+	if w.Code != http.StatusOK || calls != 0 || !strings.Contains(w.Body.String(), `"coverageLimited":true`) {
+		t.Fatalf("ambiguous subject: calls=%d status=%d body=%s", calls, w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	s.handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, "/api/application-evidence/candidates?kind=Gateway&group=networking.istio.io&namespace=default&name=entry", ""))
+	if w.Code != http.StatusOK || calls != 1 {
+		t.Fatalf("explicit group: calls=%d status=%d body=%s", calls, w.Code, w.Body)
 	}
 }
