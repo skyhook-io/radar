@@ -1,3 +1,4 @@
+import { resourceKey } from "@skyhook-io/k8s-ui";
 import {
   apiVersionToGroup,
   knownKindForPluralWithGroup,
@@ -307,19 +308,25 @@ export function projectInvestigationEvidence(
     source: InvestigationEvidenceSource,
     podContainer: string,
   ) => `previous-log:${source.tool}:${scopeFromArgs(source)}:${podContainer}`;
+  const connectorCoverageKey = (ref: {
+    group?: string;
+    kind: string;
+    namespace?: string;
+    name: string;
+  }) =>
+    `connector:${resourceKey(ref.group ?? "", ref.kind, ref.namespace ?? "", ref.name)}`;
   const retirementKey = (
     group: InvestigationEvidenceGroup,
     observation: InvestigationEvidenceObservation,
   ): string | undefined => {
     switch (group.kind) {
       case "issue":
-        // A parent diagnosis cannot clear a connector snapshot it did not read.
         if (
           observation.data.type === "issue" &&
-          observation.data.applicationSource &&
-          observation.relevance !== "target"
+          observation.data.issue.group === "kafka.strimzi.io" &&
+          observation.data.issue.kind === "KafkaConnector"
         )
-          return undefined;
+          return connectorCoverageKey(observation.data.issue);
         return semanticCoverageKey(group.kind);
       case "startup":
       case "crash":
@@ -352,6 +359,15 @@ export function projectInvestigationEvidence(
   turns.forEach((turn, turnIndex) => {
     if (!turn.verify || turn.status !== "done") return;
     const keys = new Set<string>();
+    for (const source of builder.sources) {
+      const recovered = builder.connectorRecoveryBySource.get(source.id);
+      if (
+        source.turnIndex === turnIndex &&
+        source.confirmedSuccess &&
+        recovered
+      )
+        keys.add(connectorCoverageKey(recovered));
+    }
     for (const group of builder.groups) {
       for (const observation of group.observations) {
         if (

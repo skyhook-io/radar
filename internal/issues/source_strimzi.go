@@ -12,7 +12,7 @@ import (
 )
 
 func detectStrimziConnectorIssues(gvr schema.GroupVersionResource, u *unstructured.Unstructured) []Issue {
-	if !strimziConnectorStatusCurrent(u) {
+	if !strimziStatusCurrent(u) {
 		return nil
 	}
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
@@ -80,7 +80,7 @@ func detectStrimziConnectorIssues(gvr schema.GroupVersionResource, u *unstructur
 	return []Issue{newConditionIssue(gvr, "KafkaConnector", u.GetNamespace(), u.GetName(), SeverityWarning, reason, message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}
 }
 
-func strimziConnectorStatusCurrent(u *unstructured.Unstructured) bool {
+func strimziStatusCurrent(u *unstructured.Unstructured) bool {
 	if u == nil || u.GetDeletionTimestamp() != nil || strings.EqualFold(u.GetAnnotations()["strimzi.io/pause-reconciliation"], "true") {
 		return false
 	}
@@ -98,7 +98,7 @@ func strimziConnectorStatusCurrent(u *unstructured.Unstructured) bool {
 }
 
 func StrimziConnectorRecoveryObserved(u *unstructured.Unstructured) bool {
-	if !strimziConnectorStatusCurrent(u) {
+	if !strimziStatusCurrent(u) {
 		return false
 	}
 	conds, found, err := unstructured.NestedSlice(u.Object, "status", "conditions")
@@ -133,4 +133,94 @@ func StrimziConnectorRecoveryObserved(u *unstructured.Unstructured) bool {
 		}
 	}
 	return true
+}
+
+type StrimziSnapshotAssessment struct {
+	State              string `json:"state"`
+	Reason             string `json:"reason,omitempty"`
+	Readiness          string `json:"readiness"`
+	GenerationCurrent  bool   `json:"generationCurrent"`
+	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
+}
+
+func AssessStrimziSnapshot(gvr schema.GroupVersionResource, u *unstructured.Unstructured) StrimziSnapshotAssessment {
+	out := StrimziSnapshotAssessment{State: "unknown", Reason: "missing_or_malformed", Readiness: "unknown"}
+	if u == nil {
+		return out
+	}
+	observed, found, err := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
+	if err == nil && found {
+		out.ObservedGeneration = &observed
+	}
+	if u.GetDeletionTimestamp() != nil {
+		out.Reason = "terminating"
+		out.Readiness = "terminating"
+		return out
+	}
+	if strings.EqualFold(u.GetAnnotations()["strimzi.io/pause-reconciliation"], "true") {
+		out.Reason = "paused"
+		out.Readiness = "paused"
+		return out
+	}
+	if err != nil || !found || observed <= 0 {
+		return out
+	}
+	if observed != u.GetGeneration() {
+		out.Reason = "stale"
+		return out
+	}
+	out.GenerationCurrent = true
+	conds, conditionsFound, conditionsErr := unstructured.NestedSlice(u.Object, "status", "conditions")
+	validConditions := conditionsFound && conditionsErr == nil
+	ready, notReady := false, false
+	for _, raw := range conds {
+		c, ok := raw.(map[string]any)
+		if !ok {
+			validConditions = false
+			continue
+		}
+		if c["type"] == "ReconciliationPaused" && c["status"] == "True" {
+			out.Reason = "paused"
+			out.Readiness = "paused"
+			return out
+		}
+		if c["type"] == "Ready" {
+			ready = c["status"] == "True"
+			notReady = notReady || c["status"] == "False"
+		}
+		if c["type"] == "NotReady" && c["status"] == "True" {
+			notReady = true
+		}
+	}
+	if validConditions {
+		if notReady {
+			out.Readiness = "not_ready"
+		} else if ready {
+			out.Readiness = "ready"
+		}
+	}
+	if u.GetKind() == "KafkaConnector" {
+		if len(detectStrimziConnectorIssues(gvr, u)) > 0 {
+			out.State = "failing"
+			out.Reason = "operator_snapshot"
+			return out
+		}
+		if StrimziConnectorRecoveryObserved(u) {
+			out.State = "recovered"
+			out.Reason = ""
+			return out
+		}
+		state, _, _ := unstructured.NestedString(u.Object, "status", "connectorStatus", "connector", "state")
+		if state == "PAUSED" || state == "STOPPED" {
+			out.Reason = "inactive"
+		} else {
+			out.Reason = "incomplete_runtime"
+		}
+		return out
+	}
+	if out.Readiness == "ready" || out.Readiness == "not_ready" {
+		out.State = "observed"
+		out.Reason = ""
+	}
+	return out
 }

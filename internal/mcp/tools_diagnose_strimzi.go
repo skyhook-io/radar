@@ -47,17 +47,28 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 	// Connector configuration and raw exception traces can contain credentials.
 	// Diagnosis needs only identity and the existing curated issue projection.
 	resp := struct {
-		ConnectorRecoveryObserved bool                             `json:"connectorRecoveryObserved,omitempty"`
-		Resource                  any                              `json:"resource"`
-		ResourceContext           *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
-		RelatedIssues             []issues.Issue                   `json:"relatedIssues,omitempty"`
-		Coverage                  string                           `json:"coverage"`
+		OperatorSnapshot issues.StrimziSnapshotAssessment `json:"operatorSnapshot"`
+		Resource         any                              `json:"resource"`
+		ResourceContext  *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
+		RelatedIssues    []issues.Issue                   `json:"relatedIssues,omitempty"`
+		Coverage         string                           `json:"coverage"`
 	}{
-		ConnectorRecoveryObserved: kind == "KafkaConnector" && issues.StrimziConnectorRecoveryObserved(obj),
-		Coverage:                  "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
-		Resource:                  map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
-		ResourceContext:           &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx))},
-		RelatedIssues:             issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name),
+		OperatorSnapshot: issues.AssessStrimziSnapshot(gvr, obj),
+		Coverage:         "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
+		Resource:         map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
+		ResourceContext:  &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx))},
+		RelatedIssues:    issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name),
+	}
+	if kind == "KafkaConnect" {
+		phase := map[string]string{"ready": "Ready", "not_ready": "NotReady", "unknown": "Unknown", "paused": "Paused", "terminating": "Terminating"}[resp.OperatorSnapshot.Readiness]
+		resp.ResourceContext.StatusSummary = &resourcecontext.StatusSummary{Phase: phase}
+		if resp.OperatorSnapshot.Readiness == "ready" || resp.OperatorSnapshot.Readiness == "not_ready" {
+			status := "True"
+			if resp.OperatorSnapshot.Readiness == "not_ready" {
+				status = "False"
+			}
+			resp.ResourceContext.StatusSummary.Conditions = []resourcecontext.ConditionSummary{{Type: "Ready", Status: status}}
+		}
 	}
 	return toJSONResult(resp)
 }

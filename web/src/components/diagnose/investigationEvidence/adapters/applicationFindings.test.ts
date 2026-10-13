@@ -34,6 +34,9 @@ const context = {
   workloadSummary: { replicas: { desired: 1, ready: 1, available: 1 } },
   relatedApplicationFindings: {
     source,
+    coverageState: "cached",
+    checked: 1,
+    unknown: 0,
     findings: [connector],
     coverage:
       "Checked 1 authorized cached connector snapshots; missing findings do not establish application health.",
@@ -123,6 +126,9 @@ describe("cached application findings", () => {
           tier: "basic",
           relatedApplicationFindings: {
             source,
+            coverageState: "limited",
+            checked: 0,
+            unknown: 0,
             truncated: true,
             coverage:
               "Connector findings were not checked because this namespace exceeds the inspection budget.",
@@ -231,7 +237,12 @@ describe("cached application findings", () => {
               tool("verify", "diagnose", {
                 resource,
                 resourceContext: { tier: "basic" },
-                connectorRecoveryObserved: recovered,
+                operatorSnapshot: {
+                  state: recovered ? "recovered" : "unknown",
+                  generationCurrent: recovered,
+                  readiness: recovered ? "ready" : "unknown",
+                  reason: recovered ? undefined : "stale",
+                },
               }),
             ],
           },
@@ -246,6 +257,104 @@ describe("cached application findings", () => {
       expect(groupsOf(result.groups, "issue")[0].historical).toBe(recovered);
     },
   );
+
+  it.each(["shop", "other"])(
+    "uses connector-scoped recovery in a parent investigation (%s)",
+    (namespace) => {
+      const resource = {
+        apiVersion: "kafka.strimzi.io/v1",
+        kind: "KafkaConnector",
+        metadata: { namespace, name: "sink" },
+      };
+      const result = projectInvestigationEvidence(
+        [
+          {
+            timeline: [
+              tool("read", "diagnose", {
+                resource: deployment,
+                resourceContext: context,
+              }),
+            ],
+          },
+          {
+            verify: true,
+            status: "done",
+            timeline: [
+              tool("verify", "diagnose", {
+                resource,
+                operatorSnapshot: {
+                  state: "recovered",
+                  generationCurrent: true,
+                  readiness: "ready",
+                },
+                resourceContext: { tier: "basic" },
+              }),
+            ],
+          },
+        ],
+        target,
+      );
+      expect(groupsOf(result.groups, "issue")[0].historical).toBe(
+        namespace === "shop",
+      );
+    },
+  );
+
+  it("shows unverifiable operator status as a limitation", () => {
+    const result = project([
+      tool("read", "diagnose", {
+        resource: {
+          apiVersion: "kafka.strimzi.io/v1",
+          kind: "KafkaConnector",
+          metadata: { namespace: "shop", name: "sink" },
+        },
+        resourceContext: { tier: "basic" },
+        operatorSnapshot: {
+          state: "unknown",
+          generationCurrent: false,
+          readiness: "unknown",
+          reason: "stale",
+        },
+      }),
+    ]);
+    expect(result.limitations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "Operator snapshot",
+          message: expect.stringContaining("stale"),
+        }),
+      ]),
+    );
+  });
+
+  it("shows KafkaConnect's own NotReady condition separately from connector findings", () => {
+    const result = project([
+      tool("read", "diagnose", {
+        resource: {
+          apiVersion: "kafka.strimzi.io/v1",
+          kind: "KafkaConnect",
+          metadata: { namespace: "shop", name: "connect" },
+        },
+        resourceContext: {
+          tier: "basic",
+          statusSummary: {
+            phase: "NotReady",
+            conditions: [{ type: "Ready", status: "False" }],
+          },
+        },
+        operatorSnapshot: {
+          state: "observed",
+          generationCurrent: true,
+          readiness: "not_ready",
+        },
+      }),
+    ]);
+    expect(groupsOf(result.groups, "resource")[0].latest).toMatchObject({
+      tone: "warning",
+      summary: "NotReady",
+    });
+    expect(groupsOf(result.groups, "issue")).toHaveLength(0);
+  });
 
   it("rejects malformed findings without projecting partial proof", () => {
     const result = project([

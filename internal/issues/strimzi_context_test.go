@@ -110,6 +110,9 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 	if len(out.Findings) != 0 {
 		t.Fatal("stale status emitted")
 	}
+	if out.Checked != 1 || out.Unknown != 1 || out.CoverageState != "limited" {
+		t.Fatalf("stale inspection looked verified: %+v", out)
+	}
 	rows = nil
 	for n := 0; n <= maxStrimziContextScan; n++ {
 		rows = append(rows, contextConnector("app", fmt.Sprintf("c%d", n), "connect"))

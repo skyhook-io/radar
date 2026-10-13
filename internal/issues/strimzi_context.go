@@ -123,7 +123,7 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	if connect.Name == "" || canRead != nil && !canRead(connect) {
 		return nil
 	}
-	out := &issuesapi.RelatedApplicationFindings{Source: connect, Coverage: "Only authorized, currently cached connector status is included; missing findings do not establish application health."}
+	out := &issuesapi.RelatedApplicationFindings{CoverageState: "unavailable", Source: connect, Coverage: "Only authorized, currently cached connector status is included; missing findings do not establish application health."}
 	if obj.GetObjectKind().GroupVersionKind().Kind == "KafkaConnector" {
 		return out
 	}
@@ -133,6 +133,7 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	}
 	if truncated || len(rows) > maxStrimziContextScan {
 		out.Truncated = true
+		out.CoverageState = "limited"
 		out.Coverage = "Connector findings were not checked because this namespace exceeds the inspection budget; missing findings do not establish application health."
 		return out
 	}
@@ -148,11 +149,14 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		matched = append(matched, row)
 	}
 	sort.Slice(matched, func(i, j int) bool { return strings.Compare(matched[i].GetName(), matched[j].GetName()) < 0 })
-	checked := 0
+	checked, unknown := 0, 0
 	for _, row := range matched {
 		checked++
 		findings := detectStrimziConnectorIssues(gvr, row)
 		findings, _ = filterShapedIssues(findings, Filters{})
+		if len(findings) == 0 && !StrimziConnectorRecoveryObserved(row) {
+			unknown++
+		}
 		if len(findings) == 0 {
 			continue
 		}
@@ -162,6 +166,14 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		}
 		out.Findings = append(out.Findings, findings...)
 	}
-	out.Coverage = fmt.Sprintf("Checked %d authorized cached connector snapshots; missing findings do not establish application health.", checked)
+	out.Checked, out.Unknown = checked, unknown
+	out.CoverageState = "cached"
+	if out.Truncated || unknown > 0 {
+		out.CoverageState = "limited"
+	}
+	out.Coverage = fmt.Sprintf("Checked %d authorized cached connector snapshots; %d were unverifiable or inactive. Missing findings do not establish application health.", checked, unknown)
+	if out.Truncated {
+		out.Coverage += " The five-finding limit was reached; additional findings may be omitted."
+	}
 	return out
 }

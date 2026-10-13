@@ -893,8 +893,11 @@ var CELBindings = []CELBinding{
 
 // RelatedApplicationFindings links canonical source findings without changing the subject's health.
 type RelatedApplicationFindings struct {
-	Source    Ref     `json:"source"`
-	Findings  []Issue `json:"findings,omitempty"`
-	Coverage  string  `json:"coverage"`
-	Truncated bool    `json:"truncated,omitempty"`
+	CoverageState string  `json:"coverageState"`
+	Checked       int     `json:"checked"`
+	Unknown       int     `json:"unknown"`
+	Source        Ref     `json:"source"`
+	Findings      []Issue `json:"findings,omitempty"`
+	Coverage      string  `json:"coverage"`
+	Truncated     bool    `json:"truncated,omitempty"`
 }

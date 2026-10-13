@@ -212,3 +212,33 @@ func TestStrimziConnectorRecoveryObserved(t *testing.T) {
 		})
 	}
 }
+
+func TestStrimziSnapshotAssessmentSeparatesReadinessAndRuntime(t *testing.T) {
+	u := strimziConnectorFixture()
+	_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Ready", "status": "True", "message": "secret-sentinel"}}, "status", "conditions")
+	got := AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "failing" || got.Readiness != "ready" {
+		t.Fatalf("Ready hid failed task: %+v", got)
+	}
+	u.SetGeneration(3)
+	got = AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "unknown" || got.Reason != "stale" || got.GenerationCurrent {
+		t.Fatalf("stale snapshot: %+v", got)
+	}
+	u.SetGeneration(2)
+	u.SetKind("KafkaConnect")
+	_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "NotReady", "status": "True", "message": "secret-sentinel"}}, "status", "conditions")
+	got = AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "observed" || got.Readiness != "not_ready" {
+		t.Fatalf("parent readiness omitted: %+v", got)
+	}
+	raw, _ := json.Marshal(got)
+	if strings.Contains(string(raw), "secret-sentinel") {
+		t.Fatal("raw condition message leaked")
+	}
+	u.SetAnnotations(map[string]string{"strimzi.io/pause-reconciliation": "true"})
+	got = AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "unknown" || got.Reason != "paused" {
+		t.Fatalf("paused snapshot: %+v", got)
+	}
+}
