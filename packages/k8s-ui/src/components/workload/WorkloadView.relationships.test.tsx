@@ -35,3 +35,25 @@ describe('workload staged-policy projection', () => {
     expect(html).not.toContain('Network policies')
   })
 })
+
+describe('workload network policy matching completeness', () => {
+  it.each([false, true])('preserves uncertainty with confirmed matches=%s', (known) => {
+    const html = renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload} relationships={{
+      networkPolicyMatchesIncomplete: true,
+      networkPolicies: known ? [{ kind: 'NetworkPolicy', group: 'networking.k8s.io', namespace: 'demo', name: 'confirmed' }] : [],
+    }} />)
+    expect(html).toContain('Additional policies may apply')
+    expect(html).not.toContain('No serving or dependency relationships found.')
+    if (known) expect(html).toContain('1 related resource')
+    expect(html).not.toContain('No PDB, NetworkPolicy, or storage refs found.')
+  })
+})
+
+it('does not repeat the matching notice in the separate monitoring card', () => {
+  const html = renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload} relationships={{
+    networkPolicyMatchesIncomplete: true,
+    monitors: [{ kind: 'PodMonitor', group: 'monitoring.coreos.com', namespace: 'demo', name: 'scraper' }],
+  }} />)
+  expect(html.match(/Additional policies may apply/g)).toHaveLength(1)
+  expect(html).toContain('scraper')
+})

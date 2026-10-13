@@ -463,7 +463,7 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 | `top_resources` | Live metrics ranked like `kubectl top | sort`, joined with K8s context (status, restarts, owner, requests/limits). Use for CPU/memory/OOM/load symptoms. | `kind` (optional: `pods` default, `workloads`, `nodes`), `namespace` (optional), `sort` (optional: `cpu` default, `memory`), `limit` (optional, default 20, max 100) |
 | `list_resources` | List resources of a kind with minified summaries + per-row `summaryContext` (managedBy / health / issueCount). | `kind` (required), `group` (optional), `namespace` (optional), `context` (optional: default / `none`) |
 | `search` | Find resources by content/term match (config keys, env refs, images, label values, CRD fields, status messages). Tokens AND'd; secret values never indexed. Supports `kind:`/`ns:`/`label:`/`image:` modifiers and CEL `filter`. | `query` (required), `filter` (optional CEL), `limit` (optional) |
-| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are not evidence of an active outage. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, detailed issue context, or a Node drain estimate. `include=drain-plan` reuses the read-only REST drain estimator with the caller’s credentials and the removal drawer’s explicit options; it returns up to 100 current pods, full summary counts, `drainPlanTotalPods` and `drainPlanPodsTruncated`. It evaluates Eviction API/PDB eligibility, not controller-specific policy or eviction history. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues,drain-plan`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`) |
+| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. `resourceContext.networkPolicyMatchesIncomplete: true` means additional readable network policies may apply; confirmed `selectedBy` entries remain valid. See the network-policy context contract below. Operational issues and static audit posture remain distinct; audit findings are not evidence of an active outage. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, detailed issue context, or a Node drain estimate. `include=drain-plan` reuses the read-only REST drain estimator with the caller’s credentials and the removal drawer’s explicit options; it returns up to 100 current pods, full summary counts, `drainPlanTotalPods` and `drainPlanPodsTruncated`. It evaluates Eviction API/PDB eligibility, not controller-specific policy or eviction history. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues,drain-plan`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`) |
 | `get_topology` | Whole-namespace/cluster topology graph (nodes + edges). Use `summary` format for LLM-friendly text chains. Once you have a suspect root, prefer `get_neighborhood`. | `namespace` (optional), `view` (optional: `traffic` or `resources`), `format` (optional: `graph` or `summary`) |
 | `get_neighborhood` | BFS-expanded topology neighborhood around one known root — cheaper and clearer than `get_topology` for cross-resource failures (routing, selector/endpoint, refs, owner chains). RBAC-filtered. | `kind` (required), `namespace` (optional), `name` (required), `profile` (optional: `auto` default / `all`), `hops` (optional, default 1, max 2) |
 | `get_events` | Recent Kubernetes events, deduplicated and sorted **Warning-groups-first then by recency** — all types by default, so warnings lead and lifecycle events follow as timeline evidence. Filter by resource kind/name to scope; `type=Warning` for warnings only, `type=Normal` for lifecycle only. A namespace the caller cannot read returns an empty list with `accessDenied: true`, so an empty result without the marker means nothing is recorded for that scope. A request with no `namespace` means cluster-wide; when the caller may read only some namespaces the answer covers those alone and says so with `partialScope: true` and `scopeNamespaces`, so a narrowed empty result is never read as a clean cluster. | `namespace` (optional), `limit` (optional, default 20, max 100), `kind` (optional), `name` (optional), `type` (optional: `all` default, `Warning`, `Normal`) |
@@ -576,6 +576,34 @@ Only named PodSpec declarations are included: implicit workload defaults and
 template-generated PVC names are not inferred. An absent omission does not by
 itself establish cache freshness or complete namespace coverage.
 
+A policy's `protects` context contains up to 50 authorized workload references,
+in deterministic order. Evaluation checks at most 50 distinct API group/kind/
+namespace scopes; repeated targets in an already-checked scope reuse that result.
+If either budget leaves targets unexamined, the existing `omitted` entry
+`{field: "protects", reason: "budget_exceeded"}` records that more targets may
+exist. No pre-authorization total is exposed. Resource drawers retain the full
+visible relationship list; these bounds apply to agent context.
+
+These limits can be reached in ordinary sizable clusters: a namespace-wide
+policy selecting more than 50 Deployments, StatefulSets and DaemonSets, or a
+clusterwide policy selecting workloads across namespaces. The limit counts
+workload objects, not Pod replicas. The permission-scope ceiling matters in
+namespace-heavy or restricted-reader clusters and can stop before a later
+readable target. Fifty is a protective default, not an empirically tuned
+coverage guarantee or a representative sample.
+
+On `protects/budget_exceeded`, MCP `get_resource` and the AI REST resource
+response add a `warnings` entry explaining that the list is incomplete. The
+policy drawer's Related Resources retains the full visible modeled target list.
+Within MCP, use `list_resources` for Deployments, StatefulSets and DaemonSets in
+namespaces of interest, then `get_resource` for each workload and inspect
+`resourceContext.selectedBy` (or `stagedPolicies` for staged policies) for that
+policy's exact group/kind/namespace/name. Preserve matching uncertainty and RBAC
+omissions. This checks the scoped, visible modeled workloads; it does not
+provide an exhaustive clusterwide query, live-Pod membership or an enforcement
+verdict. Repeating the same policy lookup or using `get_neighborhood` does not
+bypass the limit; all-workload policies intentionally omit dense graph edges.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
@@ -679,3 +707,28 @@ other writers, and later template/configuration edits can explain differences.
 Candidate inspection is non-exhaustive and does not perform live admission calls
 or start watches. Verify provenance with configuration history or
 [Kubernetes admission audit records](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#monitoring-admission-webhooks).
+
+### Network-policy context completeness
+
+`resourceContext.selectedBy` contains confirmed selector matches, including network policies and PodDisruptionBudgets. `networkPolicyMatchesIncomplete: true` means Radar could not determine whether one or more readable network policies apply to this resource; additional network policies may be missing from `selectedBy`. This qualifier appears in both `get_resource` and supported workload `diagnose` contexts. Preserve it when drawing conclusions, including when confirmed policy matches are already present. A matching policy is a declaration, not proof of dataplane enforcement.
+
+The same optional flag qualifies `relationships.networkPolicies` and workload graph `data` in REST, SSE and MCP graph/neighborhood responses. It is omitted when false. Absence is not a completeness guarantee: inaccessible policy evidence can be withheld, and unavailable topology or unmodeled integrations may provide no assessment. ResourceContext permission omissions are reported separately as `omitted: [{field: "selectedBy", reason: "rbac_denied"}]`; private policy names and provenance are not exposed. Other graph projections can report aggregate omitted detail without naming private resources.
+
+The producer currently reports Cilium selectors whose endpoint identity cannot be established from cached Kubernetes data, such as cluster identity, unsupported label sources, unreadable namespace labels, and labels affected by Cilium identity filtering. See [network policy integration limits](integrations.md#network-policies). This is incomplete policy matching, not a broken-policy or blocked-traffic verdict. The dashboard’s `unknownWorkloads` counts only workloads without any confirmed matching network policy; a workload can have confirmed coverage and still have incomplete additional matches.
+
+The contract is provider-neutral. A future CNI integration can add confirmed
+policy references to `selectedBy` and report incomplete matching through the
+same flag, without changing existing field meanings. References carry exact
+API group, Kind, namespace and name rather than a provider enum. Non-enforcing
+staged policies remain separate in `stagedPolicies`. Policies targeting Nodes
+or Services belong on those resource contexts; they must not be represented
+as selecting workload Pods merely to fit an integration.
+
+Selection is distinct from ordered rule evaluation, tier precedence, explicit
+allow/deny actions and observed enforcement. Adding those capabilities requires
+separate evidence; it must not reinterpret `selectedBy`, `protects` or the
+matching-completeness flag as a traffic decision. The flag is a one-way warning,
+not a complete inventory of supported policy engines: absent/false does not
+establish that every installed policy system was assessed. Broader integration
+coverage may require richer assessment metadata once a consumer needs it, but
+does not require replacing the current confirmed-reference contract.

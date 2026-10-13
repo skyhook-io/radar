@@ -19,9 +19,12 @@ import (
 // Build once via IndexByResource(topo). Pass to GetRelationshipsWithIndex on
 // each call. Lookups are read-only and goroutine-safe; mutation is not.
 type RelationshipsIndex struct {
-	byNodeID           map[string]*nodeEdgeSlots
-	nodesByID          map[string]*Node
-	nodesByResourceKey map[string]*Node
+	byNodeID                  map[string]*nodeEdgeSlots
+	nodesByID                 map[string]*Node
+	nodesByResourceKey        map[string]*Node
+	allPodPoliciesByNamespace map[string][]*Node
+	coveragePoliciesByNodeID  map[string][]*Node
+	workloadsByNamespace      map[string][]*Node
 }
 
 type nodeEdgeSlots struct {
@@ -34,19 +37,46 @@ type nodeEdgeSlots struct {
 func IndexByResource(topo *Topology) *RelationshipsIndex {
 	if topo == nil {
 		return &RelationshipsIndex{
-			byNodeID:           map[string]*nodeEdgeSlots{},
-			nodesByID:          map[string]*Node{},
-			nodesByResourceKey: map[string]*Node{},
+			byNodeID:                  map[string]*nodeEdgeSlots{},
+			nodesByID:                 map[string]*Node{},
+			nodesByResourceKey:        map[string]*Node{},
+			allPodPoliciesByNamespace: map[string][]*Node{},
+			coveragePoliciesByNodeID:  map[string][]*Node{},
+			workloadsByNamespace:      map[string][]*Node{},
 		}
 	}
 	idx := &RelationshipsIndex{
-		byNodeID:           make(map[string]*nodeEdgeSlots, len(topo.Nodes)),
-		nodesByID:          make(map[string]*Node, len(topo.Nodes)),
-		nodesByResourceKey: make(map[string]*Node, len(topo.Nodes)),
+		byNodeID:                  make(map[string]*nodeEdgeSlots, len(topo.Nodes)),
+		nodesByID:                 make(map[string]*Node, len(topo.Nodes)),
+		nodesByResourceKey:        make(map[string]*Node, len(topo.Nodes)),
+		allPodPoliciesByNamespace: map[string][]*Node{},
+		coveragePoliciesByNodeID:  map[string][]*Node{},
+		workloadsByNamespace:      map[string][]*Node{},
 	}
 	for i := range topo.Nodes {
 		node := &topo.Nodes[i]
 		idx.nodesByID[node.ID] = node
+		if (node.Kind == KindDeployment || node.Kind == KindStatefulSet || node.Kind == KindDaemonSet) && nodeGroup(node) == "apps" {
+			namespace := nodeNamespaceFromData(node)
+			if namespace != "" {
+				idx.workloadsByNamespace[namespace] = append(idx.workloadsByNamespace[namespace], node)
+			}
+			// The empty-namespace bucket holds all visible workloads for clusterwide selectors.
+			idx.workloadsByNamespace[""] = append(idx.workloadsByNamespace[""], node)
+		}
+		switch node.Kind {
+		case KindNetworkPolicy, KindCiliumNetworkPolicy, KindCiliumClusterwideNetworkPolicy:
+			if node.Data["matchesAllPods"] == true {
+				ns, _ := node.Data["namespace"].(string)
+				idx.allPodPoliciesByNamespace[ns] = append(idx.allPodPoliciesByNamespace[ns], node)
+			}
+		case KindCalicoNetworkPolicy, KindCalicoGlobalNetworkPolicy, KindCalicoStagedNetworkPolicy, KindCalicoStagedGlobalNetworkPolicy, KindCalicoStagedKubernetesNetworkPolicy:
+			if ids, ok := node.Data["policyCoverageWorkloads"].([]string); ok {
+				for _, id := range ids {
+					idx.coveragePoliciesByNodeID[id] = append(idx.coveragePoliciesByNodeID[id], node)
+				}
+			}
+		}
 		for _, key := range nodeResourceKeys(node) {
 			idx.nodesByResourceKey[key] = node
 		}
@@ -306,6 +336,20 @@ func GetRelationshipsWithIndex(kind, namespace, name string, topo *Topology, pro
 // obj is nil, behavior matches the pre-refactor path: lookupObjectMetadata
 // is called, with the group-collision risk noted above.
 func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
+	return getRelationshipsWithObject(kind, namespace, name, obj, topo, provider, dp, idx, true)
+}
+
+// GetManagementRelationshipsWithObject serves summary rows without expanding
+// policy target lists that summaries do not consume.
+func GetManagementRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
+	rel := getRelationshipsWithObject(kind, namespace, name, obj, topo, provider, dp, idx, false)
+	if rel == nil {
+		return nil
+	}
+	return &Relationships{Owner: rel.Owner, ManagedBy: rel.ManagedBy}
+}
+
+func getRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex, includePolicyTargets bool) *Relationships {
 	if topo == nil {
 		return nil
 	}
@@ -354,6 +398,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	rel := &Relationships{}
 	if node := nodeByID[nodeID]; node != nil {
 		rel.IstioServiceDomain, _ = node.Data["istioServiceDomain"].(string)
+		rel.NetworkPolicyMatchesIncomplete, _ = node.Data["networkPolicyMatchesIncomplete"].(bool)
+		for _, id := range node.networkPolicyMatchesIncompleteSources {
+			if ref := refForNodeID(id); ref != nil {
+				rel.NetworkPolicyMatchesIncompleteSources = append(rel.NetworkPolicyMatchesIncompleteSources, *ref)
+			}
+		}
 	}
 	kindLower := strings.ToLower(kind)
 
@@ -510,6 +560,54 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			default:
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
+			}
+		}
+	}
+
+	// Empty selectors omit graph edges for readability but are still selecting policies.
+	if node := nodeByID[nodeID]; node != nil && nodeGroup(node) == "apps" && (node.Kind == KindDeployment || node.Kind == KindStatefulSet || node.Kind == KindDaemonSet) {
+		for _, ns := range []string{namespace, ""} {
+			for _, policy := range lookupIndex.allPodPoliciesByNamespace[ns] {
+				if ref := resourceRefForNode(policy, dp); ref != nil {
+					rel.NetworkPolicies = appendResourceRef(rel.NetworkPolicies, *ref)
+				}
+			}
+		}
+		for _, policy := range lookupIndex.coveragePoliciesByNodeID[nodeID] {
+			if ref := resourceRefForNode(policy, dp); ref != nil {
+				selected := &rel.NetworkPolicies
+				for _, definition := range calicoPolicyDefinitions {
+					if definition.nodeKind == policy.Kind && definition.staged {
+						selected = &rel.StagedPolicies
+						break
+					}
+				}
+				*selected = appendResourceRef(*selected, *ref)
+			}
+		}
+	}
+
+	if policy := nodeByID[nodeID]; includePolicyTargets && policy != nil {
+		var targets []*Node
+		if policy.Data["matchesAllPods"] == true && (policy.Kind == KindNetworkPolicy && nodeGroup(policy) == "networking.k8s.io" ||
+			(policy.Kind == KindCiliumNetworkPolicy || policy.Kind == KindCiliumClusterwideNetworkPolicy) && nodeGroup(policy) == "cilium.io") {
+			policyNamespace := namespace
+			if policy.Kind == KindCiliumClusterwideNetworkPolicy {
+				policyNamespace = ""
+			}
+			targets = lookupIndex.workloadsByNamespace[policyNamespace]
+		} else if IsCalicoPolicyKind(policy.Kind) && isCalicoAPIGroup(nodeGroup(policy)) {
+			if ids, ok := policy.Data["policyCoverageWorkloads"].([]string); ok {
+				for _, id := range ids {
+					if target := nodeByID[id]; target != nil {
+						targets = append(targets, target)
+					}
+				}
+			}
+		}
+		for _, target := range targets {
+			if ref := resourceRefForNode(target, dp); ref != nil {
+				rel.Protects = append(rel.Protects, *ref)
 			}
 		}
 	}
@@ -743,7 +841,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
-		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 && rel.IstioServiceDomain == "" &&
+		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 && !rel.NetworkPolicyMatchesIncomplete && rel.IstioServiceDomain == "" &&
 		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && len(rel.Backends) == 0 && len(rel.RoutedFrom) == 0 && len(rel.Protects) == 0 && len(rel.HealthChecks) == 0 && len(rel.StagedPolicies) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 && !rel.PodPlacementObserved {
 		return nil

@@ -80,6 +80,8 @@ export interface DiagnosisResourceContext {
   managedBy?: DiagnosisResourceRef[];
   exposes?: DiagnosisResourceRef[];
   selectedBy?: DiagnosisResourceRef[];
+  /** Some readable network policies may also apply; confirmed selectedBy entries remain valid. */
+  networkPolicyMatchesIncomplete?: boolean;
   referencedBy?: {
     total: number;
     items?: Array<DiagnosisResourceRef & { paths?: string[] }>;

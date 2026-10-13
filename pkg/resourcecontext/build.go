@@ -243,6 +243,14 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		exposes := append(exposedBy, backends...)
 		rc.Exposes = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposes), "exposes", omitted)
 
+		for _, ref := range rel.NetworkPolicyMatchesIncompleteSources {
+			candidate := &ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}
+			if checkRef(ctx, opts.AccessChecker, candidate) {
+				rc.NetworkPolicyMatchesIncomplete = true
+			} else {
+				omitted.add("selectedBy", OmittedRBACDenied)
+			}
+		}
 		selected := make([]topology.ResourceRef, 0, len(rel.PDBs)+len(rel.NetworkPolicies))
 		selected = append(selected, rel.PDBs...)
 		selected = append(selected, rel.NetworkPolicies...)
@@ -250,7 +258,30 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			toContextRefs(selected),
 			"selectedBy", omitted)
 
-		rc.Protects = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Protects), "protects", omitted)
+		policyTargets := toContextRefs(rel.Protects)
+		type targetScope struct{ group, kind, namespace string }
+		allowedScopes := map[targetScope]bool{}
+		for _, target := range policyTargets {
+			if len(rc.Protects) == maxPolicyTargetRefs {
+				omitted.add("protects", OmittedBudgetExceeded)
+				break
+			}
+			scope := targetScope{target.Group, target.Kind, target.Namespace}
+			allowed, checked := allowedScopes[scope]
+			if !checked {
+				if len(allowedScopes) == maxPolicyTargetScopes {
+					omitted.add("protects", OmittedBudgetExceeded)
+					break
+				}
+				allowed = checkRef(ctx, opts.AccessChecker, &target)
+				allowedScopes[scope] = allowed
+			}
+			if !allowed {
+				omitted.add("protects", OmittedRBACDenied)
+				continue
+			}
+			rc.Protects = append(rc.Protects, target)
+		}
 		rc.HealthChecks = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.HealthChecks), "healthChecks", omitted)
 		rc.StagedPolicies = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.StagedPolicies), "stagedPolicies", omitted)
 		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
@@ -576,6 +607,8 @@ func buildUsesFromWorkload(ctx context.Context, obj runtime.Object, ac RefAccess
 }
 
 const (
+	maxPolicyTargetRefs        = 50
+	maxPolicyTargetScopes      = 50
 	maxReferencedByItems       = 20
 	maxReferencedByPathsPerRef = 8
 )

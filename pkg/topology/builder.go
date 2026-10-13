@@ -4224,106 +4224,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 11d. Add CiliumNetworkPolicy nodes (CRD - fetched via dynamic cache)
-	var cnpGVR schema.GroupVersionResource
-	hasCNPs := false
-	if resourceDiscovery != nil {
-		cnpGVR, hasCNPs = resourceDiscovery.GetGVRWithGroup("CiliumNetworkPolicy", "cilium.io")
-	}
-	if hasCNPs && dynamicCache != nil {
-		cnps, cnpErr := dynamicCache.ListNamespaces(cnpGVR, opts.Namespaces)
-		if cnpErr != nil {
-			log.Printf("WARNING [topology] Failed to list CiliumNetworkPolicies: %v", cnpErr)
-			warnings = append(warnings, fmt.Sprintf("Failed to list CiliumNetworkPolicies: %v", cnpErr))
-		}
-		for _, cnp := range cnps {
-			ns := cnp.GetNamespace()
-			if !opts.MatchesNamespaceFilter(ns) {
-				continue
-			}
-			name := cnp.GetName()
-			cnpID := fmt.Sprintf("ciliumnetworkpolicy/%s/%s", ns, name)
-
-			nodeData := map[string]any{
-				"namespace":  ns,
-				"labels":     cnp.GetLabels(),
-				"apiVersion": cnp.GetAPIVersion(),
-			}
-
-			nodes = append(nodes, Node{
-				ID:     cnpID,
-				Kind:   KindCiliumNetworkPolicy,
-				Name:   name,
-				Status: StatusHealthy,
-				Data:   nodeData,
-			})
-
-			// Connect via endpointSelector (equivalent to podSelector)
-			selectorMap, _, _ := unstructured.NestedMap(cnp.Object, "spec", "endpointSelector", "matchLabels")
-			if len(selectorMap) == 0 {
-				nodeData["matchesAllPods"] = true
-				continue
-			}
-
-			for _, d := range deploymentsByNS[ns] {
-				if matchesStringMap(d.Spec.Template.Labels, selectorMap) {
-					if targetID := deploymentIDs[d.Namespace+"/"+d.Name]; targetID != "" {
-						edges = append(edges, Edge{
-							ID: fmt.Sprintf("%s-to-%s", cnpID, targetID), Source: cnpID, Target: targetID, Type: EdgeProtects,
-						})
-					}
-				}
-			}
-			for _, s := range statefulsetsByNS[ns] {
-				if matchesStringMap(s.Spec.Template.Labels, selectorMap) {
-					if targetID := statefulSetIDs[s.Namespace+"/"+s.Name]; targetID != "" {
-						edges = append(edges, Edge{
-							ID: fmt.Sprintf("%s-to-%s", cnpID, targetID), Source: cnpID, Target: targetID, Type: EdgeProtects,
-						})
-					}
-				}
-			}
-			for _, d := range daemonsetsByNS[ns] {
-				if matchesStringMap(d.Spec.Template.Labels, selectorMap) {
-					dsID := fmt.Sprintf("daemonset/%s/%s", d.Namespace, d.Name)
-					edges = append(edges, Edge{
-						ID: fmt.Sprintf("%s-to-%s", cnpID, dsID), Source: cnpID, Target: dsID, Type: EdgeProtects,
-					})
-				}
-			}
-		}
-	}
-
-	// 11e. Add CiliumClusterwideNetworkPolicy nodes (CRD - cluster-scoped)
-	var ccnpGVR schema.GroupVersionResource
-	hasCCNPs := false
-	if resourceDiscovery != nil {
-		ccnpGVR, hasCCNPs = resourceDiscovery.GetGVRWithGroup("CiliumClusterwideNetworkPolicy", "cilium.io")
-	}
-	if hasCCNPs && dynamicCache != nil {
-		ccnps, ccnpErr := dynamicCache.List(ccnpGVR, "")
-		if ccnpErr != nil {
-			log.Printf("WARNING [topology] Failed to list CiliumClusterwideNetworkPolicies: %v", ccnpErr)
-			warnings = append(warnings, fmt.Sprintf("Failed to list CiliumClusterwideNetworkPolicies: %v", ccnpErr))
-		}
-		for _, ccnp := range ccnps {
-			name := ccnp.GetName()
-			ccnpID := fmt.Sprintf("ciliumclusterwidenetworkpolicy/%s", name)
-
-			nodes = append(nodes, Node{
-				ID:     ccnpID,
-				Kind:   KindCiliumClusterwideNetworkPolicy,
-				Name:   name,
-				Status: StatusHealthy,
-				Data: map[string]any{
-					"labels":     ccnp.GetLabels(),
-					"apiVersion": ccnp.GetAPIVersion(),
-				},
-			})
-			// Cluster-wide policies use endpointSelector or nodeSelector across all namespaces.
-			// Edges are complex (cross-namespace matching) — skip for now, node presence is the value.
-		}
-	}
+	// Cilium endpoint selection is shared with dashboard and flow evaluation.
+	nodes, edges = b.addCiliumPolicyNodes(nodes, edges, opts, &warnings, deployments, statefulsets, daemonsets)
 
 	// 11f. Add ClusterNetworkPolicy nodes (CRD - cluster-scoped, policy.networking.k8s.io)
 	var cnpolicyGVR schema.GroupVersionResource
@@ -8783,8 +8685,15 @@ func annotateNodePolicyCoverage(
 ) {
 	// Collect workloads covered by EdgeProtects edges (from any policy type)
 	coveredWorkloads := make(map[string]bool)
+	unknownWorkloads := make(map[string]bool)
+	policySources := map[string]bool{}
+	for _, n := range nodes {
+		if n.Kind == KindNetworkPolicy || n.Kind == KindCiliumNetworkPolicy || n.Kind == KindCiliumClusterwideNetworkPolicy || n.Kind == KindClusterNetworkPolicy || IsCalicoPolicyKind(n.Kind) {
+			policySources[n.ID] = true
+		}
+	}
 	for _, e := range edges {
-		if e.Type == EdgeProtects && !e.Partial {
+		if e.Type == EdgeProtects && !e.Partial && policySources[e.Source] {
 			coveredWorkloads[e.Target] = true
 		}
 	}
@@ -8813,6 +8722,9 @@ func annotateNodePolicyCoverage(
 
 	// Check policy nodes with matchesAllPods flag.
 	for _, n := range nodes {
+		if n.Data["networkPolicyMatchesIncomplete"] == true {
+			unknownWorkloads[n.ID] = true
+		}
 		if n.Kind == KindCalicoStagedNetworkPolicy || n.Kind == KindCalicoStagedGlobalNetworkPolicy || n.Kind == KindCalicoStagedKubernetesNetworkPolicy {
 			continue
 		}
@@ -8849,6 +8761,8 @@ func annotateNodePolicyCoverage(
 		case KindDeployment, KindStatefulSet, KindDaemonSet:
 			if coveredWorkloads[n.ID] {
 				n.Data["policyStatus"] = "protected"
+			} else if unknownWorkloads[n.ID] {
+				n.Data["policyStatus"] = "unknown"
 			} else {
 				n.Data["policyStatus"] = "unprotected"
 			}

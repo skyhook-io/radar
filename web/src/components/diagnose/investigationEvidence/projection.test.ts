@@ -13,6 +13,28 @@ import {
 } from "./evidenceFixtures";
 
 describe("strict evidence adapters", () => {
+  it.each(["get_resource", "diagnose"])("preserves incomplete network-policy matching from %s alongside confirmed matches", (name) => {
+    const result = project([
+      tool("resource", name, {
+        resource: deployment,
+        resourceContext: {
+          tier: "basic",
+          selectedBy: [{ kind: "NetworkPolicy", group: "networking.k8s.io", namespace: "shop", name: "known" }],
+          networkPolicyMatchesIncomplete: true,
+        },
+      }),
+    ]);
+    expect(result.limitations).toEqual([
+      expect.objectContaining({ kind: "unknown", message: expect.stringContaining("Additional policies may apply; confirmed matches remain valid") }),
+    ]);
+    expect(groupsOf(result.groups, "resource")[0].latest.data).toMatchObject({ resourceContext: { selectedBy: [{ name: "known" }] } });
+  });
+
+  it("does not invent network-policy uncertainty when the producer omits the flag", () => {
+    const result = project([tool("resource", "get_resource", { resource: deployment, resourceContext: { tier: "basic" } })]);
+    expect(result.limitations).toHaveLength(0);
+  });
+
   it("renders resource scopes as identities, not argument order", () => {
     const result = project([
       tool(

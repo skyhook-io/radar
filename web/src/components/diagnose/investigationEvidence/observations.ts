@@ -539,6 +539,14 @@ function addResourceContextLimitations(
       omitted.reason === "budget_exceeded" ? "truncated" : "unknown",
     );
   }
+  if (context.networkPolicyMatchesIncomplete) {
+    builder.limit(
+      source,
+      "Network policy relationships",
+      "Radar could not determine whether some network policies apply to this resource. Additional policies may apply; confirmed matches remain valid.",
+      "unknown",
+    );
+  }
   if (context.referencedBy?.truncated) {
     const shown = context.referencedBy.items?.length ?? 0;
     builder.limit(

@@ -329,6 +329,22 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 				delete(node.Data, "policyCoverageWorkloads")
 				delete(node.Data, "policyStatus")
 			}
+			if opts.Allow != nil && len(node.networkPolicyMatchesIncompleteSources) > 0 {
+				visible := false
+				for _, id := range node.networkPolicyMatchesIncompleteSources {
+					if policy := nodeByID[id]; policy != nil && opts.Allow(policy) {
+						visible = true
+						break
+					}
+				}
+				if !visible {
+					node.Data = maps.Clone(node.Data)
+					delete(node.Data, "networkPolicyMatchesIncomplete")
+					if node.Data["policyStatus"] == "unknown" {
+						delete(node.Data, "policyStatus")
+					}
+				}
+			}
 			sub.Nodes = append(sub.Nodes, node)
 		}
 	}

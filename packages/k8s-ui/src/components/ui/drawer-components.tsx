@@ -853,7 +853,8 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.protects && relationships.protects.length > 0) ||
     (relationships.healthChecks && relationships.healthChecks.length > 0) ||
     (relationships.stagedPolicies && relationships.stagedPolicies.length > 0) ||
-    relationships.scaleTarget
+    relationships.scaleTarget ||
+    relationships.networkPolicyMatchesIncomplete
 
   if (!hasRelationships) return null
 
@@ -904,6 +905,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         )}
         {relationships.networkPolicies && relationships.networkPolicies.length > 0 && (
           <RelationshipGroup label="Network Policies" refs={dedupeResourceRefs(relationships.networkPolicies)} onNavigate={onNavigate} />
+        )}
+        {relationships.networkPolicyMatchesIncomplete && (
+          <NetworkPolicyMatchesIncompleteNotice />
         )}
         {relationships.resourceClaims && relationships.resourceClaims.length > 0 && (
           <RelationshipGroup label="Resource Claims" refs={dedupeResourceRefs(relationships.resourceClaims)} onNavigate={onNavigate} />
@@ -1212,4 +1216,8 @@ function formatEventTime(timestamp: string): string {
   if (diffMins < 60) return `${diffMins}m ago`
   if (diffHours < 24) return `${diffHours}h ago`
   return date.toLocaleDateString()
+}
+
+export function NetworkPolicyMatchesIncompleteNotice() {
+  return <p className="text-xs text-theme-text-secondary">Radar could not determine whether some Cilium network policies apply to this workload. Additional policies may apply.</p>
 }

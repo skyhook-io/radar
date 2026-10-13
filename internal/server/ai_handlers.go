@@ -316,6 +316,9 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 //
 //	{ "resource": <minified>, "resourceContext": { ...basic tier... } }
 //
+// When policy-target context is budget-limited, warnings explains the omission
+// and how to inspect further without treating the sample as exhaustive.
+//
 // Response shape (context=none):
 //
 //	<minified>
@@ -374,10 +377,14 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rc := s.buildAIResourceContext(r, obj, kind, namespace, name)
-	s.writeJSON(w, map[string]any{
+	response := map[string]any{
 		"resource":        minified,
 		"resourceContext": rc,
-	})
+	}
+	if warning := aicontext.PolicyTargetBudgetWarning(rc); warning != "" {
+		response["warnings"] = []string{warning}
+	}
+	s.writeJSON(w, response)
 }
 
 // fetchAIResource resolves the resource from the typed cache or dynamic cache.

@@ -1442,6 +1442,8 @@ The panel shows only what you could read yourself: listing policies and reading 
   <br><em>Calico policy topology — enforced relationships use solid edges; staged previews use dashed edges</em>
 </p>
 
+Cilium matching shares one compiled selector across topology, dashboard and flow evaluation. It reads `spec` and `specs`, distinguishes node selectors from endpoint selectors, and includes observed Namespace labels and the Pod service account. Requirements on known non-Pod reserved identities (host, world, remote-node, health and ingress) are evaluated as absent on ordinary Pod endpoints; this shortcut leaves host-network Pods unknown. Cluster identity, other unsupported label sources and keys affected by Cilium's default identity-label filter remain unknown. Transient `reserved:init`, unmanaged identities and reserved identities Radar cannot establish from Kubernetes metadata remain unknown. Custom Cilium identity-label configurations are not discovered. These views describe selection from cached Kubernetes identity, not CNI enforcement. Unknown matching is shown separately from known uncovered workloads. Resource relationships, workload graph data and agent context carry `networkPolicyMatchesIncomplete` when additional readable network policies may apply; confirmed matches remain valid, and absence is not a completeness guarantee. Empty selectors remain visible in relationship lists without drawing an edge to every workload.
+
 **Dashboard Coverage Card:** The home dashboard includes a Network Policy Coverage card showing total policy count, the percentage of workloads covered by at least one enforced policy, and a count of uncovered workloads. When staged Calico policies exist, it separately shows projected coverage if those policies were applied. That projection can be **lower** than today's coverage — a staged deletion removes the protection of the policy it names — and the bar marks the part that would be lost.
 
 <p align="center">
@@ -1513,6 +1515,16 @@ either grant is enough to read it.
 | IPPool | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | No | Yes | Yes |
 | HostEndpoint | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | No | Yes | Yes |
 | Tier | `projectcalico.org/v3`, `crd.projectcalico.org/v1` | No | Yes | Yes |
+
+### Other Network-Policy Coverage Limits
+
+`ClusterNetworkPolicy` in `policy.networking.k8s.io` currently has node-only
+topology support. Radar does not evaluate its subject selectors or recover its
+target relationships, and this path does not emit `networkPolicyMatchesIncomplete`.
+An empty relationship list or an uncovered-workload count is therefore not proof
+that such a policy does not apply. This is an existing matching-coverage gap;
+supporting it would extend the confirmed-reference and uncertainty producers,
+not turn those fields into enforcement verdicts.
 
 ### Calico Coverage Limits
 

@@ -607,6 +607,8 @@ export interface DashboardCertificateHealth {
 }
 
 export interface DashboardNetworkPolicyCoverage {
+  unknownWorkloads?: number;
+  unknownWorkloadsIfStaged?: number;
   totalPolicies: number;
   stagedPolicies?: number;
   coveredWorkloads: number;

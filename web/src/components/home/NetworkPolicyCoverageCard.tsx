@@ -9,25 +9,28 @@ interface NetworkPolicyCoverageCardProps {
 }
 
 export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCoverageCardProps) {
+  const unknown = data.unknownWorkloads ?? 0
+  const unknownIfStaged = data.unknownWorkloadsIfStaged ?? 0
   const hasStagedPolicies = (data.stagedPolicies ?? 0) > 0
   // A staged policy can stage a deletion, so the projected coverage is allowed
   // to be lower than today's. Clamping it would hide exactly the case an
   // operator most needs to see before promoting the staged set.
   const coveredIfStaged = data.coveredWorkloadsIfStaged ?? data.coveredWorkloads
   const stagedDelta = coveredIfStaged - data.coveredWorkloads
+  const stagedSelectionUnknown = unknown > 0 || unknownIfStaged > 0
   const percentage = data.totalWorkloads > 0
-    ? Math.round((data.coveredWorkloads / data.totalWorkloads) * 100)
+    ? (unknown > 0 ? Math.floor : Math.round)((data.coveredWorkloads / data.totalWorkloads) * 100)
     : 0
   const percentageIfStaged = data.totalWorkloads > 0
-    ? Math.round((coveredIfStaged / data.totalWorkloads) * 100)
+    ? (unknownIfStaged > 0 ? Math.floor : Math.round)((coveredIfStaged / data.totalWorkloads) * 100)
     : 0
   const enforcedPercentage = hasStagedPolicies ? Math.min(percentage, percentageIfStaged) : percentage
   // Gated on the same condition as the segment that draws it, so the three
   // widths always sum to the full track even for a host that supplies a
   // projection without any staged policies.
   const stagedDeltaPercentage = hasStagedPolicies ? Math.abs(percentageIfStaged - percentage) : 0
-  const hasPolicies = data.totalPolicies > 0
-  const accentColor = !hasPolicies
+  const hasPolicies = data.totalPolicies > 0 || unknown > 0
+  const accentColor = !hasPolicies || unknown > data.totalWorkloads / 2
     ? 'text-theme-text-tertiary'
     : percentage >= 75
       ? 'text-green-500'
@@ -74,13 +77,15 @@ export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCov
                     // inside it carries the hover target.
                     <div className="h-full" style={{ width: `${stagedDeltaPercentage}%` }}>
                       <Tooltip
-                        content={stagedDelta > 0
+                        content={stagedSelectionUnknown
+                          ? `${Math.abs(stagedDelta)} ${stagedDelta > 0 ? 'more' : 'fewer'} workloads have confirmed policy selection if staged policies are applied; some selections are unknown`
+                          : stagedDelta > 0
                           ? `${stagedDelta} more workloads covered if staged policies are applied`
                           : `${-stagedDelta} workloads lose coverage if staged policies are applied`}
                         wrapperClassName="!block h-full w-full"
                       >
                         <div
-                          className={clsx('h-full w-full', stagedDelta > 0 ? 'text-yellow-500' : 'text-red-500')}
+                          className={clsx('h-full w-full', stagedSelectionUnknown ? 'text-theme-text-tertiary' : stagedDelta > 0 ? 'text-yellow-500' : 'text-red-500')}
                           style={{
                             backgroundImage: 'repeating-linear-gradient(135deg, currentColor 0, currentColor 2px, transparent 2px, transparent 5px)',
                           }}
@@ -96,23 +101,18 @@ export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCov
                   )}
                 </div>
                 <div className="flex shrink-0 flex-col items-end tabular-nums">
-                  <span className={clsx('text-sm font-semibold', accentColor)}>{percentage}%</span>
+                  <span className={clsx('text-sm font-semibold', accentColor)}>{unknown > 0 ? `≥${percentage}` : percentage}%</span>
                   {hasStagedPolicies && (
-                    <span className="text-[10px] text-theme-text-tertiary">({percentageIfStaged}% if staged applied)</span>
+                    <span className="text-[10px] text-theme-text-tertiary">({unknownIfStaged > 0 ? `≥${percentageIfStaged}` : percentageIfStaged}% if staged applied)</span>
                   )}
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-y-2 mt-4 w-full">
                 <StatRow label="Policies" value={data.totalPolicies} />
-                <StatRow label="Covered workloads" value={data.coveredWorkloads} total={data.totalWorkloads} />
-                {hasStagedPolicies && (
-                  <StatRow label="Covered if staged" value={coveredIfStaged} total={data.totalWorkloads} />
-                )}
-                <StatRow label="Uncovered workloads" value={data.totalWorkloads - data.coveredWorkloads} warn />
-                {hasStagedPolicies && (
-                  <StatRow label="Uncovered if staged" value={data.totalWorkloads - coveredIfStaged} warn />
-                )}
+                <StatRow label="Covered workloads" value={data.coveredWorkloads} total={data.totalWorkloads} projected={hasStagedPolicies ? coveredIfStaged : undefined} />
+                {(unknown > 0 || (hasStagedPolicies && unknownIfStaged > 0)) && <StatRow label="Coverage unknown" value={unknown} projected={hasStagedPolicies ? unknownIfStaged : undefined} />}
+                <StatRow label="Uncovered workloads" value={data.totalWorkloads - data.coveredWorkloads - unknown} warn projected={hasStagedPolicies ? data.totalWorkloads - coveredIfStaged - unknownIfStaged : undefined} />
               </div>
             </>
           )}
@@ -132,10 +132,11 @@ export function NetworkPolicyCoverageCard({ data, onNavigate }: NetworkPolicyCov
   )
 }
 
-function StatRow({ label, value, total, warn }: {
+function StatRow({ label, value, total, warn, projected }: {
   label: string
   value: number
   total?: number
+  projected?: number
   warn?: boolean
 }) {
   return (
@@ -146,6 +147,7 @@ function StatRow({ label, value, total, warn }: {
         warn && value > 0 ? 'text-yellow-400' : 'text-theme-text-primary',
       )}>
         {total !== undefined ? `${value}/${total}` : value}
+        {projected !== undefined && <span className="text-[10px] font-normal text-theme-text-tertiary"> ({total !== undefined ? `${projected}/${total}` : projected} if staged)</span>}
       </span>
     </div>
   )

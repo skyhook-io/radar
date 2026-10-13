@@ -58,7 +58,7 @@ import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type D
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
-import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge } from '../ui/drawer-components'
+import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge, NetworkPolicyMatchesIncompleteNotice } from '../ui/drawer-components'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { midTruncate } from '../../utils/format'
@@ -2288,6 +2288,7 @@ function WorkloadOverviewTab({
                     <ServingDependenciesCard
                       title="Related resources"
                       groups={observationGroups}
+                      showPolicyMatchingNotice={false}
                       onNavigate={onNavigate}
                       onSwitchToTopology={onSwitchToTopology}
                     />
@@ -2369,7 +2370,7 @@ function WorkloadOverviewTab({
                 onNavigate={onNavigate}
               />
             </div>
-            {secondaryRelationshipGroups.length > 0 ? (
+            {secondaryRelationshipGroups.length > 0 || relationships?.networkPolicyMatchesIncomplete ? (
               <ServingDependenciesCard
                 title={relationshipCardTitle}
                 relationships={relationships}
@@ -3781,15 +3782,18 @@ function ServingDependenciesCard({
   title = 'Serving and dependencies',
   relationships,
   groups,
+  showPolicyMatchingNotice = true,
   onNavigate,
   onSwitchToTopology,
 }: {
   title?: string
   relationships?: Relationships
   groups?: RelationshipGroup[]
+  showPolicyMatchingNotice?: boolean
   onNavigate?: NavigateToResource
   onSwitchToTopology?: () => void
 }) {
+  const matchingIncomplete = showPolicyMatchingNotice && relationships?.networkPolicyMatchesIncomplete
   const relationshipGroups = groups ?? buildRelationshipGroups(relationships)
   const visibleGroups = relationshipGroups.slice(0, RELATIONSHIP_GROUP_LIMIT)
   const hiddenRefs =
@@ -3825,9 +3829,10 @@ function ServingDependenciesCard({
           ))}
           {hiddenRefs > 0 && <div className="text-xs text-theme-text-tertiary">+{hiddenRefs} more relationships; use Topology for the full graph.</div>}
         </div>
-      ) : (
+      ) : !matchingIncomplete ? (
         <div className="text-sm text-theme-text-tertiary">No serving or dependency relationships found.</div>
-      )}
+      ) : null}
+      {matchingIncomplete && <NetworkPolicyMatchesIncompleteNotice />}
     </OverviewCard>
   )
 }
@@ -3853,7 +3858,7 @@ function ConfigurationInputsCard({
     ...(relationships?.networkPolicies ?? []),
     ...(relationships?.resourceClaims ?? []),
   ])
-  if (!serviceAccountName && configRefs.length === 0 && policyRefs.length === 0) return null
+  if (!serviceAccountName && configRefs.length === 0 && policyRefs.length === 0 && !relationships?.networkPolicyMatchesIncomplete) return null
   const navigateRef = onNavigate ? (ref: ResourceRef) => onNavigate(refToSelectedResource(ref)) : undefined
   const serviceAccountRef: ResourceRef = {
     kind: 'ServiceAccount',
@@ -3898,9 +3903,10 @@ function ConfigurationInputsCard({
             </button>
           ) : policyRefs.length > 0 ? (
             <div className="text-xs text-theme-text-secondary">{policyRefs.length} related resource{policyRefs.length === 1 ? '' : 's'} found.</div>
-          ) : (
+          ) : !relationships?.networkPolicyMatchesIncomplete ? (
             <div className="text-xs text-theme-text-tertiary">No PDB, NetworkPolicy, or storage refs found.</div>
-          )}
+          ) : null}
+          {relationships?.networkPolicyMatchesIncomplete && <NetworkPolicyMatchesIncompleteNotice />}
         </div>
       </div>
     </OverviewCard>

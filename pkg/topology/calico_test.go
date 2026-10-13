@@ -156,8 +156,17 @@ func TestCalicoPolicyTopology(t *testing.T) {
 	}
 
 	frontend := GetRelationships("Deployment", "demo", "frontend", topo, provider, nil)
-	if frontend == nil || len(frontend.NetworkPolicies) != 1 || len(frontend.StagedPolicies) != 2 {
+	if frontend == nil || len(frontend.NetworkPolicies) != 1 || len(frontend.StagedPolicies) != 3 {
 		t.Fatalf("Calico enforced/staged projections = %+v", frontend)
+	}
+	foundAll := false
+	for _, policy := range frontend.StagedPolicies {
+		if policy.Kind == "StagedGlobalNetworkPolicy" && policy.Name == "all-staged" && policy.Namespace == "" && policy.Group == "projectcalico.org" {
+			foundAll = true
+		}
+	}
+	if !foundAll {
+		t.Fatal("lost staged all-selector selection when its graph edges are omitted")
 	}
 	for _, id := range []string{"caliconetworkpolicy/demo/frontend-policy", "calicostagednetworkpolicy/demo/frontend-staged", "calicostagedkubernetesnetworkpolicy/demo/frontend-kubernetes-staged"} {
 		ref := resourceRefForNode(nodeByID(topo.Nodes, id), nil)

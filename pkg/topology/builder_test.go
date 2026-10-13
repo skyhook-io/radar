@@ -1282,6 +1282,7 @@ func TestAnnotateNodePolicyCoverage(t *testing.T) {
 		{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "demo"}},
 		{ID: "deployment/demo/api", Kind: KindDeployment, Name: "api", Data: map[string]any{"namespace": "demo"}},
 		{ID: "service/demo/web", Kind: KindService, Name: "web", Data: map[string]any{"namespace": "demo"}},
+		{ID: "networkpolicy/demo/web-policy", Kind: KindNetworkPolicy, Name: "web-policy", Data: map[string]any{"namespace": "demo"}},
 	}
 
 	// EdgeProtects from web-policy to web deployment (created by topology builder)

@@ -72,7 +72,7 @@ func BuilderFromIndexes(topo *topology.Topology, namespacedIdx, clusterIdx Issue
 			case u != nil:
 				rawObj = u
 			}
-			rel := topology.GetRelationshipsWithObject(kind, namespace, name, rawObj, topo, resourceProvider, dynamicProvider, relIdx)
+			rel := topology.GetManagementRelationshipsWithObject(kind, namespace, name, rawObj, topo, resourceProvider, dynamicProvider, relIdx)
 			managedBy = ManagedByFromRelationships(rel)
 		}
 		var source runtime.Object = obj

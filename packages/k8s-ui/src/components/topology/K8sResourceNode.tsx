@@ -734,8 +734,10 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                 <Tooltip
                   content={
                     policyStatus === "protected"
-                      ? "Protected by NetworkPolicy"
-                      : "No NetworkPolicy coverage"
+                      ? "Selected by a network policy; enforcement is not assessed"
+                      : policyStatus === "unknown"
+                        ? "Radar could not determine whether a network policy applies to this workload"
+                        : "No matching network policy found"
                   }
                   position="right"
                 >
@@ -744,10 +746,12 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                       "inline-flex items-center justify-center w-3 h-3 rounded-sm text-[8px] font-bold cursor-help leading-none",
                       policyStatus === "protected"
                         ? "bg-green-500/20 text-green-500 border border-green-500/30"
-                        : "bg-yellow-500/20 text-yellow-500 border border-yellow-500/30",
+                        : policyStatus === "unknown"
+                          ? "bg-theme-elevated text-theme-text-tertiary border border-theme-border"
+                          : "bg-yellow-500/20 text-yellow-500 border border-yellow-500/30",
                     )}
                   >
-                    {policyStatus === "protected" ? "✓" : "!"}
+                    {policyStatus === "protected" ? "✓" : policyStatus === "unknown" ? "?" : "!"}
                   </span>
                 </Tooltip>
               )}

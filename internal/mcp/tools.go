@@ -129,21 +129,20 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
-		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
+		Description: "After narrowing to one resource, returns " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
 			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
 			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
 			"audit findings are static posture and remediation priority, not evidence " +
-			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
-			"(critical|high|medium|low; current built-ins are high|medium), separate " +
-			"from issueSummary's live-operational critical|warning). This is the drill-down " +
-			"tool, not the best first call for broad incidents. Start with issues, " +
-			"get_dashboard, search, or list_resources to rank candidates; then call " +
-			"get_resource for the exact object. If you are looking for a string across " +
-			"ConfigMaps, CRD specs, env refs, or object content, use search instead of " +
-			"fetching resources one by one. Use the group parameter for ambiguous " +
-			"kinds such as Knative Service vs core Service. When recentChanges entries " +
+			"of an active outage; networkPolicyMatchesIncomplete means additional policies may apply; " +
+			"preserve uncertainty, including omissions. Matching does not establish enforcement. " +
+			"auditSummary.highestSeverity uses the Checks ladder " +
+			"(critical|high|medium|low; current built-ins high|medium), separate " +
+			"from issueSummary's operational critical|warning). Narrow with issues, " +
+			"get_dashboard, search or list_resources first. For content strings in ConfigMaps, " +
+			"CRDs or env refs, use search. Set group for colliding kinds " +
+			"(Knative Service vs core Service). When recentChanges entries " +
 			"carry `application_configuration_change: true`, it is a factual edit " +
 			"classification and narrow ranking hint, not a causal or universal relevance verdict.",
 		Annotations: readOnly,
@@ -210,12 +209,14 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
 	diagnoseDescription := "Collect a bounded, point-in-time evidence bundle for one narrowed workload, " +
-		"GitOps reconciler, or network entry. It combines signals in one round-trip to support diagnosis; " +
-		"it does not run an agent and is not an authoritative root-cause verdict or an exhaustive account. " +
+		"GitOps reconciler, or network entry in one round-trip. It does not run an agent and is not an authoritative " +
+		"root-cause verdict or an exhaustive account. " +
 		"After narrowing, use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, GitOps sync/health, " +
 		"or traffic not reaching a service, route, or ingress. For Pod, Deployment, StatefulSet, DaemonSet, or Argo Rollout it " +
 		"bundles resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
 		"related issues, and recent workload/ConfigMap changes. " +
+		"networkPolicyMatchesIncomplete means additional policies may apply; " +
+		"preserve uncertainty, including omissions. Matching does not establish enforcement. " +
 		"Warning events are a capped sample; use get_events for a broader, dedicated event read. " +
 		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
@@ -1134,6 +1135,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 	if truncationNote != "" {
 		warnings = append(warnings, truncationNote)
+	}
+	if warning := aicontext.PolicyTargetBudgetWarning(resourceCtx); warning != "" {
+		warnings = append(warnings, warning)
 	}
 
 	defaultConfigMapChanges := meaningfulchanges.ConfigMapKind(kind)

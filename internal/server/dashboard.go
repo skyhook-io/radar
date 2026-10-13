@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/netpol"
 	"log"
 	"net/http"
 	"slices"
@@ -1542,6 +1543,8 @@ type DashboardNetworkPolicyCoverage struct {
 	CoveredWorkloads         int `json:"coveredWorkloads"`
 	CoveredWorkloadsIfStaged int `json:"coveredWorkloadsIfStaged"`
 	TotalWorkloads           int `json:"totalWorkloads"`
+	UnknownWorkloads         int `json:"unknownWorkloads,omitempty"`
+	UnknownWorkloadsIfStaged int `json:"unknownWorkloadsIfStaged,omitempty"`
 }
 
 type npSelector struct {
@@ -1551,7 +1554,8 @@ type npSelector struct {
 	// cilium marks a CiliumNetworkPolicy sharing this list with the core
 	// networking.k8s.io policies. A staged Calico deletion names a policy in one
 	// family or the other, never both.
-	cilium bool
+	cilium        bool
+	ciliumMatcher *netpol.CiliumPolicyMatcher
 }
 
 type dashboardCalicoPolicy struct {
@@ -1581,6 +1585,7 @@ type dashboardPolicyWorkload struct {
 	namespace      string
 	labels         map[string]string
 	serviceAccount string
+	hostNetwork    bool
 }
 
 func (s *Server) dashboardPolicyReadScope(r *http.Request, namespaces []string, group, resource string) (clusterWide bool, readable []string) {
@@ -1638,13 +1643,32 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 	allNamespaces := namespaces == nil || (len(namespaces) == 0 && auth.UserFromContext(r.Context()) == nil)
 
 	var allNPs []npSelector
+	unknownPolicyNamespaces := map[string]bool{}
+	markUnreadable := func(clusterWide bool, readable []string) {
+		if clusterWide {
+			return
+		}
+		if allNamespaces {
+			unknownPolicyNamespaces[""] = true
+			return
+		}
+		for _, ns := range namespaces {
+			if !slices.Contains(readable, ns) {
+				unknownPolicyNamespaces[ns] = true
+			}
+		}
+	}
+	if npLister == nil {
+		markUnreadable(false, nil)
+	}
 	if npLister != nil {
-		clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, "", "networkpolicies")
+		clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, "networking.k8s.io", "networkpolicies")
+		markUnreadable(clusterWide, readableNamespaces)
 		if clusterWide {
 			nps, err := npLister.List(labels.Everything())
 			if err != nil {
 				log.Printf("[dashboard] Failed to list NetworkPolicies: %v", err)
-				return nil
+				markUnreadable(false, nil)
 			}
 			for _, np := range nps {
 				sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
@@ -1658,6 +1682,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				nps, err := npLister.NetworkPolicies(ns).List(labels.Everything())
 				if err != nil {
 					log.Printf("[dashboard] Failed to list NetworkPolicies in namespace %s: %v", ns, err)
+					unknownPolicyNamespaces[ns] = true
 					continue
 				}
 				for _, np := range nps {
@@ -1675,36 +1700,37 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 	seenCalicoPolicies := make(map[string]struct{})
 	if dynamicCache := k8s.GetDynamicResourceCache(); dynamicCache != nil {
 		if discovery := k8s.GetResourceDiscovery(); discovery != nil {
-			if cnpGVR, ok := discovery.GetGVRWithGroup("CiliumNetworkPolicy", "cilium.io"); ok {
-				clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, cnpGVR.Group, cnpGVR.Resource)
-				var cnps []*unstructured.Unstructured
-				var err error
-				if clusterWide {
-					cnps, err = dynamicCache.List(cnpGVR, "")
-				} else if len(readableNamespaces) > 0 {
-					cnps, err = dynamicCache.ListNamespaces(cnpGVR, readableNamespaces)
+			for _, kind := range []string{"CiliumNetworkPolicy", "CiliumClusterwideNetworkPolicy"} {
+				gvr, ok := discovery.GetGVRWithGroup(kind, "cilium.io")
+				if !ok {
+					continue
 				}
-				if err == nil {
-					for _, cnp := range cnps {
-						ns := cnp.GetNamespace()
-						if !clusterWide && !slices.Contains(readableNamespaces, ns) {
-							continue
-						}
-						selectorMap, _, _ := unstructured.NestedMap(cnp.Object, "spec", "endpointSelector", "matchLabels")
-						if len(selectorMap) == 0 {
-							allNPs = append(allNPs, npSelector{namespace: ns, name: cnp.GetName(), selector: labels.Everything(), cilium: true})
-						} else {
-							selectorLabels := make(map[string]string)
-							for k, v := range selectorMap {
-								if sv, ok := v.(string); ok {
-									selectorLabels[k] = sv
-								}
-							}
-							if sel, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: selectorLabels}); err == nil {
-								allNPs = append(allNPs, npSelector{namespace: ns, name: cnp.GetName(), selector: sel, cilium: true})
-							}
-						}
+				clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, gvr.Group, gvr.Resource)
+				var policies []*unstructured.Unstructured
+				var err error
+				if kind == "CiliumClusterwideNetworkPolicy" {
+					if s.canRead(r, gvr.Group, gvr.Resource, "", "list") {
+						policies, err = dynamicCache.List(gvr, "")
+					} else {
+						unknownPolicyNamespaces[""] = true
 					}
+				} else if clusterWide {
+					policies, err = dynamicCache.List(gvr, "")
+				} else if len(readableNamespaces) > 0 {
+					policies, err = dynamicCache.ListNamespaces(gvr, readableNamespaces)
+				}
+				if kind == "CiliumNetworkPolicy" {
+					markUnreadable(clusterWide, readableNamespaces)
+				}
+				if err != nil {
+					markUnreadable(false, nil)
+					continue
+				}
+				for _, policy := range policies {
+					if kind == "CiliumNetworkPolicy" && !clusterWide && !slices.Contains(readableNamespaces, policy.GetNamespace()) {
+						continue
+					}
+					allNPs = append(allNPs, npSelector{namespace: policy.GetNamespace(), name: policy.GetName(), cilium: true, ciliumMatcher: netpol.CompileCiliumPolicy(policy)})
 				}
 			}
 
@@ -1752,7 +1778,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 	}
 
 	workloads := make([]dashboardPolicyWorkload, 0)
-	addWorkload := func(kind, ns, name string, templateLabels map[string]string, serviceAccount string) {
+	addWorkload := func(kind, ns, name string, templateLabels map[string]string, serviceAccount string, hostNetwork bool) {
 		if serviceAccount == "" {
 			serviceAccount = "default"
 		}
@@ -1761,6 +1787,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 			namespace:      ns,
 			labels:         templateLabels,
 			serviceAccount: serviceAccount,
+			hostNetwork:    hostNetwork,
 		})
 	}
 
@@ -1768,13 +1795,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			deps, _ := depLister.List(labels.Everything())
 			for _, d := range deps {
-				addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName, d.Spec.Template.Spec.HostNetwork)
 			}
 		} else {
 			for _, ns := range namespaces {
 				deps, _ := depLister.Deployments(ns).List(labels.Everything())
 				for _, d := range deps {
-					addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("Deployment", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName, d.Spec.Template.Spec.HostNetwork)
 				}
 			}
 		}
@@ -1784,13 +1811,13 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			stss, _ := stsLister.List(labels.Everything())
 			for _, s := range stss {
-				addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName, s.Spec.Template.Spec.HostNetwork)
 			}
 		} else {
 			for _, ns := range namespaces {
 				stss, _ := stsLister.StatefulSets(ns).List(labels.Everything())
 				for _, s := range stss {
-					addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("StatefulSet", s.Namespace, s.Name, s.Spec.Template.Labels, s.Spec.Template.Spec.ServiceAccountName, s.Spec.Template.Spec.HostNetwork)
 				}
 			}
 		}
@@ -1800,19 +1827,35 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		if allNamespaces {
 			dss, _ := dsLister.List(labels.Everything())
 			for _, d := range dss {
-				addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+				addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName, d.Spec.Template.Spec.HostNetwork)
 			}
 		} else {
 			for _, ns := range namespaces {
 				dss, _ := dsLister.DaemonSets(ns).List(labels.Everything())
 				for _, d := range dss {
-					addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName)
+					addWorkload("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Labels, d.Spec.Template.Spec.ServiceAccountName, d.Spec.Template.Spec.HostNetwork)
 				}
 			}
 		}
 	}
 
 	covered := make(map[string]bool)
+	unknown := make(map[string]bool)
+	ciliumNamespaces := make(map[string]*corev1.Namespace)
+	ciliumIdentities := make(map[string]netpol.CiliumIdentity)
+	for _, np := range allNPs {
+		if !np.cilium {
+			continue
+		}
+		for _, workload := range workloads {
+			if _, loaded := ciliumNamespaces[workload.namespace]; !loaded {
+				ciliumNamespaces[workload.namespace] = s.namespaceObject(r, cache, workload.namespace)
+			}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: workload.namespace, Labels: workload.labels}, Spec: corev1.PodSpec{ServiceAccountName: workload.serviceAccount, HostNetwork: workload.hostNetwork}}
+			ciliumIdentities[workload.key] = netpol.CiliumIdentityFor(pod, ciliumNamespaces[workload.namespace])
+		}
+		break
+	}
 	coveredIfStaged := make(map[string]bool)
 	// Both label maps exist only to evaluate Calico's namespace and
 	// service-account selectors. On a cluster without Calico policies, building
@@ -1840,13 +1883,28 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 	}
 
 	for _, workload := range workloads {
+		if unknownPolicyNamespaces[""] || unknownPolicyNamespaces[workload.namespace] {
+			unknown[workload.key] = true
+		}
 		for _, np := range allNPs {
 			// Both answers are settled once a policy that survives the staged set
 			// matches; the rest of the list cannot change either of them.
 			if covered[workload.key] && coveredIfStaged[workload.key] {
 				break
 			}
-			if np.namespace != workload.namespace || !np.selector.Matches(labels.Set(workload.labels)) {
+			if np.cilium {
+				if np.namespace != "" && np.namespace != workload.namespace {
+					continue
+				}
+				matched, decided, _ := np.ciliumMatcher.Selects(ciliumIdentities[workload.key], "")
+				if !decided {
+					unknown[workload.key] = true
+					continue
+				}
+				if !matched {
+					continue
+				}
+			} else if np.namespace != workload.namespace || !np.selector.Matches(labels.Set(workload.labels)) {
 				continue
 			}
 			covered[workload.key] = true
@@ -1892,12 +1950,23 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 		}
 	}
 
+	unknownCount, unknownIfStaged := 0, 0
+	for key := range unknown {
+		if !covered[key] {
+			unknownCount++
+		}
+		if !coveredIfStaged[key] {
+			unknownIfStaged++
+		}
+	}
 	return &DashboardNetworkPolicyCoverage{
 		TotalPolicies:            len(allNPs) + len(calicoPolicies),
 		StagedPolicies:           stagedPolicies,
 		CoveredWorkloads:         len(covered),
 		CoveredWorkloadsIfStaged: len(coveredIfStaged),
 		TotalWorkloads:           len(workloads),
+		UnknownWorkloads:         unknownCount,
+		UnknownWorkloadsIfStaged: unknownIfStaged,
 	}
 }
 
