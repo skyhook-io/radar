@@ -8,6 +8,7 @@ import { clsx } from 'clsx'
 import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
 import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
 import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
+import { toneTextClass } from '../ui/status-tone'
 
 export interface TerminalTabProps {
   namespace: string
@@ -307,10 +308,10 @@ export function TerminalTab({
 
       <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       {error && (
-        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-slate-900">
+        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-theme-base">
           {errorType === 'shell_not_found' ? (
             <>
-              <div className="text-amber-400 mb-2 text-sm">{command ? 'Command not available' : 'Shell not available'}</div>
+              <div className="text-warning-text mb-2 text-sm">{command ? 'Command not available' : 'Shell not available'}</div>
               {command ? (
                 <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
                   Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
@@ -346,8 +347,8 @@ export function TerminalTab({
             </>
           ) : (
             <>
-              <div className="text-red-400 mb-2 text-sm">Failed to connect</div>
-              <div className="text-xs text-theme-text-disabled mb-3">{error}</div>
+              <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
+              <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
               <button
                 onClick={connect}
                 className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"

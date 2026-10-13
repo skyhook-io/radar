@@ -51,7 +51,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   selection?: ChartTimeRange | null
   /**
    * Enables range selection: drag across the plot, or click to pick the one
-   * evaluation step under the pointer (needs `stepSeconds`).
+   * step-wide window around the pointer (needs `stepSeconds`; clipped at the domain edges).
    */
   onSelectRange?: (range: ChartTimeRange) => void
 }) {
@@ -323,9 +323,11 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
     }
   }
   const handlePointerDown = (e: React.PointerEvent<SVGRectElement>) => {
-    if (!onSelectRange || e.button !== 0) return
+    if (e.button !== 0) return
     const x = pointerX(e)
     if (x === null) return
+    setHoverX(x)
+    if (!onSelectRange) return
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = { from: clampX(x), to: clampX(x) }
     setDrag(dragRef.current)
@@ -374,32 +376,6 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
             <line x1="0" y1="0" x2="0" y2="6" stroke="currentColor" strokeWidth="2" className="text-theme-border" />
           </pattern>
         </defs>
-
-        {shadedRanges?.map((r, i) => {
-          const x1 = Math.max(marginLeft, toX(r.start))
-          const x2 = Math.min(marginLeft + plotWidth, toX(r.end))
-          if (x2 <= x1) return null
-          return <rect key={`shade-${i}`} data-chart-gap x={x1} y={marginTop} width={x2 - x1} height={plotHeight} fill={`url(#${hatchId})`} opacity="0.7" />
-        })}
-
-        {selection && (() => {
-          const x1 = Math.max(marginLeft, toX(selection.start))
-          const x2 = Math.min(marginLeft + plotWidth, toX(selection.end))
-          if (x2 < x1) return null
-          return <rect data-chart-selection x={x1} y={marginTop} width={Math.max(2, x2 - x1)} height={plotHeight} fill="currentColor" className="text-accent" opacity="0.15" />
-        })()}
-
-        {drag && Math.abs(drag.to - drag.from) >= 2 && (
-          <rect
-            x={Math.max(marginLeft, Math.min(drag.from, drag.to))}
-            y={marginTop}
-            width={Math.abs(drag.to - drag.from)}
-            height={plotHeight}
-            fill="currentColor"
-            className="text-accent"
-            opacity="0.2"
-          />
-        )}
 
         {/* Grid lines */}
         {yTicks.map((tick, i) => (
@@ -467,6 +443,32 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
             fill={p.areaFillColor}
           />
         ))}
+
+        {shadedRanges?.map((r, i) => {
+          const x1 = Math.max(marginLeft, toX(r.start))
+          const x2 = Math.min(marginLeft + plotWidth, toX(r.end))
+          if (x2 <= x1) return null
+          return <rect key={`shade-${i}`} data-chart-gap x={x1} y={marginTop} width={x2 - x1} height={plotHeight} fill={`url(#${hatchId})`} opacity="0.7" />
+        })}
+
+        {selection && (() => {
+          const x1 = Math.max(marginLeft, toX(selection.start))
+          const x2 = Math.min(marginLeft + plotWidth, toX(selection.end))
+          if (x2 < x1) return null
+          return <rect data-chart-selection x={x1} y={marginTop} width={Math.max(2, x2 - x1)} height={plotHeight} fill="currentColor" className="text-accent" opacity="0.15" />
+        })()}
+
+        {drag && Math.abs(drag.to - drag.from) >= 2 && (
+          <rect
+            x={Math.max(marginLeft, Math.min(drag.from, drag.to))}
+            y={marginTop}
+            width={Math.abs(drag.to - drag.from)}
+            height={plotHeight}
+            fill="currentColor"
+            className="text-accent"
+            opacity="0.2"
+          />
+        )}
 
         {/* Lines */}
         {paths.map(p => p && (
@@ -624,7 +626,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
           onPointerUp={handlePointerUp}
           onPointerCancel={cancelDrag}
           onLostPointerCapture={cancelDrag}
-          onPointerLeave={() => setHoverX(null)}
+          onPointerLeave={(e) => { if (e.pointerType !== 'touch') setHoverX(null) }}
+          onMouseLeave={() => setHoverX(null)}
           tabIndex={onSelectRange && stepSeconds && stepSeconds > 0 ? 0 : undefined}
           role={onSelectRange && stepSeconds && stepSeconds > 0 ? 'button' : undefined}
           aria-label={onSelectRange && stepSeconds && stepSeconds > 0 ? 'Select chart interval: use arrow keys to move, then Enter to select' : undefined}

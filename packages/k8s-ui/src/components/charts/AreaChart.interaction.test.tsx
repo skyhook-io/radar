@@ -21,10 +21,11 @@ async function render(props: Partial<Parameters<typeof AreaChart>[0]> = {}) {
   await act(async () => root.render(<AreaChart series={series} color="currentColor" fillColor="currentColor" unit="count" {...props} />))
   return host.querySelector<SVGRectElement>('rect[fill="transparent"]')!
 }
-async function pointer(plot: SVGRectElement, type: string, x: number, button = 0) {
+async function pointer(plot: SVGRectElement, type: string, x: number, button = 0, pointerType = 'mouse') {
   await act(async () => {
     const event = new MouseEvent(type, { bubbles: true, clientX: x * 2 + 10, button })
     Object.defineProperty(event, 'pointerId', { value: 1 })
+    Object.defineProperty(event, 'pointerType', { value: pointerType })
     plot.dispatchEvent(event)
   })
 }
@@ -73,4 +74,29 @@ it('shows keyboard focus and clears its tooltip after blur or Escape', async () 
   await act(async () => plot.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' })))
   await act(async () => plot.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' })))
   expect(host.querySelector('.pointer-events-none.absolute')).toBeNull()
+})
+
+it('retains a default-chart touch tooltip after a tap without pointermove, then clears on mouse leave', async () => {
+  const plot = await render()
+  await pointer(plot, 'pointerdown', 84, 0, 'touch')
+  await pointer(plot, 'pointerup', 84, 0, 'touch')
+  await pointer(plot, 'pointerout', 84, 0, 'touch')
+  expect(host.querySelector('.pointer-events-none.absolute')).not.toBeNull()
+  expect(host.textContent).toContain('1')
+  await act(async () => plot.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })))
+  expect(host.querySelector('.pointer-events-none.absolute')).toBeNull()
+})
+
+it('paints selected, shaded and dragged ranges above opaque fills and below chart lines', async () => {
+  const plot = await render({ fillColor: '#123456', selection: { start: 1000, end: 1100 }, shadedRanges: [{ start: 1100, end: 1200 }], onSelectRange: vi.fn() })
+  await pointer(plot, 'pointerdown', 84)
+  await pointer(plot, 'pointermove', 500)
+  const fill = host.querySelector('path[fill="#123456"]')!
+  const line = host.querySelector('path[fill="none"]')!
+  const bands = [...host.querySelectorAll('[data-chart-gap], [data-chart-selection], rect[opacity="0.2"]')]
+  expect(bands).toHaveLength(3)
+  for (const band of bands) {
+    expect(fill.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(band.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  }
 })

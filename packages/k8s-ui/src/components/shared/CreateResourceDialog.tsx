@@ -639,6 +639,7 @@ function ApplyErrorBanner({ error, partialCreates, strictCreate, hasPreview }: {
   const { panelId, buttonProps } = useDisclosure(expanded)
   const parsed = formatApplyError(error, { allowApply: !strictCreate && partialCreates.length === 0 })
   const hasFriendly = Boolean(parsed.suggestion)
+  const recoveringWithReview = partialCreates.length > 0 && !strictCreate && hasPreview
   return (
     <div className="mx-5 mb-2 max-h-[30vh] shrink-0 overflow-y-auto rounded-md border border-red-500/30 bg-red-500/10 text-xs">
       <div className="flex items-start gap-2 px-3 py-2 text-red-600 dark:text-red-400">
@@ -647,9 +648,9 @@ function ApplyErrorBanner({ error, partialCreates, strictCreate, hasPreview }: {
           <span className="font-medium">{parsed.summary}</span>
           {partialCreates.length > 0 && <p className="mt-1">
             Created before it stopped: {partialCreates.map(result => `${result.kind} ${result.namespace ? `${result.namespace}/` : ''}${result.name}`).join(', ')}.
-            {' '}{!strictCreate && hasPreview ? 'Radar switched to Apply mode so you can review and continue from the current cluster state.' : `${strictCreate ? 'This dialog only creates. ' : ''}Remove the created objects from the manifest before retrying Create.`}
+            {' '}{recoveringWithReview ? 'Radar switched to Apply mode so you can review and continue from the current cluster state.' : `${strictCreate ? 'This dialog only creates. ' : ''}Remove the created objects from the manifest before retrying Create.`}
           </p>}
-          {parsed.suggestion && (
+          {parsed.suggestion && !recoveringWithReview && (
             <p className="mt-1 text-red-500/80 dark:text-red-400/80">{parsed.suggestion}</p>
           )}
         </div>
