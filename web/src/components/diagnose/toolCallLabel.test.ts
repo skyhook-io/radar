@@ -48,6 +48,15 @@ describe("describeToolCall", () => {
     expect(describeToolCall("delete_resource", JSON.stringify({ ...target, dry_run: true }))).toBe("Previewing deletion of Deployment shop/api");
     expect(describeToolCall("delete_resource", JSON.stringify({ ...target, dry_run: false }))).toBe("Deleting Deployment shop/api");
   });
+  it("distinguishes Helm previews from executing actions", () => {
+    expect(describeToolCall("manage_helm_release", undefined)).toBe("Managing Helm release");
+    const target = { namespace: "store", name: "api", action: "uninstall" };
+    expect(describeToolCall("manage_helm_release", JSON.stringify(target))).toBe("Previewing uninstall of store/api");
+    expect(describeToolCall("manage_helm_release", JSON.stringify({ ...target, dry_run: false }))).toBe("Uninstalling store/api");
+    const rollback = { ...target, action: "rollback", revision: 1 };
+    expect(describeToolCall("manage_helm_release", JSON.stringify(rollback))).toBe("Previewing rollback of store/api to revision 1");
+    expect(describeToolCall("manage_helm_release", JSON.stringify({ ...rollback, dry_run: false }))).toBe("Rolling back store/api to revision 1");
+  });
   it("falls back to the tool name when arguments are missing or malformed", () => {
     expect(describeToolCall("get_changes", "not json")).toBe(
       "Reading recent changes",

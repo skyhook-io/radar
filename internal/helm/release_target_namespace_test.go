@@ -165,7 +165,7 @@ func TestReleaseTargetNamespaceAndLiveRollbackEffects(t *testing.T) {
 			var err error
 			switch operation {
 			case "rollback":
-				err = client.rollbackWith(cfg, "demo", 1)
+				err = rollbackWith(cfg, "demo", 1, false)
 			case "rollback with progress":
 				ch := make(chan InstallProgress, 10)
 				err = client.rollbackWithProgressUsing(cfg, "demo", 1, ch)
@@ -173,7 +173,7 @@ func TestReleaseTargetNamespaceAndLiveRollbackEffects(t *testing.T) {
 					t.Fatalf("progress events: %d", len(ch))
 				}
 			case "uninstall":
-				err = client.uninstallWith(cfg, "demo")
+				err = uninstallWithOptions(cfg, "demo", UninstallOptions{})
 			}
 			if err != nil {
 				t.Fatal(err)

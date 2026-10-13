@@ -347,6 +347,26 @@ Inspect controller cleanup first; `patch_resource` is a separate explicit step
 for finalizer intervention, which can orphan resources. Batch deletion and Helm
 release operations are separate follow-ups.
 
+## Helm action previews
+
+`manage_helm_release` previews start with a one-line `summary` of manifest resource
+effects, hooks that run or are skipped, history policy, and the owning Flux
+HelmRelease when detected. For example: `uninstall deletes 14 resources, keeps 2
+resources, runs 1 pre-delete hook, purges history; owned by Flux HelmRelease
+flux-system/app`. Rollback summaries reflect the enriched live resource plan and
+state that a new revision is created from the selected revision.
+
+`warnings` contains only release-specific concerns: a detected Flux owner that may
+reconcile the action back, a pending-release rollback race, uninstall retry
+guidance, running hooks whose explicit delete policies omit before-hook-creation,
+and history purge. No owner warning is emitted when none is detected; this does
+not prove that the release is unmanaged. Helm defaults an empty hook delete-policy
+list to before-hook-creation, so it does not trigger that warning. `limits` holds
+standing caveats about stored-manifest planning, unenumerated controller-created
+resources, permissions and cleanup that are not simulated, and concurrent external
+Helm operations. With hooks, `statusMeaning` explains their last recorded phase once
+at preview level, rather than repeating it on every hook.
+
 ## `diagnose` evidence limits
 
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
@@ -362,6 +382,15 @@ Collecting vitals costs one Prometheus round trip on every `diagnose` of a pod-b
 One call combines cached Kubernetes resource state, historical events/changes, and live log requests. Its completion time records when the call finished, not a shared observation time or freshness guarantee for those sources. Event/change timestamps retain their source-specific meaning.
 
 These public MCP fields are available to consumers running the updated Radar server. The investigation contract that turns them into Findings — the prompt suite, the verdict, its parser and the citation binder — lives in `pkg/investigation` and is shared by the OSS engine and Radar Hub; each product supplies its own evidence issuance, run orchestration and store, and declares on its `/agents` entry whether it performs Apply (`apply`) and the verification turn after it (`verification`).
+
+When an Apply caller supplies the exact fix the user confirmed, that confirmation
+approves a preview→confirm tool workflow for exactly that fix. The agent must first
+preview, then execute with the returned token only if the preview matches the fix.
+Additional objects, dependents beyond the fix, unapproved Namespace/CRD scope, or
+an owner that would revert the action require stopping and reporting instead of
+confirming. Standing preview limits (observed, non-exhaustive dependent counts;
+stored-manifest caveats) are expected and are not a reason to stop. The empty-fix fallback prompt grants
+no such approval. A preview alone does not count as an applied change.
 
 The investigation's final JSON also carries the agent's case: `evidence` (up to 8 items of `ref`, `role`, optional one-sentence `claim` — required for `benign`, `demoted` and `rules_out` — and optional `subject`) and `ruled_out` (up to 5 hypotheses pointing at an evidence item by index). The server binds each item's ref against the run's retained ledger exactly like `root_cause_evidence_refs`: a ref from the current turn must match the exact private-transport payload; a ref from an earlier turn of the same run is accepted on the persisted `radarEvidence` flag its own validator wrote, so a revised assessment can keep resting on a result it can no longer re-read. A failing item is dropped on its own as `unlinked`, and binding runs for every assessment, healthy and inconclusive included. The server-authored `evidence` / `ruledOut` fields are `omitempty`, so a diagnosis with no bindable case carries neither: consumers must treat both as optional.
 
@@ -623,6 +652,7 @@ itself establish cache freshness or complete namespace coverage.
 | `apply_resource` | Create or update a Kubernetes resource from YAML. Supports multi-document YAML, per-document partial-failure results, server-side dry-run preview, and SSA ownership-conflict reporting. | `yaml` (required), `mode` (optional: `apply` or `create`, default `apply`), `dry_run` (optional, default false), `namespace` (optional, override), `verify` (optional, default true: real mutations return post-mutation state, submitted-vs-live diff, workload rollout/pods, and related issues; dry runs return a preview diff), `force` (optional, default false: take SSA field ownership from other managers) |
 | `patch_resource` | Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. Use for precise field/list edits when you know the exact path and do not want to rewrite the full manifest or take broad server-side-apply ownership. Strategic patch is for built-in Kubernetes kinds and name-keyed list edits, such as changing one container. | `kind` (required), `name` (required), `namespace` (required for namespaced resources), `group` (optional), `patch_type` (optional: `json` default, `merge`, or `strategic`), `patch` (required JSON string), `dry_run` (optional), `verify` (optional, default true: real mutations return compact post-patch state and JSON Patch field checks; dry runs return a preview diff) |
 | `delete_resource` | Delete one object after a mandatory caller-authorized server dry-run preview. Confirmation binds identity, generation/finalizers (resourceVersion when generation is absent), caller, context, and propagation. Dependents are approximate and caller-readable; finalizers are preserved. | `kind`, `name` (required), `namespace` (required for namespaced resources), `group` (optional), `propagation` (optional: `background`, `foreground`, `orphan`), `dry_run` (optional, default true), `confirm` (required for `dry_run: false`, valid five minutes) |
+| `manage_helm_release` | Uninstall or rollback one Helm release as the caller after a mandatory stored-manifest preview. Returns current status, manifest resource identities, action hooks that run/skip, history policy, and a five-minute confirmation bound to release state and options. Shows per-resource rollback effects from live reads and best-effort hook evidence. Checks release-storage write capability; other writes, hooks, controller cleanup, and live finalizers are not simulated. Show the preview to the user and obtain explicit approval before execution. Tokens contain a target digest and are consumed at action start; REST/MCP uninstall and rollback share an in-process guard. Retrying uninstall works for `uninstalling` releases; finalizers are never removed. | `action` (required: `uninstall` or `rollback`), `namespace` (required: Helm storage namespace), `name` (required), `revision` (required positive older revision for rollback), `no_hooks` (optional, both actions), `keep_history` (optional, uninstall only; default false purges history), `dry_run` (optional, default true; false requires `confirm`), `confirm` (reviewed preview token) |
 | `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
 | `manage_rollout` | Drive an Argo Rollout's progressive delivery — the verbs with no Deployment equivalent. `abort` reverts traffic to the last stable version at once without touching spec and stays aborted until retried (the incident-response verb); `retry` clears an abort; `promote` clears the current pause to advance one step; `promote-full` skips all remaining steps, pauses, and analysis (emergency hotfix) — it waits for the controller to observe the current pod template first, so straight after a rollback it may report that the controller has not caught up, which is safe to retry; `skip-step` advances exactly one canary step (canary only). Rollback / restart / scale go through `manage_workload` with `kind=rollout`. | `action` (required: `abort`, `retry`, `promote`, `promote-full`, `skip-step`), `namespace` (required), `name` (required) |
 | `manage_cronjob` | Trigger, suspend, or resume a CronJob | `action` (required: `trigger`, `suspend`, `resume`), `namespace` (required), `name` (required) |

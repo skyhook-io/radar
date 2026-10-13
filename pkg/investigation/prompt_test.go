@@ -20,6 +20,30 @@ func TestApplyPrompt_BindsConfirmedFix(t *testing.T) {
 	}
 }
 
+func TestApplyPrompt_ConfirmedFixApprovesOnlyMatchingPreview(t *testing.T) {
+	prompt := ApplyPrompt(Target{Kind: "Pod", Namespace: "prod", Name: "stuck"}, "Delete Pod prod/stuck")
+	for _, rule := range []string{
+		"The user's confirmation approves a preview→confirm tool workflow for exactly this fix",
+		"including delete_resource and manage_helm_release",
+		"Run dry_run=true first and review the preview",
+		"Only if it matches the confirmed fix",
+		"dry_run=false and its confirm token without asking for another confirmation",
+		"additional objects", "dependents beyond the fix", "Namespace/CRD scope not included in the fix",
+		"a GitOps or Helm owner that would revert it", "stop and report instead of confirming",
+		"Standing preview limits", "are not a reason to stop", "A preview alone does not apply the fix",
+	} {
+		if !strings.Contains(prompt, rule) {
+			t.Errorf("confirmed-fix prompt missing %q:\n%s", rule, prompt)
+		}
+	}
+	for _, fix := range []string{"", " \n\t "} {
+		fallback := ApplyPrompt(Target{Kind: "Pod", Name: "stuck"}, fix)
+		if strings.Contains(fallback, "preview→confirm") || strings.Contains(fallback, "without asking for another confirmation") {
+			t.Fatalf("fallback approves an unconfirmed preview: %s", fallback)
+		}
+	}
+}
+
 func TestApplyPrompt_BindsImmutableAPIGroup(t *testing.T) {
 	grouped := ApplyPrompt(Target{Kind: "Rollout", Group: "argoproj.io", Namespace: "prod", Name: "checkout"}, "")
 	for _, want := range []string{
