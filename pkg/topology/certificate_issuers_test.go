@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"reflect"
 	"strings"
@@ -148,13 +149,13 @@ func TestIssuanceIssuerReferenceContracts(t *testing.T) {
 	}
 }
 
-func TestIssuanceIssuerJoinsAllObservedChildrenAndRetainsNewIssuerOwner(t *testing.T) {
+func TestIssuanceIssuerJoinsAllObservedChildrenWithSharedOwnerPass(t *testing.T) {
 	issuerGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
 	issuer := genericIdentityObject(issuerGVR, "Issuer", "team", "ca", metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "operator", UID: "operator-current"})
 	issuer.SetUID("issuer-current")
 	resources := map[schema.GroupVersionResource][]*unstructured.Unstructured{issuerGVR: {issuer}}
 	gvrs := map[string]schema.GroupVersionResource{"Issuer": issuerGVR}
-	nodes := []Node{{uid: "operator-current", ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}}}
+	nodes := []Node{{observed: true, uid: "operator-current", ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}}}
 	for _, kind := range []string{"CertificateRequest", "Order", "Challenge"} {
 		group := "acme.cert-manager.io"
 		if kind == "CertificateRequest" {
@@ -172,10 +173,14 @@ func TestIssuanceIssuerJoinsAllObservedChildrenAndRetainsNewIssuerOwner(t *testi
 	}
 	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: resources}, listCalls: map[string]int{}}
 	nodes, edges, warnings := (&Builder{dynamic: p}).addIssuanceIssuerEdges(nodes, nil, DefaultBuildOptions())
+	if len(edges) != 90 {
+		t.Fatalf("stage join produced non-dependency edges: %+v", edges)
+	}
+	edges = addObservedOwnerEdges(nodes, edges)
 	if len(warnings) != 0 || len(nodes) != 92 || len(edges) != 91 {
 		t.Fatalf("issuance joins nodes=%d edges=%d warnings=%v", len(nodes), len(edges), warnings)
 	}
-	if p.getCalls != 0 || p.listCalls["issuers"] != 2 || p.listCalls["certificaterequests"] != 1 || p.listCalls["orders"] != 1 || p.listCalls["challenges"] != 1 {
+	if p.getCalls != 0 || p.listCalls["issuers"] != 1 || p.listCalls["certificaterequests"] != 1 || p.listCalls["orders"] != 1 || p.listCalls["challenges"] != 1 {
 		t.Fatalf("cache fanout: gets=%d lists=%v", p.getCalls, p.listCalls)
 	}
 	topo := &Topology{Nodes: nodes, Edges: edges}
@@ -217,29 +222,37 @@ func TestLateIssuanceIssuerJoinDoesNotReopenGenericEnrollment(t *testing.T) {
 	issuerGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
 	requestGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificaterequests"}
 	owner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "operator", UID: "operator"}
-	nodes := []Node{{ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", uid: "operator", Data: map[string]any{"namespace": "team"}}}
 	var issuers []*unstructured.Unstructured
 	for i := range 100 {
-		name := fmt.Sprintf("issuer-%d", i)
-		issuer := genericIdentityObject(issuerGVR, "Issuer", "team", name, owner)
-		issuers = append(issuers, issuer)
-		if i < 50 {
-			nodes = append(nodes, Node{ID: "issuer/team/" + name + "/cert-manager.io", Kind: "Issuer", Name: name, Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
-		}
+		issuers = append(issuers, genericIdentityObject(issuerGVR, "Issuer", "team", fmt.Sprintf("issuer-%d", i), owner))
 	}
 	target := genericIdentityObject(issuerGVR, "Issuer", "team", "ca", owner)
+	target.SetUID("issuer-current")
 	issuers = append(issuers, target)
-	request := genericIdentityObject(requestGVR, "CertificateRequest", "team", "request")
+	request := genericIdentityObject(requestGVR, "CertificateRequest", "team", "request", owner)
 	request.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
-	nodes = append(nodes, Node{ID: "certificaterequest/team/request/cert-manager.io", Kind: "CertificateRequest", Name: "request", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
-	provider := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: map[string]schema.GroupVersionResource{"Issuer": issuerGVR, "CertificateRequest": requestGVR}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{issuerGVR: issuers, requestGVR: {request}}}, listCalls: map[string]int{}}
-	nodes, edges, warnings := (&Builder{dynamic: provider}).addIssuanceIssuerEdges(nodes, nil, DefaultBuildOptions())
-	if len(nodes) != 53 || len(edges) != 2 || len(warnings) != 0 {
-		t.Fatalf("late repair enrolled another generic batch: nodes=%d edges=%+v warnings=%v", len(nodes), edges, warnings)
+	provider := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{issuerGVR, requestGVR},
+		kinds:     map[schema.GroupVersionResource]string{issuerGVR: "Issuer", requestGVR: "CertificateRequest"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{issuerGVR: issuers, requestGVR: {request}},
+		listCalls: map[schema.GroupVersionResource]int{},
 	}
-	for _, edge := range edges {
-		if edge.Type == EdgeManages && edge.Target != "issuer/team/ca/cert-manager.io" {
-			t.Fatalf("late repair changed an unrelated issuer: %+v", edge)
-		}
+	parent := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "team", UID: "operator"}}
+	topo, err := NewBuilder(&mockProvider{deployments: []*appsv1.Deployment{parent}}).WithDynamic(provider).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topo.Nodes) != 53 || len(topo.Edges) != 53 || len(topo.Warnings) != 0 {
+		t.Fatalf("late join reopened generic enrollment: nodes=%d edges=%+v warnings=%v", len(topo.Nodes), topo.Edges, topo.Warnings)
+	}
+	if provider.getCalls != 0 || provider.listCalls[issuerGVR] != 3 || provider.listCalls[requestGVR] != 3 {
+		t.Fatalf("cache fanout: gets=%d lists=%v", provider.getCalls, provider.listCalls)
+	}
+	issuerRel := GetRelationships("Issuer", "team", "ca", topo, nil, provider)
+	if issuerRel == nil || issuerRel.Owner == nil || issuerRel.Owner.Name != "operator" || len(issuerRel.Dependents) != 1 || issuerRel.Dependents[0].Kind != "CertificateRequest" {
+		t.Fatalf("late issuer lost shared ownership or reverse dependency: %+v", issuerRel)
+	}
+	if node := nodeByID(topo.Nodes, "issuer/team/ca/cert-manager.io"); node == nil || node.uid != "issuer-current" {
+		t.Fatalf("late issuer lost observed identity: %+v", node)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func addCertificateIssuerEdges(nodes []Node, edges []Edge, certificates []unstructured.Unstructured, provider DynamicProvider, opts BuildOptions) ([]Node, []Edge, []string) {
@@ -109,28 +108,8 @@ func (b *Builder) addIssuanceIssuerEdges(nodes []Node, edges []Edge, opts BuildO
 			}
 		}
 	}
-	before := len(nodes)
 	var targetWarnings []string
 	nodes, edges, targetWarnings = addObservedDependencyEdges(nodes, edges, refs, b.dynamic, opts)
 	warnings = append(warnings, targetWarnings...)
-	// Repair ownership only for issuers materialized by this late join.
-	// A second global watched-CRD scan would waste work on unrelated resources.
-	seen := map[schema.GroupVersionResource]bool{}
-	var newIssuerKinds []schema.GroupVersionResource
-	newIssuerIdentities := map[string]bool{}
-	for i := before; i < len(nodes); i++ {
-		node := &nodes[i]
-		for _, key := range nodeResourceKeys(node) {
-			newIssuerIdentities[key] = true
-		}
-		gvr, ok := b.dynamic.GetGVRWithGroup(string(node.Kind), nodeGroup(node))
-		if ok && !seen[gvr] {
-			seen[gvr] = true
-			newIssuerKinds = append(newIssuerKinds, gvr)
-		}
-	}
-	if len(newIssuerKinds) > 0 {
-		nodes, edges = b.addGenericCRDNodesForResources(nodes, edges, opts, newIssuerKinds, newIssuerIdentities)
-	}
 	return nodes, edges, warnings
 }

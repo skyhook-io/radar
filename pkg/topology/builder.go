@@ -8819,13 +8819,6 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 // multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
 // intermediate nodes only become resolvable after their parents are added.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
-	if b.dynamic == nil {
-		return nodes, edges
-	}
-	return b.addGenericCRDNodesForResources(nodes, edges, opts, b.dynamic.GetWatchedResources(), nil)
-}
-
-func (b *Builder) addGenericCRDNodesForResources(nodes []Node, edges []Edge, opts BuildOptions, resources []schema.GroupVersionResource, selectedIdentities map[string]bool) ([]Node, []Edge) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
 	if dynamicCache == nil || resourceDiscovery == nil {
@@ -8873,7 +8866,7 @@ func (b *Builder) addGenericCRDNodesForResources(nodes []Node, edges []Edge, opt
 		gvr  schema.GroupVersionResource
 		kind string
 	}
-	watched := append([]schema.GroupVersionResource(nil), resources...)
+	watched := append([]schema.GroupVersionResource(nil), dynamicCache.GetWatchedResources()...)
 	sort.Slice(watched, func(i, j int) bool {
 		if watched[i].Group != watched[j].Group {
 			return watched[i].Group < watched[j].Group
@@ -8934,9 +8927,6 @@ func (b *Builder) addGenericCRDNodesForResources(nodes []Node, edges []Edge, opt
 
 			name := resource.GetName()
 			resourceKey := resourceid.ResourceKey(gvr.Group, kind, ns, name)
-			if selectedIdentities != nil && !selectedIdentities[resourceKey] {
-				continue
-			}
 			nodeID, existing := existingResourceIDs[resourceKey]
 			if !existing {
 				nodeID = fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
