@@ -393,7 +393,7 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 	if len(response.Events) != 1 || response.Events[0].Reason != "root-now" {
 		t.Fatalf("get_resource current evidence = %+v", response.Events)
 	}
-	if len(response.Warnings) != 1 || !strings.Contains(response.Warnings[0], "1 cached Warning event records for earlier incarnations of this resource") {
+	if len(response.Warnings) != 1 || response.Warnings[0] != earlierIncarnationEventsNote(1, false) {
 		t.Fatalf("get_resource must say earlier-incarnation history was withheld: %+v", response.Warnings)
 	}
 	pods := []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "shop", UID: "pod-now"}}}
@@ -483,7 +483,7 @@ func TestDiagnoseExcludesPodsFromPreviousWorkloadAndIntermediateOwners(t *testin
 	}
 	notes := 0
 	for _, warning := range response.Warnings {
-		if strings.Contains(warning, "1 cached Warning event records for earlier incarnations") {
+		if warning == earlierIncarnationEventsNote(1, true) {
 			notes++
 		}
 	}
@@ -575,5 +575,20 @@ func TestCurrentMirrorPodEventsUseBothObservedUIDs(t *testing.T) {
 	}
 	if len(got.Events) != 2 {
 		t.Fatalf("mirror diagnosis warnings = %+v", got.Events)
+	}
+}
+
+func TestEarlierIncarnationEventsNoteReadsAsHistory(t *testing.T) {
+	one := earlierIncarnationEventsNote(1, true)
+	many := earlierIncarnationEventsNote(3, false)
+	for _, want := range []string{"Left out 1 Warning event about an earlier incarnation of this resource or of a current Pod's name", "does not describe the current object", "use get_events to read it"} {
+		if !strings.Contains(one, want) {
+			t.Fatalf("singular note %q lacks %q", one, want)
+		}
+	}
+	for _, want := range []string{"Left out 3 Warning events about earlier incarnations of this resource:", "do not describe the current objects", "use get_events to read them"} {
+		if !strings.Contains(many, want) {
+			t.Fatalf("plural note %q lacks %q", many, want)
+		}
 	}
 }

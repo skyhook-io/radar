@@ -504,7 +504,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		resp.Warnings = append(resp.Warnings, "Radar is still loading the caches this workload's pods are resolved through, so pod logs, pod events and workload metrics are missing from this bundle. Retry in a moment. Details: "+boundDiagnoseMetricsError(podsErr.Error()))
 	}
 	if eventsExcluded > 0 {
-		resp.Warnings = append(resp.Warnings, earlierIncarnationEventsNote(eventsExcluded, "this resource or same-name Pods"))
+		resp.Warnings = append(resp.Warnings, earlierIncarnationEventsNote(eventsExcluded, true))
 	}
 	capped, capStats := capMultiPodLogBundles(resp.LogsCurrent, resp.LogsPrevious)
 	resp.LogsCurrent = capped[0]
@@ -914,10 +914,22 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, na
 
 // earlierIncarnationEventsNote tells an agent that history was withheld from
 // current evidence, so an empty or short event list is not read as "nothing
-// ever failed". It counts cached event records, not occurrences, and covers
-// only the names in subject.
-func earlierIncarnationEventsNote(excluded int, subject string) string {
-	return fmt.Sprintf("%d cached Warning event records for earlier incarnations of %s were excluded from current evidence. Use get_events to inspect retained history.", excluded, subject)
+// ever failed", and that the withheld events may still explain what came
+// before. It counts cached Event objects, not occurrences, and covers only
+// the resource and, when withPods, Pods sharing a current Pod's name.
+func earlierIncarnationEventsNote(excluded int, withPods bool) string {
+	if excluded == 1 {
+		subject := "an earlier incarnation of this resource"
+		if withPods {
+			subject += " or of a current Pod's name"
+		}
+		return fmt.Sprintf("Left out 1 Warning event about %s: it does not describe the current object. It may still explain what happened before, such as why a Pod was replaced; use get_events to read it.", subject)
+	}
+	subject := "earlier incarnations of this resource"
+	if withPods {
+		subject += " or of current Pod names"
+	}
+	return fmt.Sprintf("Left out %d Warning events about %s: they do not describe the current objects. They may still explain what happened before, such as why a Pod was replaced; use get_events to read them.", excluded, subject)
 }
 
 // networkTraceKind returns the canonical entry-kind name for trace

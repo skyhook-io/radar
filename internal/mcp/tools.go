@@ -1360,7 +1360,7 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 				matched, excluded := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, uid, mirrorUID, nil)
 				if excluded > 0 {
 					existing, _ := result["warnings"].([]string)
-					result["warnings"] = append(existing, earlierIncarnationEventsNote(excluded, "this resource"))
+					result["warnings"] = append(existing, earlierIncarnationEventsNote(excluded, false))
 				}
 				if len(matched) > 0 {
 					deduplicated, totalGroups := aicontext.DeduplicateEventsN(matched, 10)
