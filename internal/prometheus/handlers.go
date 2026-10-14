@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -240,6 +241,10 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusForbidden, "cluster cache cannot establish the workload's Pod membership: "+err.Error())
 			case errors.Is(err, ErrPodScopeUnsupportedKind):
 				writeError(w, http.StatusBadRequest, "cannot resolve pods for "+kind)
+			case errors.Is(err, context.Canceled):
+				// The caller left while a Rollout or Workflow inventory was
+				// still starting; there is nobody to answer.
+				return
 			case errors.Is(err, k8s.ErrUnknownDynamicKind):
 				writeError(w, http.StatusBadRequest, k8s.CanonicalWorkloadKind(kind)+" (argoproj.io) is not installed or not yet discovered in this cluster")
 			default:

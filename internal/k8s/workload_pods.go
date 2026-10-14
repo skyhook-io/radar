@@ -351,7 +351,6 @@ func DirectlyOwnedPods(cache *ResourceCache, namespace, name, group, kind string
 	return result, nil
 }
 
-// controllerMatchesIdentity is shared by direct and multi-hop ownership checks.
 // EventDescribesIncarnation reports whether an event about a same-named
 // object describes the incarnation whose UID is uid. Events outlive their
 // object, so a known, different UID belongs to an earlier incarnation; an
@@ -362,6 +361,7 @@ func EventDescribesIncarnation(eventUID, uid, staticUID types.UID) bool {
 	return eventUID == "" || uid == "" || eventUID == uid || (staticUID != "" && eventUID == staticUID)
 }
 
+// controllerMatchesIdentity is shared by direct and multi-hop ownership checks.
 func controllerMatchesIdentity(owner *metav1.OwnerReference, kind, name, group string, uid types.UID) bool {
 	if owner == nil || uid == "" || owner.UID != uid || owner.Kind != kind || owner.Name != name {
 		return false

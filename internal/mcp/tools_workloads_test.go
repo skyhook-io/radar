@@ -82,11 +82,6 @@ func TestWorkloadSelectorMCPError(t *testing.T) {
 			err:  fmt.Errorf("%w: Job ci/nightly", k8s.ErrWorkloadNotFound),
 			want: "resource not found:",
 		},
-		{
-			name: "absent CRD says it is not installed",
-			err:  fmt.Errorf("%w: read Rollout", k8s.ErrUnknownDynamicKind),
-			want: "Job (argoproj.io) is not installed or not yet discovered in this cluster",
-		},
 	}
 
 	for _, tt := range tests {
@@ -96,6 +91,13 @@ func TestWorkloadSelectorMCPError(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestWorkloadSelectorMCPErrorNamesAnAbsentRolloutCRD(t *testing.T) {
+	err := workloadSelectorMCPError(context.Background(), fmt.Errorf("%w: read Rollout", k8s.ErrUnknownDynamicKind), "rollouts", "shop", "api")
+	if err.Error() != "Rollout (argoproj.io) is not installed or not yet discovered in this cluster" {
+		t.Fatalf("error = %q", err)
 	}
 }
 

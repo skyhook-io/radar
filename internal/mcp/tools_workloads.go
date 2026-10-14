@@ -361,7 +361,7 @@ func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, n
 		return notFoundError(ctx, err, kind, namespace, name)
 	}
 	if errors.Is(err, k8s.ErrUnknownDynamicKind) {
-		return fmt.Errorf("%s (argoproj.io) is not installed or not yet discovered in this cluster: %w", k8s.CanonicalWorkloadKind(kind), err)
+		return fmt.Errorf("%s (argoproj.io) is not installed or not yet discovered in this cluster", k8s.CanonicalWorkloadKind(kind))
 	}
 	if errors.Is(err, k8s.ErrWorkloadSelectorUnavailable) || errors.Is(err, rollouts.ErrWorkloadRefUnsupported) {
 		return fmt.Errorf("invalid %s %s/%s: %w", kind, namespace, name, err)
