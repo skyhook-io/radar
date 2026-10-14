@@ -278,6 +278,30 @@ func (d *ResourceDiscovery) HasPartialDiscovery() bool {
 	return d.partial
 }
 
+func (d *ResourceDiscovery) GroupsForKind(kind string) []string {
+	if d == nil {
+		return nil
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var groups []string
+	for _, resource := range d.resources {
+		if resource.Kind == kind {
+			groups = append(groups, resource.Group)
+		}
+	}
+	return groups
+}
+
+func (d *ResourceDiscovery) Complete() bool {
+	if d == nil {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return !d.lastRefresh.IsZero() && !d.partial
+}
+
 // GroupHadPartialDiscovery reports whether a group was specifically missing
 // from the last partial discovery response.
 func (d *ResourceDiscovery) GroupHadPartialDiscovery(group string) bool {
