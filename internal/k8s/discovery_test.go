@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	goruntime "runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -313,71 +315,80 @@ func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
 	}
 }
 
-// A CRD upgrade can retire the version discovery last saw. Write paths resolve
-// through ServedGVR, so it must refresh expired discovery itself rather than
-// wait for some read path to do it, without making the caller wait.
-func TestServedGVRRefreshesExpiredDiscovery(t *testing.T) {
+// fluxDiscovery installs a discovery singleton over a fake whose OCIRepository
+// is served at version, with a short TTL so it expires quickly.
+func fluxDiscovery(t *testing.T, version string) (*fakediscovery.FakeDiscovery, *ResourceDiscovery) {
+	t.Helper()
 	withCleanDiscoveryGlobals(t)
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
-	served := func(version string) []*metav1.APIResourceList {
-		return []*metav1.APIResourceList{{
-			GroupVersion: "source.toolkit.fluxcd.io/" + version,
-			APIResources: []metav1.APIResource{{Name: "ocirepositories", Kind: "OCIRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch", "patch"}}},
-		}}
-	}
-	fakeDisc.Resources = served("v1beta2")
+	fakeDisc.Resources = servedOCIRepository(version)
 	core, err := k8score.NewResourceDiscovery(fakeDisc, k8score.WithDiscoveryCacheTTL(time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewResourceDiscovery: %v", err)
 	}
+	d := &ResourceDiscovery{ResourceDiscovery: core}
 	discoveryMu.Lock()
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	resourceDiscovery = d
 	discoveryMu.Unlock()
+	return fakeDisc, d
+}
 
-	if gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository"); !ok || gvr.Version != "v1beta2" {
-		t.Fatalf("before upgrade: %v %v", gvr, ok)
-	}
-	fakeDisc.Resources = served("v1")
+func servedOCIRepository(version string) []*metav1.APIResourceList {
+	return []*metav1.APIResourceList{{
+		GroupVersion: "source.toolkit.fluxcd.io/" + version,
+		APIResources: []metav1.APIResource{{Name: "ocirepositories", Kind: "OCIRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch", "patch"}}},
+	}}
+}
+
+func waitForServedVersion(t *testing.T, want string) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		time.Sleep(5 * time.Millisecond)
 		gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository")
-		if ok && gvr.Version == "v1" {
-			break
+		if ok && gvr.Version == want {
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("after the TTL expired, want v1, got %v %v", gvr, ok)
+			t.Fatalf("want %s, got %v %v", want, gvr, ok)
 		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-// A stalled discovery endpoint must not hold a write action hostage: the caller
-// gets the cached answer while the refresh runs on its own.
-func TestServedGVRDoesNotWaitForASlowRefresh(t *testing.T) {
-	withCleanDiscoveryGlobals(t)
-	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
-	fakeDisc.Resources = []*metav1.APIResourceList{{
-		GroupVersion: "source.toolkit.fluxcd.io/v1",
-		APIResources: []metav1.APIResource{{Name: "ocirepositories", Kind: "OCIRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "patch"}}},
-	}}
-	core, err := k8score.NewResourceDiscovery(fakeDisc, k8score.WithDiscoveryCacheTTL(time.Millisecond))
-	if err != nil {
-		t.Fatalf("NewResourceDiscovery: %v", err)
+// A CRD upgrade can retire the version discovery last saw. Write paths resolve
+// through ServedGVR, so it must refresh expired discovery itself rather than
+// wait for some read path to do it.
+func TestServedGVRRefreshesExpiredDiscovery(t *testing.T) {
+	fakeDisc, d := fluxDiscovery(t, "v1beta2")
+	if gvr, ok := d.GetGVRWithGroup("OCIRepository", "source.toolkit.fluxcd.io"); !ok || gvr.Version != "v1beta2" {
+		t.Fatalf("before upgrade: %v %v", gvr, ok)
 	}
-	discoveryMu.Lock()
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	discoveryMu.Unlock()
+	// Changed before the first ServedGVR, so no background refresh reads the
+	// fake while it is written.
+	fakeDisc.Resources = servedOCIRepository("v1")
+	waitForServedVersion(t, "v1")
+}
 
+// A stalled discovery endpoint must not hold a write action hostage, and must
+// not pile up a goroutine per call: callers get the cached answer while one
+// refresh runs, and a later expiry can refresh again.
+func TestServedGVRDoesNotWaitForASlowRefresh(t *testing.T) {
+	fakeDisc, d := fluxDiscovery(t, "v1")
+	var stalled atomic.Bool
+	stalled.Store(true)
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
 	fakeDisc.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
-		<-release
+		if stalled.Load() {
+			<-release
+		}
 		return false, nil, nil
 	})
 	time.Sleep(5 * time.Millisecond)
+
+	before := goruntime.NumGoroutine()
 	done := make(chan string, 1)
 	go func() {
-		for range 3 {
+		for range 200 {
 			if gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository"); !ok || gvr.Version != "v1" {
 				done <- "want the cached v1"
 				return
@@ -391,6 +402,22 @@ func TestServedGVRDoesNotWaitForASlowRefresh(t *testing.T) {
 			t.Fatal(msg)
 		}
 	case <-time.After(time.Second):
+		close(release)
 		t.Fatal("ServedGVR waited on a stalled discovery refresh")
 	}
+	if grew := goruntime.NumGoroutine() - before; grew > 3 {
+		t.Errorf("%d goroutines parked behind one stalled refresh", grew)
+	}
+
+	stalled.Store(false)
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for d.backgroundRefresh.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("the stalled refresh never released its slot")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	fakeDisc.Resources = servedOCIRepository("v2")
+	waitForServedVersion(t, "v2")
 }
