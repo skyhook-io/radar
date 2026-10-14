@@ -605,3 +605,12 @@ func SetTestPermissionResult(result *PermissionCheckResult) func() {
 		resourcePermsMu.Unlock()
 	}
 }
+
+func SetTestContextOperationInProgress(active bool) func() {
+	var value int32
+	if active {
+		value = 1
+	}
+	previous := activeContextOperations.Swap(value)
+	return func() { activeContextOperations.Store(previous) }
+}

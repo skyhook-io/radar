@@ -450,7 +450,7 @@ func main() {
 		log.Printf("MCP catalog stdio mode enabled: skipping Kubernetes initialization")
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := mcppkg.RunStdio(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := mcppkg.RunStdio(ctx, !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured); err != nil && !errors.Is(err, context.Canceled) {
 			log.Fatalf("MCP stdio server failed: %v", err)
 		}
 		return

@@ -36,13 +36,42 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	return server
 }
 
-// RunStdio runs the MCP server over stdio (full tool set).
-func RunStdio(ctx context.Context) error {
-	return newServer(true).Run(ctx, &mcpsdk.StdioTransport{})
+// RunStdio runs the MCP server over stdio with tools allowed in the current mode.
+func RunStdio(ctx context.Context, allowApplicationEvidence bool) error {
+	ctx = context.WithValue(ctx, runtimeLocalCallerKey{}, true)
+	var server *mcpsdk.Server
+	if allowApplicationEvidence && runtimeEvidenceAllowed(ctx) {
+		server = newServer(true)
+	} else {
+		server = newApplyServer()
+	}
+	return server.Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+func NewHandler() http.Handler {
+	localServer, remoteServer := newServer(true), newApplyServer()
+	return handlerForServerSelector(func(r *http.Request) *mcpsdk.Server {
+		if runtimeEvidenceAllowed(r.Context()) {
+			return localServer
+		}
+		return remoteServer
+	})
+}
+
+func newApplyServer() *mcpsdk.Server {
+	server := newServer(true)
+	server.RemoveTools("collect_application_evidence")
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			return next(context.WithValue(ctx, applicationActionsDisabledKey{}, true), method, req)
+		}
+	})
+	return server
+}
+
+// NewApplyHandler excludes operator-only collection from built-in apply turns.
+func NewApplyHandler() http.Handler { return handlerForServer(newApplyServer()) }
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
@@ -137,6 +166,10 @@ func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref s
 }
 
 func handlerForServer(server *mcpsdk.Server) http.Handler {
+	return handlerForServerSelector(func(*http.Request) *mcpsdk.Server { return server })
+}
+
+func handlerForServerSelector(selectServer func(*http.Request) *mcpsdk.Server) http.Handler {
 	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
 	// The MCP SDK auto-enables DNS-rebinding protection (Host header must be
 	// loopback) when the server binds to a loopback address. That blocks
@@ -147,10 +180,10 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 		log.Printf("[mcp] WARNING: DNS-rebinding Host check DISABLED via env (bench mode)")
 	}
 
-	handler := mcpsdk.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcpsdk.Server { return server },
+	handler := runtimeLocalCaller(mcpsdk.NewStreamableHTTPHandler(
+		selectServer,
 		streamOpts,
-	)
+	))
 
 	// go-sdk v1.6 removed the implicit cross-origin protection default;
 	// wrap the handler so a malicious page can't drive the local MCP server.

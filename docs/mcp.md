@@ -613,7 +613,7 @@ See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors)
 
 ## Security
 
-- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, the exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool carries neither `readOnlyHint` nor `destructiveHint`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
+- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, one exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool carries neither `readOnlyHint` nor `destructiveHint`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. `collect_application_evidence` also carries neither hint, so clients must obtain operator approval explicitly; see [local runtime evidence](#explicit-local-runtime-evidence). Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
 - **RBAC-aware** — every call enforces RBAC at the same boundary as the REST API:
   - **Local binary**: the cache uses your kubeconfig identity, so MCP can only see what `kubectl` can see for that user
   - **In-cluster (auth enabled)**: read tools intersect namespaced reads with the calling user's RBAC-allowed namespaces; cluster-scoped reads (Nodes, PVs, ClusterRoles, cluster-scoped CRDs) are gated per-kind via SubjectAccessReview, so cluster-wide pod visibility doesn't implicitly grant Node read; write tools, exec, and logs are fully impersonated so the apiserver enforces the user's RBAC end-to-end
@@ -690,3 +690,21 @@ other writers, and later template/configuration edits can explain differences.
 Candidate inspection is non-exhaustive and does not perform live admission calls
 or start watches. Verify provenance with configuration history or
 [Kubernetes admission audit records](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#monitoring-admission-webhooks).
+
+## Explicit local runtime evidence
+
+`collect_application_evidence` reads one Pod endpoint for `rabbitmq`, `nats`, or `vault`. After operator approval, call it with `application`, `namespace`, `pod`, and `confirm_network_access: true`. Include `pod_uid` when using a diagnosis suggestion. Radar checks the confirmation argument; the client must obtain approval. Collection opens a temporary localhost-only Kubernetes port-forward using the current kubeconfig identity and requires Pod-read and port-forward permissions.
+
+The tool is available only through full local MCP, outside built-in investigations and Apply. Remote, authenticated, hosted and in-cluster deployments are unsupported. The Pod must have one recognized application container (`rabbitmq`, `nats`, or `hashicorp/vault`) with the default port declared. Host-network Pods, ambiguous targets, custom ports, TLS and endpoints requiring application credentials are unsupported.
+
+| Adapter | Source | What observations mean |
+|---|---|---|
+| RabbitMQ | Pod port 15692 `/metrics` | Source-reported disk and memory alarms for that node. Both samples must exist and be unambiguous. Metrics responses above 256 KiB, including large per-object metrics payloads, are unavailable; no partial scrape is interpreted. False alarms do not establish cluster health. |
+| NATS | Pod port 8222 `/jsz` with stream/consumer details | Account-scoped pending, acknowledgement-pending and redelivery counts, capped at 20 consumer rows with explicit coverage. A backlog is not necessarily a stuck consumer. JetStream disabled is distinct from zero pending messages. |
+| Vault | Pod port 8200 `/v1/sys/health` | Source HTTP code plus initialized/sealed/standby booleans. A standby is not necessarily a fault, and HTTP 200 alone is not a health conclusion. |
+
+`outcome: observed` carries facts; `outcome: unavailable` carries a `reason` and no facts. Unavailable evidence does not establish health or absence of problems. NATS can return observed facts with `coverage: partial`; missing consumer rows then do not imply zero activity. Results describe the selected endpoint at `observedAt`, not the whole application. If the Pod or container changes during collection, the result is discarded, though a same-name replacement may briefly be contacted. Image and Pod identity checks do not attest endpoint contents.
+
+RabbitMQ metrics and NATS monitoring must be enabled and accessible without application credentials. Collection does not support TLS endpoints.
+
+Local `diagnose` may return `applicationEvidenceActions` for Vault readiness failures or RabbitMQ alarm-check readiness failures. These suggestions identify a Pod and expected evidence; they do not authorize or perform collection. At most three candidates are returned, with incomplete coverage indicated. A missing suggestion does not establish endpoint health or availability. NATS collection must be requested explicitly.
