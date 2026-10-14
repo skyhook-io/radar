@@ -409,19 +409,18 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if total == 2 {
-			for _, g := range groups {
-				if g.Reason != "root-now" && g.Reason != "pod-now" {
-					t.Fatalf("diagnose current evidence = %+v", groups)
-				}
+		for _, g := range groups {
+			if g.Reason != "root-now" && g.Reason != "pod-now" {
+				t.Fatalf("diagnose current evidence = %+v", groups)
 			}
-			if excluded != 2 {
-				t.Fatalf("diagnose excluded = %d, want root-before and pod-before", excluded)
-			}
+		}
+		// The two Pod events reach the informer one at a time; wait for both
+		// rather than stopping at the first moment the current one is visible.
+		if total == 2 && excluded == 2 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("diagnose event groups = %+v", groups)
+			t.Fatalf("diagnose event groups = %+v excluded = %d, want root-now and pod-now with root-before and pod-before excluded", groups, excluded)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
