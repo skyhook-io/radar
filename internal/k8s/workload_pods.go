@@ -35,7 +35,8 @@ import (
 // DaemonSet, ReplicaSet, Job and Workflow directly. An unavailable lister
 // returns ErrWorkloadAccessDenied and one still filling its initial sync
 // returns ErrWorkloadCacheWarming, so an empty answer is never mistaken for
-// "no pods". Pods are sorted by name. Callers already holding the root use
+// "no pods"; a workload the synced cache does not hold returns
+// ErrWorkloadNotFound. Pods are sorted by name. Callers already holding the root use
 // WorkloadPodsForUID to keep membership tied to that observation.
 //
 // Typed roots and every hop read local listers. A Rollout or Workflow root
@@ -95,11 +96,11 @@ func WorkloadPods(ctx context.Context, cache *ResourceCache, kind, namespace, na
 			return nil, fmt.Errorf("%w: %s", ErrWorkloadCacheWarming, kind)
 		}
 		if errors.Is(err, k8score.ErrResourceNotFound) {
-			return nil, nil
+			return nil, fmt.Errorf("%w: %s %s/%s", ErrWorkloadNotFound, kind, namespace, name)
 		}
 	}
 	if apierrors.IsNotFound(err) {
-		return nil, nil
+		return nil, fmt.Errorf("%w: %s %s/%s", ErrWorkloadNotFound, kind, namespace, name)
 	}
 	if err != nil {
 		return nil, err

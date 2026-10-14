@@ -357,7 +357,7 @@ func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, n
 	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return fmt.Errorf("forbidden: cannot access %s %s/%s: %w", kind, namespace, name, err)
 	}
-	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) || errors.Is(err, k8s.ErrWorkloadNotFound) {
 		return notFoundError(ctx, err, kind, namespace, name)
 	}
 	if errors.Is(err, k8s.ErrUnknownDynamicKind) {

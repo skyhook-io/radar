@@ -63,6 +63,10 @@ func ResolvePodScope(ctx context.Context, cache *k8s.ResourceCache, kind, namesp
 	}
 
 	current, err := k8s.WorkloadPods(ctx, cache, kind, namespace, name)
+	if errors.Is(err, k8s.ErrWorkloadNotFound) {
+		// A chart of a workload that no longer exists has no current Pods.
+		current, err = nil, nil
+	}
 	if err != nil {
 		return PodScope{}, err
 	}

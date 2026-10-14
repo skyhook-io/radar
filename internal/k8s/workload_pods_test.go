@@ -478,8 +478,8 @@ func TestWorkloadPodsRequiresAnObservedCurrentRoot(t *testing.T) {
 	})
 	t.Run("missing", func(t *testing.T) {
 		cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true, k8score.StatefulSets: true}, pod)
-		if pods, err := WorkloadPods(context.Background(), cache, "StatefulSet", "shop", "db"); err != nil || len(pods) != 0 {
-			t.Fatalf("deleted root: pods=%v err=%v", pods, err)
+		if pods, err := WorkloadPods(context.Background(), cache, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadNotFound) || len(pods) != 0 {
+			t.Fatalf("deleted root: pods=%v err=%v, want ErrWorkloadNotFound", pods, err)
 		}
 	})
 	t.Run("warming", func(t *testing.T) {
@@ -529,8 +529,8 @@ func TestWorkloadPodsStartsDynamicRootInventory(t *testing.T) {
 			if err != nil || len(pods) != 1 || pods[0].Name != "current" {
 				t.Fatalf("cold dynamic read: pods=%v err=%v", pods, err)
 			}
-			if pods, err := WorkloadPods(context.Background(), cache, kind, "shop", "deleted"); err != nil || len(pods) != 0 {
-				t.Fatalf("missing dynamic root: pods=%v err=%v", pods, err)
+			if pods, err := WorkloadPods(context.Background(), cache, kind, "shop", "deleted"); !errors.Is(err, ErrWorkloadNotFound) || len(pods) != 0 {
+				t.Fatalf("missing dynamic root: pods=%v err=%v, want ErrWorkloadNotFound", pods, err)
 			}
 			before := len(dyn.Actions())
 			for range 10 {

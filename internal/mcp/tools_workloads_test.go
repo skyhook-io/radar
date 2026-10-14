@@ -78,6 +78,11 @@ func TestWorkloadSelectorMCPError(t *testing.T) {
 			want: "invalid job ci/nightly:",
 		},
 		{
+			name: "a workload the synced cache does not hold is not found",
+			err:  fmt.Errorf("%w: Job ci/nightly", k8s.ErrWorkloadNotFound),
+			want: "resource not found:",
+		},
+		{
 			name: "absent CRD says it is not installed",
 			err:  fmt.Errorf("%w: read Rollout", k8s.ErrUnknownDynamicKind),
 			want: "Job (argoproj.io) is not installed or not yet discovered in this cluster",
