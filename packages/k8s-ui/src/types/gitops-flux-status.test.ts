@@ -29,11 +29,42 @@ describe('fluxConditionsToGitOpsStatus truth table', () => {
   })
 
   it('treats the -1 sentinel as drift', () => {
-    const got = fluxConditionsToGitOpsStatus([c('Ready', 'False'), c('Reconciling', 'True')], false, {
+    // A first reconcile reports Ready=Unknown; a reported failure outranks drift.
+    const got = fluxConditionsToGitOpsStatus([c('Ready', 'Unknown'), c('Reconciling', 'True')], false, {
       generation: 1,
       observedGeneration: -1,
     })
     expect(got.sync).toBe('Reconciling')
+  })
+
+  it('a failure while retrying and never reconciled is degraded', () => {
+    // Live shape of a GitRepository whose repository doesn't exist.
+    const got = fluxConditionsToGitOpsStatus(
+      [c('Reconciling', 'True', { reason: 'ProgressingWithRetry' }), c('Ready', 'False', { reason: 'GitOperationFailed', observedGeneration: 1 })],
+      false,
+      { generation: 1, observedGeneration: -1 },
+    )
+    expect(got.sync).toBe('OutOfSync')
+    expect(got.health).toBe('Degraded')
+  })
+
+  it('a failure about an older generation does not outrank a new spec', () => {
+    const got = fluxConditionsToGitOpsStatus([c('Ready', 'False', { reason: 'BuildFailed', observedGeneration: 2 })], false, {
+      generation: 3,
+      observedGeneration: 1,
+    })
+    expect(got.sync).toBe('Reconciling')
+    expect(got.health).toBe('Progressing')
+  })
+
+  it('a retry while reconciling stays progressing', () => {
+    const got = fluxConditionsToGitOpsStatus(
+      [c('Reconciling', 'True', { reason: 'Progressing' }), c('Ready', 'False', { reason: 'ProgressingWithRetry' })],
+      false,
+      { generation: 2, observedGeneration: 1 },
+    )
+    expect(got.sync).toBe('Reconciling')
+    expect(got.health).toBe('Progressing')
   })
 
   it('does not treat an absent observedGeneration as drift', () => {

@@ -739,12 +739,12 @@ entries:
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
   - group: "source.toolkit.fluxcd.io"
-    resources: ["gitrepositories","helmrepositories","ocirepositories"]
+    resources: ["gitrepositories","helmrepositories","ocirepositories","helmcharts","buckets","externalartifacts"]
     scope: Namespaced
     collection: "flux"
     decision: grant
-    reason: "Operational configuration and status; full inline configuration is intentionally readable."
-    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+    reason: "Operational configuration and status. Credentials are referenced by Secret name only (secretRef, certSecretRef, proxySecretRef); no inline credential fields in source.toolkit.fluxcd.io/v1."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); source-controller v1.9 CRD schemas"
   - group: "sources.knative.dev"
     resources: ["apiserversources","containersources","pingsources","sinkbindings"]
     scope: Namespaced

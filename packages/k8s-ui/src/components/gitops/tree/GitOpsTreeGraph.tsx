@@ -29,6 +29,7 @@ import { servicePortsTooltip, type ServicePortEntry } from '../../topology/K8sRe
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
 import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
+import { rankTree, renderedEdge, shortcutEdges, upstreamClosure, upstreamEdges } from './layout'
 
 export type GitOpsTreePreset = 'full' | 'compact' | 'workloads' | 'app'
 
@@ -231,7 +232,7 @@ function GitOpsTreeGraphInner({
 function EdgeLegend({ edges }: { edges: Edge[] }) {
   const types = new Set(edges.map((e) => e.data?.type as string).filter(Boolean))
   const rows: Array<{ key: string; color: string; label: string }> = []
-  if (types.has('source')) rows.push({ key: 'source', color: getEdgeColor('source'), label: 'Source repo' })
+  if (types.has('source')) rows.push({ key: 'source', color: getEdgeColor('source'), label: 'Source artifact' })
   if (types.has('dependsOn')) rows.push({ key: 'dependsOn', color: getEdgeColor('dependsOn'), label: 'Depends on' })
   // Always show the default ownership color when there are 2+ edge kinds —
   // operators need to compare against it. Hide when "owns" is the only kind.
@@ -333,16 +334,10 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
   if (!tree) return { nodes: [], edges: [] }
   const visibleTree = applyGraphFilters(applyPreset(tree, preset, expandedGroups), filters)
   const byID = new Map(visibleTree.nodes.map(node => [node.id, node]))
-  const children = new Map<string, string[]>()
-  const incoming = new Map<string, number>()
-  for (const edge of visibleTree.edges) {
-    if (!byID.has(edge.source) || !byID.has(edge.target)) continue
-    children.set(edge.source, [...(children.get(edge.source) ?? []), edge.target])
-    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1)
-  }
-
-  const ranks = assignRanks(visibleTree.root.id, byID, children, incoming)
+  const ranks = groupRanks(rankTree(visibleTree), byID)
   const positioned = positionRanks(ranks, byID)
+  const upstreamTargets = new Set(upstreamEdges(visibleTree).map(edge => edge.target))
+  const shortcuts = shortcutEdges(visibleTree)
   const normalizedQuery = query.trim().toLowerCase()
   const nodes = Array.from(positioned.entries()).map(([id, position]) => {
     const node = byID.get(id)!
@@ -359,11 +354,10 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
   })
 
   const edges = visibleTree.edges
-    .filter(edge => positioned.has(edge.source) && positioned.has(edge.target))
+    .filter(edge => positioned.has(edge.source) && positioned.has(edge.target) && !shortcuts.has(edge))
     .map(edge => ({
       id: `${edge.source}->${edge.target}`,
-      source: edge.source,
-      target: edge.target,
+      ...renderedEdge(edge, upstreamTargets),
       type: 'smoothstep',
       // The legend reads back edge.data?.type to decide which rows to render —
       // ReactFlow doesn't preserve our custom `type` field at the top level
@@ -394,7 +388,9 @@ function applyPreset(tree: GitOpsResourceTree, preset: GitOpsTreePreset, expande
     children.set(edge.source, [...(children.get(edge.source) ?? []), edge.target])
   }
 
-  const keep = new Set<string>([tree.root.id])
+  // Dependencies answer "where does this come from" and are few, so every
+  // preset keeps them.
+  const keep = new Set<string>([tree.root.id, ...upstreamClosure(tree)])
   if (preset === 'app') {
     for (const edge of tree.edges) {
       if (edge.source === tree.root.id) keep.add(edge.target)
@@ -438,7 +434,7 @@ function applyGraphFilters(tree: GitOpsResourceTree, filters?: GitOpsTreeFilters
     if (node.id === tree.root.id) continue
     if (matchesGitOpsTreeFilters(node, filters)) {
       let current: string | undefined = node.id
-      while (current) {
+      while (current && !keep.has(current)) {
         keep.add(current)
         current = parent.get(current)
       }
@@ -506,43 +502,10 @@ function compactInfra(tree: GitOpsResourceTree, expandedGroups?: Set<string>): G
   }
 }
 
-function assignRanks(
-  rootID: string,
-  nodes: Map<string, GitOpsTreeNode>,
-  children: Map<string, string[]>,
-  incoming: Map<string, number>
-): Map<number, string[]> {
-  const rankByID = new Map<string, number>()
-  const queue = [{ id: rootID, rank: 0 }]
-  // Cycle/explosion guard: GitOps trees are owner-ref DAGs in practice, but
-  // the EdgeManages set we feed in could pathologically include a cycle
-  // (e.g. a CRD whose owner ref points back at one of its own children, or
-  // a malformed inventory). Without this cap, the "previous >= rank" skip
-  // never fires for cyclic edges and the loop runs forever, freezing the
-  // UI thread. Cap at a large multiple of node count so legitimate trees
-  // never hit it; cycles bail with the partial layout we have so far.
-  let iterations = 0
-  const maxIterations = nodes.size * 8 + 64
-
-  while (queue.length > 0) {
-    if (++iterations > maxIterations) break
-    const current = queue.shift()!
-    const previous = rankByID.get(current.id)
-    if (previous !== undefined && previous >= current.rank) continue
-    rankByID.set(current.id, current.rank)
-    for (const child of children.get(current.id) ?? []) {
-      queue.push({ id: child, rank: current.rank + 1 })
-    }
-  }
-
-  for (const id of nodes.keys()) {
-    if (!rankByID.has(id)) {
-      rankByID.set(id, incoming.get(id) ? 1 : 0)
-    }
-  }
-
+function groupRanks(rankByID: Map<string, number>, nodes: Map<string, GitOpsTreeNode>): Map<number, string[]> {
   const ranks = new Map<number, string[]>()
   for (const [id, rank] of rankByID.entries()) {
+    if (!nodes.has(id)) continue
     ranks.set(rank, [...(ranks.get(rank) ?? []), id])
   }
   for (const ids of ranks.values()) {
@@ -565,11 +528,22 @@ function positionRanks(ranks: Map<number, string[]>, nodes: Map<string, GitOpsTr
   const rootRank = ranks.get(0) ?? []
   if (rootRank.length === 1) {
     const rootID = rootRank[0]
-    const nextRank = ranks.get(1) ?? []
-    if (nextRank.length > 0) {
-      const maxY = (nextRank.length - 1) * ROW_GAP
-      const rootHeight = getNodeDimensions(nodes.get(rootID)!).height
+    const rootHeight = getNodeDimensions(nodes.get(rootID)!).height
+    const tallest = Math.max((ranks.get(1)?.length ?? 0), (ranks.get(-1)?.length ?? 0))
+    if (tallest > 0) {
+      const maxY = (tallest - 1) * ROW_GAP
       positioned.set(rootID, { x: 0, y: Math.max(0, (maxY - rootHeight) / 2 - ROOT_Y_OFFSET) })
+    }
+    // Dependency columns are short; center them on the root so the chain
+    // reads as one line into it.
+    const rootCenter = positioned.get(rootID)!.y + rootHeight / 2
+    for (const rank of sortedRanks) {
+      if (rank >= 0) continue
+      const ids = ranks.get(rank) ?? []
+      const columnCenter = ((ids.length - 1) * ROW_GAP + rootHeight) / 2
+      ids.forEach((id, row) => {
+        positioned.set(id, { x: rank * RANK_GAP, y: row * ROW_GAP + rootCenter - columnCenter })
+      })
     }
   }
 

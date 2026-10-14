@@ -183,6 +183,8 @@ export interface GitOpsChange {
   recentEvents?: GitOpsEventSummary[]
   partial: boolean
   partialNote?: string
+  // A Flux source or dependsOn target the root consumes but doesn't manage.
+  dependency?: boolean
 }
 
 export interface GitOpsDrift {

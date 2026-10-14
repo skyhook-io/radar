@@ -1082,18 +1082,26 @@ function newestConditionTime(resource: any): string {
 // many of them are healthy / drifted" at a glance, without making the user
 // count facets in the filter rail.
 function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
-  const nodes = (tree.nodes ?? []).filter((n) => n.role !== 'group' && n.role !== 'root')
+  const counted = (tree.nodes ?? []).filter((n) => n.role !== 'group' && n.role !== 'root')
+  // Dependencies (Flux sources, charts, dependsOn targets) are consumed, not
+  // managed: they get their own count and never inflate the managed totals.
+  const nodes = counted.filter((n) => !n.dependency)
+  const dependencies = counted.length - nodes.length
   const total = nodes.length
-  if (total === 0) return null
-  const healthy = nodes.filter((n) => (n.health || '').toLowerCase() === 'healthy').length
-  const degraded = nodes.filter((n) => {
+  if (counted.length === 0) return null
+  const isDegraded = (n: GitOpsTreeNode) => {
     const h = (n.health || '').toLowerCase()
     return h === 'degraded' || h === 'missing' || h === 'unhealthy'
-  }).length
+  }
+  const healthy = nodes.filter((n) => (n.health || '').toLowerCase() === 'healthy').length
+  const degraded = nodes.filter(isDegraded).length
+  const failingDependencies = counted.filter((n) => n.dependency && isDegraded(n)).length
   const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
   return (
     <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary sm:flex">
       <span><span className="text-theme-text-primary">{total}</span> resources</span>
+      {dependencies > 0 && <span><span className="text-theme-text-primary">{dependencies}</span> {dependencies === 1 ? 'dependency' : 'dependencies'}</span>}
+      {failingDependencies > 0 && <span className="flex items-center gap-1 font-medium text-red-600 dark:text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {failingDependencies} {failingDependencies === 1 ? 'dependency' : 'dependencies'} failing</span>}
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}
       {/* Bad-news counts use status colors on the number itself so the worst
           fact in the row visually pops, not just the dot next to it. */}

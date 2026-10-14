@@ -54,6 +54,9 @@ type Node struct {
 	// remote tree. Radar's API reads this cluster, so a same-named object
 	// here is a different resource, not this node.
 	Remote bool `json:"remote,omitempty"`
+	// Dependency marks a node reached only through a Flux source, chart or
+	// dependsOn declaration: the root consumes it but doesn't manage it.
+	Dependency bool `json:"dependency,omitempty"`
 }
 
 // HealthSource identifies who assessed a node's Health.
@@ -121,6 +124,8 @@ type Summary struct {
 	Grouped   int `json:"grouped"`
 	Degraded  int `json:"degraded"`
 	OutOfSync int `json:"outOfSync"`
+	// Dependencies counts dependency nodes, which the other tallies exclude.
+	Dependencies int `json:"dependencies,omitempty"`
 }
 
 // ResourceTree is the API response for a GitOps resource tree.
@@ -167,7 +172,8 @@ type managedResource struct {
 }
 
 type relatedResource struct {
-	Ref  ResourceRef
-	Type EdgeType
-	Data map[string]any
+	Parent ResourceRef
+	Ref    ResourceRef
+	Type   EdgeType
+	Data   map[string]any
 }

@@ -174,6 +174,7 @@ apply_fixtures() {
   setup_argo_health_customizations
   setup_rollback_history
   setup_zombie
+  setup_stale_source
 }
 
 # setup_argo_health_customizations merges the demo's Argo health checks
@@ -310,6 +311,42 @@ setup_zombie() {
   kubectl --context "${KUBECTL_CTX}" -n flux-system delete kustomization zombie-kustomization --wait=false >/dev/null 2>&1 || true
 
   ok "zombie-kustomization now stuck Terminating (severity will ramp: info → warning @5min → alert @30min)"
+}
+
+# setup_stale_source lets podinfo-stale fetch a real artifact, then points it
+# at a missing branch: the source fails but keeps that artifact, and
+# podinfo-stale-source stays Ready on the old revision.
+setup_stale_source() {
+  step "Breaking podinfo-stale after its first artifact"
+  if kubectl --context "${KUBECTL_CTX}" -n flux-system get gitrepository podinfo-stale \
+       -o jsonpath='{.spec.ref.branch}' 2>/dev/null | grep -q radar-demo-missing-branch; then
+    ok "podinfo-stale already points at the missing branch"
+    return
+  fi
+  local deadline=$((SECONDS + 180)) ready=""
+  while [ $SECONDS -lt $deadline ]; do
+    if kubectl --context "${KUBECTL_CTX}" -n flux-system get kustomization podinfo-stale-source \
+         -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q True; then
+      ready=1
+      break
+    fi
+    sleep 3
+  done
+  # Breaking the source before it applied once would test the no-artifact case,
+  # which podinfo-unreachable already covers.
+  [ -n "$ready" ] || fail "podinfo-stale-source never became Ready; rerun once the cluster settles"
+  kubectl --context "${KUBECTL_CTX}" -n flux-system patch gitrepository podinfo-stale --type merge \
+    -p '{"spec":{"ref":{"branch":"radar-demo-missing-branch"}}}' >/dev/null
+  deadline=$((SECONDS + 90))
+  while [ $SECONDS -lt $deadline ]; do
+    if kubectl --context "${KUBECTL_CTX}" -n flux-system get gitrepository podinfo-stale \
+         -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.artifact.revision}' 2>/dev/null | grep -q '^False .'; then
+      ok "podinfo-stale now fails to fetch; podinfo-stale-source keeps the last applied revision"
+      return
+    fi
+    sleep 3
+  done
+  fail "podinfo-stale didn't report a failed fetch with its previous artifact"
 }
 
 # --- Drift inducer ---------------------------------------------------------

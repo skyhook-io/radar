@@ -103,12 +103,21 @@ func (m *Memoizer) GetIndex(opts BuildOptions, build func() (*Topology, error)) 
 
 // GetIndexScoped is GetIndex with the scope semantics of GetScoped.
 func (m *Memoizer) GetIndexScoped(scope uint64, opts BuildOptions, build func() (*Topology, error)) (*RelationshipsIndex, error) {
+	_, index, err := m.GetWithIndexScoped(scope, opts, build)
+	return index, err
+}
+
+// GetWithIndexScoped returns one coherent topology snapshot and its lazy cached
+// index, with the scope semantics of GetScoped. It preserves the entry identity
+// check even if another caller refreshes or evicts the entry; callers never
+// pair nodes with an index from another build.
+func (m *Memoizer) GetWithIndexScoped(scope uint64, opts BuildOptions, build func() (*Topology, error)) (*Topology, *RelationshipsIndex, error) {
 	topo, err := m.GetScoped(scope, opts, build)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if m == nil || m.ttl <= 0 {
-		return IndexByResource(topo), nil
+		return topo, IndexByResource(topo), nil
 	}
 	key := scopedKey(scope, opts)
 	m.mu.Lock()
@@ -117,12 +126,12 @@ func (m *Memoizer) GetIndexScoped(scope uint64, opts BuildOptions, build func() 
 	// Entry evicted between Get() and GetIndex() — build inline and return.
 	// Costs one extra walk but keeps the API correct under aggressive eviction.
 	if entry == nil || entry.topo != topo {
-		return IndexByResource(topo), nil
+		return topo, IndexByResource(topo), nil
 	}
 	entry.indexOnce.Do(func() {
 		entry.index = IndexByResource(entry.topo)
 	})
-	return entry.index, nil
+	return topo, entry.index, nil
 }
 
 func (m *Memoizer) store(key string, topo *Topology) {

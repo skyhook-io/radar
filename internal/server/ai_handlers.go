@@ -503,7 +503,8 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		families: s.readablePolicyReportFamilies(r, namespace),
 	}
 
-	if topo, prov, dyn, ok := s.topologyForContext(namespace); ok {
+	if topo, index, prov, dyn, ok := s.topologyForContext(); ok {
+		opts.RelIndex = index
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn
@@ -518,32 +519,40 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	return resourcecontext.Build(r.Context(), obj, opts)
 }
 
-// topologyForContext builds (or fetches the memoized) topology scoped to the
-// resource's namespace. Cluster-scoped resources get an all-namespaces build.
-// Returns ok=false when the cache isn't ready yet.
-func (s *Server) topologyForContext(namespace string) (*topology.Topology, topology.ResourceProvider, topology.DynamicProvider, bool) {
+// topologyForContext uses the complete relationship graph the broadcaster
+// already keeps for drawer lookups, so resource context never holds a second
+// copy of the cluster. The resource context checker gates each target,
+// including other namespaces. Before that graph exists it builds one through
+// the memo. Returns ok=false when the cache is not available.
+func (s *Server) topologyForContext() (*topology.Topology, *topology.RelationshipsIndex, topology.ResourceProvider, topology.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
-	opts := topology.DefaultBuildOptions()
-	if namespace != "" {
-		opts.Namespaces = []string{namespace}
-	}
-	opts.IncludeReplicaSets = true
-	opts.IncludeSecrets = true
-	opts.ForRelationshipCache = true
-
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	if topo, index := s.RelationshipTopology(); topo != nil {
+		return topo, index, provider, dyn, true
+	}
+	opts := topology.RelationshipBuildOptions()
+	opts.IncludeSecrets = true
 
-	topo, err := s.topoMemo.GetScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
+	topo, index, err := s.topoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
 		return topology.NewBuilder(provider).WithDynamic(dyn).Build(opts)
 	})
 	if err != nil || topo == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
-	return topo, provider, dyn, true
+	return topo, index, provider, dyn, true
+}
+
+// RelationshipTopology returns the broadcaster's full relationship graph and
+// its index, or nil before it has been built.
+func (s *Server) RelationshipTopology() (*topology.Topology, *topology.RelationshipsIndex) {
+	if s == nil || s.broadcaster == nil {
+		return nil, nil
+	}
+	return s.broadcaster.GetCachedTopologyWithIndex()
 }
 
 // computeIssueSummaryForResource rolls up per-resource issue-composer rows

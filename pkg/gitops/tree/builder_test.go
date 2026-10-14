@@ -528,3 +528,351 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 		}
 	}
 }
+
+func TestFluxTreeFollowsObservedChartSourceAndGatesKinds(t *testing.T) {
+	for _, inline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inline=%t", inline), func(t *testing.T) {
+			hr := helmRelease("team", "app")
+			hr.Object["spec"] = map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "chart", "namespace": "shared"}}
+			if inline {
+				hr.Object["spec"] = map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo", "namespace": "shared"}}}}
+				hr.Object["status"] = map[string]any{"helmChart": "shared/chart"}
+			}
+			chart := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmChart", "metadata": map[string]any{"name": "chart", "namespace": "shared", "labels": map[string]any{"private": "chart-label"}}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo"}}}}
+			repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmRepository", "metadata": map[string]any{"name": "repo", "namespace": "shared"}}}
+			hrr := ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}
+			cr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmChart", Namespace: "shared", Name: "chart"}
+			rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmRepository", Namespace: "shared", Name: "repo"}
+			topo := &topology.Topology{Nodes: []topology.Node{{ID: "helmchart/shared/chart", Kind: "HelmChart", Name: "chart", Data: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "namespace": "shared", "labels": map[string]string{fluxHelmNameLabel: "app", fluxHelmNamespaceLabel: "team"}}}}}
+			for _, denied := range []string{"", "HelmChart", "HelmRepository"} {
+				t.Run(denied, func(t *testing.T) {
+					getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(cr): chart, refKey(rr): repo}}
+					builder := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied })
+					tree, _, err := builder.Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantNodes := 3
+					if denied == "HelmChart" {
+						wantNodes = 1
+						if inline {
+							wantNodes = 2
+						}
+					}
+					if denied == "HelmRepository" {
+						wantNodes = 2
+					}
+					wantEdges := wantNodes - 1
+					if inline && denied == "" {
+						wantEdges++
+					}
+					if len(tree.Nodes) != wantNodes || len(tree.Edges) != wantEdges {
+						t.Fatalf("denied %s: %+v", denied, tree)
+					}
+					for _, call := range getter.recordedCalls() {
+						if call.Kind == denied {
+							t.Fatalf("denied kind fetched: %+v", call)
+						}
+					}
+					if tree.Summary.Dependencies != wantNodes-1 || tree.Summary.Declared != 0 || tree.Summary.Degraded != 0 {
+						t.Fatalf("dependency membership: %+v", tree.Summary)
+					}
+					if denied == "" {
+						chartDependency := false
+						for _, edge := range tree.Edges {
+							if edge.Source == nodeID(hrr) && edge.Target == nodeID(cr) && edge.Type == EdgeSource {
+								chartDependency = true
+							}
+						}
+						if !chartDependency {
+							t.Fatalf("chart treated as installed release content: %+v", tree.Edges)
+						}
+						found := false
+						for _, edge := range tree.Edges {
+							if edge.Source == nodeID(cr) && edge.Target == nodeID(rr) && edge.Type == EdgeSource {
+								found = true
+							}
+						}
+						if !found {
+							t.Fatalf("chart source edge missing: %+v", tree.Edges)
+						}
+					}
+				})
+			}
+			if inline {
+				getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(rr): repo}}
+				tree, _, err := NewBuilder(getter, nil).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+				if err != nil {
+					t.Fatal(err)
+				}
+				findNode(t, tree, rr)
+				if len(tree.Edges) != 2 {
+					t.Fatalf("unobserved chart lost declared source: %+v", tree)
+				}
+				for _, edge := range tree.Edges {
+					if edge.Source == nodeID(cr) {
+						t.Fatalf("unobserved chart acquired source: %+v", edge)
+					}
+				}
+			}
+
+		})
+	}
+}
+
+func TestFluxBootstrapSourceRetainsInventoryOwnership(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}}, "status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "flux-system_flux-system_source.toolkit.fluxcd.io_GitRepository", "v": "v1"}}}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}}}
+	kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "flux-system"}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "flux-system", Name: "flux-system"}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(kr): ks, refKey(rr): repo}}
+	tree, _, err := NewBuilder(getter, nil).Build(context.Background(), "Kustomization", "flux-system", "flux-system", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoNode := findNode(t, tree, rr)
+	if repoNode.Dependency || repoNode.Data["relationship"] != "source" || tree.Summary.Declared != 1 || tree.Summary.Dependencies != 0 {
+		t.Fatalf("bootstrap membership lost: node=%+v summary=%+v", repoNode, tree.Summary)
+	}
+	if len(getter.recordedCalls()) != 2 {
+		t.Fatalf("overlapping source fetched twice: %v", getter.recordedCalls())
+	}
+	if len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeOwns {
+		t.Fatalf("bootstrap inventory ownership overwritten: %+v", tree.Edges)
+	}
+}
+
+func TestReadableGeneratedDescendantSurvivesDeniedIntermediate(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"namespace": "argocd", "name": "app"}, "spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, "status": map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "app"}}}}}
+	topo := &topology.Topology{Nodes: []topology.Node{
+		{ID: "deployment/prod/app", Kind: topology.KindDeployment, Name: "app", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
+		{ID: "replicaset/prod/hidden", Kind: topology.KindReplicaSet, Name: "hidden", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1", "labels": map[string]string{"private": "hidden-metadata"}}},
+		{ID: "pod/prod/visible", Kind: topology.KindPod, Name: "visible", Data: map[string]any{"namespace": "prod", "apiVersion": "v1"}},
+	}, Edges: []topology.Edge{{Source: "deployment/prod/app", Target: "replicaset/prod/hidden", Type: topology.EdgeManages}, {Source: "replicaset/prod/hidden", Target: "pod/prod/visible", Type: topology.EdgeManages}}}
+	for _, denied := range []string{"ReplicaSet", "Deployment"} {
+		t.Run(denied, func(t *testing.T) {
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "app"}): app}}
+			tree, _, err := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), "Application", "argocd", "app", "argoproj.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, n := range tree.Nodes {
+				if n.Ref.Kind == denied {
+					t.Fatalf("denied node emitted: %+v", n)
+				}
+				if n.Ref.Kind == "Pod" && n.Ref.Name == "visible" {
+					visible = true
+				}
+				if denied == "ReplicaSet" && strings.Contains(fmt.Sprint(n.Data), "hidden-metadata") {
+					t.Fatalf("denied metadata leaked: %+v", n.Data)
+				}
+			}
+			if !visible || len(tree.Warnings) == 0 {
+				t.Fatalf("readable descendant hidden or no incomplete warning: %+v", tree)
+			}
+			for _, e := range tree.Edges {
+				for _, n := range tree.Nodes {
+					if denied == "ReplicaSet" && n.Ref.Kind == "Pod" && e.Target == n.ID {
+						t.Fatalf("invented shortcut to Pod across denied owner: %+v", e)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDeniedFluxSourceIsDisclosedWithoutFetchingIt(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "app", "namespace": "prod"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "private"}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "prod", Name: "app"}): root,
+	}}
+	tree, _, err := NewBuilder(getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "GitRepository" }).Build(context.Background(), "Kustomization", "prod", "app", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Nodes) != 1 || len(tree.Warnings) == 0 {
+		t.Fatalf("tree = %+v", tree)
+	}
+	for _, call := range getter.recordedCalls() {
+		if call.Kind == "GitRepository" {
+			t.Fatalf("denied source fetched: %+v", call)
+		}
+	}
+	if strings.Contains(strings.Join(tree.Warnings, " "), "private") {
+		t.Fatalf("warning leaks source name: %v", tree.Warnings)
+	}
+}
+
+func TestGeneratedTopologyReferencesKeepExactAPIIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		node        topology.Node
+		kind, group string
+	}{
+		{topology.Node{Kind: topology.KindDeployment, Name: "web", Data: map[string]any{"namespace": "team"}}, "Deployment", "apps"},
+		{topology.Node{Kind: topology.KindCAPICluster, Name: "cluster", Data: map[string]any{"namespace": "team", "apiVersion": "cluster.x-k8s.io/v1beta1"}}, "Cluster", "cluster.x-k8s.io"},
+		{topology.Node{Kind: topology.KindPodGroup, Name: "batch", Data: map[string]any{"namespace": "team", "apiVersion": "scheduling.volcano.sh/v1beta1"}}, "PodGroup", "scheduling.volcano.sh"},
+		{topology.Node{Kind: topology.KindPodGroup, Name: "display", Data: map[string]any{"namespace": "team", "podCount": 7}}, "PodGroup", ""},
+	} {
+		ref := refFromTopologyNode(tc.node)
+		if ref.Kind != tc.kind || ref.Group != tc.group || ref.Namespace != "team" {
+			t.Fatalf("node=%+v ref=%+v", tc.node, ref)
+		}
+	}
+}
+
+func TestExactDeclarationCannotHydrateDeniedCoreCollision(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": "app", "namespace": "team"},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+		"status":   map[string]any{"resources": []any{map[string]any{"group": "custom.example", "kind": "Secret", "namespace": "team", "name": "shared"}}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "team", Name: "app"}): root,
+	}}
+	topo := &topology.Topology{Nodes: []topology.Node{
+		{ID: "secret/team/shared", Kind: topology.KindSecret, Name: "shared", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "labels": map[string]string{"private": "denied-core-metadata"}}},
+		{ID: "pod/team/private", Kind: topology.KindPod, Name: "private", Data: map[string]any{"namespace": "team"}},
+	}, Edges: []topology.Edge{{Source: "secret/team/shared", Target: "pod/team/private", Type: topology.EdgeManages}}}
+	result, _, err := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool {
+		return ref.Kind != "Secret" || ref.Group == "custom.example"
+	}).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 2 {
+		t.Fatalf("wrong-group descendants emitted: %+v", result.Nodes)
+	}
+	for _, n := range result.Nodes {
+		if strings.Contains(fmt.Sprint(n.Data), "denied-core-metadata") || n.Ref.Kind == "Pod" {
+			t.Fatalf("wrong-group hydration: %+v", n)
+		}
+		if n.Ref.Kind == "Secret" && (n.Health != "" || n.Ref.Group != "custom.example") {
+			t.Fatalf("wrong-group health/identity: %+v", n)
+		}
+	}
+	for _, call := range getter.recordedCalls() {
+		if call.Kind == "Secret" && call.Group == "" {
+			t.Fatalf("denied core fetch: %+v", call)
+		}
+	}
+}
+
+func TestCoreDeclarationNeverHydratesCustomCollision(t *testing.T) {
+	for _, withCore := range []bool{false, true} {
+		root := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+			"metadata": map[string]any{"name": "app", "namespace": "team"},
+			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+			"status":   map[string]any{"resources": []any{map[string]any{"kind": "Service", "namespace": "team", "name": "dual"}}},
+		}}
+		getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "team", Name: "app"}): root}}
+		topo := &topology.Topology{}
+		if withCore {
+			topo.Nodes = append(topo.Nodes, topology.Node{ID: "service/team/dual", Kind: topology.KindService, Name: "dual", Data: map[string]any{"namespace": "team", "labels": map[string]string{"source": "core"}}})
+		}
+		topo.Nodes = append(topo.Nodes, topology.Node{ID: "knative/team/dual", Kind: topology.KindKnativeService, Name: "dual", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "apiVersion": "serving.knative.dev/v1", "labels": map[string]string{"source": "custom"}}})
+		tree, _, err := NewBuilder(getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, node := range tree.Nodes {
+			if node.Ref.Kind == "Service" && (strings.Contains(fmt.Sprint(node.Data), "custom") || !withCore && node.Health != "") {
+				t.Fatalf("core declaration hydrated from custom group: %+v", node)
+			}
+		}
+	}
+}
+
+func TestRemoteInventoryDoesNotUseLocalReadPermissions(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "fleet", "namespace": "argocd"},
+		"spec":   map[string]any{"destination": map[string]any{"server": "https://remote.example"}},
+		"status": map[string]any{"resources": []any{map[string]any{"kind": "Secret", "namespace": "remote", "name": "declared", "status": "Synced"}}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "fleet"}): root}}
+	tree, _, err := NewBuilder(getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "Secret" }).Build(context.Background(), "Application", "argocd", "fleet", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := findNode(t, tree, ResourceRef{Kind: "Secret", Namespace: "remote", Name: "declared"})
+	if !node.Remote || node.Sync != "Synced" || node.Data["labels"] != nil {
+		t.Fatalf("remote declaration lost or enriched: %+v", node)
+	}
+	assertNoDynamicCall(t, getter, ResourceRef{Kind: "Secret", Namespace: "remote", Name: "declared"})
+}
+
+func TestExactLookupRetainsServedCalicoIdentities(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "app", "namespace": "team"}, "spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, "status": map[string]any{"resources": []any{map[string]any{"group": "crd.projectcalico.org", "kind": "NetworkPolicy", "namespace": "team", "name": "policy"}}}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "team", Name: "app"}): root}}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "calico/team/policy", Kind: topology.KindCalicoNetworkPolicy, Name: "policy", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "apiVersion": "projectcalico.org/v3", "apiVersions": []string{"projectcalico.org/v3", "crd.projectcalico.org/v1"}, "labels": map[string]string{"observed": "true"}}}}}
+	tree, _, err := NewBuilder(getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := findNode(t, tree, ResourceRef{Group: "crd.projectcalico.org", Kind: "NetworkPolicy", Namespace: "team", Name: "policy"})
+	if policy.Health != "Healthy" || !strings.Contains(fmt.Sprint(policy.Data), "observed") {
+		t.Fatalf("served Calico identity lost: %+v", policy)
+	}
+}
+
+func TestFluxSharedSourceIsDependencyForEachConsumer(t *testing.T) {
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"namespace": "shared", "name": "repo"}, "spec": map[string]any{"url": "https://example.org/repo"}}}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "repo"}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(rr): repo}}
+	for _, name := range []string{"one", "two"} {
+		kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "team", Name: name}
+		getter.objects[refKey(kr)] = &unstructured.Unstructured{Object: map[string]any{"apiVersion": kr.Group + "/v1", "kind": kr.Kind, "metadata": map[string]any{"namespace": kr.Namespace, "name": name}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "namespace": "shared", "name": "repo"}}}}
+		tree, _, err := NewBuilder(getter, nil).Build(context.Background(), kr.Kind, kr.Namespace, name, kr.Group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := findNode(t, tree, rr)
+		if !source.Dependency || source.Data["sourceURL"] != "https://example.org/repo" || tree.Summary.Dependencies != 1 || tree.Summary.Declared != 0 || len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeSource {
+			t.Fatalf("shared source membership: %+v", tree)
+		}
+	}
+	if len(getter.recordedCalls()) != 4 {
+		t.Fatalf("source enrichment added reads: %v", getter.recordedCalls())
+	}
+}
+
+func TestRemoteFluxInventoryOverlapDoesNotEnrichFromLocalSource(t *testing.T) {
+	for _, withTopology := range []bool{false, true} {
+		root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"namespace": "flux-system", "name": "fleet"}, "spec": map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "spoke"}}, "sourceRef": map[string]any{"kind": "GitRepository", "namespace": "prod", "name": "flux-system"}}, "status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "prod_flux-system_source.toolkit.fluxcd.io_GitRepository", "v": "v1"}}}}}}
+		rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "prod", Name: "flux-system"}
+		repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": rr.Group + "/v1", "kind": rr.Kind, "metadata": map[string]any{"namespace": rr.Namespace, "name": rr.Name, "uid": "local-uid", "labels": map[string]any{"private": "local"}}, "spec": map[string]any{"url": "https://example.org/local"}, "status": map[string]any{"artifact": map[string]any{"revision": "local"}, "conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "FetchFailed", "message": "local failure"}}}}}
+		getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(rr): repo, refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "fleet"}): root}}
+		var topo *topology.Topology
+		if withTopology {
+			topo = &topology.Topology{Nodes: []topology.Node{{ID: "local-source", Kind: topology.KindGitRepository, Name: rr.Name, Data: map[string]any{"namespace": rr.Namespace, "apiVersion": repo.GetAPIVersion(), "labels": map[string]string{"private": "local"}}}}}
+		}
+		tree, _, err := NewBuilder(getter, topo).Build(context.Background(), root.GetKind(), root.GetNamespace(), root.GetName(), "kustomize.toolkit.fluxcd.io")
+		if err != nil {
+			t.Fatal(err)
+		}
+		node := findNode(t, tree, rr)
+		if !node.Remote || node.Dependency || node.Ref.UID != "" || node.Health != "" || node.Data["artifact"] != nil || node.Data["sourceURL"] != nil || node.Data["labels"] != nil || node.Data["relationship"] != "source" || len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeOwns {
+			t.Fatalf("topology=%t remote resource got local facts: %+v", withTopology, tree)
+		}
+	}
+}
+
+func TestHelmReleaseRootKeepsInstalledChartOverTopologyRevision(t *testing.T) {
+	hr := helmRelease("team", "app")
+	hr.Object["status"] = map[string]any{"lastAttemptedRevision": "6.15.0", "history": []any{map[string]any{"chartVersion": "6.15.0", "status": "deployed"}}}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "helmrelease/team/app", Kind: "HelmRelease", Name: "app", Data: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "namespace": "team", "revision": 0}}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}): hr}}
+	tree, _, err := NewBuilder(getter, topo).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Root.Data["revision"] != "6.15.0" {
+		t.Fatalf("root revision = %#v", tree.Root.Data["revision"])
+	}
+}

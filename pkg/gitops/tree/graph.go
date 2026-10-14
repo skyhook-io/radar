@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -140,19 +142,47 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	if rev, ok, _ := unstructured.NestedInt64(obj.Object, "status", "lastReleaseRevision"); ok && rev > 0 {
 		node.Data["revision"] = fmt.Sprintf("rev:%d", rev)
 	}
+	// helm.toolkit.fluxcd.io/v2 dropped lastReleaseRevision. The newest
+	// deployed history entry is the installed chart, comparable with
+	// lastAttemptedRevision; a newer failed attempt must still show as attempted.
+	if history, ok, _ := unstructured.NestedSlice(obj.Object, "status", "history"); ok {
+		for _, raw := range history {
+			if entry, ok := raw.(map[string]any); ok && gitops.StringValue(entry["status"]) == "deployed" {
+				if version := gitops.StringValue(entry["chartVersion"]); version != "" {
+					node.Data["revision"] = version
+				}
+				break
+			}
+		}
+	}
 	if ts, ok, _ := unstructured.NestedString(obj.Object, "status", "lastHandledReconcileAt"); ok && ts != "" {
 		node.Data["lastReconciledAt"] = ts
 	}
 	if ts, ok, _ := unstructured.NestedString(obj.Object, "status", "reconciledAt"); ok && ts != "" {
 		node.Data["lastReconciledAt"] = ts
 	}
-	return node
+	if strings.HasSuffix(apiGroup(obj), ".toolkit.fluxcd.io") {
+		recordFluxReady(node, obj)
+	}
+	return enrichFluxSource(node, obj)
+}
+
+// recordFluxReady keeps a Flux object's own Ready verdict on its node, so a
+// root blocked on it can quote why.
+func recordFluxReady(node Node, obj *unstructured.Unstructured) {
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	for _, raw := range conditions {
+		if condition, ok := raw.(map[string]any); ok && condition["type"] == "Ready" {
+			node.Data["readyStatus"] = gitops.StringValue(condition["status"])
+			node.Data["readyReason"] = gitops.StringValue(condition["reason"])
+			node.Data["readyMessage"] = gitops.StringValue(condition["message"])
+		}
+	}
 }
 
 func refFromTopologyNode(n topology.Node) ResourceRef {
-	ns, _ := n.Data["namespace"].(string)
-	group, _ := n.Data["group"].(string)
-	return ResourceRef{Group: group, Kind: string(n.Kind), Namespace: ns, Name: n.Name}
+	ref := resourceid.ResolveCurrent(topology.NodeReference(&n), nil).Ref
+	return ResourceRef{Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 }
 
 func infoFromTopology(n topology.Node) []InfoItem {
@@ -307,6 +337,10 @@ func kindPriority(kind string) int {
 func Summarize(nodes []Node) Summary {
 	var s Summary
 	for _, n := range nodes {
+		if n.Dependency {
+			s.Dependencies++
+			continue
+		}
 		switch n.Role {
 		case RoleDeclared:
 			s.Declared++
@@ -373,4 +407,121 @@ func classifyGitOpsKind(obj *unstructured.Unstructured) (tool, kind string) {
 	// standard resource drawer surfaces their spec/status (lastFetchedRevision,
 	// conditions) more usefully.
 	return "", ""
+}
+
+func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
+	if node.Tool != ToolFluxCD || apiGroup(obj) != "source.toolkit.fluxcd.io" {
+		return node
+	}
+	switch obj.GetKind() {
+	case "GitRepository", "OCIRepository", "HelmRepository", "Bucket", "HelmChart", "ExternalArtifact":
+	default:
+		return node
+	}
+	node.Sync = ""
+	state := gitops.FluxStatus(obj)
+	node.Health = state.Health
+	node.HealthSource = HealthSourceController
+	node.TopologyStatus = healthToTopology(state.Health)
+	node.Info = nil
+	sourceURL := ""
+	switch obj.GetKind() {
+	case "GitRepository", "OCIRepository", "HelmRepository":
+		sourceURL, _, _ = unstructured.NestedString(obj.Object, "spec", "url")
+	case "Bucket":
+		endpoint, _, _ := unstructured.NestedString(obj.Object, "spec", "endpoint")
+		bucket, _, _ := unstructured.NestedString(obj.Object, "spec", "bucketName")
+		if endpoint != "" && bucket != "" {
+			sourceURL = strings.TrimRight(endpoint, "/") + "/" + bucket
+		}
+	case "HelmChart":
+		chart, _, _ := unstructured.NestedString(obj.Object, "spec", "chart")
+		version, _, _ := unstructured.NestedString(obj.Object, "spec", "version")
+		node.Data["chart"], node.Data["requestedVersion"] = chart, version
+		if chart != "" {
+			display := chart
+			if version != "" {
+				display += "@" + version
+			}
+			node.Info = []InfoItem{{Name: "Chart", Value: display}}
+		}
+	}
+	if sourceURL != "" {
+		sourceURL = prom.SafeAddress(sourceURL)
+		node.Data["sourceURL"] = sourceURL
+		display := sourceURL
+		if _, rest, ok := strings.Cut(display, "://"); ok {
+			display = rest
+		}
+		node.Info = []InfoItem{{Name: "Source", Value: display}}
+	}
+	var refFields []string
+	switch obj.GetKind() {
+	case "GitRepository":
+		refFields = []string{"commit", "name", "semver", "tag", "branch"}
+	case "OCIRepository":
+		refFields = []string{"digest", "semver", "tag"}
+	}
+	for _, field := range refFields {
+		if value, _, _ := unstructured.NestedString(obj.Object, "spec", "ref", field); value != "" {
+			node.Data["requestedRef"] = field + ": " + value
+			break
+		}
+	}
+	artifact, present, _ := unstructured.NestedMap(obj.Object, "status", "artifact")
+	node.Data["artifact"] = present && artifact != nil
+	if revision := gitops.StringValue(artifact["revision"]); revision != "" {
+		node.Data["artifactRevision"] = revision
+		// A HelmRepository's revision is its index digest, which identifies
+		// nothing a user would look for; the chart carries the version.
+		if obj.GetKind() != "HelmRepository" {
+			node.Data["revision"] = sourceRevisionDisplay(obj.GetKind(), revision)
+		}
+	}
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch condition["type"] {
+		case "Ready":
+			node.Data["readyStatus"] = gitops.StringValue(condition["status"])
+			node.Data["readyReason"] = gitops.StringValue(condition["reason"])
+			node.Data["readyMessage"] = gitops.StringValue(condition["message"])
+		case "Stalled":
+			node.Data["stalled"] = condition["status"] == "True"
+			node.Data["stalledMessage"] = gitops.StringValue(condition["message"])
+		case "FetchFailed":
+			node.Data["fetchFailed"] = condition["status"] == "True"
+			node.Data["fetchFailedMessage"] = gitops.StringValue(condition["message"])
+		}
+	}
+	return node
+}
+
+func sourceRevisionDisplay(kind, revision string) string {
+	if kind == "HelmChart" {
+		return revision
+	}
+	prefix, digest, ok := strings.Cut(revision, "@")
+	if !ok {
+		prefix, digest = "", revision
+	}
+	algorithm, hash, ok := strings.Cut(digest, ":")
+	if !ok || (algorithm != "sha1" && algorithm != "sha256" && algorithm != "sha512") {
+		return revision
+	}
+	if len(hash) > 7 {
+		hash = hash[:7]
+	}
+	if kind == "GitRepository" && algorithm == "sha1" {
+		digest = hash
+	} else {
+		digest = algorithm + ":" + hash
+	}
+	if prefix != "" {
+		return prefix + "@" + digest
+	}
+	return digest
 }

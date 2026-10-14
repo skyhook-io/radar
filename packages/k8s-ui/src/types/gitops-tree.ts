@@ -43,6 +43,9 @@ export interface GitOpsTreeNode {
   // Lives on the destination cluster of a remote tree. This cluster's API
   // would answer for a different, same-named object.
   remote?: boolean
+  // Reached only through a Flux source, chart or dependsOn declaration: the
+  // root consumes it but does not manage it. Not counted as a managed resource.
+  dependency?: boolean
 }
 
 // 'controllerApi' is the controller's own verdict read from its API server
@@ -69,6 +72,7 @@ export interface GitOpsTreeSummary {
   grouped: number
   degraded: number
   outOfSync: number
+  dependencies?: number
 }
 
 export interface GitOpsResourceTree {

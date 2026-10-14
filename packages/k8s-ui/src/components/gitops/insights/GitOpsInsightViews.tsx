@@ -223,7 +223,10 @@ function commitURLForRepo(source: string | undefined, revision: string): string 
 // "did everything come up?" summary. All-healthy reads green and explicit
 // ("4/4 resources healthy"); mixed states list the unhealthy buckets so
 // the user sees at a glance what didn't make it.
-function buildHealthSummary(changes: GitOpsChange[]): { text: string; tone: string } | null {
+function buildHealthSummary(allChanges: GitOpsChange[]): { text: string; tone: string } | null {
+  // Dependencies are consumed, not deployed, so they don't count toward
+  // "did everything come up"; a failing one has its own Issue.
+  const changes = allChanges.filter((c) => !c.dependency)
   if (changes.length === 0) return null
   let healthy = 0
   let degraded = 0
