@@ -850,7 +850,12 @@ func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry Flux
 // Every object is checked before anything is written, so a suspended or
 // terminating link fails the request instead of reporting a sync that its
 // controller will ignore. Unlike the CLI, it does not wait for each step.
-func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, namespace, name string, resolve FluxGVRResolver) (OperationResult, error) {
+// served is optional; without it the static API versions are used.
+func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, namespace, name string, served ...FluxGVRResolver) (OperationResult, error) {
+	var resolve FluxGVRResolver
+	if len(served) > 0 {
+		resolve = served[0]
+	}
 	entry, err := ResolveFluxKind(kind)
 	if err != nil {
 		return OperationResult{}, err
@@ -916,14 +921,15 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		}
 		sourceEntry = sourceEntry.Served(resolve)
 		chain = append([]link{{sourceEntry, ref.Namespace, ref.Name}}, chain...)
+		// Every link must be read before anything is written: without the
+		// object there is no suspend or deletion state to check, and no chart
+		// sourceRef to follow.
 		obj, err := dynClient.Resource(sourceEntry.GVR).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 		if err != nil {
-			// A source Radar can't read is still patched: the patch reports the
-			// caller's real permission or the missing object below.
-			if !apierrors.IsNotFound(err) || sourceEntry.Kind != "HelmChart" {
-				break
+			if apierrors.IsNotFound(err) {
+				return OperationResult{}, sourceNotPatchable(sourceEntry.Kind, ref.Namespace, ref.Name, err)
 			}
-			return OperationResult{}, sourceNotPatchable(sourceEntry.Kind, ref.Namespace, ref.Name, err)
+			return OperationResult{}, fmt.Errorf("failed to read source %s %s/%s: %w", sourceEntry.Kind, ref.Namespace, ref.Name, err)
 		}
 		if err := assertSyncable(obj, sourceEntry.Kind, ref.Namespace, ref.Name); err != nil {
 			return OperationResult{}, err

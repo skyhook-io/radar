@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -307,5 +308,36 @@ func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
 	}
 	if got.ResourceDiscovery == stale {
 		t.Fatal("the served singleton is still the stale build")
+	}
+}
+
+// A CRD upgrade can retire the version discovery last saw. Write paths resolve
+// through ServedGVR, so it must refresh expired discovery itself rather than
+// wait for some read path to do it.
+func TestServedGVRRefreshesExpiredDiscovery(t *testing.T) {
+	withCleanDiscoveryGlobals(t)
+	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	served := func(version string) []*metav1.APIResourceList {
+		return []*metav1.APIResourceList{{
+			GroupVersion: "source.toolkit.fluxcd.io/" + version,
+			APIResources: []metav1.APIResource{{Name: "ocirepositories", Kind: "OCIRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch", "patch"}}},
+		}}
+	}
+	fakeDisc.Resources = served("v1beta2")
+	core, err := k8score.NewResourceDiscovery(fakeDisc, k8score.WithDiscoveryCacheTTL(time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewResourceDiscovery: %v", err)
+	}
+	discoveryMu.Lock()
+	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	discoveryMu.Unlock()
+
+	if gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository"); !ok || gvr.Version != "v1beta2" {
+		t.Fatalf("before upgrade: %v %v", gvr, ok)
+	}
+	fakeDisc.Resources = served("v1")
+	time.Sleep(5 * time.Millisecond)
+	if gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository"); !ok || gvr.Version != "v1" {
+		t.Fatalf("after the TTL expired, want v1, got %v %v", gvr, ok)
 	}
 }

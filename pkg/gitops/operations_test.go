@@ -887,7 +887,7 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 			"apiVersion": "helm.toolkit.fluxcd.io/v2",
 			"kind":       "HelmRelease",
 			"metadata":   map[string]any{"namespace": "team", "name": "demo"},
-			"spec":       spec,
+			"spec":       runtime.DeepCopyJSON(spec),
 		}
 		if status != nil {
 			obj["status"] = status
@@ -979,6 +979,35 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 			}
 		})
 	}
+
+	for _, tc := range []struct {
+		name, resource string
+		err            error
+	}{
+		{"an unreadable generated chart", "helmcharts", apierrors.NewForbidden(schema.GroupResource{Group: "source.toolkit.fluxcd.io", Resource: "helmcharts"}, "team-demo", errors.New("denied"))},
+		{"an unreadable repository behind the chart", "helmrepositories", apierrors.NewForbidden(schema.GroupResource{Group: "source.toolkit.fluxcd.io", Resource: "helmrepositories"}, "repo", errors.New("denied"))},
+		{"a source read that times out", "helmrepositories", apierrors.NewTimeoutError("slow", 1)},
+	} {
+		t.Run(tc.name+" fails before any patch", func(t *testing.T) {
+			client := fake.NewSimpleDynamicClient(scheme, suspended(source("HelmRepository", "flux-system", "repo")), chart("flux-system", "team-demo", repoRef), release(inline, nil))
+			client.PrependReactor("get", tc.resource, func(clienttesting.Action) (bool, runtime.Object, error) { return true, nil, tc.err })
+			_, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo", nil)
+			if err == nil || errors.Is(err, ErrResourceSuspended) || apierrors.ReasonForError(err) != apierrors.ReasonForError(tc.err) {
+				t.Fatalf("want the read error %v, got %v", tc.err, err)
+			}
+			if got := patchSequence(client); len(got) != 0 {
+				t.Fatalf("patches = %v", got)
+			}
+		})
+	}
+
+	t.Run("callers without a resolver keep the static versions", func(t *testing.T) {
+		client := fake.NewSimpleDynamicClient(scheme, fluxGitRepository("flux-system", "source"),
+			fluxKustomization("flux-system", "demo", map[string]any{"kind": "GitRepository", "name": "source"}))
+		if _, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo"); err != nil {
+			t.Fatalf("SyncFluxWithSource: %v", err)
+		}
+	})
 
 	t.Run("sources are patched at the version the cluster serves", func(t *testing.T) {
 		older := source("OCIRepository", "team", "chart")

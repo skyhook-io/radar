@@ -288,9 +288,8 @@ func gitOpsOwnerGVR(ref *topology.ResourceRef) (schema.GroupVersionResource, boo
 	}
 	if ref.Group == "kustomize.toolkit.fluxcd.io" || ref.Group == "helm.toolkit.fluxcd.io" {
 		entry, err := gitops.ResolveFluxKind(ref.Kind)
-		entry = entry.Served(k8s.ServedGVR)
 		if err == nil && entry.GVR.Group == ref.Group {
-			return entry.GVR, true
+			return entry.Served(k8s.ServedGVR).GVR, true
 		}
 	}
 	return schema.GroupVersionResource{}, false

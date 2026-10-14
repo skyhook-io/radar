@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"fmt"
+	"log"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -158,9 +159,17 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 }
 
 // ServedGVR resolves a kind in a group to the most stable version the connected
-// cluster serves. It satisfies gitops.FluxGVRResolver.
+// cluster serves, refreshing expired discovery first so a CRD upgrade that
+// retires a version is picked up. It satisfies gitops.FluxGVRResolver.
 func ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
-	return GetResourceDiscovery().GetGVRWithGroup(kind, group)
+	d := GetResourceDiscovery()
+	if d == nil || d.ResourceDiscovery == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	if err := d.RefreshIfStale(); err != nil {
+		log.Printf("[discovery] Failed to refresh before resolving %s.%s: %v", kind, group, err)
+	}
+	return d.GetGVRWithGroup(kind, group)
 }
 
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.
