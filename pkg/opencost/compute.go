@@ -372,7 +372,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	}
 
 	cpuResult, err := client.Query(ctx,
-		`sum by (namespace) (label_replace(avg_over_time(container_cpu_allocation{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
+		`sum by (namespace) (label_replace((sum_over_time(container_cpu_allocation{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
 	if err != nil {
 		log.Printf("[opencost] CPU allocation query failed, trying opencost_container_cpu_cost_total: %v", err)
 		cpuResult, err = client.Query(ctx,
@@ -384,7 +384,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	}
 
 	memResult, err := client.Query(ctx,
-		`sum by (namespace) (label_replace(avg_over_time(container_memory_allocation_bytes{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
+		`sum by (namespace) (label_replace((sum_over_time(container_memory_allocation_bytes{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
 	if err != nil {
 		log.Printf("[opencost] memory allocation query failed, trying opencost_container_memory_cost_total: %v", err)
 		memResult, err = client.Query(ctx,
