@@ -576,6 +576,19 @@ For permitted Secret reads, `GET /api/secrets/certificate-expiry` returns REST
 an empty map. Namespace-limited inventories return observed certificates within
 the requested scope.
 
+Admission webhook configurations list declared in-cluster Service backends in
+`dependencies`, even when a readable target is absent. A core Service lists
+readable `MutatingWebhookConfiguration` and `ValidatingWebhookConfiguration`
+consumers from `admissionregistration.k8s.io` in `dependents`. URL targets and
+CRD conversion webhooks are excluded. These references do not establish
+reachability, TLS validity or webhook health.
+
+Incomplete admission webhook inventories mark `dependents` in `omitted` with
+`cache_cold` (loading or not yet observed), `rbac_denied` (access denied) or
+`unavailable` (failed or unsupported reads). Available matches remain listed;
+an empty result with an omission does not establish that no webhook uses the
+Service.
+
 Resource context distinguishes observed dependency references (`dependencies` and
 `dependents`) from autoscalers (`scaledBy`). A Certificate depends on its issuer;
 it does not scale it. These references carry API group and namespace identity,

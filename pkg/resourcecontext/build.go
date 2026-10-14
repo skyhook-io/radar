@@ -411,6 +411,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		}
 	}
 
+	addWebhookContext(ctx, obj, opts, rc, omitted)
 	rc.Omitted = omitted.collect()
 	return rc
 }

@@ -428,3 +428,11 @@ func readTypedTopologyInventory[T any](a *topologyResourceProvider, resource str
 	}
 	return items, err
 }
+
+func (a *topologyDynamicProvider) ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
+	return a.dynCache.ListWatchedReadOnly(gvr)
+}
+
+func (a *topologyDynamicProvider) Observation(gvr schema.GroupVersionResource) k8score.DynamicResourceObservation {
+	return a.dynCache.Observation(gvr)
+}

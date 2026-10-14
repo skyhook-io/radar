@@ -1,10 +1,12 @@
+import type { ResourceRef } from '../../../types'
 import { Shield } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, AlertBanner, LabelSelectorDisplay } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, AlertBanner, LabelSelectorDisplay, ResourceLink } from '../../ui/drawer-components'
 
 interface WebhookConfigRendererProps {
   data: any
   isMutating?: boolean
+  onNavigate?: (ref: ResourceRef) => void
 }
 
 function getOperationColor(op: string): string {
@@ -21,7 +23,7 @@ function getSideEffectsColor(se: string): string {
   return 'status-amber'
 }
 
-export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendererProps) {
+export function WebhookConfigRenderer({ data, isMutating, onNavigate }: WebhookConfigRendererProps) {
   const webhooks = data.webhooks || []
   const hasFailPolicy = webhooks.some((w: any) => w.failurePolicy === 'Fail')
   const allIgnore = webhooks.length > 0 && webhooks.every((w: any) => w.failurePolicy === 'Ignore')
@@ -71,7 +73,11 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
             return (
               <div key={i} className="card-inner-lg">
                 <div className="text-sm font-medium text-theme-text-primary">{wh.name}</div>
-                <div className="text-xs text-theme-text-secondary mt-0.5">{target}</div>
+                <div className="text-xs text-theme-text-secondary mt-0.5">
+                  {svc?.namespace && svc?.name ? (
+                    <><span>Service: </span><ResourceLink name={svc.name} kind="services" namespace={svc.namespace} label={`${svc.namespace}/${svc.name}`} onNavigate={onNavigate} /><span>{svc.port ? `:${svc.port}` : ''}{svc.path || ''}</span></>
+                  ) : target}
+                </div>
 
                 {/* Policy badges */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
