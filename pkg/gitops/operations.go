@@ -125,8 +125,8 @@ var fluxKinds = map[string]FluxKindEntry{
 }
 
 // FluxGVRResolver returns the version of a Flux kind the cluster serves. Flux
-// promotes its APIs over releases (OCIRepository and Bucket reached v1 in Flux
-// 2.5 and 2.6), so the static table names only the newest version.
+// promotes its APIs over releases (Bucket reached v1 in Flux 2.4, OCIRepository in
+// 2.6), so the static table names only the newest version.
 type FluxGVRResolver func(group, kind string) (schema.GroupVersionResource, bool)
 
 // Served returns the entry with the version the cluster serves; a nil resolver
