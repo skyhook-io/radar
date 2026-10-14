@@ -104,7 +104,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 
 	switch strings.ToLower(input.Action) {
 	case "restart":
-		warnings := schedulingBlockerWarnings(kind, input.Namespace, input.Name)
+		warnings := schedulingBlockerWarnings(ctx, kind, input.Namespace, input.Name)
 		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("restart failed: %w", err)
 		}
@@ -255,7 +255,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	// matches a bare debug pod or, during a Rollout workloadRef migration,
 	// the referenced Deployment's pods, and their logs would then read as
 	// this workload's.
-	pods, err := k8s.WorkloadPods(cache, kind, input.Namespace, input.Name)
+	pods, err := k8s.WorkloadPods(ctx, cache, kind, input.Namespace, input.Name)
 	if err != nil {
 		return nil, nil, workloadSelectorMCPError(ctx, err, kind, input.Namespace, input.Name)
 	}
@@ -360,6 +360,9 @@ func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, n
 	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 		return notFoundError(ctx, err, kind, namespace, name)
 	}
+	if errors.Is(err, k8s.ErrUnknownDynamicKind) {
+		return fmt.Errorf("%s (argoproj.io) is not installed or not yet discovered in this cluster: %w", k8s.CanonicalWorkloadKind(kind), err)
+	}
 	if errors.Is(err, k8s.ErrWorkloadSelectorUnavailable) || errors.Is(err, rollouts.ErrWorkloadRefUnsupported) {
 		return fmt.Errorf("invalid %s %s/%s: %w", kind, namespace, name, err)
 	}
@@ -455,22 +458,27 @@ func addMCPWorkloadLogEmptyMetadata(response map[string]any, metadata mcpWorkloa
 	}
 }
 
+const schedulingBlockerReadBudget = 250 * time.Millisecond
+
 // schedulingBlockerWarnings detects when a restart won't accomplish what the
 // agent likely wants: if the workload currently has Pending pods blocked on
 // scheduling or post-bind (CNI/volume) issues, a rolling restart just creates
 // more pods that hit the same wall. The agent should fix the underlying
-// constraint instead (taints/affinity/capacity/CNI/storage). Best-effort —
-// never blocks the restart.
+// constraint instead (taints/affinity/capacity/CNI/storage). Best-effort:
+// membership gets schedulingBlockerReadBudget, so a Rollout inventory that is
+// not watched yet delays the restart by at most that and skips the hint.
 //
 // Admission failures (quota/PSA/webhook) are intentionally out of scope: they
 // block pod creation entirely, so there are no Pending pods to key on, and the
 // FailedCreate event names the controller rather than a Pod.
-func schedulingBlockerWarnings(kind, namespace, name string) []string {
+func schedulingBlockerWarnings(ctx context.Context, kind, namespace, name string) []string {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
 	}
-	pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+	ctx, cancel := context.WithTimeout(ctx, schedulingBlockerReadBudget)
+	defer cancel()
+	pods, err := k8s.WorkloadPods(ctx, cache, kind, namespace, name)
 	if err != nil || len(pods) == 0 {
 		return nil
 	}

@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Sentinel errors distinguish the cache-loading failure modes so handlers can
@@ -290,15 +291,15 @@ type rightsizingWorkload struct {
 // so a cache that never syncs cannot hold the request open.
 const warmingRetryBudget = 3 * time.Second
 
-// workloadPodsOnceWarm reads the workload's pods, waiting out a cache that is
-// still loading. Warming and denial arrive at this call as the same empty pod
+// workloadPodsOnceWarm reads the pods of the workload incarnation the caller
+// already observed (uid), waiting out a cache that is still loading. Warming and denial arrive at this call as the same empty pod
 // list, but they are not the same thing: warming clears on its own within
 // seconds, so surfacing it would put a caveat on the recommendation that the
 // next refresh silently removes. A denial never clears, and is returned.
-func workloadPodsOnceWarm(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
+func workloadPodsOnceWarm(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string, uid types.UID) ([]*corev1.Pod, error) {
 	deadline := time.Now().Add(warmingRetryBudget)
 	for {
-		pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+		pods, err := k8s.WorkloadPodsForUID(cache, kind, namespace, name, "apps", uid)
 		if !errors.Is(err, k8s.ErrWorkloadCacheWarming) || time.Now().After(deadline) {
 			return pods, err
 		}
@@ -318,6 +319,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 
 	var podTemplate *corev1.PodSpec
 	var managedBy *WorkloadManager
+	var uid types.UID
 	scaledToZero := false
 	replicas := 0
 	switch strings.ToLower(kind) {
@@ -330,6 +332,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: deployment %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &d.Spec.Template.Spec
+		uid = d.UID
 		managedBy = detectWorkloadManager(d)
 		replicas = specReplicas(d.Spec.Replicas)
 		scaledToZero = replicas == 0
@@ -342,6 +345,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: statefulset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ss.Spec.Template.Spec
+		uid = ss.UID
 		managedBy = detectWorkloadManager(ss)
 		replicas = specReplicas(ss.Spec.Replicas)
 		scaledToZero = replicas == 0
@@ -354,6 +358,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: daemonset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ds.Spec.Template.Spec
+		uid = ds.UID
 		managedBy = detectWorkloadManager(ds)
 		replicas = int(ds.Status.DesiredNumberScheduled)
 		// Scans skip a zero the controller has observed, but a caller naming
@@ -376,7 +381,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		scaledToZero:  scaledToZero,
 		managedBy:     managedBy,
 	}
-	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name)
+	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name, uid)
 	if ctx.Err() != nil {
 		// The caller went away mid-wait. Reporting that as an unreadable
 		// inventory would answer a question nobody is listening for, and would

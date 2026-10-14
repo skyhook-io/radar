@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -17,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -105,7 +108,7 @@ func TestWorkloadPodsFollowsControllerOwnership(t *testing.T) {
 		{"daemonset", "absent", []string{}},
 	} {
 		t.Run(tc.kind+"/"+tc.name, func(t *testing.T) {
-			got, err := WorkloadPodNames(cache, tc.kind, "shop", tc.name)
+			got, err := WorkloadPodNames(context.Background(), cache, tc.kind, "shop", tc.name)
 			if err != nil {
 				t.Fatalf("WorkloadPodNames: %v", err)
 			}
@@ -124,16 +127,16 @@ func TestWorkloadPodsReportsDeniedListersInsteadOfEmpty(t *testing.T) {
 		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "nightly", UID: "nightly-uid"}},
 		ownedPod("shop", "api-7f6-a", &apiOwner, nil),
 	)
-	if _, err := WorkloadPods(noReplicaSets, "deployment", "shop", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), noReplicaSets, "deployment", "shop", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("deployment without replicasets lister: err = %v, want ErrWorkloadAccessDenied", err)
 	}
-	if _, err := WorkloadPods(noReplicaSets, "cronjob", "shop", "nightly"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), noReplicaSets, "cronjob", "shop", "nightly"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("cronjob without jobs lister: err = %v, want ErrWorkloadAccessDenied", err)
 	}
-	if _, err := WorkloadPods(&ResourceCache{}, "statefulset", "shop", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), &ResourceCache{}, "statefulset", "shop", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("no pods lister: err = %v, want ErrWorkloadAccessDenied", err)
 	}
-	if _, err := WorkloadPods(noReplicaSets, "service", "shop", "api"); err == nil {
+	if _, err := WorkloadPods(context.Background(), noReplicaSets, "service", "shop", "api"); err == nil {
 		t.Fatal("unsupported kind: want error")
 	}
 }
@@ -180,7 +183,7 @@ func TestWorkloadPodsRefuseNamespacesTheInformersDoNotCover(t *testing.T) {
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "api", UID: "api-uid"}},
 		ownedPod("team-b", "api-7f6-a", &apiOwner, nil), rs,
 	)
-	if _, err := WorkloadPods(hopElsewhere, "deployment", "team-b", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), hopElsewhere, "deployment", "team-b", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("replicasets scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
 	}
 
@@ -191,8 +194,19 @@ func TestWorkloadPodsRefuseNamespacesTheInformersDoNotCover(t *testing.T) {
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "db", UID: "db-uid"}},
 		ownedPod("team-b", "db-0", nil, nil),
 	)
-	if _, err := WorkloadPods(podsElsewhere, "statefulset", "team-b", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), podsElsewhere, "statefulset", "team-b", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("pods scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
+	}
+
+	// The root is read to learn its UID; a root informer scoped elsewhere
+	// would miss it and read as a deleted workload with no pods.
+	rootElsewhere := newScopedOwnershipCache(t,
+		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-b"}, k8score.StatefulSets: {Enabled: true, Namespace: "team-a"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "db", UID: "db-uid"}},
+		ownedPod("team-b", "db-0", nil, nil),
+	)
+	if _, err := WorkloadPods(context.Background(), rootElsewhere, "statefulset", "team-b", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("root informer scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
 	}
 
 	// The namespace it does cover still answers.
@@ -201,7 +215,7 @@ func TestWorkloadPodsRefuseNamespacesTheInformersDoNotCover(t *testing.T) {
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "db", UID: "db-uid"}},
 		ownedPod("team-a", "db-0", &metav1.OwnerReference{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "db", UID: "db-uid", Controller: func() *bool { b := true; return &b }()}, nil),
 	)
-	pods, err := WorkloadPodNames(covered, "statefulset", "team-a", "db")
+	pods, err := WorkloadPodNames(context.Background(), covered, "statefulset", "team-a", "db")
 	if err != nil {
 		t.Fatalf("covered namespace: %v", err)
 	}
@@ -240,14 +254,14 @@ func TestWorkloadPodsSeparatesARolloutFromItsReferencedDeployment(t *testing.T) 
 	if !GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
 		t.Fatal("Rollout cache did not sync")
 	}
-	rollout, err := WorkloadPodNames(cache, "rollout", "shop", "api")
+	rollout, err := WorkloadPodNames(context.Background(), cache, "rollout", "shop", "api")
 	if err != nil {
 		t.Fatalf("rollout: %v", err)
 	}
 	if len(rollout) != 1 || rollout[0] != "api-7f6-a" {
 		t.Fatalf("rollout pods = %v, want only the Rollout's", rollout)
 	}
-	deployment, err := WorkloadPodNames(cache, "deployment", "shop", "api")
+	deployment, err := WorkloadPodNames(context.Background(), cache, "deployment", "shop", "api")
 	if err != nil {
 		t.Fatalf("deployment: %v", err)
 	}
@@ -269,7 +283,7 @@ func TestWorkloadPodsDoNotCrossNamespaces(t *testing.T) {
 		ownedPod("shop", "api-7f6-a", &owner, nil),
 		ownedPod("other", "api-7f6-b", &owner, nil),
 	)
-	got, err := WorkloadPodNames(cache, "deployment", "shop", "api")
+	got, err := WorkloadPodNames(context.Background(), cache, "deployment", "shop", "api")
 	if err != nil {
 		t.Fatalf("WorkloadPodNames: %v", err)
 	}
@@ -385,7 +399,7 @@ func TestWorkloadPodsForUIDVerifiesEveryControllerHop(t *testing.T) {
 			if len(got) != 1 || got[0].Name != "active-pod" {
 				t.Fatalf("current chain pods = %v", got)
 			}
-			current, err := WorkloadPods(cache, tc.kind, "shop", "fleet")
+			current, err := WorkloadPods(context.Background(), cache, tc.kind, "shop", "fleet")
 			if err != nil || !reflect.DeepEqual(current, got) {
 				t.Fatalf("current reader disagrees with observed root: pods=%v err=%v", current, err)
 			}
@@ -435,7 +449,7 @@ func TestWorkloadPodsForUIDUsesOnlyReadyCache(t *testing.T) {
 		if err != nil || len(observed) != 1 {
 			t.Fatalf("observed pods=%v err=%v", observed, err)
 		}
-		got, err := WorkloadPods(cache, "deployment", "shop", "fleet")
+		got, err := WorkloadPods(context.Background(), cache, "deployment", "shop", "fleet")
 		if err != nil || len(got) != 1 {
 			t.Fatalf("pods=%v err=%v", got, err)
 		}
@@ -458,13 +472,13 @@ func TestWorkloadPodsRequiresAnObservedCurrentRoot(t *testing.T) {
 	pod := ownedPod("shop", "db-0", &owner, nil)
 	t.Run("denied", func(t *testing.T) {
 		cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true}, pod)
-		if _, err := WorkloadPods(cache, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		if _, err := WorkloadPods(context.Background(), cache, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
 			t.Fatalf("unobserved root: %v", err)
 		}
 	})
 	t.Run("missing", func(t *testing.T) {
 		cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true, k8score.StatefulSets: true}, pod)
-		if pods, err := WorkloadPods(cache, "StatefulSet", "shop", "db"); err != nil || len(pods) != 0 {
+		if pods, err := WorkloadPods(context.Background(), cache, "StatefulSet", "shop", "db"); err != nil || len(pods) != 0 {
 			t.Fatalf("deleted root: pods=%v err=%v", pods, err)
 		}
 	})
@@ -479,7 +493,7 @@ func TestWorkloadPodsRequiresAnObservedCurrentRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(core.Stop)
-		if _, err := WorkloadPods(&ResourceCache{ResourceCache: core}, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadCacheWarming) {
+		if _, err := WorkloadPods(context.Background(), &ResourceCache{ResourceCache: core}, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadCacheWarming) {
 			t.Fatalf("warming root: %v", err)
 		}
 	})
@@ -511,16 +525,16 @@ func TestWorkloadPodsStartsDynamicRootInventory(t *testing.T) {
 			if GetDynamicResourceCache().HasCoveringInformer(gvr, "shop") {
 				t.Fatal("root informer already started")
 			}
-			pods, err := WorkloadPods(cache, kind, "shop", "api")
+			pods, err := WorkloadPods(context.Background(), cache, kind, "shop", "api")
 			if err != nil || len(pods) != 1 || pods[0].Name != "current" {
 				t.Fatalf("cold dynamic read: pods=%v err=%v", pods, err)
 			}
-			if pods, err := WorkloadPods(cache, kind, "shop", "deleted"); err != nil || len(pods) != 0 {
+			if pods, err := WorkloadPods(context.Background(), cache, kind, "shop", "deleted"); err != nil || len(pods) != 0 {
 				t.Fatalf("missing dynamic root: pods=%v err=%v", pods, err)
 			}
 			before := len(dyn.Actions())
 			for range 10 {
-				if _, err := WorkloadPods(cache, kind, "shop", "api"); err != nil {
+				if _, err := WorkloadPods(context.Background(), cache, kind, "shop", "api"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -538,8 +552,74 @@ func TestWorkloadPodsReportsDynamicInitializationAsWarming(t *testing.T) {
 	t.Cleanup(ResetTestDynamicState)
 	cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true})
 	for _, kind := range []string{"Rollout", "Workflow"} {
-		if _, err := WorkloadPods(cache, kind, "shop", "api"); !errors.Is(err, ErrWorkloadCacheWarming) {
+		if _, err := WorkloadPods(context.Background(), cache, kind, "shop", "api"); !errors.Is(err, ErrWorkloadCacheWarming) {
 			t.Fatalf("%s before dynamic initialization: %v", kind, err)
 		}
+	}
+}
+
+// newBlockedRolloutInventory starts a dynamic cache whose Rollout list calls
+// run the given reactor, so tests can stall or deny the root's first read.
+func newBlockedRolloutInventory(t *testing.T, reactor k8stesting.ReactionFunc) (*ResourceCache, schema.GroupVersionResource) {
+	t.Helper()
+	ResetTestDynamicState()
+	t.Cleanup(ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "shop", "name": "api", "uid": "current-root"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, root)
+	dyn.PrependReactor("list", "rollouts", reactor)
+	if err := InitTestDynamicResourceCache(dyn, []APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Rollout", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	return newOwnershipCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}), gvr
+}
+
+func TestWorkloadPodsBoundsAColdDynamicRootRead(t *testing.T) {
+	previous := dynamicRootReadBudget
+	dynamicRootReadBudget = 100 * time.Millisecond
+	t.Cleanup(func() { dynamicRootReadBudget = previous })
+
+	release := make(chan struct{})
+	cache, gvr := newBlockedRolloutInventory(t, func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return false, nil, nil
+	})
+
+	started := time.Now()
+	if _, err := WorkloadPods(context.Background(), cache, "rollout", "shop", "api"); !errors.Is(err, ErrWorkloadCacheWarming) {
+		t.Fatalf("stalled acquisition: err = %v, want ErrWorkloadCacheWarming", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("stalled acquisition held the read for %v", elapsed)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	dynamicRootReadBudget = time.Minute
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if _, err := WorkloadPods(ctx, cache, "rollout", "shop", "api"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read: err = %v, want context.Canceled", err)
+	}
+
+	// The acquisition outlives the reads that stopped waiting for it, so the
+	// inventory becomes ready without another caller having to wait it out.
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for !GetDynamicResourceCache().HasCoveringInformer(gvr, "shop") || !GetDynamicResourceCache().IsNamespaceSynced(gvr, "shop") {
+		if time.Now().After(deadline) {
+			t.Fatal("abandoned acquisition never started the Rollout informer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pods, err := WorkloadPods(context.Background(), cache, "rollout", "shop", "api"); err != nil || len(pods) != 0 {
+		t.Fatalf("warm read after acquisition: pods=%v err=%v", pods, err)
+	}
+}
+
+func TestWorkloadPodsReportsDeniedDynamicRoot(t *testing.T) {
+	cache, _ := newBlockedRolloutInventory(t, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "rollouts"}, "", errors.New("denied"))
+	})
+	if _, err := WorkloadPods(context.Background(), cache, "rollout", "shop", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("denied Rollout inventory: err = %v, want ErrWorkloadAccessDenied", err)
 	}
 }

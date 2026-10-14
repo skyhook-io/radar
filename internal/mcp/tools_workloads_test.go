@@ -77,6 +77,11 @@ func TestWorkloadSelectorMCPError(t *testing.T) {
 			err:  fmt.Errorf("rollout selector: %w", k8s.ErrWorkloadSelectorUnavailable),
 			want: "invalid job ci/nightly:",
 		},
+		{
+			name: "absent CRD says it is not installed",
+			err:  fmt.Errorf("%w: read Rollout", k8s.ErrUnknownDynamicKind),
+			want: "Job (argoproj.io) is not installed or not yet discovered in this cluster",
+		},
 	}
 
 	for _, tt := range tests {

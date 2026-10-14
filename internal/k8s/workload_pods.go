@@ -1,15 +1,18 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,7 +35,12 @@ import (
 // returns ErrWorkloadCacheWarming, so an empty answer is never mistaken for
 // "no pods". Pods are sorted by name. Callers already holding the root use
 // WorkloadPodsForUID to keep membership tied to that observation.
-func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
+//
+// Typed roots and every hop read local listers. A Rollout or Workflow root
+// reads the dynamic cache, whose first read of a namespace may probe access
+// and start a watch; that wait is bounded by ctx and dynamicRootReadBudget,
+// past which the answer is ErrWorkloadCacheWarming.
+func WorkloadPods(ctx context.Context, cache *ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
 	canonical := CanonicalWorkloadKind(kind)
 	if canonical == "" {
 		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
@@ -62,7 +70,13 @@ func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1
 		if !found {
 			return nil, fmt.Errorf("%w: read %s", ErrUnknownDynamicKind, kind)
 		}
-		obj, err = dynamicCache.Get(gvr, namespace, name)
+		obj, err = readDynamicRoot(ctx, dynamicCache, gvr, namespace, name)
+		if errors.Is(err, ErrWorkloadCacheWarming) {
+			return nil, err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			return nil, fmt.Errorf("%w: read %s in %s: %v", ErrWorkloadAccessDenied, kind, namespace, err)
 		}
@@ -87,6 +101,45 @@ func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1
 		return nil, err
 	}
 	return WorkloadPodsForUID(cache, kind, namespace, name, gvr.Group, objectMeta.GetUID())
+}
+
+// dynamicRootReadBudget bounds how long a membership read waits for a Rollout
+// or Workflow inventory that is not yet watched. The acquisition keeps running
+// after the wait ends, so a later read finds the inventory ready.
+var dynamicRootReadBudget = 3 * time.Second
+
+// readDynamicRoot serves a watched, synced root from the store without
+// blocking. Otherwise it runs the ordinary acquiring read, which may wait on
+// CRD discovery, access probes and an initial sync without a context, and
+// stops waiting for it at ctx or the budget.
+func readDynamicRoot(ctx context.Context, cache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	if cache.HasCoveringInformer(gvr, namespace) && cache.IsNamespaceSynced(gvr, namespace) {
+		return cache.GetWatched(gvr, namespace, name)
+	}
+	type result struct {
+		obj *unstructured.Unstructured
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- result{err: fmt.Errorf("read %s %s/%s: %v", gvr.Resource, namespace, name, r)}
+			}
+		}()
+		obj, err := cache.Get(gvr, namespace, name)
+		done <- result{obj: obj, err: err}
+	}()
+	budget := time.NewTimer(dynamicRootReadBudget)
+	defer budget.Stop()
+	select {
+	case r := <-done:
+		return r.obj, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-budget.C:
+		return nil, fmt.Errorf("%w: %s inventory in %s is still starting", ErrWorkloadCacheWarming, gvr.Resource, namespace)
+	}
 }
 
 // WorkloadPodsForUID follows the current root and every intermediate controller
@@ -134,8 +187,8 @@ func workloadPods(cache *ResourceCache, kind, namespace, name string, identity w
 }
 
 // WorkloadPodNames is WorkloadPods reduced to sorted names.
-func WorkloadPodNames(cache *ResourceCache, kind, namespace, name string) ([]string, error) {
-	pods, err := WorkloadPods(cache, kind, namespace, name)
+func WorkloadPodNames(ctx context.Context, cache *ResourceCache, kind, namespace, name string) ([]string, error) {
+	pods, err := WorkloadPods(ctx, cache, kind, namespace, name)
 	if err != nil {
 		return nil, err
 	}

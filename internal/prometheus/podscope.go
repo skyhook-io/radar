@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,11 +44,12 @@ func (s PodScope) Partial() bool {
 var ErrPodScopeUnsupportedKind = errors.New("pod scope: unsupported kind")
 
 // ResolvePodScope establishes membership for kind/namespace/name from the
-// cluster cache by controller ownership. It reads local listers only; a
-// workload the cache cannot answer for (denied or warming listers, a
-// namespace an informer does not cover) is an error, never an empty scope,
-// so "no pods" is only ever said when it is true.
-func ResolvePodScope(cache *k8s.ResourceCache, kind, namespace, name string, maxPods int) (PodScope, error) {
+// cluster cache by controller ownership. It reads local listers, except that
+// a Rollout or Workflow root may first wait, bounded by ctx, for its dynamic
+// inventory; a workload the cache cannot answer for (denied or warming
+// listers, a namespace an informer does not cover) is an error, never an
+// empty scope, so "no pods" is only ever said when it is true.
+func ResolvePodScope(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string, maxPods int) (PodScope, error) {
 	scope := PodScope{Kind: kind, Namespace: namespace, Name: name}
 	if k := strings.ToLower(strings.TrimSpace(kind)); k == "pod" || k == "pods" {
 		// A Pod is its own scope: exactly one name, no ownership to resolve.
@@ -60,7 +62,7 @@ func ResolvePodScope(cache *k8s.ResourceCache, kind, namespace, name string, max
 		return PodScope{}, fmt.Errorf("%w: %s", ErrPodScopeUnsupportedKind, kind)
 	}
 
-	current, err := k8s.WorkloadPods(cache, kind, namespace, name)
+	current, err := k8s.WorkloadPods(ctx, cache, kind, namespace, name)
 	if err != nil {
 		return PodScope{}, err
 	}

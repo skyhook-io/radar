@@ -465,9 +465,11 @@ func TestResourceMetricsSeparatesDenialFromUnreadiness(t *testing.T) {
 	// for — the shape probe-based RBAC gating produces on a denied
 	// cluster-wide list.
 	if err := k8s.InitScopedTestResourceCache(
-		fake.NewClientset(),
+		fake.NewClientset(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web", UID: "web-uid"}}),
 		map[string]k8score.ResourceScope{
-			k8score.Pods: {Enabled: true, Namespace: "beta"},
+			k8score.Pods:        {Enabled: true, Namespace: "beta"},
+			k8score.Deployments: {Enabled: true, Namespace: "alpha"},
+			k8score.ReplicaSets: {Enabled: true, Namespace: "alpha"},
 		},
 	); err != nil {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
@@ -475,8 +477,30 @@ func TestResourceMetricsSeparatesDenialFromUnreadiness(t *testing.T) {
 	t.Cleanup(k8s.ResetTestState)
 
 	rec := getMetrics(t, metricsRouter(), "/prometheus/resources/Deployment/alpha/web?category=cpu")
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 for a namespace the cache cannot list; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "pods") {
+		t.Fatalf("status = %d, want 403 naming the pod scope for a namespace the cache cannot list; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// The root is read for its UID, so a root kind the cache does not watch is
+// a membership failure of its own, not an empty workload.
+func TestResourceMetricsRefusesAnUnwatchedRootKind(t *testing.T) {
+	SetAuthGate(nil)
+	setupAuthFakeProm(t)
+	if err := k8s.InitScopedTestResourceCache(
+		fake.NewClientset(),
+		map[string]k8score.ResourceScope{
+			k8score.Pods:        {Enabled: true},
+			k8score.ReplicaSets: {Enabled: true},
+		},
+	); err != nil {
+		t.Fatalf("InitScopedTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	rec := getMetrics(t, metricsRouter(), "/prometheus/resources/Deployment/alpha/web?category=cpu")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "deployments") {
+		t.Fatalf("status = %d, want 403 naming the unwatched root kind; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
