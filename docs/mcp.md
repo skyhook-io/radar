@@ -629,6 +629,13 @@ including Pending ones (using Kubernetes' class-annotation precedence). These ar
 declarations, not proof that provisioning, binding or mounting succeeded, and
 they appear in resource context only, not as topology or neighborhood edges.
 
+ServiceAccount `serviceAccountSummary.secretRefs` and
+`serviceAccountSummary.imagePullSecrets` list declared Secret associations,
+filtered by the caller's permissions and capped at 20 references per field.
+A Secret's `referencedBy` includes declaring ServiceAccounts with `secrets[]`
+and `imagePullSecrets[]` paths. These declarations do not establish Pod use.
+Projected bound tokens are not Secret references.
+
 ### Write Tools
 
 | Tool | Description | Parameters |

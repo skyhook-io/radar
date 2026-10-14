@@ -367,6 +367,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	rc.WorkloadSummary = buildWorkloadSummary(obj)
 	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.ServiceAccountSummary = buildServiceAccountSummary(ctx, obj, opts.AccessChecker, omitted)
 	rc.NodeSummary = buildNodeSummary(obj)
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
@@ -701,6 +702,25 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 						appendRef(ReferenceUse{Kind: "Ingress", Group: "networking.k8s.io", Namespace: ing.Namespace, Name: ing.Name, Paths: []string{"spec.tls[].secretName"}})
 					}
 				}
+			}
+		}
+		if accounts, ok := provider.(topology.ServiceAccountProvider); ok {
+			sas, err := accounts.ServiceAccounts()
+			if err != nil {
+				omitted.add("referencedBy", inventoryOmissionReason(err))
+				sas = nil
+			}
+			for _, sa := range sas {
+				if sa == nil || sa.Namespace != target.namespace {
+					continue
+				}
+				var paths []string
+				for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+					if ref.Name == target.name {
+						paths = append(paths, ref.Path)
+					}
+				}
+				appendRef(ReferenceUse{Kind: "ServiceAccount", Namespace: sa.Namespace, Name: sa.Name, Paths: paths})
 			}
 		}
 	}
@@ -1099,6 +1119,30 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 		return nil
 	}
 	return out
+}
+
+func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *ServiceAccountSummary {
+	sa, ok := obj.(*corev1.ServiceAccount)
+	if !ok {
+		return nil
+	}
+	var secrets, pulls []ContextRef
+	for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+		target := ContextRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+		if ref.ImagePull {
+			pulls = append(pulls, target)
+		} else {
+			secrets = append(secrets, target)
+		}
+	}
+	summary := &ServiceAccountSummary{
+		SecretRefs:       filterBoundedRefs(ctx, ac, secrets, "serviceAccountSummary.secretRefs", omitted),
+		ImagePullSecrets: filterBoundedRefs(ctx, ac, pulls, "serviceAccountSummary.imagePullSecrets", omitted),
+	}
+	if len(summary.SecretRefs) == 0 && len(summary.ImagePullSecrets) == 0 {
+		return nil
+	}
+	return summary
 }
 
 func buildNodeSummary(obj runtime.Object) *NodeSummary {
