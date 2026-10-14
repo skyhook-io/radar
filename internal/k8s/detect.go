@@ -503,7 +503,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 			reason := health.PodProblemReason(pod, now)
 			message := health.PodProblemMessage(pod)
-			if pf, ok := probeFailures[pod.Namespace+"/"+pod.Name]; ok && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
+			if pf, ok := probeFailures[pod.Namespace+"/"+pod.Name]; ok && probeFailureMatchesPod(pf, pod) && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
 				reason = pf.reason
 				message = pf.message
 			}

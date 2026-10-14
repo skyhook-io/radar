@@ -310,12 +310,17 @@ func probeFailureFor(probes map[string]probeFailure, pod *corev1.Pod, container,
 	if !ok && len(pod.Spec.Containers)+len(pod.Spec.InitContainers) == 1 {
 		pf, ok = probes[prefix+"/"+reason]
 	}
-	// Events outlive a pod; a recreated pod with the same name (a
-	// StatefulSet replica) must not inherit its predecessor's failures.
-	if ok && pf.podUID != "" && pod.UID != "" && pf.podUID != pod.UID {
+	if ok && !probeFailureMatchesPod(pf, pod) {
 		return probeFailure{}, false
 	}
 	return pf, ok
+}
+
+// probeFailureMatchesPod rejects a failure recorded for another incarnation.
+// Events outlive a pod; a recreated pod with the same name (a StatefulSet
+// replica) must not inherit its predecessor's failures.
+func probeFailureMatchesPod(pf probeFailure, pod *corev1.Pod) bool {
+	return pf.podUID == "" || pod.UID == "" || pf.podUID == pod.UID
 }
 
 // restartLoopMayReplace reports whether the loop's crashloop reason may stand

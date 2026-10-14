@@ -1223,6 +1223,26 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 				}},
 			},
 		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "replaced", Namespace: "prod", UID: "replacement-uid", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "replaced.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "replaced", UID: "predecessor-uid"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
 		&corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: "liveness.1", Namespace: "prod"},
 			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "liveness"},
@@ -1264,7 +1284,8 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 		if hasProblem(problems, "Pod", "readiness", "ReadinessProbeFailed") &&
 			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") &&
 			hasProblem(problems, "Pod", "thrash", "CrashLoopBackOff") &&
-			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") {
+			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") &&
+			hasProblem(problems, "Pod", "replaced", "CrashLoopBackOff") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1287,6 +1308,10 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 	}
 	if got, ok := lookupProblem(problems, "Pod", "liveness", "LivenessProbeFailed"); !ok || !strings.Contains(got.Message, "HTTP probe failed") {
 		t.Fatalf("liveness probe problem = %+v, want event message detail", got)
+	}
+	assertProblem(t, problems, "Pod", "replaced", "CrashLoopBackOff", "critical")
+	if hasProblem(problems, "Pod", "replaced", "LivenessProbeFailed") {
+		t.Fatalf("a same-name predecessor's probe failure must not relabel its replacement: %+v", problems)
 	}
 }
 
