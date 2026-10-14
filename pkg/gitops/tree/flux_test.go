@@ -152,3 +152,14 @@ func TestFluxHelmReleaseManaged_SortsForStableOutput(t *testing.T) {
 		t.Errorf("kinds = %v, want [Deployment Service]", names)
 	}
 }
+
+func TestFluxHelmInventoryNormalizesClusterScopedBuiltin(t *testing.T) {
+	hr := helmRelease("flux-system", "chart")
+	hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{
+		map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"},
+	}}}
+	got := parseFluxManagedResources(hr)
+	if len(got) != 1 || got[0].Ref.Namespace != "" || got[0].Ref.Group != "rbac.authorization.k8s.io" || got[0].Ref.Kind != "ClusterRole" || got[0].Ref.Name != "reader" {
+		t.Fatalf("cluster-scoped inventory identity = %+v", got)
+	}
+}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/skyhook-io/radar/internal/k8s"
 	"testing"
 
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -27,7 +28,7 @@ func TestGetCachedTopologyWithIndex(t *testing.T) {
 	}
 
 	topoA := topoWithEdge("deployment/ns/web", "replicaset/ns/web-1")
-	b.updateCachedTopology(topoA, b.topoEpoch.Load())
+	b.updateCachedTopology(topoA, b.topoEpoch.Load(), k8s.GetResourceCache().Generation())
 
 	gotTopo, idxA := b.GetCachedTopologyWithIndex()
 	if gotTopo != topoA {
@@ -49,7 +50,7 @@ func TestGetCachedTopologyWithIndex(t *testing.T) {
 
 	// Replacing the topology invalidates the index; the next call builds a fresh one.
 	topoB := topoWithEdge("statefulset/ns/db", "pod/ns/db-0")
-	b.updateCachedTopology(topoB, b.topoEpoch.Load())
+	b.updateCachedTopology(topoB, b.topoEpoch.Load(), k8s.GetResourceCache().Generation())
 	gotTopoB, idxB := b.GetCachedTopologyWithIndex()
 	if gotTopoB != topoB {
 		t.Fatalf("expected the replaced topology pointer back")
@@ -66,7 +67,7 @@ func TestGetCachedTopologyWithIndex(t *testing.T) {
 	}
 
 	// Clearing the topology (context-switch semantics) returns (nil, nil).
-	b.updateCachedTopology(nil, b.topoEpoch.Load())
+	b.updateCachedTopology(nil, b.topoEpoch.Load(), k8s.GetResourceCache().Generation())
 	if topo, idx := b.GetCachedTopologyWithIndex(); topo != nil || idx != nil {
 		t.Fatalf("expected (nil, nil) after clearing topology, got (%v, %v)", topo, idx)
 	}

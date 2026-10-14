@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -98,11 +99,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	// hosts merge the destination cluster's own tree on top (mergeGitOpsTrees).
 	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && !gitops.IsInClusterDestination(root)) ||
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
-	// HelmRelease has no status.inventory; recover its managed set from live
-	// topology by Helm's recommended labels so the resource tree isn't empty.
+	// Older helm-controller versions omit status.inventory. Only in that case
+	// use Flux's exact origin labels; a recorded empty inventory stays empty.
 	// A remote release's objects aren't in local topology, so a local match is
 	// someone else's.
-	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 && !remote {
+	_, hasInventory, _ := unstructured.NestedFieldNoCopy(root.Object, "status", "inventory")
+	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && !hasInventory && !remote {
 		managed = fluxHelmReleaseManaged(root, b.topoNodes())
 	}
 	status := rootStatus(root, tool)
@@ -136,6 +138,20 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		topoByRef[refKey(ref)] = n
 		topoByRef[refKey(ResourceRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name})] = n
 		topoByID[n.ID] = n
+	}
+	if tool == ToolFluxCD && !remote {
+		scope, _ := b.dynamic.(gitops.ResourceScopeProvider)
+		for i := range managed {
+			ref := &managed[i].Ref
+			ref.Namespace = gitops.FluxInventoryNamespace(ref.Group, ref.Kind, ref.Namespace, scope)
+			clusterRef := *ref
+			clusterRef.Namespace = ""
+			if _, namespaced := topoByRef[refKey(*ref)]; !namespaced {
+				if node, clusterScoped := topoByRef[refKey(clusterRef)]; clusterScoped && refFromTopologyNode(node).Group == ref.Group {
+					ref.Namespace = ""
+				}
+			}
+		}
 	}
 	topoIDByTreeID := map[string]string{}
 	treeIDByTopoID := map[string]string{}
@@ -238,6 +254,14 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		sourceTopoID := topoIDByTreeID[id]
 		if sourceTopoID == "" {
 			continue
+		}
+		if source, ok := topoByID[sourceTopoID]; ok && id != rootNode.ID {
+			apiVersion, _ := source.Data["apiVersion"].(string)
+			if topology.IsGitOpsManagerKind(source.Kind, resourceid.GroupFromAPIVersion(apiVersion)) {
+				// Nested managers remain portals to their own tree. Their
+				// inventory and generated descendants belong to that tree.
+				continue
+			}
 		}
 		for _, e := range adj[sourceTopoID] {
 			targetTopo, ok := topoByID[e.Target]

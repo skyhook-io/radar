@@ -261,3 +261,7 @@ func (a *topologyDynamicProvider) IsCRD(kind string) bool {
 func (a *topologyDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
 	return a.discovery.IsCRDGVR(gvr)
 }
+
+func (a *topologyDynamicProvider) GetResourceWithGroup(kind, group string) (k8score.APIResource, bool) {
+	return a.discovery.GetResourceWithGroup(kind, group)
+}

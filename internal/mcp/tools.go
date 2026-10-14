@@ -1291,7 +1291,7 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 		}),
 	}
 
-	if topo, prov, dyn, ok := mcpTopologyForContext(namespace); ok {
+	if topo, prov, dyn, ok := mcpTopologyForContext(ctx, scopedNamespacesForUser(ctx, nil)); ok {
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn

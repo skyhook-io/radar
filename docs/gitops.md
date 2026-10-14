@@ -252,7 +252,7 @@ Scoping and lifecycle:
 
 The GitOps tab isn't the only place Argo/Flux ownership matters. Surfaces across Radar know about GitOps and route into the right detail page when they should:
 
-- **K8s resource drawer** — every resource that carries Argo's tracking-id annotation or Flux's owner labels gets a `Managed by <app>` chip in the drawer header. Click → owning Application/Kustomization/HelmRelease detail page. The generic `app.kubernetes.io/instance` label is intentionally *not* used as a signal — it's stamped by virtually every Helm chart and would false-positive plain Helm installs
+- **K8s resource drawer** — observed ownership or Argo/Flux origin metadata resolves a `Managed by <app>` chip in the drawer header. Readable Flux inventory takes precedence over origin labels, and generated descendants resolve to their nearest manager. Click → owning Application/Kustomization/HelmRelease detail page. The generic `app.kubernetes.io/instance` label is intentionally *not* used as a signal — it's stamped by virtually every Helm chart and would false-positive plain Helm installs
 - **Topology** — clicking an Argo / Flux CR node opens its GitOps detail page directly, not the generic drawer
 - **Timeline** — lane labels for Argo / Flux CRs route to detail
 - **Helm view** — releases installed by Flux's helm-controller (detected via a HelmRelease CR lookup keyed by `<storageNamespace>/<releaseName>`, since Flux's labels live on the *managed* resources, not the release Secret) carry a `Flux` badge in the list and an amber `Managed by Flux · ns/name` link in the drawer, warning that `helm upgrade` would be reverted at the next reconcile

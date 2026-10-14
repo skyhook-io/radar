@@ -159,11 +159,14 @@ const (
 
 // Node represents a node in the topology graph
 type Node struct {
-	ID     string         `json:"id"`
-	Kind   NodeKind       `json:"kind"`
-	Name   string         `json:"name"`
-	Status HealthStatus   `json:"status"`
-	Data   map[string]any `json:"data"`
+	managedResourceKeys           map[string]bool
+	gitopsManagementAuthoritative bool
+	gitopsRemoteDestination       bool
+	ID                            string         `json:"id"`
+	Kind                          NodeKind       `json:"kind"`
+	Name                          string         `json:"name"`
+	Status                        HealthStatus   `json:"status"`
+	Data                          map[string]any `json:"data"`
 }
 
 // Edge represents a connection between two nodes
@@ -587,4 +590,29 @@ type DynamicProvider interface {
 	GetGVRWithGroup(kindOrName, group string) (schema.GroupVersionResource, bool)
 	GetKindForGVR(gvr schema.GroupVersionResource) string
 	IsCRD(kind string) bool
+}
+
+// ForNamespaces returns an immutable namespace projection. nil preserves the
+// shared snapshot; an empty set retains only cluster-scoped objects.
+func (t *Topology) ForNamespaces(namespaces []string) *Topology {
+	if t == nil || namespaces == nil {
+		return t
+	}
+	out := *t
+	out.Nodes = nil
+	out.Edges = nil
+	kept := make(map[string]bool)
+	for _, node := range t.Nodes {
+		ns := nodeNamespaceFromData(&node)
+		if ns == "" || MatchesNamespace(namespaces, ns) {
+			out.Nodes = append(out.Nodes, node)
+			kept[node.ID] = true
+		}
+	}
+	for _, edge := range t.Edges {
+		if kept[edge.Source] && kept[edge.Target] {
+			out.Edges = append(out.Edges, edge)
+		}
+	}
+	return &out
 }

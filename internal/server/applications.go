@@ -90,19 +90,23 @@ const (
 
 var applicationsCacheMaxEntries = 256
 
+// Graphs retain much more evidence than rows; keep their scope cache smaller.
+const applicationsGraphCacheMaxEntries = 8
+
 var (
 	applicationsCacheMu         sync.Mutex
 	applicationsCache           = map[string]applicationsCacheEntry{}
+	applicationsGraphCache      = map[string]applicationsCacheEntry{}
 	applicationsBuildSF         singleflight.Group
+	applicationsGraphBuildSF    singleflight.Group
 	applicationsCacheGeneration uint64
 )
 
 type applicationsCacheEntry struct {
-	at      time.Time
-	rows    []appRow
-	claims  []argoClaim
-	graph   *appGraph
-	graphAt time.Time
+	at     time.Time
+	rows   []appRow
+	claims []argoClaim
+	graph  *appGraph
 }
 
 // appRow is one logical app in this cluster.
@@ -287,7 +291,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.getUserNamespaces(r, nil), s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"), s.GetCachedTopologyForGeneration)
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -317,7 +321,7 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
+	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.getUserNamespaces(r, nil), s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"), s.GetCachedTopologyForGeneration)
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -565,16 +569,18 @@ type appGraph struct {
 // workload to its graph root + label overlay, and groups them into logical
 // apps. Add-on machinery is classified (not dropped); nothing is hidden.
 func ListApplications(ctx context.Context, namespaces []string) (*applicationsResponse, error) {
-	return listApplicationsForRequest(ctx, namespaces, true)
+	return listApplicationsForRequest(ctx, namespaces, namespaces, true, nil)
 }
 
-func listApplicationsForRequest(ctx context.Context, namespaces []string, canListClusterWorkflowTemplates bool) (*applicationsResponse, error) {
+// namespaces selects workloads; graphNamespaces bounds readable relationship
+// evidence independently so a namespace pick does not hide a Flux manager.
+func listApplicationsForRequest(ctx context.Context, namespaces, graphNamespaces []string, canListClusterWorkflowTemplates bool, shared func(uint64) *topology.Topology) (*applicationsResponse, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, errResourceCacheUnavailable
 	}
 	applicationsCacheMu.Lock()
-	cacheKey := fmt.Sprintf("%d|%s", applicationsCacheGeneration, applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates))
+	cacheKey := fmt.Sprintf("%d|%d|%s|graph:%s", applicationsCacheGeneration, cache.Generation(), applicationsCacheKeyFor(namespaces, canListClusterWorkflowTemplates), applicationsCacheKeyFor(graphNamespaces, canListClusterWorkflowTemplates))
 	entry, hit := applicationsCache[cacheKey]
 	applicationsCacheMu.Unlock()
 	if hit && time.Since(entry.at) < applicationsCacheTTL {
@@ -592,25 +598,21 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 
-		g := entry.graph
-		graphAt := entry.graphAt
-		if g == nil || time.Since(graphAt) >= applicationsGraphCacheTTL {
-			g = buildAppGraph(cache, namespaces)
-			graphAt = time.Now()
-		}
+		g := cachedAppGraph(cache, graphNamespaces, shared)
 		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, canListClusterWorkflowTemplates)
 		rows := groupApplications(wls)
-		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, cache)
+		facts := namespaceScopedResourceLister{resourceLister: cache, namespaces: graphNamespaces}
+		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, facts)
 		appSetByKey := appSetFanouts(appSetChildren)
-		enrichRowsWithManagedSourceRefs(buildCtx, cache, rows, argoItems)
+		enrichRowsWithManagedSourceRefs(buildCtx, facts, rows, argoItems)
 		enrichRowsWithArgoStatus(rows, argoItems)
-		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, cache))
+		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, facts))
 		claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 		applicationsCacheMu.Lock()
 		if len(applicationsCache) >= applicationsCacheMaxEntries {
-			evictOldestApplicationsCacheEntry()
+			evictOldestApplicationsCacheEntry(applicationsCache)
 		}
-		applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims, graph: g, graphAt: graphAt}
+		applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
 		applicationsCacheMu.Unlock()
 		return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
 	})
@@ -620,11 +622,53 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 	return value.(*applicationsResponse), nil
 }
 
-func evictOldestApplicationsCacheEntry() {
+// cachedAppGraph shares immutable ownership evidence across namespace picks.
+// Its key depends on the cache source and readable scope, not selected workloads.
+func cachedAppGraph(cache *k8s.ResourceCache, namespaces []string, shared func(uint64) *topology.Topology) *appGraph {
+	applicationsCacheMu.Lock()
+	key := fmt.Sprintf("%d|%d|%s", applicationsCacheGeneration, cache.Generation(), applicationsCacheKeyFor(namespaces, true))
+	entry, hit := applicationsGraphCache[key]
+	applicationsCacheMu.Unlock()
+	if hit && time.Since(entry.at) < applicationsGraphCacheTTL {
+		return entry.graph
+	}
+	value, _, _ := applicationsGraphBuildSF.Do(key, func() (any, error) {
+		applicationsCacheMu.Lock()
+		entry, hit := applicationsGraphCache[key]
+		applicationsCacheMu.Unlock()
+		if hit && time.Since(entry.at) < applicationsGraphCacheTTL {
+			return entry.graph, nil
+		}
+		var graph *appGraph
+		var snapshot *topology.Topology
+		if shared != nil {
+			snapshot = shared(cache.Generation())
+		}
+		if snapshot != nil {
+			// This cache is keyed by namespace scope, not user identity. Scope
+			// only by namespaces here; request-specific authentication refs
+			// are filtered after collection. Never cache a per-user graph.
+			scoped := snapshot.ForNamespaces(namespaces)
+			graph = indexAppGraph(cache, scoped)
+		} else {
+			graph = buildAppGraph(cache, namespaces)
+		}
+		applicationsCacheMu.Lock()
+		if len(applicationsGraphCache) >= applicationsGraphCacheMaxEntries {
+			evictOldestApplicationsCacheEntry(applicationsGraphCache)
+		}
+		applicationsGraphCache[key] = applicationsCacheEntry{at: time.Now(), graph: graph}
+		applicationsCacheMu.Unlock()
+		return graph, nil
+	})
+	return value.(*appGraph)
+}
+
+func evictOldestApplicationsCacheEntry(entries map[string]applicationsCacheEntry) {
 	var oldestKey string
 	var oldestAt time.Time
 	first := true
-	for k, e := range applicationsCache {
+	for k, e := range entries {
 		if first || e.at.Before(oldestAt) {
 			oldestKey = k
 			oldestAt = e.at
@@ -632,13 +676,14 @@ func evictOldestApplicationsCacheEntry() {
 		}
 	}
 	if !first {
-		delete(applicationsCache, oldestKey)
+		delete(entries, oldestKey)
 	}
 }
 
 func clearApplicationsCache() {
 	applicationsCacheMu.Lock()
 	applicationsCache = map[string]applicationsCacheEntry{}
+	applicationsGraphCache = map[string]applicationsCacheEntry{}
 	applicationsCacheGeneration++
 	applicationsCacheMu.Unlock()
 }
@@ -664,11 +709,18 @@ func buildAppGraph(cache *k8s.ResourceCache, namespaces []string) *appGraph {
 	if provider == nil {
 		return g
 	}
+	if noNamespaceAccess(namespaces) {
+		return g
+	}
 	g.provider = provider
 	g.dp = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 
 	opts := topology.DefaultBuildOptions()
 	opts.Namespaces = namespaces
+	// Grouping requires resource-level ownership even when the readable
+	// scope is large. Summary/traffic topology cannot establish that boundary.
+	opts.ForRelationshipCache = true
+	opts.IncludeReplicaSets = true
 	b := topology.NewBuilder(provider)
 	if g.dp != nil {
 		b = b.WithDynamic(g.dp)
@@ -677,8 +729,16 @@ func buildAppGraph(cache *k8s.ResourceCache, namespaces []string) *appGraph {
 	if err != nil || topo == nil {
 		return g
 	}
-	g.topo = topo
-	g.idx = topology.IndexByResource(topo)
+	return indexAppGraph(cache, topo)
+}
+
+func indexAppGraph(cache *k8s.ResourceCache, topo *topology.Topology) *appGraph {
+	g := &appGraph{
+		topo: topo, idx: topology.IndexByResource(topo),
+		provider: k8s.NewTopologyResourceProvider(cache),
+		dp:       k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()),
+		byID:     map[string]topology.Node{}, byResource: map[string]string{},
+	}
 	for _, n := range topo.Nodes {
 		g.byID[n.ID] = n
 		ns, _ := n.Data["namespace"].(string)
@@ -695,26 +755,6 @@ func appGraphNodeGroup(node *topology.Node, kind string) string {
 		return group
 	}
 	return resourceid.GroupForBuiltinKind(kind)
-}
-
-// isGitOpsManagerKind reports whether a node is an in-cluster GitOps manager —
-// the boundary structuralRoot stops climbing AT. Above a manager lies either a
-// source ref (GitRepository → Kustomization is an EdgeManages edge too) or a
-// parent manager (app-of-apps); climbing THROUGH one would resolve every
-// installation sharing that source/parent to the same structural root and
-// union-find would merge them all into one app. ownerRef chains — including
-// operator CRs (CNPG Cluster, Strimzi Kafka) — are not managers and keep
-// climbing to the topmost owner.
-func isGitOpsManagerKind(kind topology.NodeKind, group string) bool {
-	switch kind {
-	case topology.KindApplication:
-		return group == "argoproj.io"
-	case topology.KindKustomization:
-		return group == "kustomize.toolkit.fluxcd.io"
-	case topology.KindHelmRelease:
-		return group == "helm.toolkit.fluxcd.io"
-	}
-	return false
 }
 
 // structuralRoot walks incoming EdgeManages edges from startID toward the
@@ -749,7 +789,7 @@ func (g *appGraph) structuralRoot(startID string) (topology.Node, bool) {
 			ok = true
 		}
 		cur = next
-		if exists && isGitOpsManagerKind(n.Kind, appGraphNodeGroup(&n, topology.KubernetesKindForNode(&n))) {
+		if exists && topology.IsGitOpsManagerKind(n.Kind, appGraphNodeGroup(&n, topology.KubernetesKindForNode(&n))) {
 			break
 		}
 	}
@@ -893,6 +933,20 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 		group := appWorkloadAPIGroup(kind)
 		if resource, ok := obj.(*unstructured.Unstructured); ok {
 			group = resourceid.GroupFromAPIVersion(resource.GetAPIVersion())
+		}
+		if overlay != nil {
+			signals := append([]subject.Signal{overlay.Winner}, overlay.Conflicts...)
+			valid := signals[:0]
+			for _, signal := range signals {
+				if g.idx.AcceptsManagerHint(topology.ResourceRef{Kind: signal.Ref.Kind, Group: signal.Ref.Group, Namespace: signal.Ref.Namespace, Name: signal.Ref.Name}, topology.ResourceRef{Kind: kind, Group: group, Namespace: ns, Name: name}, anns) {
+					valid = append(valid, signal)
+				}
+			}
+			if len(valid) == 0 || valid[0].Tier > subject.TierAppName {
+				overlay = nil
+			} else {
+				overlay = &subject.AppOverlay{Winner: valid[0], Conflicts: valid[1:]}
+			}
 		}
 		rootKey, rootKind, rootGroup, rootIdentity := g.rootOf(group, kind, ns, name)
 		rels := g.relationshipsFor(kind, ns, name, obj)

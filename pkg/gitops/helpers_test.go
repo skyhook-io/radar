@@ -21,6 +21,8 @@ func TestParseFluxInventoryID(t *testing.T) {
 		{name: "core", id: "default_my-cm_core_ConfigMap", kind: "ConfigMap", namespace: "default", resource: "my-cm", ok: true},
 		{name: "custom", id: "ml_train_batch.volcano.sh_Job", group: "batch.volcano.sh", kind: "Job", namespace: "ml", resource: "train", ok: true},
 		{name: "cluster scoped", id: "_global_rbac.authorization.k8s.io_ClusterRole", group: "rbac.authorization.k8s.io", kind: "ClusterRole", resource: "global", ok: true},
+		{name: "cluster builtin manifest namespace", id: "prod_global_rbac.authorization.k8s.io_ClusterRole", group: "rbac.authorization.k8s.io", kind: "ClusterRole", resource: "global", ok: true},
+		{name: "namespaced kind collision", id: "prod_global_example.io_ClusterRole", group: "example.io", kind: "ClusterRole", namespace: "prod", resource: "global", ok: true},
 		{name: "invalid", id: "only_three_parts", ok: false},
 	}
 	for _, test := range tests {

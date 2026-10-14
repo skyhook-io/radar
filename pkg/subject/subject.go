@@ -120,9 +120,10 @@ func ScopeForKind(kind string) Scope {
 // the identity/overlay boundary the whole package exists to keep.
 //
 // CAUTION for a future topology adapter: do NOT wrap pkg/topology's
-// walkTopmostOwner directly — it follows every EdgeManages edge, and EdgeManages
+// walkTopmostOwner directly — it follows EdgeManages to the nearest GitOps
+// manager or topmost Kubernetes owner, and EdgeManages
 // is deliberately overloaded in the graph to include GitOps/Helm management
-// edges (Argo Application→resource, GitRepository→Kustomization, …). Resolve
+// edges (Argo Application→resource, Kustomization→resource, …). Resolve
 // from controllerReferences instead (the cache-aware k8s.topOwnerForPodResolved
 // is the reference implementation), or filter the walk to controllerRef-derived
 // edges. internal/issues passes an owner that is already controller-resolved by

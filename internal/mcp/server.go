@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/investigation"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 func newServer(includeWrites bool) *mcpsdk.Server {
@@ -185,4 +186,16 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 	}
 
 	return prot.Handler(handler)
+}
+
+type topologySnapshotKey struct{}
+type topologySnapshotGetter func(uint64) *topology.Topology
+
+// WithTopologySnapshot shares a source-bound snapshot for HTTP transports.
+// Stdio has no provider and uses the existing scoped memo instead.
+func WithTopologySnapshot(handler http.Handler, getter func(uint64) *topology.Topology) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), topologySnapshotKey{}, topologySnapshotGetter(getter))
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

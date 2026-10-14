@@ -2223,3 +2223,8 @@ func (c *ResourceCache) GetPodsForWorkload(namespace string, selector *metav1.La
 
 	return matchingPods
 }
+
+// GetResourceWithGroup exposes current discovery scope to ownership consumers.
+func (c *ResourceCache) GetResourceWithGroup(kind, group string) (k8score.APIResource, bool) {
+	return GetResourceDiscovery().GetResourceWithGroup(kind, group)
+}

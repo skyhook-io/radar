@@ -1016,3 +1016,15 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestGitOpsNeighborhoodRetainsSourceDependency(t *testing.T) {
+	ks := makeNode(KindKustomization, "flux", "apps")
+	repo := makeNode(KindGitRepository, "flux", "source")
+	topo := &Topology{Nodes: []Node{ks, repo}, Edges: []Edge{makeEdge(EdgeUses, ks.ID, repo.ID)}}
+	for _, ref := range []ResourceRef{{Kind: "Kustomization", Namespace: "flux", Name: "apps"}, {Kind: "GitRepository", Namespace: "flux", Name: "source"}} {
+		sub := BuildNeighborhood(topo, ref, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1})
+		if len(sub.Nodes) != 2 || len(sub.Edges) != 1 || sub.Edges[0].Type != EdgeUses {
+			t.Fatalf("source neighborhood = %+v", sub)
+		}
+	}
+}

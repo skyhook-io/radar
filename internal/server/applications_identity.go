@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -19,6 +20,27 @@ import (
 // needs — an interface so tests can stub the Argo Application feed.
 type resourceLister interface {
 	ListDynamicWithGroup(ctx context.Context, kind, namespace, group string) ([]*unstructured.Unstructured, error)
+}
+
+// namespaceScopedResourceLister bounds every controller-fact feed before it can
+// influence source references, identities, status or cross-cluster claims.
+type namespaceScopedResourceLister struct {
+	resourceLister
+	namespaces []string
+}
+
+func (s namespaceScopedResourceLister) ListDynamicWithGroup(ctx context.Context, kind, namespace, group string) ([]*unstructured.Unstructured, error) {
+	items, err := s.resourceLister.ListDynamicWithGroup(ctx, kind, namespace, group)
+	if err != nil || s.namespaces == nil {
+		return items, err
+	}
+	var visible []*unstructured.Unstructured
+	for _, item := range items {
+		if item != nil && slices.Contains(s.namespaces, item.GetNamespace()) {
+			visible = append(visible, item)
+		}
+	}
+	return visible, nil
 }
 
 // App identity classification — grouping per-env instances of one logical app

@@ -612,6 +612,10 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 
 **Workflow operations**: Reconcile, Reconcile-with-source (Kustomization/HelmRelease), Suspend/Resume.
 
+Flux management links use exact API group, kind, namespace and name from observed inventory. HelmRelease inventory is authoritative even when empty. Releases whose controller version does not record inventory use the paired `helm.toolkit.fluxcd.io/name` and `helm.toolkit.fluxcd.io/namespace` labels. Generic application-instance labels do not establish Flux ownership, and remote-cluster inventory is not joined to local objects. A Kustomization’s source reference is a dependency, not ownership of the reconciler; bootstrap inventory may still correctly record that the Kustomization manages its GitRepository.
+
+Flux inventory projects every observed resource kind. Argo's graph inventory projection remains limited to its existing workload and routing kinds; this Flux change does not extend Argo inventory coverage.
+
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 
 ### ArgoCD

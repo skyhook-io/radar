@@ -4,10 +4,14 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 func (s *Server) relationshipTopologyForUser(r *http.Request, shared *topology.Topology) *topology.Topology {
+	if shared == nil || auth.UserFromContext(r.Context()) == nil {
+		return shared
+	}
 	filtered := cloneTopology(shared)
 	namespaces := s.getUserNamespaces(r, nil)
 	if namespaces != nil {

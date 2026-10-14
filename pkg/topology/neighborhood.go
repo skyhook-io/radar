@@ -401,9 +401,9 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 		}
 	case KindWorkflowTemplate, KindClusterWorkflowTemplate:
 		return map[EdgeType]bool{EdgeConfigures: true, EdgeManages: true}
-	// GitOps controllers: just the management chain (what they own).
+	// GitOps controllers: management boundaries and source dependencies.
 	case KindApplication, KindKustomization, KindHelmRelease, KindGitRepository:
-		return managementEdgeTypes()
+		return map[EdgeType]bool{EdgeManages: true, EdgeUses: true}
 	// Network-shaped resources: routing topology.
 	case KindService, KindIngress, KindGateway, KindGatewayClass,
 		KindHTTPRoute, KindGRPCRoute, KindTCPRoute, KindTLSRoute, KindUDPRoute,

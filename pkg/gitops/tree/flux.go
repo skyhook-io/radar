@@ -13,18 +13,9 @@ import (
 
 const fluxSourceGroup = "source.toolkit.fluxcd.io"
 
-// HelmRelease, unlike Kustomization, doesn't maintain a status.inventory
-// listing because the Helm controller delegates tracking to Helm's own release
-// storage (a Secret in the release namespace). To recover the managed set at
-// query time we match on the labels Flux *itself* stamps onto every resource
-// it reconciles — these are universal across charts, unlike chart-author-
-// controlled labels (app.kubernetes.io/instance is recommended but many
-// charts use app.kubernetes.io/name instead).
-//
-// Limitation: charts that strip these labels in pre-render hooks won't be
-// detected. Reading the release Secret directly would be definitive but
-// requires base64+gzip+JSON decoding of Helm's wire format, deferred until
-// this label-based heuristic proves insufficient in practice.
+// Helm-controller before v1.5 omitted status.inventory. For those releases,
+// the controller's universal post-render origin labels identify membership.
+// Chart-authored instance labels and release storage namespaces do not.
 const (
 	fluxHelmNameLabel      = "helm.toolkit.fluxcd.io/name"
 	fluxHelmNamespaceLabel = "helm.toolkit.fluxcd.io/namespace"

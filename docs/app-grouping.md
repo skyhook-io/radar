@@ -155,6 +155,13 @@ deploys a set of workloads together), so it outranks any membership label.
 | 8 | `app.kubernetes.io/name` | **Name** |
 | 9 | bare `app` / name heuristic | **Name** — *disabled in Applications today* |
 
+Applications checks the Flux signals in tiers 1 and 2 against readable
+controller inventory before grouping. Recorded inventory, including an empty
+inventory, takes precedence over stale origin labels. The namespace picker
+selects workloads; relationship evidence still includes managers in the caller's
+other readable namespaces. Managers in inaccessible namespaces remain outside
+that evidence.
+
 Confidence: **tiers 1–4 are high** (GitOps controllers), **tiers 5–8 are medium**
 (`meta.helm.sh/release-name`, `instance`, `part-of`, `name`), the rest low. So a
 Helm-release (tier 5) is a release *unit* but only *medium* confidence, not high.

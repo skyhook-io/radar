@@ -786,7 +786,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if m, ok := queriedObj.(metav1.Object); ok {
 		managedByMeta = m
 	}
-	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
+	targetKind := resourceKind
+	if objectKind != "" {
+		targetKind = objectKind
+	}
+	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, ResourceRef{Kind: targetKind, Group: resourceGroup, Namespace: namespace, Name: name}, topo, dp, lookupIndex); len(mb) > 0 {
 		rel.ManagedBy = mb
 	}
 

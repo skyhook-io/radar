@@ -68,7 +68,7 @@ func TestTopologyMemo_AIContextAfterSwitch(t *testing.T) {
 	useTestResourceCache(t, clusterWithDeployment("old-cluster-web"))
 	s := newMemoTestServer(t)
 
-	before, _, _, ok := s.topologyForContext("demo")
+	before, _, _, _, ok := s.topologyForContext()
 	if !ok || !topologyHasNode(before.Nodes, "old-cluster-web") {
 		t.Fatalf("seed: expected old-cluster-web in the topology, got ok=%v", ok)
 	}
@@ -76,7 +76,7 @@ func TestTopologyMemo_AIContextAfterSwitch(t *testing.T) {
 	useTestResourceCache(t, clusterWithDeployment("new-cluster-api"))
 	s.finalizePostContextSwitch()
 
-	after, _, _, ok := s.topologyForContext("demo")
+	after, _, _, _, ok := s.topologyForContext()
 	if !ok {
 		t.Fatal("post-switch topology unavailable")
 	}

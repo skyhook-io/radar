@@ -211,13 +211,13 @@ func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group
 	return summary
 }
 
-// mcpTopologyForContext returns a per-call topology snapshot scoped to the
-// resource's namespace (cluster-scoped resources get an all-namespaces
-// build). Reuses the package-level summaryCtxTopoMemo cache to amortize
+// mcpTopologyForContext returns relationship evidence across the caller's
+// readable namespaces, including managers outside the subject's namespace.
+// Reuses the package-level summaryCtxTopoMemo cache to amortize
 // build cost across get_resource and list_resources / search calls. nil
 // return is fine — Build then skips topology-derived fields and the
 // remaining sidecar still populates.
-func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvider, topo.DynamicProvider, bool) {
+func mcpTopologyForContext(ctx context.Context, namespaces []string) (*topo.Topology, topo.ResourceProvider, topo.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, nil, false
@@ -231,13 +231,21 @@ func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvi
 	opts.IncludeReplicaSets = true
 	opts.IncludeSecrets = true
 	opts.ForRelationshipCache = true
-	if namespace != "" {
-		opts.Namespaces = []string{namespace}
+	opts.Namespaces = namespaces
+	if namespaces != nil && len(namespaces) == 0 {
+		// Retain authorized cluster-scoped relationships without treating an
+		// empty readable namespace set as the builder's unfiltered nil scope.
+		opts.Namespaces = []string{"__no_access__"}
 	}
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 
 	topology, err := summaryCtxTopoMemo.GetScoped(cache.Generation(), opts, func() (*topo.Topology, error) {
+		if get, ok := ctx.Value(topologySnapshotKey{}).(topologySnapshotGetter); ok {
+			if shared := get(cache.Generation()); shared != nil {
+				return shared.ForNamespaces(namespaces), nil
+			}
+		}
 		return topo.NewBuilder(provider).WithDynamic(dyn).Build(opts)
 	})
 	if err != nil || topology == nil {

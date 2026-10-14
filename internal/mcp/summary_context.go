@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -37,7 +36,7 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
-	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(namespaces), idx, idx)
+	return summarycontext.BuilderFromIndexes(ctx, buildSummaryContextTopology(ctx, scopedNamespacesForUser(ctx, nil)), idx, idx, nil, newMCPRequestScopedChecker(ctx))
 }
 
 // newSearchSummaryContextBuilder is the MCP search variant. Mirrors
@@ -57,7 +56,7 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
-	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(scanNamespaces), namespacedIdx, clusterIdx)
+	return summarycontext.BuilderFromIndexes(ctx, buildSummaryContextTopology(ctx, scopedNamespacesForUser(ctx, nil)), namespacedIdx, clusterIdx, nil, newMCPRequestScopedChecker(ctx))
 }
 
 // summaryCtxTopoMemo caches topology builds for the list_resources and search
@@ -77,22 +76,7 @@ var summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
 // resolving managedBy pointers, reusing a cached snapshot when one is
 // fresh. Returns nil on failure — the caller falls back to a
 // managedBy-less ResourceSummaryContext rather than failing the response.
-func buildSummaryContextTopology(namespaces []string) *topology.Topology {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil
-	}
-	opts := topology.DefaultBuildOptions()
-	if len(namespaces) > 0 {
-		opts.Namespaces = namespaces
-	}
-	topo, err := summaryCtxTopoMemo.GetScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
-		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-		return builder.Build(opts)
-	})
-	if err != nil {
-		return nil
-	}
+func buildSummaryContextTopology(ctx context.Context, namespaces []string) *topology.Topology {
+	topo, _, _, _ := mcpTopologyForContext(ctx, namespaces)
 	return topo
 }

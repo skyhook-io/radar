@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
@@ -18,7 +19,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -1538,5 +1542,52 @@ func TestManagedSourceRefs_IgnoreRemoteArgoDestinations(t *testing.T) {
 	ref := commonManagedSourceRef([]appWorkload{{Group: "apps", Kind: "Deployment", Namespace: "sealed-secrets", Name: "controller"}}, sources)
 	if ref == nil || ref.Name != "sealed-secrets-hub" {
 		t.Fatalf("source ref = %+v, want the in-cluster Application only", ref)
+	}
+}
+
+func TestCollectedApplicationOverlayRespectsFluxInventory(t *testing.T) {
+	for _, state := range []string{"missing", "empty", "exact"} {
+		t.Run(state, func(t *testing.T) {
+			dep := dashboardTestDeployment("app", "web", "web")
+			dep.Labels = map[string]string{"helm.toolkit.fluxcd.io/name": "release", "helm.toolkit.fluxcd.io/namespace": "gitops"}
+			core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewSimpleClientset(dep), ResourceTypes: map[string]bool{k8score.Deployments: true}, DeferredTypes: map[string]bool{}, SyncTimeout: 2 * time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(core.Stop)
+			gvr := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
+			hr := &unstructured.Unstructured{Object: map[string]any{"apiVersion": gvr.Group + "/" + gvr.Version, "kind": "HelmRelease", "metadata": map[string]any{"namespace": "gitops", "name": "release"}}}
+			if state != "missing" {
+				entries := []any{}
+				if state == "exact" {
+					entries = append(entries, map[string]any{"id": "app_web_apps_Deployment", "v": "v1"})
+				}
+				hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": entries}}
+			}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "HelmReleaseList"}, hr)
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "HelmRelease", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			if _, err := k8s.GetDynamicResourceCache().List(gvr, ""); err != nil {
+				t.Fatal(err)
+			}
+			if !k8s.GetDynamicResourceCache().WaitForSync(gvr, 2*time.Second) {
+				t.Fatal("HelmRelease cache did not sync")
+			}
+			cache := &k8s.ResourceCache{ResourceCache: core}
+			graph := buildAppGraph(cache, nil)
+			inputs := collectAppWorkloads(context.Background(), cache, nil, graph, false)
+			if len(inputs) != 1 {
+				t.Fatalf("inputs=%+v", inputs)
+			}
+			if state == "empty" {
+				if inputs[0].overlay != nil || inputs[0].rootKind == "HelmRelease" {
+					t.Fatalf("stale labels merged workload into Flux app: %+v", inputs[0])
+				}
+			} else if inputs[0].overlay == nil || inputs[0].overlay.Winner.Ref.Name != "release" {
+				t.Fatalf("valid Flux origin/inventory missing: %+v", inputs[0])
+			}
+		})
 	}
 }

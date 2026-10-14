@@ -169,6 +169,7 @@ func TestDirtyCacheReadRebuildsInlineRatherThanServingStale(t *testing.T) {
 	stale := &topology.Topology{Nodes: []topology.Node{{ID: "stale"}}}
 	b.cachedTopologyMu.Lock()
 	b.cachedTopology = stale
+	b.cachedTopologyGeneration = k8s.GetResourceCache().Generation()
 	b.cachedTopologyDirty = true
 	b.cachedTopologyMu.Unlock()
 
@@ -264,6 +265,7 @@ func TestCleanCacheIsServedWithoutRebuilding(t *testing.T) {
 	clean := &topology.Topology{Nodes: []topology.Node{{ID: "clean"}}}
 	b.cachedTopologyMu.Lock()
 	b.cachedTopology = clean
+	b.cachedTopologyGeneration = k8s.GetResourceCache().Generation()
 	b.cachedTopologyDirty = false
 	b.cachedTopologyMu.Unlock()
 
@@ -283,7 +285,7 @@ func TestBuildFromThePreviousClusterIsNotCached(t *testing.T) {
 	b.topoEpoch.Add(1)          // the switch lands
 
 	previousCluster := &topology.Topology{Nodes: []topology.Node{{ID: "old-cluster"}}}
-	if b.updateCachedTopology(previousCluster, epoch) {
+	if b.updateCachedTopology(previousCluster, epoch, k8s.GetResourceCache().Generation()) {
 		t.Error("a build started before the context switch reported itself as cached")
 	}
 
@@ -296,7 +298,7 @@ func TestBuildFromThePreviousClusterIsNotCached(t *testing.T) {
 
 	// The new cluster's build still lands.
 	newCluster := &topology.Topology{Nodes: []topology.Node{{ID: "new-cluster"}}}
-	if !b.updateCachedTopology(newCluster, b.topoEpoch.Load()) {
+	if !b.updateCachedTopology(newCluster, b.topoEpoch.Load(), k8s.GetResourceCache().Generation()) {
 		t.Fatal("a build started after the switch was rejected too")
 	}
 }

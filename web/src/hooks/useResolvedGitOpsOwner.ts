@@ -209,7 +209,7 @@ function isNativeHelmManager(ref: ResourceRef): boolean {
   return ref.kind === 'HelmRelease' && ref.group !== 'helm.toolkit.fluxcd.io'
 }
 
-function describeGitOpsOwnerSource(owner: GitOpsOwnerRef | null, resource: any): string | null {
+export function describeGitOpsOwnerSource(owner: GitOpsOwnerRef | null, resource: any): string | null {
   if (!owner || !resource) return null
   const labels = resource.metadata?.labels ?? {}
   const annotations = resource.metadata?.annotations ?? {}
@@ -218,9 +218,10 @@ function describeGitOpsOwnerSource(owner: GitOpsOwnerRef | null, resource: any):
     const nameKey = owner.kind === 'helmreleases' ? 'helm.toolkit.fluxcd.io/name' : 'kustomize.toolkit.fluxcd.io/name'
     const nsKey =
       owner.kind === 'helmreleases' ? 'helm.toolkit.fluxcd.io/namespace' : 'kustomize.toolkit.fluxcd.io/namespace'
-    if (labels[nameKey] || labels[nsKey]) {
-      return `${nameKey}=${labels[nameKey] ?? ''}, ${nsKey}=${labels[nsKey] ?? ''}`
+    if (labels[nameKey] === owner.name && labels[nsKey] === owner.namespace) {
+      return `${nameKey}=${labels[nameKey]}, ${nsKey}=${labels[nsKey]}`
     }
+    return null
   }
 
   const trackingID = annotations['argocd.argoproj.io/tracking-id']

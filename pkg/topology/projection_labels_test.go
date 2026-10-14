@@ -229,15 +229,18 @@ func TestWorkloadsSeeEventSourcesBehindTheirService(t *testing.T) {
 func TestUDPRouteIsBuiltLikeTheOtherGatewayRoutes(t *testing.T) {
 	gwGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 	udpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "udproutes"}
+	ksGVR := schema.GroupVersionResource{Group: fluxKustomizeGroup, Version: "v1", Resource: "kustomizations"}
+	ks := genericIdentityObject(ksGVR, "Kustomization", "flux", "gateway")
+	ks.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "demo_dns_gateway.networking.k8s.io_UDPRoute", "v": "v1alpha2"}}}}
 	route := genericIdentityObject(udpGVR, "UDPRoute", "demo", "dns")
 	route.Object["spec"] = map[string]any{
 		"parentRefs": []any{map[string]any{"name": "edge"}},
 		"rules":      []any{map[string]any{"backendRefs": []any{map[string]any{"name": "coredns", "port": int64(53)}}}},
 	}
 	dynamic := &genericIdentityDynamic{
-		watched:   []schema.GroupVersionResource{gwGVR, udpGVR},
-		kinds:     map[schema.GroupVersionResource]string{gwGVR: "Gateway", udpGVR: "UDPRoute"},
-		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gwGVR: {genericIdentityObject(gwGVR, "Gateway", "demo", "edge")}, udpGVR: {route}},
+		watched:   []schema.GroupVersionResource{gwGVR, udpGVR, ksGVR},
+		kinds:     map[schema.GroupVersionResource]string{gwGVR: "Gateway", udpGVR: "UDPRoute", ksGVR: "Kustomization"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gwGVR: {genericIdentityObject(gwGVR, "Gateway", "demo", "edge")}, udpGVR: {route}, ksGVR: {ks}},
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
 	provider := &mockProvider{services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "demo"}}}}
@@ -253,6 +256,9 @@ func TestUDPRouteIsBuiltLikeTheOtherGatewayRoutes(t *testing.T) {
 		if edges[want] != EdgeRoutesTo {
 			t.Errorf("missing routes-to edge %s; edges: %v", want, edges)
 		}
+	}
+	if edges["kustomization/flux/gateway -> udproute/demo/dns"] != EdgeManages {
+		t.Errorf("Flux inventory should manage the UDPRoute: %v", edges)
 	}
 	rel := GetRelationships("Service", "demo", "coredns", topo, nil, nil)
 	if rel == nil || len(rel.Routes) != 1 || rel.Routes[0].Kind != "UDPRoute" {

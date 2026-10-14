@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -527,4 +528,28 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 			t.Fatalf("remote HelmRelease picked up a local workload: %+v", n.Ref)
 		}
 	}
+}
+
+type clusterIssuerGetter struct{ *fakeDynamic }
+
+func (f *clusterIssuerGetter) GetResourceWithGroup(kind, group string) (k8score.APIResource, bool) {
+	return k8score.APIResource{Kind: "ClusterIssuer", Group: "cert-manager.io", Namespaced: false}, kind == "ClusterIssuer" && group == "cert-manager.io"
+}
+func TestFluxTreeNormalizesDiscoveredClusterCRDScope(t *testing.T) {
+	hr := helmRelease("flux", "release")
+	hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "prod_global_cert-manager.io_ClusterIssuer"}}}}
+	getter := &clusterIssuerGetter{&fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux", Name: "release"}): hr}}}
+	tree, _, err := NewBuilder(getter, nil).Build(context.Background(), "HelmRelease", "flux", "release", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range tree.Nodes {
+		if node.Ref.Kind == "ClusterIssuer" {
+			if node.Ref.Namespace != "" {
+				t.Fatal(node.Ref)
+			}
+			return
+		}
+	}
+	t.Fatal("cluster CRD declaration missing")
 }

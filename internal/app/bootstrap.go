@@ -34,6 +34,7 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 var clusterConnectionProbe = k8s.TestClusterConnection
@@ -551,18 +552,21 @@ func CreateServer(cfg AppConfig) *server.Server {
 		serverCfg.AIHistoryDB = dbPath
 	}
 
+	var srv *server.Server
 	if cfg.MCPEnabled {
+		getSnapshot := func(generation uint64) *topology.Topology { return srv.GetCachedTopologyForGeneration(generation) }
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
 		// handler records exactly what Radar returned inside those scopes.
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
-		serverCfg.MCPHandler = mcppkg.NewHandler()
-		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
-		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
+		serverCfg.MCPHandler = mcppkg.WithTopologySnapshot(mcppkg.NewHandler(), getSnapshot)
+		serverCfg.MCPReadOnlyHandler = mcppkg.WithTopologySnapshot(mcppkg.NewReadOnlyHandler(), getSnapshot)
+		serverCfg.MCPInvestigationHandler = mcppkg.WithTopologySnapshot(mcppkg.NewInvestigationHandler(evidenceRefs), getSnapshot)
 	}
 
-	return server.New(serverCfg)
+	srv = server.New(serverCfg)
+	return srv
 }
 
 // InitializeCluster connects to the cluster and initializes all subsystems.

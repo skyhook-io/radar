@@ -80,3 +80,21 @@ func TestStripNodeKinds_NilTopology(t *testing.T) {
 	var topo *Topology
 	topo.StripNodeKinds(map[NodeKind]bool{KindNode: true}) // no panic
 }
+
+func TestNamespaceProjectionPreservesEvidenceAndDropsCrossScopeEdges(t *testing.T) {
+	topo := &Topology{Nodes: []Node{
+		{ID: "a", Kind: KindHelmRelease, Data: map[string]any{"namespace": "a"}, gitopsManagementAuthoritative: true, gitopsRemoteDestination: true},
+		{ID: "b", Data: map[string]any{"namespace": "b"}},
+		{ID: "cluster", Data: map[string]any{"namespace": ""}},
+	}, Edges: []Edge{{Source: "a", Target: "b"}, {Source: "a", Target: "cluster"}}}
+	filtered := topo.ForNamespaces([]string{"a"})
+	if len(filtered.Nodes) != 2 || len(filtered.Edges) != 1 || !filtered.Nodes[0].gitopsManagementAuthoritative || !filtered.Nodes[0].gitopsRemoteDestination {
+		t.Fatalf("projection = %+v", filtered)
+	}
+	if len(topo.Nodes) != 3 || len(topo.Edges) != 2 || topo.ForNamespaces(nil) != topo {
+		t.Fatal("shared input mutated or copied unnecessarily")
+	}
+	if clusterOnly := topo.ForNamespaces([]string{}); len(clusterOnly.Nodes) != 1 || len(clusterOnly.Edges) != 0 {
+		t.Fatal("empty scope did not retain cluster-only projection", clusterOnly)
+	}
+}

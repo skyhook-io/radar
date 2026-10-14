@@ -46,6 +46,11 @@ func newMCPRequestScopedChecker(ctx context.Context) *requestScopedChecker {
 //     topology builder, and an unknown kind here is a temporary
 //     discovery-cold state, not a permission bypass vector.
 func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace string) bool {
+	// This is annotation-backed native Helm metadata, not a Flux CR or a
+	// read of Helm's storage Secret. Discovery must not reinterpret it as Flux.
+	if kind == "HelmRelease" && group == "" {
+		return true
+	}
 	key := "get|" + group + "|" + kind + "|" + namespace
 	if v, ok := c.cache[key]; ok {
 		return v

@@ -24,7 +24,7 @@ func TestAddGitOpsManagedResourceEdgesPreservesArgoAPIGroup(t *testing.T) {
 		}},
 	}}
 
-	edges := addGitOpsManagedResourceEdges(
+	edges := addGitOpsManagedResourceEdges(nil,
 		nodes,
 		nil,
 		[]*unstructured.Unstructured{app},
@@ -53,7 +53,7 @@ func TestAddGitOpsManagedResourceEdgesTreatsArgoGroupAsExact(t *testing.T) {
 			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "ml"}},
 			"status":   map[string]any{"resources": []any{resource}},
 		}}
-		return addGitOpsManagedResourceEdges(
+		return addGitOpsManagedResourceEdges(nil,
 			nodes,
 			nil,
 			[]*unstructured.Unstructured{app},
@@ -79,20 +79,21 @@ func TestAddGitOpsManagedResourceEdgesParsesFluxIdentityFromRight(t *testing.T) 
 		{ID: "job/ml/train_run/batch.volcano.sh", Kind: KindJob, Name: "train_run", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
 	}
 	ks := &unstructured.Unstructured{Object: map[string]any{
+		"kind": "Kustomization", "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
 		"metadata": map[string]any{"namespace": "flux-system", "name": "training"},
 		"status": map[string]any{"inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "ml_train_run_batch.volcano.sh_Job"},
 		}}},
 	}}
 
-	edges := addGitOpsManagedResourceEdges(
+	edges := addGitOpsManagedResourceEdges(nil,
 		nodes,
 		nil,
 		nil,
 		nil,
 		nil,
 		[]*unstructured.Unstructured{ks},
-		map[string]string{"flux-system/training": "kustomization/flux-system/training"},
+		map[string]string{"Kustomization/flux-system/training": "kustomization/flux-system/training"},
 	)
 	if len(edges) != 1 || edges[0].Target != "job/ml/train_run/batch.volcano.sh" {
 		t.Fatalf("Flux edges = %+v, want only the exact underscore-named Volcano Job", edges)
@@ -126,22 +127,21 @@ func TestAddGitOpsManagedResourceEdgesIgnoresRemoteDestinations(t *testing.T) {
 		}}},
 	}}
 
-	edges := addGitOpsManagedResourceEdges(
+	edges := addGitOpsManagedResourceEdges(nil,
 		nodes,
 		nil,
 		[]*unstructured.Unstructured{app("sealed-prod", "https://prod.example.com"), app("sealed-hub", "https://kubernetes.default.svc")},
 		map[string]string{"argocd/sealed-hub": "application/argocd/sealed-hub", "argocd/sealed-prod": "application/argocd/sealed-prod"},
 		nil,
 		[]*unstructured.Unstructured{remoteKs},
-		map[string]string{"flux-system/fleet-prod": "kustomization/flux-system/fleet-prod"},
+		map[string]string{"Kustomization/flux-system/fleet-prod": "kustomization/flux-system/fleet-prod"},
 	)
 	if len(edges) != 1 || edges[0].Source != "application/argocd/sealed-hub" {
 		t.Fatalf("manages edges = %+v, want only the in-cluster Application's", edges)
 	}
 }
 
-// HelmReleases have no inventory, so topology links one to the workloads whose
-// Helm labels name it. A release applied to another cluster installed nothing
+// Releases without inventory use the exact Flux origin-label pair. A release applied to another cluster installed nothing
 // here, so a local workload whose labels name it is not its own.
 func TestBuildLinksOnlyLocalHelmReleasesByLabel(t *testing.T) {
 	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
@@ -183,5 +183,18 @@ func TestBuildLinksOnlyLocalHelmReleasesByLabel(t *testing.T) {
 	}
 	if src, ok := targets["deployment/apps/api"]; ok {
 		t.Fatalf("remote release %s claimed a local workload", src)
+	}
+}
+
+func TestFluxInventoryUsesObservedClusterCRDIdentity(t *testing.T) {
+	nodes := []Node{
+		{ID: "helmrelease/flux/release", Kind: KindHelmRelease, Name: "release", Data: map[string]any{"namespace": "flux", "apiVersion": "helm.toolkit.fluxcd.io/v2"}},
+		{ID: "cluster-issuer", Kind: NodeKind("ClusterIssuer"), Name: "issuer", Data: map[string]any{"kind": "ClusterIssuer", "apiVersion": "cert-manager.io/v1", "namespace": ""}},
+		{ID: "namespaced-collision", Kind: NodeKind("ClusterIssuer"), Name: "issuer", Data: map[string]any{"kind": "ClusterIssuer", "apiVersion": "example.io/v1", "namespace": "prod"}},
+	}
+	hr := &unstructured.Unstructured{Object: map[string]any{"kind": "HelmRelease", "metadata": map[string]any{"namespace": "flux", "name": "release"}, "status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "prod_issuer_cert-manager.io_ClusterIssuer"}}}}}}
+	edges := addGitOpsManagedResourceEdges(nil, nodes, nil, nil, nil, nil, []*unstructured.Unstructured{hr}, map[string]string{"HelmRelease/flux/release": "helmrelease/flux/release"})
+	if len(edges) != 1 || edges[0].Target != "cluster-issuer" {
+		t.Fatalf("exact cluster CRD edge = %+v", edges)
 	}
 }

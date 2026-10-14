@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/skyhook-io/radar/internal/k8s"
 	"os"
 	"strconv"
 	"testing"
@@ -55,7 +56,7 @@ func TestMeasureConsumerStallPerDebounceFire(t *testing.T) {
 
 	// What the consumer used to pay per debounce fire: a full build, inline.
 	start := time.Now()
-	topo, err := buildFullTopology()
+	topo, err := buildFullTopology(k8s.GetResourceCache())
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

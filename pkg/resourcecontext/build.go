@@ -196,7 +196,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		managedBy = rel.ManagedBy
 	} else if rel == nil {
 		if m, ok := obj.(metav1.Object); ok {
-			managedBy = topology.SynthesizeManagedBy(m, ident.Kind, ident.Namespace, ident.Name, nil, nil, nil)
+			managedBy = topology.SynthesizeManagedBy(m, ident.Kind, ident.Namespace, ident.Name, opts.Topology, opts.DynamicProv, opts.RelIndex)
 		}
 	}
 	if len(managedBy) > 0 {

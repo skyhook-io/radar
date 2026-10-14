@@ -44,9 +44,10 @@ type SSEBroadcaster struct {
 	watchMu     sync.Mutex
 
 	// Cached topology for relationship lookups (rebuilt on broadcast or lazily on access)
-	cachedTopology      *topology.Topology
-	cachedTopologyMu    sync.RWMutex
-	cachedTopologyDirty bool // true when changes occurred but topology not yet rebuilt
+	cachedTopology           *topology.Topology
+	cachedTopologyGeneration uint64 // resource-cache source used to build this snapshot
+	cachedTopologyMu         sync.RWMutex
+	cachedTopologyDirty      bool // true when changes occurred but topology not yet rebuilt
 	// cachedTopologyIndex is the inverted edge index over cachedTopology, built
 	// lazily on first relationship lookup and reused across drawer opens until
 	// the topology is replaced. Nil whenever cachedTopology changes (set under
@@ -439,7 +440,11 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 // initCachedTopology builds the initial topology cache
 func (b *SSEBroadcaster) initCachedTopology() {
 	epoch := b.topoEpoch.Load()
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return
+	}
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	opts := topology.DefaultBuildOptions()
 	opts.ViewMode = topology.ViewModeResources
 	// Include ReplicaSets in the cache so relationship lookups work for them
@@ -448,7 +453,7 @@ func (b *SSEBroadcaster) initCachedTopology() {
 	opts.IncludeSecrets = true
 
 	if topo, err := builder.Build(opts); err == nil {
-		if b.updateCachedTopology(topo, epoch) {
+		if b.updateCachedTopology(topo, epoch, cache.Generation()) {
 			log.Printf("Initialized topology cache with %d nodes and %d edges", len(topo.Nodes), len(topo.Edges))
 		}
 	} else {
@@ -683,7 +688,8 @@ func resourceChangeEventData(change k8s.ResourceChange, group string) map[string
 // worker can re-arm the trigger it consumed instead of dropping it.
 func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 	// Skip if resource cache is torn down (e.g. during context switch).
-	if k8s.GetResourceCache() == nil {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
 		return false
 	}
 
@@ -723,11 +729,11 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 	if b.isWarmingUp() {
 		b.markCachedTopologyDirty()
 	} else {
-		if fullTopo, err := buildFullTopology(); err == nil {
+		if fullTopo, err := buildFullTopology(cache); err == nil {
 			// A rejected write leaves the new cluster with nothing cached, so
 			// leave the cache dirty for the next reader to rebuild — the same
 			// rule the on-demand rebuild path follows.
-			if !b.updateCachedTopology(fullTopo, epoch) {
+			if !b.updateCachedTopology(fullTopo, epoch, cache.Generation()) {
 				b.markCachedTopologyDirty()
 			}
 		} else {
@@ -739,7 +745,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 		return b.abandonCycleForNewCluster()
 	}
 
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 
 	// Group clients by namespace filter + viewMode
 	// Use comma-separated namespaces string as map key since slices aren't comparable
@@ -1137,31 +1143,29 @@ func (b *SSEBroadcaster) ClientCount() int {
 func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {
 	b.cachedTopologyMu.RLock()
 	dirty := b.cachedTopologyDirty
-	topo := b.cachedTopology
 	b.cachedTopologyMu.RUnlock()
 
 	if dirty && k8s.GetResourceCache() != nil {
-		// Gate: only one goroutine proceeds to rebuild
+		// Gate: only one goroutine proceeds to rebuild.
 		b.cachedTopologyMu.Lock()
-		if !b.cachedTopologyDirty {
-			topo = b.cachedTopology
-			b.cachedTopologyMu.Unlock()
-			return topo
+		rebuild := b.cachedTopologyDirty
+		if rebuild {
+			b.cachedTopologyDirty = false
 		}
-		b.cachedTopologyDirty = false
 		b.cachedTopologyMu.Unlock()
-
-		if !b.rebuildCachedTopology() {
-			// Rebuild failed — mark dirty again so next call retries
-			b.cachedTopologyMu.Lock()
-			b.cachedTopologyDirty = true
-			b.cachedTopologyMu.Unlock()
+		if rebuild && !b.rebuildCachedTopology() {
+			b.markCachedTopologyDirty()
 		}
-		b.cachedTopologyMu.RLock()
-		topo = b.cachedTopology
-		b.cachedTopologyMu.RUnlock()
 	}
 
+	b.cachedTopologyMu.RLock()
+	topo, generation := b.cachedTopology, b.cachedTopologyGeneration
+	b.cachedTopologyMu.RUnlock()
+	// The resource cache is replaced before context-switch callbacks clear
+	// this snapshot. Never let a consumer reuse the old graph in that window.
+	if cache := k8s.GetResourceCache(); cache != nil && cache.Generation() != generation {
+		return nil
+	}
 	return topo
 }
 
@@ -1206,10 +1210,10 @@ func (b *SSEBroadcaster) rebuildCachedTopology() bool {
 		return false
 	}
 	epoch := b.topoEpoch.Load()
-	if fullTopo, err := buildFullTopology(); err == nil {
+	if fullTopo, err := buildFullTopology(cache); err == nil {
 		// A rejected write leaves nothing cached for the new cluster, so the
 		// caller must re-dirty and let the next read rebuild against it.
-		return b.updateCachedTopology(fullTopo, epoch)
+		return b.updateCachedTopology(fullTopo, epoch, cache.Generation())
 	} else {
 		log.Printf("Error rebuilding topology cache on demand: %v", err)
 		return false
@@ -1240,13 +1244,14 @@ func (b *SSEBroadcaster) markCachedTopologyDirty() {
 // updateCachedTopology stores a full topology for relationship lookups, unless
 // the cluster view was reset while it was being built. Reports whether it
 // stored.
-func (b *SSEBroadcaster) updateCachedTopology(topo *topology.Topology, epoch uint64) bool {
+func (b *SSEBroadcaster) updateCachedTopology(topo *topology.Topology, epoch, generation uint64) bool {
 	b.cachedTopologyMu.Lock()
 	defer b.cachedTopologyMu.Unlock()
 	if b.topoEpoch.Load() != epoch {
 		return false
 	}
 	b.cachedTopology = topo
+	b.cachedTopologyGeneration = generation
 	b.cachedTopologyIndex = nil // rebuilt lazily on next relationship lookup
 	b.cachedTopologyDirty = false
 	return true
@@ -1254,8 +1259,8 @@ func (b *SSEBroadcaster) updateCachedTopology(topo *topology.Topology, epoch uin
 
 // buildFullTopology constructs a full topology (all namespaces, resources view)
 // for relationship lookups. Used by both broadcast and lazy rebuild paths.
-func buildFullTopology() (*topology.Topology, error) {
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+func buildFullTopology(cache *k8s.ResourceCache) (*topology.Topology, error) {
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	opts := topology.DefaultBuildOptions()
 	opts.ViewMode = topology.ViewModeResources
 	opts.IncludeReplicaSets = true
@@ -1390,4 +1395,21 @@ func authorizedSecretTuples(topo *topology.Topology, authorize func(group, resou
 		}
 	}
 	return allowed
+}
+
+// GetCachedTopologyForGeneration bounds snapshot reuse to the requesting source.
+func (b *SSEBroadcaster) GetCachedTopologyForGeneration(generation uint64) *topology.Topology {
+	topo := b.GetCachedTopology()
+	b.cachedTopologyMu.RLock()
+	defer b.cachedTopologyMu.RUnlock()
+	if b.cachedTopology != topo || b.cachedTopologyGeneration != generation {
+		return nil
+	}
+	return topo
+}
+
+// GetCachedTopologyForGeneration exposes the immutable source-bound snapshot to
+// HTTP MCP and Applications; standalone readers can build their own graph.
+func (s *Server) GetCachedTopologyForGeneration(generation uint64) *topology.Topology {
+	return s.broadcaster.GetCachedTopologyForGeneration(generation)
 }

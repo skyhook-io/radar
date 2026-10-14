@@ -7,11 +7,13 @@
 package summarycontext
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -298,7 +300,7 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	// scope. Replay the dispatch via the shared helper to pin the
 	// end-to-end shape. Topology is nil; managedBy is nil but
 	// issueCount dispatch is what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 1 {
 		t.Errorf("Node hit via builder: got %+v, want IssueCount=1 (was 0 pre-fix)", sc)
 	}
@@ -326,7 +328,7 @@ func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 
 	// Topology is nil — managedBy is nil but issueCount dispatch is
 	// what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
 
 	// Cluster-scoped Node hit — must read clusterIdx.
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 2 {
@@ -405,5 +407,29 @@ func TestManagedByFromRelationships_NilSafe(t *testing.T) {
 	}
 	if got := ManagedByFromRelationships(&topology.Relationships{}); got != nil {
 		t.Errorf("empty rel: got %#v, want nil", got)
+	}
+}
+
+type summaryOwnerChecker struct{ denyOwner bool }
+
+func (c summaryOwnerChecker) CanRead(_ context.Context, group, kind, namespace string) bool {
+	return group == "apps" && kind == "ReplicaSet" && namespace == "demo" && !c.denyOwner
+}
+func TestCompactSummaryKeepsReadableOwnerWhenManagerIsWithheld(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "demo", Labels: map[string]string{"helm.toolkit.fluxcd.io/name": "private-release", "helm.toolkit.fluxcd.io/namespace": "private"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs"}}}}
+	graph := &topology.Topology{Nodes: []topology.Node{
+		{ID: "pod/demo/p", Kind: topology.KindPod, Name: "p", Data: map[string]any{"namespace": "demo"}},
+		{ID: "replicaset/demo/rs", Kind: topology.KindReplicaSet, Name: "rs", Data: map[string]any{"namespace": "demo", "apiVersion": "apps/v1"}},
+	}, Edges: []topology.Edge{{Source: "replicaset/demo/rs", Target: "pod/demo/p", Type: topology.EdgeManages}}}
+	for _, deny := range []bool{false, true} {
+		build := BuilderFromIndexes(context.Background(), graph, nil, nil, nil, summaryOwnerChecker{denyOwner: deny})
+		got := build(pod, nil, "", "Pod", "demo", "p")
+		if deny {
+			if got != nil && got.ManagedBy != nil {
+				t.Fatal("unreadable references retained", got)
+			}
+		} else if got == nil || got.ManagedBy == nil || got.ManagedBy.Kind != "ReplicaSet" || got.ManagedBy.Name != "rs" {
+			t.Fatal("readable direct owner was lost", got)
+		}
 	}
 }
