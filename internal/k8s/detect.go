@@ -503,7 +503,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 			reason := health.PodProblemReason(pod, now)
 			message := health.PodProblemMessage(pod)
-			if pf, ok := probeFailures[pod.Namespace+"/"+pod.Name]; ok && probeFailureMatchesPod(pf, pod) && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
+			if pf, ok := newestProbeFailure(probeFailures, pod, ""); ok && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
 				reason = pf.reason
 				message = pf.message
 			}
@@ -1339,7 +1339,6 @@ type probeFailure struct {
 	reason  string
 	message string
 	at      time.Time
-	podUID  types.UID
 }
 
 type pvcPendingFailure struct {
@@ -1607,10 +1606,12 @@ func pvcPendingFailureFromEvent(e *corev1.Event) (pvcPendingFailure, bool) {
 	return f, true
 }
 
-// latestProbeFailures returns, per pod ("ns/name"), the newest liveness or
-// readiness probe failure inside probeFailureWindow, and the same newest
-// failure per container and probe type ("ns/name/container/reason"; container
-// is empty when the event carries no container fieldPath).
+// latestProbeFailures returns, per pod incarnation (probeFailureKey), the
+// newest liveness or readiness probe failure inside probeFailureWindow, and
+// the same newest failure per container and probe type (key + "/container/
+// reason"; container is empty when the event carries no container fieldPath).
+// Reducing within one incarnation keeps a predecessor's later-stamped event
+// from displacing the current pod's.
 func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) (map[string]probeFailure, map[string]probeFailure) {
 	out := map[string]probeFailure{}
 	byContainer := map[string]probeFailure{}
@@ -1635,8 +1636,8 @@ func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) 
 		if t.IsZero() || now.Sub(t) > probeFailureWindow {
 			continue
 		}
-		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
-		pf := probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t, podUID: e.InvolvedObject.UID}
+		key := probeFailureKey(e.InvolvedObject.Namespace, e.InvolvedObject.Name, e.InvolvedObject.UID)
+		pf := probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t}
 		containerKey := key + "/" + eventContainerName(e.InvolvedObject.FieldPath) + "/" + reason
 		if cur, exists := byContainer[containerKey]; !exists || t.After(cur.at) {
 			byContainer[containerKey] = pf
