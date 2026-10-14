@@ -33,3 +33,32 @@ func TestRelationshipTopologyHidesUnreadableEndpointsWithoutMutatingCache(t *tes
 		t.Fatal("shared topology mutated")
 	}
 }
+
+func TestStorageClaimDependentsRespectNamespaceVisibility(t *testing.T) {
+	env := newAuthTestServer(t)
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+	permissions.SetCanI("get", "", "persistentvolumeclaims", "default", false)
+	permissions.SetCanI("get", "", "persistentvolumeclaims", "denied", false)
+	permissions.SetCanI("get", "", "persistentvolumeclaims", "hidden", true)
+	env.srv.permCache.Set("storage-reader", nil, permissions)
+	refs := []topology.ResourceRef{
+		{Kind: "PersistentVolumeClaim", Namespace: "default", Name: "visible"},
+		{Kind: "PersistentVolumeClaim", Namespace: "denied", Name: "denied"},
+		{Kind: "PersistentVolumeClaim", Namespace: "hidden", Name: "hidden"},
+	}
+	rel := &topology.Relationships{Dependents: refs}
+	req := httptest.NewRequest("GET", "/api/resources/storageclasses/_/fast", nil)
+	req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "storage-reader"}))
+	env.srv.filterStorageClaimDependentsForUser(req, rel)
+	if len(rel.Dependents) != 1 || rel.Dependents[0].Name != "visible" {
+		t.Fatalf("unreadable storage claims survived: %+v", rel.Dependents)
+	}
+	if len(refs) != 3 || refs[1].Name != "denied" {
+		t.Fatal("source references mutated")
+	}
+	local := &topology.Relationships{Dependents: refs}
+	env.srv.filterStorageClaimDependentsForUser(httptest.NewRequest("GET", "/", nil), local)
+	if len(local.Dependents) != 3 {
+		t.Fatalf("local cached claims were filtered: %+v", local)
+	}
+}

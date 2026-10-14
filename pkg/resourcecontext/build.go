@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	storagehelpers "k8s.io/component-helpers/storage/volume"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
@@ -273,10 +274,29 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
 		rc.MonitorTargets = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
 
-		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependencies), "dependencies", omitted)
-		rc.Dependents = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependents), "dependents", omitted)
+		dependencies := toContextRefs(rel.Dependencies)
+		dependents := toContextRefs(rel.Dependents)
+		appendMatching := func(dst []ContextRef, refs []topology.ResourceRef, group, kind string) []ContextRef {
+			for _, ref := range refs {
+				if ref.Group == group && ref.Kind == kind {
+					dst = append(dst, ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name})
+				}
+			}
+			return dst
+		}
+		switch {
+		case ident.Group == "" && ident.Kind == "PersistentVolumeClaim":
+			dependencies = appendMatching(dependencies, rel.Children, "", "PersistentVolume")
+			dependencies = appendMatching(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+			dependents = append(dependents, toContextRefs(rel.Consumers)...)
+		case ident.Group == "" && ident.Kind == "PersistentVolume":
+			dependencies = appendMatching(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+			dependents = appendMatching(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+		case ident.Group == "storage.k8s.io" && ident.Kind == "StorageClass":
+			dependents = appendMatching(dependents, rel.Children, "", "PersistentVolume")
+		}
+		rc.Dependencies = filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted)
+		rc.Dependents = filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
 
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
@@ -1159,7 +1179,7 @@ func buildPVCSummary(obj runtime.Object) *PVCSummary {
 	}
 	out := &PVCSummary{
 		Phase:            string(pvc.Status.Phase),
-		StorageClassName: valueOrEmpty(pvc.Spec.StorageClassName),
+		StorageClassName: storagehelpers.GetPersistentVolumeClaimClass(pvc),
 		VolumeName:       pvc.Spec.VolumeName,
 		VolumeMode:       string(valueOrZero(pvc.Spec.VolumeMode)),
 	}
@@ -1608,6 +1628,78 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 	if len(out) == 0 {
 		return nil
 	}
+	return out
+}
+
+// Denied namespaces must not make reference authorization unbounded.
+const maxReferenceAccessChecks = 4 * maxReferencedByItems
+
+func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+	sorted := append([]ContextRef(nil), refs...)
+	less := func(a, b ContextRef) bool {
+		return resourceid.ResourceKey(a.Group, a.Kind, a.Namespace, a.Name) < resourceid.ResourceKey(b.Group, b.Kind, b.Namespace, b.Name)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
+	type bucket struct {
+		refs []ContextRef
+		next int
+	}
+	var buckets []bucket
+	var last, kindKey string
+	for _, ref := range sorted {
+		key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if key == last {
+			continue
+		}
+		last = key
+		kind := resourceid.ResourceKey(ref.Group, ref.Kind, "", "")
+		if len(buckets) == 0 || kind != kindKey {
+			buckets = append(buckets, bucket{})
+			kindKey = kind
+		}
+		buckets[len(buckets)-1].refs = append(buckets[len(buckets)-1].refs, ref)
+	}
+	decisions := make(map[string]bool)
+	var out []ContextRef
+	for {
+		advanced := false
+		for i := range buckets {
+			b := &buckets[i]
+			if b.next == len(b.refs) {
+				continue
+			}
+			ref := b.refs[b.next]
+			b.next++
+			advanced = true
+			allowed := true
+			if ac != nil {
+				key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, "")
+				var known bool
+				allowed, known = decisions[key]
+				if !known {
+					if len(decisions) == maxReferenceAccessChecks {
+						omitted.add(field, OmittedBudgetExceeded)
+						continue
+					}
+					allowed = checkRef(ctx, ac, &ref)
+					decisions[key] = allowed
+				}
+			}
+			if !allowed {
+				omitted.add(field, OmittedRBACDenied)
+				continue
+			}
+			out = append(out, ref)
+			if len(out) > maxReferencedByItems {
+				omitted.add(field, OmittedBudgetExceeded)
+				return out[:maxReferencedByItems]
+			}
+		}
+		if !advanced {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return less(out[i], out[j]) })
 	return out
 }
 

@@ -3015,6 +3015,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
 				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+			s.filterStorageClaimDependentsForUser(r, relationships)
 		}
 
 		s.writeJSON(w, topology.ResourceWithRelationships{
@@ -3244,6 +3245,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 				k8s.NewTopologyResourceProvider(promoted),
 				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+			s.filterStorageClaimDependentsForUser(r, relationships)
 		}
 	}
 

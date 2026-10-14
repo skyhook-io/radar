@@ -863,3 +863,39 @@ func TestRelationshipPartialInventoryPreservesVisiblePods(t *testing.T) {
 		t.Fatalf("partial evidence discarded or presented as complete: %+v", rel)
 	}
 }
+
+type partialClaimInventory struct {
+	stubProvider
+	claims []*corev1.PersistentVolumeClaim
+}
+
+func (p *partialClaimInventory) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
+	return p.claims, nil
+}
+
+func (*partialClaimInventory) InventoryError(resource, namespace string) error {
+	if resource == "persistentvolumeclaims" && namespace == "" {
+		return &InventoryError{Resource: "persistentvolumeclaims", State: InventoryUncovered}
+	}
+	return nil
+}
+
+type failedClaimInventory struct{ stubProvider }
+
+func (*failedClaimInventory) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
+	return nil, fmt.Errorf("persistentvolumeclaims inventory sync failed")
+}
+
+func TestStorageClassClaimInventoryGapsAreExplicit(t *testing.T) {
+	class := "fast"
+	visible := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}}
+	partial := &partialClaimInventory{claims: []*corev1.PersistentVolumeClaim{visible}}
+	rel := GetRelationshipsWithObject("StorageClass", "", class, &unstructured.Unstructured{}, &Topology{}, partial, nil, nil)
+	if rel == nil || len(rel.Warnings) != 1 || len(rel.Dependents) != 1 || rel.Dependents[0].Name != "data" {
+		t.Fatalf("partial claim inventory discarded visible claims or looked complete: %+v", rel)
+	}
+	failed := GetRelationshipsWithObject("StorageClass", "", class, &unstructured.Unstructured{}, &Topology{}, &failedClaimInventory{}, nil, nil)
+	if failed == nil || len(failed.Warnings) != 1 || len(failed.Dependents) != 0 {
+		t.Fatalf("failed claim inventory looked like a class with no claims: %+v", failed)
+	}
+}

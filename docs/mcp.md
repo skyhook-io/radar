@@ -582,6 +582,12 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
+Resource context `dependencies` and `dependents` are deduplicated, sorted by
+identity and capped at 20 readable references; references the caller cannot read
+do not count toward the cap. A capped list is filled round-robin across kinds, so
+a StorageClass with hundreds of claims still lists its volumes. A capped or
+partially checked list carries `omitted: budget_exceeded`.
+
 Resource context exposes routing direction through `exposedBy` (upstream
 resources routing to this resource, including entrypoints reached through a
 selecting Service) and `backends` (resources this routes to). The compatibility
@@ -615,6 +621,13 @@ Resource context's `ingressSummary.tlsSecrets` lists named TLS Secrets in the
 Ingress's namespace. A Secret's `referencedBy` includes readable Ingresses with
 the path `spec.tls[].secretName`. Resource-view topology links only observed,
 visible TLS Secrets. Empty Secret names do not resolve controller defaults.
+
+Storage context uses the drawer's cached relationships. A PVC depends on its
+declared PV and StorageClass; a PV depends on its StorageClass and lists its claim
+as a dependent; a StorageClass lists its PVs and the claims that declare it,
+including Pending ones (using Kubernetes' class-annotation precedence). These are
+declarations, not proof that provisioning, binding or mounting succeeded, and
+they appear in resource context only, not as topology or neighborhood edges.
 
 ### Write Tools
 

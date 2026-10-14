@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	storagehelpers "k8s.io/component-helpers/storage/volume"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -644,12 +645,16 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			}
 			recordLookupError("PersistentVolumeClaim", err)
 			for _, pvc := range pvcs {
-				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
-					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
-					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
-					break
+				if pvc == nil || pvc.Namespace != namespace || pvc.Name != name {
+					continue
 				}
+				if pvc.Spec.VolumeName != "" {
+					rel.Children = appendResourceRef(rel.Children, ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName})
+				}
+				if class := storagehelpers.GetPersistentVolumeClaimClass(pvc); class != "" {
+					rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: class})
+				}
+				break
 			}
 		case "persistentvolume", "persistentvolumes", "pv", "pvs":
 			pvs, err := provider.PersistentVolumes()
@@ -666,8 +671,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 						enrichRef(&claimRef, dp)
 						rel.Consumers = append(rel.Consumers, claimRef)
 					}
-					if pv.Spec.StorageClassName != "" {
-						scRef := ResourceRef{Kind: "StorageClass", Name: pv.Spec.StorageClassName}
+					if class := storagehelpers.GetPersistentVolumeClass(pv); class != "" {
+						scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: class}
 						enrichRef(&scRef, dp)
 						rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 					}
@@ -683,10 +688,24 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			}
 			recordLookupError("PersistentVolume", err)
 			for _, pv := range pvs {
-				if pv.Spec.StorageClassName == name {
+				if storagehelpers.GetPersistentVolumeClass(pv) == name {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
 					rel.Children = append(rel.Children, pvRef)
+				}
+			}
+			// Claims of a cluster-scoped class can live in any namespace, so
+			// completeness is the cluster-wide claim inventory.
+			pvcs, err := provider.PersistentVolumeClaims()
+			if err == nil {
+				if inventory, ok := provider.(ResourceInventoryProvider); ok {
+					err = inventory.InventoryError("persistentvolumeclaims", "")
+				}
+			}
+			recordLookupError("PersistentVolumeClaim", err)
+			for _, pvc := range pvcs {
+				if pvc != nil && storagehelpers.GetPersistentVolumeClaimClass(pvc) == name {
+					rel.Dependents = append(rel.Dependents, ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name})
 				}
 			}
 		case "node", "nodes":
