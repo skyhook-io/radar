@@ -48,3 +48,22 @@ func TestCascadePreviewUsesUserTopologyAndRootReadGate(t *testing.T) {
 		t.Fatalf("denied root status=%d", denied.StatusCode)
 	}
 }
+
+func TestCascadePreviewNormalizesSensitiveRootKinds(t *testing.T) {
+	env := newAuthTestServer(t)
+	old := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(old) })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+	perms.SetCanI("get", "", "secrets", "default", false)
+	perms.SetCanI("get", "", "limitranges", "default", false)
+	perms.SetCanI("get", "", "namespaces", "", false)
+	env.srv.permCache.Set("sensitive-preview-reader", nil, perms)
+	for _, kind := range []string{"Secret", "secrets", "LimitRange", "Namespace"} {
+		resp := env.authGet(t, "/api/resources/"+kind+"/default/private/cascade-preview", "sensitive-preview-reader", "")
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s bypassed its root read check: status=%d", kind, resp.StatusCode)
+		}
+	}
+}

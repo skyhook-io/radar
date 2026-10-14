@@ -20,6 +20,11 @@ afterEach(async () => {
 })
 
 describe('Deletion preview states', () => {
+  it('states the namespace-wide deletion consequence without relying on topology', async () => {
+    await act(async () => root.render(<ForceDeleteConfirmDialog {...base} resourceKind="Namespace" resourceName="demo" namespaceName="" cascadeRootResolved={false} />))
+    expect(document.body.textContent).toContain('delete the namespace "demo" and the resources in it')
+    expect(document.body.textContent).not.toContain("not in Radar's topology")
+  })
   it('shows one advisory statement for a resolved preview', async () => {
     await act(async () => root.render(<ForceDeleteConfirmDialog {...base} cascadeRootResolved cascadeDependents={[{ kind: 'Pod', namespace: 'demo', name: 'web-pod' }]} />))
     const toggle = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('May affect'))!

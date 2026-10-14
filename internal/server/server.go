@@ -4422,7 +4422,7 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	kind := chi.URLParam(r, "kind")
+	kind := normalizeKind(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 	group := r.URL.Query().Get("group")

@@ -39,6 +39,7 @@ export function ForceDeleteConfirmDialog({
   cascadePreviewFailed,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
+  const isNamespace = resourceKind.toLowerCase() === 'namespace'
 
   function handleClose() {
     onClose()
@@ -56,7 +57,7 @@ export function ForceDeleteConfirmDialog({
       onConfirm={handleConfirm}
       title="Delete Resource"
       message={`Are you sure you want to delete "${resourceName}"?`}
-      details={`This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`}
+      details={isNamespace ? `This will permanently delete the namespace "${resourceName}" and the resources in it.` : `This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`}
       confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
       variant="danger"
       isLoading={isLoading}
@@ -79,7 +80,7 @@ export function ForceDeleteConfirmDialog({
           </p>
         )}
 
-        {!cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === false && (
+        {!isNamespace && !cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === false && (
           <p className="text-xs text-theme-text-tertiary">
             This resource is not in Radar&apos;s topology, so its related resources cannot be previewed.
           </p>
