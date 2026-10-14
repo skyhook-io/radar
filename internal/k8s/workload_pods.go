@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -46,8 +48,14 @@ func WorkloadPods(ctx context.Context, cache *ResourceCache, kind, namespace, na
 		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
 	}
 	kind = canonical
-	if cache == nil || cache.ResourceCache == nil {
-		return nil, fmt.Errorf("%w: read workload", ErrWorkloadAccessDenied)
+	if cache == nil || cache.ResourceCache == nil || cache.Pods() == nil {
+		return nil, fmt.Errorf("%w: list pods", ErrWorkloadAccessDenied)
+	}
+	// Membership is answered from the pod lister, so a namespace it does not
+	// cover is refused before the root is read; a dynamic root outside a
+	// forced namespace scope would otherwise surface as a cache failure.
+	if err := requireCovers(cache, "pods", namespace); err != nil {
+		return nil, err
 	}
 	var obj runtime.Object
 	var err error
@@ -124,6 +132,7 @@ func readDynamicRoot(ctx context.Context, cache *DynamicResourceCache, gvr schem
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				log.Printf("[k8s] Dynamic root read for %s %s/%s panicked: %v\n%s", gvr.Resource, namespace, name, r, debug.Stack())
 				done <- result{err: fmt.Errorf("read %s %s/%s: %v", gvr.Resource, namespace, name, r)}
 			}
 		}()

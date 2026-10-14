@@ -623,3 +623,20 @@ func TestWorkloadPodsReportsDeniedDynamicRoot(t *testing.T) {
 		t.Fatalf("denied Rollout inventory: err = %v, want ErrWorkloadAccessDenied", err)
 	}
 }
+
+// Under a forced namespace scope the dynamic root of another namespace has
+// no informer and never will; that is a scope refusal, like a typed root's,
+// not a cache failure or a warming inventory.
+func TestWorkloadPodsRefusesDynamicRootsOutsideTheWatchedNamespace(t *testing.T) {
+	ResetTestDynamicState()
+	t.Cleanup(ResetTestDynamicState)
+	cache := newScopedOwnershipCache(t, map[string]k8score.ResourceScope{
+		k8score.Pods:        {Enabled: true, Namespace: "team-a"},
+		k8score.ReplicaSets: {Enabled: true, Namespace: "team-a"},
+	})
+	for _, kind := range []string{"Rollout", "Workflow"} {
+		if _, err := WorkloadPods(context.Background(), cache, kind, "team-b", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+			t.Fatalf("%s outside the watched namespace: err = %v, want ErrWorkloadAccessDenied", kind, err)
+		}
+	}
+}
