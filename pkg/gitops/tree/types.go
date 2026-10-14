@@ -144,6 +144,12 @@ type ResourceTree struct {
 	// usable answer, in the user's words ("the token isn't accepted for
 	// this application"). Empty when nothing was configured to ask.
 	HealthAPIError string `json:"healthApiError,omitempty"`
+	// HealthAPIPending: the host is still connecting to the controller's API
+	// server and will have an answer shortly; ask again.
+	HealthAPIPending bool `json:"healthApiPending,omitempty"`
+	// HealthAPIRetrying: the host couldn't reach the controller's API server
+	// (HealthAPIError says why) and is retrying; ask again now and then.
+	HealthAPIRetrying bool `json:"healthApiRetrying,omitempty"`
 	// RemoteDestination is true for an Argo CD Application whose
 	// spec.destination is another cluster, or a Flux object with
 	// spec.kubeConfig. Radar's own reads describe the

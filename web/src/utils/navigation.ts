@@ -137,7 +137,10 @@ export function openExternal(url: string): void {
 // setMainView's cross-view params. A navigation whose search omits
 // ?namespaces= reads as an empty pick to App's URL sync, which clears the
 // user's namespace scope.
-const CROSS_VIEW_PARAMS = ['namespaces', 'ai-run'] as const
+export const CROSS_VIEW_PARAMS = ['namespaces', 'ai-run'] as const
+
+/** A Resources list route (`/resources/<plural>`), as opposed to bare `/resources` or a detail page. */
+export const RESOURCE_LIST_PATH = /^\/resources\/[^/]+$/
 
 /**
  * Writes App's view state into the query string. Topology's `mode` and

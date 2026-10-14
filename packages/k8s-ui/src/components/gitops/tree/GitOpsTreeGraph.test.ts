@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { getSubtitle } from './GitOpsTreeGraph'
+import { getSubtitle, nodeCause } from './GitOpsTreeGraph'
 import type { GitOpsTreeNode } from '../../../types'
 
 function node(extras: Partial<GitOpsTreeNode> = {}): GitOpsTreeNode {
@@ -88,5 +88,30 @@ describe('getSubtitle', () => {
   it('falls back to the namespace only when the node states nothing else', () => {
     expect(getSubtitle(node())).toBe('demo-flux')
     expect(getSubtitle(node({ ref: { kind: 'ClusterRole', name: 'podinfo', namespace: '' } }))).toBe('')
+  })
+})
+
+describe('nodeCause', () => {
+  // Shapes as the tree API sends them: the Go side maps Argo's Degraded and
+  // Missing to topologyStatus 'unhealthy', Progressing and Suspended to
+  // 'degraded' (pkg/gitops/tree healthToTopology).
+  const CAUSE = 'Back-off restarting failed container main'
+
+  it('shows the cause on a node the controller calls Degraded', () => {
+    expect(nodeCause(node({ health: 'Degraded', healthSource: 'controller', topologyStatus: 'unhealthy' }), CAUSE)).toBe(CAUSE)
+  })
+
+  it('hides it on a Progressing node, even when an issue matched it', () => {
+    // A rollout in flight is not broken; a cause tooltip on it says it is.
+    expect(nodeCause(node({ health: 'Progressing', healthSource: 'controller', topologyStatus: 'degraded' }), CAUSE)).toBeUndefined()
+    expect(nodeCause(node({ health: 'Progressing', healthSource: 'radar', topologyStatus: 'degraded' }), CAUSE)).toBeUndefined()
+  })
+
+  it('hides it on a Suspended node, even when an issue matched it', () => {
+    expect(nodeCause(node({ health: 'Suspended', healthSource: 'controller', topologyStatus: 'degraded' }), CAUSE)).toBeUndefined()
+  })
+
+  it('never shows it on a healthy node', () => {
+    expect(nodeCause(node({ health: 'Healthy', healthSource: 'controller', topologyStatus: 'healthy' }), CAUSE)).toBeUndefined()
   })
 })

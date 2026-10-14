@@ -13,7 +13,7 @@ The Helm list shows:
 - `lastOperation` for current failed upgrades, rollback-after-failure patterns, explicit rollbacks, and stuck pending operations (including uninstalls).
 - A capped operation trail for failed upgrades, rollbacks, rollback-after-failure, and stuck pending operations (including uninstalls).
 
-When `storageNamespace` is present, use it for Helm detail/API/MCP calls. Helm stores release history there even when the chart deploys resources into another namespace.
+When `storageNamespace` is present, use it for Helm detail/API/MCP calls. Helm stores release history there even when the chart deploys resources into another namespace. Rollback, upgrade, values preview/apply, and uninstall use the release’s recorded target namespace for objects without an explicit `metadata.namespace`, while history stays in the storage namespace. Objects with an explicit namespace retain it.
 
 ## Release Detail
 
@@ -55,6 +55,8 @@ Helm rewrites `Info.Deleted` at the start of every uninstall attempt, before the
 The issue suggests checking pre-delete hook Jobs and surviving resources with finalizers before retrying the uninstall (Helm re-runs an uninstall stuck in this state). When a hook is the blocker, `helm uninstall --no-hooks` completes the uninstall, but Helm does not remove the Jobs and Pods the hook created, and resources held by finalizers stay Terminating. Radar no longer ties either to the release afterwards, so the issue tells the operator to delete the hook's leftovers and check for Terminating resources. These are investigation steps, not verified blocker diagnoses.
 
 To find them, Radar first lists only the labels of the Helm release Secrets the caller can read. Helm labels each one with the release name, revision and status. Radar then reads in full only the releases whose newest revision is failed or pending, plus any release with the same name in the same read. If any release Secret lacks those labels, Radar reads them all in full, as before. Releases stored with Helm's ConfigMap or SQL drivers are not read for issues. `/api/issues` waits for this read, and the read stops as soon as the caller disconnects.
+
+When that read fails, for example because the API server returns an error or Radar's 60-second request limit runs out, `/api/issues` still answers, with `"unchecked_sources": [{"source": "helm", "reason": "read_failed"}]`: failed or stuck Helm releases may be missing from the response. The MCP `issues` tool returns the same field. A caller that may not list release Secrets gets no Helm issues and no `helm` entry, the same as for any other kind it can't list.
 
 ## Failed Upgrades And Rollback Inference
 

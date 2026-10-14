@@ -2309,6 +2309,37 @@ export function parseColumnFilterExcludes(filtersParam: string | null): Record<s
   return excludes
 }
 
+/** The Resources list's own filter params in the URL (the kind is in the path, `apiGroup` beside it). */
+export const RESOURCE_LIST_FILTER_PARAMS = ['search', 'regex', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive'] as const
+
+/** The per-kind filters in a query string: what a kind switch resets or restores. */
+export function kindFiltersFromSearch(search: string | undefined) {
+  const params = new URLSearchParams(search ?? '')
+  const filtersParam = params.get('filters')
+  return {
+    columnFilters: parseColumnFilters(filtersParam),
+    columnFilterExcludes: parseColumnFilterExcludes(filtersParam),
+    problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
+  }
+}
+
+/** The `filters` param value. Drops an exclude flag on a column with no active values. */
+export function columnFiltersParam(colFilters: Record<string, string[]>, colExcludes: Record<string, boolean>): string {
+  const activeExcludes = Object.fromEntries(
+    Object.entries(colExcludes).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0)
+  )
+  return serializeColumnFilters(colFilters, activeExcludes)
+}
+
+/** Inverse of kindFiltersFromSearch: the `filters` + `problems` query, '' when none. */
+export function kindFiltersToSearch(f: ReturnType<typeof kindFiltersFromSearch>): string {
+  const params = new URLSearchParams()
+  const filters = columnFiltersParam(f.columnFilters, f.columnFilterExcludes)
+  if (filters) params.set('filters', filters)
+  if (f.problemFilters.length > 0) params.set('problems', f.problemFilters.join(','))
+  return params.toString()
+}
+
 // Split a single "col[:operator]:values" pair into its decoded key, values, and
 // whether the explicit exclude operator was present. The first literal colon
 // delimits key from the rest (keys are encoded, so their own colons don't

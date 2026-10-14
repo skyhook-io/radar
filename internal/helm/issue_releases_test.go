@@ -19,12 +19,15 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	helmtime "helm.sh/helm/v3/pkg/time"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
 	"k8s.io/client-go/rest"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // labelledReleaseSecret is a release Secret labelled the way Helm's Secret
@@ -331,5 +334,35 @@ func TestIssueReleasesReadOnlyFailedOrPendingReleasesInFull(t *testing.T) {
 	}
 	if got := storage.fullSent.Load(); got != 2 {
 		t.Fatalf("API server sent %d release Secrets in full, want the failed release's 2 revisions out of %d", got, len(storage.secrets))
+	}
+}
+
+// A namespace the caller may not read is skipped, but a 401 in one namespace
+// must fail the issue read even when another namespace read fine, or the
+// caller gets an empty answer with nothing saying Helm went unchecked.
+func TestIssueReleasesSkipOnlyDeniedNamespaces(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		unchecked bool
+	}{
+		{"forbidden", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", fmt.Errorf("denied")), false},
+		{"unauthorized", apierrors.NewUnauthorized("Unauthorized"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			labels := metadataClientFor(t, nil)
+			labels.PrependReactor("list", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				if action.GetNamespace() == "blocked" {
+					return true, nil, tc.err
+				}
+				return false, nil, nil
+			})
+			ctx := context.Background()
+			_, err := listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(), labels, "", []string{"open", "blocked"})
+			if got := IssueReadUnchecked(ctx, err); got != tc.unchecked {
+				t.Fatalf("IssueReadUnchecked = %v, want %v (err: %v)", got, tc.unchecked, err)
+			}
+		})
 	}
 }

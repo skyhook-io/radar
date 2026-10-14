@@ -91,9 +91,9 @@ func main() {
 	// No-op on macOS/Windows.
 	logBootEnv()
 
-	// Disable WebKit's DMABUF renderer on Linux unless the user opts in —
-	// it produces blank windows on Wayland+KDE/NVIDIA and upstream won't fix.
-	// Must run before Wails initializes WebKit.
+	// Default WebKit on Linux to shared-memory buffers — DMABUF buffers
+	// produce blank windows on Wayland+KDE/NVIDIA. Must run before Wails
+	// initializes WebKit.
 	applyWebKitDefaults()
 
 	// GUI apps (macOS .app, Linux .desktop) get a minimal PATH that

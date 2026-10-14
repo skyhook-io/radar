@@ -111,3 +111,38 @@ func TestPodSpecReferencesPreservesDistinctOptionality(t *testing.T) {
 		t.Fatalf("distinct declaration requirements = %#v, want %#v", got, want)
 	}
 }
+
+func TestVisitPodSpecReferencesDoesNotAllocate(t *testing.T) {
+	optional := true
+	spec := corev1.PodSpec{
+		ServiceAccountName: "runner",
+		ImagePullSecrets:   []corev1.LocalObjectReference{{Name: "pull"}, {Name: "pull"}, {}},
+		Containers: []corev1.Container{{EnvFrom: []corev1.EnvFromSource{
+			{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Optional: &optional}},
+			{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}},
+		}}},
+	}
+	before := spec.DeepCopy()
+	count, optionalCount := 0, 0
+	allocs := testing.AllocsPerRun(100, func() {
+		count, optionalCount = 0, 0
+		VisitPodSpecReferences("team", spec, func(ref PodSpecReference) {
+			count++
+			if ref.Optional {
+				optionalCount++
+			}
+			if ref.Namespace != "team" || ref.Name == "" || ref.Path == "" {
+				t.Errorf("invalid declaration: %+v", ref)
+			}
+		})
+	})
+	if count != 5 || optionalCount != 1 {
+		t.Fatalf("visited %d declarations (%d optional), want 5 (1 optional)", count, optionalCount)
+	}
+	if allocs != 0 {
+		t.Fatalf("visitor allocated %.0f times per scan", allocs)
+	}
+	if !reflect.DeepEqual(&spec, before) {
+		t.Fatal("visitor mutated PodSpec")
+	}
+}

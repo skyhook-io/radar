@@ -60,16 +60,17 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(scanNamespaces), namespacedIdx, clusterIdx)
 }
 
-// summaryCtxTopoMemo caches topology builds across summary-context list and
-// search invocations. MCP has no shared broadcaster cache, so without
-// memoization every list_resources / search call from an agent pays a
-// full topology build (multi-second on multi-thousand-resource clusters).
-// 5s TTL matches the REST broadcaster's cadence — short enough that
-// managedBy stays current after a context switch, long enough that a
-// burst of agent calls amortizes the build cost.
+// summaryCtxTopoMemo caches topology builds for the list_resources and search
+// summary context, and for the resource context get_resource and diagnose
+// attach (mcpTopologyForContext). MCP has no shared broadcaster cache, so without
+// memoization every one of those calls from an agent pays a full topology
+// build (multi-second on multi-thousand-resource clusters). 5s TTL matches
+// the REST broadcaster's cadence, long enough that a burst of agent calls
+// amortizes the build cost. Callers scope each build to the generation of
+// the resource cache it reads, so a context switch never serves the previous
+// cluster's graph.
 //
-// Other MCP tools (handleGetResource, get_neighborhood) still build
-// inline; threading them through here is a separate follow-up.
+// Other MCP topology reads build inline and are not memoized.
 var summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
 
 // buildSummaryContextTopology returns a topology snapshot suitable for
@@ -85,7 +86,7 @@ func buildSummaryContextTopology(namespaces []string) *topology.Topology {
 	if len(namespaces) > 0 {
 		opts.Namespaces = namespaces
 	}
-	topo, err := summaryCtxTopoMemo.Get(opts, func() (*topology.Topology, error) {
+	topo, err := summaryCtxTopoMemo.GetScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
 		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
 			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 		return builder.Build(opts)

@@ -389,6 +389,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"grouped critical/warning failures across workloads, Jobs/CronJobs, HPAs, " +
 			"PVCs, Nodes, references, pod startup, native Helm, and False controller conditions. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
+			"`unchecked_sources` lists sources Radar couldn't check, so their issues may be " +
+			"missing; don't call them healthy. `helm` means failed or stuck Helm releases. " +
 			"`diagnostic_context.role` marks roots, rollups, symptoms, or context; " +
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
@@ -2295,8 +2297,11 @@ type mcpDashboard struct {
 	TotalProblems      int              `json:"totalProblems"`                // count before the dashboard cap was applied
 	ProblemsBySeverity map[string]int   `json:"problemsBySeverity,omitempty"` // critical/high/medium/warning counts across the full set
 	RecentChanges      []mcpChange      `json:"recentChanges,omitempty"`
-	WarningEvents      int              `json:"warningEvents"`
-	WarningGroups      []mcpWarning     `json:"warningGroups"`
+	// RecentChangesError is set when the changes could not be read, so a
+	// missing recentChanges is not taken for "nothing changed".
+	RecentChangesError string       `json:"recentChangesError,omitempty"`
+	WarningEvents      int          `json:"warningEvents"`
+	WarningGroups      []mcpWarning `json:"warningGroups"`
 	// TotalWarningGroups counts distinct deduped groups before the
 	// dashboardWarningGroupCap; WarningGroupsTruncated flags that groups
 	// beyond the cap exist, so the consumer knows to narrow via get_events
@@ -2911,7 +2916,11 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	}
 
 	// Correlate recent changes with problems — only show changes for broken resources
-	if store := timeline.GetStore(); store != nil && len(d.Problems) > 0 {
+	store := timeline.GetStore()
+	if store == nil && len(d.Problems) > 0 {
+		d.RecentChangesError = timeline.StoreMissingError().Error()
+	}
+	if store != nil && len(d.Problems) > 0 {
 		problemKeys := make(map[string]bool, len(d.Problems))
 		for _, p := range d.Problems {
 			problemKeys[fmt.Sprintf("%s/%s/%s", p.Kind, p.Namespace, p.Name)] = true
@@ -2929,6 +2938,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		changes, err := store.Query(ctx, queryOpts)
 		if err != nil {
 			log.Printf("[mcp] Failed to query timeline for dashboard changes: %v", err)
+			d.RecentChangesError = err.Error()
 		}
 		if err == nil {
 			// Per-kind RBAC: correlation gates by problem match + namespace, not
@@ -3080,21 +3090,28 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	out, stats = issues.MergeExternalIssues(out, stats, filters, nativeHelmIssuesForContext(ctx, allowedNamespaces, filters))
+	helmIssues, helmUnchecked := nativeHelmIssuesForContext(ctx, allowedNamespaces, filters)
+	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse), then MCP-specific
 	// enrichments below.
 	resp := issues.NewListResponse(out, stats)
+	if helmUnchecked {
+		resp.UncheckedSources = []issuesapi.UncheckedSource{{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonReadFailed}}
+	}
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})
 	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(input.Kind, input.Filter, input.Severity) {
 		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {
-			if recentResult, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
+			recentResult, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
 				Namespaces: []string{allowedNamespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
 				Limit:      meaningfulchanges.IssueChangesFetchLimit(recentChangesReason),
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
-			}); err == nil && len(recentResult.Changes) > 0 {
+			})
+			if err != nil {
+				resp.RecentChangesError = err.Error()
+			} else if len(recentResult.Changes) > 0 {
 				// Per-kind RBAC before ranking, so priority/recap see the visible set.
 				recentResult.Changes = filterRecentChangesRBAC(ctx, recentResult.Changes)
 				changes, guidance, recapped := meaningfulchanges.PrioritizeIssueChanges(
@@ -3141,13 +3158,13 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	return toJSONResult(resp)
 }
 
-func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filters issues.Filters) []issues.Issue {
+func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked bool) {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
-		return nil
+		return nil, false
 	}
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return nil
+		return nil, false
 	}
 	username, groups := userFromContext(ctx)
 	helmNamespaces := namespaces
@@ -3156,12 +3173,12 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
 	if err != nil {
-		if !errors.Is(ctx.Err(), context.Canceled) && !helm.IsForbiddenError(err) {
+		if !errors.Is(ctx.Err(), context.Canceled) && !helm.IssueReadDenied(err) {
 			log.Printf("[mcp] Failed to list Helm releases for issue stream: %v", err)
 		}
-		return nil
+		return nil, helm.IssueReadUnchecked(ctx, err)
 	}
-	return issues.NativeHelmReleaseIssues(releases, time.Now())
+	return issues.NativeHelmReleaseIssues(releases, time.Now()), false
 }
 
 func parseSeverityList(v string) ([]issues.Severity, error) {

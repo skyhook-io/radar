@@ -197,6 +197,9 @@ func freshInstallCheck(actionConfig *action.Configuration, name, namespace strin
 // the action; see upgrade.go:49-58).
 func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest, ch *chart.Chart, mode installMode) (*release.Release, error) {
 	if mode == installUpgrade {
+		if err := useReleaseTargetNamespace(actionConfig, req.ReleaseName); err != nil {
+			return nil, err
+		}
 		upgrade := action.NewUpgrade(actionConfig)
 		upgrade.Install = true
 		upgrade.Namespace = req.Namespace

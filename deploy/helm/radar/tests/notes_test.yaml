@@ -1,0 +1,271 @@
+suite: NOTES
+templates:
+  - NOTES.txt
+release:
+  name: radar
+  namespace: radar
+tests:
+  - it: ClusterIP (default) prints the documented port-forward
+    asserts:
+      - equalRaw:
+          value: |
+            Access via port-forward:
+
+              kubectl port-forward svc/radar 9280:9280 -n radar
+              open http://localhost:9280
+
+  - it: ClusterIP follows release namespace, fullname, service port and basePath
+    release:
+      name: tools
+      namespace: platform
+    set:
+      service:
+        port: 8080
+      basePath: /radar/
+    asserts:
+      - matchRegexRaw:
+          pattern: kubectl port-forward svc/tools-radar 9280:8080 -n platform\n
+      - matchRegexRaw:
+          pattern: open http://localhost:9280/radar/\n?$
+      - notMatchRegexRaw:
+          pattern: Warning
+
+  - it: NodePort and LoadBalancer get the port-forward plus the no-auth warning
+    set:
+      service:
+        type: LoadBalancer
+    asserts:
+      - matchRegexRaw:
+          pattern: "^Access via port-forward:\n\n  kubectl port-forward svc/radar 9280:9280 -n radar\n  open http://localhost:9280\n\nWarning: no auth"
+      - notMatchRegexRaw:
+          pattern: (SERVICE_IP|NODE_PORT)
+
+  - it: NodePort gets the same port-forward
+    set:
+      service:
+        type: NodePort
+    asserts:
+      - matchRegexRaw:
+          pattern: kubectl port-forward svc/radar 9280:9280 -n radar
+      - matchRegexRaw:
+          pattern: "Warning: no auth"
+
+  - it: Ingress prints each host, https when ingress.tls is set
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: radar.example.com
+            paths:
+              - path: /
+                pathType: Prefix
+          - host: radar.example.org
+            paths:
+              - path: /
+                pathType: Prefix
+        tls:
+          - secretName: radar-tls
+            hosts:
+              - radar.example.com
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  https://radar.example.com/\n  https://radar.example.org/\n"
+      - matchRegexRaw:
+          pattern: "Warning: no auth"
+      - notMatchRegexRaw:
+          pattern: port-forward
+
+  - it: Ingress without TLS prints http
+    set:
+      ingress:
+        enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  http://radar.example.com/\n"
+
+  - it: Ingress uses basePath instead of the ingress path and drops duplicates
+    set:
+      basePath: /radar
+      ingress:
+        enabled: true
+        hosts:
+          - host: tools.example.com
+            paths:
+              - path: /radar
+                pathType: Prefix
+              - path: /radar/
+                pathType: Prefix
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  http://tools.example.com/radar/\n\n"
+
+  - it: HTTPRoute prints its hostnames without a scheme and points at the Gateway
+    set:
+      httpRoute:
+        enabled: true
+        parentRefs:
+          - name: public-gateway
+            namespace: gateway-system
+        hostnames:
+          - radar.example.com
+          - radar.example.org
+    asserts:
+      - matchRegexRaw:
+          pattern: "Radar's HTTPRoute hostnames:\n  radar.example.com/\n  radar.example.org/\n"
+      - notMatchRegexRaw:
+          pattern: https?://radar\.example
+      - matchRegexRaw:
+          pattern: Your HTTPRoute depends on the listener configuration of your gateway
+      - matchRegexRaw:
+          pattern: kubectl get --namespace gateway-system gateway/public-gateway -o yaml
+      - matchRegexRaw:
+          pattern: "Warning: no auth"
+
+  - it: HTTPRoute without hostnames prints the Gateway listener hostname command
+    set:
+      httpRoute:
+        enabled: true
+        parentRefs:
+          - name: public-gateway
+    asserts:
+      - matchRegexRaw:
+          pattern: export APP_HOSTNAME=\$\(kubectl get --namespace radar gateway/public-gateway -o jsonpath="\{\.spec\.listeners\[0\]\.hostname\}"\)
+      - matchRegexRaw:
+          pattern: kubectl get --namespace radar gateway/public-gateway -o yaml
+
+  - it: OIDC adds the documented sign-in line and the auth docs link
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: https://radar.example.com/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: Access via port-forward
+      - matchRegexRaw:
+          pattern: "Authentication: OIDC \\(auth.mode=oidc\\). Radar redirects to your identity\nprovider, validates the token, and creates a session cookie.\nSetup: https://radarhq.io/docs/configuration/authentication"
+      - notMatchRegexRaw:
+          pattern: Warning
+
+  - it: proxy auth without an ingress or route prints only the proxy note
+    set:
+      auth:
+        mode: proxy
+    asserts:
+      - equalRaw:
+          value: |
+            Authentication: proxy (auth.mode=proxy). Users authenticate through the proxy,
+            which forwards their identity to Radar via HTTP headers. The auth proxy should
+            be the only path to Radar.
+            Setup: https://radarhq.io/docs/configuration/authentication
+
+  - it: proxy auth on a LoadBalancer Service does not print a port-forward
+    set:
+      auth:
+        mode: proxy
+      service:
+        type: LoadBalancer
+    asserts:
+      - notMatchRegexRaw:
+          pattern: port-forward
+      - matchRegexRaw:
+          pattern: The auth proxy should\nbe the only path to Radar
+
+  - it: proxy auth behind an Ingress prints the URL and the proxy note
+    set:
+      auth:
+        mode: proxy
+      ingress:
+        enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  http://radar.example.com/\n\nAuthentication: proxy"
+      - notMatchRegexRaw:
+          pattern: Warning
+
+  - it: Radar Cloud prints the tunnel endpoint and the log command only
+    set:
+      cloud:
+        enabled: true
+        url: wss://cloud.example/agent
+        clusterName: prod-eu
+        existingSecret: radar-cloud-config
+      ingress:
+        enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: The Radar pod dials the Radar Cloud endpoint \(cloud.url\) over an outbound WebSocket
+      - notMatchRegexRaw:
+          pattern: cloud\.example
+      - matchRegexRaw:
+          pattern: kubectl logs -n radar deploy/radar
+      - notMatchRegexRaw:
+          pattern: (port-forward svc|Open Radar at|Warning)
+
+  # Credentials set everywhere a value can hold one. The marker must never
+  # reach the notes, in any mode.
+  - it: never prints credentials (ClusterIP)
+    set: &credentials
+      auth:
+        secret: SHOULD-NOT-APPEAR
+        oidc:
+          clientSecret: SHOULD-NOT-APPEAR
+      cloud:
+        token: SHOULD-NOT-APPEAR
+      argocd:
+        token: SHOULD-NOT-APPEAR
+      traffic:
+        prometheusUrl: https://user:SHOULD-NOT-APPEAR@prometheus.example
+        prometheusHeaders:
+          Authorization: Bearer SHOULD-NOT-APPEAR
+    asserts: &noCredentials
+      - notMatchRegexRaw:
+          pattern: SHOULD-NOT-APPEAR
+
+  - it: never prints credentials (LoadBalancer)
+    set:
+      <<: *credentials
+      service:
+        type: LoadBalancer
+    asserts: *noCredentials
+
+  - it: never prints credentials (ingress, OIDC)
+    set:
+      <<: *credentials
+      ingress:
+        enabled: true
+      auth:
+        mode: oidc
+        secret: SHOULD-NOT-APPEAR
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          clientSecret: SHOULD-NOT-APPEAR
+          redirectURL: https://radar.example.com/auth/callback
+    asserts: *noCredentials
+
+  - it: never prints credentials (HTTPRoute, proxy)
+    set:
+      <<: *credentials
+      httpRoute:
+        enabled: true
+        parentRefs:
+          - name: public-gateway
+        hostnames:
+          - radar.example.com
+      auth:
+        mode: proxy
+        secret: SHOULD-NOT-APPEAR
+    asserts: *noCredentials
+
+  - it: never prints credentials (Cloud, token in the URL)
+    set:
+      <<: *credentials
+      cloud:
+        enabled: true
+        url: wss://user:SHOULD-NOT-APPEAR@cloud.example/agent?token=SHOULD-NOT-APPEAR
+        clusterName: prod-eu
+        token: SHOULD-NOT-APPEAR
+    asserts: *noCredentials

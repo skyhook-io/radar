@@ -188,6 +188,7 @@ const (
 
 // Topology represents the complete graph
 type Topology struct {
+	podConsumers            map[string][]ResourceRef
 	Nodes                   []Node   `json:"nodes"`
 	Edges                   []Edge   `json:"edges"`
 	Warnings                []string `json:"warnings,omitempty"`                // Warnings about resources that failed to load
@@ -393,7 +394,7 @@ type BuildOptions struct {
 	IncludePVCs          bool     // Include PersistentVolumeClaim nodes
 	IncludeReplicaSets   bool     // Include ReplicaSet nodes (noisy intermediate objects)
 	IncludeGenericCRDs   bool     // Include CRDs with owner refs to topology nodes (default: true)
-	ForRelationshipCache bool     // Skip large cluster guard — used for internal relationship cache builds
+	ForRelationshipCache bool     // Retain full template/Pod facts and skip the large-cluster guard for resource reads
 	ShowPolicyEffect     bool     // Evaluate NetworkPolicies and annotate edges with allow/block/unprotected
 	SummaryMode          bool     // Collapse the pod tier into per-workload/service counts (set by Build when estimate ≥ SummaryModeThreshold)
 }
@@ -449,6 +450,8 @@ type Relationships struct {
 	PodPlacementObserved    bool `json:"-"`
 	PodPlacementUnavailable bool `json:"-"`
 
+	// IstioServiceDomain is the configured registry domain or upstream default; omitted when unknown.
+	IstioServiceDomain string `json:"istioServiceDomain,omitempty"`
 	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 

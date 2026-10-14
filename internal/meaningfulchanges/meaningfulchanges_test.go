@@ -1564,3 +1564,28 @@ func recentChange(kind, namespace, name string, at time.Time, fieldPath string) 
 		Fields:         []issuesapi.ChangeField{{Path: fieldPath}},
 	}
 }
+
+// With PostgreSQL configured and unreachable, the error reaches the Diagnose
+// evidence panel and MCP clients verbatim. "store not initialized" reads like a
+// Radar bug; it has to name the database.
+func TestRecentNamesTheUnreachableDatabase(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
+			t.Fatalf("re-init global store: %v", err)
+		}
+	})
+	// Port 1 refuses at once, so the first attempt fails without a timeout.
+	if err := timeline.InitStore(timeline.StoreConfig{
+		Type: timeline.StoreTypePostgres,
+		DSN:  "postgres://radar:pw@127.0.0.1:1/radar?connect_timeout=2",
+	}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+
+	_, err := Recent(context.Background(), Query{Since: DefaultSince, Limit: 5})
+	if err == nil || !strings.Contains(err.Error(), "can't connect to its PostgreSQL database") || !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("err = %v, want the database named with the driver's error", err)
+	}
+}

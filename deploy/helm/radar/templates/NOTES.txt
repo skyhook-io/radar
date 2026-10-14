@@ -1,0 +1,78 @@
+{{- /* Every sentence here is taken from the Radar docs (docs/*.md, radarhq.io/docs)
+       and the ingress/HTTPRoute commands from Helm's `helm create` NOTES.txt
+       scaffold. Keep it that way: don't add claims the docs don't make.
+       Never print a value that can hold a credential. cloud.url is named, not
+       printed, because a URL can carry userinfo or a token in its query. */ -}}
+{{- $fullName := include "radar.fullname" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- $port := .Values.service.port -}}
+{{- $basePath := include "radar.basePath" . -}}
+{{- $authDocs := "https://radarhq.io/docs/configuration/authentication" -}}
+{{- $mode := .Values.auth.mode -}}
+{{- $routed := or .Values.ingress.enabled .Values.httpRoute.enabled -}}
+{{- $proxyAuth := printf "Authentication: proxy (auth.mode=proxy). Users authenticate through the proxy,\nwhich forwards their identity to Radar via HTTP headers. The auth proxy should\nbe the only path to Radar.\nSetup: %s" $authDocs -}}
+{{- if .Values.cloud.enabled }}
+The Radar pod dials the Radar Cloud endpoint (cloud.url) over an outbound WebSocket.
+Once connected, the Radar Cloud install page redirects you into the cluster view.
+The pod's own listener serves only /api/health; Radar is served over the Cloud tunnel.
+
+If the install page times out, check the Radar pod logs:
+
+  kubectl logs -n {{ $ns }} deploy/{{ $fullName }}
+{{- else if and (eq $mode "proxy") (not $routed) }}
+{{- /* No Service address or port-forward: the docs say the auth proxy should
+       be the only path to Radar. */}}
+{{ $proxyAuth }}
+{{- else }}
+{{- if .Values.ingress.enabled }}
+{{- $urls := list }}
+{{- range $h := .Values.ingress.hosts }}
+{{- range $h.paths }}
+{{- $path := ternary (printf "%s/" $basePath) .path (ne $basePath "") }}
+{{- $urls = append $urls (printf "http%s://%s%s" (ternary "s" "" (not (empty $.Values.ingress.tls))) ($h.host | default "") $path) }}
+{{- end }}
+{{- end }}
+Open Radar at:
+{{- range uniq $urls }}
+  {{ . }}
+{{- end }}
+{{- else if .Values.httpRoute.enabled }}
+{{- $gw := first .Values.httpRoute.parentRefs }}
+{{- $gwNs := $gw.namespace | default $ns }}
+{{- if .Values.httpRoute.hostnames }}
+Radar's HTTPRoute hostnames:
+{{- range .Values.httpRoute.hostnames }}
+  {{ . }}{{ $basePath }}/
+{{- end }}
+{{- else }}
+Get the Gateway listener hostname:
+
+  export APP_HOSTNAME=$(kubectl get --namespace {{ $gwNs }} gateway/{{ $gw.name }} -o jsonpath="{.spec.listeners[0].hostname}")
+{{- end }}
+
+Your HTTPRoute depends on the listener configuration of your gateway.
+You can check the gateway configuration with:
+
+  kubectl get --namespace {{ $gwNs }} gateway/{{ $gw.name }} -o yaml
+{{- else }}
+Access via port-forward:
+
+  kubectl port-forward svc/{{ $fullName }} 9280:{{ $port }} -n {{ $ns }}
+  open http://localhost:9280{{ $basePath }}{{ if $basePath }}/{{ end }}
+{{- end }}
+{{- if eq $mode "oidc" }}
+
+Authentication: OIDC (auth.mode=oidc). Radar redirects to your identity
+provider, validates the token, and creates a session cookie.
+Setup: {{ $authDocs }}
+{{- else if eq $mode "proxy" }}
+
+{{ $proxyAuth }}
+{{- else if or $routed (ne .Values.service.type "ClusterIP") }}
+
+Warning: no auth (auth.mode=none). Only use this behind a trusted private
+network boundary. Anyone who can reach Radar can use the permissions granted to
+its ServiceAccount. For shared or externally reachable installations, configure
+authentication: {{ $authDocs }}
+{{- end }}
+{{- end }}

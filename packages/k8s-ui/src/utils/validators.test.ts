@@ -82,25 +82,16 @@ describe('validateRFC1123Subdomain', () => {
     if (!r.valid) expect(r.error).toMatch(/253/)
   })
 
-  it('rejects single labels longer than 63 chars even when total is under 253', () => {
-    // K8s' IsDNS1123Subdomain enforces ≤ 63 chars per dot-
-    // separated label on top of the 253-char total. Without the
-    // per-label check, a single 200-char label slipped through
-    // client-side and was rejected only server-side.
-    const huge = 'a'.repeat(200)
-    const r = validateRFC1123Subdomain(huge)
-    expect(r.valid).toBe(false)
-    if (!r.valid) expect(r.error).toMatch(/63/)
+  it('accepts long undotted names under the Kubernetes total limit', () => {
+    expect(validateRFC1123Subdomain('a'.repeat(200)).valid).toBe(true)
   })
 
   it('accepts a 63-char label at the boundary', () => {
     expect(validateRFC1123Subdomain('a'.repeat(63)).valid).toBe(true)
   })
 
-  it('rejects only the offending label when other labels are fine', () => {
-    const r = validateRFC1123Subdomain(`ok.${'a'.repeat(64)}.also-ok`)
-    expect(r.valid).toBe(false)
-    if (!r.valid) expect(r.error).toMatch(/63/)
+  it('accepts long dot-separated parts under the Kubernetes total limit', () => {
+    expect(validateRFC1123Subdomain(`ok.${'a'.repeat(64)}.also-ok`).valid).toBe(true)
   })
 })
 

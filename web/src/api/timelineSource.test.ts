@@ -19,6 +19,7 @@ import {
   applyClientFilters,
   localOverviewFromEvents,
   needsWindowFetch,
+  frozenWindowRefetchInterval,
   type RetainedRing,
 } from './timelineSource'
 import type { TimelineEvent } from '../types'
@@ -648,5 +649,13 @@ describe('retained ring fetch (the OSS-identical accumulate model)', () => {
       runRetainedRingFetch({ ringKey: 'k', cached, forceResync: flags, capMs: CAP, now: NOW }),
     ).rejects.toBeInstanceOf(ApiError)
     // cursor is intact on the cached ring — nothing was committed
+  })
+})
+
+describe('frozenWindowRefetchInterval', () => {
+  it('polls a failed window until it loads, and leaves a loaded one alone', () => {
+    expect(frozenWindowRefetchInterval('error')).toBe(10_000)
+    expect(frozenWindowRefetchInterval('success')).toBe(false)
+    expect(frozenWindowRefetchInterval('pending')).toBe(false)
   })
 })

@@ -127,16 +127,16 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 			WithDynamic(dp).
 			Build(buildOpts)
 	}
-	topo, err := s.topoMemo.Get(buildOpts, build)
+	topo, err := s.topoMemo.GetScoped(cache.Generation(), buildOpts, build)
 	if err != nil {
 		log.Printf("[neighborhood] Failed to build topology for %s %s/%s: %v", rawKind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// GetIndex piggybacks on the memo entry just populated by Get above —
-	// the index is computed once per topology refresh and reused across
+	// GetIndexScoped piggybacks on the memo entry just populated by GetScoped
+	// above. The index is computed once per topology refresh and reused across
 	// requests, matching the relationships hot path.
-	idx, err := s.topoMemo.GetIndex(buildOpts, build)
+	idx, err := s.topoMemo.GetIndexScoped(cache.Generation(), buildOpts, build)
 	if err != nil {
 		log.Printf("[neighborhood] Failed to fetch topology index for %s %s/%s: %v", rawKind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())

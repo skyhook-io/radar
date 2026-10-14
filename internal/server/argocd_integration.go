@@ -19,13 +19,16 @@ import (
 // handleArgoCDStatus reports the live Argo CD integration state for the Settings
 // Overview: configured (a URL or token is set), connected (a probe has landed),
 // and the resolved address. Read-only and NOT owner-gated — the Overview is shown
-// to every user, and this mirrors the Prometheus status endpoint. Get() nudges a
-// throttled background reconnect when disconnected, so opening Overview after a
-// restart helps the integration come back.
+// to every user, and this mirrors the Prometheus status endpoint. It reports
+// state and never waits on the server. Get() nudges a throttled background
+// reconnect when disconnected, so opening Overview after a restart helps the
+// integration come back.
 func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 	resp := struct {
 		Configured bool `json:"configured"`
 		Connected  bool `json:"connected"`
+		// Connecting: not connected yet, and a connection is being made.
+		Connecting bool `json:"connecting,omitempty"`
 		// Anonymous: connected without a token because the install serves
 		// reads to everyone — Settings can say there is nothing to add.
 		Anonymous bool   `json:"anonymous,omitempty"`
@@ -48,13 +51,20 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 	if resp.Connected {
 		resp.Address = argocd.Address()
 		resp.Anonymous = argocd.AnonymousReadAllowed()
-	} else if argocd.TokenBindingUpgradeRequired() {
-		resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
-		if s.configManagement() == "operator" {
-			resp.Reason = "The saved Argo CD token is not bound to this kubeconfig source. Ask the operator to provision the token through startup configuration."
+		if err := argocd.LastReadError(); err != nil && resp.Configured {
+			resp.Reason = "Radar's last read from Argo CD failed: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
 		}
-	} else if err := argocd.LastProbeError(); err != nil && resp.Configured {
-		resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
+	} else {
+		// While a reconnect runs, the last failure still says why it is needed.
+		resp.Connecting = argocd.Connecting()
+		if argocd.TokenBindingUpgradeRequired() {
+			resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
+			if s.configManagement() == "operator" {
+				resp.Reason = "The saved Argo CD token is not bound to this kubeconfig source. Ask the operator to provision the token through startup configuration."
+			}
+		} else if err := argocd.LastProbeError(); err != nil && resp.Configured {
+			resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -164,6 +174,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 	if err := argocd.Probe(ctx); err != nil {
 		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext, prevTokenBinding)
+		argocd.Prewarm()
 		// The upstream error can embed the raw response body (proxy headers, a
 		// render error with Secret data). Log it server-side; return only the
 		// mapped guidance so nothing from Argo's body reaches the browser.
@@ -201,6 +212,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		// The running client must agree with the on-disk config; roll it back —
 		// including the token's source binding captured above.
 		argocd.RestoreConfig(prev.ArgoCDURL, prev.ArgoCDToken, prev.ArgoCDInsecureTLS, prevTokenContext, prevTokenBinding)
+		argocd.Prewarm()
 		log.Printf("[argocd] Failed to persist Argo CD config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

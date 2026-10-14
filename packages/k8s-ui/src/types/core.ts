@@ -641,6 +641,8 @@ export interface ResourceRef {
 
 // Computed relationships for a resource
 export interface Relationships {
+  /** Istio registry domain supplied by the producer; omitted when unknown. */
+  istioServiceDomain?: string
   reflection?: {
     source?: ResourceRef
     sourceResourceVersion?: string

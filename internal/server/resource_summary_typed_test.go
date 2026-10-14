@@ -289,3 +289,14 @@ func TestSummarizeTypedListShapes(t *testing.T) {
 		t.Fatalf("unprofiled kind was transformed")
 	}
 }
+
+func TestSummarizePodRowKeepsPodLevelResources(t *testing.T) {
+	p := fatPod()
+	p.Spec.Resources = &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+	}
+	m := asJSONMap(t, summarizePodRow(p))
+	if got := dig(t, m, "spec", "resources", "limits", "cpu"); got != "2" {
+		t.Errorf("spec.resources.limits.cpu = %v — the CPU/Mem column reads the pod-level ceiling", got)
+	}
+}

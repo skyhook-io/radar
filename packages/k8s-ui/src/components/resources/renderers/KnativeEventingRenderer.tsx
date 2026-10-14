@@ -95,12 +95,11 @@ export function TriggerRenderer({ data, onNavigate }: RendererProps) {
             </span>
           } />
           <Property label="Broker" value={
-            <ResourceLink
-              name={brokerName}
-              kind="brokers"
-              namespace={ns}
-              onNavigate={onNavigate}
-            />
+            spec.brokerRef
+              ? (spec.brokerRef.name && spec.brokerRef.namespace
+                ? <ResourceLink name={spec.brokerRef.name} kind="brokers" group="eventing.knative.dev" namespace={spec.brokerRef.namespace} onNavigate={onNavigate} />
+                : <span>{spec.brokerRef.name || '-'}</span>)
+              : <ResourceLink name={brokerName} kind="brokers" group="eventing.knative.dev" namespace={ns} onNavigate={onNavigate} />
           } />
           <Property label="Subscriber" value={
             subscriberRef ? (

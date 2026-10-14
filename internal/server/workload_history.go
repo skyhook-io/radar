@@ -90,7 +90,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	store := timeline.GetStore()
 	if store == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Timeline store not available")
+		s.writeTimelineStoreUnavailable(w)
 		return
 	}
 
@@ -102,7 +102,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	events, incomplete, err := readWorkloadHistory(r.Context(), store, clusterContext, key, live, attached, beforeSeq, limit+1)
 	if err != nil {
 		log.Printf("[workload-history] Failed to query the history of %s %s/%s: %v", kind, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeTimelineQueryError(w, err)
 		return
 	}
 	resp := workloadHistoryResponse{Events: events, Incomplete: incomplete}

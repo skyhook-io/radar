@@ -71,6 +71,14 @@ export function adaptIssues(
       "truncated",
     );
   }
+  if (nonEmptyString(value.recent_changes_error)) {
+    builder.limit(
+      source,
+      "Issue-related changes",
+      value.recent_changes_error,
+      "error",
+    );
+  }
   if (value.correlation_truncated === true) {
     builder.limit(
       source,

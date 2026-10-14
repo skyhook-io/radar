@@ -114,3 +114,32 @@ func TestFindPodEnvChangesIncludesRunningInitContainers(t *testing.T) {
 		t.Fatalf("running init history starts at %v, want %v", since, startedAt.Add(-time.Second))
 	}
 }
+
+// With the timeline down, the environment section must warn that changes could
+// not be checked, as it does when a query fails, and only for a Pod that has
+// sources to check.
+func TestFindPodEnvChangesWarnsWhenTheTimelineIsDown(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+
+	withSource := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			EnvFrom: []corev1.EnvFromSource{{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app"}},
+			}},
+		}}},
+	}
+	if _, coverage := FindPodEnvChanges(t.Context(), nil, withSource, nil); !coverage.Degraded || coverage.DegradedReason == "" {
+		t.Fatalf("coverage = %+v, want degraded with a reason while the timeline is down", coverage)
+	}
+
+	noSources := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "plain"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	if _, coverage := FindPodEnvChanges(t.Context(), nil, noSources, nil); coverage.Degraded {
+		t.Fatalf("coverage = %+v, want no warning for a Pod with nothing to check", coverage)
+	}
+}

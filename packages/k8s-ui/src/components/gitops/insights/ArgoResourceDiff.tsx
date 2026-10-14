@@ -2,18 +2,23 @@ import { useState } from 'react'
 import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
 import { FileText, GitCompare, Maximize2, Rows, ShieldOff, X } from 'lucide-react'
-import type { GitOpsResourceDiff } from '../../../types'
+import type { GitOpsDrift, GitOpsResourceDiff } from '../../../types'
 import { DiffLine, hasDiffBodyChange } from '../../shared/UnifiedDiff'
 import { CodeViewer } from '../../ui/CodeViewer'
 import { DialogPortal } from '../../ui/DialogPortal'
 import { YamlDiffEditor } from '../../ui/YamlEditor'
 import { Tooltip } from '../../ui/Tooltip'
+import { DriftPanel } from './DriftPanel'
 
 interface ArgoResourceDiffProps {
   diff?: GitOpsResourceDiff | null
   loading: boolean
   // Server error string ({"error"} body), surfaced inline — not a toast.
   error?: string | null
+  // The row's last-applied field list, shown only when Argo's diff can't be
+  // loaded. A loaded diff carries Argo's own field list, which also covers Git
+  // changes that haven't synced yet.
+  fallbackDrift?: GitOpsDrift | null
 }
 
 // ArgoResourceDiff renders the full Git-rendered desired-vs-live diff for a
@@ -21,7 +26,8 @@ interface ArgoResourceDiffProps {
 // fetch and passes data / loading / error. The inline view is a compact unified
 // preview; the maximize control opens the full view (Diff / Live manifest /
 // Desired manifest, with the Monaco-based YamlDiffEditor powering the Diff tab).
-export function ArgoResourceDiff({ diff, loading, error }: ArgoResourceDiffProps) {
+// Argo's per-field list sits above the preview, and only when it has entries.
+export function ArgoResourceDiff({ diff, loading, error, fallbackDrift }: ArgoResourceDiffProps) {
   const [maximized, setMaximized] = useState(false)
 
   if (loading) {
@@ -42,19 +48,28 @@ export function ArgoResourceDiff({ diff, loading, error }: ArgoResourceDiffProps
       </div>
     )
   }
+  const fallbackPanel = fallbackDrift && fallbackDrift.entries.length > 0 ? <DriftPanel drift={fallbackDrift} /> : null
   if (error) {
     return (
-      <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-400">
-        {error}
+      <div className="space-y-3">
+        {fallbackPanel}
+        <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+          {error}
+        </div>
       </div>
     )
   }
-  if (!diff) return null
+  if (!diff) return fallbackPanel
 
   const unchanged = !docsDiffer(diff.desired, diff.live)
 
   return (
     <div>
+      {diff.fieldEntries.length > 0 && (
+        <div className="mb-3">
+          <DriftPanel drift={{ entries: diff.fieldEntries, source: diff.source }} />
+        </div>
+      )}
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <GitCompare className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />

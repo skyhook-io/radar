@@ -34,6 +34,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/kube"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/releaseutil"
@@ -374,14 +375,16 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
 func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+	return listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, IsForbiddenError, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		return helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	})
 }
 
 // listReleaseRows reads one storage snapshot per namespace scope (nil means
-// one cluster-wide read) and builds a row for each release in it.
-func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
+// one cluster-wide read) and builds a row for each release in it. A namespace
+// whose read fails with an error that denied matches is skipped; any other
+// failure fails the whole read.
+func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
 	scopes := namespaces
 	if scopes == nil {
 		scopes = []string{""}
@@ -396,7 +399,7 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		}
 		snapshot, err := read(ctx, ns)
 		if err != nil {
-			if IsForbiddenError(err) {
+			if denied(err) {
 				lastForbidden = err
 				continue
 			}
@@ -2605,7 +2608,23 @@ func (c *Client) RollbackAsUser(namespace, name string, revision int, username s
 	return c.RollbackWithProgressAsUser(namespace, name, revision, username, groups, nil)
 }
 
+func useReleaseTargetNamespace(cfg *action.Configuration, name string) error {
+	rel, err := cfg.Releases.Last(name)
+	if err != nil {
+		return err
+	}
+	// Storage retains its namespace; only the Kubernetes object builder changes.
+	if client, ok := cfg.KubeClient.(*kube.Client); ok {
+		client.Namespace = rel.Namespace
+	}
+	return nil
+}
+
 func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, revision int) error {
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return err
+	}
+
 	rollbackAction := action.NewRollback(actionConfig)
 	rollbackAction.Version = revision
 	rollbackAction.Timeout = 120 * time.Second
@@ -2636,6 +2655,10 @@ func (c *Client) UninstallAsUser(namespace, name string, username string, groups
 }
 
 func (c *Client) uninstallWith(actionConfig *action.Configuration, name string) error {
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return err
+	}
+
 	uninstallAction := action.NewUninstall(actionConfig)
 	uninstallAction.Timeout = 120 * time.Second
 
@@ -2741,6 +2764,10 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 	// Create upgrade action — don't use Wait=true because Radar already
 	// shows real-time resource status via SSE. Waiting blocks the dialog
 	// for minutes with zero feedback; users can monitor the rollout in the UI.
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return err
+	}
+
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
@@ -2774,6 +2801,10 @@ func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, tar
 
 	targetChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
+		return err
+	}
+
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
 		return err
 	}
 
@@ -3442,6 +3473,10 @@ func (c *Client) previewValuesChangeWith(actionConfig *action.Configuration, nam
 	}
 
 	// Perform a dry-run upgrade with the new values
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return nil, err
+	}
+
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.DryRun = true
@@ -3497,6 +3532,10 @@ func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string
 	}
 
 	// Create upgrade action — no Wait, Radar shows resource status in real-time
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return err
+	}
+
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second

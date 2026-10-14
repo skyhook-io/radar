@@ -801,8 +801,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
               ) : undefined}
               focusKey={changesFocusKey}
               tree={tree}
-              renderResourceDiff={isArgoApp ? (ref) => (
-                <ArgoResourceDiffLoader appNamespace={namespace} appName={name} resourceRef={ref} />
+              renderResourceDiff={isArgoApp ? (ref, fallbackDrift) => (
+                <ArgoResourceDiffLoader appNamespace={namespace} appName={name} resourceRef={ref} fallbackDrift={fallbackDrift} />
               ) : undefined}
               onOpenSettings={onOpenSettings}
               settingsNote={settingsNote}

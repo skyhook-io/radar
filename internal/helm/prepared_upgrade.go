@@ -176,6 +176,7 @@ type PreparedUpgrade struct {
 
 type preparedReleaseIdentity struct {
 	revision     int
+	namespace    string
 	status       release.Status
 	chartName    string
 	chartVersion string
@@ -250,6 +251,12 @@ func (c *Client) prepareCloudUpgradeWith(ctx context.Context, actionConfig *acti
 	}
 	if err := validateOfficialRadarRelease(current); err != nil {
 		return nil, err
+	}
+	// The workload, token Secret and permission checks below all assume the
+	// release runs where its history is stored.
+	if current.Namespace != "" && current.Namespace != request.Namespace {
+		return nil, fmt.Errorf("release %q keeps its Helm history in namespace %q but runs in %q; Cloud Connect can only adopt a Radar release kept in one namespace, so upgrade it with the tool that installed it",
+			request.ReleaseName, request.Namespace, current.Namespace)
 	}
 
 	loaded, exactVersion, err := c.resolvePreparedChart(ctx, &request, minimumStableVersion)
@@ -412,6 +419,7 @@ func (p *PreparedUpgrade) VerifyRolledBack(ctx context.Context) (bool, error) {
 func (i preparedReleaseIdentity) sameReleaseContent(actual preparedReleaseIdentity) bool {
 	return actual.status == release.StatusDeployed &&
 		i.status == release.StatusDeployed &&
+		actual.namespace == i.namespace &&
 		actual.chartName == i.chartName &&
 		actual.chartVersion == i.chartVersion &&
 		actual.appVersion == i.appVersion &&
@@ -462,8 +470,8 @@ func (p *PreparedUpgrade) recheck(actionConfig *action.Configuration) (*release.
 }
 
 func (i preparedReleaseIdentity) String() string {
-	return fmt.Sprintf("revision %d, status %s, chart %s %s, app %s, manifest %x, values %x",
-		i.revision, i.status, i.chartName, i.chartVersion, i.appVersion, i.manifestHash[:6], i.configHash[:6])
+	return fmt.Sprintf("revision %d, status %s, namespace %s, chart %s %s, app %s, manifest %x, values %x",
+		i.revision, i.status, i.namespace, i.chartName, i.chartVersion, i.appVersion, i.manifestHash[:6], i.configHash[:6])
 }
 
 func releaseIdentity(rel *release.Release) (preparedReleaseIdentity, error) {
@@ -477,6 +485,7 @@ func releaseIdentity(rel *release.Release) (preparedReleaseIdentity, error) {
 	}
 	identity.configHash = sha256.Sum256(configJSON)
 	identity.revision = rel.Version
+	identity.namespace = rel.Namespace
 	if rel.Info != nil {
 		identity.status = rel.Info.Status
 	}

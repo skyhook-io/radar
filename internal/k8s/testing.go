@@ -63,6 +63,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
+		generation:                  cacheGeneration,
 	})
 
 	cacheOnce = new(sync.Once)
@@ -111,6 +112,7 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
+		generation:                  cacheGeneration,
 	})
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
@@ -179,6 +181,7 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
+		generation:                  cacheGeneration,
 	})
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.

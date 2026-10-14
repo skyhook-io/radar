@@ -27,6 +27,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect
   const className = getClusterClass(data)
   const version = getClusterVersion(data)
   const topology = spec.topology || {}
+  const classNamespace = (topology.classRef?.name ? topology.classRef.namespace : topology.classNamespace) || data.metadata?.namespace || ''
 
   // v1beta2 replica fields
   const cpReady = status.controlPlane?.readyReplicas ?? status.controlPlane?.replicas
@@ -201,10 +202,10 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect
       </Section>
 
       {/* Topology (ClusterClass-based) */}
-      {topology.class && (
+      {className !== '-' && (
         <Section title="Topology" icon={Layers}>
           <PropertyList>
-            <Property label="Class" value={topology.class} />
+            <Property label="Class" value={<ResourceLink name={className} kind="clusterclasses" group="cluster.x-k8s.io" namespace={classNamespace} onNavigate={onNavigate} />} />
             {topology.version && <Property label="Version" value={topology.version} />}
             {topology.controlPlane?.replicas != null && (
               <Property label="CP Replicas" value={String(topology.controlPlane.replicas)} />

@@ -137,11 +137,16 @@ import {
   parseColumnFilters,
   serializeColumnFilters,
   parseColumnFilterExcludes,
+  kindFiltersFromSearch,
+  kindFiltersToSearch,
+  columnFiltersParam,
+  RESOURCE_LIST_FILTER_PARAMS,
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
   healthColors,
 } from './resource-utils'
 import { getGenericResourceStatus } from './generic-status'
+import { ActiveFilterBar } from './ActiveFilterBar'
 import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
 import {
   type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
@@ -3495,6 +3500,29 @@ interface ResourcesViewProps {
    * the switcher lives outside this component and may persist server-side.
    */
   onClearNamespaces?: () => void
+  /**
+   * A kind's saved filters, as last reported through `onKindFiltersChange`
+   * (host-owned, because this view unmounts on section switches). A user kind
+   * switch, or a URL with no list state of its own (see `hasFilterIntent`),
+   * restores that kind's column and problem filters from it. Pass undefined
+   * until the host can answer: the first defined value is still applied to a
+   * bare URL.
+   */
+  rememberedKindSearch?: (kind: { name: string; group: string }) => string | undefined
+  /**
+   * Called with a kind's serialized `filters` + `problems` query ('' when
+   * none) whenever the filters the kind shows change, including the ones a
+   * link arrives with. A list that arrives with no filters does not report
+   * '', so a link to one resource keeps what was saved.
+   */
+  onKindFiltersChange?: (kind: { name: string; group: string }, search: string) => void
+  /**
+   * Promotes the Namespace column's included values to the global namespace
+   * selection (replacing it). When wired, the column's filter dropdown offers
+   * "Apply to all sections" and clears the column filter once the returned
+   * promise resolves (a rejection keeps it).
+   */
+  onApplyNamespacesToAllSections?: (namespaces: string[]) => Promise<unknown> | void
   // Bulk operations
   onBulkDelete?: (items: BulkResourceItem[], options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
@@ -3618,19 +3646,24 @@ export function deriveSidebarResourceCounts(
   return results
 }
 
+const FILTER_INTENT_PARAMS = [...RESOURCE_LIST_FILTER_PARAMS, 'resource']
+
+/**
+ * Whether a URL states its own list state. Only a URL without any of these
+ * (a bare `/resources/<kind>`) gets the kind's remembered filters.
+ */
+export function hasFilterIntent(search: string): boolean {
+  const params = new URLSearchParams(search)
+  return FILTER_INTENT_PARAMS.some((key) => params.has(key))
+}
+
 // Get initial filters from URL
 function getInitialFiltersFromURL() {
   const params = new URLSearchParams(window.location.search)
-  // Parse generic column filters
-  const filtersParam = params.get('filters')
-  const columnFilters = parseColumnFilters(filtersParam)
-  const columnFilterExcludes = parseColumnFilterExcludes(filtersParam)
   const result = {
     search: params.get('search') || '',
     regex: params.get('regex') === 'true',
-    columnFilters,
-    columnFilterExcludes,
-    problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
+    ...kindFiltersFromSearch(window.location.search),
     showInactive: params.get('showInactive') === 'true',
     labelSelector: params.get('labels') || '', // e.g., "app=caretta,version=v1"
     ownerKind: params.get('ownerKind') || '', // e.g., "DaemonSet"
@@ -3681,6 +3714,9 @@ export function ResourcesView({
   onCompareSubmit,
   resolveRowCluster,
   onClearNamespaces,
+  rememberedKindSearch,
+  onKindFiltersChange,
+  onApplyNamespacesToAllSections,
   onBulkDelete,
   isBulkDeleting = false,
   onBulkRestart,
@@ -3735,6 +3771,30 @@ export function ResourcesView({
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
   const [columnFilterExcludes, setColumnFilterExcludes] = useState<Record<string, boolean>>(initialFilters.columnFilterExcludes)
   const [problemFilters, setProblemFilters] = useState<string[]>(initialFilters.problemFilters)
+  // The kind the filter state belongs to. During a kind switch one render
+  // pairs the new kind with the old kind's filters; saving then would file
+  // them under the wrong kind.
+  const [filtersKind, setFiltersKind] = useState(() => selectedKindIdentityOf(selectedKind))
+  // Where the current filter state came from when it wasn't a user edit.
+  const filtersArrivedRef = useRef<'url' | 'restore' | null>('url')
+  // The serialized filters last restored from rememberedKindSearch ('' when none).
+  const [restoredKindSearch, setRestoredKindSearch] = useState('')
+  // A bare URL at mount takes the kind's saved filters. Adjusted during render
+  // (not in an effect) so the unfiltered list never paints, and so it still
+  // applies when the host's lookup arrives after mount.
+  const [mountRestorePending, setMountRestorePending] = useState(() => !hasFilterIntent(locationSearch ?? window.location.search))
+  if (mountRestorePending && rememberedKindSearch) {
+    setMountRestorePending(false)
+    const restored = kindFiltersToSearch(kindFiltersFromSearch(rememberedKindSearch(selectedKind)))
+    if (restored && !hasFilterIntent(locationSearch ?? window.location.search)) {
+      const remembered = kindFiltersFromSearch(restored)
+      setColumnFilters(remembered.columnFilters)
+      setColumnFilterExcludes(remembered.columnFilterExcludes)
+      setProblemFilters(remembered.problemFilters)
+      setRestoredKindSearch(restored)
+      filtersArrivedRef.current = 'restore'
+    }
+  }
   const [openColumnFilter, setOpenColumnFilter] = useState<string | null>(null)
   const [columnFilterSearch, setColumnFilterSearch] = useState('')
   const columnFilterDropdownRef = useRef<HTMLDivElement>(null)
@@ -4599,8 +4659,21 @@ export function ResourcesView({
     const newFilters = getInitialFiltersFromURL()
 
     // Update kind if it changed
-    if (newKind.name !== selectedKind.name || newKind.group !== selectedKind.group) {
+    const kindChanged = newKind.name !== selectedKind.name || newKind.group !== selectedKind.group
+    let restored = ''
+    if (kindChanged) {
       setSelectedKind(newKind)
+      // A bare URL for another kind links to the list, not to a state of it:
+      // take that kind's saved filters and put them in the address bar. Never
+      // for the same kind, where a bare URL is the echo of Clear filters.
+      restored = hasFilterIntent(locationSearch ?? window.location.search)
+        ? ''
+        : kindFiltersToSearch(kindFiltersFromSearch(rememberedKindSearch?.(newKind)))
+      setRestoredKindSearch(restored)
+      if (restored) {
+        Object.assign(newFilters, kindFiltersFromSearch(restored))
+        updateURL(newKind, newFilters.search, newFilters.regex, newFilters.columnFilters, newFilters.columnFilterExcludes, newFilters.problemFilters, newFilters.showInactive)
+      }
     }
 
     // Update owner filter if it changed
@@ -4639,6 +4712,13 @@ export function ResourcesView({
     const excludeKeys = (m: Record<string, boolean>) => Object.keys(m).filter(k => m[k]).sort().join(',')
     if (excludeKeys(newFilters.columnFilterExcludes) !== excludeKeys(columnFilterExcludes)) {
       setColumnFilterExcludes(newFilters.columnFilterExcludes)
+    }
+
+    if (newFilters.problemFilters.join(',') !== problemFilters.join(',')) {
+      setProblemFilters(newFilters.problemFilters)
+    }
+    if (kindChanged || kindFiltersToSearch(newFilters) !== kindFiltersSearch) {
+      filtersArrivedRef.current = restored ? 'restore' : 'url'
     }
 
     // Reset the flag after a tick to allow normal URL updates
@@ -4695,11 +4775,7 @@ export function ResourcesView({
     }
     // Write column filters as `filters` param; the exclude operator is folded
     // into each column entry, so it can never drift from the values it negates.
-    // Guard against a stale exclude flag on a column with no active values.
-    const activeExcludes = Object.fromEntries(
-      Object.entries(colExcludes).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0)
-    )
-    const filtersStr = serializeColumnFilters(colFilters, activeExcludes)
+    const filtersStr = columnFiltersParam(colFilters, colExcludes)
     if (filtersStr) {
       params.set('filters', filtersStr)
     } else {
@@ -4771,12 +4847,18 @@ export function ResourcesView({
     // params are out of scope here; the host's onClearNamespaces (and its
     // own state→URL sync) owns namespace cleanup.
     const params = new URLSearchParams(window.location.search)
-    for (const key of ['search', 'regex', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive']) {
+    for (const key of RESOURCE_LIST_FILTER_PARAMS) {
       params.delete(key)
     }
     navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
     onClearNamespaces?.()
   }, [navigate, onClearNamespaces])
+
+  const clearKindFilters = useCallback(() => {
+    setColumnFilters({})
+    setColumnFilterExcludes({})
+    setProblemFilters([])
+  }, [])
 
   // Update URL when any filter changes
   useEffect(() => {
@@ -4790,6 +4872,8 @@ export function ResourcesView({
       prevSelectedResourceRef.current = selectedResource ?? null
       return
     }
+    // Right after a kind switch the filters are still the previous kind's.
+    if (filtersKind !== selectedKindIdentityOf(selectedKind)) return
     // Skip URL update if selectedResource's kind doesn't match selectedKind (still syncing)
     if (selectedResource) {
       const resourceKindLower = selectedResource.kind.toLowerCase()
@@ -4815,7 +4899,12 @@ export function ResourcesView({
         : typeof window !== 'undefined'
           ? window.location.pathname
           : ''
-    const pathChanged = currentPath !== targetPath
+    // The router commits a navigation as a transition, so the injected path can
+    // still be the previous kind's right after a push to this one (e.g. the
+    // write of filters restored on a kind switch); the address bar is already
+    // there, and pushing again would add a second entry for the same visit.
+    const pathChanged = currentPath !== targetPath &&
+      !(typeof window !== 'undefined' && window.location.pathname.endsWith(targetPath))
     const prev = prevSelectedResourceRef.current
     const current = selectedResource ?? null
     const drawerSwitched =
@@ -4829,7 +4918,7 @@ export function ResourcesView({
     prevSelectedResourceRef.current = current
 
     updateURL(selectedKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, pushHistory)
-  }, [selectedKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
+  }, [selectedKind, filtersKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
 
   // Handle resource click from URL on mount
   useEffect(() => {
@@ -4849,6 +4938,12 @@ export function ResourcesView({
     }
     // Signal that initial resource param has been processed — URL update effect can now run
     hasProcessedInitialResource.current = true
+
+    // Filters restored at mount go into the address bar (with the kind segment).
+    if (restoredKindSearch) {
+      updateURL(selectedKind, searchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets)
+      return
+    }
 
     // If the URL has no kind segment (e.g., /resources), update to include the default kind.
     // Route through `navigate` so an onNavigate-suppressing host can opt out.
@@ -5118,7 +5213,7 @@ export function ResourcesView({
     isForbiddenError(selectedQueryError) ||
     (!selectedHasRows && !selectedQueryError && forbiddenKinds.has(selectedKindCountKey))
 
-  // Reset filters when kind changes (but not when syncing from URL navigation)
+  // On a kind change, restore that kind's remembered filters, or start empty (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
   // Keyed on group as well as plural: two CRDs can share a plural across API
   // groups, and their printer columns are unrelated. Resetting on the plural
@@ -5132,12 +5227,39 @@ export function ResourcesView({
     }
     prevKindRef.current = selectedKindIdentity
     setOpenColumnFilter(null)
-    if (!isSyncingFromURL.current) {
-      setColumnFilters({})
-      setColumnFilterExcludes({})
-    }
-    setProblemFilters([])
-  }, [selectedKindIdentity])
+    setFiltersKind(selectedKindIdentity)
+    // The URL sync already set this kind's filters (and restoredKindSearch).
+    if (isSyncingFromURL.current) return
+    filtersArrivedRef.current = 'restore'
+    const restored = kindFiltersToSearch(kindFiltersFromSearch(rememberedKindSearch?.(selectedKind)))
+    const remembered = kindFiltersFromSearch(restored)
+    setColumnFilters(remembered.columnFilters)
+    setColumnFilterExcludes(remembered.columnFilterExcludes)
+    setProblemFilters(remembered.problemFilters)
+    setRestoredKindSearch(restored)
+  }, [selectedKindIdentity, selectedKind, rememberedKindSearch])
+
+  const kindFiltersSearch = useMemo(
+    () => kindFiltersToSearch({ columnFilters, columnFilterExcludes, problemFilters }),
+    [columnFilters, columnFilterExcludes, problemFilters],
+  )
+  // Saved filters are the last ones chosen for a kind: by the user, or by a
+  // link that brought its own. A restore only shows what was saved (saving it
+  // again would overwrite another tab's newer choice); a list that arrives
+  // with no filters (a link to one resource, an owner's pods) keeps what was
+  // saved; Clear filters saves none.
+  const lastSeenKindFiltersRef = useRef<{ kind: string; search: string } | null>(null)
+  useEffect(() => {
+    // The host may wire saving after mount; until then nothing counts as seen.
+    if (!onKindFiltersChange || filtersKind !== selectedKindIdentity) return
+    const last = lastSeenKindFiltersRef.current
+    lastSeenKindFiltersRef.current = { kind: filtersKind, search: kindFiltersSearch }
+    const arrived = filtersArrivedRef.current
+    filtersArrivedRef.current = null
+    if (last?.kind === filtersKind && last.search === kindFiltersSearch) return
+    if (arrived === 'restore' || (arrived === 'url' && !kindFiltersSearch)) return
+    onKindFiltersChange(selectedKind, kindFiltersSearch)
+  }, [filtersKind, selectedKindIdentity, kindFiltersSearch, selectedKind, onKindFiltersChange])
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
@@ -5830,15 +5952,16 @@ export function ResourcesView({
   // Namespace contribution gated on a host-wired clearer: without it the
   // Clear filters button can't drop the namespace, so showing it would be
   // a no-op for that case.
-  const hasAnyFilter =
-    !!searchTerm ||
-    regexMode ||
-    !!labelSelector ||
-    hasOwnerFilter ||
-    problemFilters.length > 0 ||
-    Object.values(columnFilters).some((vals) => vals.length > 0) ||
-    showInactiveReplicaSets ||
-    (!!onClearNamespaces && namespaces.length > 0)
+  const activeFilterCount =
+    Object.values(columnFilters).filter((vals) => vals.length > 0).length +
+    (problemFilters.length > 0 ? 1 : 0) +
+    (labelSelector ? 1 : 0) +
+    (searchTerm || regexMode ? 1 : 0) +
+    (hasOwnerFilter ? 1 : 0) +
+    (showInactiveReplicaSets ? 1 : 0) +
+    (!!onClearNamespaces && namespaces.length > 0 ? 1 : 0)
+  const hasAnyFilter = activeFilterCount > 0
+  const filtersRestored = !!kindFiltersSearch && kindFiltersSearch === restoredKindSearch
 
 
   // Toggle problem filter
@@ -6156,10 +6279,10 @@ export function ResourcesView({
               <button
                 type="button"
                 onClick={clearAllFilters}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs selection selection-text hover:selection-strong transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Clear filters</span>
+                <span>Clear filters ({activeFilterCount})</span>
               </button>
             </Tooltip>
           )}
@@ -6391,6 +6514,21 @@ export function ResourcesView({
           </div>
         )}
 
+        {!isLoading && !isSelectedForbidden && !largeListGuard && filteredResources.length > 0 && (
+          <ActiveFilterBar
+            columnFilters={columnFilters}
+            columnFilterExcludes={columnFilterExcludes}
+            problemFilters={problemFilters}
+            labelSelector={labelSelector}
+            onClearColumn={clearColumnFilter}
+            onClearProblems={() => setProblemFilters([])}
+            onClearLabels={() => setLabelSelector('')}
+            restored={filtersRestored}
+            onClearAll={clearKindFilters}
+            className="shrink-0 px-4 py-1.5 border-b border-theme-border"
+          />
+        )}
+
         {/* Table */}
         <div
           className="flex-1 overflow-auto relative"
@@ -6467,46 +6605,17 @@ export function ResourcesView({
                 </button>
               )}
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
-              {/* Show active filters as dismissible badges so user can clear them */}
-              {(() => {
-                const activeColEntries = Object.entries(columnFilters).filter(([, vals]) => vals.length > 0)
-                if (activeColEntries.length === 0 && problemFilters.length === 0 && !labelSelector) return null
-                return (
-                  <div className="flex flex-wrap items-center gap-1.5 mt-3">
-                    {activeColEntries.map(([key, vals]) => (
-                      <button
-                        key={key}
-                        onClick={() => clearColumnFilter(key)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs selection selection-text rounded-md hover:selection-strong transition-colors"
-                      >
-                        <ListFilter className="w-3 h-3" />
-                        <span>{key}: {columnFilterExcludes[key] ? 'not ' : ''}{vals.join(', ')}</span>
-                        <X className="w-3 h-3" />
-                      </button>
-                    ))}
-                    {problemFilters.length > 0 && (
-                      <button
-                        onClick={() => setProblemFilters([])}
-                        className="flex items-center gap-1 px-2 py-1 text-xs bg-red-500/15 text-red-700 dark:text-red-300 rounded-md hover:bg-red-500/25 transition-colors"
-                      >
-                        <AlertTriangle className="w-3 h-3" />
-                        <span>Problems: {problemFilters.join(', ')}</span>
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                    {labelSelector && (
-                      <button
-                        onClick={() => setLabelSelector('')}
-                        className="flex items-center gap-1 px-2 py-1 text-xs bg-green-500/15 text-green-700 dark:text-green-300 rounded-md hover:bg-green-500/25 transition-colors"
-                      >
-                        <Tag className="w-3 h-3" />
-                        <span>{labelSelector}</span>
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                )
-              })()}
+              <ActiveFilterBar
+                columnFilters={columnFilters}
+                columnFilterExcludes={columnFilterExcludes}
+                problemFilters={problemFilters}
+                labelSelector={labelSelector}
+                onClearColumn={clearColumnFilter}
+                onClearProblems={() => setProblemFilters([])}
+                onClearLabels={() => setLabelSelector('')}
+                restored={filtersRestored}
+                className="mt-3"
+              />
               {hasAnyFilter && (
                 <button
                   type="button"
@@ -6734,6 +6843,22 @@ export function ResourcesView({
                                   <div className="px-3 py-2 text-xs text-theme-text-disabled">No matches</div>
                                 )}
                               </div>
+                              {col.key === 'namespace' && onApplyNamespacesToAllSections && activeFilterValues.length > 0 && !columnFilterExcludes[col.key] && (
+                                <div className="p-1 border-t border-theme-border">
+                                  <button
+                                    onClick={() => {
+                                      setOpenColumnFilter(null)
+                                      // Keep the column filter until the scope change lands; a failed one keeps the user's filter.
+                                      Promise.resolve(onApplyNamespacesToAllSections(activeFilterValues))
+                                        .then(() => clearColumnFilter(col.key), () => {})
+                                    }}
+                                    className="w-full text-left px-2 py-1.5 text-xs rounded text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary transition-colors"
+                                    title="Scope every section to these namespaces in the header namespace picker"
+                                  >
+                                    Apply to all sections
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )
                         })()}
@@ -7964,9 +8089,9 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const label = isCPU ? 'CPU' : 'Memory'
       const format = isCPU ? formatCPU : formatMemoryShort
 
-      // Multi-container pods carry a per-container breakdown; single-container
-      // pods fall back to the (union-summed) pod-level fields as one synthetic
-      // container so the rest of the logic is uniform.
+      // Multi-container pods (and any pod with a pod-level budget) carry a
+      // per-container breakdown; other single-container pods fall back to the
+      // pod-level fields as one synthetic container so the logic is uniform.
       const list: ContainerResourceMetrics[] = (m.containers && m.containers.length > 0)
         ? m.containers
         : [{
@@ -7975,7 +8100,15 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
             memory: m.memory, memoryRequest: m.memoryRequest, memoryLimit: m.memoryLimit,
           }]
 
-      const { mode, totalUsage, denom, markerPct, unlimitedCount } = podAggregate(list, kind)
+      // The pod totals already carry any pod-level value (overlaid server-side
+      // with exact quantity parsing); spec.resources only says whether one is set.
+      const podLevel = resource.spec?.resources
+      const podRequest = podLevel?.requests?.[kind] ? (isCPU ? m.cpuRequest : m.memoryRequest) : undefined
+      const podLimit = podLevel?.limits?.[kind] ? (isCPU ? m.cpuLimit : m.memoryLimit) : undefined
+      const { mode, totalUsage, denom, markerPct, unlimitedCount } = podAggregate(list, kind, {
+        request: podRequest,
+        limit: podLimit,
+      })
       if (totalUsage === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
 
       // Pod-vs-node context: how full the pod's node is (the risk signal) and
@@ -7995,7 +8128,12 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
           }
         : undefined
 
-      const tip = buildContainerResourceTooltip(label, list, kind, format, nodeCtx)
+      // The synthetic single-container row already carries the pod totals, so
+      // only a real per-container breakdown needs the shared budget spelled out.
+      const podBudget = podLimit && m.containers?.length
+        ? { usage: totalUsage, limit: podLimit, request: podRequest }
+        : undefined
+      const tip = buildContainerResourceTooltip(label, list, kind, format, nodeCtx, podBudget)
 
       // Every container is limited → aggregate bar against the summed limit; a
       // real pod-level ceiling, so it may go red.
@@ -8620,12 +8758,16 @@ interface PodAggregate {
 // headline renders — total usage measured against a pod-level yardstick. It
 // keeps the dominant consumer visible instead of demoting it behind a small
 // limited container, and stays honest about partial limits (which don't form a
-// real ceiling).
-export function podAggregate(list: ContainerResourceMetrics[], kind: 'cpu' | 'memory'): PodAggregate {
+// real ceiling). A pod-level budget (spec.resources) bounds every container, so
+// its limit is a real ceiling regardless of what the containers set.
+export function podAggregate(
+  list: ContainerResourceMetrics[],
+  kind: 'cpu' | 'memory',
+  podLevel?: { request?: number; limit?: number },
+): PodAggregate {
   const isCPU = kind === 'cpu'
   let totalUsage = 0
   let limitedCount = 0
-  let requestedCount = 0
   let unlimitedCount = 0
   let summedLimit = 0
   let summedRequest = 0
@@ -8640,25 +8782,28 @@ export function podAggregate(list: ContainerResourceMetrics[], kind: 'cpu' | 'me
     } else {
       unlimitedCount++
     }
-    if (request > 0) {
-      requestedCount++
-      summedRequest += request
-    }
+    if (request > 0) summedRequest += request
   }
+  if (podLevel?.request) summedRequest = podLevel.request
   const allLimited = list.length > 0 && limitedCount === list.length
-  if (allLimited) {
+  // Container limits still apply inside a pod-level budget, so when every
+  // container has one the tighter of the two totals is the real ceiling.
+  const ceiling = podLevel?.limit && allLimited
+    ? Math.min(podLevel.limit, summedLimit)
+    : podLevel?.limit || (allLimited ? summedLimit : 0)
+  if (ceiling) {
     return {
       mode: 'limit',
       totalUsage,
-      denom: summedLimit,
-      markerPct: summedRequest > 0 ? (summedRequest / summedLimit) * 100 : undefined,
+      denom: ceiling,
+      markerPct: summedRequest > 0 ? (summedRequest / ceiling) * 100 : undefined,
       unlimitedCount,
     }
   }
   if (limitedCount > 0) {
     return { mode: 'partial', totalUsage, denom: 0, unlimitedCount }
   }
-  if (requestedCount > 0) {
+  if (summedRequest > 0) {
     return { mode: 'request', totalUsage, denom: summedRequest, unlimitedCount }
   }
   return { mode: 'none', totalUsage, denom: 0, unlimitedCount }
@@ -8686,12 +8831,13 @@ function formatSharePct(pct: number): string {
   return `${Math.round(pct)}%`
 }
 
-function buildContainerResourceTooltip(
+export function buildContainerResourceTooltip(
   label: 'CPU' | 'Memory',
   containers: ContainerResourceMetrics[],
   kind: 'cpu' | 'memory',
   formatFn: (n: number) => string,
   nodeCtx?: NodeContext,
+  podBudget?: { usage: number; limit: number; request?: number },
 ) {
   const rows = [...containers].sort((a, b) => {
     const diff = readContainer(b, kind).pct - readContainer(a, kind).pct
@@ -8714,7 +8860,7 @@ function buildContainerResourceTooltip(
             ? `${formatFn(r.usage)} · ${Math.round(r.pct)}% · ${formatFn(r.denom)} limit${r.request > 0 ? ` · req ${formatFn(r.request)}` : ''}`
             : r.yardstick === 'request'
               ? `${formatFn(r.usage)} · ${Math.round(r.pct)}% · ${formatFn(r.denom)} request`
-              : `${formatFn(r.usage)} · no limit`
+              : `${formatFn(r.usage)} · ${podBudget ? 'pod limit' : 'no limit'}`
           return (
             <div key={c.name} className="flex flex-col leading-snug">
               <span className="text-[11px] text-theme-text-tertiary truncate">{c.name}</span>
@@ -8726,6 +8872,14 @@ function buildContainerResourceTooltip(
       {remaining > 0 && (
         <div className="text-[11px] text-theme-text-tertiary border-t border-theme-border/50 pt-1">
           +{remaining} more → open pod
+        </div>
+      )}
+      {podBudget && (
+        <div className="flex flex-col leading-snug border-t border-theme-border/50 pt-1">
+          <span className="text-[11px] text-theme-text-tertiary truncate">Pod (shared)</span>
+          <span className="text-xs font-mono text-theme-text-primary">
+            {`${formatFn(podBudget.usage)} · ${Math.round((podBudget.usage / podBudget.limit) * 100)}% · ${formatFn(podBudget.limit)} limit${podBudget.request ? ` · req ${formatFn(podBudget.request)}` : ''}`}
+          </span>
         </div>
       )}
       {nodeCtx && (

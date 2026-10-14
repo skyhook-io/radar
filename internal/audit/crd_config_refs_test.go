@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -686,5 +687,31 @@ func TestClusterIssuerNamespaceInferenceNeverGuesses(t *testing.T) {
 	c.Env = append(c.Env, corev1.EnvVar{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "config"}, Key: "namespace"}}})
 	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{fromEnv}); got != nil {
 		t.Fatalf("unknown override reused an earlier env value: %v", got)
+	}
+}
+
+func TestContourDelegatedTLSConfigReferences(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"namespace": "app"}, "spec": map[string]any{"virtualhost": map[string]any{"tls": map[string]any{"secretName": "tls/server", "clientValidation": map[string]any{"caSecret": "tls/ca", "crlSecret": "tls/crl"}}}}}}
+	got := contourHTTPProxyConfigRefs(obj)
+	want := refs(secret("tls", "server"), secret("tls", "ca"), secret("tls", "crl"))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs=%+v want=%+v", got, want)
+	}
+	if !configRefDependencies[schema.GroupResource{Group: "projectcontour.io", Resource: "httpproxies"}].crossNamespace {
+		t.Fatal("delegated references need cross-namespace completeness")
+	}
+}
+
+func TestContourUpstreamCAConfigReferences(t *testing.T) {
+	validation := map[string]any{"validation": map[string]any{"caSecret": "trust/ca"}}
+	obj := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"namespace": "app"}, "spec": map[string]any{
+		"routes":      []any{map[string]any{"services": []any{validation}}},
+		"tcpproxy":    map[string]any{"services": []any{map[string]any{"validation": map[string]any{"caSecret": "trust/tcp"}}}},
+		"virtualhost": map[string]any{"jwtProviders": []any{map[string]any{"remoteJWKS": map[string]any{"validation": map[string]any{"caSecret": "trust/jwks"}}}}},
+	}}}
+	got := contourHTTPProxyConfigRefs(obj)
+	want := refs(secret("trust", "ca"), secret("trust", "tcp"), secret("trust", "jwks"))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs=%+v want=%+v", got, want)
 	}
 }

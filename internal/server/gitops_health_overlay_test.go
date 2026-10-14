@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/skyhook-io/radar/internal/argocd"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
@@ -233,6 +236,8 @@ func TestArgoAPIHealthFailure_SpeaksToTheUser(t *testing.T) {
 		{fmt.Errorf("x: %w", argoapi.ErrNotFound), true, "it doesn't know this application"},
 		{fmt.Errorf("x: %w", context.DeadlineExceeded), true, "the request timed out"},
 		{fmt.Errorf("x (retry throttled): %w", argocd.ErrUnreachable), true, "the server couldn't be reached"},
+		{fmt.Errorf("x: %w", argocd.ErrConnecting), true, "the connection is still being set up"},
+		{fmt.Errorf("%w: Argo CD at u: %w", argocd.ErrUnreachable, argoapi.ErrNotFound), true, "the server couldn't be reached"},
 		{errors.New("something else"), true, "it didn't answer"},
 	}
 	for _, tc := range cases {
@@ -267,5 +272,102 @@ func TestArgoAPIHealth_SavedSettingsFailureNamesSettings(t *testing.T) {
 				t.Fatalf("health %v, error %q; want error %q", health, got, tc.want)
 			}
 		})
+	}
+}
+
+// hungArgoServer accepts requests and never answers until the test ends.
+func hungArgoServer(t *testing.T) *httptest.Server {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() {
+		argocd.SetConfig("", "", false, true) // stop any probe before the server goes
+		close(release)
+		srv.Close()
+	})
+	return srv
+}
+
+// While Radar connects to argocd-server the page gets an answer at once:
+// the notice says so, and the page is told to ask again.
+func TestArgoAPIHealth_SaysItIsStillConnecting(t *testing.T) {
+	s := setupArgoCDTest(t)
+	srv := hungArgoServer(t)
+	argocd.SetConfig(srv.URL, "argo-secret", false, true)
+
+	app := overlayApp("Degraded")
+	tree := overlayTree(gitopstree.HealthModeAppTree, false)
+	start := time.Now()
+	if overlayArgoAPIHealth(context.Background(), tree, app, s.argoAPIHealth) {
+		t.Fatal("no answer yet must not count as Argo's answer")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("the page waited %s for the connect", elapsed)
+	}
+	if !tree.HealthAPIPending || tree.HealthAPIError != "the connection is still being set up" {
+		t.Fatalf("tree = pending %v, error %q; want pending with the connecting notice", tree.HealthAPIPending, tree.HealthAPIError)
+	}
+}
+
+// A connect that failed and is being retried shows the failure as one, with
+// the page asking again so it recovers when the retry connects.
+func TestOverlayArgoAPIHealth_RetryingShowsTheFailureAndAsksAgain(t *testing.T) {
+	app := overlayApp("Degraded")
+	tree := overlayTree(gitopstree.HealthModeAppTree, false)
+	retrying := func(context.Context, string, string) (*argoapi.ApplicationHealth, error) {
+		return nil, &argoHealthPending{notice: "the server couldn't be reached", retrying: true}
+	}
+	if overlayArgoAPIHealth(context.Background(), tree, app, retrying) {
+		t.Fatal("no answer must not count as Argo's answer")
+	}
+	if !tree.HealthAPIRetrying || tree.HealthAPIPending || tree.HealthAPIError != "the server couldn't be reached" {
+		t.Fatalf("tree = retrying %v, pending %v, error %q; want retrying with the failure", tree.HealthAPIRetrying, tree.HealthAPIPending, tree.HealthAPIError)
+	}
+}
+
+// End to end through the manager: a configured server that refuses
+// connections first answers "connecting", then, once that connect failed,
+// the failure with the page told to keep asking while Radar retries.
+func TestArgoAPIHealth_RetryingAfterAFailedConnect(t *testing.T) {
+	s := setupArgoCDTest(t)
+	argocd.SetConfig("http://127.0.0.1:1", "argo-secret", false, true)
+	app := overlayApp("Degraded")
+
+	tree := overlayTree(gitopstree.HealthModeAppTree, false)
+	overlayArgoAPIHealth(context.Background(), tree, app, s.argoAPIHealth)
+	if !tree.HealthAPIPending {
+		t.Fatalf("first load: pending %v, error %q; want pending", tree.HealthAPIPending, tree.HealthAPIError)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for argocd.LastProbeError() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the background connect never failed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	tree = overlayTree(gitopstree.HealthModeAppTree, false)
+	overlayArgoAPIHealth(context.Background(), tree, app, s.argoAPIHealth)
+	if !tree.HealthAPIRetrying || tree.HealthAPIPending || tree.HealthAPIError != "the server couldn't be reached" {
+		t.Fatalf("after the failure: retrying %v, pending %v, error %q; want retrying with the failure", tree.HealthAPIRetrying, tree.HealthAPIPending, tree.HealthAPIError)
+	}
+}
+
+// Nothing configured: the page still asks again while discovery runs, but
+// says nothing about a connection the user never set up.
+func TestOverlayArgoAPIHealth_PendingWithoutConfigurationIsQuiet(t *testing.T) {
+	app := overlayApp("Degraded")
+	tree := overlayTree(gitopstree.HealthModeAppTree, false)
+	pending := func(context.Context, string, string) (*argoapi.ApplicationHealth, error) {
+		return nil, &argoHealthPending{}
+	}
+	if overlayArgoAPIHealth(context.Background(), tree, app, pending) {
+		t.Fatal("no answer yet must not count as Argo's answer")
+	}
+	if !tree.HealthAPIPending || tree.HealthAPIError != "" {
+		t.Fatalf("tree = pending %v, error %q; want pending and no notice", tree.HealthAPIPending, tree.HealthAPIError)
 	}
 }

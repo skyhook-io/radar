@@ -177,23 +177,27 @@ func controllerObservedSpec(ctx context.Context, client dynamic.Interface, ro *u
 // older Argo wrote a spec hash here, and refusing to promote on those would break the
 // operation outright.
 func observedAtLeast(ro *unstructured.Unstructured, field string, generation int64) bool {
+	observed, ok := generationCounter(ro, field)
+	return !ok || observed >= generation
+}
+
+// generationCounter reads one of the controller's status counters, reporting false when
+// it is absent or not a number.
+func generationCounter(ro *unstructured.Unstructured, field string) (int64, bool) {
 	value, found, err := unstructured.NestedFieldNoCopy(ro.Object, "status", field)
 	if err != nil || !found {
-		return true
+		return 0, false
 	}
 	switch observed := value.(type) {
 	case string:
 		parsed, err := strconv.ParseInt(observed, 10, 64)
-		if err != nil {
-			return true
-		}
-		return parsed >= generation
+		return parsed, err == nil
 	case int64:
-		return observed >= generation
+		return observed, true
 	case float64:
-		return int64(observed) >= generation
+		return int64(observed), true
 	default:
-		return true
+		return 0, false
 	}
 }
 
@@ -217,19 +221,23 @@ func isInconclusive(ro *unstructured.Unstructured) bool {
 	return found && phase == "Inconclusive"
 }
 
-func patchStatusThenSpec(ctx context.Context, client dynamic.Interface, namespace, name string, statusPatch, specPatch []byte) error {
+// Returns the Rollout as the status write left it, or nil when status was not patched.
+func patchStatusThenSpec(ctx context.Context, client dynamic.Interface, namespace, name string, statusPatch, specPatch []byte) (*unstructured.Unstructured, error) {
 	ri := client.Resource(GVR).Namespace(namespace)
+	var afterStatus *unstructured.Unstructured
 
 	if statusPatch != nil {
-		if _, err := ri.Patch(ctx, name, types.MergePatchType, statusPatch, metav1.PatchOptions{}, "status"); err != nil {
-			return fmt.Errorf("failed to patch Rollout status: %w", err)
+		ro, err := ri.Patch(ctx, name, types.MergePatchType, statusPatch, metav1.PatchOptions{}, "status")
+		if err != nil {
+			return nil, fmt.Errorf("failed to patch Rollout status: %w", err)
 		}
+		afterStatus = ro
 	}
 
 	if specPatch != nil {
 		if _, err := ri.Patch(ctx, name, types.MergePatchType, specPatch, metav1.PatchOptions{}); err != nil {
-			return fmt.Errorf("failed to patch Rollout: %w", err)
+			return nil, fmt.Errorf("failed to patch Rollout: %w", err)
 		}
 	}
-	return nil
+	return afterStatus, nil
 }

@@ -136,6 +136,8 @@ All provider-specific NodeClass variants are automatically detected and supporte
 
 **Topology:** Full CAPI ownership chain — ClusterClass → Cluster → KubeadmControlPlane → Machine → Node, and Cluster → MachineDeployment → MachineSet → Machine → Node. MachineHealthCheck → Cluster protection edges. Machine → Node edges use status.nodeRef (semantic, not owner-ref).
 
+ClusterClass links use the namespace declared by the Cluster, defaulting to the Cluster’s namespace when omitted. Both `spec.topology.classRef` and the older supported `class`/`classNamespace` API fields are read. Owner links require the declared API group as well as kind and name; same-named resources from unrelated groups remain distinct.
+
 **Cluster Detail View:**
 - Phase, version, cluster class, control plane endpoint
 - Control plane and worker replica counts (v1beta2-aware)
@@ -418,6 +420,8 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 **Topology:** Full Contour routing path — HTTPProxy (root) → HTTPProxy (child, via delegation) → Service, with TLS secret configuration edges. Root proxies with `spec.virtualhost` appear as entry points; child proxies referenced via `spec.includes` are connected via delegation edges. Both **Resources** and **Traffic** view modes are supported.
 
+TLS references resolve local Secret names and delegated `namespace/name` names consistently, including client CA/CRL and upstream validation bundles. Configuration graphs reuse cached Secret metadata even when general Secret display is disabled; unavailable metadata remains unknown. Declared references do not establish that Contour has accepted or authorized TLS delegation, and topology does not serialize Secret values.
+
 <p align="center">
   <img src="screenshots/integrations/contour-topology.png" alt="Contour Topology" width="800">
   <br><em>Contour in Topology View — HTTPProxy → Service routing with delegation</em>
@@ -687,6 +691,8 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 ### What Radar Shows
 
 **Topology:** Full Istio traffic path — IstioGateway → VirtualService → Service, and DestinationRule → Service configuration edges. See how traffic flows through gateway listeners, virtual service routing rules, and into backend services.
+
+Service links accept short names in the rule's namespace or full `name.namespace.svc.<domain>` names. Radar reads a unique registry domain from standard observed Istiod Deployments' `--domain` argument, using Istio's `cluster.local` default when no override is observed. Conflicting or unresolved control-plane arguments leave FQDN links unresolved. External control planes and nonstandard launch configurations may therefore need additional domain discovery; arbitrary dotted hosts are not treated as local Services.
 
 **VirtualService Detail View:**
 - HTTP/TCP/TLS routing rules with match conditions
@@ -1154,6 +1160,8 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 ### What Radar Shows
 
 **Topology:** Full Knative Serving chain — Route → KnativeService → Configuration → Revision → Deployment → Pod. Eventing flow — PingSource → Broker → Trigger → subscriber target. See how traffic is split across revisions, which configurations are active, and how events flow from sources through brokers to triggers.
+
+Event destinations retain the reference’s API group, kind, namespace and name. Missing or conflicting identity remains unresolved rather than borrowing a same-named core Service. `Trigger.spec.brokerRef` uses its explicit Broker namespace and name; the older `spec.broker` field remains local to the Trigger. Channel objects and their observed backing channels are separate resources, and cached owner references establish their management links.
 
 <p align="center">
   <img src="screenshots/integrations/knative-topology.png" alt="Knative Topology" width="800">

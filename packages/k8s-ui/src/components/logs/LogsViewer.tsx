@@ -40,6 +40,22 @@ export interface LogsViewerProps {
   autoStream?: boolean
 }
 
+// Kubernetes' answers that there are no logs to show, such as "no earlier run".
+// They describe the pod, not a failure in Radar, so they are shown like an
+// empty pane rather than as an error.
+const CLUSTER_ANSWER_CODES = new Set(['no_previous_run', 'logs_unavailable'])
+
+function isClusterAnswerCode(code: unknown): boolean {
+  return typeof code === 'string' && CLUSTER_ANSWER_CODES.has(code)
+}
+
+function clusterAnswerOf(err: unknown): string | null {
+  if (!(err instanceof Error) || !('data' in err)) return null
+  const { data } = err
+  if (typeof data !== 'object' || data === null || !('error_code' in data)) return null
+  return isClusterAnswerCode(data.error_code) ? err.message : null
+}
+
 export function LogsViewer({
   namespace: _namespace,
   podName,
@@ -55,13 +71,14 @@ export function LogsViewer({
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
   const [logRange, setLogRange] = useState('500')
   const [showPrevious, setShowPrevious] = useState(false)
   const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
-  const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
+  const { isStreaming, streamError, streamErrorCode, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
   // Tracks the container we've already auto-started for, so re-renders don't
@@ -69,33 +86,61 @@ export function LogsViewer({
   const autoStartedForRef = useRef<string | null>(null)
   // Once the user explicitly Stops, don't auto-resume for this viewer's lifetime.
   const userStoppedRef = useRef(false)
+  // Set when starting a stream unticks Previous, so that change does not also
+  // load a snapshot over the stream.
+  const skipSnapshotRef = useRef(false)
+  // Numbers each snapshot load; a load superseded by a newer one or by a
+  // stream start must not write over what replaced it.
+  const loadSeqRef = useRef(0)
+  // Whether a stream is open or opening, read where its end must not itself
+  // trigger anything.
+  const streamOpenRef = useRef(false)
+  useEffect(() => { streamOpenRef.current = isStreaming || connecting }, [isStreaming, connecting])
 
   const loadLogs = useCallback(async () => {
     if (!selectedContainer) return
+    const seq = ++loadSeqRef.current
+    // The snapshot now owns the pane, so an ended stream's answer or failure
+    // must not outlive it. A stream still open or opening is left alone.
+    if (!streamOpenRef.current) stopStreaming()
     setIsLoading(true)
     setFetchError(null)
+    setEmptyMessage(null)
     try {
       const data = await fetchLogs({ container: selectedContainer, tailLines, sinceSeconds, previous: showPrevious })
+      if (seq !== loadSeqRef.current) return
       const logText = data[selectedContainer] ?? Object.values(data)[0] ?? ''
       set(logText.split('\n').filter(Boolean).map(line => {
         const { timestamp, content } = parseLogLine(line)
         return { timestamp, content, container: selectedContainer }
       }))
     } catch (err) {
+      if (seq !== loadSeqRef.current) return
+      const answer = clusterAnswerOf(err)
+      if (answer) {
+        set([])
+        setEmptyMessage(answer)
+        return
+      }
       console.error('Failed to fetch logs:', err)
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch logs')
     } finally {
-      setIsLoading(false)
+      if (seq === loadSeqRef.current) setIsLoading(false)
     }
-  }, [selectedContainer, tailLines, sinceSeconds, showPrevious, fetchLogs, set])
+  }, [selectedContainer, tailLines, sinceSeconds, showPrevious, fetchLogs, set, stopStreaming])
 
   // When auto-streaming the stream supplies the initial tail, so the static
   // snapshot fetch is skipped to avoid a redundant request and a flash of
   // snapshot content before the stream takes over. If the user has Stopped we
   // won't auto-start, so fall back to the snapshot — otherwise a container
-  // switch would keep showing the previous container's lines.
+  // switch would keep showing the previous container's lines. Once the stream
+  // has ended by itself, Previous and the range load a snapshot too.
   useEffect(() => {
-    if (!willAutoStream || userStoppedRef.current) loadLogs()
+    if (skipSnapshotRef.current) {
+      skipSnapshotRef.current = false
+      return
+    }
+    if (!willAutoStream || userStoppedRef.current || !streamOpenRef.current) loadLogs()
   }, [loadLogs, willAutoStream])
   useEffect(() => { stopStreaming() }, [selectedContainer, stopStreaming])
 
@@ -109,6 +154,18 @@ export function LogsViewer({
 
   const handleStartStreaming = useCallback(() => {
     if (!createStream) return
+    // The stream always shows the current run, so starting one leaves the
+    // Previous view without loading a snapshot over the stream. The updater
+    // reads Previous so this callback does not depend on it: a new identity
+    // would re-run the auto-start effect and reopen the stream.
+    setShowPrevious(previous => {
+      if (previous) skipSnapshotRef.current = true
+      return false
+    })
+    loadSeqRef.current++
+    setIsLoading(false)
+    setFetchError(null)
+    setEmptyMessage(null)
     // The stream replays the last N lines (TailLines + Follow); clear first so
     // they don't duplicate lines already in the buffer (the snapshot on the
     // manual path, or an earlier stream on restart).
@@ -134,13 +191,15 @@ export function LogsViewer({
   useEffect(() => {
     if (!willAutoStream || !selectedContainer) return
     if (userStoppedRef.current) return
-    if (autoStartedForRef.current === selectedContainer) return
-    autoStartedForRef.current = selectedContainer
-    handleStartStreaming()
+    if (autoStartedForRef.current !== selectedContainer) {
+      autoStartedForRef.current = selectedContainer
+      handleStartStreaming()
+    }
     // Reset the arm latch on teardown so a re-run re-streams — without this,
     // React Strict Mode's mount→unmount→mount closes the stream but the latch
-    // stays set, leaving the viewer static.
-    return () => { autoStartedForRef.current = null }
+    // stays set, leaving the viewer static. Only while a stream is open: one
+    // that ended by itself stays ended, and a range change loads a snapshot.
+    return () => { if (streamOpenRef.current) autoStartedForRef.current = null }
   }, [willAutoStream, selectedContainer, handleStartStreaming])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
@@ -179,18 +238,20 @@ export function LogsViewer({
   // While the auto-stream is opening (before it first settles), show the
   // loading state rather than the empty-logs placeholder.
   const isConnecting = willAutoStream && connecting && entries.length === 0
+  const streamAnswer = isClusterAnswerCode(streamErrorCode) ? streamError : null
 
   return (
     <LogCore
       entries={entries}
       isLoading={isLoading || isConnecting}
-      errorMessage={fetchError || (entries.length === 0 ? streamError : null)}
+      errorMessage={fetchError || (entries.length === 0 && !emptyMessage && !streamAnswer ? streamError : null)}
       isStreaming={isStreaming}
       onStartStream={createStream ? handleStartStreaming : undefined}
       onStopStream={handleStopStreaming}
       onRefresh={loadLogs}
       onDownload={downloadLogs}
       onClear={clear}
+      emptyMessage={emptyMessage ?? streamAnswer ?? undefined}
       toolbarExtra={renderToolbarExtra}
       forceDark={forceDark}
       defaultDark={defaultDark}

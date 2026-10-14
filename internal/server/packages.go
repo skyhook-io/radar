@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -206,7 +207,11 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		}, nil
 	}
 
-	cacheKey := packagesCacheKeyFor(p.Namespaces)
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return PackagesResponse{}, errResourceCacheUnavailable
+	}
+	cacheKey := packagesCacheKeyFor(cache.Generation(), p.Namespaces)
 	packagesCacheMu.Lock()
 	entry, hit := packagesCache[cacheKey]
 	packagesCacheMu.Unlock()
@@ -220,7 +225,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		generatedAt = entry.at
 	} else {
 		var err error
-		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces)
+		rows, sourceErrs, err = computePackagesInternal(ctx, cache, p.Namespaces)
 		if err != nil {
 			return PackagesResponse{}, err
 		}
@@ -289,14 +294,19 @@ func clearPackagesCache() {
 	packagesCacheMu.Unlock()
 }
 
-// packagesCacheKeyFor produces a stable cache key from the requested
-// namespace set. User identity is intentionally NOT part of the key:
+// packagesCacheKeyFor produces a stable cache key from the generation of
+// the resource cache the list is computed from and the requested namespace
+// set. The generation keeps a list computed from the previous cluster, which
+// can finish after a context switch cleared the cache, out of the new
+// cluster's entries. User identity is intentionally NOT part of the key:
 // inventory reads run via the ServiceAccount (see computePackagesInternal),
 // so the result is identical for any caller with the same namespace
 // scope. Sharing entries across users avoids N-way duplication and
 // premature LRU eviction in multi-user Cloud deployments.
-func packagesCacheKeyFor(namespaces []string) string {
+func packagesCacheKeyFor(generation uint64, namespaces []string) string {
 	var b strings.Builder
+	b.WriteString(strconv.FormatUint(generation, 10))
+	b.WriteByte('|')
 	if namespaces == nil {
 		b.WriteByte('*')
 	} else {
@@ -360,12 +370,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 // cloud-mode (see the helm comment below for the rationale). User
 // identity does still flow through ListPackagesParams for cache
 // scoping and for sensitive Helm endpoints invoked elsewhere.
-func computePackagesInternal(ctx context.Context, namespaces []string) ([]packages.PackageRow, []SourceError, error) {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, nil, errResourceCacheUnavailable
-	}
-
+func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) ([]packages.PackageRow, []SourceError, error) {
 	src := packages.Sources{}
 	var errs []SourceError
 

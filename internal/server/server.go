@@ -3662,8 +3662,8 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 		entry.MemoryLimit = totals.MemoryLimit
 
 		// Per-container breakdown drives the table's per-container display.
-		// Nil for single-running-container pods, where the client falls back
-		// to the pod-level sums above.
+		// Nil for single-running-container pods without a pod-level budget,
+		// where the client falls back to the pod-level sums above.
 		entry.Containers = k8s.BuildPodContainerMetrics(pod, containerUsage[key])
 
 		result = append(result, entry)
@@ -3933,7 +3933,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 
 	store := timeline.GetStore()
 	if store == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Timeline store not available")
+		s.writeTimelineStoreUnavailable(w)
 		return
 	}
 
@@ -4004,7 +4004,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 
 	events, err := store.Query(r.Context(), opts)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeTimelineQueryError(w, err)
 		return
 	}
 	// Cursor progress must be derived from the page BEFORE the RBAC filter
@@ -5155,6 +5155,56 @@ func (s *Server) writeErrorCode(w http.ResponseWriter, status int, code, message
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(map[string]string{"error": message, "error_code": code}); err != nil {
+		log.Printf("Failed to encode error response: %v", err)
+	}
+}
+
+// writeTimelineStoreUnavailable answers a timeline read that found no store.
+func (s *Server) writeTimelineStoreUnavailable(w http.ResponseWriter) {
+	if reason := timeline.TimelineUnavailableReason(); reason != "" {
+		s.writeTimelineDatabaseUnreachable(w, reason)
+		return
+	}
+	s.writeError(w, http.StatusServiceUnavailable, "Timeline store not available")
+}
+
+// writeTimelineQueryError answers a timeline query that failed.
+func (s *Server) writeTimelineQueryError(w http.ResponseWriter, err error) {
+	if timeline.DatabaseUnreachable(err) {
+		s.writeTimelineDatabaseUnreachable(w, err.Error())
+		return
+	}
+	// A timeout alone can't tell a database that stopped answering from a slow
+	// query. A short ping can: only the first fails it too.
+	if errors.Is(err, context.DeadlineExceeded) {
+		ctx, cancel := context.WithTimeout(context.Background(), timelineQueryPingTimeout)
+		pingErr := timeline.Unavailable(ctx)
+		cancel()
+		if pingErr != nil {
+			s.writeTimelineDatabaseUnreachable(w, pingErr.Error())
+			return
+		}
+	}
+	s.writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+// timelineQueryPingTimeout bounds the check a timed-out timeline query makes
+// before answering, so the reply is not held much past the timeout itself.
+const timelineQueryPingTimeout = 2 * time.Second
+
+// writeTimelineDatabaseUnreachable is the one answer for a PostgreSQL database
+// Radar can't connect to, whether it never answered at startup or went away later,
+// so the page says the same thing in both cases. `detail` is the driver's error
+// with the password already redacted, for the operator to act on.
+func (s *Server) writeTimelineDatabaseUnreachable(w http.ResponseWriter, detail string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	payload := map[string]string{
+		"error":      "Timeline history is unavailable because Radar can't connect to its PostgreSQL database. Radar keeps retrying. Its logs have the details: search them for [timeline].",
+		"error_code": "timeline_database_unreachable",
+		"detail":     detail,
+	}
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		log.Printf("Failed to encode error response: %v", err)
 	}
 }

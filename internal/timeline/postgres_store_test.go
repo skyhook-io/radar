@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/skyhook-io/radar/pkg/timeline/storetest"
@@ -50,10 +51,20 @@ func testPostgresDSN(t *testing.T) string {
 	}
 
 	t.Cleanup(func() {
-		if _, err := admin.ExecContext(
-			context.Background(),
-			"DROP SCHEMA IF EXISTS "+schema+" CASCADE",
-		); err != nil {
+		// A store's Close cancels its background index build, but PostgreSQL
+		// applies the cancel a moment later, and a drop that meets the build
+		// still running loses a deadlock or a catalog update race. Both clear
+		// once the cancel lands.
+		var err error
+		for attempt := 0; attempt < 10; attempt++ {
+			_, err = admin.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+			var pgErr *pgconn.PgError
+			if err == nil || !errors.As(err, &pgErr) || (pgErr.Code != "40P01" && pgErr.Code != "XX000") {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if err != nil {
 			t.Errorf("drop PostgreSQL test schema: %v", err)
 		}
 		if err := admin.Close(); err != nil {

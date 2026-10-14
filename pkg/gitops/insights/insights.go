@@ -82,6 +82,12 @@ type Summary struct {
 	// ResourceHealthAPIError: the controller's API server was asked and
 	// didn't answer usefully — why, in the user's words.
 	ResourceHealthAPIError string `json:"resourceHealthApiError,omitempty"`
+	// ResourceHealthAPIPending: the host is still connecting to the
+	// controller's API server; ask again shortly.
+	ResourceHealthAPIPending bool `json:"resourceHealthApiPending,omitempty"`
+	// ResourceHealthAPIRetrying: the host couldn't reach the controller's API
+	// server and is retrying; ask again now and then.
+	ResourceHealthAPIRetrying bool `json:"resourceHealthApiRetrying,omitempty"`
 }
 
 // IgnoredDifferencesSummary is the comparison-coverage disclosure for an Argo
@@ -300,6 +306,12 @@ type Capabilities struct {
 	// the connection is down / token rejected" (offer Reconnect), instead of
 	// showing per-resource diff buttons that would fail.
 	ArgoConfigured bool `json:"argoConfigured,omitempty"`
+	// ArgoConnecting: configured, and the host is still making the first
+	// connection; ask again shortly instead of reporting the diff as down.
+	ArgoConnecting bool `json:"argoConnecting,omitempty"`
+	// ArgoRetrying: configured, the connection failed in a way that may pass
+	// on its own, and the host is retrying; ask again now and then.
+	ArgoRetrying bool `json:"argoRetrying,omitempty"`
 	// RevisionMetadataAvailable reports that the Argo CD revision-metadata
 	// endpoint can resolve Git commit details (author, message, signature) for
 	// this Application's deployed revisions. Same gating as ArgoDiffAvailable:
@@ -392,6 +404,8 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 		out.Summary.RemoteDestination = resourceTree.RemoteDestination && (tool != "argocd" || gitops.HasArgoDestination(root))
 		out.Summary.ResourceHealthFromAPI = resourceTree.HealthFromAPI
 		out.Summary.ResourceHealthAPIError = resourceTree.HealthAPIError
+		out.Summary.ResourceHealthAPIPending = resourceTree.HealthAPIPending
+		out.Summary.ResourceHealthAPIRetrying = resourceTree.HealthAPIRetrying
 	}
 	return out
 }

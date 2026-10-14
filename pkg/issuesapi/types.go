@@ -606,12 +606,46 @@ type Response struct {
 	// the lookback window itself: changes older than the window are out of
 	// scope either way, not implied absent.
 	RecentChangesTruncated bool `json:"recent_changes_truncated,omitempty"`
+	// RecentChangesError is set when the recent-changes feed was due but could
+	// not be read, such as while the timeline database is unreachable. Without
+	// it, a missing recent_changes would read the same as no changes.
+	RecentChangesError string `json:"recent_changes_error,omitempty"`
 	// CorrelationTruncated is set when per-issue change correlation skipped
 	// some critical or warning issues (shared cap reached; criticals are
 	// checked first). Under truncation, an issue without correlation markers
 	// means "not checked", not "no changes".
 	CorrelationTruncated bool `json:"correlation_truncated,omitempty"`
+	// UncheckedSources lists the issue sources Radar couldn't check for this
+	// answer, so their issues may be missing. Omitted when every source was
+	// checked. A source the caller may not read, or a read cut short because
+	// the caller left, is not listed. Consumers must treat an unknown source
+	// value as unchecked too.
+	UncheckedSources []UncheckedSource `json:"unchecked_sources,omitempty"`
 }
+
+// UncheckedSource is one issue source Radar couldn't check.
+type UncheckedSource struct {
+	Source UncheckedSourceName `json:"source"`
+	Reason UncheckedReason     `json:"reason"`
+}
+
+// UncheckedSourceName names an issue source that can go unchecked. It is not
+// Issue.Source, which says how an issue was detected.
+type UncheckedSourceName string
+
+const (
+	// UncheckedSourceHelm is Radar's native Helm release read (release
+	// Secrets). Flux HelmReleases are not part of it.
+	UncheckedSourceHelm UncheckedSourceName = "helm"
+)
+
+type UncheckedReason string
+
+const (
+	// UncheckedReasonReadFailed: the read failed, for example an API server
+	// error, rejected credentials, or Radar's own request deadline.
+	UncheckedReasonReadFailed UncheckedReason = "read_failed"
+)
 
 type BindingType string
 

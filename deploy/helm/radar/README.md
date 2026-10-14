@@ -27,6 +27,9 @@ kubectl port-forward svc/radar 9280:9280 -n radar
 open http://localhost:9280
 ```
 
+Each install or upgrade prints how to open Radar for the values you set. To see
+it again, run `helm get notes radar -n radar`.
+
 ### With Ingress
 
 ```bash

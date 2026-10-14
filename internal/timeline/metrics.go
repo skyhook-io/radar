@@ -53,6 +53,7 @@ const (
 	DropReasonAlreadySeen = "already_seen"
 	DropReasonHistoryNil  = "history_nil"
 	DropReasonStoreFailed = "store_failed"
+	DropReasonStoreDown   = "store_unavailable"
 	// DropReasonNoDiff: update event for a kind whose diff function found no
 	// observable change. Heartbeats, managed-fields-only updates, reconcile
 	// counters — see KindHasDiffer for the audited set.

@@ -255,25 +255,8 @@ func traefikTLSStoreConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRe
 
 func contourHTTPProxyConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
-	add := func(ref string) {
-		if ref != "" {
-			ns, name := configrefs.ContourSecretRef(u.GetNamespace(), ref)
-			addSecret(&refs, ns, name)
-		}
-	}
-	add(stringAt(u.Object, "spec", "virtualhost", "tls", "secretName"))
-	add(stringAt(u.Object, "spec", "virtualhost", "tls", "clientValidation", "caSecret"))
-	add(stringAt(u.Object, "spec", "virtualhost", "tls", "clientValidation", "crlSecret"))
-	for _, provider := range mapsAt(u.Object, "spec", "virtualhost", "jwtProviders") {
-		add(stringAt(provider, "remoteJWKS", "validation", "caSecret"))
-	}
-	for _, route := range mapsAt(u.Object, "spec", "routes") {
-		for _, service := range mapsAt(route, "services") {
-			add(stringAt(service, "validation", "caSecret"))
-		}
-	}
-	for _, service := range mapsAt(u.Object, "spec", "tcpproxy", "services") {
-		add(stringAt(service, "validation", "caSecret"))
+	for _, ref := range configrefs.ContourSecretReferences(u) {
+		addSecret(&refs, ref.Namespace, ref.Name)
 	}
 	return refs
 }

@@ -83,6 +83,12 @@ export interface GitOpsResourceTree {
   healthFromApi?: boolean
   // The controller's API server was asked and didn't answer usefully.
   healthApiError?: string
+  // The host is still connecting to the controller's API server; ask again
+  // shortly.
+  healthApiPending?: boolean
+  // The host couldn't reach the controller's API server and is retrying;
+  // ask again now and then.
+  healthApiRetrying?: boolean
   // The Application (or Flux object with spec.kubeConfig) deploys to another
   // cluster; Radar derives nothing about its resources from here.
   remoteDestination?: boolean

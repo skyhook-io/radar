@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,6 +19,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 )
+
+// diagTimelinePingTimeout bounds the reachability check so a database that
+// drops packets cannot stall the whole diagnostics snapshot.
+const diagTimelinePingTimeout = 2 * time.Second
 
 // DiagConfig holds sanitized configuration for the diagnostics endpoint.
 // No sensitive values (kubeconfig paths, Prometheus URLs, etc.).
@@ -310,6 +315,37 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	collectSafe("timeline", &errs, func() {
 		store := timeline.GetStore()
 		if store == nil {
+			// A missing timeline with no explanation is the hardest kind of
+			// failure to chase, so report the reason rather than omitting the
+			// section entirely.
+			if reason := timeline.TimelineUnavailableReason(); reason != "" {
+				snap.Timeline = &DiagTimeline{
+					StorageType:    "unavailable",
+					Degraded:       true,
+					DegradedReason: reason,
+					TotalDrops:     timeline.GetTotalDropCount(),
+				}
+			}
+			return
+		}
+		// A database that went away after startup leaves the store in place,
+		// and Stats reads its failed queries as zeros: an outage would show as
+		// a healthy, empty timeline.
+		ctx, cancel := context.WithTimeout(context.Background(), diagTimelinePingTimeout)
+		err := timeline.Unavailable(ctx)
+		cancel()
+		if err != nil {
+			storageType := "postgres"
+			if s.diagConfig != nil {
+				storageType = s.diagConfig.TimelineStorage
+			}
+			snap.Timeline = &DiagTimeline{
+				StorageType:    storageType,
+				Degraded:       true,
+				DegradedReason: err.Error(),
+				StoreErrors:    timeline.GetStoreErrorCount(),
+				TotalDrops:     timeline.GetTotalDropCount(),
+			}
 			return
 		}
 		stats := store.Stats()

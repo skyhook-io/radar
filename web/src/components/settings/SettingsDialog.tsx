@@ -856,11 +856,8 @@ export function SettingsDialog({
                 anonymous={argoSectionStatus?.connected && argoSectionStatus.anonymous}
                 connectedAddress={argoSectionStatus?.connected && !argoSectionStatus.anonymous ? argoSectionStatus.address : undefined}
                 active={section === 'argocd'}
-                statusReason={
-                  argoSectionStatus?.configured && !argoSectionStatus.connected
-                    ? argoSectionStatus.reason
-                    : undefined
-                }
+                statusReason={argoSectionStatus?.configured ? argoSectionStatus.reason : undefined}
+                connecting={argoSectionStatus?.connecting}
                 onChangeUrl={(v) => updateConfigField('argoCdUrl', v || undefined)}
                 onChangeInsecureTls={(v) => updateConfigField('argoCdInsecureTls', v || undefined)}
                 onApplied={({ url, insecureTls, tokenSet }) => {
@@ -1218,7 +1215,7 @@ function OperatorSettingsSummary({ section, config }: { section: SettingsSection
       break
     case 'argocd':
       rows = [
-        ['Status', argoError ? 'Status unavailable' : !argo ? 'Checking…' : argo.connected ? 'Connected' : 'Not connected'],
+        ['Status', argoError ? 'Status unavailable' : !argo ? 'Checking…' : argo.connected ? 'Connected' : argo.connecting ? 'Connecting…' : 'Not connected'],
         ['Endpoint', argo?.address || c.argoCdUrl || 'Auto-discovery'],
         ['Token', config.argoCdTokenSet ? 'Configured' : 'None configured'],
         ['TLS verification', c.argoCdInsecureTls ? 'Disabled' : 'Enabled'],
@@ -1347,9 +1344,9 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'argocd', icon: GitBranch, label: 'Argo CD',
-      tone: argo?.connected ? 'ok' : argo?.configured || argo?.reason ? 'warn' : 'off',
-      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : 'Not connected',
-      detail: argo?.connected ? argo.address : argo?.reason ? 'Open Argo CD for connection details.' : undefined,
+      tone: argo?.connected ? (argo.reason ? 'warn' : 'ok') : argo?.connecting ? 'unknown' : argo?.configured || argo?.reason ? 'warn' : 'off',
+      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : argo?.connecting ? 'Connecting…' : 'Not connected',
+      detail: argo?.reason ? 'Open Argo CD for connection details.' : argo?.connected ? argo.address : undefined,
     },
     {
       id: 'advanced', icon: Zap, label: 'MCP',
@@ -2228,6 +2225,7 @@ function ArgoCDConfigField({
   envError,
   cliSession,
   statusReason,
+  connecting,
   anonymous,
   connectedAddress,
   active,
@@ -2242,6 +2240,7 @@ function ArgoCDConfigField({
   envError?: string
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  connecting?: boolean
   anonymous?: boolean
   connectedAddress?: string
   active?: boolean
@@ -2250,7 +2249,7 @@ function ArgoCDConfigField({
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
 }) {
   if (envManaged) {
-    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} connectedAddress={connectedAddress} statusReason={statusReason} />
+    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} connectedAddress={connectedAddress} statusReason={statusReason} connecting={connecting} />
   }
   return (
     <ArgoCDEditableField
@@ -2259,6 +2258,7 @@ function ArgoCDConfigField({
       tokenSet={tokenSet}
       cliSession={cliSession}
       statusReason={statusReason}
+      connecting={connecting}
       anonymous={anonymous}
       connectedAddress={connectedAddress}
       active={active}
@@ -2279,6 +2279,7 @@ function ArgoCDEnvManagedField({
   envError,
   connectedAddress,
   statusReason,
+  connecting,
 }: {
   url: string
   insecureTls: boolean
@@ -2288,6 +2289,7 @@ function ArgoCDEnvManagedField({
   // so this is the one thing on it that can change after deploy.
   connectedAddress?: string
   statusReason?: string
+  connecting?: boolean
 }) {
   if (envError) {
     return (
@@ -2344,10 +2346,15 @@ function ArgoCDEnvManagedField({
             <dt className="w-24 shrink-0 text-theme-text-tertiary">Status</dt>
             <dd className="min-w-0 truncate text-theme-text-secondary">
               {connectedAddress ? (
-                <span className="inline-flex items-center gap-1">
-                  <Check className="w-3 h-3 shrink-0 text-green-600 dark:text-green-400/80" />
-                  Connected at {connectedAddress}
-                </span>
+                <>
+                  <span className="inline-flex items-center gap-1">
+                    <Check className="w-3 h-3 shrink-0 text-green-600 dark:text-green-400/80" />
+                    Connected at {connectedAddress}
+                  </span>
+                  {statusReason && <span className="block whitespace-normal text-warning-text">{statusReason}</span>}
+                </>
+              ) : connecting ? (
+                'Connecting…'
               ) : statusReason ? (
                 <span className="text-warning-text">Not connected — {statusReason}</span>
               ) : (
@@ -2377,6 +2384,7 @@ function ArgoCDEditableField({
   tokenSet,
   cliSession,
   statusReason,
+  connecting: serverConnecting,
   anonymous,
   connectedAddress,
   active,
@@ -2389,6 +2397,7 @@ function ArgoCDEditableField({
   tokenSet: boolean
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  connecting?: boolean
   anonymous?: boolean
   connectedAddress?: string
   active?: boolean
@@ -2515,6 +2524,10 @@ function ArgoCDEditableField({
             <>Connected to Argo CD at {connectedAddress}.</>
           )}
         </p>
+      )}
+
+      {serverConnecting && state.status === 'idle' && !anonymous && !connectedAddress && (
+        <p className="mb-3 text-xs text-theme-text-secondary">Connecting to Argo CD…</p>
       )}
 
       {statusReason && state.status !== 'connected' && (

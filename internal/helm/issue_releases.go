@@ -2,6 +2,7 @@ package helm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -60,8 +61,26 @@ func (c *Client) ListIssueReleasesAcrossNamespaces(ctx context.Context, namespac
 	return listIssueReleasesWithClients(ctx, client, labelsClient, contextName, namespaces)
 }
 
+// IssueReadDenied reports whether a failed ListIssueReleasesAcrossNamespaces
+// was Kubernetes refusing the caller's release Secret list. A 401 is not: it
+// is Radar's own credentials failing, not the caller's permissions.
+func IssueReadDenied(err error) bool {
+	return err != nil && isReleaseReadForbidden(err)
+}
+
+// IssueReadUnchecked reports whether a failed ListIssueReleasesAcrossNamespaces
+// leaves the caller's Helm issues unknown. A denial does not: the caller may
+// not read release Secrets, so it sees no Helm issues, like any other kind it
+// can't list. Neither does a caller that left, since nobody gets the answer.
+// Radar's own request deadline does: the caller is still waiting.
+func IssueReadUnchecked(ctx context.Context, err error) bool {
+	return err != nil && !IssueReadDenied(err) && !errors.Is(ctx.Err(), context.Canceled)
+}
+
+// Only a 403 skips a namespace here. A 401 in one namespace fails the whole
+// read, so IssueReadUnchecked sees it even when another namespace succeeded.
 func listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, contextName string, namespaces []string) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, false, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+	return listReleaseRows(ctx, contextName, namespaces, false, isReleaseReadForbidden, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		snapshot, skipped, err := helmIssueStorageSnapshot(ctx, client, labelsClient, namespace)
 		if err != nil {
 			return nil, err

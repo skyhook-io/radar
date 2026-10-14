@@ -135,7 +135,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 
 	store := timeline.GetStore()
 	if store == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Timeline store not available")
+		s.writeTimelineStoreUnavailable(w)
 		return
 	}
 	clusterContext := k8s.ActiveClusterContext()
@@ -150,7 +150,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 	})
 	if err != nil {
 		log.Printf("[cnpg] Failed to query activity for %s/%s: %v", namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeTimelineQueryError(w, err)
 		return
 	}
 	var liveUID string
@@ -240,7 +240,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 	})
 	if err != nil {
 		log.Printf("[cnpg] Failed to query retention floor for %s/%s: %v", namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeTimelineQueryError(w, err)
 		return
 	}
 	if len(oldest) > 0 {

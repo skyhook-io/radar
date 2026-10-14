@@ -540,7 +540,7 @@ leave Kubernetes resources, infrastructure or storage behind. Dependents with
 their own finalizers can remain stuck even after the controller is restored;
 older VictoriaMetrics operators place such finalizers on managed objects.
 
-For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
+For `issues`, `unchecked_sources` lists the issue sources Radar couldn't check for this answer, so their issues may be missing; don't read the response as healthy for them. Today the only source is `helm` (failed or stuck Helm releases), with reason `read_failed`. Treat any other value as unchecked too. Read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
 Resource context distinguishes observed dependency references (`dependencies` and
 `dependents`) from autoscalers (`scaledBy`). A Certificate depends on its issuer;
@@ -575,6 +575,11 @@ this omission does not establish that no consumers exist.
 Only named PodSpec declarations are included: implicit workload defaults and
 template-generated PVC names are not inferred. An absent omission does not by
 itself establish cache freshness or complete namespace coverage.
+
+Resource context's `ingressSummary.tlsSecrets` lists named TLS Secrets in the
+Ingress's namespace. A Secret's `referencedBy` includes readable Ingresses with
+the path `spec.tls[].secretName`. Resource-view topology links only observed,
+visible TLS Secrets. Empty Secret names do not resolve controller defaults.
 
 ### Write Tools
 

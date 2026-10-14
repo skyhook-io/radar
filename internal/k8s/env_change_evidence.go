@@ -38,8 +38,18 @@ type podEnvSourceKey struct {
 
 func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Pod, sources map[envresolve.SourceID]envresolve.SourceData) ([]PodEnvChange, envresolve.Coverage) {
 	var coverage envresolve.Coverage
+	if pod == nil {
+		return nil, coverage
+	}
 	store := timeline.GetStore()
-	if store == nil || pod == nil {
+	if store == nil {
+		// Same as a failed query when there is something to check: without
+		// it the section would show no changes and no warning while the
+		// timeline is down.
+		if len(podEnvSourceNames(pod)) > 0 {
+			coverage.Degraded = true
+			coverage.DegradedReason = "Recent changes could not be checked."
+		}
 		return nil, coverage
 	}
 	stats := store.Stats()

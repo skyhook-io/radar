@@ -48,6 +48,25 @@ func IsPodReady(pod *corev1.Pod) bool {
 	return true
 }
 
+// ContainerRestartCount reports how many times the named container (regular or
+// init) has restarted, or 0 when the pod has no status for it.
+func ContainerRestartCount(pod *corev1.Pod, name string) int32 {
+	if pod == nil {
+		return 0
+	}
+	for _, status := range pod.Status.InitContainerStatuses {
+		if status.Name == name {
+			return status.RestartCount
+		}
+	}
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == name {
+			return status.RestartCount
+		}
+	}
+	return 0
+}
+
 func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
 	containerStatuses := make([]ContainerInfo, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))

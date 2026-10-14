@@ -160,6 +160,13 @@ type ScanResults struct {
 	// means some subject was left unevaluated; a gap in supplemental evidence
 	// that still lets a finding fire is stated in that finding's message.
 	MissingInputs []string `json:"missingInputs,omitempty"`
+	// IgnoreChecksAnnotation names the per-resource opt-out annotation this
+	// Radar honors. Its presence is what tells a newer UI the opt-out exists.
+	IgnoreChecksAnnotation string `json:"ignoreChecksAnnotation,omitempty"`
+	// AnnotationIgnoredByNamespace maps checkID → namespace → distinct subjects
+	// whose findings were dropped by IgnoreChecksAnnotation, shaped like
+	// EvaluatedByNamespace so ApplySettings filters both the same way.
+	AnnotationIgnoredByNamespace map[string]map[string]int `json:"annotationIgnoredByNamespace,omitempty"`
 	// GroupedChecks is the per-check remediation-queue rollup (one Check per
 	// failing check). Populated by the HTTP audit handler post local-settings —
 	// not by RunChecks, which doesn't carry the request context BuildChecks

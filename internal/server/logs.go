@@ -109,12 +109,20 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
+		// These are answers about the pod, not failures in Radar. The code
+		// lets the viewer show them as such.
 		if errors.Is(err, k8score.ErrLogsUnavailable) {
-			s.writeError(w, http.StatusNotFound, k8score.ErrLogsUnavailable.Error())
+			s.writeErrorCode(w, http.StatusNotFound, "logs_unavailable", k8score.ErrLogsUnavailable.Error())
 			return
 		}
 		if previous && isNoPreviousContainer(err) {
-			s.writeError(w, http.StatusNotFound, "This container has not restarted, so there is no earlier run to show.")
+			// The apiserver gives the same answer when the node has dropped
+			// the earlier run's record, so the restart count tells them apart.
+			if podlogs.ContainerRestartCount(pod, container) > 0 {
+				s.writeErrorCode(w, http.StatusNotFound, "logs_unavailable", "Kubernetes did not return the logs of this container's earlier run.")
+				return
+			}
+			s.writeErrorCode(w, http.StatusNotFound, "no_previous_run", "This container has not restarted, so there is no earlier run to show.")
 			return
 		}
 		if err != nil {
@@ -232,7 +240,9 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 			// Checked before the EOF branch: the notice is the whole body with
 			// no trailing newline, so it arrives together with EOF.
 			if k8score.IsLogsUnavailableNotice(line) {
-				sendSSEError(w, flusher, k8score.ErrLogsUnavailable.Error())
+				// Coded like the snapshot answer, so the viewer shows it as an
+				// answer about the pod rather than a Radar failure.
+				sendSSEEvent(w, flusher, "error", map[string]string{"error": k8score.ErrLogsUnavailable.Error(), "error_code": "logs_unavailable"})
 				return
 			}
 
@@ -295,9 +305,10 @@ func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Inter
 	return string(content), nil
 }
 
-// isNoPreviousContainer matches the apiserver's answer when an earlier run is
-// asked for on a container that never restarted. The apiserver sends it as a
-// 400 BadRequest, so any other failure that mentions the phrase is left alone.
+// isNoPreviousContainer matches the apiserver's answer when it has no earlier
+// run to give: the container never restarted, or the node no longer knows the
+// run it had. The apiserver sends it as a 400 BadRequest, so any other failure
+// that mentions the phrase is left alone.
 func isNoPreviousContainer(err error) bool {
 	return apierrors.IsBadRequest(err) && strings.Contains(err.Error(), "previous terminated container")
 }

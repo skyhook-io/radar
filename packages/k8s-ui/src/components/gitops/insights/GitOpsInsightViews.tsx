@@ -2,7 +2,7 @@ import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, Circl
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
+import type { GitOpsChange, GitOpsDrift, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { radarHealthNote } from '../health-provenance'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
@@ -30,6 +30,7 @@ import {
   type ResourceSortKey,
   type ResourceStatusFacet,
 } from './insights-helpers'
+import { DriftPanel } from './DriftPanel'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -735,7 +736,10 @@ interface GitOpsChangesViewProps {
   // returns the loaded <ArgoResourceDiff/>. When present AND
   // insight.capabilities.argoDiffAvailable, resolvable rows expose a "Full
   // diff" toggle. Library consumers that don't wire it get no such affordance.
-  renderResourceDiff?: (ref: GitOpsInsightRef) => ReactNode
+  // fallbackDrift is the row's last-applied field list. The loaded diff shows
+  // Argo's own field list instead, and falls back to this one when the diff
+  // can't be loaded.
+  renderResourceDiff?: (ref: GitOpsInsightRef, fallbackDrift?: GitOpsDrift) => ReactNode
   // Opens the global Settings dialog. Backs the "Connect Argo CD" hint shown
   // when the root is an Argo Application without the diff integration.
   onOpenSettings?: () => void
@@ -1005,7 +1009,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
             )}
           </div>
         )}
-        {totalCount > 0 && isArgoRoot && !insight.capabilities?.argoDiffAvailable && onOpenSettings && (
+        {totalCount > 0 && isArgoRoot && !insight.capabilities?.argoDiffAvailable && !insight.capabilities?.argoConnecting && onOpenSettings && (
           <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
             {insight.capabilities?.argoConfigured ? (
               <>
@@ -1330,7 +1334,7 @@ function ChangeRow({
   // When true, the expanded panel offers a "Full diff" toggle that mounts the
   // host-wired Argo CD diff loader for this resource.
   canFullDiff: boolean
-  renderResourceDiff?: (ref: GitOpsInsightRef) => ReactNode
+  renderResourceDiff?: (ref: GitOpsInsightRef, fallbackDrift?: GitOpsDrift) => ReactNode
   onOpenResource?: (ref: GitOpsChange['ref']) => void
   onSyncResource?: (ref: GitOpsChange['ref']) => void
   syncResourceDisabledReason?: string
@@ -1422,8 +1426,11 @@ function ChangeRow({
             )}
             {/* Detail badges: surface that there's something to see in
                 the expanded panel. Without these the user has no signal
-                that clicking will reveal anything useful. */}
-            {driftEntries.length > 0 && (
+                that clicking will reveal anything useful. The field count
+                comes from the last-applied list, which can undercount on an
+                Argo row (Argo's own list loads only on expand), so it is
+                left off there. The OutOfSync badge already marks the row. */}
+            {!canFullDiff && driftEntries.length > 0 && (
               <Tooltip content={`${driftEntries.length} field${driftEntries.length === 1 ? '' : 's'} differ from Git`} delay={200} wrapperClassName="shrink-0">
                 <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
                   {driftEntries.length} diff
@@ -1523,81 +1530,24 @@ function ChangeRow({
       {expandable && (
         <Collapse open={expanded} mountLazily>
           <div className="border-t border-theme-border bg-theme-base/40 px-4 py-3">
-            {driftEntries.length > 0 && <DriftPanel drift={change.drift!} />}
+            {/* The last-applied list only knows what was applied at the last
+                sync, so it misses a Git change that hasn't synced yet. When
+                Argo's diff can load, it owns the field list and shows this
+                one only if that load fails. */}
+            {!canFullDiff && driftEntries.length > 0 && <DriftPanel drift={change.drift!} />}
             {events.length > 0 && <RecentEventsPanel events={events} />}
             {/* Expanding a row IS the request to see its diff — render it inline
                 rather than behind a second "Full diff" click. The capability is
                 already gated on a live Argo connection, so this only mounts (and
                 fetches) when the diff can actually be served. */}
             {canFullDiff && (
-              <div className={clsx((driftEntries.length > 0 || events.length > 0) && 'mt-3')}>
-                {renderResourceDiff?.(change.ref)}
+              <div className={clsx(events.length > 0 && 'mt-3')}>
+                {renderResourceDiff?.(change.ref, change.drift)}
               </div>
             )}
           </div>
         </Collapse>
       )}
-    </div>
-  )
-}
-
-// DriftPanel renders the structured per-field diff. Format mimics a
-// `diff -u` summary: removed paths in red, added in green, changed shown
-// inline as "old → new". Path is monospace; values are JSON-encoded and
-// pre-wrapped so structured values (objects, arrays) render readably.
-function DriftPanel({ drift }: { drift: NonNullable<GitOpsChange['drift']> }) {
-  const sourceLabel = driftSourceLabel(drift.source)
-  return (
-    <div>
-      <div className="mb-2 flex items-baseline justify-between gap-2">
-        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Field diff</h4>
-        <span className="text-[10px] text-theme-text-tertiary">
-          desired (Git) → live ·
-          {drift.truncated ? ' showing first 50 entries' : ` ${drift.entries.length} field${drift.entries.length === 1 ? '' : 's'}`}
-          {sourceLabel && ` · ${sourceLabel}`}
-        </span>
-      </div>
-      <div className="space-y-1 font-mono text-[11px]">
-        {drift.entries.map((entry, i) => (
-          <DriftEntryRow key={`${entry.path}-${i}`} entry={entry} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// Provenance label for a Drift's field entries. Only Argo-sourced drift gets an
-// explicit label; the built-in last-applied path renders without one (the
-// "desired (Git) → live" copy already implies it). Unknown sources (a library
-// consumer lagging the backend) fall through to no label rather than surfacing
-// a raw enum string.
-function driftSourceLabel(source: NonNullable<GitOpsChange['drift']>['source']): string {
-  return source === 'argocd-api' ? 'via Argo CD API' : ''
-}
-
-function DriftEntryRow({ entry }: { entry: NonNullable<GitOpsChange['drift']>['entries'][number] }) {
-  if (entry.op === 'removed') {
-    return (
-      <div>
-        <span className="text-red-600 dark:text-red-400">- {entry.path}</span>
-        {entry.desired && <span className="ml-2 text-theme-text-secondary">{entry.desired}</span>}
-      </div>
-    )
-  }
-  if (entry.op === 'added') {
-    return (
-      <div>
-        <span className="text-emerald-700 dark:text-emerald-400">+ {entry.path}</span>
-        {entry.live && <span className="ml-2 text-theme-text-secondary">{entry.live}</span>}
-      </div>
-    )
-  }
-  return (
-    <div>
-      <span className="text-amber-700 dark:text-amber-400">~ {entry.path}</span>
-      <span className="ml-2 text-theme-text-tertiary">{entry.desired}</span>
-      <span className="mx-1 text-theme-text-tertiary">→</span>
-      <span className="text-theme-text-primary">{entry.live}</span>
     </div>
   )
 }

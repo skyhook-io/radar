@@ -84,3 +84,14 @@ export * from './components/compare'
 export * from './perf'
 
 export { CertaintyGlyph, certaintyGlyph, certaintyValueLabel, type Certainty } from './components/facts/certainty'
+
+export * from './components/facts'
+export {
+  WorkspaceProblemCallout,
+  ProblemList,
+  ProblemMeta,
+  OpenIssueContext,
+  problemOriginLabel,
+  type WorkspaceProblem,
+  type ProblemOrigin,
+} from './components/problems'

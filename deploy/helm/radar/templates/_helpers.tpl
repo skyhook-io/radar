@@ -61,6 +61,18 @@ Create the name of the service account to use
 {{- end }}
 {{- end }}
 
+{{/*
+The URL path prefix Radar serves under: "" for root, otherwise "/<prefix>"
+with no trailing slash. Shared by the Deployment (--base-path, probes) and
+NOTES.txt (the URL printed after install).
+*/}}
+{{- define "radar.basePath" -}}
+{{- $trimmed := trimAll "/" (default "" .Values.basePath) -}}
+{{- if $trimmed -}}
+{{- printf "/%s" $trimmed -}}
+{{- end -}}
+{{- end }}
+
 {{- define "radar.operatorSettings" -}}
 {{- $settings := dict "version" 1 -}}
 {{- if .Values.audit -}}

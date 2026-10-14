@@ -9,6 +9,7 @@ import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useConnection } from "../../context/ConnectionContext";
 import type { SelectedResource } from "../../types";
 import {
+  EmptyState,
   IssuesView,
   PaneLoader,
   PageHeader,
@@ -24,6 +25,7 @@ import {
 import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
+import { uncheckedSourceLines } from "./uncheckedSources";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
 // always single-cluster (unlike Argo hub-and-spoke), so the issue and the
@@ -202,6 +204,7 @@ export function IssuesPane({
     ? subjectHidden ? undefined : related.data?.visibility
     : data?.visibility;
   const pageIssues = useMemo(() => data?.issues ?? [], [data]);
+  const uncheckedLines = subject ? [] : uncheckedSourceLines(data?.unchecked_sources);
   // With a subject set, the tiles and the list both describe the subject.
   const scopeIssues = subjectState
     ? subjectState.state === "found" ? subjectState.issues : []
@@ -305,6 +308,16 @@ export function IssuesPane({
         </div>
       )}
 
+      {/* Unchecked-source honesty: the rows can't include issues from a
+          source Radar couldn't check. With no rows the empty state below says
+          it instead. */}
+      {scopeIssues.length > 0 && uncheckedLines.map((line) => (
+        <div key={line} className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <span>{line}</span>
+        </div>
+      ))}
+
       {/* Truncation honesty: when more issues matched than were returned, say
           so — don't present a capped list as the complete picture. */}
       {!subject && data?.total_matched != null &&
@@ -371,6 +384,8 @@ export function IssuesPane({
             Clear filter
           </button>
         </div>
+      ) : uncheckedLines.length > 0 && scopeIssues.length === 0 ? (
+        <EmptyState tone="neutral" variant="card" headline="No issues found" body={uncheckedLines.join(" ")} />
       ) : (
         /* anyData = the query resolved, i.e. the cluster is reachable; an empty
            list then means "nothing broken" rather than "not connected". */

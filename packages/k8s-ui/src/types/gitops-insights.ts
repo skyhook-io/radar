@@ -93,6 +93,12 @@ export interface GitOpsInsightSummary {
   // The controller's API server was asked and didn't answer usefully — why,
   // in the user's words. Only set when the integration is configured.
   resourceHealthApiError?: string
+  // The host is still connecting to the controller's API server; ask again
+  // shortly.
+  resourceHealthApiPending?: boolean
+  // The host couldn't reach the controller's API server and is retrying;
+  // ask again now and then.
+  resourceHealthApiRetrying?: boolean
 }
 
 export interface GitOpsIgnoredDifferences {
@@ -247,6 +253,12 @@ export interface GitOpsCapabilities {
   // tell "not set up" (offer Connect) from "set up but disconnected" (offer
   // Reconnect) — instead of advertising a diff that would fail.
   argoConfigured?: boolean
+  // Configured, and the host is still making the first connection; ask
+  // again shortly instead of reporting the diff as down.
+  argoConnecting?: boolean
+  // Configured, the connection failed in a way that may pass on its own, and
+  // the host is retrying; ask again now and then.
+  argoRetrying?: boolean
   // True on an Argo CD Application detail when the integration is connected,
   // meaning the revision-metadata endpoint can resolve Git commit details
   // (author, message, signature) for this app's deployed revisions.

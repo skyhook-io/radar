@@ -2,6 +2,9 @@
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
 
+import type { Fact } from '../facts'
+import type { ProblemDetails, ProblemProvenance } from '../problems'
+
 import type { HealthLevel } from '../resources/resource-utils'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
@@ -96,14 +99,7 @@ export function isCNPGWorkspaceKind(kind: string, group: string | undefined): bo
 /** The value is observed, derived, or not available from the cluster. */
 export type CNPGFactTone = HealthLevel
 
-export interface CNPGFact {
-  text: string
-  tone: CNPGFactTone
-  /** Where the value comes from, shown next to it so claims carry their source. */
-  source?: string
-  /** A timestamp the text refers to; the UI renders it as an age. */
-  at?: string
-}
+export type CNPGFact = Fact
 
 export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations' | 'pooling'
 
@@ -114,17 +110,9 @@ export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }
   { id: 'pooling', label: 'Pooling' },
 ]
 
-export interface CNPGProblem {
-  /** Stable identity for keys. */
-  id: string
-  severity: 'critical' | 'warning' | 'posture'
-  category: CNPGProblemCategory
-  title: string
-  detail?: string
-  /** The object the evidence is about (may be the Cluster or a child object). */
-  subject: { kind: string; group: string; namespace: string; name: string }
-  source: 'issue' | 'audit'
-}
+export type CNPGProblem = ProblemDetails<CNPGProblemCategory> &
+  Extract<ProblemProvenance, { source: 'issue' | 'audit' }> &
+  { severity: 'critical' | 'warning' | 'posture' }
 
 export interface CNPGInstance {
   name: string

@@ -247,6 +247,22 @@ describe("strict evidence adapters", () => {
       }),
     ]);
 
+    const unreadIssueFeed = project([
+      tool("issues-down", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_error: "timeline history is unavailable",
+      }),
+    ]);
+    expect(unreadIssueFeed.limitations).toEqual([
+      expect.objectContaining({
+        source: "Issue-related changes",
+        kind: "error",
+        message: "timeline history is unavailable",
+      }),
+    ]);
+
     const filtered = project([
       tool("filtered", "get_resource", {
         resource: deployment,

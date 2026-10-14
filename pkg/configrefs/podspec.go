@@ -19,19 +19,48 @@ type PodSpecReference struct {
 // different containers can declare the same target with different requirements.
 func PodSpecReferences(namespace string, spec corev1.PodSpec) []PodSpecReference {
 	seen := map[PodSpecReference]bool{}
-	add := func(kind, name, path string, optional *bool) {
-		if name == "" {
-			return
-		}
-		seen[PodSpecReference{Ref: Ref{kind, namespace, name}, Path: path, Optional: optional != nil && *optional}] = true
+	VisitPodSpecReferences(namespace, spec, func(ref PodSpecReference) { seen[ref] = true })
+	result := make([]PodSpecReference, 0, len(seen))
+	for ref := range seen {
+		result = append(result, ref)
 	}
-	collectEnv := func(prefix string, env []corev1.EnvVar, envFrom []corev1.EnvFromSource) {
+	slices.SortFunc(result, func(a, b PodSpecReference) int {
+		if order := cmp.Compare(a.Kind, b.Kind); order != 0 {
+			return order
+		}
+		if order := cmp.Compare(a.Name, b.Name); order != 0 {
+			return order
+		}
+		if order := cmp.Compare(a.Path, b.Path); order != 0 {
+			return order
+		}
+		if a.Optional == b.Optional {
+			return 0
+		}
+		if a.Optional {
+			return 1
+		}
+		return -1
+	})
+	return result
+}
+
+// VisitPodSpecReferences visits non-empty declarations without collecting or
+// sorting them. Repeated declarations are visited separately; callers that need
+// unique references should use PodSpecReferences or deduplicate their target keys.
+func VisitPodSpecReferences(namespace string, spec corev1.PodSpec, visit func(PodSpecReference)) {
+	add := func(kind, name, path string, optional *bool) {
+		if name != "" {
+			visit(PodSpecReference{Ref: Ref{kind, namespace, name}, Path: path, Optional: optional != nil && *optional})
+		}
+	}
+	collectEnv := func(paths [4]string, env []corev1.EnvVar, envFrom []corev1.EnvFromSource) {
 		for _, source := range envFrom {
 			if ref := source.ConfigMapRef; ref != nil {
-				add("ConfigMap", ref.Name, prefix+".envFrom[].configMapRef.name", ref.Optional)
+				add("ConfigMap", ref.Name, paths[0], ref.Optional)
 			}
 			if ref := source.SecretRef; ref != nil {
-				add("Secret", ref.Name, prefix+".envFrom[].secretRef.name", ref.Optional)
+				add("Secret", ref.Name, paths[1], ref.Optional)
 			}
 		}
 		for _, variable := range env {
@@ -39,21 +68,21 @@ func PodSpecReferences(namespace string, spec corev1.PodSpec) []PodSpecReference
 				continue
 			}
 			if ref := variable.ValueFrom.ConfigMapKeyRef; ref != nil {
-				add("ConfigMap", ref.Name, prefix+".env[].valueFrom.configMapKeyRef.name", ref.Optional)
+				add("ConfigMap", ref.Name, paths[2], ref.Optional)
 			}
 			if ref := variable.ValueFrom.SecretKeyRef; ref != nil {
-				add("Secret", ref.Name, prefix+".env[].valueFrom.secretKeyRef.name", ref.Optional)
+				add("Secret", ref.Name, paths[3], ref.Optional)
 			}
 		}
 	}
 	for _, container := range spec.Containers {
-		collectEnv("containers[]", container.Env, container.EnvFrom)
+		collectEnv([4]string{"containers[].envFrom[].configMapRef.name", "containers[].envFrom[].secretRef.name", "containers[].env[].valueFrom.configMapKeyRef.name", "containers[].env[].valueFrom.secretKeyRef.name"}, container.Env, container.EnvFrom)
 	}
 	for _, container := range spec.InitContainers {
-		collectEnv("initContainers[]", container.Env, container.EnvFrom)
+		collectEnv([4]string{"initContainers[].envFrom[].configMapRef.name", "initContainers[].envFrom[].secretRef.name", "initContainers[].env[].valueFrom.configMapKeyRef.name", "initContainers[].env[].valueFrom.secretKeyRef.name"}, container.Env, container.EnvFrom)
 	}
 	for _, container := range spec.EphemeralContainers {
-		collectEnv("ephemeralContainers[]", container.Env, container.EnvFrom)
+		collectEnv([4]string{"ephemeralContainers[].envFrom[].configMapRef.name", "ephemeralContainers[].envFrom[].secretRef.name", "ephemeralContainers[].env[].valueFrom.configMapKeyRef.name", "ephemeralContainers[].env[].valueFrom.secretKeyRef.name"}, container.Env, container.EnvFrom)
 	}
 	for _, volume := range spec.Volumes {
 		if ref := volume.ConfigMap; ref != nil {
@@ -107,27 +136,4 @@ func PodSpecReferences(namespace string, spec corev1.PodSpec) []PodSpecReference
 		add("Secret", ref.Name, "imagePullSecrets[].name", nil)
 	}
 	add("ServiceAccount", spec.ServiceAccountName, "serviceAccountName", nil)
-	result := make([]PodSpecReference, 0, len(seen))
-	for ref := range seen {
-		result = append(result, ref)
-	}
-	slices.SortFunc(result, func(a, b PodSpecReference) int {
-		if order := cmp.Compare(a.Kind, b.Kind); order != 0 {
-			return order
-		}
-		if order := cmp.Compare(a.Name, b.Name); order != 0 {
-			return order
-		}
-		if order := cmp.Compare(a.Path, b.Path); order != 0 {
-			return order
-		}
-		if a.Optional == b.Optional {
-			return 0
-		}
-		if a.Optional {
-			return 1
-		}
-		return -1
-	})
-	return result
 }

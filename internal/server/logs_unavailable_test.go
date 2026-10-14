@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -125,6 +126,9 @@ func TestPodLogsStream_ReportsLogsUnavailable(t *testing.T) {
 	if !strings.Contains(stream, "event: error") || !strings.Contains(stream, k8score.ErrLogsUnavailable.Error()) {
 		t.Fatalf("expected an error event naming the reason:\n%s", stream)
 	}
+	if !strings.Contains(stream, `"error_code":"logs_unavailable"`) {
+		t.Fatalf("the error event must carry the code the viewer shows it by:\n%s", stream)
+	}
 	if strings.Contains(stream, "event: log") || strings.Contains(stream, "event: end") {
 		t.Fatalf("the notice must not arrive as a log line or a clean end:\n%s", stream)
 	}
@@ -164,5 +168,59 @@ func TestCNPGClusterLogsStream_ReportsLogsUnavailableOnce(t *testing.T) {
 	}
 	if strings.Contains(stream, "event: log") {
 		t.Fatalf("the notice must not arrive as a log line:\n%s", stream)
+	}
+}
+
+func getPodLogsError(t *testing.T, path string) (int, map[string]string) {
+	t.Helper()
+	resp, err := http.Get(testServer.URL + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return resp.StatusCode, body
+}
+
+// The apiserver answers "previous terminated container not found" both for a
+// container that never restarted and for one whose earlier run the node no
+// longer has. Telling a reader whose pod shows restarts that it never
+// restarted is false, so the restart count picks the answer.
+func TestPodLogs_PreviousRunAnswerFollowsRestartCount(t *testing.T) {
+	never := cnpgPod("prevlogs", "never-restarted", "x")
+	never.Status.ContainerStatuses[0].RestartCount = 0
+	restarted := cnpgPod("prevlogs", "restarted", "x")
+	restarted.Status.ContainerStatuses[0].RestartCount = 1
+	seedCNPGPods(t, never, restarted)
+	client := logAPIServer(t, http.StatusBadRequest, "application/json",
+		`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"previous terminated container \"postgres\" in pod \"p\" not found","reason":"BadRequest","code":400}`)
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+
+	for _, tc := range []struct {
+		pod, code, message string
+	}{
+		{"never-restarted", "no_previous_run", "This container has not restarted, so there is no earlier run to show."},
+		{"restarted", "logs_unavailable", "Kubernetes did not return the logs of this container's earlier run."},
+	} {
+		t.Run(tc.pod, func(t *testing.T) {
+			status, body := getPodLogsError(t, "/api/pods/prevlogs/"+tc.pod+"/logs?container=postgres&previous=true")
+			if status != http.StatusNotFound || body["error_code"] != tc.code || body["error"] != tc.message {
+				t.Fatalf("got %d %v, want 404 %s %q", status, body, tc.code, tc.message)
+			}
+		})
+	}
+}
+
+// The node's "could not read logs" answer is about the cluster, not a Radar
+// failure, so it carries a code the viewer can show it by.
+func TestPodLogs_LogsUnavailableCarriesCode(t *testing.T) {
+	useLogsUnavailableServer(t)
+	status, body := getPodLogsError(t, "/api/pods/default/nginx-abc-xyz/logs?container=nginx")
+	if status != http.StatusNotFound || body["error_code"] != "logs_unavailable" || body["error"] != k8score.ErrLogsUnavailable.Error() {
+		t.Fatalf("got %d %v", status, body)
 	}
 }

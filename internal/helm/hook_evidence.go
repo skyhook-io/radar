@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/podlogs"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	batchv1 "k8s.io/api/batch/v1"
@@ -346,7 +347,7 @@ func collectHookLogs(ctx context.Context, client kubernetes.Interface, namespace
 			if len(logs) >= maxHookEvidenceLogs {
 				break
 			}
-			if hookContainerRestartCount(pod, container) > 0 {
+			if podlogs.ContainerRestartCount(pod, container) > 0 {
 				if log, ok := fetchHookLog(ctx, client, namespace, pod.Name, container, true); ok {
 					logs = append(logs, log)
 				}
@@ -396,23 +397,6 @@ func hookLogContainerNames(pod *corev1.Pod) []string {
 		names = names[:maxHookEvidenceContainers]
 	}
 	return names
-}
-
-func hookContainerRestartCount(pod *corev1.Pod, name string) int32 {
-	if pod == nil {
-		return 0
-	}
-	for _, status := range pod.Status.InitContainerStatuses {
-		if status.Name == name {
-			return status.RestartCount
-		}
-	}
-	for _, status := range pod.Status.ContainerStatuses {
-		if status.Name == name {
-			return status.RestartCount
-		}
-	}
-	return 0
 }
 
 func fetchHookLog(ctx context.Context, client kubernetes.Interface, namespace, podName, container string, previous bool) (HookLogEvidence, bool) {

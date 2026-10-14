@@ -33,3 +33,5 @@ export * from './inClusterConsent'
 export * from './workflow-execution'
 export * from './network-policy'
 export * from './resource-refs'
+
+export * from './grant'

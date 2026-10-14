@@ -103,7 +103,7 @@ func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gito
 	opts.IncludeReplicaSets = true
 	opts.ForRelationshipCache = true
 
-	topo, err := s.topoMemo.Get(opts, func() (*topology.Topology, error) {
+	topo, err := s.topoMemo.GetScoped(req.Cache.Generation(), opts, func() (*topology.Topology, error) {
 		return topology.NewBuilder(k8s.NewTopologyResourceProvider(req.Cache)).
 			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())).
 			Build(opts)
@@ -193,7 +193,9 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 // Only meaningful in appTree mode. Cached and throttled by the manager. A
 // nil health with a nil error is "no answer and nothing to tell the user":
 // nothing is configured and the install doesn't serve anonymous reads, so
-// the caller falls through to Radar's own read quietly. With the
+// the caller falls through to Radar's own read quietly. While a connection
+// is being made it returns *argoHealthPending (with no notice when nothing
+// is configured), so the page asks again. With the
 // integration configured, the failure comes back in the user's words — they
 // set the connection up for this, and the page should say it isn't
 // delivering rather than silently show Radar's read.
@@ -211,11 +213,35 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 		}
 		return nil, errors.New("this cluster's saved integration settings need review in Settings")
 	}
+	if errors.Is(err, argocd.ErrConnecting) {
+		pending := &argoHealthPending{}
+		if argocd.IsConfigured() {
+			pending.notice = argoAPIHealthFailure(err, argocd.TokenSet())
+		}
+		return nil, pending
+	}
 	if !argocd.IsConfigured() {
 		return nil, nil
 	}
+	if argocd.Retrying() {
+		// Say why it failed, and have the page ask again so it recovers
+		// when the retry connects.
+		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, argocd.TokenSet()), retrying: true}
+	}
 	return nil, errors.New(argoAPIHealthFailure(err, argocd.TokenSet()))
 }
+
+// argoHealthPending: Radar is connecting to argocd-server in the background,
+// and the page should ask again. notice is what to tell a user who
+// configured the integration (empty when they didn't, since they set
+// nothing up to wait for). retrying: a connect failed and is being retried;
+// notice is that failure, shown as one.
+type argoHealthPending struct {
+	notice   string
+	retrying bool
+}
+
+func (p *argoHealthPending) Error() string { return p.notice }
 
 // argoAPIHealthFailure is the clause the notice appends to "Radar couldn't
 // read Argo's per-resource health from your Argo CD server".
@@ -226,12 +252,16 @@ func argoAPIHealthFailure(err error, tokenSet bool) string {
 			return "the token isn't accepted for this application"
 		}
 		return "it requires a token"
-	case errors.Is(err, argoapi.ErrNotFound):
-		return "it doesn't know this application"
+	case errors.Is(err, argocd.ErrConnecting):
+		return "the connection is still being set up"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "the request timed out"
 	case errors.Is(err, argocd.ErrUnreachable):
+		// Before ErrNotFound: a URL that 404s on /api/version is not an Argo
+		// CD server, which is not the same as Argo not knowing the app.
 		return "the server couldn't be reached"
+	case errors.Is(err, argoapi.ErrNotFound):
+		return "it doesn't know this application"
 	}
 	// Anything else (a 500, a body that didn't parse) is still a configured
 	// connection that didn't deliver; an empty clause would read as nothing
@@ -258,6 +288,16 @@ func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, ro
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	health, err := fetch(ctx, root.GetNamespace(), root.GetName())
+	var pending *argoHealthPending
+	if errors.As(err, &pending) {
+		tree.HealthAPIError = pending.notice
+		if pending.retrying {
+			tree.HealthAPIRetrying = true
+		} else {
+			tree.HealthAPIPending = true
+		}
+		return false
+	}
 	if err != nil {
 		tree.HealthAPIError = err.Error()
 		return false
@@ -409,6 +449,10 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 				insight.Capabilities.ArgoDiffAvailable = isInClusterDestination(root)
 			}
 		}
+		// Read after the managed-resources call: a failure there may just
+		// have started a re-check the page should wait out.
+		insight.Capabilities.ArgoConnecting = argocd.Connecting()
+		insight.Capabilities.ArgoRetrying = insight.Capabilities.ArgoConfigured && argocd.Retrying()
 		if insight.Capabilities.ArgoConfigured {
 			// Best-effort: surface a broken Git repo connection (a top hidden cause
 			// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.

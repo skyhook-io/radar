@@ -147,9 +147,9 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// App-level query (no per-resource filter) so it shares the manager's 15s
-	// cache; per-resource filters would bypass the cache. ManagedResourcesCached
-	// connects on demand (synchronous probe) when the background reconnect hasn't
-	// landed yet, so the first diff after a restart works. We filter in-process.
+	// cache; per-resource filters would bypass the cache. Before the first
+	// connection of a configured integration lands it answers ErrConnecting
+	// instead of waiting for it. We filter in-process.
 	items, err := argocd.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
 		AppName:      appName,
 		AppNamespace: appNamespace,
@@ -398,6 +398,8 @@ func manifestToYAML(obj map[string]any) string {
 	return string(b)
 }
 
+const argoConnectingMessage = "Radar is still connecting to Argo CD. Try again in a few seconds."
+
 // writeArgoDiffError maps managed-resources fetch failures to HTTP status
 // codes. Token problems (either the manager's auth verification or an
 // upstream 401/403) are 403 with a re-auth hint; unreachable is 503;
@@ -408,6 +410,8 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 		s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 	case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
 		s.writeError(w, http.StatusForbidden, "Argo CD rejected the configured token; re-authenticate the integration in Settings.")
+	case errors.Is(err, argocd.ErrConnecting):
+		s.writeError(w, http.StatusServiceUnavailable, argoConnectingMessage)
 	case errors.Is(err, argocd.ErrUnreachable):
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD API server is unreachable.")
 	default:
@@ -640,6 +644,8 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 			s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 		case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
 			s.writeError(w, http.StatusForbidden, "Argo CD rejected the configured token; re-authenticate the integration in Settings.")
+		case errors.Is(err, argocd.ErrConnecting):
+			s.writeError(w, http.StatusServiceUnavailable, argoConnectingMessage)
 		case errors.Is(err, argocd.ErrUnreachable):
 			s.writeError(w, http.StatusServiceUnavailable, "Argo CD API server is unreachable.")
 		case errors.Is(err, argoapi.ErrNotFound):
