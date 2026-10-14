@@ -118,7 +118,7 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 | Operation | What it does |
 |---|---|
 | **Reconcile** | Annotates `reconcile.fluxcd.io/requestedAt` to trigger a single reconcile |
-| **Sync with source** (Kustomization / HelmRelease) | Reconciles the source first, then the resource itself, as `flux reconcile --with-source` does. For a HelmRelease the source is its chart: the generated HelmChart of an inline `spec.chart`, or the HelmChart / OCIRepository named by `spec.chartRef`. An ExternalArtifact comes from another controller, so only the resource is reconciled |
+| **Sync with source** (Kustomization / HelmRelease) | Requests the reconciles `flux reconcile --with-source` makes, upstream first: the source, then the resource. For a HelmRelease the source is its chart (the generated HelmChart of an inline `spec.chart`, named from the current spec, or the HelmChart / OCIRepository named by `spec.chartRef`), and a HelmChart's own source is reconciled before it, so a new chart version in the repository is picked up. A suspended or Terminating object anywhere in that chain fails the request with 409 before anything is written. Unlike the CLI, Radar does not wait for each step to finish. An ExternalArtifact comes from another controller, so only the resource is reconciled. Objects are patched at the API version the cluster serves |
 | **Suspend / Resume** | Toggles `spec.suspend` |
 
 ### Keyboard shortcuts (per-app detail page)

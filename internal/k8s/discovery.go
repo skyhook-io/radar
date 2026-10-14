@@ -157,6 +157,12 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 	return d.ResourceDiscovery.GetGVRWithGroup(kindOrName, group)
 }
 
+// ServedGVR resolves a kind in a group to the most stable version the connected
+// cluster serves. It satisfies gitops.FluxGVRResolver.
+func ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
+	return GetResourceDiscovery().GetGVRWithGroup(kind, group)
+}
+
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.
 func (d *ResourceDiscovery) SupportsWatchGVR(gvr schema.GroupVersionResource) bool {
 	if d == nil || d.ResourceDiscovery == nil {

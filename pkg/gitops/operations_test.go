@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -821,7 +822,7 @@ func TestFluxOperationsRefuseTerminatingResource(t *testing.T) {
 			return err
 		}},
 		{"SyncFluxWithSource", func(c *fake.FakeDynamicClient) error {
-			_, err := SyncFluxWithSource(ctx, c, "Kustomization", "flux-system", "demo")
+			_, err := SyncFluxWithSource(ctx, c, "Kustomization", "flux-system", "demo", nil)
 			return err
 		}},
 	}
@@ -858,7 +859,7 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 				"kind": "GitRepository", "name": "source", "namespace": "flux-system",
 			}),
 		)
-		res, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo")
+		res, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo", nil)
 		if err != nil {
 			t.Fatalf("SyncFluxWithSource: %v", err)
 		}
@@ -895,38 +896,115 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 	}
 	inline := map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo", "namespace": "flux-system"}}}}
 
-	// Matches `flux reconcile hr --with-source`: the generated chart is what
-	// re-resolves the version, so it is reconciled, not the repository.
+	chart := func(namespace, name string, sourceRef map[string]any) *unstructured.Unstructured {
+		obj := source("HelmChart", namespace, name)
+		obj.Object["spec"] = map[string]any{"sourceRef": sourceRef}
+		return obj
+	}
+	repoRef := map[string]any{"kind": "HelmRepository", "name": "repo"}
+
+	// Matches `flux reconcile hr --with-source`: the chart is reconciled with
+	// its own source first, so a new chart version in the repository resolves.
 	for _, tc := range []struct {
-		name          string
-		hr            *unstructured.Unstructured
-		objects       []runtime.Object
-		kind, ns, ref string
-		resource      string
+		name    string
+		hr      *unstructured.Unstructured
+		objects []runtime.Object
+		source  string
+		want    []string
 	}{
-		{"inline release reconciles its recorded HelmChart", release(inline, map[string]any{"helmChart": "flux-system/team-demo"}), []runtime.Object{source("HelmChart", "flux-system", "team-demo")}, "HelmChart", "flux-system", "team-demo", "helmcharts"},
-		{"inline release before the chart is recorded uses Flux's generated name", release(inline, nil), []runtime.Object{source("HelmChart", "flux-system", "team-demo")}, "HelmChart", "flux-system", "team-demo", "helmcharts"},
-		{"chartRef to an OCIRepository", release(map[string]any{"chartRef": map[string]any{"kind": "OCIRepository", "name": "chart"}}, nil), []runtime.Object{source("OCIRepository", "team", "chart")}, "OCIRepository", "team", "chart", "ocirepositories"},
-		{"chartRef to a HelmChart in another namespace", release(map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "shared", "namespace": "charts"}}, nil), []runtime.Object{source("HelmChart", "charts", "shared")}, "HelmChart", "charts", "shared", "helmcharts"},
+		{"inline release reconciles repository, generated chart, release", release(inline, nil),
+			[]runtime.Object{source("HelmRepository", "flux-system", "repo"), chart("flux-system", "team-demo", repoRef)},
+			"HelmChart flux-system/team-demo", []string{"helmrepositories flux-system/repo", "helmcharts flux-system/team-demo", "helmreleases team/demo"}},
+		{"inline release follows the current spec, not a stale recorded chart", release(inline, map[string]any{"helmChart": "old-charts/team-demo"}),
+			[]runtime.Object{source("HelmRepository", "flux-system", "repo"), chart("flux-system", "team-demo", repoRef), chart("old-charts", "team-demo", repoRef)},
+			"HelmChart flux-system/team-demo", []string{"helmrepositories flux-system/repo", "helmcharts flux-system/team-demo", "helmreleases team/demo"}},
+		{"chartRef to an OCIRepository", release(map[string]any{"chartRef": map[string]any{"kind": "OCIRepository", "name": "chart"}}, nil),
+			[]runtime.Object{source("OCIRepository", "team", "chart")},
+			"OCIRepository team/chart", []string{"ocirepositories team/chart", "helmreleases team/demo"}},
+		{"chartRef to a HelmChart in another namespace reconciles the chart's source first", release(map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "shared", "namespace": "charts"}}, nil),
+			[]runtime.Object{source("GitRepository", "charts", "git"), chart("charts", "shared", map[string]any{"kind": "GitRepository", "name": "git"})},
+			"HelmChart charts/shared", []string{"gitrepositories charts/git", "helmcharts charts/shared", "helmreleases team/demo"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := fake.NewSimpleDynamicClient(scheme, append(tc.objects, tc.hr)...)
-			res, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo")
+			res, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo", nil)
 			if err != nil {
 				t.Fatalf("SyncFluxWithSource: %v", err)
 			}
-			if res.Source == nil || res.Source.Kind != tc.kind || res.Source.Namespace != tc.ns || res.Source.Name != tc.ref {
-				t.Fatalf("source = %#v", res.Source)
+			if res.Source == nil || res.Source.Kind+" "+res.Source.Namespace+"/"+res.Source.Name != tc.source {
+				t.Fatalf("source = %#v, want %s", res.Source, tc.source)
 			}
-			if patches := patchActionsByResource(client); patches[tc.resource] != 1 || patches["helmreleases"] != 1 || patches["helmrepositories"] != 0 {
-				t.Fatalf("patches = %v", patches)
+			if got := patchSequence(client); !slices.Equal(got, tc.want) {
+				t.Fatalf("patches = %v, want %v", got, tc.want)
 			}
 		})
 	}
 
+	t.Run("a generated chart that doesn't exist yet fails before any patch", func(t *testing.T) {
+		client := fake.NewSimpleDynamicClient(scheme, source("HelmRepository", "flux-system", "repo"), release(inline, nil))
+		_, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo", nil)
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("want NotFound, got %v", err)
+		}
+		if got := patchSequence(client); len(got) != 0 {
+			t.Fatalf("patches = %v", got)
+		}
+	})
+
+	suspended := func(obj *unstructured.Unstructured) *unstructured.Unstructured {
+		spec, _ := obj.Object["spec"].(map[string]any)
+		if spec == nil {
+			spec = map[string]any{}
+		}
+		spec["suspend"] = true
+		obj.Object["spec"] = spec
+		return obj
+	}
+	for _, tc := range []struct {
+		name    string
+		objects []runtime.Object
+	}{
+		{"suspended release", []runtime.Object{source("HelmRepository", "flux-system", "repo"), chart("flux-system", "team-demo", repoRef), suspended(release(inline, nil))}},
+		{"suspended generated chart", []runtime.Object{source("HelmRepository", "flux-system", "repo"), suspended(chart("flux-system", "team-demo", repoRef)), release(inline, nil)}},
+		{"suspended repository behind the chart", []runtime.Object{suspended(source("HelmRepository", "flux-system", "repo")), chart("flux-system", "team-demo", repoRef), release(inline, nil)}},
+	} {
+		t.Run(tc.name+" is refused before any patch", func(t *testing.T) {
+			client := fake.NewSimpleDynamicClient(scheme, tc.objects...)
+			_, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo", nil)
+			if !errors.Is(err, ErrResourceSuspended) {
+				t.Fatalf("want ErrResourceSuspended, got %v", err)
+			}
+			if got := patchSequence(client); len(got) != 0 {
+				t.Fatalf("patches = %v", got)
+			}
+		})
+	}
+
+	t.Run("sources are patched at the version the cluster serves", func(t *testing.T) {
+		older := source("OCIRepository", "team", "chart")
+		older.SetAPIVersion("source.toolkit.fluxcd.io/v1beta2")
+		hr := release(map[string]any{"chartRef": map[string]any{"kind": "OCIRepository", "name": "chart"}}, nil)
+		served := func(group, kind string) (schema.GroupVersionResource, bool) {
+			if kind == "OCIRepository" {
+				return schema.GroupVersionResource{Group: group, Version: "v1beta2", Resource: "ocirepositories"}, true
+			}
+			return schema.GroupVersionResource{}, false
+		}
+		if _, err := SyncFluxWithSource(ctx, fake.NewSimpleDynamicClient(scheme, older, hr.DeepCopy()), "HelmRelease", "team", "demo", nil); !apierrors.IsNotFound(err) {
+			t.Fatalf("static v1 against a v1beta2-only cluster: want NotFound, got %v", err)
+		}
+		client := fake.NewSimpleDynamicClient(scheme, older, hr)
+		if _, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo", served); err != nil {
+			t.Fatalf("SyncFluxWithSource: %v", err)
+		}
+		if got := patchSequence(client); !slices.Equal(got, []string{"ocirepositories team/chart", "helmreleases team/demo"}) {
+			t.Fatalf("patches = %v", got)
+		}
+	})
+
 	t.Run("chartRef to an ExternalArtifact reconciles only the release", func(t *testing.T) {
 		client := fake.NewSimpleDynamicClient(scheme, release(map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "generated"}}, nil))
-		res, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo")
+		res, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo", nil)
 		if err != nil {
 			t.Fatalf("SyncFluxWithSource: %v", err)
 		}
@@ -941,7 +1019,7 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 	t.Run("Kustomization from a Bucket", func(t *testing.T) {
 		client := fake.NewSimpleDynamicClient(scheme, source("Bucket", "flux-system", "manifests"),
 			fluxKustomization("flux-system", "demo", map[string]any{"kind": "Bucket", "name": "manifests"}))
-		res, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo")
+		res, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo", nil)
 		if err != nil || res.Source == nil || res.Source.Kind != "Bucket" {
 			t.Fatalf("result = %#v err = %v", res, err)
 		}
@@ -949,7 +1027,7 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 
 	t.Run("missing sourceRef returns an explicit error before any patch", func(t *testing.T) {
 		client := fake.NewSimpleDynamicClient(scheme, fluxKustomization("flux-system", "demo", nil))
-		_, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo")
+		_, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo", nil)
 		if err == nil {
 			t.Fatal("expected error for missing sourceRef")
 		}
@@ -974,7 +1052,7 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 			"spec":       map[string]any{"interval": "1m", "url": "https://example.com"},
 		}}
 		client := fake.NewSimpleDynamicClient(scheme, repo)
-		_, err := SyncFluxWithSource(ctx, client, "GitRepository", "flux-system", "source")
+		_, err := SyncFluxWithSource(ctx, client, "GitRepository", "flux-system", "source", nil)
 		if err == nil {
 			t.Fatal("expected error for unsupported kind")
 		}
@@ -993,7 +1071,7 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 				"kind": "GitRepository", "name": "ghost", "namespace": "flux-system",
 			}),
 		)
-		_, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo")
+		_, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo", nil)
 		if err == nil {
 			t.Fatal("expected NotFound error from missing source")
 		}
@@ -1017,9 +1095,11 @@ func newFluxScheme(t *testing.T) *runtime.Scheme {
 		"GitRepository":  {Group: "source.toolkit.fluxcd.io", Version: "v1"},
 		"HelmRepository": {Group: "source.toolkit.fluxcd.io", Version: "v1"},
 		"OCIRepository":  {Group: "source.toolkit.fluxcd.io", Version: "v1"},
+		"OCIRepository.": {Group: "source.toolkit.fluxcd.io", Version: "v1beta2"},
 		"HelmChart":      {Group: "source.toolkit.fluxcd.io", Version: "v1"},
 		"Bucket":         {Group: "source.toolkit.fluxcd.io", Version: "v1"},
 	} {
+		kind = strings.TrimSuffix(kind, ".")
 		scheme.AddKnownTypeWithName(gv.WithKind(kind), &unstructured.Unstructured{})
 		scheme.AddKnownTypeWithName(gv.WithKind(kind+"List"), &unstructured.UnstructuredList{})
 	}
@@ -1046,6 +1126,17 @@ func fluxGitRepository(namespace, name string) *unstructured.Unstructured {
 		"kind":       "GitRepository",
 		"metadata":   map[string]any{"namespace": namespace, "name": name},
 	}}
+}
+
+// patchSequence lists patches in order as "<resource> <namespace>/<name>".
+func patchSequence(client *fake.FakeDynamicClient) []string {
+	var out []string
+	for _, action := range client.Actions() {
+		if pa, ok := action.(clienttesting.PatchAction); ok {
+			out = append(out, pa.GetResource().Resource+" "+pa.GetNamespace()+"/"+pa.GetName())
+		}
+	}
+	return out
 }
 
 func patchActionsByResource(client *fake.FakeDynamicClient) map[string]int {
