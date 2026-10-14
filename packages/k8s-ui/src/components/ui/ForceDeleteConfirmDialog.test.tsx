@@ -25,14 +25,23 @@ describe('Deletion preview states', () => {
     const toggle = [...document.querySelectorAll('button')].find(b => b.textContent?.includes('May affect'))!
     await act(async () => toggle.click())
     expect(document.body.textContent).toContain('web-pod')
-    expect(document.body.textContent?.match(/not guaranteed deletion/g)).toHaveLength(1)
+    expect(document.body.textContent?.match(/does not predict what will be deleted/g)).toHaveLength(1)
+    expect(document.body.textContent).not.toContain('Other resources may be affected')
+  })
+  it.each([[], undefined])('omits the advisory statement for an empty resolved preview (%j)', async (dependents) => {
+    await act(async () => root.render(<ForceDeleteConfirmDialog {...base} cascadeRootResolved cascadeDependents={dependents} />))
+    expect(document.body.textContent).not.toContain('May affect')
+    expect(document.body.textContent).not.toContain('does not predict')
+    expect(document.body.textContent).not.toContain('unavailable')
+    expect(document.body.textContent).not.toContain('Other resources may be affected')
   })
   it('distinguishes an observed unresolved root from a fetch failure', async () => {
     await act(async () => root.render(<ForceDeleteConfirmDialog {...base} cascadeRootResolved={false} />))
-    expect(document.body.textContent).toContain("couldn't resolve this resource in the topology")
+    expect(document.body.textContent).toContain("This resource is not in Radar's topology")
     await act(async () => root.render(<ForceDeleteConfirmDialog {...base} cascadeRootResolved={false} cascadePreviewFailed cascadeDependents={[{ kind: 'Pod', namespace: 'demo', name: 'stale' }]} />))
-    expect(document.body.textContent).toContain("couldn't load the related-resource preview")
-    expect(document.body.textContent).not.toContain("couldn't resolve")
+    expect(document.body.textContent).toContain('Related-resource preview unavailable.')
+    expect(document.body.textContent).not.toContain('This resource is not in')
+    expect(document.body.textContent).not.toContain('Other resources may be affected')
     expect(document.body.textContent).not.toContain('May affect')
     const confirm = [...document.querySelectorAll('button')].find(b => b.textContent === 'Delete')!
     expect(confirm.disabled).toBe(false)
@@ -42,7 +51,7 @@ describe('Deletion preview states', () => {
   it('shows loading without presenting stale failure or success as a result', async () => {
     await act(async () => root.render(<ForceDeleteConfirmDialog {...base} cascadeLoading cascadePreviewFailed cascadeRootResolved />))
     expect(document.body.textContent).toContain('Checking related resources')
-    expect(document.body.textContent).not.toContain("couldn't load")
-    expect(document.body.textContent).not.toContain('not guaranteed deletion')
+    expect(document.body.textContent).not.toContain('unavailable')
+    expect(document.body.textContent).not.toContain('does not predict')
   })
 })

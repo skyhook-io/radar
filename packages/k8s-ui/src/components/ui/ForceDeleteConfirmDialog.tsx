@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { ConfirmDialog } from './ConfirmDialog'
 import { pluralize } from '../../utils/pluralize'
@@ -74,23 +74,20 @@ export function ForceDeleteConfirmDialog({
         )}
 
         {!cascadeLoading && cascadePreviewFailed && (
-          <p className="text-xs text-warning-text">
-            Radar couldn&apos;t load the related-resource preview. Other resources may be affected.
+          <p className="text-xs text-theme-text-tertiary">
+            Related-resource preview unavailable.
           </p>
         )}
 
         {!cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === false && (
-          <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-warning-text">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              Radar couldn&apos;t resolve this resource in the topology. Related resources may be affected but aren&apos;t shown here.
-            </span>
-          </div>
+          <p className="text-xs text-theme-text-tertiary">
+            This resource is not in Radar&apos;s topology, so its related resources cannot be previewed.
+          </p>
         )}
 
-        {!cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === true && (
+        {!cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === true && cascadeDependents && cascadeDependents.length > 0 && (
           <p className="text-xs text-theme-text-secondary">
-            This preview shows visible topology relationships, not guaranteed deletion. Other resources may be affected.
+            This list shows visible related resources; it does not predict what will be deleted.
           </p>
         )}
 
