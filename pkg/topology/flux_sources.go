@@ -13,7 +13,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 	chartTargets := map[string]bool{}
 	for _, root := range roots {
 		for _, ref := range gitops.FluxSourceReferences(root) {
-			refs = append(refs, declaredDependency{Source: resourceid.NewRef(resourceid.GroupFromAPIVersion(root.GetAPIVersion()), root.GetKind(), root.GetNamespace(), root.GetName()), Target: ref.Ref, Label: ref.Role})
+			refs = append(refs, declaredDependency{Source: resourceid.NewRef(resourceid.GroupFromAPIVersion(root.GetAPIVersion()), root.GetKind(), root.GetNamespace(), root.GetName()), Target: ref.Ref, Label: ref.Role, Configuration: true})
 			if ref.Kind == "HelmChart" {
 				chartTargets[ref.Key()] = true
 			}
@@ -47,7 +47,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 			continue
 		}
 		for _, ref := range gitops.FluxSourceReferences(chart) {
-			refs = append(refs, declaredDependency{Source: resourceid.NewRef(gvr.Group, "HelmChart", chart.GetNamespace(), chart.GetName()), Target: ref.Ref, Label: ref.Role})
+			refs = append(refs, declaredDependency{Source: resourceid.NewRef(gvr.Group, "HelmChart", chart.GetNamespace(), chart.GetName()), Target: ref.Ref, Label: ref.Role, Configuration: true})
 		}
 	}
 	nodes, edges, sourceWarnings := addObservedDependencyEdges(nodes, edges, refs, provider, opts)

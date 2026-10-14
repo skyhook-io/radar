@@ -618,8 +618,9 @@ observed Flux sources in both directions within Radar's namespace scope.
 Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
 or `spec.chartRef`. Inline releases also link the generated HelmChart named by
 `status.helmChart`; an observed HelmChart links its source in its own namespace.
-These are dependencies, not owners. A link does not prove that Flux permits the
-reference or has produced an artifact.
+These are dependencies, not owners: topology draws each source upstream, with
+the edge pointing into the object that reads it. A link does not prove that Flux
+permits the reference or has produced an artifact.
 
 For default Radar Cloud read permissions, see the [integration-read policy](cloud-rbac-baseline.md#intentional-exceptions).
 

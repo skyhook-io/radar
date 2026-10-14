@@ -98,7 +98,7 @@ import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
-import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
+import { useResourceAudit, useResourceIssues, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
@@ -122,7 +122,6 @@ import {
   defaultPathForPort,
 } from '../curl/ServiceCurlButton'
 import { useToast } from '../ui/Toast'
-import { Tooltip } from '../ui/Tooltip'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
@@ -1253,7 +1252,6 @@ export function WorkloadView({
           <>
             {diagnoseInline}
             {diagnoseHint}
-            <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
             <AuditOverviewSection
               findings={auditFindings ?? []}
               onViewAll={() => navigateRouter('/checks')}
@@ -2137,137 +2135,6 @@ function DiagnoseInlineSection({ kind, namespace, name, group, onOpenReachabilit
   )
 }
 
-// FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)
-// that reference this Flux source CR — the inverse of `spec.sourceRef`. Renders
-// only when the focused resource is a Flux source kind; otherwise null. Sources
-// can have many consumers (one repo feeding multiple apps), so this answers
-// "if I edit this source, what gets affected on the next reconcile?".
-//
-// Filtering happens client-side off the namespaced reconciler lists — these
-// are typically small (tens, not thousands) and the dynamic informer cache
-// makes the request cheap. If a cluster ever has thousands of HelmReleases,
-// a dedicated /api/gitops/consumers endpoint would be the right move; today
-// it'd be premature.
-// Outer component is cheap — it does only the kind check and decides whether
-// to mount the data-fetching child. Without this split, useResources would
-// fire two API calls on EVERY workload drawer open (Pod, Deployment, Service,
-// …), since the hook has no `enabled` flag and can't be conditionally called
-// (Rules of Hooks). The hooks only need to run when the focused resource is
-// actually a Flux source CR.
-function FluxSourceConsumersSection({
-  kind,
-  namespace,
-  name,
-}: {
-  kind: string
-  namespace: string
-  name: string
-}) {
-  // The inner WorkloadView de-pluralizes the URL's plural form, which gives
-  // "Gitrepository" (single-uppercase) rather than the wire-correct
-  // "GitRepository" — so we match lowercase. spec.sourceRef.kind on consumers
-  // is always wire-correct, so we look that up separately.
-  const sourceKind = FLUX_SOURCE_KIND_BY_LOWER.get(kind.toLowerCase()) ?? null
-  if (!sourceKind) return null
-  return <FluxSourceConsumersInner sourceKind={sourceKind} namespace={namespace} name={name} />
-}
-
-function FluxSourceConsumersInner({
-  sourceKind,
-  namespace,
-  name,
-}: {
-  sourceKind: string
-  namespace: string
-  name: string
-}) {
-  const navigate = useNavigate()
-  const { data: kustomizations } = useResources<any>(
-    'kustomizations',
-    undefined,
-    'kustomize.toolkit.fluxcd.io',
-  )
-  const { data: helmReleases } = useResources<any>(
-    'helmreleases',
-    undefined,
-    'helm.toolkit.fluxcd.io',
-  )
-
-  const consumers: Array<{
-    kind: 'Kustomization' | 'HelmRelease'
-    namespace: string
-    name: string
-    plural: string
-  }> = []
-  for (const k of kustomizations ?? []) {
-    const ref = k?.spec?.sourceRef ?? {}
-    const refNs = ref.namespace || k?.metadata?.namespace
-    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
-      consumers.push({
-        kind: 'Kustomization',
-        namespace: k.metadata.namespace,
-        name: k.metadata.name,
-        plural: 'kustomizations',
-      })
-    }
-  }
-  for (const h of helmReleases ?? []) {
-    const ref = h?.spec?.chartRef ?? h?.spec?.chart?.spec?.sourceRef ?? {}
-    const refNs = ref.namespace || h?.metadata?.namespace
-    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
-      consumers.push({
-        kind: 'HelmRelease',
-        namespace: h.metadata.namespace,
-        name: h.metadata.name,
-        plural: 'helmreleases',
-      })
-    }
-  }
-
-  if (consumers.length === 0) {
-    return (
-      <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
-        <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Consumed by</h3>
-        <p className="text-xs text-theme-text-tertiary">
-          No Kustomization or HelmRelease references this source.
-        </p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
-      <h3 className="mb-3 text-sm font-semibold text-theme-text-primary">
-        Consumed by ({consumers.length})
-      </h3>
-      <div className="flex flex-wrap gap-1.5">
-        {consumers.map((c) => (
-          <Tooltip
-            key={`${c.kind}/${c.namespace}/${c.name}`}
-            content={`${c.kind} ${c.namespace}/${c.name}`}
-          >
-            <button
-              onClick={() =>
-                navigate(
-                  `/gitops/detail/${c.plural}/${encodeURIComponent(c.namespace)}/${encodeURIComponent(c.name)}`,
-                )
-              }
-              className="inline-flex items-center gap-1.5 rounded border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[11px] text-theme-text-secondary hover:border-skyhook-500/60 hover:text-skyhook-500 transition-colors"
-            >
-              <span className="text-theme-text-tertiary">
-                {c.kind === 'HelmRelease' ? 'HR' : 'K'}
-              </span>
-              <span>
-                {c.namespace}/{c.name}
-              </span>
-            </button>
-          </Tooltip>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 // Drawer mode: single chart + category tabs (compact for ~500px width).
 // Full-screen mode: multi-chart grid so CPU + Memory + Network can be
 // compared side-by-side without tab switching.
@@ -2341,18 +2208,6 @@ function DrawerMetricsContent({
     </div>
   )
 }
-
-// FLUX_SOURCE_KIND_BY_LOWER maps lowercase kind (what the inner WorkloadView
-// produces via its plural-to-singular fallback) to the wire-correct
-// PascalCase form that consumers carry in spec.sourceRef.kind. HelmChart is
-// intentionally absent — it's an auto-generated internal CR, not something
-// users create or point reconcilers at directly.
-const FLUX_SOURCE_KIND_BY_LOWER = new Map<string, string>([
-  ['gitrepository', 'GitRepository'],
-  ['helmrepository', 'HelmRepository'],
-  ['ocirepository', 'OCIRepository'],
-  ['bucket', 'Bucket'],
-])
 
 // Read-only manifest view for an object in the workload's neighborhood (the
 // YAML tab's object rail). Read-only by design — editing an arbitrary related

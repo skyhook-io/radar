@@ -14,6 +14,12 @@ export function gitOpsFilterSet(values?: Set<string> | string[]): Set<string> | 
   return set.size > 0 ? set : undefined
 }
 
+// treeNodeFilterRole is the node's role as the filter rail presents it: a
+// dependency the root consumes but doesn't manage is not "Declared".
+export function treeNodeFilterRole(node: GitOpsTreeNode): string {
+  return node.dependency ? 'dependency' : node.role
+}
+
 export function matchesGitOpsTreeFilters(node: GitOpsTreeNode, filters?: GitOpsTreeFilters): boolean {
   if (!filters) return true
   const kinds = gitOpsFilterSet(filters.kinds)
@@ -26,7 +32,7 @@ export function matchesGitOpsTreeFilters(node: GitOpsTreeNode, filters?: GitOpsT
   if (namespaces && !namespaces.has(node.ref.namespace || '(cluster)')) return false
   if (sync && !sync.has(node.sync || 'Unknown')) return false
   if (health && !health.has(node.health || 'Unknown')) return false
-  if (roles && !roles.has(node.role)) return false
+  if (roles && !roles.has(treeNodeFilterRole(node))) return false
   return true
 }
 

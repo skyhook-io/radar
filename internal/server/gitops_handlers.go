@@ -826,6 +826,16 @@ func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest,
 				changed = true
 			}
 		}
+		if len(refs) < len(issue.Refs) && gitopsinsights.IsFluxBlockerCondition(issue) {
+			// The root's own condition stays; the cause was quoted from the
+			// object the caller can't read.
+			issue.Cause = ""
+			if len(refs) == 0 {
+				issue.Refs = nil
+				issues = append(issues, issue)
+				continue
+			}
+		}
 		if len(refs) == 0 {
 			changed = true
 			continue

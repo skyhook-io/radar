@@ -778,8 +778,10 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         }
       }
 
-      // configures/protects: ConfigMap→Deployment, PDB→Deployment (target is parent)
-      if (edge.type === 'configures' || edge.type === 'protects') {
+      // configures/protects: ConfigMap→Deployment, PDB→Deployment (target is parent).
+      // A Flux source feeds many reconcilers and its timeline is its own, so it
+      // never nests under one of them.
+      if ((edge.type === 'configures' && !isFluxSource(topologyNodeById.get(edge.source))) || edge.type === 'protects') {
         link(sourceId, targetId, sourceExists)
       }
       // uses: only an autoscaler or a mounted claim belongs under the workload it
@@ -1486,6 +1488,12 @@ const ATTACHED_USES_SOURCES = new Set([
   'keda.sh/ScaledJob',
   '/PersistentVolumeClaim',
 ])
+
+function isFluxSource(node: Topology['nodes'][number] | undefined): boolean {
+  if (!node) return false
+  const apiVersion = typeof node.data?.apiVersion === 'string' ? node.data.apiVersion : ''
+  return apiVersionToGroup(apiVersion) === 'source.toolkit.fluxcd.io'
+}
 
 function attachesToTarget(node: Topology['nodes'][number] | undefined): boolean {
   if (!node) return false

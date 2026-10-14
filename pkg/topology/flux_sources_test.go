@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -37,6 +38,22 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 			}
 			if len(nodes) != 5 || len(edges) != wantEdges || len(warnings) != 0 || p.getCalls != 0 || p.listCalls["helmcharts"] != 2 || p.listCalls["gitrepositories"] != 0 {
 				t.Fatalf("source chain: nodes=%+v edges=%+v warnings=%v lists=%v gets=%d", nodes, edges, warnings, p.listCalls, p.getCalls)
+			}
+
+			previousEdges := make([]Edge, len(edges))
+			for i, edge := range edges {
+				if edge.Type != EdgeConfigures {
+					t.Fatalf("source edge must configure upstream: %+v", edge)
+				}
+				previousEdges[i] = Edge{Source: edge.Target, Target: edge.Source, Type: EdgeUses, Label: edge.Label}
+			}
+			for _, node := range nodes {
+				namespace, _ := node.Data["namespace"].(string)
+				before := GetRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: previousEdges}, nil, p)
+				after := GetRelationships(string(node.Kind), namespace, node.Name, &Topology{Nodes: nodes, Edges: edges}, nil, p)
+				if !reflect.DeepEqual(before, after) {
+					t.Fatalf("%s %s/%s relationship projection changed:\nbefore=%+v\nafter=%+v", node.Kind, namespace, node.Name, before, after)
+				}
 			}
 			rel := GetRelationships("HelmRelease", "team", "app", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 			wantDependencies := 1

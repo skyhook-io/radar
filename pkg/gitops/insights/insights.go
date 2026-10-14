@@ -231,6 +231,9 @@ type Change struct {
 	RecentEvents []EventSummary `json:"recentEvents,omitempty"`
 	Partial      bool           `json:"partial"`
 	PartialNote  string         `json:"partialNote,omitempty"`
+	// Dependency marks a Flux source or dependsOn target the root consumes
+	// but doesn't manage.
+	Dependency bool `json:"dependency,omitempty"`
 }
 
 // Drift describes the per-field difference between desired and live spec.
@@ -695,21 +698,30 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	} else {
 		for _, c := range conditions(root) {
 			if c.status == "False" && (c.typ == "Ready" || c.typ == "Healthy" || c.typ == "Released" || c.typ == "TestSuccess") {
-				out = append(out, Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, c.typ), Message: fallback(c.message, c.typ+" is false"), Action: diagnose.ActionForFluxReason(c.reason)})
+				issue := Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, c.typ), Message: fallback(c.message, c.typ+" is false"), Action: diagnose.ActionForFluxReason(c.reason)}
+				out = append(out, attachFluxBlocker(issue, root, resourceTree))
 			}
 			if c.status == "True" && c.typ == "Stalled" {
-				out = append(out, Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, "Stalled"), Message: fallback(c.message, "Reconciliation is stalled"), Action: diagnose.ActionForFluxReason(c.reason)})
+				issue := Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, "Stalled"), Message: fallback(c.message, "Reconciliation is stalled"), Action: diagnose.ActionForFluxReason(c.reason)}
+				out = append(out, attachFluxBlocker(issue, root, resourceTree))
 			}
 			if c.status == "True" && c.typ == "Reconciling" {
 				out = append(out, Issue{Severity: SeverityInfo, Scope: ScopeCondition, Reason: fallback(c.reason, "Reconciling"), Message: fallback(c.message, "Reconciliation is in progress")})
 			}
 		}
+		out = append(out, fluxSourceWarnings(resourceTree, out)...)
 	}
 	// The events lead is a pointer, so the count stays next to it; a
 	// per-resource finding of any tier already names a resource, so the
 	// count would only restate it.
-	if resourceTree != nil && resourceTree.Summary.Degraded > 0 && !appHealthy && !degradedResourcesExplained(out) && !hasResourceFinding(out) {
-		out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", resourceTree.Summary.Degraded, pluralizeResourcesAre(resourceTree.Summary.Degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
+	if resourceTree != nil && !appHealthy && !degradedResourcesExplained(out) && !hasResourceFinding(out) {
+		degraded := resourceTree.Summary.Degraded
+		if tool == "fluxcd" {
+			degraded = unexplainedFluxDegraded(resourceTree, out)
+		}
+		if degraded > 0 {
+			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
+		}
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure
 	// reason in multiple status.conditions slots (Released=False *and*
@@ -963,16 +975,18 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 			continue
 		}
 		category := categorizeFluxChange(n.Sync, n.Health)
-		if related[n.ID] != "" && (n.Sync == "" || n.Sync == "Unknown") && (n.Health == "" || n.Health == "Unknown") {
+		if n.Dependency && (n.Sync == "" || n.Sync == "Unknown") && (category == CategorySynced || n.Health == "" || n.Health == "Unknown") {
 			category = CategoryUnknown
 		}
 		partial := true
 		note := "Flux inventory confirms this resource is managed; desired manifest content is not available in Radar yet."
-		switch related[n.ID] {
-		case gitopstree.EdgeSource:
-			note = "Flux declares this resource as a source dependency; this reference does not establish ownership or a desired manifest."
-		case gitopstree.EdgeDependsOn:
-			note = "Flux declares this resource as an ordering dependency; this reference does not establish ownership or a desired manifest."
+		if n.Dependency {
+			switch related[n.ID] {
+			case gitopstree.EdgeSource:
+				note = "Flux declares this resource as a source dependency; this reference does not establish ownership or a desired manifest."
+			case gitopstree.EdgeDependsOn:
+				note = "Flux declares this resource as an ordering dependency; this reference does not establish ownership or a desired manifest."
+			}
 		}
 		out = append(out, Change{
 			Ref:         refFromTree(n.Ref),
@@ -983,6 +997,7 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 			HasDesired:  false,
 			Partial:     partial,
 			PartialNote: note,
+			Dependency:  n.Dependency,
 		})
 	}
 	sortChanges(out)

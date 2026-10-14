@@ -334,3 +334,54 @@ func TestRemoteInsightPreservesOnlyRemoteInventoryDeclarations(t *testing.T) {
 		t.Fatalf("remote inventory dropped or unrelated local ref exposed: %+v", out.Changes)
 	}
 }
+
+func TestFluxSourceInsightDropsDeniedStatusText(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team", "shared"}}
+	s.permCache.Set("source-user", nil, permissions)
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "source-user"}))
+	source := gitopsinsights.Ref{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "private"}
+	issue := gitopsinsights.Issue{Severity: gitopsinsights.SeverityWarning, Scope: gitopsinsights.ScopeTree, Reason: "SourceNotReady", Message: "GitRepository shared/private can't fetch updates: private status text. No artifact has been fetched yet.", Refs: []gitopsinsights.Ref{source}}
+	input := gitopsinsights.Insight{Issues: []gitopsinsights.Issue{issue}}
+	out := s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, input, nil)
+	if len(out.Issues) != 0 {
+		t.Fatalf("denied source status leaked: %+v", out.Issues)
+	}
+	if len(input.Issues) != 1 || len(input.Issues[0].Refs) != 1 {
+		t.Fatal("filter mutated shared insight")
+	}
+	out = s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team", "shared"}}, input, nil)
+	if len(out.Issues) != 1 || out.Issues[0].Message != issue.Message || len(out.Issues[0].Refs) != 1 {
+		t.Fatalf("readable source issue lost: %+v", out)
+	}
+}
+
+func TestFluxTreeResummarizesDependenciesAfterFiltering(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	permissions.SetCanI("get", "apps", "deployments", "team", true)
+	s.permCache.Set("tree-user", nil, permissions)
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "tree-user"}))
+	root := gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot}
+	nodes := []gitopstree.Node{root, {ID: "source", Role: gitopstree.RoleDeclared, Dependency: true, Ref: gitopstree.ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "repo"}, Health: "Degraded"}, {ID: "workload", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "team", Name: "app"}, Health: "Degraded", Sync: "OutOfSync"}}
+	input := &gitopstree.ResourceTree{Root: root, Nodes: nodes, Summary: gitopstree.Summarize(nodes)}
+	out := s.filterGitOpsTreeForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, input)
+	if len(out.Nodes) != 2 || out.Summary.Dependencies != 0 || out.Summary.Declared != 1 || out.Summary.Degraded != 1 || out.Summary.OutOfSync != 1 || input.Summary.Dependencies != 1 {
+		t.Fatalf("filtered summary: %+v", out)
+	}
+}
+
+func TestFluxBlockerConditionSurvivesDeniedSource(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("blocker-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "blocker-user"}))
+	source := gitopsinsights.Ref{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "private"}
+	issue := gitopsinsights.Issue{Severity: gitopsinsights.SeverityCritical, Scope: gitopsinsights.ScopeCondition, Reason: "ArtifactFailed", Message: "Source artifact not found, retrying in 30s", Cause: "GitRepository private: private status text", Refs: []gitopsinsights.Ref{source}}
+	out := s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, gitopsinsights.Insight{Issues: []gitopsinsights.Issue{issue}}, nil)
+	if len(out.Issues) != 1 || out.Issues[0].Message != issue.Message || out.Issues[0].Cause != "" || len(out.Issues[0].Refs) != 0 {
+		t.Fatalf("root condition lost or source status leaked: %+v", out.Issues)
+	}
+}

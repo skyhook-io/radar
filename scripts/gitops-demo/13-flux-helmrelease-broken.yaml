@@ -1,13 +1,7 @@
-# Failed-HelmRelease fixture — helm-controller fails the chart pull
-# because the version range matches nothing. Drives helm-specific UI
-# surfaces that Kustomization doesn't share: lastAttemptedRevision
-# (the version Flux *tried* to install) divergent from lastAppliedRevision,
-# InstallFailed phase, and the retry counter inside status.history.
-#
-# Using `>=99.0.0` rather than a typo'd chart name because the latter
-# fails at HelmChart pull (deeper in the source-controller) and produces
-# a less informative UI state; the version-range approach keeps the
-# failure inside helm-controller where the status surface is richer.
+# Failed-HelmRelease fixture — the version range matches no chart.
+# source-controller fails the generated HelmChart (flux-system-podinfo-broken)
+# and helm-controller reports SourceNotReady naming it, so the failure sits on
+# the middle hop of release → HelmChart → HelmRepository.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

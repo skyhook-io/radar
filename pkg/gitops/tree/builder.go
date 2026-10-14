@@ -163,7 +163,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if liveRoot, ok := findTopoNode(topoByRef, rootRef); ok {
 		topoIDByTreeID[rootNode.ID] = liveRoot.ID
 		treeIDByTopoID[liveRoot.ID] = rootNode.ID
-		nodes[rootNode.ID] = mergeData(rootNode, liveRoot.Data)
+		// The root's own object outranks topology's summary of it (topology
+		// records a HelmRelease revision of 0 when the v2 API omits it).
+		nodes[rootNode.ID] = enrichNodeFromObject(mergeData(rootNode, liveRoot.Data), root)
 	}
 
 	var fluxRelated []relatedResource
@@ -251,6 +253,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			if id == rootNode.ID {
 				continue
 			}
+			if node, exists := nodes[id]; exists && node.Remote {
+				nodes[id] = mergeData(node, res.Data)
+				continue
+			}
 			obj := objects[refKey(res.Ref)]
 			// Derive sync/health from the related CR's own Ready/Reconciling/
 			// Stalled conditions. Without this, source CRs render with empty
@@ -271,8 +277,17 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			} else if _, exists := nodes[id]; !exists {
 				nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, sync, health, HealthSourceController), obj), res.Data)
 			} else {
-				nodes[id] = mergeData(nodes[id], res.Data)
+				node := nodes[id]
+				if obj != nil {
+					node.Sync, node.Health = sync, health
+					node.HealthSource = healthSourceFor(health, HealthSourceController)
+					node.TopologyStatus = healthToTopology(health)
+				}
+				nodes[id] = mergeData(enrichNodeFromObject(node, obj), res.Data)
 			}
+			node := nodes[id]
+			node.Dependency = !declaredIDs[id]
+			nodes[id] = node
 			parentID := rootNode.ID
 			if res.Parent.Name != "" {
 				parentID = nodeID(res.Parent)
@@ -331,6 +346,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 				if _, exists := nodes[targetID]; !exists {
 					nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
 				}
+				node := nodes[targetID]
+				node.Dependency = false
+				nodes[targetID] = node
 				if _, sourceVisible := nodes[id]; sourceVisible {
 					edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
 				}

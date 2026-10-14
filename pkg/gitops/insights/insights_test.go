@@ -1844,8 +1844,8 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 func TestFluxDependencyChangesDoNotClaimInventoryOwnership(t *testing.T) {
 	tree := &gitopstree.ResourceTree{
 		Nodes: []gitopstree.Node{
-			{ID: "source", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "OCIRepository", Name: "chart"}},
-			{ID: "ordering", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Kustomization", Name: "base"}},
+			{ID: "source", Dependency: true, Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "OCIRepository", Name: "chart"}},
+			{ID: "ordering", Dependency: true, Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Kustomization", Name: "base"}},
 			{ID: "managed", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Deployment", Name: "app"}},
 		},
 		Edges: []gitopstree.Edge{
@@ -1871,7 +1871,7 @@ func TestFluxDependencyChangesDoNotClaimInventoryOwnership(t *testing.T) {
 
 func TestFluxUnobservedDependenciesDoNotClaimSync(t *testing.T) {
 	tree := &gitopstree.ResourceTree{
-		Nodes: []gitopstree.Node{{ID: "source", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "prod", Name: "absent"}}},
+		Nodes: []gitopstree.Node{{ID: "source", Dependency: true, Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "prod", Name: "absent"}}},
 		Edges: []gitopstree.Edge{{Source: "root", Target: "source", Type: gitopstree.EdgeSource}},
 	}
 	changes := buildChanges(nil, tree, "fluxcd", nil)

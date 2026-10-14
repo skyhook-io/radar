@@ -51,8 +51,10 @@ kubectl config use-context kind-radar-gitops-demo
 | `flux-system/podinfo-suspended` | Kustomization | `spec.suspend: true` → Suspended chip + Resume button |
 | `flux-system/podinfo` | HelmRelease | Helm chart from HelmRepository → exercises helm-controller path + Sync-with-source verb |
 | `flux-system/podinfo-broken` | Kustomization | Stable Flux failure: `targetNamespace: demo-flux-missing` doesn't exist → kustomize-controller leaves it `Ready=False` (`ReconciliationFailed`). Flux equivalent of `guestbook-broken-sync`. |
-| `flux-system/podinfo-broken` | HelmRelease | Stable HelmRelease failure: `version: '>=99.0.0'` matches no chart → helm-controller leaves it `InstallFailed` with `spec.install.remediation.retries: 3`. Drives Helm-specific UI (`lastAttemptedRevision`, retry state). |
+| `flux-system/podinfo-broken` | HelmRelease | Stable HelmRelease failure: `version: '>=99.0.0'` matches no chart, so its generated HelmChart (`flux-system-podinfo-broken`) fails to pull and the release reports `SourceNotReady` naming it. Exercises the release → HelmChart → HelmRepository chain with the failure on the middle hop. |
 | `flux-system/zombie-kustomization` | Kustomization | Stuck `Terminating` via fake finalizer (no controller scaled down). Drives lifecycle severity ramp + finalizer attribution + `[Terminating]` chip + Audit `stuckTerminating`. Severity tier ramps with cluster age: info → warning at 5min → alert at 30min. |
+| `flux-system/podinfo-unreachable` | GitRepository | Repository that doesn't exist: the source never stores an artifact. Consumed by `podinfo-no-source`, which stays `Ready=False` ("Source artifact not found"). |
+| `flux-system/podinfo-stale` | GitRepository | Fetches `master`, then `setup_stale_source` points it at a missing branch: `Ready=False` but its last artifact stays. `podinfo-stale-source` stays `Ready=True` on the old revision — Ready, but new commits won't land. |
 
 ### State coverage matrix
 
@@ -110,6 +112,7 @@ future feature would consume; UI work is what's missing.
 | 15 | Hard refresh / cache bust | ✅ covered | Hard Refresh button on every Argo app |
 | 16 | Compare environments side-by-side | ⚠️ partial proxy | The `set-vanilla` / `set-kustomize` / `set-helm` ApplicationSet trio gives "multiple apps, same source repo, different paths/destinations" — close to but not literally "same path, two environments." If/when a side-by-side feature gets specced and "literally same overlay across envs" is the right shape, add a `demo-multi-env-staging` + `demo-multi-env-prod` pair pointing at the same path. |
 | 17 | dependsOn / sync wave ordering | ✅ covered | `podinfo-overlay dependsOn podinfo-base` |
+| 21 | Why isn't my Flux object Ready? (source side) | ✅ covered | `podinfo-broken` HelmRelease (failing generated chart), `podinfo-no-source` (source never fetched), `podinfo-stale-source` (Ready on a stale artifact) |
 | 18 | Get paged when an app degrades | ⚠️ data shape present | `guestbook-broken-sync` and the zombie give degraded targets to fire alerts on; no in-UI alerting hookup yet |
 | 19 | Inspect HelmRelease values + chart version | ✅ covered | podinfo HelmRelease |
 | 20 | Onboard a new app | N/A | Write-only feature; no fixture concept applies |
