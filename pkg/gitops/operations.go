@@ -114,6 +114,8 @@ var fluxKinds = map[string]FluxKindEntry{
 	"gitrepository":  {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}, Kind: "GitRepository"},
 	"ocirepository":  {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}, Kind: "OCIRepository"},
 	"helmrepository": {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "helmrepositories"}, Kind: "HelmRepository"},
+	"helmchart":      {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "helmcharts"}, Kind: "HelmChart"},
+	"bucket":         {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "buckets"}, Kind: "Bucket"},
 	"kustomization":  {GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization"},
 	"helmrelease":    {GVR: schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}, Kind: "HelmRelease"},
 	"alert":          {GVR: schema.GroupVersionResource{Group: "notification.toolkit.fluxcd.io", Version: "v1beta3", Resource: "alerts"}, Kind: "Alert"},
@@ -840,40 +842,35 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		return OperationResult{}, err
 	}
 
-	// Extract sourceRef based on kind
-	var sourceKind, sourceName, sourceNamespace string
-	spec, ok := resource.Object["spec"].(map[string]any)
-	if !ok {
-		return OperationResult{}, fmt.Errorf("invalid resource spec for %s %s/%s", entry.Kind, namespace, name)
-	}
-
-	switch entry.Kind {
-	case "Kustomization":
-		if sourceRef, ok := spec["sourceRef"].(map[string]any); ok {
-			sourceKind, _ = sourceRef["kind"].(string)
-			sourceName, _ = sourceRef["name"].(string)
-			sourceNamespace, _ = sourceRef["namespace"].(string)
-		}
-	case "HelmRelease":
-		if chart, ok := spec["chart"].(map[string]any); ok {
-			if chartSpec, ok := chart["spec"].(map[string]any); ok {
-				if sourceRef, ok := chartSpec["sourceRef"].(map[string]any); ok {
-					sourceKind, _ = sourceRef["kind"].(string)
-					sourceName, _ = sourceRef["name"].(string)
-					sourceNamespace, _ = sourceRef["namespace"].(string)
-				}
-			}
-		}
-	default:
+	if entry.Kind != "Kustomization" && entry.Kind != "HelmRelease" {
 		return OperationResult{}, fmt.Errorf("sync-with-source only supported for Kustomization and HelmRelease")
 	}
-
-	if sourceName == "" {
+	if _, ok := resource.Object["spec"].(map[string]any); !ok {
+		return OperationResult{}, fmt.Errorf("invalid resource spec for %s %s/%s", entry.Kind, namespace, name)
+	}
+	source, ok := syncSourceFor(resource)
+	if !ok {
 		return OperationResult{}, fmt.Errorf("no source reference found in %s %s/%s", entry.Kind, namespace, name)
 	}
+	sourceKind, sourceName, sourceNamespace := source.Kind, source.Name, source.Namespace
 
-	if sourceNamespace == "" {
-		sourceNamespace = namespace
+	timestamp := time.Now().Format(time.RFC3339Nano)
+	// An ExternalArtifact is written by the controller that generates it; it has
+	// no reconcile request to honor, so only the consumer is reconciled.
+	if sourceKind == "ExternalArtifact" {
+		patch := map[string]any{"metadata": map[string]any{"annotations": map[string]string{"reconcile.fluxcd.io/requestedAt": timestamp}}}
+		if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, patch); err != nil {
+			return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s: %w", entry.Kind, namespace, name, err)
+		}
+		return OperationResult{
+			Message:     fmt.Sprintf("Reconcile triggered for FluxCD %s %s/%s; its ExternalArtifact %s/%s is produced by another controller and was not reconciled", entry.Kind, namespace, name, sourceNamespace, sourceName),
+			Operation:   "reconcile",
+			Tool:        "fluxcd",
+			Kind:        entry.Kind,
+			Namespace:   namespace,
+			Name:        name,
+			RequestedAt: timestamp,
+		}, nil
 	}
 
 	sourceEntry, err := ResolveFluxKind(sourceKind)
@@ -881,7 +878,6 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		return OperationResult{}, fmt.Errorf("unknown source kind: %s", sourceKind)
 	}
 
-	timestamp := time.Now().Format(time.RFC3339Nano)
 	reconcilePatch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{
@@ -938,6 +934,40 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		RequestedAt: timestamp,
 		Source:      &SourceRef{Kind: sourceEntry.Kind, Namespace: sourceNamespace, Name: sourceName},
 	}, nil
+}
+
+// syncSourceFor picks the object `flux reconcile --with-source` refreshes. An
+// inline HelmRelease pulls its chart through the HelmChart Flux generates, so
+// that chart is reconciled rather than the repository behind it: refreshing
+// the repository index alone does not re-resolve the chart version. Before the
+// controller records status.helmChart, the chart has Flux's generated name,
+// <release namespace>-<release name>, in the source's namespace.
+func syncSourceFor(resource *unstructured.Unstructured) (FluxSourceRef, bool) {
+	refs := FluxSourceReferences(resource)
+	if resource.GetKind() == "HelmRelease" {
+		if _, chartRef, _ := unstructured.NestedMap(resource.Object, "spec", "chartRef"); !chartRef {
+			var repository *FluxSourceRef
+			for i := range refs {
+				switch refs[i].Kind {
+				case "HelmChart":
+					return refs[i], true
+				case "HelmRepository", "GitRepository", "Bucket":
+					repository = &refs[i]
+				}
+			}
+			if repository == nil {
+				return FluxSourceRef{}, false
+			}
+			chart := *repository
+			chart.Kind = "HelmChart"
+			chart.Name = resource.GetNamespace() + "-" + resource.GetName()
+			return chart, true
+		}
+	}
+	if len(refs) == 0 {
+		return FluxSourceRef{}, false
+	}
+	return refs[0], true
 }
 
 // mergePatch is a helper that applies a merge patch to a resource.

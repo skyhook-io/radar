@@ -118,7 +118,7 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 | Operation | What it does |
 |---|---|
 | **Reconcile** | Annotates `reconcile.fluxcd.io/requestedAt` to trigger a single reconcile |
-| **Sync with source** (Kustomization / HelmRelease) | Reconciles the source first, then the resource itself |
+| **Sync with source** (Kustomization / HelmRelease) | Reconciles the source first, then the resource itself, as `flux reconcile --with-source` does. For a HelmRelease the source is its chart: the generated HelmChart of an inline `spec.chart`, or the HelmChart / OCIRepository named by `spec.chartRef`. An ExternalArtifact comes from another controller, so only the resource is reconciled |
 | **Suspend / Resume** | Toggles `spec.suspend` |
 
 ### Keyboard shortcuts (per-app detail page)

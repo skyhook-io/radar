@@ -874,33 +874,76 @@ func TestSyncFluxWithSourceCases(t *testing.T) {
 		}
 	})
 
-	t.Run("HelmRelease happy path resolves nested chart sourceRef", func(t *testing.T) {
-		hr := &unstructured.Unstructured{Object: map[string]any{
+	source := func(kind, namespace, name string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "source.toolkit.fluxcd.io/v1",
+			"kind":       kind,
+			"metadata":   map[string]any{"namespace": namespace, "name": name},
+		}}
+	}
+	release := func(spec, status map[string]any) *unstructured.Unstructured {
+		obj := map[string]any{
 			"apiVersion": "helm.toolkit.fluxcd.io/v2",
 			"kind":       "HelmRelease",
-			"metadata":   map[string]any{"namespace": "flux-system", "name": "demo"},
-			"spec": map[string]any{
-				"chart": map[string]any{
-					"spec": map[string]any{
-						"sourceRef": map[string]any{
-							"kind": "HelmRepository", "name": "repo", "namespace": "flux-system",
-						},
-					},
-				},
-			},
-		}}
-		repo := &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "source.toolkit.fluxcd.io/v1",
-			"kind":       "HelmRepository",
-			"metadata":   map[string]any{"namespace": "flux-system", "name": "repo"},
-		}}
-		client := fake.NewSimpleDynamicClient(scheme, hr, repo)
-		res, err := SyncFluxWithSource(ctx, client, "HelmRelease", "flux-system", "demo")
+			"metadata":   map[string]any{"namespace": "team", "name": "demo"},
+			"spec":       spec,
+		}
+		if status != nil {
+			obj["status"] = status
+		}
+		return &unstructured.Unstructured{Object: obj}
+	}
+	inline := map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo", "namespace": "flux-system"}}}}
+
+	// Matches `flux reconcile hr --with-source`: the generated chart is what
+	// re-resolves the version, so it is reconciled, not the repository.
+	for _, tc := range []struct {
+		name          string
+		hr            *unstructured.Unstructured
+		objects       []runtime.Object
+		kind, ns, ref string
+		resource      string
+	}{
+		{"inline release reconciles its recorded HelmChart", release(inline, map[string]any{"helmChart": "flux-system/team-demo"}), []runtime.Object{source("HelmChart", "flux-system", "team-demo")}, "HelmChart", "flux-system", "team-demo", "helmcharts"},
+		{"inline release before the chart is recorded uses Flux's generated name", release(inline, nil), []runtime.Object{source("HelmChart", "flux-system", "team-demo")}, "HelmChart", "flux-system", "team-demo", "helmcharts"},
+		{"chartRef to an OCIRepository", release(map[string]any{"chartRef": map[string]any{"kind": "OCIRepository", "name": "chart"}}, nil), []runtime.Object{source("OCIRepository", "team", "chart")}, "OCIRepository", "team", "chart", "ocirepositories"},
+		{"chartRef to a HelmChart in another namespace", release(map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "shared", "namespace": "charts"}}, nil), []runtime.Object{source("HelmChart", "charts", "shared")}, "HelmChart", "charts", "shared", "helmcharts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewSimpleDynamicClient(scheme, append(tc.objects, tc.hr)...)
+			res, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo")
+			if err != nil {
+				t.Fatalf("SyncFluxWithSource: %v", err)
+			}
+			if res.Source == nil || res.Source.Kind != tc.kind || res.Source.Namespace != tc.ns || res.Source.Name != tc.ref {
+				t.Fatalf("source = %#v", res.Source)
+			}
+			if patches := patchActionsByResource(client); patches[tc.resource] != 1 || patches["helmreleases"] != 1 || patches["helmrepositories"] != 0 {
+				t.Fatalf("patches = %v", patches)
+			}
+		})
+	}
+
+	t.Run("chartRef to an ExternalArtifact reconciles only the release", func(t *testing.T) {
+		client := fake.NewSimpleDynamicClient(scheme, release(map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "generated"}}, nil))
+		res, err := SyncFluxWithSource(ctx, client, "HelmRelease", "team", "demo")
 		if err != nil {
 			t.Fatalf("SyncFluxWithSource: %v", err)
 		}
-		if res.Source == nil || res.Source.Kind != "HelmRepository" {
-			t.Fatalf("unexpected Source ref: %#v", res.Source)
+		if res.Source != nil || !strings.Contains(res.Message, "produced by another controller") {
+			t.Fatalf("result = %#v", res)
+		}
+		if patches := patchActionsByResource(client); len(patches) != 1 || patches["helmreleases"] != 1 {
+			t.Fatalf("patches = %v", patches)
+		}
+	})
+
+	t.Run("Kustomization from a Bucket", func(t *testing.T) {
+		client := fake.NewSimpleDynamicClient(scheme, source("Bucket", "flux-system", "manifests"),
+			fluxKustomization("flux-system", "demo", map[string]any{"kind": "Bucket", "name": "manifests"}))
+		res, err := SyncFluxWithSource(ctx, client, "Kustomization", "flux-system", "demo")
+		if err != nil || res.Source == nil || res.Source.Kind != "Bucket" {
+			t.Fatalf("result = %#v err = %v", res, err)
 		}
 	})
 
@@ -974,6 +1017,8 @@ func newFluxScheme(t *testing.T) *runtime.Scheme {
 		"GitRepository":  {Group: "source.toolkit.fluxcd.io", Version: "v1"},
 		"HelmRepository": {Group: "source.toolkit.fluxcd.io", Version: "v1"},
 		"OCIRepository":  {Group: "source.toolkit.fluxcd.io", Version: "v1"},
+		"HelmChart":      {Group: "source.toolkit.fluxcd.io", Version: "v1"},
+		"Bucket":         {Group: "source.toolkit.fluxcd.io", Version: "v1"},
 	} {
 		scheme.AddKnownTypeWithName(gv.WithKind(kind), &unstructured.Unstructured{})
 		scheme.AddKnownTypeWithName(gv.WithKind(kind+"List"), &unstructured.UnstructuredList{})
