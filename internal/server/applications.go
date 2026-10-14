@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -920,7 +921,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 			},
 			overlay:      overlay,
 			source:       sourceRefForInput(overlay, rootKind, rootGroup, rootKey),
-			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, pods),
+			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, workloadUID(obj), pods),
 			rels:         rels,
 			rootKey:      rootKey,
 			rootKind:     rootKind,
@@ -2556,20 +2557,30 @@ func podsRestarts(pods []*corev1.Pod) (int, string) {
 // eventsForWorkload joins a workload's Warning events from the per-namespace
 // index (the workload object + its pods), deduped by (object, reason) with
 // summed counts — the "why is it broken" feed (FailedScheduling, ImagePullBackOff,
-// FailedMount, …) that restarts alone miss.
-func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
+// FailedMount, …) that restarts alone miss. Only events about the current
+// workload and its current Pods join: a same-named Pod or workload replaced
+// earlier leaves events behind that would otherwise read as a current
+// problem. Those stay on the timeline.
+func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, uid types.UID, pods []*corev1.Pod) []appEvent {
 	if byObject == nil {
 		return nil
 	}
-	names := make([]string, 0, len(pods)+1)
-	names = append(names, resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName))
+	type subject struct {
+		key            string
+		uid, staticUID types.UID
+	}
+	subjects := make([]subject, 0, len(pods)+1)
+	subjects = append(subjects, subject{key: resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName), uid: uid})
 	for _, p := range pods {
-		names = append(names, resourceid.ResourceKey("", "Pod", "", p.Name))
+		subjects = append(subjects, subject{key: resourceid.ResourceKey("", "Pod", "", p.Name), uid: p.UID, staticUID: types.UID(p.Annotations[corev1.MirrorPodAnnotationKey])})
 	}
 	byKey := map[string]*appEvent{}
 	order := []string{}
-	for _, n := range names {
-		for _, e := range byObject[n] {
+	for _, n := range subjects {
+		for _, e := range byObject[n.key] {
+			if !k8s.EventDescribesIncarnation(e.InvolvedObject.UID, n.uid, n.staticUID) {
+				continue
+			}
 			key := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name + "/" + e.Reason
 			c := int(e.Count)
 			if c < 1 {
@@ -2600,6 +2611,14 @@ func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workl
 		out = append(out, *byKey[k])
 	}
 	return out
+}
+
+// workloadUID is the observed workload's UID, or "" when obj carries none.
+func workloadUID(obj any) types.UID {
+	if o, ok := obj.(metav1.Object); ok {
+		return o.GetUID()
+	}
+	return ""
 }
 
 func appEventFirstSeen(e *corev1.Event) string {

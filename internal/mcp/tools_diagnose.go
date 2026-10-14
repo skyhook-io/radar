@@ -1180,11 +1180,11 @@ func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, na
 		if !subject.HasGroup() {
 			involvedGroup = resourceid.GroupForBuiltinKind(subject.Kind)
 		}
-		matchesUID := uid == "" || subject.UID == "" || subject.UID == string(uid)
-		// Kubelet events use the static Pod UID; its API mirror has a different UID.
-		if displayKind == "Pod" && group == "" && mirrorUID != "" && subject.UID == string(mirrorUID) {
-			matchesUID = true
+		staticUID := types.UID("")
+		if displayKind == "Pod" && group == "" {
+			staticUID = mirrorUID
 		}
+		matchesUID := k8s.EventDescribesIncarnation(types.UID(subject.UID), uid, staticUID)
 		if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && strings.EqualFold(involvedGroup, group) && e.InvolvedObject.Name == name {
 			if matchesUID {
 				matched = append(matched, *e)
@@ -1198,7 +1198,7 @@ func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, na
 			if !ok {
 				continue
 			}
-			if podUID == "" || subject.UID == "" || subject.UID == string(podUID) {
+			if k8s.EventDescribesIncarnation(types.UID(subject.UID), podUID, "") {
 				matched = append(matched, *e)
 			} else {
 				excluded++

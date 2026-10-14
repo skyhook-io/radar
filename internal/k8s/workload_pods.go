@@ -352,6 +352,16 @@ func DirectlyOwnedPods(cache *ResourceCache, namespace, name, group, kind string
 }
 
 // controllerMatchesIdentity is shared by direct and multi-hop ownership checks.
+// EventDescribesIncarnation reports whether an event about a same-named
+// object describes the incarnation whose UID is uid. Events outlive their
+// object, so a known, different UID belongs to an earlier incarnation; an
+// event without a UID cannot say which one it is about and is kept. Kubelet
+// reports a static Pod under its static UID, which the API mirror records in
+// kubernetes.io/config.mirror; pass it as staticUID, or "" for anything else.
+func EventDescribesIncarnation(eventUID, uid, staticUID types.UID) bool {
+	return eventUID == "" || uid == "" || eventUID == uid || (staticUID != "" && eventUID == staticUID)
+}
+
 func controllerMatchesIdentity(owner *metav1.OwnerReference, kind, name, group string, uid types.UID) bool {
 	if owner == nil || uid == "" || owner.UID != uid || owner.Kind != kind || owner.Name != name {
 		return false
