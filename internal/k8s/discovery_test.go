@@ -6,9 +6,11 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func TestIsMoreStableVersion(t *testing.T) {
@@ -313,7 +315,7 @@ func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
 
 // A CRD upgrade can retire the version discovery last saw. Write paths resolve
 // through ServedGVR, so it must refresh expired discovery itself rather than
-// wait for some read path to do it.
+// wait for some read path to do it, without making the caller wait.
 func TestServedGVRRefreshesExpiredDiscovery(t *testing.T) {
 	withCleanDiscoveryGlobals(t)
 	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
@@ -336,8 +338,59 @@ func TestServedGVRRefreshesExpiredDiscovery(t *testing.T) {
 		t.Fatalf("before upgrade: %v %v", gvr, ok)
 	}
 	fakeDisc.Resources = served("v1")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		time.Sleep(5 * time.Millisecond)
+		gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository")
+		if ok && gvr.Version == "v1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the TTL expired, want v1, got %v %v", gvr, ok)
+		}
+	}
+}
+
+// A stalled discovery endpoint must not hold a write action hostage: the caller
+// gets the cached answer while the refresh runs on its own.
+func TestServedGVRDoesNotWaitForASlowRefresh(t *testing.T) {
+	withCleanDiscoveryGlobals(t)
+	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDisc.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "source.toolkit.fluxcd.io/v1",
+		APIResources: []metav1.APIResource{{Name: "ocirepositories", Kind: "OCIRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "patch"}}},
+	}}
+	core, err := k8score.NewResourceDiscovery(fakeDisc, k8score.WithDiscoveryCacheTTL(time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewResourceDiscovery: %v", err)
+	}
+	discoveryMu.Lock()
+	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	discoveryMu.Unlock()
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	fakeDisc.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return false, nil, nil
+	})
 	time.Sleep(5 * time.Millisecond)
-	if gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository"); !ok || gvr.Version != "v1" {
-		t.Fatalf("after the TTL expired, want v1, got %v %v", gvr, ok)
+	done := make(chan string, 1)
+	go func() {
+		for range 3 {
+			if gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository"); !ok || gvr.Version != "v1" {
+				done <- "want the cached v1"
+				return
+			}
+		}
+		done <- ""
+	}()
+	select {
+	case msg := <-done:
+		if msg != "" {
+			t.Fatal(msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServedGVR waited on a stalled discovery refresh")
 	}
 }

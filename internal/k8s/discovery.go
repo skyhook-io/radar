@@ -159,16 +159,21 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 }
 
 // ServedGVR resolves a kind in a group to the most stable version the connected
-// cluster serves, refreshing expired discovery first so a CRD upgrade that
-// retires a version is picked up. It satisfies gitops.FluxGVRResolver.
+// cluster serves. It satisfies gitops.FluxGVRResolver. Expired discovery is
+// refreshed in the background rather than on the caller's request: a slow
+// discovery endpoint for an unrelated API would otherwise use up the action's
+// deadline. Only the first action after the cache expires can still see a
+// version that a CRD upgrade just retired.
 func ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
 	d := GetResourceDiscovery()
 	if d == nil || d.ResourceDiscovery == nil {
 		return schema.GroupVersionResource{}, false
 	}
-	if err := d.RefreshIfStale(); err != nil {
-		log.Printf("[discovery] Failed to refresh before resolving %s.%s: %v", kind, group, err)
-	}
+	go func() {
+		if err := d.RefreshIfStale(); err != nil {
+			log.Printf("[discovery] Background refresh failed: %v", err)
+		}
+	}()
 	return d.GetGVRWithGroup(kind, group)
 }
 
