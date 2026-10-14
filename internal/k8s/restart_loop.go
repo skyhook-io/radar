@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -320,7 +321,13 @@ func probeFailureFor(probes map[string]probeFailure, pod *corev1.Pod, container,
 // Events outlive a pod; a recreated pod with the same name (a StatefulSet
 // replica) must not inherit its predecessor's failures.
 func probeFailureMatchesPod(pf probeFailure, pod *corev1.Pod) bool {
-	return pf.podUID == "" || pod.UID == "" || pf.podUID == pod.UID
+	if pf.podUID == "" || pod.UID == "" || pf.podUID == pod.UID {
+		return true
+	}
+	// Kubelet reports a static Pod under its static UID, which the API mirror
+	// records in an annotation rather than as its own UID.
+	static := types.UID(pod.Annotations[corev1.MirrorPodAnnotationKey])
+	return static != "" && pf.podUID == static
 }
 
 // restartLoopMayReplace reports whether the loop's crashloop reason may stand

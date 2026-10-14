@@ -1235,6 +1235,26 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 				}},
 			},
 		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "static", Namespace: "prod", UID: "mirror-uid", CreationTimestamp: old, Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "static-uid"}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "static.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "static", UID: "static-uid"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
 		&corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: "replaced.1", Namespace: "prod"},
 			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "replaced", UID: "predecessor-uid"},
@@ -1285,7 +1305,8 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") &&
 			hasProblem(problems, "Pod", "thrash", "CrashLoopBackOff") &&
 			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") &&
-			hasProblem(problems, "Pod", "replaced", "CrashLoopBackOff") {
+			hasProblem(problems, "Pod", "replaced", "CrashLoopBackOff") &&
+			hasProblem(problems, "Pod", "static", "LivenessProbeFailed") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1313,6 +1334,8 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 	if hasProblem(problems, "Pod", "replaced", "LivenessProbeFailed") {
 		t.Fatalf("a same-name predecessor's probe failure must not relabel its replacement: %+v", problems)
 	}
+	// Kubelet names a static Pod by its static UID, not its API mirror's.
+	assertProblem(t, problems, "Pod", "static", "LivenessProbeFailed", "critical")
 }
 
 func TestDetectProblems_InvalidProbeTargetAndStalledInit(t *testing.T) {
