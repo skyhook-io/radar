@@ -82,3 +82,25 @@ func TestStripNodeClassesExceptKeepsAuthorizedProviderOnly(t *testing.T) {
 		t.Fatalf("incident edges were not stripped with the denied NodeClass: %+v", topo.Edges)
 	}
 }
+
+func TestRBACTuplesForNodeUsesRecordedDynamicIdentityWithoutDiscovery(t *testing.T) {
+	n := Node{Kind: "ClusterParent", Data: map[string]any{
+		"apiVersion": "parents.example.io/v1", clusterScopedGroupKey: "parents.example.io", clusterScopedResourceKey: "clusterparents",
+	}}
+	decision, tuples := RBACTuplesForNode(&n, nil)
+	if decision != NodeRBACCheckTuples || len(tuples) != 1 || tuples[0] != (SARTuple{Group: "parents.example.io", Resource: "clusterparents"}) {
+		t.Fatalf("decision=%v tuples=%+v", decision, tuples)
+	}
+	delete(n.Data, clusterScopedResourceKey)
+	if decision, _ := RBACTuplesForNode(&n, nil); decision != NodeRBACDeny {
+		t.Fatalf("incomplete recorded identity decision = %v", decision)
+	}
+}
+
+func TestRBACTuplesForNodeAcceptsRecordedCoreGroup(t *testing.T) {
+	n := Node{Kind: "PersistentVolume", Data: map[string]any{clusterScopedGroupKey: "", clusterScopedResourceKey: "persistentvolumes"}}
+	decision, tuples := RBACTuplesForNode(&n, nil)
+	if decision != NodeRBACCheckTuples || len(tuples) != 1 || tuples[0] != (SARTuple{Resource: "persistentvolumes"}) {
+		t.Fatalf("decision=%v tuples=%+v", decision, tuples)
+	}
+}

@@ -164,9 +164,10 @@ type Node struct {
 	// uid is observed incarnation metadata, retained only in the cached Go graph.
 	// Synthetic groups have no object incarnation; UID is not a wire field.
 	// observed distinguishes cached objects from declaration-only stubs.
-	observed        bool
-	ownerReferences []metav1.OwnerReference
-	uid             types.UID
+	observed              bool
+	ownerReferences       []metav1.OwnerReference
+	memberOwnerReferences []metav1.OwnerReference
+	uid                   types.UID
 	// uidByGroup preserves observed incarnations of independently authorized API aliases.
 	uidByGroup map[string]types.UID
 	ID         string         `json:"id"`
@@ -187,10 +188,12 @@ type Edge struct {
 	Type          EdgeType `json:"type"`
 	Label         string   `json:"label,omitempty"`
 	// OwnerController is set only for an observed metadata owner reference.
-	OwnerController   *bool  `json:"ownerController,omitempty"`
-	Partial           bool   `json:"partial,omitempty"`
-	SkipIfKindVisible string `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
-	PolicyEffect      string `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
+	OwnerAggregation           *bool  `json:"ownerAggregation,omitempty"` // Present and true only for member-backed display ancestry.
+	OwnerAggregationController *bool  `json:"ownerAggregationController,omitempty"`
+	OwnerController            *bool  `json:"ownerController,omitempty"`
+	Partial                    bool   `json:"partial,omitempty"`
+	SkipIfKindVisible          string `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
+	PolicyEffect               string `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
 }
 
 // PolicyEffect constants for edge annotation

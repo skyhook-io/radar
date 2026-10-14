@@ -258,6 +258,8 @@ const (
 //     secrets tuple. Secret nodes need a per-user secrets SAR because the
 //     cache SA may have cluster-wide secrets RBAC the calling user doesn't.
 //   - Namespaced, other kinds → Allow.
+//   - Recorded dynamic cluster identity → CheckTuples, even during discovery
+//     refresh; an incomplete tuple → Deny.
 //   - NodeClass → CheckTuples with the exact group/resource stored on the
 //     node by the builder. Missing exact identity fails closed.
 //   - Other cluster-scoped tracked pseudo-kind, variant matches → CheckTuples
@@ -291,6 +293,17 @@ func RBACTuplesForNode(n *Node, disc PseudoKindDiscoveryLookup) (decision NodeRB
 			return NodeRBACDeny, nil
 		}
 		return NodeRBACCheckTuples, tuples
+	}
+
+	groupValue, groupRecorded := n.Data[clusterScopedGroupKey]
+	resourceValue, resourceRecorded := n.Data[clusterScopedResourceKey]
+	if groupRecorded || resourceRecorded {
+		group, groupOK := groupValue.(string)
+		resource, resourceOK := resourceValue.(string)
+		if !groupRecorded || !resourceRecorded || !groupOK || !resourceOK || resource == "" {
+			return NodeRBACDeny, nil
+		}
+		return NodeRBACCheckTuples, []SARTuple{{Group: group, Resource: resource}}
 	}
 
 	// NodeClass provider kinds are open-ended. The builder resolves each

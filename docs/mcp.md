@@ -701,3 +701,12 @@ controller owner; `false` identifies an observed non-controller owner. A singula
 `owner` or an ownership-based `managedBy` chain prefers the controller. Management
 links based on labels, spec references or GitOps inventory do not by themselves
 establish Kubernetes ownership.
+
+With generic CRDs enabled, resource topology can include observed custom-resource
+owners of visible resources, matched by API group, scope and UID. An absent
+parent does not establish that the resource has no owner.
+
+An `ownerAggregation: true` edge to a synthetic PodGroup describes its members'
+observed ancestry, not ownership of a Kubernetes object.
+`ownerAggregationController` is true if a matched member names that parent as
+its controller.

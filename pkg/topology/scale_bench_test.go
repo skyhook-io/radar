@@ -11,6 +11,9 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // clusterShape is a per-kind object census. Feeding it to newSyntheticProvider
@@ -670,4 +673,32 @@ func TestRelationshipBuildScopeBoundsTheGraph(t *testing.T) {
 
 	t.Logf("guarded: %d nodes — cluster-wide: %d nodes / %d edges — scoped to %s: %d nodes / %d edges",
 		len(guarded.Nodes), len(clusterWide.Nodes), len(clusterWide.Edges), wantNS, len(scoped.Nodes), len(scoped.Edges))
+}
+
+func BenchmarkGenericParentClosureOwnerlessInventory(b *testing.B) {
+	gvr := schema.GroupVersionResource{Group: "parents.example.io", Version: "v1", Resource: "widgets"}
+	objects := make([]*unstructured.Unstructured, 50000)
+	for i := range objects {
+		objects[i] = genericIdentityObject(gvr, "Widget", "team", fmt.Sprintf("widget-%d", i))
+		objects[i].SetUID(types.UID(fmt.Sprintf("widget-uid-%d", i)))
+	}
+	ctrl := true
+	provider := &mockProvider{pods: []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{
+		Name: "worker", Namespace: "team", UID: "worker-uid",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "parents.example.io/v1", Kind: "Widget", Name: "widget-0", UID: "widget-uid-0", Controller: &ctrl}},
+	}}}}
+	dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: objects}, listCalls: make(map[schema.GroupVersionResource]int)}
+	builder := NewBuilder(provider).WithDynamic(dynamic)
+	opts := DefaultBuildOptions()
+	opts.ForRelationshipCache = true
+	result, err := builder.Build(opts)
+	if err != nil || len(result.Nodes) != 2 {
+		b.Fatalf("build nodes=%v err=%v", result, err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := builder.Build(opts); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

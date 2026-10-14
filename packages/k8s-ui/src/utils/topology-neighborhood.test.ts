@@ -485,3 +485,13 @@ it('retains workflow label ownership when its metadata reference is non-controll
   const { topology } = tagWorkloadOwnership(topo, [{ kind: 'Workflow', namespace: 'app', name: 'job' }])
   expect(topology.nodes.find(n => n.id === 'pod')!.data.ownerWorkloadId).toBe('Workflow/app/job')
 })
+
+it('keeps aggregate identity separate from member controller precedence', () => {
+  const topo: Topology = {
+    nodes: [node('a','Deployment','app','a'),node('b','Deployment','app','b'),node('group','PodGroup','app','workers')],
+    edges: [{...edge('a','group','manages'),ownerAggregation:true,ownerAggregationController:false},{...edge('b','group','manages'),ownerAggregation:true,ownerAggregationController:true}],
+  }
+  const {topology,colorByWorkload}=tagWorkloadOwnership(topo,[{kind:'Deployment',namespace:'app',name:'a'},{kind:'Deployment',namespace:'app',name:'b'}])
+  expect(topology.nodes.find(n=>n.id==='group')?.data.ownerColorIndex).toBe(colorByWorkload.get('Deployment/app/b'))
+  expect(topology.edges.every(e=>e.ownerAggregation===true)).toBe(true)
+})

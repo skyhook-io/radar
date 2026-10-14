@@ -6,11 +6,20 @@ import "github.com/skyhook-io/radar/pkg/resourceid"
 // It performs no provider reads and creates neither missing owners nor children.
 func addObservedOwnerEdges(nodes []Node, edges []Edge) []Edge {
 	index := IndexByResource(&Topology{Nodes: nodes})
+	aggregate := true
 	type pair struct{ source, target string }
 	valid := map[pair]bool{}
+	aggregated := map[pair]bool{}
 	for i := range nodes {
 		child := &nodes[i]
 		namespace, _ := child.Data["namespace"].(string)
+		for _, owner := range child.memberOwnerReferences {
+			parent, matches := index.ResolveObservedOwner(resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace))
+			if parent != nil && matches && (parent.observed || parent.uid != "") && parent.ID != child.ID {
+				key := pair{parent.ID, child.ID}
+				aggregated[key] = aggregated[key] || owner.Controller != nil && *owner.Controller
+			}
+		}
 		for _, owner := range child.ownerReferences {
 			if owner.APIVersion == "" || owner.Kind == "" || owner.Name == "" {
 				continue
@@ -35,6 +44,17 @@ func addObservedOwnerEdges(nodes []Node, edges []Edge) []Edge {
 			if edge.metadataOwner && child != nil && (child.observed || child.uid != "") && !matches {
 				continue
 			}
+			if edge.metadataOwner && child != nil && len(child.memberOwnerReferences) > 0 {
+				if _, memberMatches := aggregated[key]; !memberMatches {
+					continue
+				}
+			}
+			edge.OwnerAggregation = nil
+			edge.OwnerAggregationController = nil
+			if controller, matches := aggregated[key]; matches {
+				edge.OwnerAggregation = &aggregate
+				edge.OwnerAggregationController = &controller
+			}
 			edge.OwnerController = nil
 			if matches {
 				edge.OwnerController = &controller
@@ -57,6 +77,23 @@ func addObservedOwnerEdges(nodes []Node, edges []Edge) []Edge {
 				continue
 			}
 			kept = append(kept, Edge{metadataOwner: true, ID: parent.ID + "-to-" + child.ID + "-owner", Source: parent.ID, Target: child.ID, Type: EdgeManages, OwnerController: &controller})
+			existing[key] = true
+		}
+	}
+	for i := range nodes {
+		child := &nodes[i]
+		namespace, _ := child.Data["namespace"].(string)
+		for _, owner := range child.memberOwnerReferences {
+			parent, matches := index.ResolveObservedOwner(resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace))
+			if parent == nil || !matches {
+				continue
+			}
+			key := pair{parent.ID, child.ID}
+			controller, validOwner := aggregated[key]
+			if !validOwner || existing[key] {
+				continue
+			}
+			kept = append(kept, Edge{OwnerAggregation: &aggregate, OwnerAggregationController: &controller, ID: parent.ID + "-to-" + child.ID + "-members", Source: parent.ID, Target: child.ID, Type: EdgeManages})
 			existing[key] = true
 		}
 	}

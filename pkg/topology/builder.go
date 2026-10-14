@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -5831,7 +5832,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 17. Add generic CRD nodes connected via owner references
-	// Only includes CRDs already being watched and with owner refs to existing nodes
+	// Only includes watched CRDs connected by observed ownership to visible nodes
 	if opts.IncludeGenericCRDs {
 		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
 		var issuerWarnings []string
@@ -8809,9 +8810,9 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 
 // addGenericCRDNodes adds CRD nodes connected to the topology via owner references.
 // It uses two-phase resolution: first collecting all candidate CRD resources, then
-// iteratively adding nodes whose owners are already in the topology. This handles
-// multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
-// intermediate nodes only become resolvable after their parents are added.
+// iteratively adding children of visible owners and observed parents declared by
+// visible dependents. This handles owner chains in both directions without
+// enrolling unrelated CRDs or fetching individual owners.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
@@ -8852,7 +8853,6 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		ownerRefs   []resourceid.Reference
 		resourceKey string
 		typeKey     string
-		existing    bool
 	}
 	var candidates []candidate
 
@@ -8894,6 +8894,17 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		}
 	}
 
+	referencedOwnerUIDs := make(map[types.UID]bool)
+	for _, node := range nodes {
+		for _, refs := range [][]metav1.OwnerReference{node.ownerReferences, node.memberOwnerReferences} {
+			for _, owner := range refs {
+				if owner.UID != "" {
+					referencedOwnerUIDs[owner.UID] = true
+				}
+			}
+		}
+	}
+	resourcesByType := make(map[string][]*unstructured.Unstructured)
 	for _, typeKey := range selectedKeys {
 		selection := selected[typeKey]
 		gvr, kind := selection.gvr, selection.kind
@@ -8908,20 +8919,36 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			continue
 		}
 
+		resourcesByType[typeKey] = resources
 		for _, resource := range resources {
+			if ns := resource.GetNamespace(); ns != "" && !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			for _, owner := range resource.GetOwnerReferences() {
+				if owner.UID != "" {
+					referencedOwnerUIDs[owner.UID] = true
+				}
+			}
+		}
+	}
+
+	for _, typeKey := range selectedKeys {
+		selection := selected[typeKey]
+		gvr, kind := selection.gvr, selection.kind
+		for _, resource := range resourcesByType[typeKey] {
 			ns := resource.GetNamespace()
-			if !opts.MatchesNamespaceFilter(ns) {
+			if ns != "" && !opts.MatchesNamespaceFilter(ns) {
 				continue
 			}
 
 			ownerRefs := resource.GetOwnerReferences()
-			if len(ownerRefs) == 0 {
-				continue
-			}
 
 			name := resource.GetName()
 			resourceKey := resourceid.ResourceKey(gvr.Group, kind, ns, name)
 			nodeID, existing := existingResourceIDs[resourceKey]
+			if !existing && len(ownerRefs) == 0 && !referencedOwnerUIDs[resource.GetUID()] {
+				continue
+			}
 			if !existing {
 				nodeID = fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
 				if existingIDs[nodeID] {
@@ -8941,8 +8968,14 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				}
 				ownerResources = append(ownerResources, resourceid.OwnerReference(ref.APIVersion, ref.Kind, ref.Name, string(ref.UID), ns))
 			}
-			if len(ownerResources) == 0 {
-				continue
+			data := map[string]any{
+				"namespace":  ns,
+				"labels":     resource.GetLabels(),
+				"apiVersion": resource.GetAPIVersion(),
+			}
+			if ns == "" {
+				data[clusterScopedGroupKey] = gvr.Group
+				data[clusterScopedResourceKey] = gvr.Resource
 			}
 			candidates = append(candidates, candidate{
 				nodeID: nodeID,
@@ -8952,27 +8985,84 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 					Kind:   NodeKind(kind),
 					Name:   name,
 					Status: extractGenericStatus(resource),
-					Data: map[string]any{
-						"namespace":  ns,
-						"labels":     resource.GetLabels(),
-						"apiVersion": resource.GetAPIVersion(),
-					},
+					Data:   data,
 				},
 				ownerRefs:   ownerResources,
 				resourceKey: resourceKey,
 				typeKey:     typeKey,
-				existing:    existing,
 			})
 		}
 	}
 
-	// Phase 2: Enroll nodes to a fixed point. Enrollment needs one observed
-	// owner, but edge resolution must wait for every late parent to be enrolled.
+	// Index the complete cached candidate snapshot once. Upward enrollment needs
+	// a nonempty matching UID, so a recreated or merely declared owner cannot
+	// bring an unrelated root into the graph. Existing child enrollment keeps its
+	// observed-owner rules. No per-edge cache/API object lookup is needed.
+	candidateNodes := make([]Node, 0, len(candidates))
+	candidatesByID := make(map[string]candidate, len(candidates))
+	for _, c := range candidates {
+		candidateNodes = append(candidateNodes, c.node)
+		candidatesByID[c.nodeID] = c
+	}
+	candidateIndex := IndexByResource(&Topology{Nodes: candidateNodes})
+	neededParents := make(map[string]bool)
+	var parentQueue []string
+	markParents := func(child Node) {
+		if !child.observed && child.uid == "" && len(child.memberOwnerReferences) == 0 {
+			return
+		}
+		ns, _ := child.Data["namespace"].(string)
+		refs := child.ownerReferences
+		if child.Kind == KindPodGroup && len(child.memberOwnerReferences) > 0 {
+			refs = child.memberOwnerReferences
+		}
+		for _, owner := range refs {
+			if owner.UID == "" {
+				continue
+			}
+			ref := resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), ns)
+			if parent, matches := candidateIndex.ResolveObservedOwner(ref); matches && parent.uid != "" && parent.ID != child.ID {
+				if !neededParents[parent.ID] {
+					neededParents[parent.ID] = true
+					parentQueue = append(parentQueue, parent.ID)
+				}
+			}
+		}
+	}
+	for _, node := range nodes {
+		markParents(node)
+	}
+
+	// Allocate the existing kind budget to owners of already visible nodes and
+	// their ancestors before optional connected children can consume it.
+	enroll := func(c candidate) {
+		nodes = append(nodes, c.node)
+		existingIDs[c.nodeID] = true
+		existingResourceIDs[c.resourceKey] = c.nodeID
+		ownerIndex.nodesByResourceKey[c.resourceKey] = &nodes[len(nodes)-1]
+		crdCounts[c.typeKey]++
+		markParents(c.node)
+	}
+	parentCursor := 0
+	enrollParents := func() {
+		for parentCursor < len(parentQueue) {
+			c := candidatesByID[parentQueue[parentCursor]]
+			parentCursor++
+			if existingResourceIDs[c.resourceKey] != "" || crdCounts[c.typeKey] >= maxPerKind {
+				continue
+			}
+			enroll(c)
+		}
+	}
+	enrollParents()
+
+	// Phase 2: Enroll connected observed nodes to a fixed point. Complete edge
+	// resolution waits until every available parent has been enrolled.
 	for {
 		added := 0
 		remaining := candidates[:0]
 		for _, c := range candidates {
-			if c.existing || crdCounts[c.typeKey] >= maxPerKind {
+			if existingResourceIDs[c.resourceKey] != "" || crdCounts[c.typeKey] >= maxPerKind {
 				continue
 			}
 			connected := false
@@ -8986,11 +9076,8 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				remaining = append(remaining, c)
 				continue
 			}
-			nodes = append(nodes, c.node)
-			existingIDs[c.nodeID] = true
-			existingResourceIDs[c.resourceKey] = c.nodeID
-			ownerIndex.nodesByResourceKey[c.resourceKey] = &nodes[len(nodes)-1]
-			crdCounts[c.typeKey]++
+			enroll(c)
+			enrollParents()
 			added++
 		}
 		candidates = remaining

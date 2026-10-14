@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // PodGroup represents a collection of pods grouped by app label or owner
@@ -210,6 +212,8 @@ type PodDetail struct {
 
 // CreatePodGroupNode creates a Node for a group of pods
 func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
+	var memberOwners []metav1.OwnerReference
+	seenOwners := make(map[resourceid.Reference]bool)
 	podGroupID := fmt.Sprintf("podgroup-%s", strings.ReplaceAll(group.Key, "/", "-"))
 
 	// Determine display name
@@ -224,6 +228,13 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 	groupStatusIssue := ""
 
 	for _, pod := range group.Pods {
+		for _, owner := range pod.OwnerReferences {
+			key := resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), pod.Namespace)
+			if !seenOwners[key] {
+				seenOwners[key] = true
+				memberOwners = append(memberOwners, owner)
+			}
+		}
 		restarts := ComputePodRestarts(pod)
 		totalRestarts += restarts
 
@@ -259,16 +270,20 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 		// which pod goes with which owner.
 		if len(pod.OwnerReferences) > 0 {
 			ref := pod.OwnerReferences[0]
+			if controller := metav1.GetControllerOf(pod); controller != nil {
+				ref = *controller
+			}
 			detail["ownerKey"] = pod.Namespace + "/" + ref.Kind + "/" + ref.Name
 		}
 		podDetails = append(podDetails, detail)
 	}
 
 	return Node{
-		ID:     podGroupID,
-		Kind:   KindPodGroup,
-		Name:   groupName,
-		Status: ComputeGroupStatus(group),
+		memberOwnerReferences: memberOwners,
+		ID:                    podGroupID,
+		Kind:                  KindPodGroup,
+		Name:                  groupName,
+		Status:                ComputeGroupStatus(group),
 		Data: map[string]any{
 			"namespace":     group.Namespace,
 			"ownerKind":     group.GroupKind,

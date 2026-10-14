@@ -24,7 +24,7 @@ import (
 // counts as a Crossplane resource. v1↔v2 path handling (spec.crossplane.x
 // first, fall back to spec.x) lives here.
 
-// Data keys recording a cluster-scoped Crossplane node's exact GVR, so the
+// Data keys recording a cluster-scoped dynamic node's exact GVR, so the
 // topology RBAC strip can authorize it by (group, resource) — the same shape
 // NodeClass uses. Only set on cluster-scoped (empty-namespace) nodes.
 const (
@@ -33,7 +33,7 @@ const (
 )
 
 // ClusterScopedDynamicRBACTuples returns the distinct (group, resource) tuples
-// of cluster-scoped dynamic nodes (Crossplane XRs/MRs) present in the graph.
+// of cluster-scoped dynamic nodes present in the graph.
 // These provider CRD kinds are unbounded, so they cannot be covered by the
 // fixed ClusterScopedKinds denylist; the caller SARs each tuple and passes the
 // authorized set to StripClusterScopedDynamicExcept.

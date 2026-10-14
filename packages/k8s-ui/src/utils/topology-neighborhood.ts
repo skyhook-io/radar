@@ -387,7 +387,7 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
   const neighbors = new Map<string, Set<string>>()
   const controllerByChild = new Map<string, Set<string>>()
   for (const edge of sub.edges) {
-    if (edge.type === 'manages' && edge.ownerController === true && nodeById.has(edge.source)) {
+    if (edge.type === 'manages' && (edge.ownerController === true || edge.ownerAggregation === true && edge.ownerAggregationController === true) && nodeById.has(edge.source)) {
       if (!controllerByChild.has(edge.target)) controllerByChild.set(edge.target, new Set())
       controllerByChild.get(edge.target)!.add(edge.source)
     }
