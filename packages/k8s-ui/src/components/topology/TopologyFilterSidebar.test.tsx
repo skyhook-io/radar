@@ -29,3 +29,13 @@ describe("TopologyFilterSidebar Calico policy category", () => {
     );
   });
 });
+
+it('separates synthetic pod groups from actual PodGroup APIs', () => {
+  const html = renderToString(<TopologyFilterSidebar nodes={[
+    {id:'aggregate',kind:'PodGroup',name:'web',status:'healthy',data:{namespace:'team',podCount:7}},
+    {id:'batch',kind:'PodGroup',name:'batch',status:'healthy',data:{namespace:'team',apiVersion:'scheduling.volcano.sh/v1beta1'}}
+  ]} visibleKinds={new Set(['PodGroup','PodGroup@scheduling.volcano.sh'])} onToggleKind={()=>{}} onShowAll={()=>{}} onHideAll={()=>{}} />)
+  expect(html).toContain('Pod Group')
+  expect(html).toContain('PodGroup · scheduling.volcano.sh')
+  expect(html).toContain('Custom Resources')
+})

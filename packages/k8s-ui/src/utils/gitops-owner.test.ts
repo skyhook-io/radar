@@ -92,4 +92,36 @@ describe('gitOpsOwnerFromRelationships', () => {
       name: 'primary',
     })
   })
+  it('keeps inventory-only GitOps managers available after ownership is separated', () => {
+    expect(gitOpsOwnerFromRelationships({
+      managers: [{ kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', namespace: 'flux-system', name: 'app' }],
+    })).toEqual({ tool: 'fluxcd', kind: 'kustomizations', namespace: 'flux-system', name: 'app' })
+  })
+
+  it('prefers tracking metadata over another logical manager', () => {
+    expect(gitOpsOwnerFromRelationships({
+      managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'tracked' }],
+      managers: [{ kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', namespace: 'flux-system', name: 'other' }],
+    })).toEqual({ tool: 'argocd', kind: 'applications', namespace: 'argocd', name: 'tracked' })
+  })
+
+  it('finds a direct GitOps manager when the owner chain names a workload', () => {
+    expect(gitOpsOwnerFromRelationships({
+      managedBy: [{ kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'web' }],
+      managers: [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'flux-system', name: 'chart' }],
+    })).toEqual({ tool: 'fluxcd', kind: 'helmreleases', namespace: 'flux-system', name: 'chart' })
+  })
+
+  it('recognizes logical managers only in their exact GitOps API group', () => {
+    expect(gitOpsOwnerFromRelationships({
+      managers: [{ kind: 'Application', group: 'other.example.com', namespace: 'shop', name: 'decoy' }],
+    })).toBeNull()
+    expect(gitOpsOwnerFromRelationships({
+      managers: [
+        { kind: 'Application', group: 'other.example.com', namespace: 'shop', name: 'decoy' },
+        { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'real' },
+      ],
+    })).toEqual({ tool: 'argocd', kind: 'applications', namespace: 'argocd', name: 'real' })
+  })
+
 })

@@ -41,7 +41,7 @@ import type { GitOpsStatus } from '../../types/gitops'
 import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
-import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
+import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind, isSyntheticPodGroup } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
@@ -636,7 +636,7 @@ export function WorkloadView({
       ReplicaSet: 4, Pod: 5,
     }
     return neighborhood.nodes
-      .filter((n) => n.kind !== 'Internet' && n.kind !== 'PodGroup')
+      .filter((n) => n.kind !== 'Internet' && !isSyntheticPodGroup(n.kind, n.data?.apiVersion))
       .map((n) => ({
         id: n.id,
         kind: topologyNodeResourceKind(n),

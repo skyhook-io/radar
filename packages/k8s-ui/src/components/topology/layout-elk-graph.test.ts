@@ -220,3 +220,17 @@ describe('applyHierarchicalLayout — rendered displayLevel matches placement', 
     expect(groupNode('group-namespace-app2')?.data.displayLevel).toBe('topology')
   })
 })
+
+it('counts actual PodGroup resources in a namespace chip, excluding display aggregates', async () => {
+  setLayoutEngine('main-thread')
+  const nodes: TopologyNode[] = [deployment('team','web'),
+    {id:'batch',kind:'PodGroup',name:'batch',status:'healthy',data:{namespace:'team',apiVersion:'scheduling.volcano.sh/v1beta1'}},
+    {id:'aggregate',kind:'PodGroup',name:'web',status:'healthy',data:{namespace:'team',podCount:7}},
+  ]
+  const levels = new Map<string,GroupDisplayLevel>([['group-namespace-team','chip']])
+  const collapsed = new Set(['group-namespace-team'])
+  const {elkGraph,groupMap} = buildHierarchicalElkGraph(nodes,[], 'namespace',collapsed,levels,false)
+  const result = await applyHierarchicalLayout(elkGraph,nodes,[],groupMap,'namespace',collapsed,{onSetLevel:()=>{},onCardClick:()=>{}},false,levels)
+  expect(result.error).toBeUndefined()
+  expect(result.nodes.find(n=>n.id==='group-namespace-team')?.data.kindCounts).toEqual({Deployment:1,PodGroup:1})
+})

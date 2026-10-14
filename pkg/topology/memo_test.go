@@ -400,3 +400,12 @@ func TestMemoizer_GetWithIndexKeepsSnapshotPairAndReusesIndex(t *testing.T) {
 		t.Fatal("index paired with another snapshot")
 	}
 }
+
+func TestMemoSeparatesPodGroupingThresholds(t *testing.T) {
+	grouped := DefaultBuildOptions()
+	individual := grouped
+	individual.MaxIndividualPods = 100
+	if memoKey(grouped) == memoKey(individual) {
+		t.Fatal("different Pod grouping thresholds share a cache key")
+	}
+}

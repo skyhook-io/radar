@@ -599,23 +599,37 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}
 
-	if opts.Force {
-		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
-		var patchErr error
-		if opts.Namespace != "" {
-			_, patchErr = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
-		} else {
-			_, patchErr = m.dynClient.Resource(gvr).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
+	var resource dynamic.ResourceInterface = m.dynClient.Resource(gvr)
+	if opts.Namespace != "" {
+		resource = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	}
+
+	// Strip finalizers only from an object that has some: a patch an
+	// admission policy rejects shouldn't block force-deleting, say, a Pod
+	// stuck terminating on a dead node. If the read fails, try the patch.
+	needsStrip := opts.Force
+	if needsStrip {
+		if current, err := resource.Get(ctx, opts.Name, metav1.GetOptions{}); err == nil && len(current.GetFinalizers()) == 0 {
+			needsStrip = false
 		}
+	}
+	if needsStrip {
+		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
+		_, patchErr := resource.Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
 		if patchErr != nil && !apierrors.IsNotFound(patchErr) {
 			if apierrors.IsForbidden(patchErr) {
 				return fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
 			}
-			log.Printf("[delete] Failed to strip finalizers from %s %s/%s: %v", opts.Kind, opts.Namespace, opts.Name, patchErr)
+			// Deleting with the finalizers still in place would let their
+			// controllers run the teardown force delete is meant to skip.
+			return fmt.Errorf("force delete could not strip finalizers: %w", patchErr)
 		}
 	}
 
-	deleteOpts := metav1.DeleteOptions{}
+	// Cascade like kubectl. Left unset, the API server's per-kind default
+	// applies, and batch/v1 Jobs default to orphaning their Pods.
+	propagation := metav1.DeletePropagationBackground
+	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &propagation}
 	if opts.Force {
 		gracePeriod := int64(0)
 		deleteOpts.GracePeriodSeconds = &gracePeriod
@@ -632,18 +646,6 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 			return nil
 		}
 		return fmt.Errorf("failed to delete resource: %w", err)
-	}
-
-	if !opts.Force {
-		var obj *unstructured.Unstructured
-		if opts.Namespace != "" {
-			obj, _ = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Get(ctx, opts.Name, metav1.GetOptions{})
-		} else {
-			obj, _ = m.dynClient.Resource(gvr).Get(ctx, opts.Name, metav1.GetOptions{})
-		}
-		if obj != nil && obj.GetDeletionTimestamp() != nil && len(obj.GetFinalizers()) > 0 {
-			return fmt.Errorf("resource is stuck in Terminating state due to finalizers — use force delete to remove it")
-		}
 	}
 
 	return nil

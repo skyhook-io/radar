@@ -35,3 +35,21 @@ describe('workload staged-policy projection', () => {
     expect(html).not.toContain('Network policies')
   })
 })
+
+it('keeps an API-backed PodGroup in the YAML rail and omits the display aggregate', () => {
+  const html = renderToStaticMarkup(<WorkloadView
+    kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload}
+    activeTab="yaml" renderRelatedYaml={() => <div>related manifest</div>}
+    topology={{ nodes: [
+      {id:'deployment/demo/web',kind:'Deployment',name:'web',status:'healthy',data:{namespace:'demo',apiVersion:'apps/v1'}},
+      {id:'actual-batch',kind:'PodGroup',name:'actual-batch',status:'healthy',data:{namespace:'demo',apiVersion:'scheduling.volcano.sh/v1beta1'}},
+      {id:'display-group',kind:'PodGroup',name:'display-group',status:'healthy',data:{namespace:'demo',podCount:7}},
+    ], edges: [
+      {id:'a',source:'deployment/demo/web',target:'actual-batch',type:'manages',ownerController:true},
+      {id:'b',source:'deployment/demo/web',target:'display-group',type:'manages',ownerAggregation:true},
+    ] }}
+  />)
+  expect(html).toContain('actual-batch')
+  expect(html).toContain('PodGroup')
+  expect(html).not.toContain('display-group')
+})

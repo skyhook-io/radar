@@ -4403,10 +4403,6 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		if strings.Contains(err.Error(), "stuck in Terminating state") {
-			s.writeError(w, http.StatusConflict, err.Error())
-			return
-		}
 		log.Printf("[delete] Failed to delete %s %s/%s (force=%v): %v", kind, namespace, name, force, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -4422,7 +4418,7 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	kind := chi.URLParam(r, "kind")
+	kind := normalizeKind(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 	group := r.URL.Query().Get("group")
@@ -4430,15 +4426,41 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		namespace = ""
 	}
 
-	cachedTopo := s.broadcaster.GetCachedTopology()
+	if status, message, ok := s.preflightResourceGet(r, kind, namespace, name, group); !ok {
+		s.writeError(w, status, message)
+		return
+	}
+	cachedTopo, cachedIndex := s.broadcaster.GetCachedTopologyWithIndex()
 	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	preview := topology.GetCascadeDeletePreview(topology.ResourceRef{
+	preview := topology.GetCascadeDeletePreviewWithIndex(topology.ResourceRef{
 		Kind:      kind,
 		Namespace: namespace,
 		Name:      name,
 		Group:     group,
-	}, cachedTopo, dp)
+	}, cachedTopo, dp, cachedIndex)
 
+	if checker := s.newRelationshipReadChecker(r); checker != nil {
+		filter := func(field string, refs []topology.ResourceRef) []topology.ResourceRef {
+			visible := make([]topology.ResourceRef, 0, len(refs))
+			withheld := false
+			for _, ref := range refs {
+				if checker.CanRead(r.Context(), ref.Group, ref.Kind, ref.Namespace) {
+					visible = append(visible, ref)
+				} else {
+					withheld = true
+				}
+			}
+			if withheld {
+				preview.Withheld = append(preview.Withheld, field)
+			}
+			return visible
+		}
+		preview.Dependents = filter("dependents", preview.Dependents)
+		preview.PossibleDependents = filter("possibleDependents", preview.PossibleDependents)
+		if preview.ControllerTeardown != nil {
+			preview.ControllerTeardown.Resources = filter("controllerTeardown.resources", preview.ControllerTeardown.Resources)
+		}
+	}
 	s.writeJSON(w, preview)
 }
 

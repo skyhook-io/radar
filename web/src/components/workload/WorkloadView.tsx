@@ -392,6 +392,14 @@ function useActionsBarProps(
     cascadeDependents: cascadePreview?.dependents,
     cascadeLoading,
     cascadeRootResolved: cascadeError ? false : cascadePreview?.rootResolved,
+    cascadeDetail: cascadePreview
+      ? {
+          basis: cascadePreview.basis,
+          withheld: cascadePreview.withheld,
+          possibleDependents: cascadePreview.possibleDependents,
+          controllerTeardown: cascadePreview.controllerTeardown,
+        }
+      : undefined,
     onRestart: rolloutAllows('restart')
       ? (params: Parameters<typeof restartWorkloadMutation.mutate>[0]) =>
           restartWorkloadMutation.mutate(params)

@@ -234,6 +234,11 @@ func (a *topologyDynamicProvider) Get(gvr schema.GroupVersionResource, namespace
 	return a.dynCache.Get(gvr, namespace, name)
 }
 
+// GetWatched reads from existing informers only; it never starts one.
+func (a *topologyDynamicProvider) GetWatched(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	return a.dynCache.GetWatched(gvr, namespace, name)
+}
+
 func (a *topologyDynamicProvider) GetWatchedResources() []schema.GroupVersionResource {
 	return a.dynCache.GetWatchedResources()
 }

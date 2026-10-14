@@ -966,6 +966,7 @@ func cloneTopology(topo *topology.Topology) *topology.Topology {
 	if topo == nil {
 		return nil
 	}
+	// Copy the whole value so private ownership evidence follows the public graph.
 	clone := *topo
 	clone.Nodes = append([]topology.Node(nil), topo.Nodes...)
 	clone.Edges = append([]topology.Edge(nil), topo.Edges...)

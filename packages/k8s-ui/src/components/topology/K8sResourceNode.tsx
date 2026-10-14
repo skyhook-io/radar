@@ -507,6 +507,7 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       return storage ? `${storage} (${phase})` : phase
     }
     case "PodGroup": {
+      if (nodeData.apiVersion) return (nodeData.statusSummary as string) || ""
       const count = (nodeData.podCount as number) || 0;
       const healthy = (nodeData.healthy as number) || 0;
       const unhealthy = (nodeData.unhealthy as number) || 0;
@@ -595,7 +596,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
       : null
   const clusterLocal = kind === 'KnativeService' && nodeData.visibility === 'cluster-local'
   const isInternet = kind === 'Internet'
-  const isPodGroup = kind === 'PodGroup'
+  const isPodGroup = kind === 'PodGroup' && !nodeData.apiVersion
   const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'ServiceAccount' || kind === 'SealedSecret' || kind === 'ServiceMonitor' || kind === 'PodMonitor' || kind === 'HorizontalPodAutoscaler'
   const canExpand = isPodGroup && onExpand && !isExpanded
   const canCollapse = isPodGroup && onCollapse && isExpanded

@@ -21,6 +21,8 @@ import (
 // Build once via IndexByResource(topo). Pass to GetRelationshipsWithIndex on
 // each call. Lookups are read-only and goroutine-safe; mutation is not.
 type RelationshipsIndex struct {
+	groupedPods        map[string]*podOwnershipSnapshot
+	groupedPodsByOwner map[string][]string
 	byNodeID           map[string]*nodeEdgeSlots
 	nodesByID          map[string]*Node
 	nodesByResourceKey map[string]*Node
@@ -91,6 +93,7 @@ func IndexByResource(topo *Topology) *RelationshipsIndex {
 			slot.incoming = append(slot.incoming, e)
 		}
 	}
+	idx.indexGroupedPods(topo)
 	return idx
 }
 
@@ -124,6 +127,9 @@ func (r *RelationshipsIndex) ResolveObservedOwner(ref resourceid.Reference) (*No
 		return nil, false
 	}
 	node := r.nodesByResourceKey[resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)]
+	if node == nil && ref.Group == "" && ref.Kind == "Pod" {
+		node = r.nodeForID("pod/" + ref.Namespace + "/" + ref.Name)
+	}
 	if node == nil && ref.Namespace != "" {
 		node = r.nodesByResourceKey[resourceid.ResourceKey(ref.Group, ref.Kind, "", ref.Name)]
 	}
@@ -146,9 +152,9 @@ func (r *RelationshipsIndex) EdgesFor(nodeID string) (incoming, outgoing []Edge)
 	}
 	slot := r.byNodeID[nodeID]
 	if slot == nil {
-		return nil, nil
+		return r.withGroupedPodEdges(nodeID, nil, nil)
 	}
-	return slot.incoming, slot.outgoing
+	return r.withGroupedPodEdges(nodeID, slot.incoming, slot.outgoing)
 }
 
 // edgesForNode returns incoming/outgoing edges for nodeID, preferring the
@@ -171,9 +177,15 @@ func edgesForNode(topo *Topology, idx *RelationshipsIndex, nodeID string) (incom
 	return incoming, outgoing
 }
 
-// GetCascadeDeletePreview walks topology management edges to approximate the
-// resources Kubernetes may garbage-collect with root.
+// GetCascadeDeletePreview walks observed owner references to find the
+// resources Kubernetes garbage-collects with root. Only objects in the
+// topology are visible to it.
 func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvider) *CascadeDeletePreview {
+	return GetCascadeDeletePreviewWithIndex(root, topo, dp, nil)
+}
+
+// GetCascadeDeletePreviewWithIndex reuses a shared immutable relationship index.
+func GetCascadeDeletePreviewWithIndex(root ResourceRef, topo *Topology, dp DynamicProvider, index *RelationshipsIndex) *CascadeDeletePreview {
 	preview := &CascadeDeletePreview{
 		Root:       root,
 		Dependents: []ResourceRef{},
@@ -197,12 +209,12 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 		}
 		rootID = strings.ToLower(KindForGVK(resolvedKind, root.Group)) + "/" + root.Namespace + "/" + root.Name
 	}
-	nodeByID := make(map[string]*Node, len(topo.Nodes))
-	for i := range topo.Nodes {
-		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	if index == nil {
+		index = IndexByResource(topo)
 	}
 
-	rootNode, ok := nodeByID[rootID]
+	rootNode := index.nodeForID(rootID)
+	ok := rootNode != nil
 	if root.Group != "" {
 		if ok && !nodeMatchesAPIGroup(rootNode, root.Group) {
 			ok = false
@@ -236,42 +248,101 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 		preview.Root = *resolved
 	}
 	preview.RootResolved = true
+	preview.Basis = "ownerReferences"
+	preview.ControllerTeardown = controllerTeardown(rootNode, topo, dp)
 
-	// Build adjacency list for EdgeManages edges (source → targets)
-	manages := make(map[string][]string)
+	// Garbage collection follows owner references only, and deletes a
+	// dependent once none of its owners remain: a dependent that another live
+	// owner still holds survives. An owner reference Radar can't resolve to an
+	// observed object may name a live owner, so such a dependent is only a
+	// possible deletion, as is anything that depends on it.
+	owned := make(map[string][]string)
+	owners := make(map[string][]string)
 	for _, edge := range topo.Edges {
-		if edge.Type == EdgeManages {
-			manages[edge.Source] = append(manages[edge.Source], edge.Target)
+		if edge.verifiedOwner() {
+			owned[edge.Source] = append(owned[edge.Source], edge.Target)
+			owners[edge.Target] = append(owners[edge.Target], edge.Source)
 		}
 	}
+	for parent, pods := range index.groupedPodsByOwner {
+		owned[parent] = append(owned[parent], pods...)
+	}
+	const (
+		survives = iota
+		possible
+		certain
+	)
+	deleted := map[string]int{rootID: certain}
+	fate := func(child *Node) int {
+		result := certain
+		for _, owner := range owners[child.ID] {
+			switch deleted[owner] {
+			case survives:
+				return survives
+			case possible:
+				result = possible
+			}
+		}
+		namespace, _ := child.Data["namespace"].(string)
+		for _, owner := range child.ownerReferences {
+			if owner.APIVersion == "" || owner.Kind == "" || owner.Name == "" {
+				continue
+			}
+			parent, current := index.ResolveObservedOwner(resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace))
+			switch {
+			case parent == nil || !parent.observed && parent.uid == "":
+				// Missing, or only a declared stub Radar hasn't observed.
+				result = possible
+			case !current:
+				// The named incarnation is gone; garbage collection ignores it.
+			case deleted[parent.ID] == possible:
+				result = possible
+			case deleted[parent.ID] != certain:
+				return survives
+			}
+		}
+		return result
+	}
 
-	// BFS from root node
-	visited := map[string]bool{rootID: true}
 	queue := []string{rootID}
-	var dependents []ResourceRef
-
+	var order []string
+	var dependents, possibleDependents []ResourceRef
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 
-		for _, targetID := range manages[current] {
-			if visited[targetID] {
+		for _, targetID := range owned[current] {
+			child := index.nodeForID(targetID)
+			if child == nil || deleted[targetID] == certain {
 				continue
 			}
-			visited[targetID] = true
-
-			ref := resourceRefForNode(nodeByID[targetID], dp)
-			if ref == nil {
+			outcome := fate(child)
+			if outcome == survives || outcome == deleted[targetID] {
 				continue
 			}
-			dependents = append(dependents, *ref)
+			if deleted[targetID] == survives {
+				order = append(order, targetID)
+			}
+			deleted[targetID] = outcome
 			queue = append(queue, targetID)
+		}
+	}
+	for _, id := range order {
+		ref := resourceRefForNode(index.nodeForID(id), dp)
+		if ref == nil {
+			continue
+		}
+		if deleted[id] == certain {
+			dependents = append(dependents, *ref)
+		} else {
+			possibleDependents = append(possibleDependents, *ref)
 		}
 	}
 
 	if dependents != nil {
 		preview.Dependents = dependents
 	}
+	preview.PossibleDependents = possibleDependents
 
 	return preview
 }
@@ -388,8 +459,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if lookupIndex == nil {
 		lookupIndex = IndexByResource(topo)
 	}
-	nodeByID := lookupIndex.nodesByID
-	directNode, directExists := nodeByID[nodeID]
+	directNode := lookupIndex.nodeForID(nodeID)
+	directExists := directNode != nil
 	resourceKind := objectKind
 	if resourceKind == "" {
 		resourceKind = normalizeKindWithGroup(kind, objectGroup, dp)
@@ -412,11 +483,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 	incomingEdges, outgoingEdges := edgesForNode(topo, lookupIndex, nodeID)
 	refForNodeID := func(id string) *ResourceRef {
-		return resourceRefForNode(nodeByID[id], dp)
+		return resourceRefForNode(lookupIndex.nodeForID(id), dp)
 	}
 
 	rel := &Relationships{}
-	if node := nodeByID[nodeID]; node != nil {
+	if node := lookupIndex.nodeForID(nodeID); node != nil {
 		rel.IstioServiceDomain, _ = node.Data["istioServiceDomain"].(string)
 	}
 	kindLower := strings.ToLower(kind)
@@ -430,8 +501,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 		switch edge.Type {
 		case EdgeManages:
-			// This resource manages/owns the target
-			rel.Children = append(rel.Children, *ref)
+			switch {
+			case edge.verifiedOwner():
+				rel.Children = append(rel.Children, *ref)
+			case edge.SkipIfKindVisible == "" && edge.OwnerAggregation == nil:
+				rel.Manages = append(rel.Manages, *ref)
+			}
 		case EdgeExposes, EdgeRoutesTo:
 			if ref.Kind == "Pod" && ref.Group == "" {
 				rel.Pods = append(rel.Pods, *ref)
@@ -468,7 +543,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			if isConfigurationDependency(refForNodeID(edge.Source)) {
 				rel.Dependents = appendResourceRef(rel.Dependents, *ref)
 			}
-			if reflectionEdge(edge, nodeByID) {
+			if reflectionEdge(edge, lookupIndex.nodesByID) {
 				if rel.Reflection == nil {
 					rel.Reflection = &ReflectionRelationships{}
 				}
@@ -488,9 +563,14 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 		switch edge.Type {
 		case EdgeManages:
-			// Preserve the observed controller when multiple parents are present.
-			if preferredOwner != nil && edge.Source == preferredOwner.Source {
-				rel.Owner = ref
+			switch {
+			case edge.verifiedOwner():
+				// Preserve the observed controller when multiple parents are present.
+				if preferredOwner != nil && edge.Source == preferredOwner.Source {
+					rel.Owner = ref
+				}
+			case edge.SkipIfKindVisible == "" && edge.OwnerAggregation == nil:
+				rel.Managers = append(rel.Managers, *ref)
 			}
 		case EdgeExposes:
 			if isServiceEntrypointRoute(ref) {
@@ -559,12 +639,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			if isConfigurationDependency(ref) {
 				rel.Dependencies = appendResourceRef(rel.Dependencies, *ref)
 			}
-			if reflectionEdge(edge, nodeByID) {
+			if reflectionEdge(edge, lookupIndex.nodesByID) {
 				if rel.Reflection == nil {
 					rel.Reflection = &ReflectionRelationships{}
 				}
 				rel.Reflection.Source = ref
-				rel.Reflection.SourceResourceVersion, _ = nodeByID[edge.Source].Data["resourceVersion"].(string)
+				rel.Reflection.SourceResourceVersion, _ = lookupIndex.nodeForID(edge.Source).Data["resourceVersion"].(string)
 			}
 			switch ref.Kind {
 			case "ServiceAccount":
@@ -598,7 +678,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				continue
 			}
 			for _, edge := range incomingEdges {
-				if edge.Type == EdgeManages && edge.Source == node.ID {
+				if edge.verifiedOwner() && edge.Source == node.ID {
 					rel.Owner = refForNodeID(node.ID)
 					break
 				}
@@ -622,7 +702,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				childID := buildNodeID(child.Kind, child.Namespace, child.Name, dp)
 				_, childOutgoing := edgesForNode(topo, lookupIndex, childID)
 				for _, edge := range childOutgoing {
-					if edge.Type != EdgeManages {
+					if !edge.verifiedOwner() {
 						continue
 					}
 					podRef := refForNodeID(edge.Target)
@@ -640,7 +720,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name, dp)
 			ownerIncoming, _ := edgesForNode(topo, lookupIndex, ownerID)
 			for _, edge := range ownerIncoming {
-				if edge.Type != EdgeManages {
+				if !edge.verifiedOwner() {
 					continue
 				}
 				deployRef := refForNodeID(edge.Source)
@@ -660,9 +740,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			pvcs, _ := provider.PersistentVolumeClaims()
 			for _, pvc := range pvcs {
 				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
+					// Bound, not owned: the claim's storage is the volume.
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
 					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
+					rel.StorageRefs = append(rel.StorageRefs, pvRef)
 					break
 				}
 			}
@@ -687,9 +768,11 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			pvs, _ := provider.PersistentVolumes()
 			for _, pv := range pvs {
 				if pv.Spec.StorageClassName == name {
+					// The reverse of a volume's Configuration: volumes name
+					// their class; the class owns none of them.
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
+					rel.Consumers = append(rel.Consumers, pvRef)
 				}
 			}
 		case "node", "nodes":
@@ -832,18 +915,18 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if m, ok := queriedObj.(metav1.Object); ok {
 		managedByMeta = m
 	}
-	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
+	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, lookupIndex); len(mb) > 0 {
 		rel.ManagedBy = mb
 	}
 
 	// Return nil if no relationships found
 	// Collected without per-append checks: a PVC shared by thousands of
 	// workloads would make a linear duplicate scan quadratic.
-	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.RoutedFrom, &rel.Protects, &rel.HealthChecks, &rel.StagedPolicies, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+	for _, refs := range []*[]ResourceRef{&rel.Manages, &rel.Managers, &rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.RoutedFrom, &rel.Protects, &rel.HealthChecks, &rel.StagedPolicies, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
 		*refs = uniqueResourceRefs(*refs)
 	}
 
-	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
+	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Manages) == 0 && len(rel.Managers) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
@@ -912,6 +995,13 @@ func resourceRefForNodeID(nodeID string, topo *Topology, dp DynamicProvider) *Re
 func resourceRefForNode(node *Node, dp DynamicProvider) *ResourceRef {
 	if node == nil {
 		return nil
+	}
+	if node.Kind == KindPodGroup {
+		if version, _ := node.Data["apiVersion"].(string); version == "" {
+			return nil
+		}
+		namespace, _ := node.Data["namespace"].(string)
+		return &ResourceRef{Kind: "PodGroup", Namespace: namespace, Name: node.Name, Group: nodeGroup(node)}
 	}
 	ref := parseNodeID(node.ID, dp)
 	if ref == nil {

@@ -1,3 +1,4 @@
+import { isSyntheticPodGroup } from '../../utils/topology-neighborhood'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
@@ -461,7 +462,7 @@ export function TopologyGraph({
     topoEdges: TopologyEdge[],
     podGroupId: string
   ): { nodes: TopologyNode[]; edges: TopologyEdge[] } => {
-    const podGroupNode = topoNodes.find(n => n.id === podGroupId && n.kind === 'PodGroup')
+    const podGroupNode = topoNodes.find(n => n.id === podGroupId && isSyntheticPodGroup(n.kind, n.data?.apiVersion))
     if (!podGroupNode || !podGroupNode.data.pods) {
       return { nodes: topoNodes, edges: topoEdges }
     }
@@ -762,8 +763,8 @@ export function TopologyGraph({
       // actually carry a per-pod array are expandable — summary-only orphan
       // nodes (summary mode) hold counts only, so they get no expand affordance.
       const nodesWithHandlers = positionedNodes.map(node => {
-        const isPodGroup = node.data?.kind === 'PodGroup'
         const nodeData = node.data?.nodeData as Record<string, unknown> | undefined
+        const isPodGroup = isSyntheticPodGroup(node.data?.kind as string, nodeData?.apiVersion as string | undefined)
         // The per-pod array lives on the backend node data (nodeData.pods).
         // Summary-only orphan nodes omit it, so they get no expand affordance.
         const podsArray = nodeData?.pods
@@ -967,7 +968,7 @@ export function TopologyGraph({
         if (!topologyNode) return node
         const nodeData = topologyNode.data as Record<string, unknown>
         const pods = nodeData.pods
-        const isExpandablePodGroup = topologyNode.kind === 'PodGroup' && Array.isArray(pods) && pods.length > 0
+        const isExpandablePodGroup = isSyntheticPodGroup(topologyNode.kind, topologyNode.data?.apiVersion) && Array.isArray(pods) && pods.length > 0
         const expandedFromGroup = nodeData.expandedFromGroup as string | undefined
         const onExpand = isExpandablePodGroup ? handleExpandPodGroup : undefined
         const onCollapse = expandedFromGroup ? handleCollapsePodGroup : undefined

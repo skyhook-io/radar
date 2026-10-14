@@ -11,7 +11,7 @@ import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnose
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { resetNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
-import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
+import { topologyNodeResourceKind, topologyKindFilterKey, isSyntheticPodGroup } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
@@ -1383,11 +1383,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (!topology?.nodes) return
     const newKinds: NodeKind[] = []
     for (const node of topology.nodes) {
-      const k = node.kind as string
+      const k = topologyKindFilterKey(node) as string
       if (!allNodeKindsSet.has(k) && !seededCRDKindsRef.current.has(k)) {
         seededCRDKindsRef.current.add(k)
         if (!CRD_HIDDEN_BY_DEFAULT.has(k)) {
-          newKinds.push(node.kind)
+          newKinds.push(topologyKindFilterKey(node))
         }
       }
     }
@@ -1409,7 +1409,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const resourceKind = topologyNodeResourceKind(node)
     // Radar's topology PodGroup is a virtual pod aggregate. A Kubernetes
     // scheduling.k8s.io PodGroup carries apiVersion and is a real resource.
-    if (node.kind === 'PodGroup' && !nodeGroup) return
+    if (isSyntheticPodGroup(node.kind, node.data?.apiVersion)) return
 
     const namespace = (node.data.namespace as string) || ''
     // GitOps CRs (Application/Kustomization/HelmRelease/etc.) have a dedicated
@@ -1712,7 +1712,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Filter by namespace (client-side) and by visible kinds
     const nsSet = namespaces.length > 0 ? new Set(namespaces) : null
     const filteredNodes = displayedTopology.nodes.filter(node =>
-      effectiveKinds.has(node.kind) && isInNamespaceScope(node, nsSet)
+      effectiveKinds.has(topologyKindFilterKey(node)) && isInNamespaceScope(node, nsSet)
     )
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
 
@@ -1797,7 +1797,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const allKinds = new Set<NodeKind>(ALL_NODE_KINDS)
     if (topology?.nodes) {
       for (const node of topology.nodes) {
-        allKinds.add(node.kind)
+        allKinds.add(topologyKindFilterKey(node))
       }
     }
     setVisibleKinds(allKinds)

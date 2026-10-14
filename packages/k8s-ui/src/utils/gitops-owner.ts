@@ -1,4 +1,4 @@
-// Map a resource's server-side `Relationships.managedBy` to a navigable
+// Map server-side GitOps management evidence to a navigable
 // GitOps owner ref, used by the drawer to render the "Managed by <app>" chip.
 //
 // The detection (label/annotation parsing, Argo tracking-id decoding, Flux
@@ -25,10 +25,9 @@ const ARGO_APPLICATION_GROUP = 'argoproj.io'
 const FLUX_KUSTOMIZE_GROUP = 'kustomize.toolkit.fluxcd.io'
 const FLUX_HELM_GROUP = 'helm.toolkit.fluxcd.io'
 
-// gitOpsOwnerFromRelationships reads relationships.managedBy[0] and maps it to
-// a GitOpsOwnerRef when the manager is a GitOps controller. Returns null when
-// the manager is a native K8s owner (Deployment, ReplicaSet, etc.), a plain
-// Helm release, or when no manager is reported.
+// gitOpsOwnerFromRelationships maps tracking metadata or logical managers to
+// a GitOpsOwnerRef. Tracking metadata has precedence; logical management
+// remains independent of the Kubernetes owner chain.
 //
 // Old radar binaries (pre-T2) emit no managedBy field; this returns null in
 // that case and the drawer silently skips the chip — natural pressure to
@@ -36,9 +35,16 @@ const FLUX_HELM_GROUP = 'helm.toolkit.fluxcd.io'
 export function gitOpsOwnerFromRelationships(
   rel: Relationships | undefined | null,
 ): GitOpsOwnerRef | null {
-  const refs = rel?.managedBy
-  if (!refs || refs.length === 0) return null
-  return gitOpsOwnerFromRef(refs[0])
+  const trackedManager = rel?.managedBy?.[0]
+  if (trackedManager) {
+    const owner = gitOpsOwnerFromRef(trackedManager)
+    if (owner) return owner
+  }
+  for (const manager of rel?.managers ?? []) {
+    const owner = gitOpsOwnerFromRef(manager)
+    if (owner) return owner
+  }
+  return null
 }
 
 /** A manager ref (relationships.managedBy, a workspace's managedBy) as a GitOps owner, or null when the manager is not a GitOps controller. */

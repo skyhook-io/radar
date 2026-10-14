@@ -21,7 +21,7 @@ import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
 import { classifyDiffLine } from './UnifiedDiff'
 import { Tooltip } from '../ui/Tooltip'
-import { ForceDeleteConfirmDialog, type CascadeDependent } from '../ui/ForceDeleteConfirmDialog'
+import { ForceDeleteConfirmDialog, type CascadeDependent, type CascadeDetail } from '../ui/ForceDeleteConfirmDialog'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { AlertBanner } from '../ui/drawer-components'
 import { DialogPortal } from '../ui/DialogPortal'
@@ -81,6 +81,7 @@ interface ResourceActionsBarProps {
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
   cascadeRootResolved?: boolean
+  cascadeDetail?: CascadeDetail
 
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
@@ -162,7 +163,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved,
+  onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadeDetail,
   onRestart, isRestarting,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
@@ -689,6 +690,7 @@ export function ResourceActionsBar({
         cascadeDependents={cascadeDependents}
         cascadeLoading={cascadeLoading}
         cascadeRootResolved={cascadeRootResolved}
+        cascadeDetail={cascadeDetail}
       />
 
       {onLoadImages && onSetImages && (

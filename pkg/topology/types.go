@@ -187,13 +187,15 @@ type Edge struct {
 	Target        string   `json:"target"`
 	Type          EdgeType `json:"type"`
 	Label         string   `json:"label,omitempty"`
+	// OwnerAggregation is present and true only for member-backed display ancestry.
+	// It never makes the group a Kubernetes resource or a garbage-collection target.
+	OwnerAggregation           *bool `json:"ownerAggregation,omitempty"`
+	OwnerAggregationController *bool `json:"ownerAggregationController,omitempty"`
 	// OwnerController is set only for an observed metadata owner reference.
-	OwnerAggregation           *bool  `json:"ownerAggregation,omitempty"` // Present and true only for member-backed display ancestry.
-	OwnerAggregationController *bool  `json:"ownerAggregationController,omitempty"`
-	OwnerController            *bool  `json:"ownerController,omitempty"`
-	Partial                    bool   `json:"partial,omitempty"`
-	SkipIfKindVisible          string `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
-	PolicyEffect               string `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
+	OwnerController   *bool  `json:"ownerController,omitempty"`
+	Partial           bool   `json:"partial,omitempty"`
+	SkipIfKindVisible string `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
+	PolicyEffect      string `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
 }
 
 // PolicyEffect constants for edge annotation
@@ -206,6 +208,7 @@ const (
 // Topology represents the complete graph
 type Topology struct {
 	podConsumers            map[string][]ResourceRef
+	groupedPods             []podOwnershipSnapshot
 	Nodes                   []Node   `json:"nodes"`
 	Edges                   []Edge   `json:"edges"`
 	Warnings                []string `json:"warnings,omitempty"`                // Warnings about resources that failed to load
@@ -464,9 +467,14 @@ type Relationships struct {
 	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 
-	Owner           *ResourceRef  `json:"owner,omitempty"`      // Parent via ownerReference (manages edge)
-	Deployment      *ResourceRef  `json:"deployment,omitempty"` // Grandparent Deployment (for Pods owned by ReplicaSets)
-	Children        []ResourceRef `json:"children,omitempty"`   // Resources this owns (manages edge)
+	Owner      *ResourceRef  `json:"owner,omitempty"`      // Observed owner reference, preferring the controller
+	Deployment *ResourceRef  `json:"deployment,omitempty"` // Grandparent Deployment (for Pods owned by ReplicaSets)
+	Children   []ResourceRef `json:"children,omitempty"`   // Resources whose observed owner references name this
+	// Manages and Managers are management links without an owner reference:
+	// GitOps inventory, class bindings, label-inferred releases. They never
+	// imply ownership or garbage collection.
+	Manages         []ResourceRef `json:"manages,omitempty"`
+	Managers        []ResourceRef `json:"managers,omitempty"`
 	Services        []ResourceRef `json:"services,omitempty"`   // Core Services selecting/exposing this
 	Ingresses       []ResourceRef `json:"ingresses,omitempty"`  // Ingresses routing to this
 	Gateways        []ResourceRef `json:"gateways,omitempty"`   // Gateway API Gateways routing to this
@@ -541,9 +549,19 @@ type SecretCertificateInfo struct {
 // CascadeDeletePreview represents all resources that will be garbage-collected
 // when a parent resource is deleted via Kubernetes owner reference cascade.
 type CascadeDeletePreview struct {
+	Withheld     []string      `json:"withheld,omitempty"`
 	Root         ResourceRef   `json:"root"`
 	RootResolved bool          `json:"rootResolved"`
 	Dependents   []ResourceRef `json:"dependents"`
+	// PossibleDependents go too unless an owner reference Radar couldn't
+	// resolve names an owner that is still live.
+	PossibleDependents []ResourceRef `json:"possibleDependents,omitempty"`
+	// Basis is "ownerReferences" when the dependents are garbage-collection
+	// results; older servers walked every management link and omit it.
+	Basis string `json:"basis,omitempty"`
+	// ControllerTeardown is what a GitOps controller deletes on top of
+	// garbage collection, when its deletion policy prunes or uninstalls.
+	ControllerTeardown *ControllerTeardown `json:"controllerTeardown,omitempty"`
 }
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships

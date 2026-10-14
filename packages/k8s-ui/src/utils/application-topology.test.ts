@@ -196,7 +196,7 @@ describe('collapseStableReplicaSets', () => {
     ],
     edges: [
       { id: 'deployment-rs', source: 'deployment/default/api', target: 'replicaset/default/api-abc', type: 'manages' },
-      { id: 'rs-pod', source: 'replicaset/default/api-abc', target: 'pod/default/api-1', type: 'manages' },
+      { id: 'rs-pod', source: 'replicaset/default/api-abc', target: 'pod/default/api-1', type: 'manages', ownerController: true },
     ],
   }
 
@@ -205,6 +205,8 @@ describe('collapseStableReplicaSets', () => {
     expect(result.nodes.map((node) => node.kind)).toEqual(['Deployment', 'Pod'])
     expect(result.edges).toContainEqual(expect.objectContaining({ source: 'deployment/default/api', target: 'pod/default/api-1' }))
     expect(result.nodes[0].data).toMatchObject({ replicaSetCount: 1, replicaSetsCollapsed: true })
+    // The Deployment is not the Pod's owner reference.
+    expect(result.edges.find((edge) => edge.target === 'pod/default/api-1')?.ownerController).toBeUndefined()
   })
 
   it('shows the ReplicaSet when the developer expands it', () => {
@@ -220,4 +222,23 @@ describe('collapseStableReplicaSets', () => {
     }
     expect(collapseStableReplicaSets(unhealthy, new Set()).nodes.map((node) => node.kind)).toContain('ReplicaSet')
   })
+})
+
+it('matches real PodGroup APIs to inventory while keeping display groups synthetic', () => {
+  const runtime: Topology = {
+    nodes: [
+      { id: 'real-batch', kind: 'PodGroup', name: 'batch', status: 'healthy', data: { namespace: 'default', apiVersion: 'scheduling.volcano.sh/v1beta1' } },
+      { id: 'display-batch', kind: 'PodGroup', name: 'display', status: 'healthy', data: { namespace: 'default', podCount: 7 } },
+    ],
+    edges: [],
+  }
+  const source = deploymentInventoryFromGitOps({
+    root: inventory().root,
+    edges: [],
+    nodes: [inventory().root, { id: 'declared-batch', ref: { group: 'scheduling.volcano.sh', kind: 'PodGroup', namespace: 'default', name: 'batch' }, role: 'declared', tool: 'argocd' }],
+  })!
+  const result = layerDeploymentInventory(runtime, source, 'Argo CD')
+  expect(result.managedRuntimeCount).toBe(1)
+  expect(result.managedOnly).toEqual([])
+  expect(result.runtimeOnlyCount).toBe(0)
 })

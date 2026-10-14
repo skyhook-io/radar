@@ -10,6 +10,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { NodeKind, TopologyNode } from '../../types'
+import { topologyKindFilterKey } from '../../utils/topology-neighborhood'
 import { getTopologyIcon } from '../../utils/resource-icons'
 
 // Resource kind configuration
@@ -152,7 +153,8 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
   const kindCounts = useMemo(() => {
     const counts = new Map<NodeKind, number>()
     for (const node of nodes) {
-      counts.set(node.kind, (counts.get(node.kind) || 0) + 1)
+      const key = topologyKindFilterKey(node)
+      counts.set(key, (counts.get(key) || 0) + 1)
     }
     return counts
   }, [nodes])
@@ -171,9 +173,9 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
       if (!knownKindSet.has(kind) && kind !== 'Internet') {
         dynamicKinds.push({
           kind: kind as NodeKind,
-          label: kind, // Use the kind name as label
+          label: kind.startsWith('PodGroup@') ? `PodGroup · ${kind.slice('PodGroup@'.length)}` : kind,
           icon: getTopologyIcon(kind), // Returns Puzzle for unknown kinds
-          color: 'text-gray-400',
+          color: 'text-theme-text-secondary',
           category: 'custom',
         })
       }

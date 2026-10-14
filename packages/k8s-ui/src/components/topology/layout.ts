@@ -1,5 +1,6 @@
 import type { Node } from '@xyflow/react'
 import type { TopologyNode, GroupingMode, NodeKind, HealthStatus } from '../../types'
+import { isSyntheticPodGroup } from '../../utils/topology-neighborhood'
 import { NODE_DIMENSIONS } from './K8sResourceNode'
 
 // --- 3-level display system types ---
@@ -597,7 +598,7 @@ export function buildHierarchicalElkGraph(
           const uniqueKinds = new Set<string>()
           for (const nId of memberIds) {
             const n = nodeMapForGroups.get(nId)
-            if (n && n.kind !== 'PodGroup') uniqueKinds.add(n.kind)
+            if (n && !isSyntheticPodGroup(n.kind, n.data?.apiVersion)) uniqueKinds.add(n.kind)
           }
           const maxPills = [2, 5, 8, 12][tier]
           const pillCount = Math.min(maxPills, uniqueKinds.size)
@@ -956,7 +957,7 @@ export async function applyHierarchicalLayout(
       const kindCounts: Record<string, number> = {}
       for (const id of memberIds) {
         const node = nodeMap.get(id)
-        if (!node || node.kind === 'PodGroup') continue
+        if (!node || isSyntheticPodGroup(node.kind, node.data?.apiVersion)) continue
         kindCounts[node.kind] = (kindCounts[node.kind] || 0) + 1
       }
 

@@ -4359,6 +4359,17 @@ export interface CascadeDeletePreview {
     name: string;
     group?: string;
   }[];
+  possibleDependents?: { kind: string; namespace: string; name: string; group?: string }[];
+  withheld?: string[]
+  basis?: string;
+  controllerTeardown?: {
+    controller: string;
+    destination: 'local' | 'remote' | 'unknown'
+    resourcesBasis: 'inventory' | 'labels';
+    action: string;
+    resources?: { kind: string; namespace: string; name: string; group?: string }[];
+    terminating?: boolean;
+  };
 }
 
 export function useCascadeDeletePreview(
@@ -4419,7 +4430,7 @@ export function useDeleteResource() {
     },
     meta: {
       errorMessage: "Failed to delete resource",
-      successMessage: "Resource deleted",
+      successMessage: "Deletion requested",
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
@@ -4474,7 +4485,7 @@ export function useBulkDeleteResources() {
     },
     meta: {
       errorMessage: "Failed to delete some resources",
-      successMessage: "Resources deleted",
+      successMessage: "Deletion requested",
     },
     // onSettled, not onSuccess — a partial failure still deleted some
     // resources, and the table must refetch to drop them.

@@ -710,3 +710,14 @@ An `ownerAggregation: true` edge to a synthetic PodGroup describes its members'
 observed ancestry, not ownership of a Kubernetes object.
 `ownerAggregationController` is true if a matched member names that parent as
 its controller.
+
+REST `owner` and `children` relationships include individual Pods even when
+topology groups them. GitOps inventory and label-based management are not
+Kubernetes ownership.
+
+REST `cascade-preview` separates predicted garbage-collection `dependents` from
+`possibleDependents` whose deletion is uncertain because other owners are
+unresolved. `controllerTeardown` describes GitOps cleanup through finalizers;
+its `destination` is `local`, `remote` or `unknown`, and only local teardown can
+list resources. `withheld` names lists with unreadable references; an empty list
+marked this way does not mean no resources are affected.

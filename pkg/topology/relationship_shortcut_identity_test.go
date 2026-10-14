@@ -29,7 +29,7 @@ func TestRelationshipShortcutsDoNotClaimCustomCoreKinds(t *testing.T) {
 				t.Fatal(err)
 			}
 			rel := GetRelationshipsWithObject(tc.plural, tc.namespace, "shared", obj, topo, provider, d, nil)
-			if rel != nil && (len(rel.Pods) > 0 || len(rel.Children) > 0 || len(rel.Consumers) > 0 || len(rel.ConfigRefs) > 0) {
+			if rel != nil && (len(rel.Pods) > 0 || len(rel.Children) > 0 || len(rel.Consumers) > 0 || len(rel.ConfigRefs) > 0 || len(rel.StorageRefs) > 0) {
 				t.Errorf("custom %s borrowed core shortcuts: %+v", tc.kind, rel)
 			}
 			core := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": tc.kind, "metadata": map[string]any{"name": "shared", "namespace": tc.namespace}}}
@@ -45,9 +45,13 @@ func TestRelationshipShortcutsDoNotClaimCustomCoreKinds(t *testing.T) {
 				if len(coreRel.Pods) != 1 {
 					t.Errorf("core Node pods=%v", coreRel.Pods)
 				}
-			case "PersistentVolumeClaim", "StorageClass":
-				if len(coreRel.Children) != 1 {
-					t.Errorf("core %s children=%v", tc.kind, coreRel.Children)
+			case "PersistentVolumeClaim":
+				if len(coreRel.StorageRefs) != 1 {
+					t.Errorf("core PersistentVolumeClaim storage=%v", coreRel.StorageRefs)
+				}
+			case "StorageClass":
+				if len(coreRel.Consumers) != 1 {
+					t.Errorf("core StorageClass consumers=%v", coreRel.Consumers)
 				}
 			case "PersistentVolume":
 				if len(coreRel.Consumers) != 1 || len(coreRel.ConfigRefs) != 1 {

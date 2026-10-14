@@ -233,3 +233,20 @@ func TestObservedOwnerJoinIncludesReflectionMaterializedNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestObservedOwnerJoinDropsStaleSyntheticMemberOwnership(t *testing.T) {
+	for _, uid := range []types.UID{"current", "previous"} {
+		controller := true
+		nodes := []Node{
+			{ID: "deployment/team/web", Kind: KindDeployment, Name: "web", uid: "current", observed: true, Data: map[string]any{"namespace": "team"}},
+			{ID: "podgroup/team/web", Kind: KindPodGroup, Name: "web-pods", Data: map[string]any{"namespace": "team", "podCount": 7}, memberOwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: uid, Controller: &controller}}},
+		}
+		edges := addObservedOwnerEdges(nodes, []Edge{{ID: "metadata-members", Source: nodes[0].ID, Target: nodes[1].ID, Type: EdgeManages, metadataOwner: true}})
+		if uid == "previous" && len(edges) != 0 {
+			t.Fatalf("stale member ownership survived: %+v", edges)
+		}
+		if uid == "current" && (len(edges) != 1 || edges[0].OwnerAggregation == nil || !*edges[0].OwnerAggregation || edges[0].OwnerController != nil) {
+			t.Fatalf("current aggregate not classified: %+v", edges)
+		}
+	}
+}

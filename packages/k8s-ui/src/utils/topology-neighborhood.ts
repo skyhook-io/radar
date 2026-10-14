@@ -1,6 +1,6 @@
 import type { Topology, TopologyNode, TopologyEdge, EdgeType, NodeKind } from '../types/core'
 import { canonicalResourceGroup } from './api-resources'
-import { laneId } from './navigation'
+import { laneId, apiVersionToGroup } from './navigation'
 
 // Seeded neighborhood query — the shared primitive behind the WorkloadView
 // Topology tab (seed = one workload) and the Application topology (seed = the
@@ -60,6 +60,17 @@ function nodeGroup(node: TopologyNode): string | undefined {
   const apiVersion = node.data?.apiVersion
   if (typeof apiVersion !== 'string' || apiVersion === '') return undefined
   return apiVersion.includes('/') ? apiVersion.split('/')[0] : ''
+}
+
+export function isSyntheticPodGroup(kind: string, apiVersion: unknown): boolean {
+  return kind === 'PodGroup' && !apiVersion
+}
+
+export function topologyKindFilterKey(node: TopologyNode): NodeKind {
+  if (node.kind === 'PodGroup' && !isSyntheticPodGroup(node.kind, node.data?.apiVersion)) {
+    return `PodGroup@${apiVersionToGroup(node.data?.apiVersion as string)}` as NodeKind
+  }
+  return node.kind
 }
 
 export function topologyNodeResourceKind(node: TopologyNode): string {

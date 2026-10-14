@@ -35,11 +35,12 @@ const (
 //  3. ArgoCD Application via argocd.argoproj.io/tracking-id annotation
 //  4. ArgoCD Application via argocd.argoproj.io/instance label
 //  5. Helm release via meta.helm.sh/release-name annotation
-//  6. Topmost K8s owner via topology EdgeManages chain (Pod -> ReplicaSet -> Deployment)
+//  6. GitOps management of the topmost K8s owner via inventory or label edges
+//  7. Topmost K8s owner via verified owner references (Pod -> ReplicaSet -> Deployment)
 //
-// Cases 1-5 inspect the queried resource's own labels/annotations. Case 6 walks
-// owner references via the topology graph. If obj is nil, only the topology
-// owner walk runs.
+// Cases 1-5 inspect the queried resource's own labels/annotations. The graph
+// fallback keeps management separate from ownership: a GitOps inventory does
+// not establish garbage collection. If obj is nil, only the graph walk runs.
 //
 // idx is the topology inverted edges index. When non-nil, the owner walk
 // uses it for O(depth) lookup; when nil, the walk falls back to scanning
@@ -179,9 +180,12 @@ func walkTopmostOwnerFromNodeID(startID string, topo *Topology, dp DynamicProvid
 	if topo == nil {
 		return nil
 	}
+	if idx == nil && len(topo.groupedPods) > 0 {
+		idx = IndexByResource(topo)
+	}
 
-	// Controller metadata wins when classified; unclassified graph ownership
-	// preserves its existing order, including logical controller relationships.
+	// Metadata ownership and GitOps management are separate: an inventory
+	// manager can own the configuration without owning the Kubernetes object.
 	var ownerOf func(target string) string
 	if idx != nil {
 		ownerOf = func(target string) string {
@@ -213,6 +217,26 @@ func walkTopmostOwnerFromNodeID(startID string, topo *Topology, dp DynamicProvid
 	visited := map[string]bool{cur: true}
 	var topRef *ResourceRef
 	for {
+		incoming, _ := edgesForNode(topo, idx, cur)
+		for _, edge := range incoming {
+			if edge.Type != EdgeManages || edge.OwnerController != nil || edge.SkipIfKindVisible != "" || edge.Source == startID || edge.Source == cur {
+				continue
+			}
+			var manager *ResourceRef
+			if idx != nil {
+				manager = resourceRefForNode(idx.nodeForID(edge.Source), dp)
+			} else {
+				manager = resourceRefForNodeID(edge.Source, topo, dp)
+			}
+			if manager == nil {
+				continue
+			}
+			if manager.Kind == "Application" && manager.Group == argoApplicationGroup ||
+				manager.Kind == "Kustomization" && manager.Group == fluxKustomizeGroup ||
+				manager.Kind == "HelmRelease" && manager.Group == fluxHelmGroup {
+				return manager
+			}
+		}
 		next := ownerOf(cur)
 		if next == "" {
 			break
@@ -221,11 +245,19 @@ func walkTopmostOwnerFromNodeID(startID string, topo *Topology, dp DynamicProvid
 			break
 		}
 		visited[next] = true
-		ref := resourceRefForNodeID(next, topo, dp)
+		var ref *ResourceRef
+		if idx != nil {
+			ref = resourceRefForNode(idx.nodeForID(next), dp)
+		} else {
+			ref = resourceRefForNodeID(next, topo, dp)
+		}
 		if ref == nil {
 			break
 		}
 		topRef = ref
+		if ref.Kind == "Application" && ref.Group == argoApplicationGroup || ref.Kind == "Kustomization" && ref.Group == fluxKustomizeGroup || ref.Kind == "HelmRelease" && ref.Group == fluxHelmGroup {
+			return ref
+		}
 		cur = next
 	}
 	return topRef
