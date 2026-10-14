@@ -562,7 +562,11 @@ func CreateServer(cfg AppConfig) *server.Server {
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}
 
-	return server.New(serverCfg)
+	srv := server.New(serverCfg)
+	if cfg.MCPEnabled {
+		mcppkg.SetRelationshipTopologySource(srv.RelationshipTopology)
+	}
+	return srv
 }
 
 // InitializeCluster connects to the cluster and initializes all subsystems.

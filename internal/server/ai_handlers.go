@@ -519,19 +519,23 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	return resourcecontext.Build(r.Context(), obj, opts)
 }
 
-// topologyForContext reuses the complete cached relationship graph. The
-// resource context checker gates each target, including other namespaces.
-// Returns ok=false when the cache is not available.
+// topologyForContext uses the complete relationship graph the broadcaster
+// already keeps for drawer lookups, so resource context never holds a second
+// copy of the cluster. The resource context checker gates each target,
+// including other namespaces. Before that graph exists it builds one through
+// the memo. Returns ok=false when the cache is not available.
 func (s *Server) topologyForContext() (*topology.Topology, *topology.RelationshipsIndex, topology.ResourceProvider, topology.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, nil, nil, false
 	}
-	opts := topology.RelationshipBuildOptions()
-	opts.IncludeSecrets = true
-
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	if topo, index := s.RelationshipTopology(); topo != nil {
+		return topo, index, provider, dyn, true
+	}
+	opts := topology.RelationshipBuildOptions()
+	opts.IncludeSecrets = true
 
 	topo, index, err := s.topoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
 		return topology.NewBuilder(provider).WithDynamic(dyn).Build(opts)
@@ -540,6 +544,15 @@ func (s *Server) topologyForContext() (*topology.Topology, *topology.Relationshi
 		return nil, nil, nil, nil, false
 	}
 	return topo, index, provider, dyn, true
+}
+
+// RelationshipTopology returns the broadcaster's full relationship graph and
+// its index, or nil before it has been built.
+func (s *Server) RelationshipTopology() (*topology.Topology, *topology.RelationshipsIndex) {
+	if s == nil || s.broadcaster == nil {
+		return nil, nil
+	}
+	return s.broadcaster.GetCachedTopologyWithIndex()
 }
 
 // computeIssueSummaryForResource rolls up per-resource issue-composer rows

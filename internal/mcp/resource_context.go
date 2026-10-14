@@ -211,18 +211,44 @@ func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group
 	return summary
 }
 
-// mcpTopologyForContext reuses a complete cached relationship graph. Resource
-// context authorizes every emitted reference through its request-scoped checker;
-// a namespace-scoped build would erase explicit cross-namespace dependencies.
+// RelationshipTopologySource returns the host's maintained full relationship
+// graph and its index, or nil while none has been built.
+type RelationshipTopologySource func() (*topo.Topology, *topo.RelationshipsIndex)
+
+var relationshipTopology struct {
+	sync.RWMutex
+	source RelationshipTopologySource
+}
+
+// SetRelationshipTopologySource lets resource context reuse the graph the host
+// already keeps for relationship lookups, instead of holding a second copy of
+// the whole cluster.
+func SetRelationshipTopologySource(source RelationshipTopologySource) {
+	relationshipTopology.Lock()
+	relationshipTopology.source = source
+	relationshipTopology.Unlock()
+}
+
+// mcpTopologyForContext uses a complete relationship graph. Resource context
+// authorizes every emitted reference through its request-scoped checker; a
+// namespace-scoped build would erase explicit cross-namespace dependencies.
 func mcpTopologyForContext() (*topo.Topology, *topo.RelationshipsIndex, topo.ResourceProvider, topo.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, nil, nil, false
 	}
-	opts := topo.RelationshipBuildOptions()
-	opts.IncludeSecrets = true
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	relationshipTopology.RLock()
+	source := relationshipTopology.source
+	relationshipTopology.RUnlock()
+	if source != nil {
+		if topology, index := source(); topology != nil {
+			return topology, index, provider, dyn, true
+		}
+	}
+	opts := topo.RelationshipBuildOptions()
+	opts.IncludeSecrets = true
 
 	topology, index, err := summaryCtxTopoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topo.Topology, error) {
 		return topo.NewBuilder(provider).WithDynamic(dyn).Build(opts)

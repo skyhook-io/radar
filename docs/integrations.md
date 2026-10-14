@@ -622,8 +622,6 @@ These are dependencies, not owners: topology draws each source upstream, with
 the edge pointing into the object that reads it. A link does not prove that Flux
 permits the reference or has produced an artifact.
 
-For default Radar Cloud read permissions, see the [integration-read policy](cloud-rbac-baseline.md#intentional-exceptions).
-
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 
 ### ArgoCD

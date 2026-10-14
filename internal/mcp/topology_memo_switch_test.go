@@ -87,3 +87,23 @@ func TestResourceContextTopologyAfterSwitch(t *testing.T) {
 		t.Errorf("post-switch resource-context topology still describes the previous cluster: %+v", after.Nodes)
 	}
 }
+
+func TestResourceContextUsesHostRelationshipGraph(t *testing.T) {
+	freshSummaryCtxTopoMemo(t)
+	useSwitchTestCluster(t, "cluster-web")
+	host := &topology.Topology{Nodes: []topology.Node{{ID: "deployment/demo/host-graph", Kind: "Deployment", Name: "host-graph"}}}
+	index := topology.IndexByResource(host)
+	SetRelationshipTopologySource(func() (*topology.Topology, *topology.RelationshipsIndex) { return host, index })
+	t.Cleanup(func() { SetRelationshipTopologySource(nil) })
+
+	got, gotIndex, _, _, ok := mcpTopologyForContext()
+	if !ok || got != host || gotIndex != index {
+		t.Fatalf("resource context built its own graph instead of reusing the host's: %+v", got)
+	}
+
+	// Before the host has a graph, resource context still builds one.
+	SetRelationshipTopologySource(func() (*topology.Topology, *topology.RelationshipsIndex) { return nil, nil })
+	if built, _, _, _, ok := mcpTopologyForContext(); !ok || !hasNode(built, "cluster-web") {
+		t.Fatalf("fallback build missing: %+v", built)
+	}
+}
