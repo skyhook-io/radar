@@ -233,7 +233,7 @@ func TestFetchEventsForResource_ReportsPreCapGroupTotal(t *testing.T) {
 		err    error
 	)
 	for time.Now().Before(deadline) {
-		groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "web", "", "", nil, 10)
+		groups, total, _, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "web", "", "", nil, 10)
 		if err != nil || total == 12 {
 			break
 		}
@@ -246,7 +246,7 @@ func TestFetchEventsForResource_ReportsPreCapGroupTotal(t *testing.T) {
 		t.Fatalf("groups=%d total=%d, want capped response of 10 from 12 deduplicated groups", len(groups), total)
 	}
 
-	groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "missing", "", "", nil, 10)
+	groups, total, _, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "missing", "", "", nil, 10)
 	if err != nil || len(groups) != 0 || total != 0 {
 		t.Fatalf("missing resource groups=%d total=%d err=%v, want empty successful result", len(groups), total, err)
 	}
@@ -284,7 +284,7 @@ func TestFetchEventsForResource_RolloutWarningSurvivesKindAndGroupFiltering(t *t
 		err    error
 	)
 	for time.Now().Before(deadline) {
-		groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "rollouts", "argoproj.io", "shop", "checkout", "", "", nil, 10)
+		groups, total, _, err = fetchEventsForResource(k8s.GetResourceCache(), "rollouts", "argoproj.io", "shop", "checkout", "", "", nil, 10)
 		if err != nil || total == 1 {
 			break
 		}
@@ -304,11 +304,11 @@ func TestFilterEventsByInvolvedObject_RequiresExactAPIGroup(t *testing.T) {
 		{Type: corev1.EventTypeWarning, Reason: "Knative", InvolvedObject: corev1.ObjectReference{APIVersion: "serving.knative.dev/v1", Kind: "Service", Name: "api"}},
 	}
 
-	core := filterEventsByInvolvedObject(events, "Service", "", "api", "", "", nil)
+	core, _ := filterEventsByInvolvedObject(events, "Service", "", "api", "", "", nil)
 	if len(core) != 1 || core[0].Reason != "Core" {
 		t.Fatalf("core Service events = %+v, want only core/v1", core)
 	}
-	knative := filterEventsByInvolvedObject(events, "Service", "serving.knative.dev", "api", "", "", nil)
+	knative, _ := filterEventsByInvolvedObject(events, "Service", "serving.knative.dev", "api", "", "", nil)
 	if len(knative) != 1 || knative[0].Reason != "Knative" {
 		t.Fatalf("Knative Service events = %+v, want only serving.knative.dev", knative)
 	}
@@ -333,7 +333,7 @@ func TestFilterEventsByInvolvedObject_CurrentIncarnations(t *testing.T) {
 		event("WrongPodGroup", "Pod", "custom.example.io", "worker", "pod-now"),
 		event("UnknownPod", "Pod", "", "foreign", "other"),
 	}
-	got := filterEventsByInvolvedObject(events, "Deployment", "apps", "web", "root-now", "", map[string]types.UID{"worker": "pod-now"})
+	got, excluded := filterEventsByInvolvedObject(events, "Deployment", "apps", "web", "root-now", "", map[string]types.UID{"worker": "pod-now"})
 	var reasons []string
 	for _, e := range got {
 		reasons = append(reasons, e.Reason)
@@ -341,15 +341,20 @@ func TestFilterEventsByInvolvedObject_CurrentIncarnations(t *testing.T) {
 	if strings.Join(reasons, ",") != "CurrentRoot,UIDlessRoot,CurrentPod,UIDlessPod" {
 		t.Fatalf("current evidence = %v", reasons)
 	}
+	// Only the replaced root and replaced Pod count as withheld history; other
+	// groups and names were never this workload's evidence.
+	if excluded != 2 {
+		t.Fatalf("excluded = %d, want 2 (ReplacedRoot, ReplacedPod)", excluded)
+	}
 	// Supplemental includes do not enroll workload Pod events.
-	if got := filterEventsByInvolvedObject(events, "Deployment", "apps", "web", "root-now", "", nil); len(got) != 2 {
-		t.Fatalf("root-only evidence = %v", got)
+	if got, excluded := filterEventsByInvolvedObject(events, "Deployment", "apps", "web", "root-now", "", nil); len(got) != 2 || excluded != 1 {
+		t.Fatalf("root-only evidence = %v excluded = %d", got, excluded)
 	}
 	// Kubelet Node events identify the name, without proving an incarnation.
 	nodes := []*corev1.Event{event("CurrentNode", "Node", "", "node-a", "node-uid"), event("NameUID", "Node", "", "node-a", "node-a"), event("PreviousNode", "Node", "", "node-a", "old-node-uid"), event("VersionlessNameUID", "Node", "", "node-a", "node-a")}
 	nodes[3].InvolvedObject.APIVersion = ""
-	if got := filterEventsByInvolvedObject(nodes, "Node", "", "node-a", "node-uid", "", nil); len(got) != 3 || got[0].Reason != "CurrentNode" || got[1].Reason != "NameUID" || got[2].Reason != "VersionlessNameUID" {
-		t.Fatalf("Node evidence = %v", got)
+	if got, excluded := filterEventsByInvolvedObject(nodes, "Node", "", "node-a", "node-uid", "", nil); len(got) != 3 || got[0].Reason != "CurrentNode" || got[1].Reason != "NameUID" || got[2].Reason != "VersionlessNameUID" || excluded != 1 {
+		t.Fatalf("Node evidence = %v excluded = %d", got, excluded)
 	}
 }
 
@@ -366,7 +371,8 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var response struct {
-		Events []aicontext.DeduplicatedEvent `json:"events"`
+		Events   []aicontext.DeduplicatedEvent `json:"events"`
+		Warnings []string                      `json:"warnings"`
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -387,6 +393,9 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 	if len(response.Events) != 1 || response.Events[0].Reason != "root-now" {
 		t.Fatalf("get_resource current evidence = %+v", response.Events)
 	}
+	if len(response.Warnings) != 1 || !strings.Contains(response.Warnings[0], "1 cached Warning event records for earlier incarnations of this resource") {
+		t.Fatalf("get_resource must say earlier-incarnation history was withheld: %+v", response.Warnings)
+	}
 	pods := []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "shop", UID: "pod-now"}}}
 	for _, uid := range []types.UID{"pod-now", "pod-before"} {
 		_, err := client.CoreV1().Events("shop").Create(t.Context(), &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: string(uid), Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: string(uid), Message: string(uid), LastTimestamp: now, InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Namespace: "shop", Name: "worker", UID: uid}}, metav1.CreateOptions{})
@@ -396,7 +405,7 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 	}
 	deadline = time.Now().Add(2 * time.Second)
 	for {
-		groups, total, err := fetchEventsForResource(k8s.GetResourceCache(), "deployment", "apps", "shop", "web", root.UID, "", pods, 10)
+		groups, total, excluded, err := fetchEventsForResource(k8s.GetResourceCache(), "deployment", "apps", "shop", "web", root.UID, "", pods, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -406,12 +415,22 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 					t.Fatalf("diagnose current evidence = %+v", groups)
 				}
 			}
+			if excluded != 2 {
+				t.Fatalf("diagnose excluded = %d, want root-before and pod-before", excluded)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("diagnose event groups = %+v", groups)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// When every retained warning belongs to an earlier incarnation, the
+	// count must still reach the caller even though no evidence remains.
+	replaced := []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "shop", UID: "pod-later"}}}
+	groups, total, excluded, err := fetchEventsForResource(k8s.GetResourceCache(), "deployment", "apps", "shop", "web", "root-later", "", replaced, 10)
+	if err != nil || len(groups) != 0 || total != 0 || excluded != 4 {
+		t.Fatalf("all-historical evidence groups=%v total=%d excluded=%d err=%v, want 0/0/4", groups, total, excluded, err)
 	}
 }
 
@@ -430,6 +449,9 @@ func TestDiagnoseExcludesPodsFromPreviousWorkloadAndIntermediateOwners(t *testin
 		event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: item.name, Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: item.name, Message: item.name, LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: pod.Name, Namespace: pod.Namespace, UID: pod.UID}}
 		objects = append(objects, pod, event)
 	}
+	// A same-name Pod replaced earlier left a warning that is history, not
+	// current evidence.
+	objects = append(objects, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "current-before", Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: "current-before", Message: "current-before", LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: "current", Namespace: "shop", UID: "current-before-uid"}})
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatal(err)
 	}
@@ -458,6 +480,15 @@ func TestDiagnoseExcludesPodsFromPreviousWorkloadAndIntermediateOwners(t *testin
 	}
 	if len(response.Events) != 1 || response.Events[0].Reason != "current" {
 		t.Fatalf("diagnose leaked previous controller warnings: %+v", response.Events)
+	}
+	notes := 0
+	for _, warning := range response.Warnings {
+		if strings.Contains(warning, "1 cached Warning event records for earlier incarnations") {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Fatalf("diagnose must say once that earlier-incarnation history was withheld: %v", response.Warnings)
 	}
 	if response.Metrics == nil || response.Metrics.Pods != 1 || len(response.Metrics.Series) != 3 {
 		t.Fatalf("metrics disagree with current membership: %+v", response.Metrics)

@@ -441,7 +441,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		)
 	}
 
-	events, eventsTotalGroups, eventsErr := fetchEventsForResource(cache, kindNorm, canonicalGroup, input.Namespace, input.Name, objectMeta.GetUID(), types.UID(objectMeta.GetAnnotations()[corev1.MirrorPodAnnotationKey]), pods, 10)
+	events, eventsTotalGroups, eventsExcluded, eventsErr := fetchEventsForResource(cache, kindNorm, canonicalGroup, input.Namespace, input.Name, objectMeta.GetUID(), types.UID(objectMeta.GetAnnotations()[corev1.MirrorPodAnnotationKey]), pods, 10)
 	resp.Events = events
 	resp.EventsTotalGroups = eventsTotalGroups
 	if eventsErr != nil {
@@ -502,6 +502,9 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	}
 	if podsCacheWarming {
 		resp.Warnings = append(resp.Warnings, "Radar is still loading the caches this workload's pods are resolved through, so pod logs, pod events and workload metrics are missing from this bundle. Retry in a moment. Details: "+boundDiagnoseMetricsError(podsErr.Error()))
+	}
+	if eventsExcluded > 0 {
+		resp.Warnings = append(resp.Warnings, earlierIncarnationEventsNote(eventsExcluded, "this resource or same-name Pods"))
 	}
 	capped, capStats := capMultiPodLogBundles(resp.LogsCurrent, resp.LogsPrevious)
 	resp.LogsCurrent = capped[0]
@@ -880,18 +883,18 @@ var errPodsCacheWarming = errors.New("the pod cache is still loading")
 // "no warnings exist" from "apiserver list failed and we couldn't tell"
 // — diagnose surfaces it as EventsError so the agent doesn't read empty
 // events as ground truth.
-func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, name string, uid, mirrorUID types.UID, pods []*corev1.Pod, limit int) ([]aicontext.DeduplicatedEvent, int, error) {
+func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, name string, uid, mirrorUID types.UID, pods []*corev1.Pod, limit int) ([]aicontext.DeduplicatedEvent, int, int, error) {
 	eventLister := cache.Events()
 	if eventLister == nil {
 		// Mirror attachResourceExtras / get_resource(include=events): surface
 		// "couldn't load" rather than returning empty, so handleDiagnose sets
 		// EventsError and agents don't read silence as "no warnings."
-		return nil, 0, fmt.Errorf("events lister unavailable (insufficient permissions or cache cold)")
+		return nil, 0, 0, fmt.Errorf("events lister unavailable (insufficient permissions or cache cold)")
 	}
 	events, err := eventLister.Events(namespace).List(labels.Everything())
 	if err != nil {
 		log.Printf("[mcp] diagnose: failed to list events for %s/%s/%s: %v", kind, namespace, name, err)
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	podUIDs := make(map[string]types.UID, len(pods))
 	for _, p := range pods {
@@ -899,14 +902,22 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, na
 			podUIDs[p.Name] = p.UID
 		}
 	}
-	matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, uid, mirrorUID, podUIDs)
+	matched, excluded := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, uid, mirrorUID, podUIDs)
 	if len(matched) == 0 {
-		return nil, 0, nil
+		return nil, 0, excluded, nil
 	}
 	// This remains a fixed-size evidence sample, but return the pre-cap group
 	// count so the composite response can report when groups were omitted.
 	dedup, totalGroups := aicontext.DeduplicateEventsN(matched, limit)
-	return dedup, totalGroups, nil
+	return dedup, totalGroups, excluded, nil
+}
+
+// earlierIncarnationEventsNote tells an agent that history was withheld from
+// current evidence, so an empty or short event list is not read as "nothing
+// ever failed". It counts cached event records, not occurrences, and covers
+// only the names in subject.
+func earlierIncarnationEventsNote(excluded int, subject string) string {
+	return fmt.Sprintf("%d cached Warning event records for earlier incarnations of %s were excluded from current evidence. Use get_events to inspect retained history.", excluded, subject)
 }
 
 // networkTraceKind returns the canonical entry-kind name for trace
@@ -1143,8 +1154,11 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 // UID-less events remain identity-matched evidence without proof of incarnation.
 // Namespace is scoped by the event lister. get_resource passes no Pods; diagnose
 // supplies its authorized current Pod set. Normal lifecycle events stay out.
-func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, name string, uid, mirrorUID types.UID, podUIDs map[string]types.UID) []corev1.Event {
+// It also returns how many Warning records were rejected for a known UID
+// mismatch.
+func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, name string, uid, mirrorUID types.UID, podUIDs map[string]types.UID) ([]corev1.Event, int) {
 	var matched []corev1.Event
+	excluded := 0
 	for _, e := range events {
 		if e.Type != corev1.EventTypeWarning {
 			continue
@@ -1159,18 +1173,27 @@ func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, na
 		if displayKind == "Pod" && group == "" && mirrorUID != "" && subject.UID == string(mirrorUID) {
 			matchesUID = true
 		}
-		if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && strings.EqualFold(involvedGroup, group) && e.InvolvedObject.Name == name && matchesUID {
-			matched = append(matched, *e)
+		if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && strings.EqualFold(involvedGroup, group) && e.InvolvedObject.Name == name {
+			if matchesUID {
+				matched = append(matched, *e)
+			} else {
+				excluded++
+			}
 			continue
 		}
 		if displayKind != "Pod" && involvedGroup == "" && strings.EqualFold(e.InvolvedObject.Kind, "Pod") {
 			podUID, ok := podUIDs[e.InvolvedObject.Name]
-			if ok && (podUID == "" || subject.UID == "" || subject.UID == string(podUID)) {
+			if !ok {
+				continue
+			}
+			if podUID == "" || subject.UID == "" || subject.UID == string(podUID) {
 				matched = append(matched, *e)
+			} else {
+				excluded++
 			}
 		}
 	}
-	return matched
+	return matched, excluded
 }
 
 // diagnosePodNames is the bundle's pod list: sorted names, capped like the

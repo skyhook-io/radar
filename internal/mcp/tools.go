@@ -1357,7 +1357,11 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 				// resolving the pod set; that's the diagnose tool's job, not
 				// this include's. nil podUIDs intentionally restricts to
 				// InvolvedObject == this kind+name.
-				matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, uid, mirrorUID, nil)
+				matched, excluded := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, uid, mirrorUID, nil)
+				if excluded > 0 {
+					existing, _ := result["warnings"].([]string)
+					result["warnings"] = append(existing, earlierIncarnationEventsNote(excluded, "this resource"))
+				}
 				if len(matched) > 0 {
 					deduplicated, totalGroups := aicontext.DeduplicateEventsN(matched, 10)
 					result["events"] = deduplicated
