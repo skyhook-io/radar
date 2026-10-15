@@ -1034,7 +1034,7 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 	}
 	if readErr == nil || isObjectNotFound(readErr) {
 		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
-			_, waitErr := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
+			_, waitErr := dynamicCache.ListBlockingContext(ctx, gvr, namespace, dynamicSyncWait)
 			if waitErr != nil {
 				return checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, waitErr, dynamicCache, gvr, ok)
 			}

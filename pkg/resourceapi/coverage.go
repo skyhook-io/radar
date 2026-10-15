@@ -191,3 +191,16 @@ type ReadError struct {
 	ErrorCode readreason.Code `json:"error_code"`
 	Coverage  *Coverage       `json:"coverage,omitempty"`
 }
+
+// SearchCoverage qualifies a search. A search reads many kinds across
+// namespaces and cluster scope, so it has no single scope or read set: Status
+// says whether everything the query named was searched with nothing failing,
+// and Gaps what was not. A broad query searches what the caller and Radar can
+// read without listing each kind or namespace it skipped for access or
+// collection; NarrowedBy says that happened, so "complete" never stands for
+// an exhaustive negative.
+type SearchCoverage struct {
+	Status     CoverageStatus `json:"status"`
+	NarrowedBy []Narrowing    `json:"narrowedBy,omitempty"`
+	Gaps       []Gap          `json:"gaps"`
+}

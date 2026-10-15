@@ -1,4 +1,5 @@
 export * from './core'
+export * from './read-coverage'
 export * from './fetch-error'
 export * from './gitops'
 export * from './gitops-tree'

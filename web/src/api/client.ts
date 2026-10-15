@@ -2,6 +2,7 @@ import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
 import type {
   AppHistory,
@@ -1966,6 +1967,8 @@ export interface SearchResult {
   total: number;
   searched: number;
   total_matched: number;
+  /** Absent from Radars that predate search coverage, which say nothing about it. */
+  coverage?: SearchCoverage;
 }
 
 const SEARCH_MIN_QUERY = 2;
@@ -1983,6 +1986,8 @@ export function useSearch(
     context?: "summary" | "none";
     enabled?: boolean;
     globalNs?: boolean;
+    /** Re-query on an interval decided from the latest response. */
+    refetchInterval?: (data: SearchResult | undefined) => number | false;
   },
 ) {
   const trimmed = query.trim();
@@ -2002,6 +2007,7 @@ export function useSearch(
       ),
     enabled,
     staleTime: 2000,
+    refetchInterval: (q) => opts?.refetchInterval?.(q.state.data) ?? false,
     placeholderData: (prev) => prev, // keepPreviousData
   });
 }

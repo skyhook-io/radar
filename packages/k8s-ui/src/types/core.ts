@@ -160,6 +160,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+  searchCoverage?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean

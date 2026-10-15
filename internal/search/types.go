@@ -2,6 +2,7 @@ package search
 
 import (
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -24,8 +25,8 @@ type CELFilter = filter.Filter
 // before scoring.
 type Query struct {
 	Tokens      []string  // free tokens; each must match somewhere; sum of best per-site scores = total
-	KindFilter  []string  // kind:Foo modifiers, lowercased; matches Kind name (singular or plural)
-	NSFilter    []string  // ns:foo modifiers
+	KindFilter  []string  // kind:Foo modifiers as written; matches Kind name (singular or plural), case-insensitively
+	NSFilter    []string  // ns:foo modifiers; restrict namespaced kinds, and exclude cluster-scoped kinds unless a kind: names them
 	LabelFilter []LabelEq // label:k=v modifiers; AND'd
 	ImageFilter []string  // image:foo modifiers; substring match on container images
 	Cluster     string    // cluster: modifier — radar ignores; hub uses for routing
@@ -74,9 +75,17 @@ type MatchSnippet struct {
 
 // Result is the full response shape for a search request.
 type Result struct {
-	Hits     []Hit `json:"hits"`
-	Total    int   `json:"total"`    // number of hits returned (after limit)
-	Searched int   `json:"searched"` // approx. number of objects scanned
+	// Coverage says whether this result can rule out a match for what you
+	// asked. Status "partial" means something was loading or failed, a kind or
+	// namespace you named couldn't be searched, or the filter couldn't be
+	// evaluated on some objects — gaps say which. NarrowedBy says a broad
+	// query searched only what your access and Radar's collection allow, so
+	// even "complete" is no proof that nothing exists outside them. Result
+	// limits (Total vs TotalMatched) are separate.
+	Coverage resourceapi.SearchCoverage `json:"coverage"`
+	Hits     []Hit                      `json:"hits"`
+	Total    int                        `json:"total"`    // number of hits returned (after limit)
+	Searched int                        `json:"searched"` // approx. number of objects scanned
 	// TotalMatched is the count of hits BEFORE truncation by Limit.
 	// Equals Total when no truncation occurred. Surfaced so callers
 	// (the hub's fleet aggregator, agents, the frontend) can report honest
