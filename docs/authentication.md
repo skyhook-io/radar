@@ -79,7 +79,7 @@ radar --auth-mode=proxy \
       --auth-groups-header=X-Forwarded-Groups
 ```
 
-> **Security:** Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
+> **Security:** Radar accepts these headers from any client that can reach it. Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
 
 > **Proxies:** Preserve the browser-facing `Host` header when proxying Radar. Radar accepts changes and pod exec sessions only from its own page, and it recognizes that page by comparing the browser's `Origin` with `Host` (or by `Sec-Fetch-Site`, which browsers send over HTTPS). If your proxy must rewrite `Host`, list the address users open Radar at in `trustedOrigins` (Helm) or `RADAR_TRUSTED_ORIGINS`. See [Changes fail with "Radar refused this request"](in-cluster.md#changes-fail-with-radar-refused-this-request).
 
@@ -118,6 +118,8 @@ auth:
     groupsClaim: groups                        # JWT claim containing group membership
     # scopes: ["openid", "profile", "email", "groups"]  # Default — uncomment to override (e.g., drop "groups" for Google)
 ```
+
+**Open Radar at the redirect URL's host.** Sign-in sets a cookie on the address you opened Radar at, and your identity provider sends you back to `redirectURL`. When the two hosts differ, for example Radar opened through a port-forward to `localhost` while `redirectURL` names `radar.example.com`, the callback has no cookie and sign-in fails with "missing state cookie".
 
 **Scopes:** by default Radar requests `openid profile email groups` at the authorization endpoint. The `groups` scope is required by Dex, Keycloak, and most IdPs to actually include the groups claim in the ID token. If your IdP rejects unknown scopes (Google in particular doesn't define `groups`), override via `auth.oidc.scopes` / `--auth-oidc-scopes` to drop it or substitute the provider-specific equivalent.
 

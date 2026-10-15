@@ -12,7 +12,8 @@ tests:
             Access via port-forward:
 
               kubectl port-forward svc/radar 9280:9280 -n radar
-              open http://localhost:9280
+
+            Then open http://localhost:9280 in your browser.
 
   - it: ClusterIP follows release namespace, fullname, service port and basePath
     release:
@@ -26,7 +27,7 @@ tests:
       - matchRegexRaw:
           pattern: kubectl port-forward svc/tools-radar 9280:8080 -n platform\n
       - matchRegexRaw:
-          pattern: open http://localhost:9280/radar/\n?$
+          pattern: Then open http://localhost:9280/radar/ in your browser\.\n?$
       - notMatchRegexRaw:
           pattern: Warning
 
@@ -36,7 +37,7 @@ tests:
         type: LoadBalancer
     asserts:
       - matchRegexRaw:
-          pattern: "^Access via port-forward:\n\n  kubectl port-forward svc/radar 9280:9280 -n radar\n  open http://localhost:9280\n\nWarning: no auth"
+          pattern: "^Access via port-forward:\n\n  kubectl port-forward svc/radar 9280:9280 -n radar\n\nThen open http://localhost:9280 in your browser.\n\nWarning: no auth"
       - notMatchRegexRaw:
           pattern: (SERVICE_IP|NODE_PORT)
 
@@ -133,7 +134,7 @@ tests:
       - matchRegexRaw:
           pattern: kubectl get --namespace radar gateway/public-gateway -o yaml
 
-  - it: OIDC adds the documented sign-in line and the auth docs link
+  - it: OIDC without an ingress or route points at the redirect URL's host, not a port-forward
     set:
       auth:
         mode: oidc
@@ -143,7 +144,9 @@ tests:
           redirectURL: https://radar.example.com/auth/callback
     asserts:
       - matchRegexRaw:
-          pattern: Access via port-forward
+          pattern: "^Open Radar at the redirect URL's host \\(auth.oidc.redirectURL\\):\n  https://radar.example.com/\n"
+      - notMatchRegexRaw:
+          pattern: port-forward
       - matchRegexRaw:
           pattern: "Authentication: OIDC \\(auth.mode=oidc\\). Radar redirects to your identity\nprovider, validates the token, and creates a session cookie.\nSetup: https://radarhq.io/docs/configuration/authentication"
       - notMatchRegexRaw:
@@ -161,7 +164,7 @@ tests:
             be the only path to Radar.
             Setup: https://radarhq.io/docs/configuration/authentication
 
-  - it: proxy auth on a LoadBalancer Service does not print a port-forward
+  - it: proxy auth on a LoadBalancer Service warns that the identity headers can be spoofed
     set:
       auth:
         mode: proxy
@@ -172,6 +175,21 @@ tests:
           pattern: port-forward
       - matchRegexRaw:
           pattern: The auth proxy should\nbe the only path to Radar
+      - matchRegexRaw:
+          pattern: "Warning: Radar accepts the X-Forwarded-User and X-Forwarded-Groups\nheaders from any client that can reach it. Your ingress must strip them from\nexternal requests to prevent spoofing.\n?$"
+
+  - it: proxy auth warning names the configured headers
+    set:
+      auth:
+        mode: proxy
+        proxy:
+          userHeader: X-Auth-Request-Email
+          groupsHeader: X-Auth-Request-Groups
+      service:
+        type: NodePort
+    asserts:
+      - matchRegexRaw:
+          pattern: "Radar accepts the X-Auth-Request-Email and X-Auth-Request-Groups\nheaders"
 
   - it: proxy auth behind an Ingress prints the URL and the proxy note
     set:
@@ -182,8 +200,10 @@ tests:
     asserts:
       - matchRegexRaw:
           pattern: "Open Radar at:\n  http://radar.example.com/\n\nAuthentication: proxy"
+      - matchRegexRaw:
+          pattern: "Warning: Radar accepts the X-Forwarded-User"
       - notMatchRegexRaw:
-          pattern: Warning
+          pattern: "Warning: no auth"
 
   - it: Radar Cloud prints the tunnel endpoint and the log command only
     set:
@@ -203,6 +223,275 @@ tests:
           pattern: kubectl logs -n radar deploy/radar
       - notMatchRegexRaw:
           pattern: (port-forward svc|Open Radar at|Warning)
+
+  - it: OIDC with a localhost redirect URL keeps the port-forward on that port
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: http://localhost:8080/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: "kubectl port-forward svc/radar 8080:9280 -n radar\n\nThen open http://localhost:8080 in your browser."
+
+  - it: OIDC behind an Ingress prints the ingress URL
+    set:
+      ingress:
+        enabled: true
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: https://radar.example.com/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: "^Open Radar at:\n  http://radar.example.com/\n"
+      - notMatchRegexRaw:
+          pattern: redirect URL's host
+
+  - it: an Ingress host left empty points at the ingress address instead of printing http:///
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: ""
+            paths:
+              - path: /
+                pathType: Prefix
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "http:///"
+      - notMatchRegexRaw:
+          pattern: Open Radar at:\n
+      - matchRegexRaw:
+          pattern: "An ingress host left empty matches every hostname. Open Radar at the ingress\ncontroller's address, shown by:\n\n  kubectl get ingress radar -n radar\n"
+
+  - it: an empty Ingress host next to a named one prints both
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: radar.example.com
+            paths:
+              - path: /
+                pathType: Prefix
+          - host: ""
+            paths:
+              - path: /
+                pathType: Prefix
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  http://radar.example.com/\n\nAn ingress host left empty"
+
+  - it: a regex Ingress path prints the host and the pattern, not a URL
+    set:
+      ingress:
+        enabled: true
+        annotations:
+          nginx.ingress.kubernetes.io/use-regex: "true"
+          nginx.ingress.kubernetes.io/rewrite-target: /$2
+        hosts:
+          - host: tools.example.com
+            paths:
+              - path: /radar(/|$)(.*)
+                pathType: ImplementationSpecific
+    asserts:
+      - matchRegexRaw:
+          pattern: "A regular expression path isn't a URL. Open Radar at a path it matches:\n  http://tools.example.com  \\(path /radar\\(/\\|\\$\\)\\(\\.\\*\\)\\)\n"
+      - notMatchRegexRaw:
+          pattern: "Open Radar at:"
+
+  - it: HTTPRoute without hostnames says to open the listener hostname, picking the sectionName listener
+    set:
+      httpRoute:
+        enabled: true
+        parentRefs:
+          - name: public-gateway
+            namespace: gateway-system
+            sectionName: https
+    asserts:
+      - matchRegexRaw:
+          pattern: export APP_HOSTNAME=\$\(kubectl get --namespace gateway-system gateway/public-gateway -o jsonpath="\{\.spec\.listeners\[\?\(@\.name=='https'\)\]\.hostname\}"\)
+      - matchRegexRaw:
+          pattern: "Then open \\$APP_HOSTNAME/ in your browser, with https:// if that\nlistener's protocol is HTTPS."
+
+  - it: ingress basic auth gets the softer note instead of the no-auth warning (ClusterIP)
+    set:
+      ingress:
+        enabled: true
+        annotations:
+          nginx.ingress.kubernetes.io/auth-type: basic
+          nginx.ingress.kubernetes.io/auth-secret: radar-basic-auth
+    asserts:
+      - notMatchRegexRaw:
+          pattern: "Warning: no auth"
+      - matchRegexRaw:
+          pattern: "Radar's own authentication is off \\(auth.mode=none\\). Everyone who passes your\ningress authentication"
+
+  - it: ingress basic auth with a LoadBalancer Service keeps the no-auth warning, since the Service skips the ingress
+    set:
+      service:
+        type: LoadBalancer
+      ingress:
+        enabled: true
+        annotations:
+          nginx.ingress.kubernetes.io/auth-type: basic
+          nginx.ingress.kubernetes.io/auth-secret: radar-basic-auth
+    asserts:
+      - matchRegexRaw:
+          pattern: "Warning: no auth"
+      - notMatchRegexRaw:
+          pattern: "Radar's own authentication is off"
+
+  - it: OIDC with an https loopback redirect points at that URL, since a port-forward serves no TLS
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: https://localhost:8443/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at the redirect URL's host \\(auth.oidc.redirectURL\\):\n  https://localhost:8443/\n"
+      - notMatchRegexRaw:
+          pattern: "kubectl port-forward"
+
+  - it: OIDC with a 127.0.0.1 redirect URL keeps that host, since localhost has different cookies
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: http://127.0.0.1:8080/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: "Then open http://127.0.0.1:8080 in your browser."
+
+  - it: OIDC with a malformed redirect URL still renders, falls back to the port-forward and prints no credential
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: https://user:SHOULD-NOT-APPEAR@example.com:bad/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: kubectl port-forward svc/radar 9280:9280 -n radar
+      - notMatchRegexRaw:
+          pattern: SHOULD-NOT-APPEAR
+
+  - it: OIDC redirect URL with userinfo prints only the host
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: https://user:SHOULD-NOT-APPEAR@radar.example.com/auth/callback?token=SHOULD-NOT-APPEAR
+    asserts:
+      - matchRegexRaw:
+          pattern: "  https://radar.example.com/\n"
+      - notMatchRegexRaw:
+          pattern: SHOULD-NOT-APPEAR
+
+  - it: an Ingress path left out (allowed for ImplementationSpecific) prints the host root
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: radar.example.com
+            paths:
+              - pathType: ImplementationSpecific
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  http://radar.example.com/\n"
+
+  - it: a regex Ingress path with alternation is not turned into a prefix URL
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: tools.example.com
+            paths:
+              - path: /radar/(foo|bar)(/|$)(.*)
+                pathType: ImplementationSpecific
+    asserts:
+      - matchRegexRaw:
+          pattern: "  http://tools.example.com  \\(path /radar/\\(foo\\|bar\\)"
+      - notMatchRegexRaw:
+          pattern: "http://tools.example.com/radar/\n"
+
+  - it: a Prefix path with regex characters is printed as written
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: tools.example.com
+            paths:
+              - path: /radar+tools
+                pathType: Prefix
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  http://tools.example.com/radar\\+tools\n"
+
+  - it: OIDC with an IPv6 redirect host points at that host
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: https://[2001:db8::1]/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: "  https://\\[2001:db8::1\\]/\n"
+
+  - it: OIDC loopback redirect without a port forwards the scheme's default port
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: http://localhost/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: "kubectl port-forward svc/radar 80:9280 -n radar\n\nThen open http://localhost:80 in your browser."
+
+  - it: a regex path next to a plain one lists both, each in its own section
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: radar.example.com
+            paths:
+              - path: /
+                pathType: Prefix
+          - host: tools.example.com
+            paths:
+              - path: /radar(/|$)(.*)
+                pathType: ImplementationSpecific
+    asserts:
+      - matchRegexRaw:
+          pattern: "Open Radar at:\n  http://radar.example.com/\n\nA regular expression path isn't a URL"
+
+  - it: OIDC IPv6 loopback redirect gets the port-forward
+    set:
+      auth:
+        mode: oidc
+        oidc:
+          issuerURL: https://idp.example.com
+          clientID: radar
+          redirectURL: http://[::1]:8080/auth/callback
+    asserts:
+      - matchRegexRaw:
+          pattern: "kubectl port-forward svc/radar 8080:9280 -n radar\n\nThen open http://\\[::1\\]:8080 in your browser."
 
   # Credentials set everywhere a value can hold one. The marker must never
   # reach the notes, in any mode.
