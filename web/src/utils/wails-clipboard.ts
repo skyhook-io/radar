@@ -10,8 +10,8 @@
 //     these accelerators with nil callbacks (native responder chain), but WKWebView
 //     does NOT dispatch a DOM copy/cut event from the native copy: selector.
 //     The keydown event DOES reach JS, so we intercept it here.
-//   Cmd+V: Handled by menu.go's explicit WindowExecJS callback which reads
-//     navigator.clipboard.readText() and dispatches a synthetic paste event.
+//   Cmd+V: Handled by menu.go's explicit WindowExecJS callback, which reads
+//     through Wails on macOS and dispatches a synthetic paste event.
 //   Right-click Copy/Cut (Monaco): Monaco calls document.execCommand('copy'/'cut'),
 //     intercepted by the monkey-patch below.
 //   Right-click Paste (Monaco): Not supported — Monaco calls navigator.clipboard
