@@ -596,6 +596,14 @@ export function ClusterActionDialog({
         }
       case 'fence': {
         const choices = [...facts.instances.map((i) => i.pod).filter((p) => !fenced.includes(p)), '*']
+        // The server refuses some instances on their own, such as the target of
+        // a switchover or failover in progress.
+        const refusal = (pod: string) => {
+          const cap = pod === '*' ? undefined : caps.instanceActions?.[pod]?.fence
+          return cap && !cap.allowed ? capabilityReason(cap) : undefined
+        }
+        const refused = caps.actions.fence.allowed ? choices.flatMap((pod) => { const reason = refusal(pod); return reason ? [{ pod, reason }] : [] }) : []
+        const selRefusal = fenceSel ? refusal(fenceSel) : undefined
         const next = fenceSel === '*' ? ['*'] : [...fenced.filter((f) => f !== '*'), fenceSel]
         const fencesPrimary = fenceSel === '*' || fenceSel === facts.currentPrimary
         return {
@@ -605,22 +613,31 @@ export function ClusterActionDialog({
             ? 'Stops PostgreSQL on the fenced instances while keeping their Pods and volumes. Writes stop and no failover happens while the primary is fenced.'
             : 'Stops PostgreSQL on this standby while keeping its Pod and volume for investigation.',
           body: (
-            <label className="flex items-center gap-2 text-sm">
-              <span className="text-xs text-theme-text-secondary">Instance</span>
-              <select value={fenceSel} onChange={(e) => setFenceSel(e.target.value)} className="rounded-lg border border-theme-border bg-theme-base px-2 py-1 text-sm">
-                <option value="" disabled>Choose an instance</option>
-                {choices.map((c) => (
-                  <option key={c} value={c}>{c === '*' ? 'All instances — stops service' : c}{c === facts.currentPrimary ? ' (primary)' : ''}</option>
-                ))}
-              </select>
-            </label>
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-2 text-sm">
+                <span className="text-xs text-theme-text-secondary">Instance</span>
+                <select value={fenceSel} onChange={(e) => setFenceSel(e.target.value)} className="rounded-lg border border-theme-border bg-theme-base px-2 py-1 text-sm">
+                  <option value="" disabled>Choose an instance</option>
+                  {choices.map((c) => (
+                    <option key={c} value={c} disabled={!!refusal(c)}>
+                      {c === '*' ? 'All instances — stops service' : c}{c === facts.currentPrimary ? ' (primary)' : ''}{refusal(c) ? ' — cannot be fenced' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {refused.map((r) => (
+                <div key={r.pod} className="text-xs text-theme-text-secondary">
+                  <span className="font-mono">{r.pod}</span> cannot be fenced: {r.reason}
+                </div>
+              ))}
+            </div>
           ),
           writes: fenceSel ? [{ summary: `patch Cluster ${namespace}/${name}`, detail: `metadata.annotations["cnpg.io/fencedInstances"] = ${JSON.stringify(JSON.stringify(next))}` }] : [],
           scope: { kind: 'metadata', paths: ['metadata.annotations["cnpg.io/fencedInstances"]'] },
           typed: fencesPrimary,
           disruptive: fencesPrimary,
           params: { instances: fenceSel === '*' ? '*' : [fenceSel] },
-          invalid: fencingMalformed ? 'The cnpg.io/fencedInstances annotation is not valid JSON; fix it in YAML first.' : undefined,
+          invalid: fencingMalformed ? 'The cnpg.io/fencedInstances annotation is not valid JSON; fix it in YAML first.' : selRefusal ? `${fenceSel} cannot be fenced: ${selRefusal}` : undefined,
           incomplete: !fenceSel ? 'Choose an instance to fence.' : undefined,
           success: () => 'Fencing requested.',
         }

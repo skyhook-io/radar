@@ -898,6 +898,63 @@ func TestCNPGActionUnfenceWaitsForColdSnapshot(t *testing.T) {
 	}
 }
 
+// A cluster that declares volume snapshots may be under a cold snapshot, so
+// an unreadable Backup list refuses lifting a fence; without the declaration
+// no cold snapshot can exist and the list failure is irrelevant.
+func TestCNPGActionUnfenceWhenBackupsUnreadable(t *testing.T) {
+	cases := []struct {
+		name       string
+		listErr    error
+		snapshots  bool
+		blocked    bool
+		wantReason string
+	}{
+		{"forbidden, snapshots declared", apiForbidden("backups"), true, true, "list backups (postgresql.cnpg.io) in namespace db"},
+		{"apiserver error, snapshots declared", apierrors.NewInternalError(errors.New("etcd unavailable")), true, true, "listing Backups failed"},
+		{"forbidden, no snapshots declared", apiForbidden("backups"), false, false, ""},
+		{"apiserver error, no snapshots declared", apierrors.NewInternalError(errors.New("etcd unavailable")), false, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := cnpgActionCluster(func(o map[string]any) {
+				o["metadata"].(map[string]any)["annotations"] = map[string]any{cnpgFencedAnnotation: `["pg-2"]`}
+				if !tc.snapshots {
+					delete(o["spec"].(map[string]any), "backup")
+				}
+			})
+			env := newCNPGActionEnv(t, []runtime.Object{c}, cnpgActionPod("pg-1", "u1", true))
+			env.dyn.PrependReactor("list", "backups", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.listErr
+			})
+			resp, err := newTestReader(nil).ClusterCapabilities(context.Background(), env.clients(), "kind-test", "db", "pg")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for label, verdict := range map[string]integration.ActionCapability{"unfence": resp.Actions.Unfence, "pg-2 unfence": resp.InstanceActions["pg-2"].Unfence} {
+				if verdict.Allowed == tc.blocked || !strings.Contains(verdict.Reason, tc.wantReason) {
+					t.Errorf("%s = %+v, want blocked %v naming %q", label, verdict, tc.blocked, tc.wantReason)
+				}
+			}
+			facts := cnpgActionFacts()
+			facts["fencedInstances"] = map[string]any{"raw": `["pg-2"]`}
+			_, err = RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "unfence", cnpgActionReq(t, facts, map[string]any{"instances": []string{"pg-2"}}))
+			if !tc.blocked {
+				if err != nil || len(env.patches) != 1 {
+					t.Fatalf("run: err = %v, patches = %d; want the fence lifted", err, len(env.patches))
+				}
+				return
+			}
+			ae, ok := cnpgActionStatus(t, err)
+			if !ok || ae.Code != integration.ActionCodeBlocked || !strings.Contains(ae.Message, tc.wantReason) {
+				t.Errorf("run: err = %v, want blocked naming %q", err, tc.wantReason)
+			}
+			if len(env.patches) != 0 {
+				t.Error("a write went out")
+			}
+		})
+	}
+}
+
 func TestCNPGActionMalformedFencingBlocksCapability(t *testing.T) {
 	c := cnpgActionCluster(func(o map[string]any) {
 		o["metadata"].(map[string]any)["annotations"] = map[string]any{cnpgFencedAnnotation: "{not json"}
@@ -1239,7 +1296,7 @@ func TestCNPGActionScheduleSuspendResume(t *testing.T) {
 		suspended := cnpgActionSchedule(func(o map[string]any) { o["spec"].(map[string]any)["suspend"] = true })
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), suspended})
 		res, err := RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "resume",
-			integration.ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true}`)})
+			integration.ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true,"generation":3}`)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1254,11 +1311,35 @@ func TestCNPGActionScheduleSuspendResume(t *testing.T) {
 	t.Run("suspend binds the reviewed state", func(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
 		_, err := RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "suspend",
-			integration.ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true}`)})
+			integration.ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true,"generation":3}`)})
 		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeChanged {
 			t.Fatalf("err = %v, want 409 changed", err)
 		}
 	})
+	// Generation binds the schedule's target Cluster and method, which the
+	// dialog names, not only spec.suspend.
+	for _, tc := range []struct {
+		name   string
+		facts  string
+		status int
+		code   string
+	}{
+		{"suspend requires the reviewed generation", `{"suspended":false}`, http.StatusBadRequest, ""},
+		{"suspend binds the reviewed generation", `{"suspended":false,"generation":2}`, http.StatusConflict, integration.ActionCodeChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			retargeted := cnpgActionSchedule(func(o map[string]any) { o["spec"].(map[string]any)["cluster"] = map[string]any{"name": "pg-other"} })
+			env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), retargeted})
+			_, err := RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "suspend",
+				integration.ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(tc.facts)})
+			if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != tc.status || ae.Code != tc.code {
+				t.Fatalf("err = %v, want %d %q", err, tc.status, tc.code)
+			}
+			if len(env.patches) != 0 {
+				t.Error("a write went out")
+			}
+		})
+	}
 }
 
 func TestCNPGActionApiserverConflictIsNotRetried(t *testing.T) {

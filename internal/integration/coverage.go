@@ -9,7 +9,7 @@ const (
 	KindCoverageFull    = "full"
 	KindCoveragePartial = "partial"
 	KindCoverageDenied  = "denied"
-	// kindCoverageUncached: the caller may list the kind, but Radar's informer
+	// KindCoverageUncached: the caller may list the kind, but Radar's informer
 	// holds none of the Namespaces in scope, so nothing was read.
 	KindCoverageUncached     = "uncached"
 	KindCoverageNotInstalled = "notInstalled"

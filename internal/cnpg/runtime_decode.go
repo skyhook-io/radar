@@ -321,9 +321,10 @@ func parseCNPGSyncPriority(raw json.RawMessage) *int {
 
 var cnpgPgIntervalUnitSeconds = map[string]float64{"year": 365.25 * 86400, "mon": 30 * 86400, "day": 86400}
 
-// parsePgIntervalSeconds reads a PostgreSQL interval in the default output
-// style ("00:00:00.012345", "1 day 02:03:04", "2 mons 3 days"). Unparseable
-// is nil, never zero: a lag that cannot be read must not look like no lag.
+// parseCNPGPgInterval returns the seconds in a PostgreSQL interval written in
+// the default output style ("00:00:00.012345", "1 day 02:03:04", "2 mons 3
+// days"). Unparseable is nil, never zero: a lag that cannot be read must not
+// look like no lag.
 func parseCNPGPgInterval(v string) *float64 {
 	tokens := strings.Fields(v)
 	if len(tokens) == 0 {

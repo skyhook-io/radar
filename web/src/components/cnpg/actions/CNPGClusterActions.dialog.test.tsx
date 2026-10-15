@@ -37,6 +37,25 @@ it('requires an explicit fencing choice, puts All last and keeps primary typed c
   expect(state.dialog.typedConfirmation).toBe('orders')
   expect(state.dialog.effect).toContain('Writes stop')
 })
+it('disables fencing an instance the server refuses on its own, with the reason, and keeps All', () => {
+  const target = 'It is the target of a switchover or failover in progress'
+  render('fence', { instanceActions: { 'orders-1': { fence: { allowed: true } }, 'orders-2': { fence: { allowed: false, reason: target, permission: 'allowed' } } } })
+  const select = host.querySelector('select')!
+  const option = (value: string) => [...select.options].find((o) => o.value === value)!
+  expect(option('orders-2').disabled).toBe(true)
+  expect(option('orders-2').textContent).toBe('orders-2 — cannot be fenced')
+  expect(option('orders-1').disabled).toBe(false)
+  expect(option('*').disabled).toBe(false)
+  expect(host.textContent).toContain(`orders-2 cannot be fenced: ${target}`)
+  act(() => { select.value = 'orders-2'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(state.dialog.disabledReason).toBe(`orders-2 cannot be fenced: ${target}`)
+  act(() => host.querySelector('button')!.click())
+  expect(state.mutate).not.toHaveBeenCalled()
+  act(() => { select.value = '*'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(state.dialog.disabledReason).toBeUndefined()
+  act(() => host.querySelector('button')!.click())
+  expect(state.mutate.mock.calls[0][0].request.params.instances).toBe('*')
+})
 it('keeps a malformed fencing annotation as a real blocker after selecting an instance', () => {
   render('fence', { facts: { ...facts, fencedInstances: { all: false, instances: [], malformed: true } } })
   const select = host.querySelector('select')!

@@ -1540,10 +1540,13 @@ function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | unde
       const partial = expectedStandbys !== undefined && expectedStandbys !== null && lag.lagStandbys !== undefined && lag.lagStandbys < expectedStandbys
       const coverage = partial ? ` (${lag.lagStandbys} of ${expectedStandbys} ${designated ? 'instances' : 'standbys'} reporting)` : ''
       const lagTone = cnpgLagTone(lag.seconds)
+      // A replica cluster's lag is replay behind what arrived; a dead upstream
+      // feed delivers nothing and still reads 0.
+      const upstream = designated !== undefined
       return {
-        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}${coverage}${lag.receiverUnknown ? ' · streaming unverified' : ''}`,
-        tone: lag.receiverUnknown || (partial && lagTone === 'healthy') ? 'unknown' : lagTone,
-        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}.${lag.receiverUnknown ? ' The exporter reported no WAL receiver state, and a standby that receives nothing also reads 0.' : ''}${isolationCaveat(lag.isolation)}`,
+        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}${coverage}${lag.receiverUnknown ? ' · streaming unverified' : ''}${upstream ? ' · upstream feed not assessed' : ''}`,
+        tone: lag.receiverUnknown || ((partial || upstream) && lagTone === 'healthy') ? 'unknown' : lagTone,
+        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}.${lag.receiverUnknown ? ' The exporter reported no WAL receiver state, and a standby that receives nothing also reads 0.' : ''}${upstream ? ' The designated primary replays WAL from an external cluster; Radar does not assess that feed.' : ''}${isolationCaveat(lag.isolation)}`,
       }
     }
     case 'noStandby':

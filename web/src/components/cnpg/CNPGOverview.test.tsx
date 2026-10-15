@@ -161,11 +161,11 @@ it('uses an unknown sidebar count and tooltip for zero over partial coverage', (
   for (const d of result.value!.CloudNativePG.destinations.filter((d) => d.id !== 'operator')) {
     expect(d.count).toBeNull()
     expect(d.countLowerBound).toBe(true)
-    expect(d.countTitle).toBe('Unknown: some CloudNativePG data could not be read.')
+    expect(d.countTitle).toMatch(/^Unknown: some CloudNativePG data could not be read\./)
     expect(d.countTitle).not.toContain('At least 0')
   }
   sidebar.data.coverage.clusters = { state: 'full' }
   renderToStaticMarkup(<MemoryRouter><Probe /></MemoryRouter>)
-  expect(result.value!.CloudNativePG.destinations.find((d) => d.id === 'overview')!.count).toBe(0)
+  expect(result.value!.CloudNativePG.destinations.find((d) => d.id === 'protection')!.count).toBe(0)
   sidebar.data = undefined
 })

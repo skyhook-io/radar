@@ -117,6 +117,9 @@ type CNPGClusterFacts struct {
 	// ColdSnapshotBackup names a running offline volume-snapshot Backup of
 	// the cluster: the operator fenced its instance and lifts the fence itself.
 	ColdSnapshotBackup string `json:"coldSnapshotBackup,omitempty"`
+	// ColdSnapshotUnchecked says why Radar could not tell whether such a
+	// Backup is running, for a cluster that declares volume snapshots.
+	ColdSnapshotUnchecked string `json:"coldSnapshotUnchecked,omitempty"`
 }
 
 type CNPGClusterActions struct {
@@ -670,20 +673,30 @@ func cnpgGuardUnfence(f CNPGClusterFacts) string {
 	if f.ColdSnapshotBackup != "" {
 		return fmt.Sprintf("Backup %s is a cold snapshot: the operator fenced the instance for it and lifts the fence itself once the snapshot is taken. Lifting it now would start PostgreSQL under the snapshot", f.ColdSnapshotBackup)
 	}
+	if f.ColdSnapshotUnchecked != "" {
+		return fmt.Sprintf("Radar cannot tell whether a cold snapshot Backup is running: %s. The operator fences the instance for a cold snapshot and lifts the fence itself; lifting it first would start PostgreSQL under the snapshot", f.ColdSnapshotUnchecked)
+	}
 	return ""
 }
 
 // cnpgRunningColdSnapshot names a running offline (cold) volume-snapshot
-// Backup of the cluster, or "" when there is none. A failed list also gives
-// "": lifting a fence must stay possible during an incident, and the operator
-// still owns its own fence.
-func cnpgRunningColdSnapshot(ctx context.Context, dyn dynamic.Interface, cluster *unstructured.Unstructured) string {
+// Backup of the cluster. When the Backups cannot be listed, unchecked says
+// why, but only for a cluster that declares spec.backup.volumeSnapshot: the
+// operator fails a snapshot Backup of any other cluster before fencing, so
+// there a failed list must not stand in the way of lifting a fence.
+func cnpgRunningColdSnapshot(ctx context.Context, dyn dynamic.Interface, cluster *unstructured.Unstructured) (running, unchecked string) {
 	if dyn == nil {
-		return ""
+		return "", ""
 	}
 	list, err := dyn.Resource(cnpgBackupGVR).Namespace(cluster.GetNamespace()).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return ""
+		switch {
+		case apierrors.IsNotFound(err), !cnpg.ParseBackupDeclaration(cluster).SnapshotsConfigured:
+			return "", ""
+		case apierrors.IsForbidden(err):
+			return "", "you are not allowed to " + cnpgGrantListBackups.In(cluster.GetNamespace()).String()
+		}
+		return "", "listing Backups failed: " + truncateCNPGRuntimeError(err.Error())
 	}
 	// An unset online follows the Cluster's default, which is online.
 	clusterOnline, found, _ := unstructured.NestedBool(cluster.Object, "spec", "backup", "volumeSnapshot", "online")
@@ -715,9 +728,9 @@ func cnpgRunningColdSnapshot(ctx context.Context, dyn dynamic.Interface, cluster
 		case "", "completed", "failed", "walArchivingFailing":
 			continue
 		}
-		return b.GetName()
+		return b.GetName(), ""
 	}
-	return ""
+	return "", ""
 }
 
 func cnpgGuardHibernate(f CNPGClusterFacts) string {
@@ -759,7 +772,7 @@ func (s *Reader) ClusterCapabilities(callerCtx context.Context, c ActionClients,
 		return nil, err
 	}
 	facts, _ := cnpgClusterFactsOf(ctx, c.Typed, cluster)
-	facts.ColdSnapshotBackup = cnpgRunningColdSnapshot(ctx, c.Dynamic, cluster)
+	facts.ColdSnapshotBackup, facts.ColdSnapshotUnchecked = cnpgRunningColdSnapshot(ctx, c.Dynamic, cluster)
 
 	perm := map[auth.Grant]string{}
 	permOf := func(g auth.Grant) string {
@@ -1228,7 +1241,7 @@ func RunCNPGClusterAction(ctx context.Context, c ActionClients, namespace, name,
 		typed = nil
 	}
 	facts, pods := cnpgClusterFactsOf(ctx, typed, cluster)
-	facts.ColdSnapshotBackup = cnpgRunningColdSnapshot(ctx, c.Dynamic, cluster)
+	facts.ColdSnapshotBackup, facts.ColdSnapshotUnchecked = cnpgRunningColdSnapshot(ctx, c.Dynamic, cluster)
 	if string(cluster.GetUID()) != req.UID {
 		return nil, integration.ChangedAction(facts, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
@@ -1834,11 +1847,18 @@ func RunCNPGScheduleAction(ctx context.Context, c ActionClients, namespace, name
 			return nil, integration.ChangedAction(facts, "ScheduledBackup %s/%s settings changed since you confirmed; review the action again", namespace, name)
 		}
 	default:
+		// Generation binds the schedule, method and Cluster the dialog named.
 		if reviewed.Suspended == nil {
 			return nil, integration.RefuseAction(http.StatusBadRequest, "", "facts.suspended is required for %s", action)
 		}
+		if reviewed.Generation == nil {
+			return nil, integration.RefuseAction(http.StatusBadRequest, "", "facts.generation is required for %s", action)
+		}
 		if *reviewed.Suspended != facts.Suspended {
 			return nil, integration.ChangedAction(facts, "ScheduledBackup %s/%s changed since you confirmed (suspended); review the action again", namespace, name)
+		}
+		if *reviewed.Generation != facts.Generation {
+			return nil, integration.ChangedAction(facts, "ScheduledBackup %s/%s settings changed since you confirmed; review the action again", namespace, name)
 		}
 	}
 	if facts.Terminating {

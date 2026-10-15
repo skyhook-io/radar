@@ -242,5 +242,6 @@ describe('fleet lag covers the standbys that report', () => {
     expect(row(f, 'ha').replication).toMatchObject({ text: expect.stringContaining('(2 of 3 instances reporting)'), tone: 'unknown' })
     const all = applyCNPGFleetMetrics(replica, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-1', lagStandbys: 3, standbys: 3, receiving: 3 })], { source: 'prometheus' })
     expect(row(all, 'ha').replication.text).not.toContain('reporting')
+    expect(row(all, 'ha').replication).toMatchObject({ text: expect.stringContaining('upstream feed not assessed'), tone: 'unknown' })
   })
 })

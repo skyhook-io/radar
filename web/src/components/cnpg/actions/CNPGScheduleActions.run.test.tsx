@@ -37,3 +37,22 @@ it('binds the manual run and its follow-through to the reviewed source Cluster',
     host.remove()
   }
 })
+
+it('binds the reviewed generation when suspending', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  mocks.mutate.mockReset()
+  try {
+    await act(async () => root.render(<CNPGScheduleActions namespace="prod" name="nightly" />))
+    await act(async () => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Suspend')!.click())
+    const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((button) => button.textContent === 'Suspend')!
+    expect(confirm).toBeDefined()
+    await act(async () => confirm.click())
+    expect(mocks.mutate.mock.calls[0][0]).toMatchObject({ action: 'suspend', request: { uid: 'schedule-uid', facts: { generation: 3, suspended: false } } })
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
+  }
+})

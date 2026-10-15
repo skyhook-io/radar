@@ -165,6 +165,13 @@ func TestCNPGActionCancelBackendRefusals(t *testing.T) {
 	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusBadRequest || len(calls) != 0 {
 		t.Errorf("malformed backendStart = %v, want 400 before any exec", err)
 	}
+
+	// Refused before any exec, so retryable rather than an unknown outcome.
+	c.Exec = nil
+	_, err = RunCNPGClusterAction(context.Background(), c, "db", "pg", "cancelBackend", cnpgActionReq(t, nil, cnpgSignalParamsFor("u1")))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusServiceUnavailable || ae.Code != integration.ActionCodeUnavailable {
+		t.Errorf("no exec client = %v, want 503 unavailable", err)
+	}
 }
 
 func cnpgDestroyTestPVC(name, uid, instance string, owned bool, mut func(*corev1.PersistentVolumeClaim)) *corev1.PersistentVolumeClaim {
@@ -503,7 +510,7 @@ func TestCNPGPoolerPauseBindsReviewedState(t *testing.T) {
 		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1, UpdatedReplicas: 2, AvailableReplicas: 1},
 	}
 	env := newCNPGActionEnv(t, []runtime.Object{cnpgTestPooler(false)}, deploy)
-	req := integration.ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":false}`)}
+	req := integration.ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":false,"generation":2}`)}
 
 	res, err := RunCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "pause", req)
 	if err != nil {
@@ -518,7 +525,7 @@ func TestCNPGPoolerPauseBindsReviewedState(t *testing.T) {
 		t.Errorf("target = %+v", res.Target)
 	}
 
-	_, err = RunCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "resume", integration.ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":true}`)})
+	_, err = RunCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "resume", integration.ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":true,"generation":2}`)})
 	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeChanged {
 		t.Errorf("stale paused = %v, want 409 changed", err)
 	}
@@ -538,6 +545,42 @@ func TestCNPGPoolerPauseBindsReviewedState(t *testing.T) {
 	}
 	if !caps.Actions.Pause.Allowed || caps.Actions.Resume.Allowed {
 		t.Errorf("actions = %+v", caps.Actions)
+	}
+}
+
+// Pause/resume binds the spec generation: the dialog names the target
+// Cluster, and a retargeted Pooler keeps its paused value.
+func TestCNPGPoolerActionBindsGeneration(t *testing.T) {
+	retargeted := cnpgTestPooler(false)
+	retargeted.Object["metadata"].(map[string]any)["generation"] = int64(3)
+	retargeted.Object["spec"].(map[string]any)["cluster"] = map[string]any{"name": "pg-other"}
+	cases := []struct {
+		name   string
+		facts  string
+		status int
+		code   string
+	}{
+		{"generation missing", `{"paused":false}`, http.StatusBadRequest, ""},
+		{"generation moved", `{"paused":false,"generation":2}`, http.StatusConflict, integration.ActionCodeChanged},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newCNPGActionEnv(t, []runtime.Object{retargeted})
+			_, err := RunCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "pause",
+				integration.ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(tc.facts)})
+			ae, ok := cnpgActionStatus(t, err)
+			if !ok || ae.Status != tc.status || ae.Code != tc.code {
+				t.Errorf("err = %v, want %d %q", err, tc.status, tc.code)
+			}
+			if tc.code == integration.ActionCodeChanged {
+				if cur, _ := ae.Current.(CNPGPoolerFacts); cur.Generation != 3 || cur.Cluster != "pg-other" {
+					t.Errorf("current = %+v, want generation 3 targeting pg-other", ae.Current)
+				}
+			}
+			if len(env.patches) != 0 {
+				t.Error("a write went out")
+			}
+		})
 	}
 }
 
@@ -575,6 +618,24 @@ func TestCNPGActionDestroyInstanceRefusesWithoutEveryGrantBeforeAnyWrite(t *test
 	}
 	if !strings.Contains(ae.Message, "patch clusters") {
 		t.Errorf("message = %q", ae.Message)
+	}
+	if len(env.deletes) != 0 || len(env.patches) != 0 {
+		t.Errorf("wrote before the preflight refused: %d deletes, %d patches", len(env.deletes), len(env.patches))
+	}
+}
+
+// A permission check that could not run refuses before any write, so the
+// refusal is coded unavailable: retryable, not an unknown outcome.
+func TestCNPGActionDestroyInstanceUncheckablePreflightIsUnavailable(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	env.typed.PrependReactor("create", "selfsubjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServiceUnavailable("authorizer unavailable")
+	})
+	_, err := RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	ae, ok := cnpgActionStatus(t, err)
+	if !ok || ae.Status != http.StatusServiceUnavailable || ae.Code != integration.ActionCodeUnavailable || !strings.Contains(ae.Message, "nothing was changed") {
+		t.Fatalf("err = %v, want 503 unavailable", err)
 	}
 	if len(env.deletes) != 0 || len(env.patches) != 0 {
 		t.Errorf("wrote before the preflight refused: %d deletes, %d patches", len(env.deletes), len(env.patches))

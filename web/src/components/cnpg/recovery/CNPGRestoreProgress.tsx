@@ -32,7 +32,9 @@ export function describeRecoverySource(r: CNPGRecoverySpec): string {
     case 'barmanObjectStore':
       return `Barman object store · server ${r.serverName ?? '?'} · to ${target}`
     case 'backup':
-      return `Backup ${r.backup ?? '?'} · to ${target}`
+      // Without a target, an in-tree Backup replays its archive's WAL but a
+      // volume snapshot stops at its own end; the method is not read here.
+      return `Backup ${r.backup ?? '?'}${r.target ? ` · to ${target}` : ''}`
     case 'volumeSnapshots':
       return 'Volume snapshots'
     default:
@@ -172,7 +174,7 @@ export function CNPGRestoreProgress({ namespace, name, nextSteps }: { namespace:
           </div>
         )}
         <div className="text-[11px] text-theme-text-tertiary">
-          Complete when the Cluster reports a healthy phase with every instance ready. Sampled {formatAge(snapshot.capturedAt)} ago.
+          Complete once the recovery Job completes or a restored instance is ready. Sampled {formatAge(snapshot.capturedAt)} ago.
         </div>
       </div>
     </section>

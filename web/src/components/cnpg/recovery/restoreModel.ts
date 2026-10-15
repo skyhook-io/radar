@@ -10,21 +10,59 @@ const HEALTHY_PHASE = 'Cluster in healthy state'
  * Where a restore reads from. Plugin backups are restored through the
  * ObjectStore with the backup's ID pinned: CloudNativePG restores a
  * `bootstrap.recovery.backup` reference only from in-tree or snapshot backups.
+ * A `snapshot` Backup restores its own consistent point; replaying WAL past it
+ * needs a WAL archive `source`, which this restore does not configure.
  */
 export type RestoreSource = (
   | { kind: 'objectStore'; objectStore: string; serverName: string; backupID?: string; backupName?: string; backupEnd?: string }
   | { kind: 'inTree'; barmanObjectStore: Record<string, unknown>; serverName: string }
-  | { kind: 'backup'; backup: string; backupEnd?: string }
+  | { kind: 'backup'; backup: string; backupEnd?: string; snapshot?: boolean }
 ) & { majorVersion?: number }
 
 export type RestoreTarget = { kind: 'latest' } | { kind: 'time'; iso: string } | { kind: 'backupEnd' }
+
+type InTreeArchive = Extract<RestoreSource, { kind: 'inTree' }>
 
 function isPluginBackup(b: any): boolean {
   return b?.spec?.method === 'plugin' || b?.status?.method === 'plugin'
 }
 
+function isSnapshotBackup(b: any): boolean {
+  return b?.spec?.method === 'volumeSnapshot' || b?.status?.method === 'volumeSnapshot'
+}
+
 function backupEnd(b: any): string | undefined {
   return b?.status?.stoppedAt || b?.status?.startedAt
+}
+
+/**
+ * The in-tree archive a Backup recorded writing to. A restore of it reads WAL
+ * from there too, whatever the Cluster declares today.
+ */
+function recordedInTreeArchive(b: any): InTreeArchive | null {
+  const s = b?.status
+  const serverName = s?.serverName || b?.spec?.cluster?.name
+  if (isPluginBackup(b) || isSnapshotBackup(b) || typeof s?.destinationPath !== 'string' || !s.destinationPath || !serverName) return null
+  return { kind: 'inTree', barmanObjectStore: { destinationPath: s.destinationPath, endpointURL: s.endpointURL }, serverName }
+}
+
+function sameInTreeArchive(a: InTreeArchive, b: InTreeArchive): boolean {
+  return cnpgArchiveMatchesCluster({ spec: { backup: { barmanObjectStore: { ...a.barmanObjectStore, serverName: a.serverName } } } }, b)
+}
+
+/** Whether the Cluster's WAL archiving writes the WAL a restore from this source replays. */
+function clusterArchivesInto(source: RestoreSource, cluster: any, namespace: string, completed: any[]): boolean {
+  if (!cluster) return false
+  switch (source.kind) {
+    case 'inTree':
+      return true
+    case 'objectStore':
+      return cluster.metadata?.namespace === namespace && cnpgArchiveMatchesCluster(cluster, source) && getCNPGClusterBarmanPlugin(cluster)?.isWALArchiver === true
+    default: {
+      const archive = source.snapshot ? null : recordedInTreeArchive(completed.find((b) => b?.metadata?.name === source.backup))
+      return !!archive && cnpgArchiveMatchesCluster(cluster, archive)
+    }
+  }
 }
 
 /** The source a Backup restores from, given the cluster that took it (if it still exists). */
@@ -33,7 +71,7 @@ export function restoreSourceForBackup(backup: any, sourceCluster: any | null): 
   const name = backup.metadata?.name
   const majorVersion = backup.status?.majorVersion > 0 ? backup.status.majorVersion : undefined
   const version = majorVersion ? { majorVersion } : {}
-  if (!isPluginBackup(backup)) return { kind: 'backup', backup: name, backupEnd: backupEnd(backup), ...version }
+  if (!isPluginBackup(backup)) return { kind: 'backup', backup: name, backupEnd: backupEnd(backup), ...(isSnapshotBackup(backup) ? { snapshot: true } : {}), ...version }
   if (getCNPGBackupPlugin(backup)?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
   if (!cnpgBackupMatchesCluster(backup, sourceCluster)) return null
   const plugin = sourceCluster ? getCNPGClusterBarmanPlugin(sourceCluster) : null
@@ -150,13 +188,19 @@ export function describeSource(s: RestoreSource): string {
     case 'inTree':
       return `Barman object store (in-tree) · server ${s.serverName}`
     default:
-      return `Backup ${s.backup}`
+      return s.snapshot ? `Backup ${s.backup} (volume snapshot)` : `Backup ${s.backup}`
   }
 }
 
 /** A source pinned to one base backup can also stop at that backup's end. */
 export function sourcePinsBackup(s: RestoreSource | undefined): boolean {
   return s?.kind === 'objectStore' && !!s.backupID
+}
+
+/** The recovery targets the manifest can deliver from a source, the default first. */
+export function restoreTargetKinds(s: RestoreSource | undefined): RestoreTarget['kind'][] {
+  if (s?.kind === 'backup' && s.snapshot) return ['backupEnd']
+  return sourcePinsBackup(s) ? ['backupEnd', 'latest', 'time'] : ['latest', 'time']
 }
 
 export interface EvidencePoint {
@@ -192,6 +236,10 @@ export function recoveryEvidenceFor(
   const cluster = ctx.sourceCluster
   const clusterName = cluster?.metadata?.name
 
+  const completed = ctx.backups.filter((b) => b?.metadata?.namespace === ctx.namespace && b?.status?.phase === 'completed')
+  const point = (b: any): EvidencePoint | undefined => (backupEnd(b) ? { at: backupEnd(b)!, source: `Backup ${b.metadata?.name}` } : undefined)
+  const sameNamespace = cluster?.metadata?.namespace === ctx.namespace
+
   if (source.kind === 'objectStore') {
     const store = ctx.stores.find((s) => s?.metadata?.namespace === ctx.namespace && s?.metadata?.name === source.objectStore)
     if (!store) gaps.push(`ObjectStore ${source.objectStore} is not readable, so its recovery window is unknown`)
@@ -200,23 +248,34 @@ export function recoveryEvidenceFor(
     const where = `ObjectStore ${source.objectStore} status, server ${source.serverName}`
     if (w?.firstRecoverabilityPoint) out.firstPoint = { at: w.firstRecoverabilityPoint, source: where }
     if (w?.lastSuccessfulBackupTime) out.lastBackup = { at: w.lastSuccessfulBackupTime, source: where }
-  } else if (source.kind === 'inTree' && cluster) {
-    if (cluster.status?.firstRecoverabilityPoint) out.firstPoint = { at: cluster.status.firstRecoverabilityPoint, source: `Cluster ${clusterName} status` }
-    if (cluster.status?.lastSuccessfulBackup) out.lastBackup = { at: cluster.status.lastSuccessfulBackup, source: `Cluster ${clusterName} status` }
+    // barman-cloud writes a Backup where its Cluster's plugin points, so a
+    // Backup counts only while its Cluster still points at this archive.
+    const intoStore = cluster && sameNamespace && cnpgArchiveMatchesCluster(cluster, source)
+      ? completed.filter((b) => isPluginBackup(b) && getCNPGBackupPlugin(b)?.name === CNPG_BARMAN_PLUGIN_NAME && cnpgBackupMatchesCluster(b, cluster))
+      : []
+    out.lastBackup = newest([out.lastBackup, ...intoStore.map(point)])
+  } else if (source.kind === 'inTree') {
+    if (cluster) {
+      // An operator that reports per-method times folds volume snapshots into
+      // the plain fields; one that does not predates counting them there.
+      const st = cluster.status ?? {}
+      const first = st.firstRecoverabilityPointByMethod ? st.firstRecoverabilityPointByMethod.barmanObjectStore : st.firstRecoverabilityPoint
+      const last = st.lastSuccessfulBackupByMethod ? st.lastSuccessfulBackupByMethod.barmanObjectStore : st.lastSuccessfulBackup
+      if (first) out.firstPoint = { at: first, source: `Cluster ${clusterName} status` }
+      if (last) out.lastBackup = { at: last, source: `Cluster ${clusterName} status` }
+    }
+    const intoArchive = completed.filter((b) => {
+      const archive = recordedInTreeArchive(b)
+      return !!archive && sameInTreeArchive(archive, source)
+    })
+    out.lastBackup = newest([out.lastBackup, ...intoArchive.map(point)])
+  } else if (source.backupEnd) {
+    out.lastBackup = { at: source.backupEnd, source: `Backup ${source.backup}` }
   }
 
-  const ownBackups = ctx.backups.filter(
-    (b) => b?.metadata?.namespace === ctx.namespace && b?.status?.phase === 'completed' && (!isPluginBackup(b) || getCNPGBackupPlugin(b)?.name === CNPG_BARMAN_PLUGIN_NAME) && cnpgBackupMatchesCluster(b, cluster),
-  )
-  const newestBackup = newest(ownBackups.map((b) => (backupEnd(b) ? { at: backupEnd(b)!, source: `Backup ${b.metadata?.name}` } : undefined)))
-  out.lastBackup = newest([out.lastBackup, newestBackup])
-
-  const archivesSource = cluster && (source.kind !== 'objectStore' || (
-    cluster.metadata?.namespace === ctx.namespace &&
-    cnpgArchiveMatchesCluster(cluster, source) &&
-    getCNPGClusterBarmanPlugin(cluster)?.isWALArchiver === true
-  ))
-  if (archivesSource) {
+  if (source.kind === 'backup' && source.snapshot) {
+    out.archiving = { text: 'Not replayed', tone: 'neutral', source: 'A volume snapshot restores to its own end; no archived WAL is applied' }
+  } else if (clusterArchivesInto(source, cluster, ctx.namespace, completed)) {
     const cond = (cluster.status?.conditions ?? []).find((c: any) => c?.type === 'ContinuousArchiving')
     if (!cond) out.archiving = { text: 'Not reported', tone: 'unknown', source: `Cluster ${clusterName} has no ContinuousArchiving condition` }
     else if (cond.status === 'True') out.archiving = { text: 'Archiving', tone: 'healthy', source: `ContinuousArchiving condition on ${clusterName}` }
@@ -240,7 +299,7 @@ export function recoveryEvidenceFor(
                 : 'The primary’s instance manager did not report archiving',
       )
     }
-  } else if (source.kind !== 'backup') {
+  } else {
     out.archiving = { text: 'Unknown', tone: 'unknown', source: 'No live cluster archives into this source' }
     gaps.push('No live cluster archives into this source, so WAL archived after the last backup is unknown')
   }
@@ -346,7 +405,8 @@ function storageText(s: any): string {
 /**
  * A new Cluster that bootstraps from `source`. It copies what the restored
  * data needs from the source cluster and nothing that would make it write to
- * the source's backup location: no plugins, no backup section.
+ * the source's backup location: no plugins, no backup section. A target the
+ * source cannot deliver (a time past a volume snapshot) is not written.
  */
 export function buildRestoreManifest(args: {
   sourceCluster: any | null
@@ -360,7 +420,7 @@ export function buildRestoreManifest(args: {
   const recovery: Record<string, any> = source.kind === 'backup' ? { backup: { name: source.backup } } : { source: 'origin' }
   const pinned = source.kind === 'objectStore' && source.backupID ? { backupID: source.backupID } : {}
   if (target.kind === 'backupEnd' && 'backupID' in pinned) recovery.recoveryTarget = { ...pinned, targetImmediate: true }
-  else if (target.kind === 'time') recovery.recoveryTarget = { ...pinned, targetTime: target.iso }
+  else if (target.kind === 'time' && restoreTargetKinds(source).includes('time')) recovery.recoveryTarget = { ...pinned, targetTime: target.iso }
   else if ('backupID' in pinned) recovery.recoveryTarget = pinned
   const out: Record<string, any> = {
     apiVersion: 'postgresql.cnpg.io/v1',
@@ -458,12 +518,13 @@ export function cnpgRestoredPrimaryUp(snap: CNPGRecoveryResponse): boolean {
 /**
  * Where a restore stands, from the recovery snapshot alone. The panel stays
  * mounted for the Cluster's whole life, so only recovery Jobs and their Pods
- * count. Completion is a restored instance being ready (a ready instance Pod,
- * or the Cluster's readyInstances, which needs no Pod access): CloudNativePG
- * starts one only after recovery succeeded, so a later switchover, scale-up
- * or failed join never reopens the restore. Failure is a failed recovery Job,
- * or a failing phase before any instance was ready. Missing Pod access never
- * reads as progress or failure.
+ * count. Completion is a completed recovery Job, which stays recorded while
+ * every instance is down (hibernated, or restarting), or a restored instance
+ * being ready (a ready instance Pod, or the Cluster's readyInstances, which
+ * needs no Pod access): CloudNativePG starts one only after recovery
+ * succeeded, so a later switchover, scale-up or failed join never reopens the
+ * restore. Failure is a failed recovery Job, or a failing phase before any
+ * instance was ready. Missing Pod access never reads as progress or failure.
  */
 export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
   const recoveryJobs = snap.jobs.filter(isCNPGRecoveryJob)
@@ -478,13 +539,19 @@ export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
     const pod = recoveryPods.find((p) => p.job === failedJob.name)
     return { ...base, state: 'failed', tone: 'unhealthy', title: `Recovery Job ${failedJob.name} failed`, detail: failedJob.failedWith, logsPod: pod ? { name: pod.name, container: failingContainer(pod)?.name } : undefined }
   }
-  if (cnpgRestoredPrimaryUp(snap) || (c.readyInstances ?? 0) >= 1) {
+  const finishedJob = recoveryJobs.find((j) => j.complete || j.succeeded > 0)
+  const primaryUp = cnpgRestoredPrimaryUp(snap) || (c.readyInstances ?? 0) >= 1
+  if (finishedJob || primaryUp) {
     return {
       ...base,
       state: 'completed',
       tone: 'healthy',
       title: 'Restore completed',
-      detail: [c.readyInstances !== null && c.instances !== null ? `${c.readyInstances}/${c.instances} instances ready` : null, c.phase].filter(Boolean).join(' · '),
+      detail: [
+        !primaryUp && finishedJob ? `Recovery Job ${finishedJob.name} completed` : null,
+        c.readyInstances !== null && c.instances !== null ? `${c.readyInstances}/${c.instances} instances ready` : null,
+        c.phase,
+      ].filter(Boolean).join(' · '),
     }
   }
   if (c.phase && c.phase !== HEALTHY_PHASE && FAILING_PHASE.test(c.phase)) {

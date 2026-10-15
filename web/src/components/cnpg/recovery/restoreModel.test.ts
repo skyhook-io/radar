@@ -16,6 +16,8 @@ import {
   restoreSourceForBackup,
   restoreSourcesFor,
   restoreSourcesForStore,
+  restoreTargetKinds,
+  describeSource,
   targetIsoFrom,
   sourceClusterFor,
 } from './restoreModel'
@@ -132,6 +134,26 @@ describe('restore manifest', () => {
     const m = buildRestoreManifest({ sourceCluster: cluster, source: { kind: 'backup', backup: 'b1' }, namespace: 'db', newName: 'r', target: { kind: 'latest' } })
     expect(m.spec.bootstrap.recovery).toEqual({ backup: { name: 'b1' } })
     expect(m.spec.externalClusters).toBeUndefined()
+    const pitr = buildRestoreManifest({ sourceCluster: cluster, source: { kind: 'backup', backup: 'b1' }, namespace: 'db', newName: 'r', target: { kind: 'time', iso: '2026-09-28T12:00:00Z' } })
+    expect(pitr.spec.bootstrap.recovery).toEqual({ backup: { name: 'b1' }, recoveryTarget: { targetTime: '2026-09-28T12:00:00Z' } })
+  })
+
+  it('offers only the end of a volume snapshot, and writes no later target for it', () => {
+    const snap = { apiVersion: 'postgresql.cnpg.io/v1', metadata: { name: 'snap', namespace: 'db' }, spec: { cluster: { name: 'pg-a' }, method: 'volumeSnapshot' }, status: { phase: 'completed', method: 'volumeSnapshot', stoppedAt: '2026-09-30T12:00:00Z' } }
+    const source = restoreSourceForBackup(snap, cluster)!
+    expect(source).toMatchObject({ kind: 'backup', backup: 'snap', snapshot: true, backupEnd: '2026-09-30T12:00:00Z' })
+    expect(restoreTargetKinds(source)).toEqual(['backupEnd'])
+    expect(describeSource(source)).toBe('Backup snap (volume snapshot)')
+    for (const target of [{ kind: 'backupEnd' as const }, { kind: 'latest' as const }, { kind: 'time' as const, iso: '2026-09-30T13:00:00Z' }]) {
+      const m = buildRestoreManifest({ sourceCluster: cluster, source, namespace: 'db', newName: 'r', target })
+      expect(m.spec.bootstrap.recovery).toEqual({ backup: { name: 'snap' } })
+      expect(m.spec.externalClusters).toBeUndefined()
+    }
+    const inTree = restoreSourceForBackup({ ...snap, spec: { cluster: { name: 'pg-a' }, method: 'barmanObjectStore' }, status: { ...snap.status, method: 'barmanObjectStore' } }, cluster)!
+    expect(inTree).not.toHaveProperty('snapshot')
+    expect(restoreTargetKinds(inTree)).toEqual(['latest', 'time'])
+    expect(restoreTargetKinds(restoreSourceForBackup(pluginBackup, cluster)!)).toEqual(['backupEnd', 'latest', 'time'])
+    expect(restoreTargetKinds({ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' })).toEqual(['latest', 'time'])
   })
 
   it('lists copied facts and says what is missing without a source cluster', () => {
@@ -197,6 +219,84 @@ describe('PITR evidence', () => {
     expect(pitrWarnings('2026-09-01T00:00:00Z', evidence, now)[0]).toContain('before the first recoverability point')
     expect(pitrWarnings('2026-09-30T06:00:00Z', evidence, now)[0]).toContain('after the newest evidence')
     expect(pitrWarnings('2026-10-01T00:00:00Z', evidence, now)[0]).toContain('future')
+  })
+
+  describe('evidence per source', () => {
+    const now = Date.parse('2026-09-30T13:00:00Z')
+    const archive = { destinationPath: 's3://bucket/pg-b', endpointURL: 'https://storage.example' }
+    const inTreeCluster = {
+      apiVersion: 'postgresql.cnpg.io/v1',
+      metadata: { name: 'pg-b', namespace: 'db' },
+      spec: { backup: { barmanObjectStore: archive } },
+      status: {
+        conditions: [{ type: 'ContinuousArchiving', status: 'True' }],
+        firstRecoverabilityPoint: '2026-09-01T00:00:00Z',
+        firstRecoverabilityPointByMethod: { barmanObjectStore: '2026-09-29T00:00:00Z', volumeSnapshot: '2026-09-01T00:00:00Z' },
+        lastSuccessfulBackup: '2026-09-30T12:00:00Z',
+        lastSuccessfulBackupByMethod: { barmanObjectStore: '2026-09-30T09:00:00Z', volumeSnapshot: '2026-09-30T12:00:00Z' },
+      },
+    }
+    const backup = (name: string, method: string, stoppedAt: string, status: Record<string, unknown> = {}) => ({
+      apiVersion: 'postgresql.cnpg.io/v1',
+      metadata: { name, namespace: 'db' },
+      spec: { cluster: { name: 'pg-b' }, method },
+      status: { phase: 'completed', method, stoppedAt, ...status },
+    })
+    const base = backup('base-0900', 'barmanObjectStore', '2026-09-30T09:00:00Z', { destinationPath: 's3://bucket/pg-b/', endpointURL: 'https://storage.example', serverName: 'pg-b' })
+    const noonSnapshot = backup('snap-1200', 'volumeSnapshot', '2026-09-30T12:00:00Z')
+    const elsewhere = backup('other-1000', 'barmanObjectStore', '2026-09-30T10:00:00Z', { destinationPath: 's3://bucket/other', endpointURL: 'https://storage.example', serverName: 'pg-b' })
+    const unrecorded = backup('unrecorded-1030', 'barmanObjectStore', '2026-09-30T10:30:00Z')
+    const inTree = { kind: 'inTree' as const, barmanObjectStore: archive, serverName: 'pg-b' }
+    const backups = [base, noonSnapshot, elsewhere, unrecorded]
+
+    it('keeps a noon volume snapshot out of an in-tree archive whose newest base backup is 09:00', () => {
+      const e = recoveryEvidenceFor(inTree, { sourceCluster: inTreeCluster, stores: [], backups, namespace: 'db' })
+      expect(e.firstPoint?.at).toBe('2026-09-29T00:00:00Z')
+      expect(e.lastBackup?.at).toBe('2026-09-30T09:00:00Z')
+      expect(pitrWarnings('2026-09-30T11:00:00Z', e, now)[0]).toContain('after the newest evidence Radar has (2026-09-30 09:00:00 UTC')
+      expect(pitrWarnings('2026-09-28T12:00:00Z', e, now)[0]).toContain('before the first recoverability point')
+    })
+
+    it('reads the plain status fields from an operator that reports no per-method times', () => {
+      const plain = { conditions: inTreeCluster.status.conditions, firstRecoverabilityPoint: '2026-09-01T00:00:00Z', lastSuccessfulBackup: '2026-09-30T08:00:00Z' }
+      const e = recoveryEvidenceFor(inTree, { sourceCluster: { ...inTreeCluster, status: plain }, stores: [], backups: [base], namespace: 'db' })
+      expect(e.firstPoint?.at).toBe('2026-09-01T00:00:00Z')
+      expect(e.lastBackup).toEqual({ at: '2026-09-30T09:00:00Z', source: 'Backup base-0900' })
+    })
+
+    it('counts only plugin Backups into an ObjectStore, while their Cluster still points at it', () => {
+      const snapshotOfA = { ...noonSnapshot, spec: { ...noonSnapshot.spec, cluster: { name: 'pg-a' } } }
+      const inTreeOfA = { ...base, spec: { ...base.spec, cluster: { name: 'pg-a' } }, status: { ...base.status, stoppedAt: '2026-09-30T11:00:00Z' } }
+      const source = { kind: 'objectStore' as const, objectStore: 'store', serverName: 'pg-a-v2' }
+      const e = recoveryEvidenceFor(source, { sourceCluster: cluster, stores: [], backups: [pluginBackup, snapshotOfA, inTreeOfA], namespace: 'db' })
+      expect(e.lastBackup).toEqual({ at: '2026-09-29T22:00:09Z', source: 'Backup b-plugin' })
+      const moved = { ...cluster, spec: { ...cluster.spec, plugins: [{ ...cluster.spec.plugins[0], parameters: { barmanObjectName: 'elsewhere', serverName: 'pg-a-v2' } }] } }
+      expect(recoveryEvidenceFor(source, { sourceCluster: moved, stores: [], backups: [pluginBackup], namespace: 'db' }).lastBackup).toBeUndefined()
+    })
+
+    it('reads a Backup source as that Backup, and WAL only from the archive it recorded', () => {
+      const source = restoreSourceForBackup(base, inTreeCluster)!
+      const e = recoveryEvidenceFor(source, { sourceCluster: inTreeCluster, stores: [], backups, namespace: 'db', runtime })
+      expect(e.lastBackup).toEqual({ at: '2026-09-30T09:00:00Z', source: 'Backup base-0900' })
+      expect(e.archiving.tone).toBe('healthy')
+      expect(e.lastArchived?.at).toBe('2026-09-30T08:00:00Z')
+
+      const away = recoveryEvidenceFor(restoreSourceForBackup(elsewhere, inTreeCluster)!, { sourceCluster: inTreeCluster, stores: [], backups, namespace: 'db', runtime })
+      expect(away.lastBackup).toEqual({ at: '2026-09-30T10:00:00Z', source: 'Backup other-1000' })
+      expect(away.archiving.tone).toBe('unknown')
+      expect(away.lastArchived).toBeUndefined()
+      expect(away.gaps).toContain('No live cluster archives into this source, so WAL archived after the last backup is unknown')
+      expect(recoveryEvidenceFor(restoreSourceForBackup(unrecorded, inTreeCluster)!, { sourceCluster: inTreeCluster, stores: [], backups, namespace: 'db', runtime }).lastArchived).toBeUndefined()
+    })
+
+    it('reads a volume snapshot as its own end, with no archived WAL applied', () => {
+      const e = recoveryEvidenceFor(restoreSourceForBackup(noonSnapshot, inTreeCluster)!, { sourceCluster: inTreeCluster, stores: [], backups, namespace: 'db', runtime })
+      expect(e.lastBackup).toEqual({ at: '2026-09-30T12:00:00Z', source: 'Backup snap-1200' })
+      expect(e.archiving).toMatchObject({ text: 'Not replayed', tone: 'neutral' })
+      expect(e.lastArchived).toBeUndefined()
+      expect(e.lastArchiveFailure).toBeUndefined()
+      expect(e.gaps).toEqual([])
+    })
   })
 
   it('reads the target in the chosen zone and writes UTC without milliseconds', () => {
@@ -288,6 +388,17 @@ describe('observeRestore', () => {
       const failedJoin = { name: 'r-4-join', role: 'join', active: 0, succeeded: 0, failed: 6, complete: false, failedWith: 'BackoffLimitExceeded' }
       expect(observeRestore(snapshot({ phase: 'Creating a new replica', ready: 3, instances: 4, pods: [ready('r-1'), ready('r-2'), ready('r-3')], jobs: [recovered, failedJoin] })).state).toBe('completed')
       expect(observeRestore(snapshot({ phase: 'Creating a new replica', ready: 3, instances: 4, pods: [ready('r-1')], jobs: [{ ...failedJoin, role: undefined }] })).state).toBe('completed')
+    })
+
+    it('stays restored while every instance is down, from the completed recovery Job', () => {
+      const down = (name: string) => ({ ...ready(name), phase: 'Pending', ready: false })
+      const hibernated = observeRestore(snapshot({ phase: 'Cluster in hibernation', ready: 0, instances: 3, jobs: [recovered] }))
+      expect(hibernated.state).toBe('completed')
+      expect(hibernated.detail).toBe('Recovery Job r-1-full-recovery completed · 0/3 instances ready · Cluster in hibernation')
+      expect(observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [down('r-1')], jobs: [{ ...recovered, role: undefined, complete: false }] })).state).toBe('completed')
+      expect(observeRestore(snapshot({ phase: 'Waiting for the instances to become active', ready: 0, pods: [down('r-1')], jobs: [{ name: 'r-1-join', role: 'join', active: 0, succeeded: 1, failed: 0, complete: true }] })).state).toBe('progressing')
+      const noJobs = { pods: { state: 'ok' as const }, jobs: { state: 'denied' as const }, events: { state: 'ok' as const } }
+      expect(observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [down('r-1')], coverage: noJobs }))).toMatchObject({ state: 'progressing', title: 'Waiting for the recovery to start' })
     })
 
     it('a Job read without its role counts as recovery only by its role-suffixed name', () => {

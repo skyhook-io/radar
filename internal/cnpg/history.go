@@ -107,9 +107,9 @@ func historyMemoizable(ctx context.Context, charts []prometheuspkg.CNPGHistoryCh
 	return true
 }
 
-// cnpgPrometheusUnavailable returns why Radar has no Prometheus to read, or
-// "" when it does.
-// Discovery's own failures are complete diagnoses, so they are not prefixed again.
+// cnpgNoPrometheusReason words why Radar has no Prometheus to read from the
+// connection error msg ("" when there is no connection at all). Discovery's
+// own failures are complete diagnoses, so they are not prefixed again.
 func cnpgNoPrometheusReason(msg string) string {
 	switch {
 	case msg == "":
@@ -130,7 +130,7 @@ func historyScopeFailure(err error) (string, string) {
 	return historyStateError, "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())
 }
 
-// usageScopeFailure is cnpgHistoryScopeFailure for kubelet volume stats.
+// usageScopeFailure is historyScopeFailure for kubelet volume stats.
 func usageScopeFailure(err error) (string, string) {
 	switch {
 	case errors.Is(err, prometheuspkg.ErrScopeAmbiguous):

@@ -163,8 +163,11 @@ func (s *Reader) PoolerCapabilities(ctx context.Context, c ActionClients, contex
 	}, nil
 }
 
+// cnpgPoolerReviewed binds paused and the spec generation, which moves with
+// every spec change the dialog showed (the target Cluster among them).
 type cnpgPoolerReviewed struct {
-	Paused *bool `json:"paused"`
+	Paused     *bool  `json:"paused"`
+	Generation *int64 `json:"generation"`
 }
 
 func RunCNPGPoolerAction(ctx context.Context, c ActionClients, namespace, name, action string, req integration.ActionRequest) (*CNPGActionResult, error) {
@@ -174,8 +177,15 @@ func RunCNPGPoolerAction(ctx context.Context, c ActionClients, namespace, name, 
 			return nil, integration.RefuseAction(http.StatusBadRequest, "", "facts: %v", err)
 		}
 	}
-	if reviewed.Paused == nil {
-		return nil, integration.RefuseAction(http.StatusBadRequest, "", "facts.paused is required for %s: the confirmation must bind what the dialog showed", action)
+	missing := ""
+	switch {
+	case reviewed.Paused == nil:
+		missing = "paused"
+	case reviewed.Generation == nil:
+		missing = "generation"
+	}
+	if missing != "" {
+		return nil, integration.RefuseAction(http.StatusBadRequest, "", "facts.%s is required for %s: the confirmation must bind what the dialog showed", missing, action)
 	}
 	if err := integration.DecodeActionParams(req.Params, &struct{}{}); err != nil {
 		return nil, err
@@ -190,6 +200,9 @@ func RunCNPGPoolerAction(ctx context.Context, c ActionClients, namespace, name, 
 	}
 	if *reviewed.Paused != facts.Paused {
 		return nil, integration.ChangedAction(facts, "Pooler %s/%s changed since you confirmed (paused); review the action again", namespace, name)
+	}
+	if *reviewed.Generation != facts.Generation {
+		return nil, integration.ChangedAction(facts, "Pooler %s/%s settings changed since you confirmed; review the action again", namespace, name)
 	}
 	pause := action == "pause"
 	if r := cnpgGuardPooler(facts, pause); r != "" {

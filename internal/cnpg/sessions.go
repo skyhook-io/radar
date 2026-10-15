@@ -318,7 +318,7 @@ func cnpgRunSignalBackend(signal string) func(context.Context, *cnpgClusterRun) 
 			return nil, integration.ChangedAction(x.facts, "Pod %s was recreated since you reviewed it; the backend is gone", p.Pod)
 		}
 		if x.c.Exec == nil {
-			return nil, integration.RefuseAction(http.StatusServiceUnavailable, "", "cluster client not available — check cluster connection")
+			return nil, integration.RefuseAction(http.StatusServiceUnavailable, integration.ActionCodeUnavailable, "cluster client not available — check cluster connection")
 		}
 		fn, verb := "pg_cancel_backend", "Cancel of the running query"
 		if signal == cnpgSignalTerminate {

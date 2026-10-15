@@ -19,6 +19,8 @@ type Metrics struct {
 	DiskGrowth func(context.Context, string, []string, time.Duration, string) (map[string]float64, error)
 }
 
+// prometheusUnavailable returns why Radar has no Prometheus to read, or ""
+// when it does.
 func (s *Reader) prometheusUnavailable(ctx context.Context) string {
 	connected, err := s.Metrics.Connection(ctx)
 	if !connected {

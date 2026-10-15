@@ -45,7 +45,7 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
   const active = ops.filter(cnpgOperationFollowed)
   const followed = cnpgOperationsForCluster(allOps, { apiBase, namespace, name, context }).filter(cnpgOperationFollowed)
   const following = followed.length > 0
-  const needsRuntime = followed.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
+  const needsRuntime = followed.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance', 'destroyInstance'].includes(o.kind))
 
   const queryClient = useQueryClient()
   const caps = useCNPGClusterCapabilities(namespace, name, following)
@@ -74,26 +74,27 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
       (c: any) => c?.metadata?.namespace === namespace && c?.metadata?.name === name,
     )
     const backupsReadable = ws?.coverage.backups ? coverageReadable(ws.coverage.backups, namespace) : false
+    // Runtime that is not polled is a cached answer from another view, not a
+    // check of the Cluster now.
     const identity = [
       { uid: caps.data?.uid, updatedAt: capsFresh.updatedAt, failed: capsFresh.failed },
       { uid: ha.data?.cluster.uid, updatedAt: haFresh.updatedAt, failed: haFresh.failed },
-      { uid: runtime.data?.cluster.uid, updatedAt: runtimeFresh.updatedAt, failed: runtimeFresh.failed },
+      ...(needsRuntime ? [{ uid: runtime.data?.cluster.uid, updatedAt: runtimeFresh.updatedAt, failed: runtimeFresh.failed }] : []),
       { uid: cluster?.metadata?.uid, updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
     ].filter((source) => source.uid && !source.failed).sort((a, b) => b.updatedAt - a.updatedAt)[0]
-    // No identity because the reads failed, not because none has answered yet.
-    const identityFailed = !identity && (capsFresh.failed || haFresh.failed || workspaceFresh.failed || (needsRuntime && runtimeFresh.failed))
     return {
       // Failed polls must advance elapsed-time checks even when no data changes.
       now: Math.max(Date.now(), capsFresh.checkedAt, haFresh.checkedAt, runtimeFresh.checkedAt, workspaceFresh.checkedAt),
       clusterUID: identity?.uid,
       identityPending: capsFresh.initialPending || haFresh.initialPending || workspaceFresh.initialPending || (needsRuntime && runtimeFresh.initialPending),
+      identityReadFailed: capsFresh.failed || haFresh.failed || workspaceFresh.failed || (needsRuntime && runtimeFresh.failed),
       facts: caps.data?.facts,
       cluster,
       ha: ha.data,
       runtime: runtime.data,
       backups: backupsReadable ? (ws?.objects.backups ?? []) : undefined,
       freshness: {
-        clusterUID: identity ? { updatedAt: identity.updatedAt, failed: false } : identityFailed ? { updatedAt: 0, failed: true } : undefined,
+        clusterUID: identity ? { updatedAt: identity.updatedAt, failed: false } : undefined,
         facts: { updatedAt: capsFresh.updatedAt, failed: capsFresh.failed, clusterUID: caps.data?.uid },
         cluster: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed, clusterUID: cluster?.metadata?.uid },
         backups: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },

@@ -58,6 +58,8 @@ export interface CNPGObservation {
   clusterUID?: string
   /** The first live identity check after mounting is still in flight. */
   identityPending?: boolean
+  /** The latest fetch of a source polled for the Cluster identity failed. */
+  identityReadFailed?: boolean
   facts?: CNPGClusterFacts
   /** The Cluster object from the workspace (status.conditions, readyInstances). */
   cluster?: any
@@ -138,7 +140,11 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
   if (op.clusterUID && !current.clusterUID) {
     const identity = obs.freshness?.clusterUID
     const expired = obs.now - op.startedAt > CNPG_OP_UNOBSERVABLE_MS
-    if (!expired && !identity?.failed && (!identity || identity.updatedAt < op.startedAt)) {
+    const unread = !identity || identity.updatedAt < op.startedAt
+    // An identity from before the request cannot hold "waiting" while the
+    // reads that would replace it fail.
+    const failed = !!identity?.failed || (unread && !!obs.identityReadFailed)
+    if (!expired && !failed && unread) {
       return { ...op, state: 'requested', detail: 'Waiting for the first read since the request' }
     }
     return {
@@ -196,8 +202,14 @@ export function supersedeFor(existing: CNPGTrackedOperation[], next: CNPGTracked
     if (CNPG_OP_TERMINAL.has(op.state)) return op
     if (op.apiBase !== next.apiBase || op.context !== next.context || op.namespace !== next.namespace || op.cluster !== next.cluster) return op
     if (!(CONFLICTS[op.kind] ?? []).includes(next.kind)) return op
+    if (op.kind === 'restartInstance' && next.kind === 'fence' && !fencedBy(next, op.target?.name)) return op
     return { ...op, state: 'superseded', detail: `Superseded by ${next.label}`, finishedAt: next.startedAt }
   })
+}
+
+// A fence of all instances records every instance it fenced.
+function fencedBy(fence: CNPGTrackedOperation, pod: string | undefined): boolean {
+  return !!pod && ((fence.baseline.instances as string[] | undefined) ?? []).includes(pod)
 }
 
 // ---------------------------------------------------------------------------

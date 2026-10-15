@@ -26,6 +26,7 @@ import {
   restoreSourcesForStore,
   sourceClusterFor,
   restorePermission,
+  restoreTargetKinds,
   sourcePinsBackup,
   targetIsoFrom,
   type RestoreSource,
@@ -90,8 +91,10 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   const [newName, setNewName] = useState<string | null>(null)
   const name = newName ?? defaultName
   const pinned = sourcePinsBackup(source)
+  const snapshot = source?.kind === 'backup' && !!source.snapshot
   const [targetKind, setTargetKind] = useState<RestoreTarget['kind'] | null>(null)
-  const effectiveKind = targetKind ?? (pinned ? 'backupEnd' : 'latest')
+  const targetKinds = restoreTargetKinds(source)
+  const effectiveKind = targetKind && targetKinds.includes(targetKind) ? targetKind : targetKinds[0]
   const [timeValue, setTimeValue] = useState('')
   const [zone, setZone] = useState<'utc' | 'local'>('utc')
   const [manifest, setManifest] = useState<string | null>(null)
@@ -303,7 +306,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       /> : <>
         <div className="mb-4 rounded-lg border border-theme-border bg-theme-base p-3 text-sm">
           <div className="font-medium text-theme-text-primary">{describeSource(source!)}</div>
-          <div className="mt-1 text-theme-text-secondary">{effectiveKind === 'time' && targetIso ? `Recover to ${formatUTC(targetIso)}` : effectiveKind === 'backupEnd' ? 'Recover to the end of this backup' : 'Recover to the latest archived WAL'}</div>
+          <div className="mt-1 text-theme-text-secondary">{effectiveKind === 'time' && targetIso ? `Recover to ${formatUTC(targetIso)}` : effectiveKind === 'backupEnd' ? `Recover to the end of this ${snapshot ? 'snapshot' : 'backup'}` : 'Recover to the latest archived WAL'}</div>
         </div>
           <CNPGTargetFields value={targetValues} onChange={(values) => { setNewName(values.name); setTargetOverrides(values) }} idPrefix="cnpg-restore" namespaceFixed storageClasses={storageClasses.data?.map((item) => item.metadata.name)} imageDescription={imageDescription} imageRequired={requireImage} defaultClassDisabled={(manifest !== null ? cnpgTargetDraft(manifest) : baseManifest)?.spec.storage?.pvcTemplate?.storageClassName === ''} />
           {storageClasses.isError && <p className="text-xs text-theme-text-tertiary">Storage class suggestions could not be read. You can enter a name directly.</p>}

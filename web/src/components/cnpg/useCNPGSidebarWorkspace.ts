@@ -55,16 +55,29 @@ function diskFailed(clusters: any[], err: unknown): CNPGDiskReading[] {
   return clusters.map((c) => ({ namespace: c?.metadata?.namespace ?? '', name: c?.metadata?.name ?? '', state: 'error', reason, claims: 0, measured: 0 }))
 }
 
+const UNMEASURED_NOTE = 'Disk use and replication lag are counted on the CloudNativePG views.'
+
 function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null, withMetrics: boolean): { count?: number | null; lowerBound?: boolean; title?: string } {
   if (!fleet) return {}
   const partial = fleet.incompleteKinds.length > 0
   const note = partial ? ' Some CloudNativePG data is not readable, so this is a lower bound.' : ''
-  const at = (count: number, what: string, extra = '') => partial && count === 0
-    ? { count: null, lowerBound: true, title: 'Unknown: some CloudNativePG data could not be read.' }
-    : { count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} ${what}.${note}${extra}` }
+  // Disk use and measured lag only ever add problems, so a count without them
+  // is a lower bound, and its zero is not "none".
+  const at = (count: number, what: string, unmeasured?: string) => {
+    const lowerBound = partial || !!unmeasured
+    const extra = unmeasured ? ` ${unmeasured}` : ''
+    if (lowerBound && count === 0) {
+      return {
+        count: null,
+        lowerBound: true,
+        title: partial ? `Unknown: some CloudNativePG data could not be read.${extra}` : `None found in the workspace read.${extra}`,
+      }
+    }
+    return { count, lowerBound, title: `${lowerBound ? 'At least ' : ''}${count} ${what}.${note}${extra}` }
+  }
   switch (screen) {
     case 'overview':
-      return at(fleet.attentionCount, 'clusters need attention', withMetrics ? '' : ' Disk use and replication lag are counted on the CloudNativePG views.')
+      return at(fleet.attentionCount, 'clusters need attention', withMetrics ? undefined : UNMEASURED_NOTE)
     case 'protection':
       return at(fleet.categoryCounts.protection, 'clusters with failing backups or WAL archiving')
     case 'declarations':

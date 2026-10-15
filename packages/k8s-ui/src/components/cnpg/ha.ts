@@ -548,6 +548,25 @@ function withStandbyGaps(row: CNPGFleetRow, dim: CNPGDimension): CNPGDimension {
 }
 
 function liveReplicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
+  const dim = localReplicationDimension(row, live, gap)
+  return row.replicaCluster && !row.hibernated ? withUpstreamUnassessed(row.replicaCluster, dim) : dim
+}
+
+// A replica cluster's designated primary replays WAL from outside the cluster,
+// by streaming or from the archive. Its pg_stat_replication lists only the
+// standbys downstream of it, so a calm local reading says nothing about that
+// feed: a dead one still reads every local standby streaming.
+function withUpstreamUnassessed(replica: { source?: string }, dim: CNPGDimension): CNPGDimension {
+  const calm = dim.tone === 'healthy' || dim.tone === 'neutral'
+  return {
+    ...dim,
+    tone: calm ? 'unknown' : dim.tone,
+    text: dim.tone === 'unknown' && dim.text === 'unassessed' ? dim.text : `${dim.text} · upstream feed not assessed`,
+    source: `${dim.source}. The designated primary replays WAL from ${replica.source ? `external cluster ${replica.source}` : 'an external cluster'}; Radar does not assess that feed`,
+  }
+}
+
+function localReplicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
   const base = { id: 'replication' as const, label: 'Replication' }
   if (row.hibernated) return { ...base, tone: 'neutral', text: 'hibernated', source: 'cnpg.io/hibernation annotation' }
   if (row.instances.desired === 1) return { ...base, tone: 'neutral', text: 'no standby', source: 'spec.instances is 1: there is no failover target' }

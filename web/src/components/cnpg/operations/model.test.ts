@@ -414,6 +414,15 @@ describe('right after the request', () => {
     expect(failed.state).toBe('unobservable')
   })
 
+  it('an identity from before the request does not hold "requested" while the reads fail', () => {
+    const o = advanceCNPGOperation(op({}), { now: T0 + 1_000, identityReadFailed: true, freshness: { clusterUID: before } })
+    expect(o.state).toBe('unobservable')
+    expect(o.detail).toContain('identity')
+    expect(o.finishedAt).toBeUndefined()
+    const none = advanceCNPGOperation(op({}), { now: T0 + 1_000, identityReadFailed: true })
+    expect(none.state).toBe('unobservable')
+  })
+
   it('a failed read makes it unobservable without ending it', () => {
     const o = advanceCNPGOperation(op({}), { now: T0 + 1_000, freshness: { clusterUID: { updatedAt: T0 - 1_000, failed: true } } })
     expect(o.state).toBe('unobservable')
@@ -459,9 +468,18 @@ describe('rolling restart and fencing', () => {
   })
 
   it('is superseded by a fence requested in Radar', () => {
-    const fence = op({ id: 'f', kind: 'fence', label: 'Fence pg-1', target: undefined, startedAt: T0 + 1_000 })
+    const fence = op({ id: 'f', kind: 'fence', label: 'Fence pg-1', target: undefined, baseline: { instances: ['pg-1'] }, startedAt: T0 + 1_000 })
     expect(supersedeFor([restart([])], fence)[0].state).toBe('superseded')
     expect(supersedeFor([op({ kind: 'restartInstance', label: 'Restart pg-1', target: { name: 'pg-1' } })], fence)[0].state).toBe('superseded')
+  })
+
+  it('an instance restart is superseded only by a fence that covers its instance; a rolling restart by any fence', () => {
+    const restartPg2 = op({ id: 'r', kind: 'restartInstance', label: 'Restart pg-2', target: { name: 'pg-2' }, baseline: {} })
+    const fence = (label: string, instances: string[]) => op({ id: 'f', kind: 'fence', label, target: undefined, baseline: { instances }, startedAt: T0 + 1_000 })
+    expect(supersedeFor([restartPg2], fence('Fence pg-3', ['pg-3']))[0].state).toBe('requested')
+    expect(supersedeFor([restartPg2], fence('Fence pg-2', ['pg-2']))[0].state).toBe('superseded')
+    expect(supersedeFor([restartPg2], fence('Fence all instances', ['pg-1', 'pg-2', 'pg-3']))[0].state).toBe('superseded')
+    expect(supersedeFor([restart([])], fence('Fence pg-3', ['pg-3']))[0].state).toBe('superseded')
   })
 })
 

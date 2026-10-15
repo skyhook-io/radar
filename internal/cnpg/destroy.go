@@ -65,7 +65,7 @@ func cnpgDestroyPreflight(ctx context.Context, x *cnpgClusterRun, keepPVC bool) 
 		allowed, apiErr := k8score.CanI(ctx, x.c.Typed, namespace, g.Group, resource, g.Verb)
 		switch {
 		case apiErr:
-			return integration.RefuseAction(http.StatusServiceUnavailable, "", "Could not confirm you may %s; nothing was changed", g.In(namespace).String())
+			return integration.RefuseAction(http.StatusServiceUnavailable, integration.ActionCodeUnavailable, "Could not confirm you may %s; nothing was changed", g.In(namespace).String())
 		case !allowed:
 			return integration.RefuseAction(http.StatusForbidden, "", "Destroying needs %s; nothing was changed", g.In(namespace).String())
 		}

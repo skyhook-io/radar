@@ -188,6 +188,8 @@ func cnpgRelayedTransportTimeout(err error) bool {
 		(strings.HasSuffix(msg, ": i/o timeout") || strings.HasSuffix(msg, ": context deadline exceeded"))
 }
 
+// classifyCNPGProxyFailure classifies a failed read and, for a failure in
+// transit, replaces the raw error with a sentence; the raw error is logged.
 func classifyCNPGProxyFailure(ctx context.Context, err error, out cnpgProxyOutcome, t proxyTarget) cnpgProxyOutcome {
 	cnpgMarkTimedOut(ctx, err)
 	out = classifyCNPGProxyError(ctx, err, out)

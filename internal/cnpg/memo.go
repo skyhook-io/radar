@@ -114,8 +114,6 @@ func pruneCNPGRuntimeMemoLocked(now time.Time) {
 	}
 }
 
-// classifyCNPGProxyFailure classifies a failed read and, for a failure in
-// transit, replaces the raw error with a sentence; the raw error is logged.
 // cnpgReadTimedOutKey carries a flag a memoized read sets when any request
 // inside it timed out, so the memo does not keep a timeout for its full TTL.
 type cnpgReadTimedOutKey struct{}

@@ -322,7 +322,7 @@ type CNPGActionMutation = {
     | { action: CNPGClusterActionName | 'destroyInstance'; request: ActionRequest<CNPGClusterFacts> }
     | { action: 'cancelBackend' | 'terminateBackend'; request: ActionRequest<Record<string, never>, { pod: string; podUID?: string; pid: number; backendStart: string }> }
   scheduledbackups: { action: CNPGScheduleActionName; request: ActionRequest<CNPGScheduleCapabilities['facts']> }
-  poolers: { action: 'pause' | 'resume'; request: ActionRequest<Pick<CNPGPoolerFacts, 'paused'>> }
+  poolers: { action: 'pause' | 'resume'; request: ActionRequest<Pick<CNPGPoolerFacts, 'paused' | 'generation'>> }
 }
 
 export function useCNPGAction<Kind extends keyof CNPGActionMutation>(kind: Kind, namespace: string, name: string, reviewedContext: string | undefined) {

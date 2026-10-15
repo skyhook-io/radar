@@ -207,6 +207,28 @@ it('reads "requested", not "cannot be followed", until the first read since the 
   }
 })
 
+it('does not let runtime cached by another view stand in for the identity while the polled reads fail', () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const startedAt = Date.now() - 1_000
+  state.operations = [{ id: 'fence', kind: 'fence', label: 'Fence pg-2', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: { instances: ['pg-2'] } }]
+  const failing = { data: undefined, dataUpdatedAt: 0, errorUpdatedAt: Date.now(), isError: true, isFetching: false, isFetchedAfterMount: true }
+  state.caps.mockReturnValue(failing)
+  state.ha.mockReturnValue(failing)
+  state.workspace.mockReturnValue(failing)
+  state.runtime.mockReturnValue({ data: { cluster: { uid: 'uid' } }, dataUpdatedAt: startedAt - 1, errorUpdatedAt: 0, isError: false, isFetching: false, isFetchedAfterMount: true })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  try {
+    act(() => root.render(<CNPGOperationTracker namespace="db" name="pg" uid="uid" />))
+    expect(state.runtime).toHaveBeenLastCalledWith('db', 'pg', false)
+    expect(state.operations[0].state).toBe('unobservable')
+    expect(state.operations[0].detail).toContain('identity')
+    expect(state.operations[0].finishedAt).toBeUndefined()
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
 it('leaves records issued against another Radar alone', () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const startedAt = Date.now() - 1_000

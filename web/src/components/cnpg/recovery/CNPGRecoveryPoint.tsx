@@ -4,6 +4,7 @@ import {
   describeSource,
   formatLocal,
   formatUTC,
+  restoreTargetKinds,
   sourcePinsBackup,
   type EvidencePoint,
   type RecoveryEvidence,
@@ -65,6 +66,9 @@ export function CNPGRecoveryPoint({
 }) {
   const source = sources[sourceIndex]
   const pinned = sourcePinsBackup(source)
+  const snapshot = source?.kind === 'backup' && !!source.snapshot
+  const kinds = restoreTargetKinds(source)
+  const end = source?.kind === 'objectStore' || source?.kind === 'backup' ? source.backupEnd : undefined
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   return (
     <>
@@ -89,7 +93,7 @@ export function CNPGRecoveryPoint({
         <div>
           <fieldset className="space-y-1.5">
             <legend className="mb-1 text-xs text-theme-text-secondary">Recover to</legend>
-            {pinned && (
+            {kinds.includes('backupEnd') && (
               <label className="flex items-center gap-2 text-sm text-theme-text-primary">
                 <input
                   type="radio"
@@ -97,31 +101,42 @@ export function CNPGRecoveryPoint({
                   checked={targetKind === 'backupEnd'}
                   onChange={() => onTargetChange('backupEnd')}
                 />
-                The end of this backup
-                {source?.kind === 'objectStore' && source.backupEnd ? ` (${formatUTC(source.backupEnd)})` : ''}
+                {snapshot ? 'The end of this snapshot' : 'The end of this backup'}
+                {end ? ` (${formatUTC(end)})` : ''}
               </label>
             )}
-            <label className="flex items-center gap-2 text-sm text-theme-text-primary">
-              <input
-                type="radio"
-                name="cnpg-restore-target"
-                checked={targetKind === 'latest'}
-                onChange={() => onTargetChange('latest')}
-              />
-              The latest archived WAL
-            </label>
-            <p className="ml-6 text-xs text-theme-text-tertiary">
-              Replay the archived transaction logs to the newest available point.
-            </p>
-            <label className="flex items-center gap-2 text-sm text-theme-text-primary">
-              <input
-                type="radio"
-                name="cnpg-restore-target"
-                checked={targetKind === 'time'}
-                onChange={() => onTargetChange('time')}
-              />
-              A point in time
-            </label>
+            {snapshot && (
+              <p className="ml-6 text-xs text-theme-text-tertiary">
+                No later point is offered: replaying WAL past a snapshot needs a WAL archive source, which this restore does not configure.
+              </p>
+            )}
+            {kinds.includes('latest') && (
+              <>
+                <label className="flex items-center gap-2 text-sm text-theme-text-primary">
+                  <input
+                    type="radio"
+                    name="cnpg-restore-target"
+                    checked={targetKind === 'latest'}
+                    onChange={() => onTargetChange('latest')}
+                  />
+                  The latest archived WAL
+                </label>
+                <p className="ml-6 text-xs text-theme-text-tertiary">
+                  Replay the archived transaction logs to the newest available point.
+                </p>
+              </>
+            )}
+            {kinds.includes('time') && (
+              <label className="flex items-center gap-2 text-sm text-theme-text-primary">
+                <input
+                  type="radio"
+                  name="cnpg-restore-target"
+                  checked={targetKind === 'time'}
+                  onChange={() => onTargetChange('time')}
+                />
+                A point in time
+              </label>
+            )}
             {targetKind === 'time' && (
               <div className="ml-6 space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -170,7 +185,7 @@ export function CNPGRecoveryPoint({
             What the source holds
           </div>
           <EvidenceRow label="First recoverability point">
-            <When point={evidence.firstPoint} empty={source?.kind === 'backup' ? 'This backup' : 'Not reported'} />
+            <When point={evidence.firstPoint} empty={snapshot ? 'This snapshot' : source?.kind === 'backup' ? 'This backup' : 'Not reported'} />
           </EvidenceRow>
           <EvidenceRow label="Last successful backup">
             <When point={evidence.lastBackup} empty="None observed" />
@@ -181,9 +196,11 @@ export function CNPGRecoveryPoint({
             </Tooltip>
             <div className="text-[11px] text-theme-text-tertiary">{evidence.archiving.source}</div>
           </EvidenceRow>
-          <EvidenceRow label="Last archived WAL">
-            <When point={evidence.lastArchived} empty={sourceClusterName ? 'Not reported' : 'Unknown'} />
-          </EvidenceRow>
+          {!snapshot && (
+            <EvidenceRow label="Last archived WAL">
+              <When point={evidence.lastArchived} empty={sourceClusterName ? 'Not reported' : 'Unknown'} />
+            </EvidenceRow>
+          )}
           {evidence.lastArchiveFailure && (
             <EvidenceRow label="Last archive failure">
               <When point={evidence.lastArchiveFailure} empty="" />
