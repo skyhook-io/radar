@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/finalizers"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -43,7 +44,7 @@ type gitopsRequest struct {
 // namespace's resources. False means handlers should short-circuit with an
 // empty success response (see the per-handler empty value).
 func (g *gitopsRequest) HasNamespaceAccess() bool {
-	return !noNamespaceAccess(g.AllowedNamespaces)
+	return !readscope.NoNamespaceAccess(g.AllowedNamespaces)
 }
 
 // parseGitOpsRequest pulls the GitOps URL params and runs the namespace
@@ -59,7 +60,7 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 	}
 	if namespace != "" {
 		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
 			return nil, false
 		}
@@ -601,7 +602,7 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 	nsFilter := strings.TrimSpace(r.URL.Query().Get("namespace"))
 
 	allowedNamespaces := s.getUserNamespaces(r, nil)
-	if noNamespaceAccess(allowedNamespaces) {
+	if readscope.NoNamespaceAccess(allowedNamespaces) {
 		// Caller has no namespace access — return a tree with just the
 		// synthetic root + a warning. Mirrors handleGitOpsTree's behavior
 		// rather than 403'ing so the frontend can render an honest empty state.
@@ -885,7 +886,7 @@ func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, 
 			return false
 		}
 		allowed := s.getUserNamespaces(r, []string{name})
-		return !noNamespaceAccess(allowed)
+		return !readscope.NoNamespaceAccess(allowed)
 	}
 	if namespace != "" {
 		if !namespaceAllowedForGitOps(req.AllowedNamespaces, namespace) {

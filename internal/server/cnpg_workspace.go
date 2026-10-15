@@ -17,6 +17,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -250,7 +251,7 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 // would disclose namespaces the caller was never shown; partial then carries
 // the fact without the names.
 func (s *Server) cnpgWorkspaceScope(r *http.Request, namespaces []string, group, resource string) (allowed, denied []string, partial, any bool) {
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		return []string{}, nil, false, false
 	}
 	if s.canRead(r, group, resource, "", "list") {
@@ -552,7 +553,7 @@ func (s *Server) cnpgWorkspaceReadPods(r *http.Request, cache *k8s.ResourceCache
 		return cnpgKindAccess{state: cnpgCoverageError}, nil, out, returned
 	}
 
-	pods := listPodsScoped(cache.Pods(), read)
+	pods := readscope.ListPodsScoped(cache.Pods(), read)
 	sort.Slice(pods, func(i, j int) bool {
 		if pods[i].Namespace != pods[j].Namespace {
 			return pods[i].Namespace < pods[j].Namespace
@@ -584,7 +585,7 @@ var cnpgWorkspaceKeyByGroupKind = func() map[string]string {
 // this response returned. IDs are the subject-derived IDs /api/issues uses.
 func (s *Server) cnpgWorkspaceIssues(r *http.Request, namespaces []string, access map[string]cnpgKindAccess, instancePods map[string]bool) []CNPGWorkspaceIssue {
 	out := []CNPGWorkspaceIssue{}
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		return out
 	}
 	provider := issues.NewCacheProvider()

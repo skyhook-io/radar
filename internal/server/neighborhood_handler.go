@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -85,7 +86,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 			return
 		}
@@ -267,7 +268,7 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 	if n != nil && n.Data != nil {
 		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
 			allowed := s.getUserNamespaces(r, []string{ns})
-			if noNamespaceAccess(allowed) {
+			if readscope.NoNamespaceAccess(allowed) {
 				return false
 			}
 		}

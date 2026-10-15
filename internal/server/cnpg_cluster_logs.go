@@ -24,6 +24,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/podlogs"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -100,7 +101,7 @@ func (s *Server) authorizeCNPGClusterLogs(w http.ResponseWriter, r *http.Request
 	if !s.requireConnected(w) {
 		return false
 	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return false
 	}

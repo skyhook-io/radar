@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
@@ -104,7 +105,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 	if !s.requireConnected(w) {
 		return
 	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}

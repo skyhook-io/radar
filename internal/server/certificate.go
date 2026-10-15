@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/certs"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -61,7 +62,7 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []certs.Cert{})
 		return
 	}
@@ -188,7 +189,7 @@ func (s *Server) handleSecretCertExpiry(w http.ResponseWriter, r *http.Request) 
 
 	provider := k8s.NewTopologyResourceProvider(cache)
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, map[string]CertExpiry{})
 		return
 	}

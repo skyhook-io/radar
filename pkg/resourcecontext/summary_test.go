@@ -371,7 +371,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			want:      &ManagedByRef{Kind: "GitRepository", Source: "flux", Name: "repo", Namespace: "flux-system"},
 		},
 		{
-			// Native Helm release: topology's detectManagedByFromMeta emits
+			// Native Helm release: topology's ManagedByFromMeta emits
 			// {Kind:"HelmRelease", Group:""} when it sees Helm's release-name
 			// annotation (no Flux/GitOps signal). Must classify as "helm",
 			// not "native" — distinguishes Helm-managed resources in the

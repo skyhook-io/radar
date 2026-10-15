@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 // browserOriginAllowed decides whether a request may act with Radar's cluster
@@ -73,8 +74,8 @@ func sameAuthorityOriginOK(r *http.Request) bool {
 		!strings.EqualFold(u.Scheme, "https") {
 		return false
 	}
-	originAuthority, originOK := normalizeOrigin(origin)
-	requestAuthority, requestOK := normalizeOrigin(u.Scheme + "://" + r.Host)
+	originAuthority, originOK := urlutil.NormalizeOrigin(origin)
+	requestAuthority, requestOK := urlutil.NormalizeOrigin(u.Scheme + "://" + r.Host)
 	return originOK && requestOK && originAuthority == requestAuthority
 }
 
@@ -91,7 +92,7 @@ func (s *Server) viteDevProxyOriginOK(r *http.Request) bool {
 }
 
 func (s *Server) originTrusted(origin string) bool {
-	normalized, ok := normalizeOrigin(origin)
+	normalized, ok := urlutil.NormalizeOrigin(origin)
 	if !ok {
 		return false
 	}
@@ -131,7 +132,7 @@ func validateTrustedOrigin(entry string) error {
 	if u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("an origin is scheme://host[:port] only, with no path, query or credentials")
 	}
-	if _, ok := normalizeOrigin(entry); !ok {
+	if _, ok := urlutil.NormalizeOrigin(entry); !ok {
 		return fmt.Errorf("invalid port")
 	}
 	return nil

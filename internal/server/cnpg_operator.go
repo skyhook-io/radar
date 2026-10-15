@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"github.com/skyhook-io/radar/internal/imageutil"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -240,7 +241,7 @@ func cnpgOperatorComponent(d *appsv1.Deployment, role, pluginName string, c *cor
 	}
 	if c != nil {
 		out.Image = c.Image
-		out.Version = imageTag(c.Image)
+		out.Version = imageutil.ImageTag(c.Image)
 	}
 	if out.Version == "" {
 		out.Version = d.Labels[cnpgVersionLabel]

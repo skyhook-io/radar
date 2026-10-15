@@ -54,6 +54,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -70,6 +71,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/rbac"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	topology "github.com/skyhook-io/radar/pkg/topology"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 // Server is the Explorer HTTP server
@@ -269,7 +271,7 @@ func New(cfg Config) *Server {
 	if len(cfg.TrustedOrigins) > 0 {
 		s.trustedOrigins = make(map[string]struct{}, len(cfg.TrustedOrigins))
 		for _, origin := range cfg.TrustedOrigins {
-			if normalized, ok := normalizeOrigin(origin); ok {
+			if normalized, ok := urlutil.NormalizeOrigin(origin); ok {
 				s.trustedOrigins[normalized] = struct{}{}
 			}
 		}
@@ -1472,7 +1474,7 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 // parseNamespacesForUser parses namespace query params and filters by user permissions.
 // Returns nil for "all namespaces" (no filter), a populated slice for specific namespaces,
 // or an empty non-nil slice when the user has no namespace access.
-// Use noNamespaceAccess() to check the no-access case.
+// Use readscope.NoNamespaceAccess() to check the no-access case.
 //
 // If the request omits an explicit namespace filter, falls back to the user's
 // in-app namespace pick (from the namespace switcher). The pick is treated as
@@ -1522,7 +1524,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	// if it's still the live pick, so a stale read can't wipe a concurrent
 	// POST or clear across a context switch. A failed access check is empty
 	// for the wrong reason and must not cost the user their pick.
-	if pickFallback && !discoveryFailed && noNamespaceAccess(filtered) {
+	if pickFallback && !discoveryFailed && readscope.NoNamespaceAccess(filtered) {
 		s.commitPickMutation(r, pickCtx, namespaces, nil, false)
 		filtered = s.getUserNamespaces(r, nil)
 	}
@@ -1587,7 +1589,10 @@ func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []str
 // so the (cluster-wide) pool only needs to be a superset of what the user can
 // read.
 func allNamespaceNames() []string {
-	cache := k8s.GetResourceCache()
+	return namespaceNamesInCache(k8s.GetResourceCache())
+}
+
+func namespaceNamesInCache(cache *k8s.ResourceCache) []string {
 	if cache == nil {
 		return nil
 	}
@@ -1622,13 +1627,6 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
-// noNamespaceAccess returns true when a namespace filter explicitly grants no access
-// (non-nil empty slice from auth filtering). Handlers with custom namespace logic
-// should check this and return empty results.
-func noNamespaceAccess(namespaces []string) bool {
-	return namespaces != nil && len(namespaces) == 0
-}
-
 // prometheusAuthGate is the per-request read check behind every metrics
 // route. Two checks, both load-bearing:
 //
@@ -1645,7 +1643,7 @@ func (s *Server) prometheusAuthGate(req *http.Request, group, resource, namespac
 	if !s.canRead(req, group, resource, namespace, verb) {
 		return false
 	}
-	if namespace != "" && noNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
+	if namespace != "" && readscope.NoNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
 		return false
 	}
 	return true
@@ -1767,7 +1765,7 @@ func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, res
 // reads within the cache TTL don't re-SAR.
 //
 // nil or empty input is returned unchanged; the caller's namespace-access
-// gate (parseNamespacesForUser / noNamespaceAccess) is the upstream decision.
+// gate (parseNamespacesForUser / readscope.NoNamespaceAccess) is the upstream decision.
 func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, verb string, namespaces []string) []string {
 	if len(namespaces) == 0 {
 		return namespaces
@@ -1922,7 +1920,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, map[string]any{"nodes": []any{}, "edges": []any{}})
 		return
 	}
@@ -2052,7 +2050,7 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 		observation.Namespaces = append([]string(nil), allowed...)
 	case k8score.DynamicObservationScopeExplicitNamespaces:
 		if len(observation.Namespaces) > 0 {
-			observation.Namespaces = intersectNamespaces(allowed, observation.Namespaces)
+			observation.Namespaces = readscope.SelectNamespaces(allowed, observation.Namespaces)
 		}
 	}
 	if len(allowed) == 0 || (observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && len(observation.Namespaces) == 0) {
@@ -2166,7 +2164,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 
 	// Cluster-only kinds (Nodes, PVs, StorageClasses, ClusterRoles, cluster-
 	// scoped CRDs) have no namespace dimension — gate via SAR. Run BEFORE the
-	// noNamespaceAccess check so a user with explicit cluster-scoped RBAC but
+	// readscope.NoNamespaceAccess check so a user with explicit cluster-scoped RBAC but
 	// no namespace access can still read those resources.
 	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
 	if isClusterScoped {
@@ -2180,7 +2178,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 		return nil, 0, "", true
 	}
 
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		return namespaces, http.StatusForbidden, "no namespace access", false
 	}
 
@@ -2891,7 +2889,7 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 	case namespace != "":
 		// Namespaced kind: verify namespace access.
 		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			return http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace), false
 		}
 		// Per-kind RBAC inside the namespace for Secrets — the chart can
@@ -3316,7 +3314,7 @@ func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -3558,7 +3556,7 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -3634,7 +3632,7 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []k8s.TopPodMetrics{})
 		return
 	}
@@ -3847,7 +3845,7 @@ func (s *Server) handleTopResources(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, k8s.BuildTopMetrics(opts))
 		return
 	}
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, k8s.TopMetricsResponse{Kind: opts.Kind, Sort: opts.Sort, Reason: "no namespace access"})
 		return
 	}
@@ -3896,7 +3894,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	var events any
 	var err error
 
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	} else if len(namespaces) == 1 {
@@ -3947,7 +3945,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	}
@@ -5372,7 +5370,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 				s.getUserNamespaces(r, nil)
 			}
 			if perms := s.permCache.Get(user.Username, user.Groups); perms != nil {
-				resp["noNamespaceAccess"] = noNamespaceAccess(auth.FilterNamespacesForUser(nil, user, perms))
+				resp["noNamespaceAccess"] = readscope.NoNamespaceAccess(auth.FilterNamespacesForUser(nil, user, perms))
 			}
 		}
 	}

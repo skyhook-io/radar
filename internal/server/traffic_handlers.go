@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
@@ -134,7 +135,7 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	}
@@ -364,7 +365,7 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, map[string]any{"flows": []traffic.Flow{}, "matched": 0})
 		return
 	}
@@ -413,7 +414,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 	// Enforce per-user namespace access (parseNamespacesForUser intersects the
 	// requested ?namespace= with the user's RBAC-allowed namespaces).
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeError(w, http.StatusForbidden, "no namespace access")
 		return
 	}

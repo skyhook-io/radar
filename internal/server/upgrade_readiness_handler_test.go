@@ -6,6 +6,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 )
 
 func TestUpgradeReadinessNamespacesIgnoresBrowsingFilter(t *testing.T) {
@@ -43,7 +44,7 @@ func TestUpgradeReadinessNamespacesIntersectsForcedScopeWithUserAccess(t *testin
 	s := &Server{permCache: auth.NewPermissionCache()}
 	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
 	req := requestWithUser("GET", "/api/upgrade-readiness", &auth.User{Username: "alice"})
-	if got := s.upgradeReadinessNamespaces(req); !noNamespaceAccess(got) {
+	if got := s.upgradeReadinessNamespaces(req); !readscope.NoNamespaceAccess(got) {
 		t.Fatalf("upgrade namespace scope = %v, want no access", got)
 	}
 }

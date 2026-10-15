@@ -3,37 +3,9 @@ package prom
 import (
 	"errors"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
-)
 
-// NormalizeOrigin compares scheme, hostname and effective port, including the
-// default HTTP(S) port when it is omitted. Paths are not part of an origin.
-func NormalizeOrigin(raw string) (string, bool) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "", false
-	}
-	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
-	port := u.Port()
-	if port != "" {
-		number, err := strconv.ParseUint(port, 10, 16)
-		if err != nil {
-			return "", false
-		}
-		port = strconv.FormatUint(number, 10)
-	} else {
-		switch scheme {
-		case "https":
-			port = "443"
-		case "http":
-			port = "80"
-		}
-	}
-	return scheme + "://" + host + ":" + port, true
-}
+	"github.com/skyhook-io/radar/pkg/urlutil"
+)
 
 // SameOriginRedirectClient copies a client, preserving its transport and stricter
 // redirect policy while refusing redirects that could expose configured headers.
@@ -46,9 +18,9 @@ func SameOriginRedirectClient(client *http.Client) *http.Client {
 		if len(via) == 0 {
 			return errors.New("redirect has no original request")
 		}
-		origin, ok := NormalizeOrigin(via[0].URL.String())
+		origin, ok := urlutil.NormalizeOrigin(via[0].URL.String())
 		check := func() error {
-			destination, valid := NormalizeOrigin(next.URL.String())
+			destination, valid := urlutil.NormalizeOrigin(next.URL.String())
 			if !ok || !valid || destination != origin {
 				return errors.New("cross-origin redirect refused: configure the final backend URL directly")
 			}

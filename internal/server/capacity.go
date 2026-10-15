@@ -12,6 +12,7 @@ import (
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	internaltimeline "github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"
@@ -708,7 +709,7 @@ func (s *Server) loadCapacityPods(r *http.Request, meta *capacityapi.ResponseMet
 	baseNamespaces := s.capacityNamespacesForUser(r)
 	namespaces := s.capacityNamespacesForSource(r, baseNamespaces, "", "pods")
 	explicit := parseNamespaces(r.URL.Query()) != nil || k8s.ForceNamespaceScope
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		meta.Coverage[capacityapi.CoveragePods] = deniedCoverage("pods_list_denied", []string{"scheduledRequests", "aggregateDemand", "workloads", "summary.actions", "demand.summary"})
 		meta.Coverage[capacityapi.CoverageWorkloads] = meta.Coverage[capacityapi.CoveragePods]
 		return nil
@@ -734,7 +735,7 @@ func (s *Server) loadCapacityPods(r *http.Request, meta *capacityapi.ResponseMet
 		meta.Coverage[capacityapi.CoverageWorkloads] = coverage
 		return nil
 	}
-	pods := listPodsScoped(cache.Pods(), namespaces)
+	pods := readscope.ListPodsScoped(cache.Pods(), namespaces)
 	scope := capacityapi.CoverageScopeCluster
 	status := capacityapi.CoverageAvailable
 	if namespaces != nil || cacheNamespaces.limited {

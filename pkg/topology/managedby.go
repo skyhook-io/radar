@@ -49,8 +49,8 @@ const (
 //
 // Returns nil when no meaningful manager is detectable.
 func SynthesizeManagedBy(obj metav1.Object, kind, namespace, name string, topo *Topology, dp DynamicProvider, idx *RelationshipsIndex) []ResourceRef {
-	if ref := detectManagedByFromMeta(obj); ref != nil {
-		// detectManagedByFromMeta hand-sets Group for GitOps/Flux managers; do
+	if ref := ManagedByFromMeta(obj); ref != nil {
+		// ManagedByFromMeta hand-sets Group for GitOps/Flux managers; do
 		// NOT call enrichRef here — it would overwrite the deliberate group
 		// with the result of a dp lookup keyed on the manager kind, which
 		// resolves wrong for cross-group kinds like Flux's HelmRelease vs
@@ -64,7 +64,7 @@ func SynthesizeManagedBy(obj metav1.Object, kind, namespace, name string, topo *
 }
 
 func synthesizeManagedByFromNode(obj metav1.Object, nodeID string, topo *Topology, dp DynamicProvider, idx *RelationshipsIndex) []ResourceRef {
-	if ref := detectManagedByFromMeta(obj); ref != nil {
+	if ref := ManagedByFromMeta(obj); ref != nil {
 		return []ResourceRef{*ref}
 	}
 	if top := walkTopmostOwnerFromNodeID(nodeID, topo, dp, idx); top != nil {
@@ -73,10 +73,14 @@ func synthesizeManagedByFromNode(obj metav1.Object, nodeID string, topo *Topolog
 	return nil
 }
 
-// detectManagedByFromMeta inspects labels/annotations on obj for GitOps / Helm
-// ownership signals and returns the implied manager ref. Returns nil if no
-// signal is present. Mirrors detectGitOpsOwner precedence in the web package.
-func detectManagedByFromMeta(obj metav1.Object) *ResourceRef {
+// ManagedByFromMeta inspects labels/annotations on obj for GitOps / Helm
+// ownership signals and returns the implied manager ref, or nil when there is
+// none. It reads metadata only, so it needs no topology. A native Helm release
+// has Kind "HelmRelease" and no Group (Flux's HelmRelease carries its group);
+// an Argo CD Application named only by the instance label, or by a tracking ID
+// without an app namespace, has no Namespace. Mirrors detectGitOpsOwner
+// precedence in the web package.
+func ManagedByFromMeta(obj metav1.Object) *ResourceRef {
 	if obj == nil {
 		return nil
 	}

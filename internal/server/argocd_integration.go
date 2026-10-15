@@ -14,6 +14,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 // handleArgoCDStatus reports the live Argo CD integration state for the Settings
@@ -241,17 +242,10 @@ func sameIntegrationOrigin(a, b string) bool {
 	if a == "" || b == "" {
 		return a == b
 	}
-	na, oka := normalizeOrigin(a)
-	nb, okb := normalizeOrigin(b)
+	na, oka := urlutil.NormalizeOrigin(a)
+	nb, okb := urlutil.NormalizeOrigin(b)
 	if !oka || !okb {
 		return a == b
 	}
 	return na == nb
-}
-
-// normalizeOrigin returns a lowercased scheme://host:port with the scheme's
-// default port filled in when omitted, so default-port and explicit-port forms
-// of the same server compare equal.
-func normalizeOrigin(raw string) (string, bool) {
-	return prom.NormalizeOrigin(raw)
 }
