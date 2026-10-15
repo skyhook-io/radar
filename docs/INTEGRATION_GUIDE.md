@@ -205,11 +205,6 @@ unknown, partial and denied values first: every piece here exists to keep them.
     Namespace selection utilities live in `internal/readscope`; scope alone
     does not establish initial readiness. Check `KindReadinessFor` before
     claiming complete or empty observations.
-  - Reviewed writes use `useReviewedActionMutation` in `web/src/api/reviewedActionMutation.ts`
-    to retain in-flight and uncertain results through dialog remounts and connection cache resets.
-    Pass its retained error through `actionDialogResult` to the dialog's single `result` prop.
-    Share a target key for writes that invalidate each other's review; an unrelated annotation record can use its own endpoint key.
-    The host still owns result follow-through and notification.
   - A per-object read with several sources reports a `ReadSource`
     `{state, grant, reason}` per source (`internal/integration/reads.go`), with the missing
     permission as a `Grant` (`internal/auth/grant.go`), never a sentence.
@@ -235,7 +230,7 @@ unknown, partial and denied values first: every piece here exists to keep them.
   - An action error `code` tells the client the write was refused before it
     took effect. Never put a code on a failure that may follow a write; use
     `outcome_unknown`, or `partial` with what completed.
-- [ ] **Guided multi-resource setup.** Keep integration-specific target models and workflow state in the app. CNPG reuses its target fields between Create and Restore, its schedule inputs between Edit and Create, and the shared strict-create/YAML review for both. Put preflight and reviewed conditional writes in the integration service, with thin HTTP adapters and a new feature flag when the endpoint/verb is new. Each independent write needs its own review and observed follow-through; saving declarations is not end-to-end success. Do not grow a universal provisioning registry around one integration. A future second concrete setup flow should extract only the seam it actually shares.
+- [ ] **Guided multi-resource setup.** Keep integration-specific target models and workflow state in the app, and reuse the shared strict-create/YAML review. Put preflight and reviewed conditional writes in the integration service, with thin HTTP adapters and a new feature flag when the endpoint/verb is new. Each independent write needs its own review and observed follow-through; saving declarations is not end-to-end success. Do not grow a universal provisioning registry around one integration. A future second concrete setup flow should extract only the seam it actually shares.
 - [ ] **Domain rules.** Put interpretation reused by checks, findings and actions in a pure integration package (CNPG uses `pkg/cnpg`), independent of HTTP and caller permissions. Keep matching frontend derivations together; share fixture cases for rules represented in both languages. Put request-independent orchestration in an integration service (`internal/cnpg` is the current example), with caller-scoped observations/clients supplied by server adapters. Share typed service reads between endpoints and reports rather than invoking handlers through a response recorder. Keep HTTP requests, routing and process-wide client resolution outside the service.
 - [ ] **Findings.** The Issues engine owns findings from cached Kubernetes objects. Cross-resource findings retain their inventory operations in `Issue.RequiredReads`; hosts supply `CanReadEvidence` for both composition and cached related-issue projections. A live proxy or Prometheus measurement stays in the workspace with `source: 'measurement'` and `measuredBy`; identity limitations such as CNPG's `unverifiedMatch` stay in its domain model. Map domain severity to a non-healthy `HealthLevel` when presenting a `WorkspaceProblem`. Title reasons the Issues page already titles with `issueReasonTitle`. Carry semantic reasons/states through presentation; never branch on generated IDs or display text.
 - [ ] **Screens.**
@@ -275,6 +270,11 @@ unknown, partial and denied values first: every piece here exists to keep them.
   - Client:
     - `web/src/api/actions.ts`: `actionErrorCode`, widened with the integration's
       own codes; `actionOutcomeLocked`, `actionCompleted` and `capabilityReason`.
+    - `useReviewedActionMutation` (`web/src/api/reviewedActionMutation.ts`) keeps
+      in-flight and uncertain results through dialog remounts and connection
+      resets; pass its retained error to the dialog with `actionDialogResult`.
+      Writes that invalidate each other's review share a target key. The host
+      still owns follow-through and notification.
     - `ActionConfirmDialog` and the GitOps write guard (`useGitOpsWriteGuard`).
       Multi-step setup can supply `onBack`/`backLabel` without giving Cancel a
       second meaning. For YAML creation, `CreateResourceDialog.onBack(yaml)`
