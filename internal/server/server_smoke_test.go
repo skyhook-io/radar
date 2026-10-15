@@ -613,12 +613,12 @@ func TestSmokeListPods(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var body []any
+	var body testResourceListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if len(body) < 1 {
+	if len(body.Items) < 1 {
 		t.Error("expected at least 1 pod")
 	}
 }
@@ -678,12 +678,12 @@ func TestSmokeListDeployments(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var body []any
+	var body testResourceListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if len(body) < 1 {
+	if len(body.Items) < 1 {
 		t.Error("expected at least 1 deployment")
 	}
 }
@@ -869,8 +869,11 @@ func TestSmokeListResources(t *testing.T) {
 	for _, kind := range kinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
-			var body []any
+			var body testResourceListEnvelope
 			assertOK(t, get(t, "/api/resources/"+kind), &body)
+			if body.Coverage.Status != "complete" || body.Items == nil {
+				t.Fatalf("expected complete list envelope, got %+v", body)
+			}
 		})
 	}
 }
@@ -882,16 +885,19 @@ func TestSmokeListResourcesCaseInsensitive(t *testing.T) {
 	for _, kind := range kinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
-			var body []any
+			var body testResourceListEnvelope
 			assertOK(t, get(t, "/api/resources/"+kind), &body)
+			if body.Coverage.Status != "complete" || body.Items == nil {
+				t.Fatalf("expected complete list envelope, got %+v", body)
+			}
 		})
 	}
 }
 
 func TestSmokeListResourcesNamespaceFilter(t *testing.T) {
-	var body []any
+	var body testResourceListEnvelope
 	assertOK(t, get(t, "/api/resources/deployments?namespace=default"), &body)
-	if len(body) == 0 {
+	if len(body.Items) == 0 {
 		t.Error("expected at least 1 deployment in namespace=default")
 	}
 }

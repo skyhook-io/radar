@@ -326,12 +326,12 @@ radar_crd_discovery_ready() {
 
 radar_workloads_ready() {
   curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io&namespaces=${DEMO_NS}" 2>/dev/null | \
-    jq -e 'type == "array" and length == 3 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' >/dev/null 2>&1
+    jq -e 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end | type == "array" and length == 3 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' >/dev/null 2>&1
 }
 
 radar_clusterqueues_ready() {
   curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/clusterqueues?group=kueue.x-k8s.io" 2>/dev/null | \
-    jq -e 'type == "array" and length == 2 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' >/dev/null 2>&1
+    jq -e 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end | type == "array" and length == 2 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' >/dev/null 2>&1
 }
 
 assert_radar_scheduling() {
@@ -424,7 +424,7 @@ cmd_verify_radar() {
   wait_until "Radar CRD discovery" radar_crd_discovery_ready
 
   wait_until "Radar to cache the three Kueue Workloads" radar_workloads_ready
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io&namespaces=${DEMO_NS}")" || \
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io&namespaces=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || \
     fail "Radar Workload list request failed"
   jq -e 'type == "array" and length == 3 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' <<<"${response}" >/dev/null || \
     fail "Radar did not return the three group-pure Kueue Workloads"
@@ -436,7 +436,7 @@ cmd_verify_radar() {
     fail "Radar did not expose queue-held's inactive-queue Workload"
 
   wait_until "Radar to cache the two Kueue ClusterQueues" radar_clusterqueues_ready
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/clusterqueues?group=kueue.x-k8s.io")" || \
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/clusterqueues?group=kueue.x-k8s.io" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || \
     fail "Radar ClusterQueue list request failed"
   jq -e 'type == "array" and length == 2 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' <<<"${response}" >/dev/null || \
     fail "Radar did not return the two group-pure ClusterQueues"

@@ -66,6 +66,22 @@ describe('FetchResult', () => {
     expect(html).toContain('pods failed to load within the sync deadline')
   })
 
+  it('blames Radar\'s collector, not the cluster, for a collector failure', () => {
+    const html = renderToString(
+      <FetchResult loading={false} error={shaped('Radar is not allowed to list pods', 503, { error_code: 'collector_forbidden' })} />,
+    )
+    expect(html).toContain('Radar can')
+    expect(html).not.toContain('Cluster unavailable')
+  })
+
+  it('keeps a disconnected cluster reading as unavailable', () => {
+    const html = renderToString(
+      <FetchResult loading={false} error={shaped('Not connected to cluster', 503, { error_code: 'cluster_disconnected' })} />,
+    )
+    expect(html).toContain('Cluster unavailable')
+    expect(html).not.toContain('Radar can')
+  })
+
   it('renders a Retry button only when onRetry is given', () => {
     const err = shaped('internal server error', 500)
     expect(renderToString(<FetchResult loading={false} error={err} onRetry={() => {}} />)).toContain('Retry')

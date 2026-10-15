@@ -27,6 +27,7 @@ export interface RadarFeatureSpec {
 }
 
 export const RADAR_FEATURES = {
+  resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
   resourceIssueCoverage: { label: 'Resource-specific issue views', flag: 'resourceIssueCoverage', flagShippedWithEndpoint: true },

@@ -50,6 +50,7 @@ func TestProgressiveGatingContract(t *testing.T) {
 
 	// 1. Still-syncing typed kind: retryable, machine-readable pending.
 	assertGateResponse(t, "/api/resources/pods", http.StatusServiceUnavailable, "kind_sync_pending")
+	assertGateResponse(t, "/api/resources/pods/default/not-found", http.StatusServiceUnavailable, "kind_sync_pending")
 
 	// 2. Synced typed kind serves while the connection is still 'connecting'.
 	// Polled: under -race the services informer can still be completing when
@@ -83,6 +84,7 @@ func TestProgressiveGatingContract(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+	assertGateResponse(t, "/api/resources/pods/default/not-found", http.StatusServiceUnavailable, "kind_sync_failed")
 
 	// 5. The delayed informer starts, its LIST completes after the deadline:
 	//    the store is real, so serve it (gate and lister must agree — this

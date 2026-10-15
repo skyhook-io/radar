@@ -136,6 +136,7 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
+	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
 	SearchCoverage        bool `json:"searchCoverage"`
 	ResourceIssueCoverage bool `json:"resourceIssueCoverage"`
 	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`
