@@ -14,6 +14,7 @@ import {
   GitOpsTreeGraph,
   RollbackDialog,
   SyncOptionsDialog,
+  argoApplicationSyncOptions,
   buildFluxSourceUrlMap,
   buildTreeFacets,
   describeGitOpsTerminating,
@@ -329,13 +330,14 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
       <SyncOptionsDialog
         open={!!syncDialogRow}
         appLabel={syncDialogRow ? `${syncDialogRow.namespace}/${syncDialogRow.name}` : ''}
+        applicationSyncOptions={argoApplicationSyncOptions(syncDialogRow?.raw)}
         pending={argoSync.isPending}
         onCancel={() => setSyncDialogRow(null)}
         onConfirm={(opts) => {
           if (!syncDialogRow) return
           const { namespace, name } = syncDialogRow
           argoSync.mutate(
-            { namespace, name, ...opts },
+            { namespace, name, ...opts, applicationSyncOptions: argoApplicationSyncOptions(syncDialogRow.raw) },
             // onSettled so the dialog closes on both success and error —
             // otherwise the error toast surfaces behind the still-open
             // modal and the user can't read it.
@@ -387,6 +389,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   // The toggle button reads from this so the label flips correctly when an
   // app is in Manual mode or suspended via Radar's annotations.
   const argoAutoSyncEnabled = kind === 'applications' && isArgoAutoSyncEnabled(resourceQ.data)
+  const appSyncOptions = argoApplicationSyncOptions(resourceQ.data)
   // Radar-driven Argo suspension is signaled by annotations that record the
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
   // the app is in a deliberately-paused state (vs. Manual mode, which is a
@@ -707,7 +710,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 // failure doesn't yield a misleading "sync triggered" toast.
                 if (kind === 'applications') {
                   argoSync.mutate(
-                    { namespace, name },
+                    { namespace, name, applicationSyncOptions: appSyncOptions },
                     {
                       onSuccess: () => {
                         showSuccess(`Created namespace ${nsName}`, 'Sync triggered to retry the apply.')
@@ -867,6 +870,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             open={!!syncDialogTarget}
             appLabel={`${namespace}/${name}`}
             resource={syncDialogTarget?.scope === 'resource' ? syncDialogTarget.resource : undefined}
+            applicationSyncOptions={appSyncOptions}
             pending={argoSync.isPending}
             autoSyncEnabled={argoAutoSyncEnabled}
             validationPending={argoResourceValidation.isPending}
@@ -876,13 +880,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             onCancel={closeArgoSyncDialog}
             onValidationReset={() => argoResourceValidation.reset()}
             onValidate={syncDialogTarget?.scope === 'resource' ? (opts) => {
-              argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts))
+              argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions))
             } : undefined}
             onConfirm={(opts) => {
               if (!syncDialogTarget) return
               const variables = syncDialogTarget.scope === 'resource'
-                ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts)
-                : { namespace, name, ...opts }
+                ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions)
+                : { namespace, name, ...opts, applicationSyncOptions: appSyncOptions }
               argoSync.mutate(variables, {
                 onSettled: closeArgoSyncDialog,
               })

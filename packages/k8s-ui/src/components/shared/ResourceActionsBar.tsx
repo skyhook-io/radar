@@ -29,7 +29,7 @@ import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName } from '../resources/resource-utils'
-import { isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff } from '../resources/resource-utils-argo'
+import { argoApplicationSyncOptions, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff } from '../resources/resource-utils-argo'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
@@ -122,7 +122,7 @@ interface ResourceActionsBarProps {
   isFluxResuming?: boolean
 
   // Argo actions
-  onArgoSync?: (params: { namespace: string; name: string }) => void
+  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] }) => void
   isArgoSyncing?: boolean
   onArgoRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void
   isArgoRefreshing?: boolean
@@ -865,7 +865,7 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 
 function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade }: {
   resource: SelectedResource; data: any
-  onSync?: (params: { namespace: string; name: string }) => void; isSyncing?: boolean
+  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] }) => void; isSyncing?: boolean
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
   onResume?: (params: { namespace: string; name: string }) => void; isResuming?: boolean
@@ -882,6 +882,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
             onClick={() => onSync({
               namespace: resource.namespace,
               name: resource.name,
+              applicationSyncOptions: argoApplicationSyncOptions(data),
             })}
             disabled={isSyncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"

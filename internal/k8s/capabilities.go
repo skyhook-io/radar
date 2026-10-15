@@ -149,6 +149,11 @@ type FeatureCapabilities struct {
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
 	// operation.rollback the API server prunes, and leaves enabled: false set.
 	ArgoRollbackSync bool `json:"argoRollbackSync"`
+	// POST /api/argo/applications/{namespace}/{name}/sync (and
+	// .../validate-resource) with syncOptions omitted uses the Application's
+	// spec.syncPolicy.syncOptions, and an omitted prune does not prune. An
+	// older Radar syncs with no options and prunes.
+	ArgoSyncInheritance bool `json:"argoSyncInheritance"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

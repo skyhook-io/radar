@@ -13,9 +13,15 @@ import type { GitOpsInsightRef } from '../../types/gitops-insights'
 // the onConfirm callback (POST to /api/argo/applications/{ns}/{name}/sync
 // or the hub-proxied equivalent /c/{ctrl}/api/argo/...).
 //
-// Full sync defaults match Argo's most-common path (prune true, no dry-run,
-// no force). Resource sync fixes prune off and omits revision/apply-only so
-// selecting one object cannot opt into deletion behavior.
+// Prune starts off, as in Argo CD's UI and CLI, and is always sent. Resource
+// sync fixes prune off and omits revision/apply-only so selecting one object
+// cannot opt into deletion behavior.
+//
+// Sync options start from the Application's own (applicationSyncOptions). A
+// sync whose options the user leaves alone sends none, so Radar applies the
+// Application's current ones; flipping Replace or Server-side apply sends the
+// Application's options with that edit; leaving out the rest takes the
+// deliberate "Keep the Application's other sync options" switch.
 // =============================================================================
 
 // ArgoSyncOpts is the payload shape the dialog passes to its onConfirm
@@ -29,13 +35,20 @@ export interface ArgoSyncOpts {
   dryRun: boolean
   force: boolean
   applyOnly: boolean
-  syncOptions: string[]
+  // Omitted: sync with the Application's own spec.syncPolicy.syncOptions.
+  // Present: the options for this sync, replacing the Application's ([] = none).
+  // Only a Radar advertising `argoSyncInheritance` reads an omission that
+  // way; see argoSyncOptionsForRequest.
+  syncOptions?: string[]
 }
 
 export interface SyncOptionsDialogProps {
   open: boolean
   appLabel: string
   resource?: GitOpsInsightRef
+  // The Application's spec.syncPolicy.syncOptions. Without it the toggles
+  // start off and an edit replaces whatever the Application sets.
+  applicationSyncOptions?: string[]
   pending?: boolean
   autoSyncEnabled?: boolean
   validationPending?: boolean
@@ -57,44 +70,83 @@ export interface ResourceValidationResult {
   }
 }
 
-export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+export function SyncOptionsDialog({ open, appLabel, resource, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const titleId = useId()
+  const liveAppOptions = applicationSyncOptions ?? EMPTY_OPTIONS
+  // Joined so a caller passing a fresh array each render isn't a change.
+  const liveAppOptionsKey = liveAppOptions.join('\n')
+  // The options the toggles started from, which the request is built from.
+  // They follow the Application until the user edits an option, so a refetch
+  // while the dialog is open never replaces what the user sees or chose.
+  const [appOptions, setAppOptions] = useState(liveAppOptions)
+  const [optionsEdited, setOptionsEdited] = useState(false)
+  const appReplace = appOptions.includes(REPLACE_OPTION)
+  const appServerSideApply = appOptions.includes(SERVER_SIDE_APPLY_OPTION)
+  const otherAppOptions = appOptions.filter((option) => !isToggledOption(option))
   const [revision, setRevision] = useState('')
-  const [prune, setPrune] = useState(true)
+  const [prune, setPrune] = useState(false)
   const [dryRun, setDryRun] = useState(false)
   const [force, setForce] = useState(false)
   const [applyOnly, setApplyOnly] = useState(false)
-  const [replace, setReplace] = useState(false)
-  const [serverSideApply, setServerSideApply] = useState(false)
+  const [replace, setReplace] = useState(appReplace)
+  const [serverSideApply, setServerSideApply] = useState(appServerSideApply)
+  const [keepApplicationSyncOptions, setKeepApplicationSyncOptions] = useState(true)
   const richResourceValidation = !!resource && !!onValidate
   const busy = !!pending || !!validationPending
   const optionsDisabled = busy || !!operationInProgress
+
+  function startFromApplicationOptions(options: string[]) {
+    setAppOptions(options)
+    setReplace(options.includes(REPLACE_OPTION))
+    setServerSideApply(options.includes(SERVER_SIDE_APPLY_OPTION))
+    setKeepApplicationSyncOptions(true)
+  }
 
   // Reset on each open so a previous attempt's flags don't leak into the
   // next sync — easy footgun in modal-heavy flows.
   useEffect(() => {
     if (open) {
       setRevision('')
-      setPrune(!resource)
+      setPrune(false)
       setDryRun(false)
       setForce(false)
       setApplyOnly(false)
-      setReplace(false)
-      setServerSideApply(false)
+      setOptionsEdited(false)
+      startFromApplicationOptions(liveAppOptions)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, resource])
 
+  // The Application's options changed while the dialog is open and the user
+  // hasn't edited one: start from the new ones, and drop a dry-run result
+  // that was computed with the old ones.
+  useEffect(() => {
+    if (!open || optionsEdited || liveAppOptionsKey === appOptions.join('\n')) return
+    startFromApplicationOptions(liveAppOptions)
+    onValidationReset?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveAppOptionsKey])
+
+  // Omitting the options means "the Application's current ones", which is
+  // what the toggles show only while the snapshot is still current.
+  const optionEdits = { applicationSyncOptions: appOptions, keepApplicationSyncOptions, sendUnchanged: appOptions.join('\n') !== liveAppOptionsKey }
+
   function submit() {
-    onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision, prune, dryRun: richResourceValidation ? false : dryRun, force, applyOnly, replace, serverSideApply }))
+    onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision, prune, dryRun: richResourceValidation ? false : dryRun, force, applyOnly, replace, serverSideApply, ...optionEdits }))
   }
 
   function validate() {
-    onValidate?.(buildArgoSyncOpts({ resourceMode: true, revision, prune, dryRun: true, force, applyOnly, replace, serverSideApply }))
+    onValidate?.(buildArgoSyncOpts({ resourceMode: true, revision, prune, dryRun: true, force, applyOnly, replace, serverSideApply, ...optionEdits }))
   }
 
   function updateValidationOption(setter: (value: boolean) => void, value: boolean) {
     setter(value)
     onValidationReset?.()
+  }
+
+  function updateSyncOption(setter: (value: boolean) => void, value: boolean) {
+    setOptionsEdited(true)
+    updateValidationOption(setter, value)
   }
 
   return (
@@ -154,8 +206,19 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
           <legend className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Advanced</legend>
           {!resource && <Toggle label="Apply only" checked={applyOnly} onChange={setApplyOnly} disabled={optionsDisabled} hint="Skip PreSync / PostSync / SyncFail hooks." />}
           <Toggle label="Force" checked={force} onChange={(value) => updateValidationOption(setForce, value)} disabled={optionsDisabled} hint="Use kubectl --force; required for some immutable-field changes." />
-          <Toggle label="Replace" checked={replace} onChange={(value) => updateValidationOption(setReplace, value)} disabled={optionsDisabled} hint="kubectl replace instead of apply (drops fields not in source)." />
-          <Toggle label="Server-side apply" checked={serverSideApply} onChange={(value) => updateValidationOption(setServerSideApply, value)} disabled={optionsDisabled} hint="Use the K8s server-side apply mechanism for ownership tracking." />
+          <Toggle label="Replace" checked={replace} onChange={(value) => updateSyncOption(setReplace, value)} disabled={optionsDisabled} hint={`kubectl replace instead of apply (drops fields not in source).${appReplace ? FROM_APPLICATION : ''}`} />
+          <Toggle label="Server-side apply" checked={serverSideApply} onChange={(value) => updateSyncOption(setServerSideApply, value)} disabled={optionsDisabled} hint={`Use the K8s server-side apply mechanism for ownership tracking.${appServerSideApply ? FROM_APPLICATION : ''}`} />
+          {otherAppOptions.length > 0 && (
+            <Toggle
+              label="Keep the Application's other sync options"
+              checked={keepApplicationSyncOptions}
+              onChange={(value) => updateSyncOption(setKeepApplicationSyncOptions, value)}
+              disabled={optionsDisabled}
+              hint={keepApplicationSyncOptions
+                ? `${otherAppOptions.join(', ')}. Turn off to sync without them.`
+                : `This sync leaves out ${otherAppOptions.join(', ')} and uses only the options above.`}
+            />
+          )}
         </fieldset>
         {richResourceValidation && (validationPending || validationResult || validationError) && (
           <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} />
@@ -249,7 +312,19 @@ function ValidationResult({ pending, result, error }: { pending: boolean; result
   )
 }
 
-export function buildArgoSyncOpts({ resourceMode, revision, prune, dryRun, force, applyOnly, replace, serverSideApply }: {
+const EMPTY_OPTIONS: string[] = []
+const REPLACE_OPTION = 'Replace=true'
+const SERVER_SIDE_APPLY_OPTION = 'ServerSideApply=true'
+const FROM_APPLICATION = " On in the Application's sync policy."
+
+// The dialog's Replace and Server-side apply toggles own these keys, whatever
+// value the Application gives them.
+function isToggledOption(option: string): boolean {
+  const key = option.split('=')[0].trim()
+  return key === 'Replace' || key === 'ServerSideApply'
+}
+
+export function buildArgoSyncOpts({ resourceMode, revision, prune, dryRun, force, applyOnly, replace, serverSideApply, applicationSyncOptions = EMPTY_OPTIONS, keepApplicationSyncOptions = true, sendUnchanged = false }: {
   resourceMode: boolean
   revision: string
   prune: boolean
@@ -258,18 +333,38 @@ export function buildArgoSyncOpts({ resourceMode, revision, prune, dryRun, force
   applyOnly: boolean
   replace: boolean
   serverSideApply: boolean
+  applicationSyncOptions?: string[]
+  keepApplicationSyncOptions?: boolean
+  // Send the options even when the toggles match applicationSyncOptions,
+  // because those are no longer the Application's current ones.
+  sendUnchanged?: boolean
 }): ArgoSyncOpts {
-  const syncOptions: string[] = []
-  if (replace) syncOptions.push('Replace=true')
-  if (serverSideApply) syncOptions.push('ServerSideApply=true')
-  return {
+  const opts: ArgoSyncOpts = {
     revision: resourceMode ? undefined : revision.trim() || undefined,
     prune: resourceMode ? false : prune,
     dryRun,
     force,
     applyOnly: resourceMode ? false : applyOnly,
-    syncOptions,
   }
+  const unchanged = keepApplicationSyncOptions &&
+    replace === applicationSyncOptions.includes(REPLACE_OPTION) &&
+    serverSideApply === applicationSyncOptions.includes(SERVER_SIDE_APPLY_OPTION)
+  if (unchanged && !sendUnchanged) return opts
+
+  const syncOptions = keepApplicationSyncOptions ? applicationSyncOptions.filter((option) => !isToggledOption(option)) : []
+  if (replace) syncOptions.push(REPLACE_OPTION)
+  if (serverSideApply) syncOptions.push(SERVER_SIDE_APPLY_OPTION)
+  return { ...opts, syncOptions }
+}
+
+// argoSyncOptionsForRequest is the syncOptions to send for a sync whose
+// options are `syncOptions` (undefined = the Application's own). Only a Radar
+// advertising `argoSyncInheritance` reads an omitted list as the
+// Application's own; an older one syncs with none, so it is sent the
+// Application's options as the caller last read them.
+export function argoSyncOptionsForRequest(syncOptions: string[] | undefined, applicationSyncOptions: string[] | undefined, serverInheritsOptions: boolean): string[] | undefined {
+  if (syncOptions !== undefined || serverInheritsOptions) return syncOptions
+  return applicationSyncOptions && applicationSyncOptions.length > 0 ? applicationSyncOptions : undefined
 }
 
 function Toggle({ label, checked, onChange, disabled, hint }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; hint?: string }) {

@@ -172,6 +172,7 @@ export interface FeatureCapabilities {
   trafficRecords?: boolean
   gitopsWriteEvidence?: boolean
   argoRollbackSync?: boolean
+  argoSyncInheritance?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

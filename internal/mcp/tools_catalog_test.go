@@ -241,11 +241,37 @@ func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
 	}
 }
 
+func TestManageGitOpsSyncOptionsDescription(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name != "manage_gitops" {
+			continue
+		}
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]struct {
+				Description string `json:"description"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		want := "sync only — Argo SyncOption strings, e.g. Replace=true, ServerSideApply=true. Omit to use the Application's own syncPolicy.syncOptions; a list replaces them ([] = none). Include existing options you want to keep (e.g. CreateNamespace=true)."
+		if got := schema.Properties["sync_options"].Description; got != want {
+			t.Fatalf("sync_options description = %q, want %q", got, want)
+		}
+		return
+	}
+	t.Fatal("manage_gitops is not registered")
+}
+
 func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 59000
+		maxCatalogBytes         = 59100
 		maxToolDescriptionBytes = 3000
 	)
 

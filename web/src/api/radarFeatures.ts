@@ -45,6 +45,10 @@ export const RADAR_FEATURES = {
   // resume reports success while leaving automated.enabled: false in place.
   argoRollback: { label: 'Argo CD rollbacks', flag: 'argoRollbackSync', flagShippedWithEndpoint: true },
   argoAutoSyncEnable: { label: 'Auto-sync controls for Applications with automated.enabled: false', flag: 'argoRollbackSync', flagShippedWithEndpoint: true },
+  // Never blocks a control. An older Radar's sync drops the Application's
+  // sync options when the request omits them, and prunes when it omits prune,
+  // so useArgoSync sends both explicitly unless this is supported.
+  argoSyncInheritance: { label: "Syncs that keep the Application's sync options", flag: 'argoSyncInheritance', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

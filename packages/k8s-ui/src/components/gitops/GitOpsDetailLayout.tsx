@@ -422,7 +422,9 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   ) : (
                     <ActionButton
                       label="Enable auto-sync"
-                      description="Re-enable automatic syncing of Git changes to the cluster."
+                      description={effectiveSuspended
+                        ? 'Turn auto-sync back on with the settings it had before'
+                        : 'Argo applies new commits and reverts live edits (self-heal). Resources removed from Git are kept (prune off).'}
                       icon={Play}
                       loading={argo.resuming}
                       onClick={argo.onResume}

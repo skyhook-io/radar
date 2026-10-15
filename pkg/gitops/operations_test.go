@@ -18,6 +18,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 // argoAppForTest returns a minimal Argo Application as an unstructured object
@@ -169,7 +171,10 @@ func equalMap(a, b map[string]any) bool {
 	return true
 }
 
-func TestSyncArgoAppPruneAlwaysWrittenButRespectsExplicitOff(t *testing.T) {
+// Prune is always written and is off unless the caller asks for it, as in
+// Argo CD's UI and CLI: a sync that omits it must not delete resources that
+// were removed from Git.
+func TestSyncArgoAppPruneAlwaysWrittenAndDefaultsOff(t *testing.T) {
 	tr := true
 	fa := false
 	cases := []struct {
@@ -177,11 +182,8 @@ func TestSyncArgoAppPruneAlwaysWrittenButRespectsExplicitOff(t *testing.T) {
 		opts      ArgoSyncOptions
 		wantPrune any
 	}{
-		{name: "nil prune defaults to true", opts: ArgoSyncOptions{}, wantPrune: true},
+		{name: "nil prune defaults to false", opts: ArgoSyncOptions{}, wantPrune: false},
 		{name: "explicit true", opts: ArgoSyncOptions{Prune: &tr}, wantPrune: true},
-		// The doc-comment on ArgoSyncOptions.Prune calls out that explicit
-		// false from the user (via the modal "untick Prune") must reach Argo
-		// as `prune: false`, otherwise the user's choice is silently dropped.
 		{name: "explicit false reaches the wire", opts: ArgoSyncOptions{Prune: &fa}, wantPrune: false},
 	}
 	for _, tc := range cases {
@@ -388,40 +390,6 @@ func TestRollbackArgoAppWritesSyncOperation(t *testing.T) {
 		}
 		assertNoPatch(t, client)
 	})
-}
-
-func TestArgoOperationsClearCompletedState(t *testing.T) {
-	for _, action := range []string{"sync", "rollback"} {
-		t.Run(action, func(t *testing.T) {
-			ctx := context.Background()
-			client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
-				obj["status"] = map[string]any{
-					"operationState": map[string]any{
-						"phase":      "Succeeded",
-						"operation":  map[string]any{"info": []any{map[string]any{"name": argoRollbackInfoName, "value": "true"}}},
-						"syncResult": map[string]any{"revision": "abc123"},
-					},
-					"history": []any{map[string]any{"id": int64(0), "revision": "abc123", "source": map[string]any{"repoURL": "https://example.com/repo"}}},
-				}
-			}))
-			var err error
-			if action == "sync" {
-				_, err = SyncArgoApp(ctx, client, "argocd", "demo", ArgoSyncOptions{})
-			} else {
-				_, err = RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 0})
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			app, err := client.Resource(argoAppGVR).Namespace("argocd").Get(ctx, "demo", metav1.GetOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, found, _ := unstructured.NestedFieldNoCopy(app.Object, "status", "operationState"); found {
-				t.Fatalf("completed operation state survives %s: %#v", action, app.Object)
-			}
-		})
-	}
 }
 
 // Argo CD refuses a rollback while automated sync is on; Argo CD 3.x can keep
@@ -828,8 +796,14 @@ func TestValidateArgoResourceStartsSafeSelectiveDryRun(t *testing.T) {
 		t.Fatalf("validation resources = %#v, want one exact selector", sync["resources"])
 	}
 	info, ok := nestedMap(body, "operation")["info"].([]any)
-	if !ok || len(info) != 1 {
-		t.Fatalf("validation info = %#v, want one correlation entry", nestedMap(body, "operation")["info"])
+	if !ok || len(info) != 2 {
+		t.Fatalf("validation info = %#v, want the provenance and one correlation entry", nestedMap(body, "operation")["info"])
+	}
+	if !argoOperationHasInfo(nestedMap(body, "operation"), ArgoInitiatedViaInfo, ArgoInitiatedViaRadar) {
+		t.Fatalf("validation info lacks the Radar provenance: %#v", info)
+	}
+	if _, ok := nestedMap(body, "operation")["retry"]; ok {
+		t.Fatalf("validation dry-run must not carry a retry strategy: %#v", nestedMap(body, "operation"))
 	}
 }
 
@@ -890,7 +864,7 @@ func TestArgoResourceValidationResultCorrelatesAndReturnsTarget(t *testing.T) {
 // annotation lookup on resume. Older Radar builds wrote skyhook.io/* keys;
 // the current writer uses radarhq.io/*. Resume must read either, prefer
 // the current key when both are present, and fall back to defaults when
-// neither is — and clear all four keys regardless.
+// neither is (prune off, selfHeal on) — and clear all the keys regardless.
 func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -928,10 +902,18 @@ func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 			wantSelfHeal: false,
 		},
 		{
-			name:         "no suspension annotations → defaults to true/true",
+			name:         "never suspended → prune off, as in Argo CD's UI; selfHeal on",
 			annotations:  map[string]any{},
-			wantPrune:    true,
+			wantPrune:    false,
 			wantSelfHeal: true,
+		},
+		{
+			name: "only the legacy selfHeal key → prune off",
+			annotations: map[string]any{
+				legacyArgoSuspendedSelfHealAnnotation: "false",
+			},
+			wantPrune:    false,
+			wantSelfHeal: false,
 		},
 	}
 	for _, tc := range cases {
@@ -963,6 +945,7 @@ func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 				t.Fatalf("patch missing metadata.annotations: %#v", body)
 			}
 			for _, key := range []string{
+				ArgoSuspendedAutomatedAnnotation,
 				ArgoSuspendedPruneAnnotation,
 				ArgoSuspendedSelfHealAnnotation,
 				legacyArgoSuspendedPruneAnnotation,
@@ -1528,3 +1511,509 @@ func TestTerminateArgoSyncRepairsStaleRunningStatus(t *testing.T) {
 
 // Suppress the unused-metav1 lint when this file is compiled alone.
 var _ = metav1.ObjectMeta{}
+
+// completedAutomatedState is what Argo CD leaves in status.operationState after
+// an automated sync that needed retries.
+func completedAutomatedState() map[string]any {
+	return map[string]any{
+		"phase":      "Succeeded",
+		"message":    "successfully synced (all tasks run)",
+		"retryCount": int64(2),
+		"startedAt":  "2026-10-10T10:00:00Z",
+		"finishedAt": "2026-10-10T10:00:05Z",
+		"operation": map[string]any{
+			"initiatedBy": map[string]any{"automated": true},
+			"retry":       map[string]any{"limit": int64(5)},
+			"sync":        map[string]any{"revision": "old", "prune": true},
+		},
+		"syncResult": map[string]any{"revision": "old", "resources": []any{}},
+	}
+}
+
+func appWithHistoryAndState(state map[string]any) *unstructured.Unstructured {
+	return argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		status, _ := obj["status"].(map[string]any)
+		status["history"] = []any{map[string]any{"id": int64(1), "revision": "abc", "source": map[string]any{"repoURL": "https://example.com/repo"}}}
+		if state != nil {
+			status["operationState"] = state
+		}
+	})
+}
+
+// A new operation replaces a completed status.operationState in the same
+// write, as Argo CD's SetAppOperation does. Otherwise the controller's merge
+// patch keeps the old state's initiatedBy.automated, retryCount and
+// syncResult, and its sync-window check reads the old automated state.
+func TestArgoOperationsClearCompletedOperationState(t *testing.T) {
+	run := map[string]func(*fake.FakeDynamicClient) error{
+		"sync": func(client *fake.FakeDynamicClient) error {
+			_, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{})
+			return err
+		},
+		"rollback": func(client *fake.FakeDynamicClient) error {
+			_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+			return err
+		},
+	}
+	for name, start := range run {
+		for stateName, completedState := range map[string]map[string]any{
+			"automated": completedAutomatedState(),
+			"rollback": {
+				"phase":      "Succeeded",
+				"operation":  map[string]any{"info": []any{map[string]any{"name": argoRollbackInfoName, "value": "true"}}},
+				"syncResult": map[string]any{"revision": "abc123"},
+			},
+		} {
+			t.Run(name+" clears a completed "+stateName+" state", func(t *testing.T) {
+				client := newFakeArgo(appWithHistoryAndState(completedState))
+				if err := start(client); err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				body := captureLastPatch(t, client)
+				status, ok := body["status"].(map[string]any)
+				if !ok {
+					t.Fatalf("patch does not touch status: %#v", body)
+				}
+				if state, present := status["operationState"]; !present || state != nil {
+					t.Fatalf("status.operationState = %#v (present %v), want null", state, present)
+				}
+				if nestedMap(body, "operation", "sync") == nil {
+					t.Fatalf("patch does not install the operation: %#v", body)
+				}
+				app, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+				if err != nil {
+					t.Fatalf("get app: %v", err)
+				}
+				if _, found, _ := unstructured.NestedFieldNoCopy(app.Object, "status", "operationState"); found {
+					t.Fatalf("stored Application still has the old operationState: %#v", app.Object["status"])
+				}
+				if _, found, _ := unstructured.NestedSlice(app.Object, "status", "history"); !found {
+					t.Fatalf("clearing the operation state dropped status.history: %#v", app.Object["status"])
+				}
+			})
+		}
+		t.Run(name+" leaves status alone when there is no state", func(t *testing.T) {
+			client := newFakeArgo(appWithHistoryAndState(nil))
+			if err := start(client); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if _, ok := captureLastPatch(t, client)["status"]; ok {
+				t.Fatalf("patch touches status with no operationState to clear: %#v", captureLastPatch(t, client))
+			}
+		})
+	}
+}
+
+// An omitted syncOptions inherits the Application's own, as argocd-server
+// does; an explicit list, even an empty one, replaces them. A sync also
+// carries the Application's retry strategy, while a rollback never does
+// (argocd-server's Rollback doesn't) and still inherits the sync options.
+func TestArgoOperationsInheritSyncOptionsAndRetry(t *testing.T) {
+	appSyncOptions := []any{"CreateNamespace=true", "ServerSideApply=true"}
+	appRetry := map[string]any{"limit": float64(3), "backoff": map[string]any{"duration": "5s"}}
+	withPolicy := func() *unstructured.Unstructured {
+		app := appWithHistoryAndState(nil)
+		spec, _ := app.Object["spec"].(map[string]any)
+		spec["syncPolicy"] = map[string]any{"syncOptions": appSyncOptions, "retry": appRetry}
+		return app
+	}
+	syncWith := func(t *testing.T, app *unstructured.Unstructured, opts ArgoSyncOptions) map[string]any {
+		t.Helper()
+		client := newFakeArgo(app)
+		if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", opts); err != nil {
+			t.Fatalf("SyncArgoApp: %v", err)
+		}
+		return nestedMap(captureLastPatch(t, client), "operation")
+	}
+
+	t.Run("omitted options inherit the Application's options and retry", func(t *testing.T) {
+		operation := syncWith(t, withPolicy(), ArgoSyncOptions{})
+		if got := nestedMap(operation, "sync")["syncOptions"]; !reflect.DeepEqual(got, appSyncOptions) {
+			t.Fatalf("syncOptions = %#v, want %#v", got, appSyncOptions)
+		}
+		if got := nestedMap(operation, "retry"); !reflect.DeepEqual(got, appRetry) {
+			t.Fatalf("retry = %#v, want %#v", got, appRetry)
+		}
+	})
+	t.Run("explicit options replace the Application's", func(t *testing.T) {
+		operation := syncWith(t, withPolicy(), ArgoSyncOptions{SyncOptions: []string{"Replace=true"}})
+		if got := nestedMap(operation, "sync")["syncOptions"]; !reflect.DeepEqual(got, []any{"Replace=true"}) {
+			t.Fatalf("syncOptions = %#v, want only Replace=true", got)
+		}
+	})
+	t.Run("an explicit empty list syncs with no options", func(t *testing.T) {
+		operation := syncWith(t, withPolicy(), ArgoSyncOptions{SyncOptions: []string{}})
+		if got, ok := nestedMap(operation, "sync")["syncOptions"]; ok {
+			t.Fatalf("syncOptions = %#v, want none", got)
+		}
+	})
+	t.Run("an Application without a policy adds neither", func(t *testing.T) {
+		operation := syncWith(t, appWithHistoryAndState(nil), ArgoSyncOptions{})
+		if got, ok := nestedMap(operation, "sync")["syncOptions"]; ok {
+			t.Fatalf("syncOptions = %#v, want none", got)
+		}
+		if got, ok := operation["retry"]; ok {
+			t.Fatalf("retry = %#v, want none", got)
+		}
+	})
+	t.Run("rollback inherits options but not retry", func(t *testing.T) {
+		client := newFakeArgo(withPolicy())
+		if _, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1}); err != nil {
+			t.Fatalf("RollbackArgoApp: %v", err)
+		}
+		operation := nestedMap(captureLastPatch(t, client), "operation")
+		if got := nestedMap(operation, "sync")["syncOptions"]; !reflect.DeepEqual(got, appSyncOptions) {
+			t.Fatalf("rollback syncOptions = %#v, want %#v", got, appSyncOptions)
+		}
+		if got, ok := operation["retry"]; ok {
+			t.Fatalf("rollback retry = %#v, want none", got)
+		}
+	})
+}
+
+// The sync fixes the Application's source(s) when it is requested, as
+// argocd-server does, so a sync waiting behind a window deploys what was
+// there when it was asked for.
+func TestSyncArgoAppCapturesSources(t *testing.T) {
+	single := map[string]any{"repoURL": "https://example.com/repo", "path": "app", "targetRevision": "HEAD"}
+	multi := []any{
+		map[string]any{"repoURL": "https://example.com/a", "path": "a", "targetRevision": "main"},
+		map[string]any{"repoURL": "https://example.com/b", "path": "b", "targetRevision": "v1"},
+	}
+	t.Run("single source", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["spec"].(map[string]any)["source"] = single
+		}))
+		if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{}); err != nil {
+			t.Fatalf("SyncArgoApp: %v", err)
+		}
+		sync := nestedMap(captureLastPatch(t, client), "operation", "sync")
+		if !reflect.DeepEqual(sync["source"], single) || sync["sources"] != nil {
+			t.Fatalf("sync source = %#v sources = %#v, want the spec's source only", sync["source"], sync["sources"])
+		}
+	})
+	t.Run("multiple sources", func(t *testing.T) {
+		client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			obj["spec"].(map[string]any)["sources"] = multi
+		}))
+		if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{}); err != nil {
+			t.Fatalf("SyncArgoApp: %v", err)
+		}
+		sync := nestedMap(captureLastPatch(t, client), "operation", "sync")
+		if !reflect.DeepEqual(sync["sources"], multi) || sync["source"] != nil {
+			t.Fatalf("sync sources = %#v source = %#v, want the spec's sources only", sync["sources"], sync["source"])
+		}
+	})
+}
+
+func TestArgoOperationsAttributeInitiator(t *testing.T) {
+	alice := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "alice@example.com", Groups: []string{"team"}})
+	cases := []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{name: "authenticated user", ctx: alice, want: "alice@example.com"},
+		{name: "cloud email", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "user_01ABC", Groups: []string{"radar:member", "radar:idp:radar:email:other@example.com", "radar:email:alice@example.com"}}), want: "alice@example.com"},
+		{name: "cloud without email", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "user_01ABC", Groups: []string{"radar:member"}}), want: "user_01ABC"},
+		{name: "empty email group", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "user_01ABC", Groups: []string{"radar:email:"}}), want: "user_01ABC"},
+		{name: "no per-user auth", ctx: context.Background(), want: "radar"},
+		{name: "user without a name", ctx: pkgauth.ContextWithUser(context.Background(), &pkgauth.User{}), want: "radar"},
+	}
+	for _, tc := range cases {
+		for verb, start := range map[string]func(context.Context, *fake.FakeDynamicClient) error{
+			"sync": func(ctx context.Context, client *fake.FakeDynamicClient) error {
+				_, err := SyncArgoApp(ctx, client, "argocd", "demo", ArgoSyncOptions{})
+				return err
+			},
+			"rollback": func(ctx context.Context, client *fake.FakeDynamicClient) error {
+				_, err := RollbackArgoApp(ctx, client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+				return err
+			},
+		} {
+			t.Run(tc.name+"/"+verb, func(t *testing.T) {
+				user := pkgauth.UserFromContext(tc.ctx)
+				var originalUser pkgauth.User
+				if user != nil {
+					originalUser = *user
+					originalUser.Groups = append([]string(nil), user.Groups...)
+				}
+				client := newFakeArgo(appWithHistoryAndState(nil))
+				if err := start(tc.ctx, client); err != nil {
+					t.Fatalf("%s: %v", verb, err)
+				}
+				if user != nil && !reflect.DeepEqual(*user, originalUser) {
+					t.Fatalf("operation changed the authenticated identity: got %#v, want %#v", *user, originalUser)
+				}
+				operation := nestedMap(captureLastPatch(t, client), "operation")
+				if got := nestedMap(operation, "initiatedBy"); !reflect.DeepEqual(got, map[string]any{"username": tc.want}) {
+					t.Fatalf("initiatedBy = %#v, want username %q only", got, tc.want)
+				}
+				if !argoOperationHasInfo(operation, ArgoInitiatedViaInfo, ArgoInitiatedViaRadar) {
+					t.Fatalf("operation.info = %#v, want the Radar provenance", operation["info"])
+				}
+				if got := argoOperationHasInfo(operation, argoRollbackInfoName, "true"); got != (verb == "rollback") {
+					t.Fatalf("rollback marker present = %v for %s; info = %#v", got, verb, operation["info"])
+				}
+			})
+		}
+	}
+}
+
+// conflictOnce makes the first patch fail with a conflict after applying
+// change to the stored Application, as a concurrent writer would.
+func conflictOnce(t *testing.T, client *fake.FakeDynamicClient, change func(app *unstructured.Unstructured)) *int {
+	t.Helper()
+	patches := 0
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patches++
+		if patches > 1 {
+			return false, nil, nil
+		}
+		obj, err := client.Tracker().Get(argoAppGVR, "argocd", "demo")
+		if err != nil {
+			t.Fatalf("tracker get: %v", err)
+		}
+		app := obj.(*unstructured.Unstructured).DeepCopy()
+		change(app)
+		app.SetResourceVersion("18")
+		if err := client.Tracker().Update(argoAppGVR, app, "argocd"); err != nil {
+			t.Fatalf("tracker update: %v", err)
+		}
+		return true, nil, apierrors.NewConflict(argoAppGVR.GroupResource(), "demo", errors.New("changed"))
+	})
+	return &patches
+}
+
+// A conflicting write is retried only from a fresh read that is validated
+// again: an operation another writer installed in between is refused, and
+// a changed Application is written from its new state and resourceVersion.
+func TestArgoOperationConflictRereadsAndRevalidates(t *testing.T) {
+	seed := func() *unstructured.Unstructured {
+		app := appWithHistoryAndState(nil)
+		app.SetResourceVersion("17")
+		return app
+	}
+	starts := map[string]func(*fake.FakeDynamicClient) error{
+		"sync": func(client *fake.FakeDynamicClient) error {
+			_, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{})
+			return err
+		},
+		"rollback": func(client *fake.FakeDynamicClient) error {
+			_, err := RollbackArgoApp(context.Background(), client, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+			return err
+		},
+	}
+	for verb, start := range starts {
+		t.Run(verb+": an operation installed meanwhile is refused", func(t *testing.T) {
+			client := newFakeArgo(seed())
+			patches := conflictOnce(t, client, func(app *unstructured.Unstructured) {
+				app.Object["operation"] = map[string]any{"sync": map[string]any{"revision": "theirs"}}
+			})
+			if err := start(client); !errors.Is(err, ErrOperationInProgress) {
+				t.Fatalf("error = %v, want ErrOperationInProgress", err)
+			}
+			if *patches != 1 {
+				t.Fatalf("patches = %d, want only the conflicting one", *patches)
+			}
+			app, _ := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+			if revision, _, _ := unstructured.NestedString(app.Object, "operation", "sync", "revision"); revision != "theirs" {
+				t.Fatalf("the other writer's operation was replaced: %#v", app.Object["operation"])
+			}
+		})
+		t.Run(verb+": a changed Application is written from the new read", func(t *testing.T) {
+			client := newFakeArgo(seed())
+			patches := conflictOnce(t, client, func(app *unstructured.Unstructured) {
+				spec, _ := app.Object["spec"].(map[string]any)
+				spec["syncPolicy"] = map[string]any{"syncOptions": []any{"PruneLast=true"}}
+			})
+			if err := start(client); err != nil {
+				t.Fatalf("%s: %v", verb, err)
+			}
+			if *patches != 2 {
+				t.Fatalf("patches = %d, want the conflict and one retry", *patches)
+			}
+			body := captureLastPatch(t, client)
+			if rv := nestedMap(body, "metadata")["resourceVersion"]; rv != "18" {
+				t.Fatalf("retry resourceVersion = %#v, want the reread 18", rv)
+			}
+			if got := nestedMap(body, "operation", "sync")["syncOptions"]; !reflect.DeepEqual(got, []any{"PruneLast=true"}) {
+				t.Fatalf("retry syncOptions = %#v, want the reread Application's", got)
+			}
+		})
+	}
+	t.Run("a conflict on every attempt gives up with 409", func(t *testing.T) {
+		client := newFakeArgo(seed())
+		patches := 0
+		client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+			patches++
+			return true, nil, apierrors.NewConflict(argoAppGVR.GroupResource(), "demo", errors.New("changed"))
+		})
+		if _, err := SyncArgoApp(context.Background(), client, "argocd", "demo", ArgoSyncOptions{}); !errors.Is(err, ErrOperationInProgress) {
+			t.Fatalf("error = %v, want ErrOperationInProgress", err)
+		}
+		if patches != argoOperationAttempts {
+			t.Fatalf("patches = %d, want %d", patches, argoOperationAttempts)
+		}
+	})
+}
+
+func getTestApp(t *testing.T, client *fake.FakeDynamicClient) *unstructured.Unstructured {
+	t.Helper()
+	app, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	return app
+}
+
+func setAutoSync(t *testing.T, client *fake.FakeDynamicClient, enable bool) OperationResult {
+	t.Helper()
+	result, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", enable)
+	if err != nil {
+		t.Fatalf("SetArgoAutoSync(%v): %v", enable, err)
+	}
+	return result
+}
+
+func automatedOf(app *unstructured.Unstructured) (map[string]any, bool) {
+	automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	return automated, found
+}
+
+func appWithAutomated(automated map[string]any, annotations map[string]any) *unstructured.Unstructured {
+	return argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		if automated != nil {
+			obj["spec"].(map[string]any)["syncPolicy"] = map[string]any{"automated": automated}
+		}
+		if annotations != nil {
+			obj["metadata"].(map[string]any)["annotations"] = annotations
+		}
+	})
+}
+
+// Suspend and resume keep the whole automated block, defined for repeated
+// suspends and for edits made outside Radar while suspended.
+func TestSetArgoAutoSyncLifecycle(t *testing.T) {
+	original := map[string]any{"prune": true, "selfHeal": false, "allowEmpty": true}
+
+	t.Run("resume restores every field suspend removed", func(t *testing.T) {
+		client := newFakeArgo(appWithAutomated(original, nil))
+		setAutoSync(t, client, false)
+		suspended := getTestApp(t, client)
+		if _, found := automatedOf(suspended); found {
+			t.Fatalf("suspend left automated in place: %#v", suspended.Object["spec"])
+		}
+		annotations := suspended.GetAnnotations()
+		if annotations[ArgoSuspendedPruneAnnotation] != "true" || annotations[ArgoSuspendedSelfHealAnnotation] != "false" {
+			t.Fatalf("suspend dropped the per-field keys older Radar builds resume from: %#v", annotations)
+		}
+		setAutoSync(t, client, true)
+		resumed := getTestApp(t, client)
+		if automated, _ := automatedOf(resumed); !reflect.DeepEqual(automated, original) {
+			t.Fatalf("resumed automated = %#v, want %#v", automated, original)
+		}
+		if len(resumed.GetAnnotations()) != 0 {
+			t.Fatalf("resume left suspension annotations: %#v", resumed.GetAnnotations())
+		}
+	})
+
+	t.Run("a second suspend changes nothing", func(t *testing.T) {
+		client := newFakeArgo(appWithAutomated(original, nil))
+		setAutoSync(t, client, false)
+		before := getTestApp(t, client).GetAnnotations()
+		if result := setAutoSync(t, client, false); !result.NoChange {
+			t.Fatalf("second suspend = %#v, want NoChange", result)
+		}
+		if after := getTestApp(t, client).GetAnnotations(); !reflect.DeepEqual(after, before) {
+			t.Fatalf("second suspend rewrote the saved settings: %#v, want %#v", after, before)
+		}
+		setAutoSync(t, client, true)
+		if automated, _ := automatedOf(getTestApp(t, client)); !reflect.DeepEqual(automated, original) {
+			t.Fatalf("resume after two suspends = %#v, want %#v", automated, original)
+		}
+	})
+
+	t.Run("suspending an Application without auto-sync writes nothing", func(t *testing.T) {
+		client := newFakeArgo(appWithAutomated(nil, nil))
+		if result := setAutoSync(t, client, false); !result.NoChange {
+			t.Fatalf("suspend = %#v, want NoChange", result)
+		}
+		assertNoPatch(t, client)
+	})
+
+	t.Run("auto-sync re-enabled outside Radar keeps its block", func(t *testing.T) {
+		client := newFakeArgo(appWithAutomated(original, nil))
+		setAutoSync(t, client, false)
+		app := getTestApp(t, client)
+		external := map[string]any{"prune": false, "selfHeal": true}
+		app.Object["spec"].(map[string]any)["syncPolicy"] = map[string]any{"automated": external}
+		if err := client.Tracker().Update(argoAppGVR, app, "argocd"); err != nil {
+			t.Fatalf("external edit: %v", err)
+		}
+		if result := setAutoSync(t, client, true); !result.NoChange {
+			t.Fatalf("resume = %#v, want NoChange", result)
+		}
+		resumed := getTestApp(t, client)
+		if automated, _ := automatedOf(resumed); !reflect.DeepEqual(automated, external) {
+			t.Fatalf("resume replaced the external block: %#v, want %#v", automated, external)
+		}
+		if len(resumed.GetAnnotations()) != 0 {
+			t.Fatalf("resume left Radar's saved copy: %#v", resumed.GetAnnotations())
+		}
+	})
+
+	t.Run("a block switched off in place while suspended wins over the saved one", func(t *testing.T) {
+		client := newFakeArgo(appWithAutomated(original, nil))
+		setAutoSync(t, client, false)
+		app := getTestApp(t, client)
+		app.Object["spec"].(map[string]any)["syncPolicy"] = map[string]any{"automated": map[string]any{"enabled": false, "prune": false, "allowEmpty": true}}
+		if err := client.Tracker().Update(argoAppGVR, app, "argocd"); err != nil {
+			t.Fatalf("external edit: %v", err)
+		}
+		setAutoSync(t, client, true)
+		resumed := getTestApp(t, client)
+		if automated, _ := automatedOf(resumed); !reflect.DeepEqual(automated, map[string]any{"prune": false, "allowEmpty": true}) {
+			t.Fatalf("resumed automated = %#v, want the in-place block without enabled", automated)
+		}
+		if !ArgoAutoSyncEnabled(resumed) || len(resumed.GetAnnotations()) != 0 {
+			t.Fatalf("resume left auto-sync off or annotations behind: %#v", resumed.Object)
+		}
+	})
+
+	t.Run("a saved block an older Radar's suspend made stale is not used", func(t *testing.T) {
+		client := newFakeArgo(appWithAutomated(nil, map[string]any{
+			ArgoSuspendedAutomatedAnnotation: `{"prune":true,"selfHeal":true,"allowEmpty":true}`,
+			ArgoSuspendedPruneAnnotation:     "false",
+			ArgoSuspendedSelfHealAnnotation:  "true",
+		}))
+		setAutoSync(t, client, true)
+		if automated, _ := automatedOf(getTestApp(t, client)); !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": true}) {
+			t.Fatalf("resumed automated = %#v, want the per-field keys", automated)
+		}
+	})
+}
+
+// "Enable Auto-Sync" on an Application Radar never suspended has no saved
+// settings to restore. It must not turn pruning on: Argo CD's own UI enables
+// auto-sync with prune off, and a block that exists keeps its own values.
+func TestSetArgoAutoSyncEnableNeverAutomatedLeavesPruneOff(t *testing.T) {
+	client := newFakeArgo(appWithAutomated(nil, nil))
+	setAutoSync(t, client, true)
+	app := getTestApp(t, client)
+	if !ArgoAutoSyncEnabled(app) {
+		t.Fatalf("auto-sync still off: %#v", app.Object["spec"])
+	}
+	if automated, _ := automatedOf(app); !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": true}) {
+		t.Fatalf("enabled automated = %#v, want prune off and selfHeal on", automated)
+	}
+
+	saved := newFakeArgo(appWithAutomated(nil, map[string]any{
+		ArgoSuspendedPruneAnnotation:    "true",
+		ArgoSuspendedSelfHealAnnotation: "false",
+	}))
+	setAutoSync(t, saved, true)
+	if automated, _ := automatedOf(getTestApp(t, saved)); !reflect.DeepEqual(automated, map[string]any{"prune": true, "selfHeal": false}) {
+		t.Fatalf("resumed automated = %#v, want the saved prune on and selfHeal off", automated)
+	}
+}
