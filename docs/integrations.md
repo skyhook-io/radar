@@ -893,11 +893,11 @@ Beyond the per-kind views below, CloudNativePG gets its own views under Resource
 
 **Fleet:** every Cluster ordered by urgency, each with its top problem.
 
-![CloudNativePG Clusters view: three PostgreSQL clusters, two needing attention, each with its top problem](images/cnpg/fleet.png)
+![CloudNativePG Clusters view: three PostgreSQL clusters, two needing attention, each with its top problem](images/cnpg/cnpg-fleet.png)
 
 **Cluster page:** the cause first, then one line per health dimension.
 
-![A Cluster stuck because its first instance can't be scheduled: the scheduler's reason first, then Serving, Replication, Storage and Backups at a glance](images/cnpg/cluster-overview.png)
+![A Cluster stuck because its first instance can't be scheduled: the scheduler's reason first, then Serving, Replication, Storage and Backups at a glance](images/cnpg/cnpg-cluster-overview.png)
 
 ### What Radar Shows
 
