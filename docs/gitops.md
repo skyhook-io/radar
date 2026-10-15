@@ -121,6 +121,42 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 | **Sync with source** (Kustomization / HelmRelease) | Requests the reconciles `flux reconcile --with-source` makes, upstream first: the source, then the resource. For a HelmRelease the source is its chart (the generated HelmChart of an inline `spec.chart`, named from the current spec, or the HelmChart / OCIRepository named by `spec.chartRef`), and a HelmChart's own source is reconciled before it, so a new chart version in the repository is picked up. A suspended or Terminating object anywhere in that chain fails the request with 409 before anything is written. Unlike the CLI, Radar does not wait for each step to finish. An ExternalArtifact comes from another controller, so only the resource is reconciled. Objects are patched at the API version the cluster serves |
 | **Suspend / Resume** | Toggles `spec.suspend` |
 
+## Action permissions
+
+`GET /api/gitops/capabilities/{kind}/{namespace}/{name}` reviews named API operations as the caller. Every action needs `patch`; actions with lifecycle preflights also need `get`.
+Refresh only needs `patch`, and its capability check does not read the target.
+Flux checks read the target as the caller to resolve any source reference. Flux
+Sync with source also needs `get` and `patch` on every source it reconciles,
+including each namespace: a HelmRelease using a HelmChart needs both the chart
+and its upstream repository. ExternalArtifact is not read or patched. Each action reports `allowed`; a denied action lists
+every operation the caller lacks in `denied` (`{verb, group, resource, namespace, name, kind, source}`),
+so the grant guidance is complete, and each distinct operation is reviewed once
+per request. A Flux target the caller can't read denies every action on that
+read and still reports a missing `patch`. Sync with source on an object with no source Radar can reconcile
+(for example, a Kustomization without `sourceRef`)
+reports `unsupported` with a reason, and the action itself answers 400.
+Disabled controls explain the denied permission. Controls stay enabled while the first check loads or fails. Failed refetches
+preserve the last known permissions; only a confirmed denial disables an action. Lifecycle restrictions still
+apply; Refresh and Terminate remain available during deletion when permitted.
+A connected Radar without the `gitOpsActionCapabilities` feature flag retains
+its existing action controls.
+
+GitOps action denials return HTTP 403 with
+`{error, error_code: "rbac_denied", verb, group, resource, namespace, name, kind}`. The UI presents
+permission guidance and keeps the original error behind an Error details
+disclosure with a Copy raw error button. Admission refusals, from a webhook or a
+ValidatingAdmissionPolicy, return 403 with `error_code: "admission_denied"` and
+a `summary` naming the policy, whatever status the policy chose (a
+ValidatingAdmissionPolicy defaults to 422 Invalid). Only `rbac_denied` is ever
+presented as a role problem; any other error shows the server's message.
+`manage_gitops` returns the same denied tuple, or the admission summary, as a tool error.
+No action gains permissions from the capability endpoint. In Radar Cloud, the
+chart's owner-only write add-on grants `get`/`patch` on Argo CD Applications
+(`cloud.defaultRbac.integrationWrite.gitops.owner`, default `auto`: on when the
+owner role is the stock `admin` or `cluster-admin`); stock Flux already lets
+`admin` and `edit` patch its objects. See the [chart README](../deploy/helm/radar/README.md#cloud-owner-integration-writes)
+for the controller authority that grant delegates.
+
 ### Keyboard shortcuts (per-app detail page)
 
 | Key | Action |

@@ -1,0 +1,68 @@
+{{- /*
+Owner write add-on for integration actions, rendered from the grant rows of
+files/integration-write-baseline.yaml. Each capability has its own switch,
+cloud.defaultRbac.integrationWrite.<capability>.owner:
+  auto  - on only when ownerClusterRole is exactly admin or cluster-admin
+  true  - on with any owner role
+  false - off
+An absent switch (older --reuse-values trees) follows the capability's default
+in the table. Helm's `default` would also replace an explicit false, so presence
+is checked with hasKey instead.
+*/}}
+{{- $rbac := .Values.cloud.defaultRbac -}}
+{{- if and .Values.cloud.enabled .Values.rbac.create $rbac.create $rbac.owner -}}
+{{- $root := . -}}
+{{- $policy := .Files.Get "files/integration-write-baseline.yaml" | fromYaml -}}
+{{- $switches := dict -}}
+{{- if and (hasKey $rbac "integrationWrite") (kindIs "map" $rbac.integrationWrite) -}}
+{{- $switches = $rbac.integrationWrite -}}
+{{- end -}}
+{{- $stockOwner := has (toString $rbac.ownerClusterRole) (list "admin" "cluster-admin") -}}
+{{- $enabled := dict -}}
+{{- range $capability, $spec := $policy.capabilities -}}
+{{- $mode := toString $spec.default -}}
+{{- $switch := index $switches $capability -}}
+{{- if and (kindIs "map" $switch) (hasKey $switch "owner") (not (kindIs "invalid" $switch.owner)) -}}
+{{- $mode = toString $switch.owner -}}
+{{- end -}}
+{{- if not (has $mode (list "auto" "true" "false")) -}}
+{{- fail (printf "cloud.defaultRbac.integrationWrite.%s.owner must be auto, true or false (got %q)" $capability $mode) -}}
+{{- end -}}
+{{- $_ := set $enabled $capability (or (eq $mode "true") (and (eq $mode "auto") $stockOwner)) -}}
+{{- end -}}
+{{- $rules := list -}}
+{{- range $entry := $policy.entries -}}
+{{- if and (eq $entry.decision "grant") (index $enabled $entry.capability) (or $root.Values.rbac.crdGroups.all (index $root.Values.rbac.crdGroups $entry.collection)) -}}
+{{- $rules = append $rules (dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" $entry.verbs) -}}
+{{- end -}}
+{{- end -}}
+{{- if $rules }}
+{{- $name := printf "%s-integration-write" (include "radar.fullname" $root) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "radar.labels" $root | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" $root }}-cloud-owner-integration-write
+  labels:
+    {{- include "radar.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: Group
+    name: radar:owner
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: cloud:owner
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

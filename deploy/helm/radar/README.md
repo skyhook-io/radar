@@ -164,6 +164,81 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Cloud owner integration writes
+
+Some Radar actions write integration resources that the built-in `admin` and
+`edit` roles don't cover on a stock install. The chart grants those writes to
+the owner tier from a reviewed [write table](files/integration-write-baseline.yaml),
+with one switch per capability:
+
+```yaml
+cloud:
+  defaultRbac:
+    integrationWrite:
+      gitops:
+        owner: auto   # auto | true | false
+```
+
+Today the table grants one thing: `get` and `patch` on Argo CD Applications
+(`argoproj.io/applications`) in all namespaces, through a `*-integration-write`
+ClusterRole bound to `radar:owner` and `cloud:owner`. Members and viewers get
+nothing from it. The other rows record decisions that add no rule: Flux and
+Argo Rollouts writes are already granted to `admin` and `edit` by the vendors'
+stock aggregated roles, and Velero run messages (`downloadrequests`) are
+withheld pending review.
+
+- `auto` (default): on only when `cloud.defaultRbac.ownerClusterRole` is exactly
+  `admin` or `cluster-admin`. This compares the name; a modified `admin` role is
+  not detected. With a custom owner role, `auto` grants nothing.
+- `true`: on with any owner role, including a custom one.
+- `false`: off. This removes only this add-on. Kubernetes RBAC is additive:
+  vendor aggregation, other roles and your own bindings still apply.
+
+The add-on also requires `cloud.enabled`, `rbac.create`,
+`cloud.defaultRbac.create`, `cloud.defaultRbac.owner`, and the `argo`
+collection (`rbac.crdGroups.argo` or `all`). These are caller permissions;
+`rbac.additionalRules` extends Radar's collector ServiceAccount, not callers,
+and can't grant these actions.
+
+**What `get` and `patch` on Applications allow.** Kubernetes RBAC can't limit
+a patch to the fields an action sets, and the grant works from any client, not
+only Radar. A holder can:
+
+- change an Application's sources, destination, sync policy, labels, status and
+  `spec.project`. The controller enforces whichever existing AppProject the
+  Application names, so the original project is not a fixed boundary;
+- start operations, including a sync to another revision or with locally
+  supplied manifests, which argocd-server would gate behind its `override`
+  permission;
+- so use the Argo CD controller's deployment authority, often cluster-admin and
+  possibly on remote clusters that Argo CD manages.
+
+It does not allow creating or deleting Applications, or administering
+AppProjects. Argo CD's own user and project RBAC, and argocd-server's request
+checks, are not consulted for actions through Radar or `kubectl`. What the
+controller enforces still holds: sync windows (Argo CD 2.11 and later), the
+destination, kind and namespace limits of the project the Application names,
+and source-integrity rules.
+
+A stock `admin` owner already has indirect routes to this authority, but
+admission policies may block them, so the grant can add real authority. If
+owners shouldn't have it, set `false`. A namespace RoleBinding can't narrow it,
+or any other cluster-wide default binding. For narrower access, turn the
+add-on off (or set `cloud.defaultRbac.create=false`) and bind your own
+namespace- or resource-name-scoped roles.
+
+**Upgrades.** Only a chart install or upgrade applies the grant. On `helm upgrade
+--reuse-values` from an older chart, the missing key follows the capability's
+declared default (`auto` for gitops), so a stock install gains the grant; pass
+`--set cloud.defaultRbac.integrationWrite.gitops.owner=false` to keep it off.
+Updating only the Radar binary, including Radar Cloud self-upgrade, installs no
+RBAC.
+
+GitOps action controls check the caller's permissions per object and disable
+denied actions with an explanation. While a check loads or retries, controls
+stay available. The checks are advisory: each action still runs as the caller,
+and Kubernetes makes the final authorization decision.
+
 ### Radar Cloud background services (`radar:system`)
 
 Radar Cloud's alerts worker and timeline puller read as `radar:system`.

@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef, Fragment } from 'react'
+import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { DURATION_TOAST_EXIT } from '../../utils/animation'
 import { Check, Terminal, X, AlertTriangle, Info } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -6,6 +7,7 @@ import { clsx } from 'clsx'
 interface Toast {
   id: string
   message: string
+  rawDetail?: string
   detail?: string
   command?: string
   type?: 'success' | 'info' | 'warning' | 'error'
@@ -17,6 +19,8 @@ interface Toast {
 
 interface ToastContextType {
   showToast: (message: string, options?: {
+    id?: string
+    rawDetail?: string
     detail?: string
     command?: string
     type?: Toast['type']
@@ -25,7 +29,7 @@ interface ToastContextType {
     onDetailClick?: () => void
   }) => void
   showCopied: (command: string, label?: string, event?: React.MouseEvent) => void
-  showError: (message: string, detail?: string) => void
+  showError: (message: string, detail?: string, rawDetail?: string) => void
   showSuccess: (message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void
 }
 
@@ -34,7 +38,7 @@ const ToastContext = createContext<ToastContextType | null>(null)
 // Singleton pattern for showing toasts outside React components (e.g., in API error handlers)
 class ToastManager {
   private static instance: ToastManager
-  private showErrorFn: ((message: string, detail?: string) => void) | null = null
+  private showErrorFn: ((message: string, detail?: string, rawDetail?: string) => void) | null = null
   private showSuccessFn: ((message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void) | null = null
 
   static getInstance(): ToastManager {
@@ -54,8 +58,8 @@ class ToastManager {
     this.showSuccessFn = null
   }
 
-  showError(message: string, detail?: string) {
-    this.showErrorFn ? this.showErrorFn(message, detail) : console.error('[Toast]', message, detail)
+  showError(message: string, detail?: string, rawDetail?: string) {
+    this.showErrorFn ? this.showErrorFn(message, detail, rawDetail) : console.error('[Toast]', message, detail)
   }
 
   showSuccess(message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) {
@@ -65,8 +69,8 @@ class ToastManager {
 
 const toastManager = ToastManager.getInstance()
 
-export function showApiError(message: string, detail?: string) {
-  toastManager.showError(message, detail)
+export function showApiError(message: string, detail?: string, rawDetail?: string) {
+  toastManager.showError(message, detail, rawDetail)
 }
 
 export function showApiSuccess(message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) {
@@ -92,6 +96,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const showToast = useCallback((message: string, options?: {
+    id?: string
+    rawDetail?: string
     detail?: string
     command?: string
     type?: Toast['type']
@@ -99,17 +105,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     action?: Toast['action']
     onDetailClick?: () => void
   }) => {
-    const id = Math.random().toString(36).slice(2)
-    const toast: Toast = { id, message, ...options }
+    const id = options?.id ?? Math.random().toString(36).slice(2)
+    const toast: Toast = { message, ...options, id }
 
-    setToasts(prev => [...prev, toast])
-
-    // Auto-dismiss: errors stay longer (10s), others 7s
-    const dismissTime = options?.type === 'error' ? 10000 : 7000
-    setTimeout(() => {
-      animateDismiss(id)
-    }, dismissTime)
-  }, [animateDismiss])
+    setToasts(prev => prev.some(existing => existing.id === id) ? prev : [...prev, toast])
+  }, [])
 
   const showCopied = useCallback((command: string, label?: string, event?: React.MouseEvent) => {
     navigator.clipboard.writeText(command)
@@ -124,8 +124,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     showToast(label || 'Copied to clipboard', { command, type: 'success', position })
   }, [showToast])
 
-  const showError = useCallback((message: string, detail?: string) => {
-    showToast(message, { detail, type: 'error' })
+  const showError = useCallback((message: string, detail?: string, rawDetail?: string) => {
+    showToast(message, { detail, rawDetail, type: 'error' })
   }, [showToast])
 
   const showSuccess = useCallback((message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => {
@@ -155,6 +155,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const disclosure = useDisclosure(detailsOpen)
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const remaining = useRef(toast.type === 'error' ? 10000 : 7000)
+  useEffect(() => {
+    if (hovered || focused || detailsOpen || toast.dismissing) return
+    const started = Date.now()
+    const timer = setTimeout(onDismiss, remaining.current)
+    return () => {
+      clearTimeout(timer)
+      remaining.current = Math.max(0, remaining.current - (Date.now() - started))
+    }
+  }, [hovered, focused, detailsOpen, toast.dismissing, onDismiss])
   // Calculate position - either near button or default to bottom-right
   const style: React.CSSProperties = toast.position
     ? {
@@ -173,6 +188,10 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   const isError = toast.type === 'error'
   const isSuccess = toast.type === 'success'
   const isNotice = toast.type === 'info' || toast.type === 'warning'
+  // Error and success toasts keep a dark surface in both themes, so nested
+  // panels tint from the toast's text tone; theme surfaces turn near-white in
+  // light mode.
+  const textTone = isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary'
 
   return (
     <div
@@ -187,6 +206,10 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
             : 'bg-theme-surface border-theme-border'
       )}
       style={style}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }}
     >
       {/* Icon */}
       <div className={clsx(
@@ -211,8 +234,8 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary')}>
-            {toast.message}
+          <span className={clsx('min-w-0 text-sm font-medium', textTone)}>
+            {toast.message.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)}
           </span>
           {!isError && !isNotice && !toast.action && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-400' : 'text-green-400')} />}
         </div>
@@ -230,13 +253,24 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               )}
               title="Click to open file"
             >
-              {toast.detail}
+              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)}
             </button>
           ) : (
             <p className={clsx('mt-1 text-xs break-words', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
-              {toast.detail}
+              {toast.detail.split(' ').map((word, index) => <Fragment key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</Fragment>)}
             </p>
           )
+        )}
+        {toast.rawDetail && (
+          <div className={clsx('mt-2 rounded bg-current/10 p-2', textTone)}>
+            <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
+              <CollapseChevron open={detailsOpen} inheritColor /> Error details
+            </button>
+            <Collapse open={detailsOpen} id={disclosure.panelId}>
+              <button type="button" onClick={async () => { await navigator.clipboard.writeText(toast.rawDetail!); setCopied(true) }} className="mt-2 rounded border border-current px-2 py-1 text-xs">{copied ? 'Copied' : 'Copy raw error'}</button>
+              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">{toast.rawDetail}</pre>
+            </Collapse>
+          </div>
         )}
         {toast.command && (
           <code className="block mt-1.5 text-xs text-theme-text-secondary font-mono bg-theme-base rounded px-2 py-1.5 whitespace-pre-wrap break-all">
@@ -261,6 +295,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
 
       {/* Dismiss button */}
       <button
+        aria-label="Dismiss notification"
         onClick={onDismiss}
         className={clsx(
           'p-1 rounded shrink-0 transition-colors',

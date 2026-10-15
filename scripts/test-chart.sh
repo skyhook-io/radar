@@ -439,6 +439,28 @@ assert_not_contains 'name: radar-cluster-read$'                 "no cluster-read
 assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "no tier bindings outside cloud mode"
 echo
 
+render "integration writes default to auto: stock admin owner gets Argo CD actions" $CLOUD
+assert_contains 'name: radar-integration-write$'                     "write role rendered"
+assert_contains 'name: radar-cloud-owner-integration-write$'         "owner-only write binding rendered"
+assert_not_contains 'name: radar-cloud-member-integration-write$'    "no member write binding"
+echo
+
+render "auto with a custom owner role grants no integration writes" $CLOUD --set cloud.defaultRbac.ownerClusterRole=platform-owner
+assert_not_contains 'name: radar-integration-write$'                 "custom owner role stays off under auto"
+echo
+
+render "explicit true with a custom owner role grants integration writes" $CLOUD --set cloud.defaultRbac.ownerClusterRole=platform-owner --set cloud.defaultRbac.integrationWrite.gitops.owner=true
+assert_contains 'name: radar-integration-write$'                     "explicit opt-in renders the role"
+echo
+
+render "legacy values (integrationWrite absent) follow auto" $CLOUD --set cloud.defaultRbac.integrationWrite=null
+assert_contains 'name: radar-integration-write$'                     "absent map treated as auto"
+echo
+
+render "string false must not enable integration writes" $CLOUD --set-string cloud.defaultRbac.integrationWrite.gitops.owner=false --skip-schema-validation
+assert_not_contains 'name: radar-integration-write$'                 "string-false write grant stays off"
+echo
+
 if [[ $FAIL -eq 0 ]]; then
   echo "All chart template tests passed."
   exit 0
