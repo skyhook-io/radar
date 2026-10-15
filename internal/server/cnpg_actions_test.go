@@ -13,6 +13,7 @@ import (
 
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	integration "github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 func TestCNPGActionErrorMapping(t *testing.T) {
@@ -53,6 +54,29 @@ func TestCNPGActionErrorMapping(t *testing.T) {
 				if !strings.Contains(msg, s) {
 					t.Errorf("error %q does not contain %q", msg, s)
 				}
+			}
+		})
+	}
+}
+
+func TestCNPGWriteRefusedBeforeConnectingCarriesCode(t *testing.T) {
+	prev := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	srv := &Server{}
+	for name, handler := range map[string]http.HandlerFunc{
+		"cluster action":     srv.handleCNPGClusterAction,
+		"schedule action":    srv.handleCNPGScheduleAction,
+		"pooler action":      srv.handleCNPGPoolerAction,
+		"restore validation": srv.handleCNPGRestoreValidation,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handler(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}")))
+			var body map[string]any
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if w.Code != http.StatusServiceUnavailable || body["code"] != integration.ActionCodeUnavailable {
+				t.Errorf("got %d %v, want 503 with code %q", w.Code, body, integration.ActionCodeUnavailable)
 			}
 		})
 	}

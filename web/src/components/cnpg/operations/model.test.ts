@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import type { CNPGClusterFacts, CNPGRuntimeResponse } from '../../../api/cnpg'
-import { CNPG_OP_STALL_MS, CNPG_OP_UNOBSERVABLE_MS, advanceCNPGOperation, restartedSince, summarizeSteps, supersedeFor, type CNPGObservation, type CNPGTrackedOperation } from './model'
+import { CNPG_OP_FIRST_READ_MS, CNPG_OP_STALL_MS, CNPG_OP_UNOBSERVABLE_MS, advanceCNPGOperation, restartedSince, summarizeSteps, supersedeFor, type CNPGObservation, type CNPGTrackedOperation } from './model'
 
 const T0 = Date.parse('2026-09-30T12:00:00Z')
 
@@ -10,6 +10,7 @@ function op(over: Partial<CNPGTrackedOperation>): CNPGTrackedOperation {
     id: 'op',
     kind: 'switchover',
     label: 'Switchover to pg-2',
+    apiBase: '/api',
     context: 'kind',
     namespace: 'db',
     cluster: 'pg',
@@ -162,6 +163,22 @@ describe('backup observer', () => {
     expect(advanceCNPGOperation(base, obs({ backups: b('failed') })).state).toBe('failed')
     expect(advanceCNPGOperation(base, obs({ backups: undefined })).state).toBe('unobservable')
   })
+
+  it('never calls a long backup stalled: its phase holds while the data copies', () => {
+    const base = op({ kind: 'backup', target: { name: 'pg-1' } })
+    for (const phase of ['pending', 'started', 'running', 'finalizing']) {
+      let o = advanceCNPGOperation(base, obs({ backups: b(phase) }))
+      o = advanceCNPGOperation(o, obs({ now: T0 + 2 * 3_600_000, backups: b(phase) }))
+      expect(o.state).toBe('progressing')
+    }
+  })
+
+  it('still stalls a Backup the operator never picked up', () => {
+    const base = op({ kind: 'backup', target: { name: 'pg-1' } })
+    let o = advanceCNPGOperation(base, obs({ backups: b() }))
+    o = advanceCNPGOperation(o, obs({ now: T0 + CNPG_OP_STALL_MS + 60_000, backups: b() }))
+    expect(o.state).toBe('stalled')
+  })
 })
 
 describe('reload', () => {
@@ -178,6 +195,11 @@ describe('supersedeFor', () => {
     const next = op({ id: 'b', kind: 'hibernate', label: 'Hibernate' })
     expect(supersedeFor([older], next)[0].state).toBe('superseded')
     expect(supersedeFor([op({ id: 'c', cluster: 'other' })], next)[0].state).toBe('requested')
+  })
+
+  it('never reaches a record issued against another Radar', () => {
+    const next = op({ id: 'b', kind: 'hibernate', label: 'Hibernate' })
+    expect(supersedeFor([op({ id: 'a', apiBase: '/c/other/api' })], next)[0].state).toBe('requested')
   })
 })
 
@@ -359,4 +381,112 @@ it('supersedes a scheduled run when its source Cluster is recreated', () => {
 it('does not certify a backup whose source identity was never recorded', () => {
   const result = advanceCNPGOperation(op({ kind: 'run', clusterUID: undefined, target: { name: 'manual-backup' } }), obs({ backups: [{ metadata: { name: 'manual-backup', namespace: 'db' }, status: { phase: 'completed' } }] }))
   expect(result.state).toBe('unobservable')
+})
+
+describe('right after the request', () => {
+  const before = { updatedAt: T0 - 1_000, failed: false, clusterUID: 'uid-1' }
+
+  it.each([
+    ['no read yet', undefined],
+    ['only reads from before the request', { clusterUID: before, facts: before, cluster: before, ha: before, runtime: before, backups: before }],
+  ])('waits for the first read instead of reading "cannot be followed" (%s)', (_, freshness) => {
+    const o = advanceCNPGOperation(op({}), { now: T0 + 1_000, clusterUID: 'uid-1', facts: facts({}), freshness })
+    expect(o.state).toBe('requested')
+    expect(o.detail).toBe('Waiting for the first read since the request')
+    expect(o.finishedAt).toBeUndefined()
+  })
+
+  it('follows the observer once a read since the request lands', () => {
+    const waiting = advanceCNPGOperation(op({}), obs({ now: T0 + 1_000, freshness: { clusterUID: before, facts: before } }))
+    expect(waiting.state).toBe('requested')
+    const observed = advanceCNPGOperation(waiting, obs({ now: T0 + 5_000, facts: facts({ targetPrimary: 'pg-2', phase: 'Switchover in progress' }) }))
+    expect(observed.state).toBe('observed')
+  })
+
+  it('waits while a source the observer needs has not been re-read since the request', () => {
+    const fresh = { updatedAt: T0 + 500, failed: false, clusterUID: 'uid-1' }
+    const o = advanceCNPGOperation(op({}), { now: T0 + 1_000, clusterUID: 'uid-1', freshness: { clusterUID: fresh, facts: before } })
+    expect(o.state).toBe('requested')
+    expect(o.detail).toBe('Waiting for the first read since the request')
+    const later = advanceCNPGOperation(op({}), { now: T0 + CNPG_OP_FIRST_READ_MS, clusterUID: 'uid-1', freshness: { clusterUID: fresh, facts: before } })
+    expect(later.state).toBe('unobservable')
+    const failed = advanceCNPGOperation(op({}), { now: T0 + 1_000, clusterUID: 'uid-1', freshness: { clusterUID: fresh, facts: { ...before, failed: true } } })
+    expect(failed.state).toBe('unobservable')
+  })
+
+  it('a failed read makes it unobservable without ending it', () => {
+    const o = advanceCNPGOperation(op({}), { now: T0 + 1_000, freshness: { clusterUID: { updatedAt: T0 - 1_000, failed: true } } })
+    expect(o.state).toBe('unobservable')
+    expect(o.detail).toContain('identity')
+    expect(o.finishedAt).toBeUndefined()
+  })
+
+  it('still gives up after the follow window without a read', () => {
+    const now = T0 + CNPG_OP_UNOBSERVABLE_MS + 1
+    const o = advanceCNPGOperation(op({}), { now, freshness: { clusterUID: before } })
+    expect(o.state).toBe('unobservable')
+    expect(o.finishedAt).toBe(now)
+  })
+})
+
+describe('rolling restart and fencing', () => {
+  const restart = (fenced?: string[]) =>
+    op({ kind: 'restart', label: 'Rolling restart', target: undefined, baseline: { instances: ['pg-1', 'pg-2'], podUIDs: { 'pg-1': 'a', 'pg-2': 'b' }, ...(fenced ? { fenced } : {}) } })
+  // pg-2 restarted and is ready; the primary pg-1 has not restarted.
+  const h = ha({
+    instances: [
+      { pod: 'pg-1', podUID: 'a', role: 'primary', ready: false, restartCount: 0 },
+      { pod: 'pg-2', podUID: 'b2', role: 'replica', ready: true, restartCount: 0 },
+    ],
+  })
+  const primaryFenced = facts({ fencedInstances: { raw: '["pg-1"]', all: false, instances: ['pg-1'] } })
+  const allFenced = facts({ fencedInstances: { raw: '["*"]', all: true, instances: [] } })
+
+  it.each([
+    ['the primary', primaryFenced, []],
+    ['every instance', allFenced, []],
+    ['the primary, on an operation recorded without the fenced set', primaryFenced, undefined],
+  ])('never completes when %s was fenced mid-restart before restarting', (_, current, fenced) => {
+    const o = advanceCNPGOperation(restart(fenced), obs({ ha: h, facts: current }))
+    expect(o.state).not.toBe('completed')
+    expect(o.steps?.find((s) => s.label === 'pg-1 restarted and ready')?.done).toBe(false)
+  })
+
+  it('leaves out only the instances fenced when it was requested', () => {
+    const o = advanceCNPGOperation(restart(['pg-1']), obs({ ha: h, facts: primaryFenced }))
+    expect(o.state).toBe('completed')
+    expect(o.steps?.map((s) => s.label)).toEqual(['pg-2 restarted and ready'])
+  })
+
+  it('is superseded by a fence requested in Radar', () => {
+    const fence = op({ id: 'f', kind: 'fence', label: 'Fence pg-1', target: undefined, startedAt: T0 + 1_000 })
+    expect(supersedeFor([restart([])], fence)[0].state).toBe('superseded')
+    expect(supersedeFor([op({ kind: 'restartInstance', label: 'Restart pg-1', target: { name: 'pg-1' } })], fence)[0].state).toBe('superseded')
+  })
+})
+
+describe('unreadable readiness keeps a step unknown, not stalled', () => {
+  const unreadable = (pod: string) => ({ pod, podUID: `uid-${pod}`, role: 'standby' as const, ready: false, healthy: false, fenced: false, podReadable: false, podExists: true })
+  const readable = (pod: string) => ({ ...unreadable(pod), ready: true, healthy: true, podReadable: true })
+  const later = T0 + CNPG_OP_STALL_MS + 60_000
+
+  it('lifting a fence', () => {
+    const unfence = op({ kind: 'unfence', label: 'Lift fence on pg-2', target: undefined, baseline: { instances: ['pg-2'] } })
+    const f = facts({ instances: [readable('pg-1'), unreadable('pg-2')] })
+    let o = advanceCNPGOperation(unfence, obs({ facts: f }))
+    expect(o.steps?.map((s) => s.done)).toEqual([null, null])
+    expect(o.state).toBe('unobservable')
+    o = advanceCNPGOperation(o, obs({ now: later, facts: f }))
+    expect(o.state).toBe('unobservable')
+  })
+
+  it('destroying an instance', () => {
+    const destroy = op({ kind: 'destroyInstance', label: 'Destroy pg-3', target: { name: 'pg-3', uid: 'uid-pg-3' }, baseline: { instances: ['pg-1', 'pg-2', 'pg-3'] } })
+    const f = facts({ instances: [readable('pg-1'), readable('pg-2'), unreadable('pg-4')] })
+    let o = advanceCNPGOperation(destroy, obs({ facts: f }))
+    expect(o.steps?.map((s) => s.done)).toEqual([true, null, null, true])
+    expect(o.state).toBe('unobservable')
+    o = advanceCNPGOperation(o, obs({ now: later, facts: f }))
+    expect(o.state).toBe('unobservable')
+  })
 })

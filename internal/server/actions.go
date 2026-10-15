@@ -50,7 +50,7 @@ func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (in
 	}
 	dyn, contextName := s.getDynamicClientSnapshotForRequest(r)
 	if dyn == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		writeActionUnavailable(w, "cluster client not available — check cluster connection")
 		return req, nil, false
 	}
 	if err := integration.CheckReviewedContext(req.ReviewedContext, contextName); err != nil {
@@ -58,6 +58,24 @@ func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (in
 		return req, nil, false
 	}
 	return req, dyn, true
+}
+
+// requireConnectedForAction is requireConnected for a write handler: its 503
+// says Radar refused before writing, so the client can retry it.
+func (s *Server) requireConnectedForAction(w http.ResponseWriter) bool {
+	if k8s.IsConnected() {
+		return true
+	}
+	writeActionUnavailable(w, "Not connected to cluster")
+	return false
+}
+
+func writeActionUnavailable(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message, "code": integration.ActionCodeUnavailable}); err != nil {
+		log.Printf("Failed to encode error response: %v", err)
+	}
 }
 
 // writeActionError answers a failed action. A refusal keeps its status, code,

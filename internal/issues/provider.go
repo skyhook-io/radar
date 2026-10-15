@@ -766,6 +766,10 @@ func (p *CacheProvider) ListDynamic(gvr schema.GroupVersionResource, namespace s
 	return p.dynamic.List(gvr, namespace)
 }
 
+func (p *CacheProvider) DynamicNamespaceSynced(gvr schema.GroupVersionResource, namespace string) bool {
+	return p.dynamic != nil && p.dynamic.IsNamespaceSynced(gvr, namespace)
+}
+
 // ListDynamicAllNamespaces unions the GVR's cached objects across every watched
 // scope. Safe only on the cluster-wide-intent path (the caller has already
 // confirmed no namespace filter, which the handler only leaves empty for

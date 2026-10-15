@@ -550,7 +550,7 @@ function withStandbyGaps(row: CNPGFleetRow, dim: CNPGDimension): CNPGDimension {
 function liveReplicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
   const base = { id: 'replication' as const, label: 'Replication' }
   if (row.hibernated) return { ...base, tone: 'neutral', text: 'hibernated', source: 'cnpg.io/hibernation annotation' }
-  if (row.instances.desired === 1) return { ...base, tone: 'degraded', text: 'no standby', source: 'spec.instances is 1: there is no failover target' }
+  if (row.instances.desired === 1) return { ...base, tone: 'neutral', text: 'no standby', source: 'spec.instances is 1: there is no failover target' }
   if (!live) return { ...base, tone: 'unknown', text: 'unassessed', source: `Needs the primary’s pg_stat_replication: ${gap ?? 'read through get pods/proxy'}` }
   // Standbys whose Pods are gone are missing from the runtime read too, so
   // the denominator is what the Cluster asks for, never what is running.
@@ -578,7 +578,7 @@ function protectionDimension(row: CNPGFleetRow): CNPGDimension {
   if (p.walArchiving.tone === 'unhealthy') return { ...base, tone: 'unhealthy', text: 'WAL archiving failing', source: 'ContinuousArchiving condition' }
   const blockedSchedule = row.problems.find((problem) => problem.reason === 'CNPGScheduleDestinationMissing')
   if (blockedSchedule) return { ...base, tone: 'degraded', text: blockedSchedule.title, source: blockedSchedule.origin?.detail ?? 'ScheduledBackup method against Cluster spec' }
-  if (p.destination.method === 'none') return { ...base, tone: 'degraded', text: 'no backup destination', source: 'Cluster spec' }
+  if (p.destination.method === 'none') return { ...base, tone: 'neutral', text: 'no backup destination', source: 'Cluster spec' }
   if (p.lastSuccessfulBackup.tone === 'unhealthy' || p.lastSuccessfulBackup.tone === 'degraded') {
     const text = !p.lastSuccessfulBackup.at && p.walArchiving.tone === 'healthy'
       ? `CNPG reports archiving · ${p.lastSuccessfulBackup.text.toLowerCase()}`

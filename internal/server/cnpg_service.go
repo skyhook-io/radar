@@ -30,7 +30,7 @@ type cnpgReadAdapter struct {
 func (s *Server) cnpgActionClients(r *http.Request, req integration.ActionRequest) (cnpgsvc.ActionClients, error) {
 	reader := s.cnpgReader(r)
 	if reader.dynamic == nil {
-		return cnpgsvc.ActionClients{}, integration.RefuseAction(http.StatusServiceUnavailable, "", "cluster client not available — check cluster connection")
+		return cnpgsvc.ActionClients{}, integration.RefuseAction(http.StatusServiceUnavailable, integration.ActionCodeUnavailable, "cluster client not available — check cluster connection")
 	}
 	if err := integration.CheckReviewedContext(req.ReviewedContext, reader.actionContext); err != nil {
 		return cnpgsvc.ActionClients{}, err

@@ -53,6 +53,14 @@ type dynamicScopeProvider interface {
 	NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool)
 }
 
+// dynamicSyncProvider reports whether a dynamic list for gvr in namespace is
+// authoritative. ListDynamic answers from an informer that has not synced yet
+// with an empty list and no error, so a detector that reads absence as
+// evidence must ask.
+type dynamicSyncProvider interface {
+	DynamicNamespaceSynced(gvr schema.GroupVersionResource, namespace string) bool
+}
+
 // ComposeStats reports anything the caller would want to surface
 // alongside the issue list — currently CEL-filter eval-error
 // counters so the caller can distinguish "filter excluded

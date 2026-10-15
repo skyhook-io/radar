@@ -62,7 +62,7 @@ func (s *Server) handleCNPGScheduleCapabilities(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handleCNPGClusterAction(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedForAction(w) {
 		return
 	}
 	namespace := chi.URLParam(r, "namespace")
@@ -82,7 +82,7 @@ func (s *Server) handleCNPGClusterAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if clients.Typed == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		writeActionUnavailable(w, "cluster client not available — check cluster connection")
 		return
 	}
 	auth.AuditLog(r, namespace, name)
@@ -96,7 +96,7 @@ func (s *Server) handleCNPGClusterAction(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleCNPGScheduleAction(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedForAction(w) {
 		return
 	}
 	namespace := chi.URLParam(r, "namespace")

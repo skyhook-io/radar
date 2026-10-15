@@ -39,6 +39,8 @@ export interface CNPGRecoveryPod {
 
 export interface CNPGRecoveryJob {
   name: string
+  /** The Job's cnpg.io/jobRole label. */
+  role?: string
   active: number
   succeeded: number
   failed: number

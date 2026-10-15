@@ -26,7 +26,8 @@ it('does not call a pre-request feature refusal an unknown write outcome', () =>
 describe('actionDialogResult', () => {
   it.each([
     [new ApiError('Review changed', 409, { code: 'changed' }), 'error'],
-    [new ApiError('Connection not ready', 503), 'error'],
+    [new ApiError('upstream connect error or disconnect/reset before headers', 503), 'unknown'],
+    [new ApiError('The operator webhook did not answer', 503, { code: 'operator_webhook_unavailable' }), 'error'],
     [new ApiError('Gateway timeout', 504), 'unknown'],
     [new Error('Connection lost'), 'unknown'],
     [new ApiError('Write result missing', 500, { code: 'outcome_unknown' }), 'unknown'],

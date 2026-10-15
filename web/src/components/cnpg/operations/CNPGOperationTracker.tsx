@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Check, Circle, CircleHelp, Copy, X } from 'lucide-react'
 import { Badge, DialogPortal, StatusDot, coverageReadable, formatAge } from '@skyhook-io/k8s-ui'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
-import { routePath } from '../../../api/config'
+import { getApiBase, routePath } from '../../../api/config'
 import { cnpgClusterFullPath } from '../paths'
 import { useToast } from '../../ui/Toast'
 import { useConnection } from '../../../context/ConnectionContext'
@@ -39,10 +39,11 @@ function sourceFreshness(q: { dataUpdatedAt: number; errorUpdatedAt: number; isE
 export function CNPGOperationTracker({ namespace, name, uid }: { namespace: string; name: string; uid: string }) {
   const { connection } = useConnection()
   const context = connection.context
+  const apiBase = getApiBase()
   const allOps = useCNPGOperations()
-  const ops = cnpgOperationsForCluster(allOps, { namespace, name, context, uid })
+  const ops = cnpgOperationsForCluster(allOps, { apiBase, namespace, name, context, uid })
   const active = ops.filter(cnpgOperationFollowed)
-  const followed = cnpgOperationsForCluster(allOps, { namespace, name, context }).filter(cnpgOperationFollowed)
+  const followed = cnpgOperationsForCluster(allOps, { apiBase, namespace, name, context }).filter(cnpgOperationFollowed)
   const following = followed.length > 0
   const needsRuntime = followed.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
 
@@ -79,6 +80,8 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
       { uid: runtime.data?.cluster.uid, updatedAt: runtimeFresh.updatedAt, failed: runtimeFresh.failed },
       { uid: cluster?.metadata?.uid, updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
     ].filter((source) => source.uid && !source.failed).sort((a, b) => b.updatedAt - a.updatedAt)[0]
+    // No identity because the reads failed, not because none has answered yet.
+    const identityFailed = !identity && (capsFresh.failed || haFresh.failed || workspaceFresh.failed || (needsRuntime && runtimeFresh.failed))
     return {
       // Failed polls must advance elapsed-time checks even when no data changes.
       now: Math.max(Date.now(), capsFresh.checkedAt, haFresh.checkedAt, runtimeFresh.checkedAt, workspaceFresh.checkedAt),
@@ -90,7 +93,7 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
       runtime: runtime.data,
       backups: backupsReadable ? (ws?.objects.backups ?? []) : undefined,
       freshness: {
-        clusterUID: identity && { updatedAt: identity.updatedAt, failed: identity.failed },
+        clusterUID: identity ? { updatedAt: identity.updatedAt, failed: false } : identityFailed ? { updatedAt: 0, failed: true } : undefined,
         facts: { updatedAt: capsFresh.updatedAt, failed: capsFresh.failed, clusterUID: caps.data?.uid },
         cluster: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed, clusterUID: cluster?.metadata?.uid },
         backups: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
@@ -130,7 +133,7 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
     updateCNPGOperations((all) => {
       let changed = false
       const next = all.map((op) => {
-        if (op.namespace !== namespace || op.cluster !== name || op.context !== context || !cnpgOperationFollowed(op))
+        if (op.apiBase !== apiBase || op.namespace !== namespace || op.cluster !== name || op.context !== context || !cnpgOperationFollowed(op))
           return op
         const adv = advanceCNPGOperation(op, observation)
         if (JSON.stringify(adv) !== JSON.stringify(op)) changed = true
@@ -138,7 +141,7 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
       })
       return changed ? next : all
     })
-  }, [observation, namespace, name, context])
+  }, [observation, apiBase, namespace, name, context])
 
   const [open, setOpen] = useState(false)
   if (ops.length === 0) return null

@@ -60,7 +60,7 @@ func (s *Server) writeCNPGReadError(w http.ResponseWriter, err error, g Grant, n
 // annotation, with an impersonated merge patch bound to the reviewed context
 // and Cluster UID.
 func (s *Server) handleCNPGRestoreValidation(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedForAction(w) {
 		return
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")

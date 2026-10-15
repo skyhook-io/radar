@@ -354,7 +354,7 @@ func cnpgHAInstances(cache *k8s.ResourceCache, pods []*corev1.Pod, desiredImage 
 	return out
 }
 
-// cnpgHAQuorum reads the recorded synchronous configuration. The object exists
+// hAQuorum reads the recorded synchronous configuration. The object exists
 // only while quorum failover is enabled; an enabled cluster without one has a
 // configuration the primary has not recorded yet, and failover waits.
 func (s *Reader) hAQuorum(ctx context.Context, callerCtx context.Context, c HAClients, cluster *unstructured.Unstructured, pods []*corev1.Pod, podsKnown bool) CNPGHAQuorum {
@@ -551,7 +551,7 @@ func (s *Reader) hAPrimaryLease(ctx context.Context, callerCtx context.Context, 
 	return out
 }
 
-// cnpgHAOperatorLease finds the operator's leader-election Lease in the
+// hAOperatorLease finds the operator's leader-election Lease in the
 // namespace of a visible operator Deployment. Which operator replica leads is
 // a different fact from which instance is primary.
 func (s *Reader) hAOperatorLease(ctx context.Context, callerCtx context.Context, c HAClients, cache *k8s.ResourceCache, now time.Time) CNPGHALease {
@@ -725,7 +725,7 @@ func cnpgReadyEndpointPods(slices []discoveryv1.EndpointSlice) []string {
 	return pods
 }
 
-// cnpgHACertificates lists every certificate the operator reports an expiry
+// hACertificates lists every certificate the operator reports an expiry
 // for, with who renews it. A user-provided Secret's metadata is read (never
 // its data) to name a cert-manager Certificate; without get secrets that link
 // is unknown, not absent.

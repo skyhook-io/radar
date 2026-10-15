@@ -32,14 +32,14 @@ const (
 	workspaceClusterKey = "clusters"
 )
 
-// cnpgBackupWindow bounds how far back settled Backups are returned. The newest
+// backupWindow bounds how far back settled Backups are returned. The newest
 // completed Backup per Cluster is kept regardless: it is the last-good-backup
 // fact the workspace reports.
 const backupWindow = 7 * 24 * time.Hour
 
 const noDeclarativeBackupCheckID = "cnpgNoDeclarativeBackup"
 
-// cnpgGroups are the API groups CloudNativePG objects are read from; a kind
+// groups are the API groups CloudNativePG objects are read from; a kind
 // listed by name keeps only objects of these groups.
 var groups = []string{Group, barmanGroup}
 
@@ -277,7 +277,7 @@ func trimCNPGPod(p *corev1.Pod) WorkspacePod {
 	return out
 }
 
-// WorkspaceReadPods returns the instance Pods of visible Clusters and,
+// workspaceReadPods returns the instance Pods of visible Clusters and,
 // where the caller may also list Jobs, the Pods of the Jobs those Clusters
 // control, plus the namespace/name set of what it returned — the only Pods
 // whose issues the response may carry.
@@ -411,7 +411,7 @@ func workspaceIssueVisible(iss issues.Issue, access map[string]integration.KindA
 	return ok && access[key].Covers(iss.Namespace)
 }
 
-// cnpgWorkspaceAudit reports the declarative-backup posture finding only for
+// workspaceAudit reports the declarative-backup posture finding only for
 // Clusters whose namespace had its ScheduledBackups read: without that list,
 // "no schedule targets this cluster" is an absence nobody established.
 func (s *Reader) workspaceAudit(clusters, scheduled []*unstructured.Unstructured, schedAccess integration.KindAccess) []CNPGWorkspaceAuditFinding {

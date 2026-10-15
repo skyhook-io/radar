@@ -28,7 +28,6 @@ func init() {
 		inProgress bool
 	}{{"setMaintenance", true}, {"unsetMaintenance", false}} {
 		clusterActionRunners[a.action] = cnpgClusterRunner{binds: []string{"maintenance"}, run: cnpgRunMaintenance(a.inProgress)}
-		cnpgClusterActionGrants[a.action] = GrantPatchClusters
 		clusterActionsOrdered = append(clusterActionsOrdered, a.action)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// keepGroups drops anything whose apiVersion is not one of groups, so an
+// KeepGroups drops anything whose apiVersion is not one of groups, so an
 // object of another group can never ride along on a kind-name match (a Velero
 // Backup on a CloudNativePG Backup, a CAPI Cluster on a CNPG Cluster).
 func KeepGroups(items []*unstructured.Unstructured, groups []string) []*unstructured.Unstructured {

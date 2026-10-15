@@ -67,14 +67,18 @@ export interface SwitchoverConcern {
 }
 
 export function switchoverConcerns(
-  primary: { state: string; timeline?: number; replication?: { applicationName: string }[] | null } | undefined,
+  primary: { state: string; timeline?: number; replication?: { applicationName: string; state?: string }[] | null } | undefined,
   standby: { pod: string; status: { state: string; timeline?: number; replayPaused?: boolean; roleDetail?: string } } | undefined,
 ): SwitchoverConcern[] {
   if (!primary || !standby) return []
   const out: SwitchoverConcern[] = []
   if (primary.state === 'ok' && primary.replication && !primary.replication.some((r) => r.applicationName === standby.pod)) out.push({ code: 'not_receiving', text: 'not connected to the primary' })
   if (standby.status.replayPaused || standby.status.roleDetail === 'replayPaused') out.push({ code: 'replay_paused', text: 'replay paused' })
-  if (standby.status.timeline !== undefined && primary.timeline !== undefined && standby.status.timeline !== primary.timeline) {
+  // An instance reports the timeline of its last checkpoint, which on a
+  // standby lags until its next restartpoint. One streaming from the current
+  // primary follows the primary's timeline whatever it reports.
+  const streaming = !!primary.replication?.some((r) => r.applicationName === standby.pod && r.state === 'streaming')
+  if (!streaming && standby.status.timeline !== undefined && primary.timeline !== undefined && standby.status.timeline !== primary.timeline) {
     out.push({ code: 'timeline_mismatch', text: `timeline ${standby.status.timeline}, primary on ${primary.timeline}` })
   }
   return out

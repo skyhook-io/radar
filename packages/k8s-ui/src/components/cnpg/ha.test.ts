@@ -257,6 +257,12 @@ describe('cnpgDimensions', () => {
     const d = cnpgDimensions({ row: row({ instances: { ready: null, desired: null } }), replication: { streaming: 0, standbys: 0 } })
     expect(d[1].tone).toBe('unknown')
   })
+  it('a single instance and a missing backup destination are posture, not marked', () => {
+    const single = cnpgDimensions({ row: row({ instances: { ready: 1, desired: 1 } }) }).find((x) => x.id === 'replication')
+    expect(single).toMatchObject({ tone: 'neutral', text: 'no standby' })
+    const unprotected = row({ protection: { ...row().protection, destination: { text: 'None', tone: 'neutral', method: 'none' } } })
+    expect(cnpgDimensions({ row: unprotected }).find((x) => x.id === 'protection')).toMatchObject({ tone: 'neutral', text: 'no backup destination' })
+  })
   it('replication is unassessed without runtime, never healthy', () => {
     const d = cnpgDimensions({ row: row() })
     expect(d.find((x) => x.id === 'replication')?.text).toBe('unassessed')

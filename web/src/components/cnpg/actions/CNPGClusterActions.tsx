@@ -295,7 +295,11 @@ function trackedOperationFor(
         ? { kind, label: `Switchover to ${x.switchTarget}`, target: { name: x.switchTarget, uid: x.chosenPodUID }, baseline: { currentPrimary: x.facts.currentPrimary } }
         : null
     case 'restart':
-      return { kind, label: 'Rolling restart', baseline: { instances: pods, podUIDs } }
+      return {
+        kind,
+        label: 'Rolling restart',
+        baseline: { instances: pods, podUIDs, fenced: x.facts.fencedInstances.all ? pods : x.facts.fencedInstances.instances },
+      }
     case 'restartInstance':
       return x.instance
         ? { kind, label: `Restart ${x.instance.pod}`, target: { name: x.instance.pod, uid: x.instance.podUID }, baseline: { podUIDs: { [x.instance.pod]: x.instance.podUID } } }

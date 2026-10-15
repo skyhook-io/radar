@@ -52,7 +52,7 @@ export function CNPGReportDialog({ namespace, name, onClose }: { namespace: stri
       confirmLabel={busy ? 'Building…' : 'Download'}
       isLoading={busy}
       result={error ? { state: 'error', message: error, title: 'The report could not be downloaded' } : undefined}
-      notes={['Secret objects are never read. Inline connection passwords and initialization SQL are withheld. Included logs are redacted for recognisable secrets on a best-effort basis; review them before sharing.', 'The bundle is capped at 32 MiB; anything past that is listed as skipped.']}
+      notes={['Secret objects are never read. Inline connection passwords and initialization and import SQL are withheld. Included logs are redacted for recognisable secrets on a best-effort basis; review them before sharing.', 'The bundle is capped at 32 MiB; anything past that is listed as skipped.']}
     >
       <ul className="mb-3 list-disc space-y-0.5 pl-5 text-sm text-theme-text-secondary">
         {INCLUDED.map((i) => <li key={i}>{i}</li>)}

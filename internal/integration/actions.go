@@ -26,6 +26,10 @@ const (
 	ActionCodeContextChanged = "context_changed"
 	ActionCodeBlocked        = "blocked"
 	ActionCodePartial        = "partial"
+	// ActionCodeUnavailable: Radar refused before any write because it has no
+	// connection or client. Without a code a 503 may come from a proxy that
+	// already forwarded the write.
+	ActionCodeUnavailable = "unavailable"
 
 	PermissionAllowed = "allowed"
 	PermissionDenied  = "denied"
@@ -51,7 +55,7 @@ type ActionRequest struct {
 	Params          json.RawMessage `json:"params,omitempty"`
 }
 
-// actionError is a refusal with a stable code; Current carries the facts as
+// ActionError is a refusal with a stable code; Current carries the facts as
 // they are now when a confirmation no longer matches.
 type ActionError struct {
 	Status  int
@@ -69,7 +73,7 @@ func RefuseAction(status int, code, format string, args ...any) *ActionError {
 	return &ActionError{Status: status, Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-// changedAction refuses a confirmation whose reviewed facts no longer hold.
+// ChangedAction refuses a confirmation whose reviewed facts no longer hold.
 func ChangedAction(current any, format string, args ...any) *ActionError {
 	e := RefuseAction(http.StatusConflict, ActionCodeChanged, format, args...)
 	e.Current = current
@@ -80,7 +84,7 @@ func BlockedAction(reason string) error {
 	return RefuseAction(http.StatusConflict, ActionCodeBlocked, "%s", reason)
 }
 
-// partialAction reports a multi-step action that stopped after some of its
+// PartialAction reports a multi-step action that stopped after some of its
 // mutations took effect; retrying it blindly would act on a changed target.
 func PartialAction(completed []string, cause error) *ActionError {
 	status := http.StatusInternalServerError
@@ -113,7 +117,7 @@ func CheckReviewedContext(reviewed, active string) error {
 	return nil
 }
 
-// decodeActionParams decodes an action's params strictly: an unknown field is
+// DecodeActionParams decodes an action's params strictly: an unknown field is
 // a client that means something this server does not do.
 func DecodeActionParams(raw json.RawMessage, into any) error {
 	trimmed := bytes.TrimSpace(raw)
@@ -128,7 +132,7 @@ func DecodeActionParams(raw json.RawMessage, into any) error {
 	return nil
 }
 
-// mergePatchAtVersion merge-patches obj bound to the resourceVersion it was
+// MergePatchAtVersion merge-patches obj bound to the resourceVersion it was
 // read at, so a write the caller did not review is refused with a Conflict
 // rather than applied over. Callers turn the Conflict into "changed"; it is
 // never retried.
@@ -147,7 +151,7 @@ func MergePatchAtVersion(ctx context.Context, dyn dynamic.Interface, gvr schema.
 	return err
 }
 
-// grantText words an optional grant, "" when there is none.
+// GrantText words an optional grant, "" when there is none.
 func GrantText(g *auth.Grant) string {
 	if g == nil {
 		return ""
@@ -155,7 +159,7 @@ func GrantText(g *auth.Grant) string {
 	return g.String()
 }
 
-// capabilityVerdict folds a guard reason and the permission of each grant
+// CapabilityVerdict folds a guard reason and the permission of each grant
 // (perms[i] answers grants[i]) into a verdict. The first denied grant is
 // named; an unknown grant leaves the action offered.
 func CapabilityVerdict(guard string, perms []string, grants []auth.Grant) ActionCapability {

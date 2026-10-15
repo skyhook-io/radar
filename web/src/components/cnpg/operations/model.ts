@@ -4,10 +4,11 @@ import { formatGrant } from '@skyhook-io/k8s-ui'
 
 // Follow-through for CloudNativePG actions. A successful POST only means the
 // write was accepted; the operator acts on it later. A tracked operation is
-// bound to the context, Cluster UID and target it was requested for, carries a
-// baseline taken before the write, and is judged by a per-kind observer
-// against what the cluster reports now. Missing telemetry is "unobservable",
-// never "stalled": stalled needs evidence that nothing is moving.
+// bound to the Radar API base, context, Cluster UID and target it was
+// requested for, carries a baseline taken before the write, and is judged by
+// a per-kind observer against what the cluster reports now. Missing telemetry
+// is "unobservable", never "stalled": stalled needs evidence that nothing is
+// moving.
 
 export type CNPGOpState = 'requested' | 'observed' | 'progressing' | 'completed' | 'failed' | 'stalled' | 'superseded' | 'unobservable'
 
@@ -23,6 +24,12 @@ export interface CNPGTrackedOperation {
   id: string
   kind: string
   label: string
+  /**
+   * The Radar API base the request went to. Every in-cluster Radar reports
+   * the context "in-cluster", so in Radar Hub this is what tells two
+   * clusters apart.
+   */
+  apiBase: string
   context: string
   namespace: string
   cluster: string
@@ -108,6 +115,13 @@ export const CNPG_OP_STALL_MS = 10 * 60_000
 /** An operation Radar cannot observe is followed this long, then left alone. */
 export const CNPG_OP_UNOBSERVABLE_MS = 15 * 60_000
 
+/**
+ * Just after a request the sources an observer needs may not have been re-read
+ * yet; until one fails, or this long has passed, that is waiting, not
+ * "cannot be followed".
+ */
+export const CNPG_OP_FIRST_READ_MS = 20_000
+
 /** Whether the tracker should still poll for this operation. */
 export function cnpgOperationFollowed(op: CNPGTrackedOperation): boolean {
   return !CNPG_OP_TERMINAL.has(op.state) && !op.finishedAt
@@ -122,11 +136,16 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
     return { ...op, state: 'superseded', detail: 'The Cluster was deleted and recreated; this operation no longer applies to it', finishedAt: obs.now }
   }
   if (op.clusterUID && !current.clusterUID) {
+    const identity = obs.freshness?.clusterUID
+    const expired = obs.now - op.startedAt > CNPG_OP_UNOBSERVABLE_MS
+    if (!expired && !identity?.failed && (!identity || identity.updatedAt < op.startedAt)) {
+      return { ...op, state: 'requested', detail: 'Waiting for the first read since the request' }
+    }
     return {
       ...op,
       state: 'unobservable',
       detail: 'The Cluster identity has not been verified since this operation was requested',
-      finishedAt: !obs.identityPending && obs.now - op.startedAt > CNPG_OP_UNOBSERVABLE_MS ? obs.now : undefined,
+      finishedAt: !obs.identityPending && expired ? obs.now : undefined,
     }
   }
   const observer = observers.get(op.kind)
@@ -136,6 +155,10 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
   const lastProgressAt = moved ? obs.now : op.lastProgressAt
   let state: CNPGOpState = res.state
   let detail = res.detail
+  if (state === 'unobservable' && !res.final && obs.now - op.startedAt < CNPG_OP_FIRST_READ_MS && !Object.values(obs.freshness ?? {}).some((f) => f?.failed)) {
+    state = 'requested'
+    detail = 'Waiting for the first read since the request'
+  }
   if ((state === 'progressing' || state === 'observed' || state === 'requested') && res.progressKey !== undefined && obs.now - lastProgressAt > CNPG_OP_STALL_MS) {
     state = 'stalled'
     detail = `No progress for ${Math.round((obs.now - lastProgressAt) / 60_000)} min${res.detail ? ` · ${res.detail}` : ''}`
@@ -158,8 +181,8 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
  */
 const CONFLICTS: Record<string, string[]> = {
   switchover: ['switchover', 'hibernate', 'rehydrate'],
-  restart: ['restart', 'hibernate'],
-  restartInstance: ['hibernate', 'restart'],
+  restart: ['restart', 'hibernate', 'fence'],
+  restartInstance: ['hibernate', 'restart', 'fence'],
   fence: ['fence', 'unfence', 'hibernate'],
   unfence: ['fence', 'unfence', 'hibernate'],
   hibernate: ['hibernate', 'rehydrate'],
@@ -171,7 +194,7 @@ const CONFLICTS: Record<string, string[]> = {
 export function supersedeFor(existing: CNPGTrackedOperation[], next: CNPGTrackedOperation): CNPGTrackedOperation[] {
   return existing.map((op) => {
     if (CNPG_OP_TERMINAL.has(op.state)) return op
-    if (op.context !== next.context || op.namespace !== next.namespace || op.cluster !== next.cluster) return op
+    if (op.apiBase !== next.apiBase || op.context !== next.context || op.namespace !== next.namespace || op.cluster !== next.cluster) return op
     if (!(CONFLICTS[op.kind] ?? []).includes(next.kind)) return op
     return { ...op, state: 'superseded', detail: `Superseded by ${next.label}`, finishedAt: next.startedAt }
   })
@@ -326,9 +349,9 @@ function restartObserver(podsOf: (op: CNPGTrackedOperation, obs: CNPGObservation
 
 registerCNPGOperationObserver(
   'restart',
-  restartObserver((op, obs) => {
-    const fenced = new Set(obs.facts?.fencedInstances.instances ?? [])
-    return ((op.baseline.instances as string[]) ?? []).filter((p) => !fenced.has(p) && !obs.facts?.fencedInstances.all)
+  restartObserver((op) => {
+    const fenced = new Set((op.baseline.fenced as string[] | undefined) ?? [])
+    return ((op.baseline.instances as string[]) ?? []).filter((p) => !fenced.has(p))
   }),
 )
 registerCNPGOperationObserver(
@@ -347,7 +370,10 @@ registerCNPGOperationObserver('destroyInstance', (op, obs) => {
   const steps: CNPGOpStep[] = [
     { label: `${destroyed} removed`, done: gone },
     { label: replacement ? `Replacement ${replacement.pod} ready` : 'Operator created a replacement instance', done: replacement ? replacementReady : false },
-    { label: replacement ? `${replacement.pod} streaming from the primary` : 'Replacement streaming from the primary', done: replacement && replacementReady ? streamingStandby(obs, replacement.pod) : false },
+    {
+      label: replacement ? `${replacement.pod} streaming from the primary` : 'Replacement streaming from the primary',
+      done: !replacement ? false : replacementReady === null ? null : replacementReady ? streamingStandby(obs, replacement.pod) : false,
+    },
     { label: 'Cluster reports a healthy state again', done: gone && !!replacement && f.phase === 'Cluster in healthy state' },
   ]
   const detail = f.phase && f.phase !== 'Cluster in healthy state' ? f.phase + (f.phaseReason ? `: ${f.phaseReason}` : '') : undefined
@@ -390,7 +416,7 @@ registerCNPGOperationObserver('unfence', (op, obs) => {
   const steps: CNPGOpStep[] = pods.flatMap((p) => {
     const ready = readyNow(obs, p)
     const out: CNPGOpStep[] = [{ label: `${p}: ready again`, done: ready }]
-    if (p !== primary) out.push({ label: `${p}: streaming from the primary`, done: ready ? streamingStandby(obs, p) : false })
+    if (p !== primary) out.push({ label: `${p}: streaming from the primary`, done: ready === null ? null : ready ? streamingStandby(obs, p) : false })
     return out
   })
   return { state: summarizeSteps(steps), steps, progressKey: key(steps) }
@@ -440,7 +466,9 @@ function backupObserver(op: CNPGTrackedOperation, obs: CNPGObservation): CNPGObs
     case '':
       return { state: 'observed', detail: `Backup ${name} created; the operator has not picked it up yet`, progressKey: 'new' }
     default:
-      return { state: 'progressing', detail: `Backup ${name}: ${phase}`, progressKey: phase }
+      // The phase holds for as long as the data takes to copy, so an
+      // unchanged phase is no evidence of a stall.
+      return { state: 'progressing', detail: `Backup ${name}: ${phase}` }
   }
 }
 registerCNPGOperationObserver('backup', backupObserver)

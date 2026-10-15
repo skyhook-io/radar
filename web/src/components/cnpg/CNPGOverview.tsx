@@ -15,6 +15,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
+import { getApiBase } from '../../api/config'
 import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, type CNPGScreenProps } from './shared'
 import { cnpgClusterFullPath, cnpgClusterProblemsPath } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
@@ -201,6 +202,7 @@ export function CNPGOverview({
   const navigate = useCNPGNavigate()
   const { connection } = useConnection()
   const operations = useCNPGOperations()
+  const apiBase = getApiBase()
   const q = searchParams.get('q') ?? ''
   const cat = (searchParams.get('cat') as CNPGProblemCategory | null) ?? null
   const rawFilter = searchParams.get('filter') as Filter | null
@@ -378,7 +380,7 @@ export function CNPGOverview({
                   {rows.map((row) => {
                     const ref: SelectedResource = { kind: 'clusters', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name }
                     const active = sameSelectedResource(inspected, ref)
-                    const operation = latestCNPGOperation(operations, { context, namespace: row.namespace, name: row.name, uid: row.cluster.metadata.uid })
+                    const operation = latestCNPGOperation(operations, { apiBase, context, namespace: row.namespace, name: row.name, uid: row.cluster.metadata.uid })
                     return (
                       <tr
                         key={row.key}

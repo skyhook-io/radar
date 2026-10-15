@@ -34,12 +34,20 @@ export const CNPG_OP_STATE_SEVERITY: Record<CNPGOpState, 'success' | 'error' | '
   unobservable: 'neutral',
 }
 
+export interface CNPGOperationSubject {
+  apiBase: string
+  context: string
+  namespace: string
+  name: string
+}
+
 export function cnpgOperationsForCluster(
   ops: CNPGTrackedOperation[],
-  subject: { context: string; namespace: string; name: string; uid?: string },
+  subject: CNPGOperationSubject & { uid?: string },
 ): CNPGTrackedOperation[] {
   return ops.filter(
     (op) =>
+      op.apiBase === subject.apiBase &&
       op.context === subject.context &&
       op.namespace === subject.namespace &&
       op.cluster === subject.name &&
@@ -49,7 +57,7 @@ export function cnpgOperationsForCluster(
 
 export function latestCNPGOperation(
   ops: CNPGTrackedOperation[],
-  subject: { context: string; namespace: string; name: string; uid: string },
+  subject: CNPGOperationSubject & { uid: string },
 ): CNPGTrackedOperation | undefined {
   return cnpgOperationsForCluster(ops, subject).reduce<CNPGTrackedOperation | undefined>(
     (latest, op) => (!latest || op.startedAt > latest.startedAt ? op : latest),

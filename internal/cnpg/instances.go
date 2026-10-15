@@ -24,7 +24,7 @@ const (
 	logsNoInstanceMessage = "This cluster has no instance Pods yet."
 )
 
-// cnpgClusterInstancePods returns the Cluster's instance Pods under the same
+// clusterInstancePods returns the Cluster's instance Pods under the same
 // label-and-controller-UID rule the workspace uses, sorted by name.
 func clusterInstancePods(cache *k8s.ResourceCache, cluster *unstructured.Unstructured) ([]*corev1.Pod, error) {
 	namespace, name := cluster.GetNamespace(), cluster.GetName()

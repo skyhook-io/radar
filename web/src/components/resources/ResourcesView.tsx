@@ -109,10 +109,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // API resources discovery
   const { data: apiResources } = useAPIResources()
 
-  const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces })
-
   // Track the selected kind from the k8s-ui component
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(null)
+  const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1

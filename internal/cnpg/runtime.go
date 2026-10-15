@@ -118,7 +118,7 @@ func (s *Reader) Pooler(ctx context.Context, cache *k8s.ResourceCache, namespace
 	return nil, nil
 }
 
-// cnpgPoolerPods returns the Pods of the Pooler's Deployment, validated along
+// poolerPods returns the Pods of the Pooler's Deployment, validated along
 // the controller chain Pooler → Deployment (named after the Pooler) →
 // ReplicaSet → Pod by UID. The poolerName label alone is something any Pod
 // can carry.

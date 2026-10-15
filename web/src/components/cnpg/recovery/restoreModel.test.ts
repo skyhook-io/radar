@@ -243,10 +243,65 @@ describe('observeRestore', () => {
     expect(o.logsPod?.container).toBe('bootstrap-controller')
   })
 
-  it('fails on a failed Job and completes only when healthy with every instance ready', () => {
-    expect(observeRestore(snapshot({ jobs: [{ name: 'j', active: 0, succeeded: 0, failed: 6, complete: false, failedWith: 'BackoffLimitExceeded: Job has reached the specified backoff limit' }] })).state).toBe('failed')
-    expect(observeRestore(snapshot({ phase: 'Cluster in healthy state', ready: 1 })).state).toBe('completed')
-    expect(observeRestore(snapshot({ phase: 'Cluster in healthy state', ready: 1, instances: 3 })).state).toBe('progressing')
+  it('fails on a failed recovery Job, by role or by name', () => {
+    const failedWith = 'BackoffLimitExceeded: Job has reached the specified backoff limit'
+    expect(observeRestore(snapshot({ jobs: [{ name: 'r-1-full-recovery', active: 0, succeeded: 0, failed: 6, complete: false, failedWith }] })).state).toBe('failed')
+    expect(observeRestore(snapshot({ jobs: [{ name: 'r-1-restore', role: 'snapshot-recovery', active: 0, succeeded: 0, failed: 6, complete: false, failedWith }] })).state).toBe('failed')
+  })
+
+  it('completes once a restored instance is ready, read from its Pod or the Cluster', () => {
+    const instance = { name: 'r-1', uid: 'i1', kind: 'instance' as const, ownerVerified: true, phase: 'Running', ready: true, initContainers: [], containers: [] }
+    const fromPod = observeRestore(snapshot({ phase: 'Creating a new replica', ready: 0, instances: 3, pods: [instance] }))
+    expect(fromPod.state).toBe('completed')
+    const denied = { pods: { state: 'denied' as const }, jobs: { state: 'denied' as const }, events: { state: 'denied' as const } }
+    expect(observeRestore(snapshot({ phase: 'Cluster in healthy state', ready: 1, instances: 3, coverage: denied })).state).toBe('completed')
+    expect(observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, instances: 3 })).state).toBe('progressing')
+  })
+
+  describe('weeks after the restore', () => {
+    const ready = (name: string) => ({ name, uid: name, kind: 'instance' as const, ownerVerified: true, phase: 'Running', ready: true, initContainers: [], containers: [] })
+    const join = (phase: string) => ({
+      name: 'r-4-join-x',
+      uid: 'j',
+      kind: 'job' as const,
+      job: 'r-4-join',
+      ownerVerified: true,
+      phase,
+      ready: false,
+      initContainers: [{ name: 'bootstrap-controller', state: 'terminated' as const, exitCode: 0, restarts: 0, ready: false }],
+      containers: [{ name: 'join', state: 'running' as const, restarts: 0, ready: false }],
+    })
+    const recovered = { name: 'r-1-full-recovery', role: 'full-recovery', active: 0, succeeded: 1, failed: 0, complete: true }
+
+    it('a switchover reads restored, not "Restore in progress"', () => {
+      const o = observeRestore(snapshot({ phase: 'Switchover in progress', ready: 2, instances: 3, pods: [ready('r-1'), ready('r-2')], jobs: [recovered] }))
+      expect(o.state).toBe('completed')
+    })
+
+    it('a scale-up join Pod is not read as restoring the base backup', () => {
+      const o = observeRestore(snapshot({ phase: 'Creating a new replica', ready: 3, instances: 4, pods: [ready('r-1'), ready('r-2'), ready('r-3'), join('Running')], jobs: [recovered, { name: 'r-4-join', role: 'join', active: 1, succeeded: 0, failed: 0, complete: false }] }))
+      expect(o.state).toBe('completed')
+      expect(o.recoveryPods).toEqual([])
+    })
+
+    it('a failed join Job is not a failed restore', () => {
+      const failedJoin = { name: 'r-4-join', role: 'join', active: 0, succeeded: 0, failed: 6, complete: false, failedWith: 'BackoffLimitExceeded' }
+      expect(observeRestore(snapshot({ phase: 'Creating a new replica', ready: 3, instances: 4, pods: [ready('r-1'), ready('r-2'), ready('r-3')], jobs: [recovered, failedJoin] })).state).toBe('completed')
+      expect(observeRestore(snapshot({ phase: 'Creating a new replica', ready: 3, instances: 4, pods: [ready('r-1')], jobs: [{ ...failedJoin, role: undefined }] })).state).toBe('completed')
+    })
+
+    it('a Job read without its role counts as recovery only by its role-suffixed name', () => {
+      const o = observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [join('Running')], jobs: [{ name: 'r-4-join', active: 1, succeeded: 0, failed: 0, complete: false }] }))
+      expect(o.recoveryPods).toEqual([])
+      expect(o.title).toBe('Waiting for the recovery to start')
+    })
+  })
+
+  it('still reads an in-progress recovery as progressing', () => {
+    const o = observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [recoveryPod('running')], jobs: [{ name: 'r-1-full-recovery', role: 'full-recovery', active: 1, succeeded: 0, failed: 0, complete: false }] }))
+    expect(o.state).toBe('progressing')
+    expect(o.title).toBe('Restoring the base backup and replaying WAL')
+    expect(o.recoveryPods.map((p) => p.name)).toEqual(['r-1-full-recovery-x'])
   })
 
   it('never reads missing access as progress or failure', () => {
@@ -257,7 +312,7 @@ describe('observeRestore', () => {
 })
 
 describe('restore operation observer', () => {
-  const op = { id: '1', kind: 'restore', label: 'Restore into r', context: 'c', namespace: 'db', cluster: 'r', startedAt: 0, baseline: {}, state: 'requested' as const, lastProgressAt: 0 }
+  const op = { id: '1', kind: 'restore', label: 'Restore into r', apiBase: '/api', context: 'c', namespace: 'db', cluster: 'r', startedAt: 0, baseline: {}, state: 'requested' as const, lastProgressAt: 0 }
 
   it('waits for the Cluster, then completes on a healthy phase with all instances ready', () => {
     expect(restoreOperationObserver(op, { now: 1000 }).state).toBe('requested')
@@ -346,9 +401,9 @@ describe('resourcesText', () => {
 describe('cnpgRestoredPrimaryUp', () => {
   const pod = (kind: 'job' | 'instance', phase: string, ready: boolean) => ({ name: `${kind}-x`, uid: kind, kind, ownerVerified: true, phase, ready, initContainers: [], containers: [] })
   it('is up once a restored instance is ready, even if the cluster later degrades', () => {
-    // A replica lost after the restore: not "completed", but the primary answers.
+    // A replica lost after the restore does not reopen the restore.
     const degraded = snapshot({ phase: 'Cluster in healthy state', ready: 1, instances: 2, pods: [pod('job', 'Succeeded', false), pod('instance', 'Running', true), pod('instance', 'Running', false)] as any })
-    expect(observeRestore(degraded).state).not.toBe('completed')
+    expect(observeRestore(degraded).state).toBe('completed')
     expect(cnpgRestoredPrimaryUp(degraded)).toBe(true)
   })
   it('is not up while recovery runs or when Pods cannot be seen, and a join Job does not hide it', () => {

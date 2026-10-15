@@ -58,7 +58,7 @@ var (
 	metricsMemoTTL             = 25 * time.Second
 )
 
-// cnpgContainerHasFlag reports whether the running Pod's container was
+// containerHasFlag reports whether the running Pod's container was
 // started with a flag — how the operator turns TLS on for a port.
 func containerHasFlag(p *corev1.Pod, container, flag string) bool {
 	for _, c := range p.Spec.Containers {
@@ -110,7 +110,7 @@ func (o cnpgProxyOutcome) source() CNPGRuntimeSource {
 	return CNPGRuntimeSource{State: o.state, Error: o.err, Scheme: o.scheme, CapturedAt: o.capturedAt}
 }
 
-// cnpgProxyGetWithFallback tries the declared scheme and, only when that
+// proxyGetWithFallback tries the declared scheme and, only when that
 // failed as a protocol mismatch, the other one once: a Pod created by an older
 // operator may disagree with what its object declares today.
 func proxyGetWithFallback(ctx context.Context, client kubernetes.Interface, t proxyTarget) cnpgProxyOutcome {

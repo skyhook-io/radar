@@ -79,7 +79,4 @@ func TestCNPGActionMaintenanceGuardsAndBinding(t *testing.T) {
 	if len(env.patches) != 0 {
 		t.Errorf("refused requests wrote: %v", env.patches)
 	}
-	if g, ok := GrantFor("setMaintenance"); !ok || g != GrantPatchClusters {
-		t.Errorf("setMaintenance grant = %v", g)
-	}
 }

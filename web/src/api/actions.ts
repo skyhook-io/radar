@@ -28,11 +28,14 @@ export interface ActionRequest<Facts extends object = object, Params extends obj
  * Refusals every action family shares. An integration adds its own codes by
  * widening the type parameter of actionErrorCode.
  */
-export type ActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'partial' | 'outcome_unknown'
+export type ActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'partial' | 'unavailable' | 'outcome_unknown'
 
 // A request that timed out or lost its connection may have been applied by the
-// apiserver anyway. 503 without a code is Radar refusing before any write.
-const AMBIGUOUS_STATUSES = new Set([500, 502, 504])
+// apiserver anyway. A 503 without a code is just as uncertain: an Envoy-based
+// ingress (Istio, Contour, Gateway API implementations) answers 503 when the
+// upstream connection reset after it forwarded the request. Radar's own
+// refusals before any write carry the code `unavailable`.
+const AMBIGUOUS_STATUSES = new Set([500, 502, 503, 504])
 
 export function actionErrorCode<C extends string = ActionErrorCode>(err: unknown): C | ActionErrorCode | undefined {
   if (!err || isRadarFeatureUnsupported(err)) return undefined

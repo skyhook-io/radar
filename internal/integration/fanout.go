@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// fanOut calls run(i) for every i in [0, n), at most limit at a time, and
+// FanOut calls run(i) for every i in [0, n), at most limit at a time, and
 // returns the results in index order once every call has finished. A call
 // still waiting for a slot when ctx is done does not run; its result is the
 // zero value. Caps on n, ordering and what a skipped index means stay with

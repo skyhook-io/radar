@@ -46,6 +46,11 @@ func TestReportWithholdsInitializationSQLAndInlineConnectionPasswords(t *testing
 			"postInitApplicationSQL": []any{"private-application-sql"},
 			"postInitTemplateSQL":    []any{"private-template-sql"},
 			"postInitSQLRefs":        map[string]any{"secretRefs": []any{map[string]any{"name": "sql-secret", "key": "sql"}}},
+			"import": map[string]any{
+				"type":                     "microservice",
+				"databases":                []any{"app"},
+				"postImportApplicationSQL": []any{"ALTER ROLE app PASSWORD 'import-secret'"},
+			},
 		}},
 		"externalClusters": []any{map[string]any{"name": "origin", "connectionParameters": map[string]any{"host": "pg-rw", "password": "secret-inline", "sslpassword": "secret-ssl"}, "password": map[string]any{"name": "password-secret", "key": "password"}}},
 	}}}
@@ -53,7 +58,7 @@ func TestReportWithholdsInitializationSQLAndInlineConnectionPasswords(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"secret-sql", "private-application-sql", "private-template-sql", "secret-inline", "secret-ssl"} {
+	for _, secret := range []string{"secret-sql", "private-application-sql", "private-template-sql", "import-secret", "secret-inline", "secret-ssl"} {
 		if strings.Contains(string(data), secret) {
 			t.Errorf("report exposed %s: %s", secret, data)
 		}

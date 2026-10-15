@@ -40,14 +40,6 @@ var (
 	cnpgGrantListJobs   = auth.Grant{Verb: "list", Group: "batch", Resource: "jobs"}
 	cnpgGrantDeleteJobs = auth.Grant{Verb: "delete", Group: "batch", Resource: "jobs"}
 	cnpgGrantPatchPool  = auth.Grant{Verb: "patch", Group: Group, Resource: "poolers"}
-
-	cnpgExtraActionGrants = map[string]auth.Grant{
-		"cancelBackend":    grantCreateExec,
-		"terminateBackend": grantCreateExec,
-		"destroyInstance":  cnpgGrantDeletePods,
-		"poolerPause":      cnpgGrantPatchPool,
-		"poolerResume":     cnpgGrantPatchPool,
-	}
 )
 
 // cnpgDestroyGrants: with keepPVC the PVCs are updated (detached), otherwise

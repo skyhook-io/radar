@@ -93,6 +93,20 @@ func historyMemoPut(key string, now time.Time, charts []prometheuspkg.CNPGHistor
 	cnpgHistoryMemo[key] = cnpgHistoryMemoEntry{expires: now.Add(cnpgHistoryMemoTTL), charts: charts}
 }
 
+// historyMemoizable: a cancelled read or a chart whose query failed is
+// retried by the next request rather than served for the memo's lifetime.
+func historyMemoizable(ctx context.Context, charts []prometheuspkg.CNPGHistoryChart) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	for _, c := range charts {
+		if c.State == prometheuspkg.CNPGHistoryStateError {
+			return false
+		}
+	}
+	return true
+}
+
 // cnpgPrometheusUnavailable returns why Radar has no Prometheus to read, or
 // "" when it does.
 // Discovery's own failures are complete diagnoses, so they are not prefixed again.
@@ -116,7 +130,7 @@ func historyScopeFailure(err error) (string, string) {
 	return historyStateError, "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())
 }
 
-// cnpgUsageScopeFailure is cnpgHistoryScopeFailure for kubelet volume stats.
+// usageScopeFailure is cnpgHistoryScopeFailure for kubelet volume stats.
 func usageScopeFailure(err error) (string, string) {
 	switch {
 	case errors.Is(err, prometheuspkg.ErrScopeAmbiguous):
@@ -127,7 +141,7 @@ func usageScopeFailure(err error) (string, string) {
 	return historyStateError, "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())
 }
 
-// cnpgHistoryAnchors are current instance Pods, name and UID, that prove
+// historyAnchors are current instance Pods, name and UID, that prove
 // which cluster-identity labels are this cluster's.
 func historyAnchors(cache *k8s.ResourceCache, cluster *unstructured.Unstructured) []prom.WorkloadPodIdentity {
 	pods, err := clusterInstancePods(cache, cluster)
@@ -399,7 +413,7 @@ func cnpgFleetSlotsOf(res prometheuspkg.CNPGFleetSlots, cluster string, iso *pro
 	}
 }
 
-// cnpgFleetClaims lists each Cluster's owned claims under the caller's grants.
+// fleetClaims lists each Cluster's owned claims under the caller's grants.
 // A non-empty returned State says why growth is not read for the namespace.
 func (s *Reader) fleetClaims(ctx context.Context, cache *k8s.ResourceCache, namespace string, clusters []*unstructured.Unstructured) (map[string][]*corev1.PersistentVolumeClaim, CNPGFleetGrowth) {
 	if !s.Access.CanRead(ctx, "", "persistentvolumeclaims", namespace, "list") {
@@ -539,7 +553,9 @@ func (s *Reader) ClusterHistory(ctx context.Context, cache *k8s.ResourceCache, c
 			resp.State, resp.Reason = historyStateError, err.Error()
 			return resp
 		}
-		historyMemoPut(key, now, charts)
+		if historyMemoizable(ctx, charts) {
+			historyMemoPut(key, now, charts)
+		}
 	}
 	resp.State, resp.Charts = historyStateOK, charts
 	return resp

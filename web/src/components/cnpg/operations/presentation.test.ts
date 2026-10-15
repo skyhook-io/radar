@@ -6,6 +6,7 @@ const operation: CNPGTrackedOperation = {
   id: 'local',
   kind: 'reload',
   label: 'Reload configuration',
+  apiBase: '/api',
   context: 'kind-db',
   namespace: 'db',
   cluster: 'pg',
@@ -19,7 +20,7 @@ const operation: CNPGTrackedOperation = {
 describe('local operation presentation', () => {
   it('keeps completed predecessor operations out of the header, count and handoff list', () => {
     const completed = { ...operation, state: 'completed' as const, finishedAt: operation.startedAt + 1000 }
-    const subject = { context: 'kind-db', namespace: 'db', name: 'pg', uid: 'replacement' }
+    const subject = { apiBase: '/api', context: 'kind-db', namespace: 'db', name: 'pg', uid: 'replacement' }
     expect(cnpgOperationsForCluster([completed], subject)).toEqual([])
     const current = { ...completed, id: 'replacement-restore', clusterUID: 'replacement', startedAt: completed.startedAt + 2000 }
     expect(cnpgOperationsForCluster([completed, current], subject)).toEqual([current])
@@ -27,9 +28,9 @@ describe('local operation presentation', () => {
   })
 
   it('never joins a record across contexts, namespaces or a recreated Cluster', () => {
-    const subject = { context: 'kind-db', namespace: 'db', name: 'pg', uid: 'uid' }
+    const subject = { apiBase: '/api', context: 'kind-db', namespace: 'db', name: 'pg', uid: 'uid' }
     expect(latestCNPGOperation([operation], subject)).toBe(operation)
-    for (const changed of [{ context: 'prod' }, { namespace: 'elsewhere' }, { uid: 'new-uid' }]) {
+    for (const changed of [{ apiBase: '/c/other/api' }, { context: 'prod' }, { namespace: 'elsewhere' }, { uid: 'new-uid' }]) {
       expect(latestCNPGOperation([operation], { ...subject, ...changed })).toBeUndefined()
     }
     expect(
@@ -38,8 +39,17 @@ describe('local operation presentation', () => {
     ).toBe('newer')
   })
 
+  it('keeps Radar Hub clusters apart although every in-cluster Radar reports the same context', () => {
+    const hub = { ...operation, context: 'in-cluster', apiBase: '/c/east/api' }
+    const west = { apiBase: '/c/west/api', context: 'in-cluster', namespace: 'db', name: 'pg', uid: 'uid' }
+    expect(cnpgOperationsForCluster([hub], west)).toEqual([])
+    expect(cnpgOperationsForCluster([hub], { ...west, apiBase: '/c/east/api' })).toEqual([hub])
+    const { apiBase: _, ...unstamped } = hub
+    expect(cnpgOperationsForCluster([unstamped as CNPGTrackedOperation], { ...west, apiBase: '/c/east/api' })).toEqual([])
+  })
+
   it('records a check even when the result is unobservable; terminal records retain their assessment time', () => {
-    const checked = advanceCNPGOperation(operation, { now: operation.startedAt + 1000 })
+    const checked = advanceCNPGOperation(operation, { now: operation.startedAt + 1000, freshness: { clusterUID: { updatedAt: 0, failed: true } } })
     expect(checked.state).toBe('unobservable')
     expect(checked.lastCheckedAt).toBe(operation.startedAt + 1000)
     const terminal = { ...checked, state: 'completed' as const }

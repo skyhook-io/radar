@@ -1,8 +1,8 @@
 import { registerCNPGOperationObserver, summarizeSteps, type CNPGObservation, type CNPGObserverResult, type CNPGOpStep, type CNPGTrackedOperation } from '../operations/model'
+import { isCNPGRecoveryJob } from './restoreModel'
 
 const HEALTHY_PHASE = 'Cluster in healthy state'
 const FAILING_PHASE = /unrecoverable|unable to|cannot|error|failed/i
-const RECOVERY_JOB_ROLES = new Set(['full-recovery', 'snapshot-recovery'])
 
 /**
  * The tracker's view of a restore, from what the operation tracker already
@@ -19,7 +19,7 @@ export function restoreOperationObserver(op: CNPGTrackedOperation, obs: CNPGObse
   const phase: string | undefined = c.status?.phase
   const desired: number | undefined = c.spec?.instances
   const ready: number | undefined = c.status?.readyInstances
-  const jobs = obs.ha?.jobs.state === 'ok' ? obs.ha.jobs.items.filter((j) => (j.role ? RECOVERY_JOB_ROLES.has(j.role) : j.name.includes('recovery'))) : undefined
+  const jobs = obs.ha?.jobs.state === 'ok' ? obs.ha.jobs.items.filter(isCNPGRecoveryJob) : undefined
   const failed = jobs?.find((j) => j.phase === 'failed')
   if (failed) return { state: 'failed', detail: `Recovery Job ${failed.name} failed${failed.reason ? `: ${failed.reason}` : ''}` }
   if (phase && phase !== HEALTHY_PHASE && FAILING_PHASE.test(phase)) {

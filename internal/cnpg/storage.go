@@ -254,7 +254,7 @@ func (s *Reader) ClusterStorage(ctx context.Context, namespace, name string) (*C
 	return &resp, nil
 }
 
-// cnpgClusterClaims lists the claims the Cluster owns, after the caller's own
+// clusterClaims lists the claims the Cluster owns, after the caller's own
 // list grant — reading a Cluster never implies reading its claims.
 func (s *Reader) clusterClaims(ctx context.Context, cache *k8s.ResourceCache, cluster *unstructured.Unstructured) ([]*corev1.PersistentVolumeClaim, []CNPGStorageExcludedPV, CNPGStorageCoverage) {
 	namespace := cluster.GetNamespace()
@@ -340,7 +340,7 @@ func claimNames(claims []*corev1.PersistentVolumeClaim) []string {
 	return out
 }
 
-// cnpgStorageClasses reads each named class once, when the caller may get
+// storageClasses reads each named class once, when the caller may get
 // StorageClasses.
 func (s *Reader) storageClasses(ctx context.Context, cache *k8s.ResourceCache, claims []*corev1.PersistentVolumeClaim) map[string]CNPGStorageClassFact {
 	out := map[string]CNPGStorageClassFact{}
@@ -473,7 +473,7 @@ func cnpgStorageVolumeOf(pvc *corev1.PersistentVolumeClaim, classes map[string]C
 	return v
 }
 
-// cnpgClaimUsage reads kubelet volume stats for the claims, behind the same
+// claimUsage reads kubelet volume stats for the claims, behind the same
 // gate as the single-claim PVC chart.
 func (s *Reader) claimUsage(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity) (CNPGStorageCoverage, prometheuspkg.PVCUsageBatch) {
 	grant := grantGetPVCs.In(namespace).Ref()
@@ -594,7 +594,7 @@ func cnpgStorageTargetOf(obj map[string]any, role, tablespace, base string, path
 	return t
 }
 
-// cnpgStorageWAL reads each instance's WAL facts through the same memoized
+// storageWAL reads each instance's WAL facts through the same memoized
 // pods/proxy reads the Replication and Performance tabs use. It writes the error and returns an
 // empty state only when the caller's client cannot be built.
 func (s *Reader) storageWAL(callerCtx context.Context, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, byInstance map[string]*CNPGStorageInstance) (CNPGStorageCoverage, error) {
@@ -764,7 +764,7 @@ type CNPGDiskUsage struct {
 	Ratio         float64 `json:"ratio"`
 }
 
-// cnpgNamespaceDisk answers for every Cluster of one namespace with one claim
+// namespaceDisk answers for every Cluster of one namespace with one claim
 // list and one usage batch.
 func (s *Reader) namespaceDisk(ctx context.Context, cache *k8s.ResourceCache, namespace string, clusters []*unstructured.Unstructured) []CNPGClusterDisk {
 	all := func(d CNPGClusterDisk) []CNPGClusterDisk {

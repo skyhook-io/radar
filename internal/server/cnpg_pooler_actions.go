@@ -37,7 +37,7 @@ func (s *Server) handleCNPGPoolerCapabilities(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleCNPGPoolerAction(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedForAction(w) {
 		return
 	}
 	namespace, name, action := chi.URLParam(r, "namespace"), chi.URLParam(r, "name"), chi.URLParam(r, "action")

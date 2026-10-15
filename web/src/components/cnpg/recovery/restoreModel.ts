@@ -432,6 +432,18 @@ function activeContainer(p: CNPGRecoveryPod) {
   return init ?? p.containers.find((c) => c.state === 'running') ?? p.containers[0]
 }
 
+const RECOVERY_JOB_ROLES = ['full-recovery', 'snapshot-recovery']
+
+/**
+ * Whether a Cluster's Job restores data: by its cnpg.io/jobRole, or, read
+ * without the role, by the `<instance>-<role>` name CloudNativePG gives it.
+ * The Cluster's other Jobs (a replica's join, initdb, a major upgrade) run
+ * long after a restore and say nothing about it.
+ */
+export function isCNPGRecoveryJob(job: { name: string; role?: string }): boolean {
+  return job.role ? RECOVERY_JOB_ROLES.includes(job.role) : RECOVERY_JOB_ROLES.some((role) => job.name.endsWith(`-${role}`))
+}
+
 /**
  * Whether the restored primary is up: an instance Pod is ready. CloudNativePG
  * starts the first instance only after the recovery Job succeeded, so this
@@ -444,28 +456,39 @@ export function cnpgRestoredPrimaryUp(snap: CNPGRecoveryResponse): boolean {
 }
 
 /**
- * Where a restore stands, from the recovery snapshot alone. Completion is the
- * Cluster reporting a healthy phase with every instance ready; failure is a
- * failed recovery Job or a failing phase. Missing Pod access never reads as
- * progress or failure.
+ * Where a restore stands, from the recovery snapshot alone. The panel stays
+ * mounted for the Cluster's whole life, so only recovery Jobs and their Pods
+ * count. Completion is a restored instance being ready (a ready instance Pod,
+ * or the Cluster's readyInstances, which needs no Pod access): CloudNativePG
+ * starts one only after recovery succeeded, so a later switchover, scale-up
+ * or failed join never reopens the restore. Failure is a failed recovery Job,
+ * or a failing phase before any instance was ready. Missing Pod access never
+ * reads as progress or failure.
  */
 export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
-  const recoveryPods = snap.pods.filter((p) => p.kind === 'job')
+  const recoveryJobs = snap.jobs.filter(isCNPGRecoveryJob)
+  const recoveryPods = snap.pods.filter((p) => p.kind === 'job' && !!p.job && isCNPGRecoveryJob(snap.jobs.find((j) => j.name === p.job) ?? { name: p.job }))
   const instances = snap.pods.filter((p) => p.kind === 'instance')
   const c = snap.cluster
   const base = { recoveryPods }
   const podsVisible = snap.coverage.pods?.state === 'ok'
 
-  const failedJob = snap.jobs.find((j) => j.failedWith)
+  const failedJob = recoveryJobs.find((j) => j.failedWith)
   if (failedJob) {
     const pod = recoveryPods.find((p) => p.job === failedJob.name)
     return { ...base, state: 'failed', tone: 'unhealthy', title: `Recovery Job ${failedJob.name} failed`, detail: failedJob.failedWith, logsPod: pod ? { name: pod.name, container: failingContainer(pod)?.name } : undefined }
   }
+  if (cnpgRestoredPrimaryUp(snap) || (c.readyInstances ?? 0) >= 1) {
+    return {
+      ...base,
+      state: 'completed',
+      tone: 'healthy',
+      title: 'Restore completed',
+      detail: [c.readyInstances !== null && c.instances !== null ? `${c.readyInstances}/${c.instances} instances ready` : null, c.phase].filter(Boolean).join(' · '),
+    }
+  }
   if (c.phase && c.phase !== HEALTHY_PHASE && FAILING_PHASE.test(c.phase)) {
     return { ...base, state: 'failed', tone: 'unhealthy', title: c.phase, detail: c.phaseReason || c.ready?.message }
-  }
-  if (c.phase === HEALTHY_PHASE && c.readyInstances !== null && c.instances !== null && c.readyInstances >= 1 && c.readyInstances === c.instances) {
-    return { ...base, state: 'completed', tone: 'healthy', title: 'Restore completed', detail: `${c.readyInstances}/${c.instances} instances ready · ${c.phase}` }
   }
 
   const crashing = recoveryPods.map((p) => ({ p, c: failingContainer(p) })).find((x) => x.c)

@@ -1,9 +1,12 @@
 import { useSyncExternalStore } from 'react'
+import { getApiBase } from '../../../api/config'
 import { supersedeFor, type CNPGTrackedOperation } from './model'
 
 // Tracked operations for this browser session: they survive tab changes and
 // reloads of the page, and end with the session. Storage can be unavailable
-// (private windows, blocked site data); the tracker then lives in memory.
+// (private windows, blocked site data); the tracker then lives in memory. One
+// key holds the records of every cluster a Radar Hub tab shows, so each record
+// carries the API base it was issued against.
 
 const STORAGE_KEY = 'radar.cnpg.operations.v1'
 const MAX_OPS = 50
@@ -65,6 +68,7 @@ export function trackCNPGOperation(input: TrackCNPGOperationInput): string {
     id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     kind: input.kind,
     label: input.label,
+    apiBase: getApiBase(),
     context: input.context,
     namespace: input.namespace,
     cluster: input.cluster,
@@ -91,9 +95,4 @@ export function dismissCNPGOperation(id: string) {
 
 export function useCNPGOperations(): CNPGTrackedOperation[] {
   return useSyncExternalStore(subscribe, () => ops, () => ops)
-}
-
-export function resetCNPGOperationsForTest() {
-  ops = []
-  listeners.clear()
 }

@@ -249,7 +249,7 @@ func parseCNPGDatabaseContents(out []byte) (*CNPGDatabaseContents, error) {
 	return &c, nil
 }
 
-// cnpgRestoreDatabase is the database applications use after the restore:
+// restoreDatabase is the database applications use after the restore:
 // spec.bootstrap.recovery.database, which CloudNativePG defaults to "app".
 func restoreDatabase(cluster *unstructured.Unstructured) string {
 	if db, _, _ := unstructured.NestedString(cluster.Object, "spec", "bootstrap", "recovery", "database"); db != "" {
@@ -369,7 +369,7 @@ FROM pg_settings s
 WHERE s.name = ANY (string_to_array(:'names', ','));
 `
 
-// cnpgDeclaredParameters returns spec.postgresql.parameters sorted, capped,
+// declaredParameters returns spec.postgresql.parameters sorted, capped,
 // and split into names Radar can ask about and names it skips.
 func declaredParameters(cluster *unstructured.Unstructured) (declared []CNPGParameterValue, query []string, skipped []string, omitted int) {
 	params, _, _ := unstructured.NestedMap(cluster.Object, "spec", "postgresql", "parameters")

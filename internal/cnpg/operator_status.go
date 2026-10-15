@@ -86,7 +86,7 @@ type cnpgOperatorStatusMemoEntry struct {
 	grants  map[auth.Grant]string
 }
 
-// cnpgOperatorVerdictFor is the verdict for one namespace, or unknown when
+// operatorVerdictFor is the verdict for one namespace, or unknown when
 // the facts cannot be gathered at all.
 func (s *Reader) operatorVerdictFor(ctx context.Context, namespace string) CNPGOperatorVerdict {
 	return s.operatorFactsFor(ctx).verdict(namespace)

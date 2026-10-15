@@ -39,7 +39,7 @@ beforeEach(() => {
 it('uses a fresh runtime identity to supersede a hidden predecessor when other reads fail', () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const startedAt = Date.now() - 1_000
-  state.operations = [{ id: 'predecessor', kind: 'restart', label: 'Restart', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: { instances: ['pg-1'], podUIDs: { 'pg-1': 'old-pod' } } }]
+  state.operations = [{ id: 'predecessor', kind: 'restart', label: 'Restart', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: { instances: ['pg-1'], podUIDs: { 'pg-1': 'old-pod' } } }]
   state.caps.mockReturnValue({ data: undefined, dataUpdatedAt: 0, errorUpdatedAt: 0, isError: true, isFetching: false, isFetchedAfterMount: true })
   state.ha.mockReturnValue({ data: undefined, dataUpdatedAt: 0, errorUpdatedAt: 0, isError: true, isFetching: false, isFetchedAfterMount: true })
   state.runtime.mockReturnValue({ data: { cluster: { uid: 'new-uid' } }, dataUpdatedAt: startedAt + 1, errorUpdatedAt: 0, isError: false, isFetching: false, isFetchedAfterMount: true })
@@ -56,7 +56,7 @@ it('uses a fresh runtime identity to supersede a hidden predecessor when other r
 
 it('observes a lone predecessor record even when identity filtering hides it', () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  const op: CNPGTrackedOperation = { id: 'old', kind: 'reload', label: 'Reload', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt: 1, lastProgressAt: 1, state: 'requested', baseline: {} }
+  const op: CNPGTrackedOperation = { id: 'old', kind: 'reload', label: 'Reload', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt: 1, lastProgressAt: 1, state: 'requested', baseline: {} }
   const completed = { ...op, id: 'finished', state: 'completed' as const, finishedAt: 2 }
   const otherContext = { ...op, id: 'other-context', context: 'prod' }
   const otherCluster = { ...op, id: 'other-cluster', cluster: 'other' }
@@ -79,7 +79,7 @@ it('observes a lone predecessor record even when identity filtering hides it', (
 it.each([true, false])('keeps the current operation when an old capability UID has failed=%s', (failed) => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const startedAt = Date.now() - 1_000
-  state.operations = [{ id: 'current', kind: 'switchover', label: 'Switch over', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'new-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
+  state.operations = [{ id: 'current', kind: 'switchover', label: 'Switch over', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'new-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
   state.caps.mockReturnValue({ data: { uid: 'old-uid' }, dataUpdatedAt: startedAt - 1, errorUpdatedAt: 0, isError: failed, isFetching: false, isFetchedAfterMount: true })
   state.ha.mockReturnValue({ data: { cluster: { uid: 'new-uid' } }, dataUpdatedAt: startedAt + 1, errorUpdatedAt: 0, isError: false, isFetching: false, isFetchedAfterMount: true })
   const host = document.createElement('div')
@@ -98,7 +98,7 @@ it.each([true, false])('keeps the current operation when an old capability UID h
 it.each(['reload', 'restart'])('waits for the first identity response before finalizing an old hidden %s', (kind) => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const startedAt = Date.now() - CNPG_OP_UNOBSERVABLE_MS - 1_000
-  state.operations = [{ id: 'predecessor', kind, label: kind, context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
+  state.operations = [{ id: 'predecessor', kind, label: kind, apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
   state.caps.mockReturnValue({ data: undefined, dataUpdatedAt: 0, errorUpdatedAt: 0, isError: false, isFetching: true, isFetchedAfterMount: false })
   const host = document.createElement('div')
   const root = createRoot(host)
@@ -120,7 +120,7 @@ it.each(['reload', 'restart'])('waits for the first identity response before fin
 it('bounds old unobservable operations during background refetches after initial reads settled', () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const startedAt = Date.now() - CNPG_OP_UNOBSERVABLE_MS - 1_000
-  state.operations = [{ id: 'predecessor', kind: 'reload', label: 'Reload', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
+  state.operations = [{ id: 'predecessor', kind: 'reload', label: 'Reload', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
   state.caps.mockReturnValue({ data: undefined, dataUpdatedAt: 0, errorUpdatedAt: 0, isError: true, isFetching: true, isFetchedAfterMount: true })
   state.ha.mockReturnValue({ data: undefined, dataUpdatedAt: 0, errorUpdatedAt: 0, isError: true, isFetching: true, isFetchedAfterMount: true })
   state.workspace.mockReturnValue({ dataUpdatedAt: 0, errorUpdatedAt: 0, isError: true, isFetching: true, isFetchedAfterMount: true })
@@ -141,7 +141,7 @@ it('advances the follow-window clock when only repeated failure timestamps chang
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const startedAt = Date.now()
   const clock = vi.spyOn(Date, 'now').mockReturnValue(startedAt + 1_000)
-  state.operations = [{ id: 'outage', kind: 'restart', label: 'Restart', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
+  state.operations = [{ id: 'outage', kind: 'restart', label: 'Restart', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
   const failed = { data: undefined, dataUpdatedAt: 0, errorUpdatedAt: startedAt + 1_000, isError: true, isFetching: false, isFetchedAfterMount: true }
   state.caps.mockReturnValue(failed)
   state.ha.mockReturnValue(failed)
@@ -169,7 +169,7 @@ it('preserves an in-flight initial identity read when its next poll is due', () 
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.useFakeTimers()
   const startedAt = Date.now() - CNPG_OP_UNOBSERVABLE_MS - 1_000
-  state.operations = [{ id: 'slow', kind: 'reload', label: 'Reload', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
+  state.operations = [{ id: 'slow', kind: 'reload', label: 'Reload', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'old-uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }]
   state.caps.mockReturnValue({ data: { uid: 'old-uid' }, dataUpdatedAt: startedAt - 1, errorUpdatedAt: 0, isError: false, isFetching: true, isFetchedAfterMount: false })
   const host = document.createElement('div')
   const root = createRoot(host)
@@ -182,5 +182,44 @@ it('preserves an in-flight initial identity read when its next poll is due', () 
   } finally {
     act(() => root.unmount())
     vi.useRealTimers()
+  }
+})
+
+it('reads "requested", not "cannot be followed", until the first read since the request lands', () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const startedAt = Date.now() - 1_000
+  state.operations = [{ id: 'fresh', kind: 'switchover', label: 'Switch over', apiBase: '/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'uid', target: { name: 'pg-2' }, startedAt, lastProgressAt: startedAt, state: 'requested', baseline: { currentPrimary: 'pg-1' } }]
+  state.caps.mockReturnValue({ data: { uid: 'uid' }, dataUpdatedAt: startedAt - 1, errorUpdatedAt: 0, isError: false, isFetching: true, isFetchedAfterMount: true })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  try {
+    act(() => root.render(<CNPGOperationTracker namespace="db" name="pg" uid="uid" />))
+    expect(state.operations[0]).toMatchObject({ state: 'requested', detail: 'Waiting for the first read since the request' })
+    expect(host.textContent).toContain('requested')
+    state.caps.mockReturnValue({ data: undefined, dataUpdatedAt: startedAt - 1, errorUpdatedAt: Date.now(), isError: true, isFetching: false, isFetchedAfterMount: true })
+    state.ha.mockReturnValue({ data: undefined, dataUpdatedAt: 0, errorUpdatedAt: Date.now(), isError: true, isFetching: false, isFetchedAfterMount: true })
+    state.workspace.mockReturnValue({ dataUpdatedAt: 0, errorUpdatedAt: Date.now(), isError: true, isFetching: false, isFetchedAfterMount: true })
+    act(() => root.render(<CNPGOperationTracker namespace="db" name="pg" uid="uid" />))
+    expect(state.operations[0].state).toBe('unobservable')
+    expect(state.operations[0].finishedAt).toBeUndefined()
+  } finally {
+    act(() => root.unmount())
+  }
+})
+
+it('leaves records issued against another Radar alone', () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const startedAt = Date.now() - 1_000
+  const other: CNPGTrackedOperation = { id: 'east', kind: 'reload', label: 'Reload', apiBase: '/c/east/api', context: 'kind-db', namespace: 'db', cluster: 'pg', clusterUID: 'uid', startedAt, lastProgressAt: startedAt, state: 'requested', baseline: {} }
+  state.operations = [other]
+  state.caps.mockReturnValue({ data: { uid: 'uid' }, dataUpdatedAt: Date.now(), errorUpdatedAt: 0, isError: false, isFetching: false, isFetchedAfterMount: true })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  try {
+    act(() => root.render(<CNPGOperationTracker namespace="db" name="pg" uid="uid" />))
+    expect(host.textContent).toBe('')
+    expect(state.operations).toEqual([other])
+  } finally {
+    act(() => root.unmount())
   }
 })

@@ -24,12 +24,14 @@ export function cnpgDiscovered(apiResources: APIResource[] | undefined): boolean
 }
 
 // Disk use joins the fleet here, so low-disk clusters count toward Needs
-// attention on every screen and sidebar badge that reads the fleet; measured
-// replication lag and disk growth join the same way.
-export function useCNPGFleet(namespaces: string[], enabled = true) {
+// attention on every screen and sidebar badge that reads the enriched fleet;
+// measured replication lag and disk growth join the same way. Both are
+// Prometheus fan-outs per namespace, so callers outside the CloudNativePG views
+// pass withMetrics=false.
+export function useCNPGFleet(namespaces: string[], enabled = true, withMetrics = true) {
   const query = useCNPGWorkspace(namespaces, { enabled })
   const { support } = useRadarFeature('cnpgWorkspace')
-  const enrich = enabled && support === 'supported' && !!query.data?.installed
+  const enrich = enabled && withMetrics && support === 'supported' && !!query.data?.installed
   const disk = useCNPGFleetDisk(namespaces, enrich)
   const metrics = useCNPGFleetMetrics(namespaces, enrich)
   const fleet = useMemo<CNPGFleet | null>(
@@ -53,16 +55,16 @@ function diskFailed(clusters: any[], err: unknown): CNPGDiskReading[] {
   return clusters.map((c) => ({ namespace: c?.metadata?.namespace ?? '', name: c?.metadata?.name ?? '', state: 'error', reason, claims: 0, measured: 0 }))
 }
 
-function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null): { count?: number | null; lowerBound?: boolean; title?: string } {
+function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null, withMetrics: boolean): { count?: number | null; lowerBound?: boolean; title?: string } {
   if (!fleet) return {}
   const partial = fleet.incompleteKinds.length > 0
   const note = partial ? ' Some CloudNativePG data is not readable, so this is a lower bound.' : ''
-  const at = (count: number, what: string) => partial && count === 0
+  const at = (count: number, what: string, extra = '') => partial && count === 0
     ? { count: null, lowerBound: true, title: 'Unknown: some CloudNativePG data could not be read.' }
-    : { count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} ${what}.${note}` }
+    : { count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} ${what}.${note}${extra}` }
   switch (screen) {
     case 'overview':
-      return at(fleet.attentionCount, 'clusters need attention')
+      return at(fleet.attentionCount, 'clusters need attention', withMetrics ? '' : ' Disk use and replication lag are counted on the CloudNativePG views.')
     case 'protection':
       return at(fleet.categoryCounts.protection, 'clusters with failing backups or WAL archiving')
     case 'declarations':
@@ -83,20 +85,23 @@ export function useCNPGSidebarWorkspace({
   apiResources,
   namespaces,
   active,
+  withMetrics = !!active,
 }: {
   apiResources: APIResource[] | undefined
   namespaces: string[]
   active?: { screen: CNPGScreen; child?: { label: string; title?: string } }
+  /** Count disk use and replication lag too. Off by default outside the CloudNativePG views: every Resources page renders this sidebar. */
+  withMetrics?: boolean
 }): Record<string, SidebarCategoryWorkspace> | undefined {
   const navigate = useCNPGNavigate()
   const available = cnpgDiscovered(apiResources)
-  const { fleet } = useCNPGFleet(namespaces, available)
+  const { fleet } = useCNPGFleet(namespaces, available, withMetrics)
   const nsKey = namespaces.join(',')
 
   return useMemo(() => {
     if (!available) return undefined
     const destinations = CNPG_SCREENS.map((s) => {
-      const { count, lowerBound, title } = destinationCount(s.id, fleet)
+      const { count, lowerBound, title } = destinationCount(s.id, fleet, withMetrics)
       return {
         id: s.id,
         label: s.label,
@@ -116,5 +121,5 @@ export function useCNPGSidebarWorkspace({
         scopeNote: nsKey ? `Counts for namespace ${nsKey.split(',').join(', ')}` : undefined,
       },
     }
-  }, [available, fleet, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [available, fleet, withMetrics, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
 }

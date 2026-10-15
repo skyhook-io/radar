@@ -30,7 +30,7 @@ type KindCoverage struct {
 	AllowedNamespaces  []string `json:"allowedNamespaces,omitempty"`
 }
 
-// kindAccess is the resolved read scope for one kind. All means every
+// KindAccess is the resolved read scope for one kind. All means every
 // namespace in the request's scope (or the cluster-scoped kind itself).
 // Denied and Uncached name the in-scope Namespaces left unread, under the
 // disclosure rule of listScope.

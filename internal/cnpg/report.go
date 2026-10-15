@@ -530,12 +530,16 @@ func (b *cnpgReportBuilder) containerLog(p corev1.Pod, container string, previou
 
 var cnpgQueryRecordKeys = []string{"query", "internal_query", "context"}
 
+// cnpgAuditRecordKeys are the SQL fields of a pgaudit record, which the
+// instance manager parses into record.audit.
+var cnpgAuditRecordKeys = []string{"statement", "parameter"}
+
 // cnpgSQLMessage finds where SQL starts in a PostgreSQL log message: after
 // "statement: ", "execute <name>[/<portal>]: ", "execute fetch from <name>: ",
 // "parse <name>: ", "bind <name>[/<portal>]: " (each possibly after
-// "duration: … ms  "), and auto_explain's "plan:". Unanchored on purpose: a
-// false positive only redacts more.
-var cnpgSQLMessage = regexp.MustCompile(`(?s)\b(?:statement|execute fetch from \S+|execute \S+|parse \S+|bind \S+|plan):\s?`)
+// "duration: … ms  "), auto_explain's "plan:" and pgaudit's "AUDIT:".
+// Unanchored on purpose: a false positive only redacts more.
+var cnpgSQLMessage = regexp.MustCompile(`(?s)\b(?:statement|execute fetch from \S+|execute \S+|parse \S+|bind \S+|plan|AUDIT):\s?`)
 
 // cnpgSQLProtocolMessage finds an extended-protocol message: after an
 // optional "duration: … ms", text starting with execute, parse or bind. The
@@ -547,9 +551,13 @@ var cnpgSQLProtocolMessage = regexp.MustCompile(`(?is)(?:^|\b(?:LOG|DEBUG[1-5]?|
 // field or line.
 var cnpgSQLParameters = regexp.MustCompile(`(?is)\bparameters:\s?`)
 
+// cnpgSQLProcessQuery finds another backend's statement in a DETAIL, as a
+// deadlock report lists it ("Process <pid>: <query>").
+var cnpgSQLProcessQuery = regexp.MustCompile(`\bProcess \d+:\s?`)
+
 func cnpgRedactSQLText(msg string) (string, bool) {
 	changed := false
-	for _, re := range []*regexp.Regexp{cnpgSQLProtocolMessage, cnpgSQLMessage, cnpgSQLParameters} {
+	for _, re := range []*regexp.Regexp{cnpgSQLProtocolMessage, cnpgSQLMessage, cnpgSQLParameters, cnpgSQLProcessQuery} {
 		if loc := re.FindStringIndex(msg); loc != nil {
 			msg = msg[:loc[1]] + cnpgReportQueryRedacted
 			changed = true
@@ -559,8 +567,9 @@ func cnpgRedactSQLText(msg string) (string, bool) {
 }
 
 // cnpgReportLogLine redacts one log line. PostgreSQL records from the instance
-// manager are JSON with the statement in record.query / record.message and
-// bind parameters in record.detail; without the query-text opt-in those are
+// manager are JSON with the statement in record.query / record.message (or
+// record.audit for pgaudit) and bind parameters or other backends' statements
+// in record.detail; without the query-text opt-in those are
 // replaced, and plain-text lines are cut where SQL starts. Every line also
 // gets the high-confidence secret patterns.
 func cnpgReportLogLine(line string, queryText bool) string {
@@ -595,6 +604,14 @@ func cnpgRedactQueryText(body string) string {
 				changed = true
 			}
 		}
+		if audit, ok := rec["audit"].(map[string]any); ok {
+			for _, k := range cnpgAuditRecordKeys {
+				if v, ok := audit[k].(string); ok && v != "" {
+					audit[k] = cnpgReportQueryRedacted
+					changed = true
+				}
+			}
+		}
 		redact(rec, "message")
 		redact(rec, "detail")
 		redact(rec, "hint")
@@ -623,8 +640,10 @@ func cnpgReportCleanObject(obj *unstructured.Unstructured) *unstructured.Unstruc
 func cnpgReportCleanMetadata(obj metav1.Object) {
 	obj.SetManagedFields(nil)
 	annotations := obj.GetAnnotations()
-	// Serialized spec copies bypass the field-level credential redaction.
+	// Serialized spec copies and patches bypass the field-level credential
+	// redaction.
 	delete(annotations, "cnpg.io/podSpec")
+	delete(annotations, "cnpg.io/podPatch")
 	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 	if annotations != nil {
 		obj.SetAnnotations(annotations)
@@ -640,7 +659,7 @@ func cnpgReportRedactManifest(v any) {
 				if metadata, ok := child.(map[string]any); ok {
 					cnpgReportCleanMetadata(&unstructured.Unstructured{Object: map[string]any{"metadata": metadata}})
 				}
-			case "postInitSQL", "postInitApplicationSQL", "postInitTemplateSQL":
+			case "postInitSQL", "postInitApplicationSQL", "postInitTemplateSQL", "postImportApplicationSQL":
 				if sql, ok := child.([]any); ok {
 					for i := range sql {
 						sql[i] = cnpgReportRedacted

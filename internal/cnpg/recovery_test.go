@@ -81,7 +81,7 @@ func TestCNPGRecoverySpecOf(t *testing.T) {
 func TestCNPGRecoverySnapshotClassifiesPodsByOwner(t *testing.T) {
 	cluster := cnpgRestoredCluster()
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "pg-1-full-recovery", Namespace: "db", UID: "job-uid", Labels: map[string]string{"cnpg.io/cluster": "pg"}, OwnerReferences: testControllerRefs("Cluster", "pg", cnpgActionTestUID)},
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-1-full-recovery", Namespace: "db", UID: "job-uid", Labels: map[string]string{"cnpg.io/cluster": "pg", jobRoleLabel: "full-recovery"}, OwnerReferences: testControllerRefs("Cluster", "pg", cnpgActionTestUID)},
 		Status:     batchv1.JobStatus{Active: 1},
 	}
 	foreignJob := &batchv1.Job{
@@ -114,6 +114,9 @@ func TestCNPGRecoverySnapshotClassifiesPodsByOwner(t *testing.T) {
 	snap := s.RecoverySnapshot(ctx, typed, cluster)
 	if len(snap.Jobs) != 1 || snap.Jobs[0].Name != "pg-1-full-recovery" {
 		t.Fatalf("only the Cluster-owned Job counts: %+v", snap.Jobs)
+	}
+	if snap.Jobs[0].Role != "full-recovery" {
+		t.Errorf("job role = %q, want the operator's cnpg.io/jobRole", snap.Jobs[0].Role)
 	}
 	if len(snap.Pods) != 1 || snap.Pods[0].Kind != "job" || !snap.Pods[0].OwnerVerified {
 		t.Fatalf("only the owned Job's Pod counts: %+v", snap.Pods)
@@ -268,6 +271,22 @@ func TestCNPGReportLogLineRedactsEverySQLFormat(t *testing.T) {
 		"name with colon":    record("execute a: b/c: d: SELECT '"+secret+"'", ""),
 		"upper case":         record("EXECUTE Customer Lookup: SELECT '"+secret+"'", ""),
 		"plain name spaces":  "2026-09-30 00:00:00 UTC [42] LOG:  duration: 0.4 ms  execute customer lookup: SELECT '" + secret + "'",
+		"deadlock detail":    record("deadlock detected", "Process 101 waits for ShareLock on transaction 7; blocked by process 102.\nProcess 102 waits for ShareLock on transaction 8; blocked by process 101.\nProcess 101: UPDATE t SET v = '"+secret+"'\nProcess 102: UPDATE t SET v = 'other'"),
+		"plain deadlock":     "\tProcess 101: UPDATE t SET v = '" + secret + "'",
+		"plain pgaudit":      "2026-09-30 00:00:00 UTC [42] LOG:  AUDIT: SESSION,1,1,WRITE,INSERT,,,\"INSERT INTO t VALUES ('" + secret + "')\",<not logged>",
+		"pgaudit record": func() string {
+			b, _ := json.Marshal(map[string]any{"level": "info", "logger": "pgaudit", "msg": "record",
+				"record": map[string]any{"error_severity": "LOG", "audit": map[string]any{
+					"audit_type": "SESSION", "class": "WRITE", "command": "INSERT",
+					"statement": "INSERT INTO t VALUES ($1)", "parameter": secret,
+				}}})
+			return "2026-09-30T00:00:00.000000000Z " + string(b)
+		}(),
+		"pgaudit statement": func() string {
+			b, _ := json.Marshal(map[string]any{"level": "info", "logger": "pgaudit", "msg": "record",
+				"record": map[string]any{"audit": map[string]any{"statement": "SELECT '" + secret + "'", "parameter": "<not logged>"}}})
+			return "2026-09-30T00:00:00.000000000Z " + string(b)
+		}(),
 	} {
 		if out := cnpgReportLogLine(line, false); strings.Contains(out, secret) {
 			t.Errorf("%s: SQL kept with queryText off: %s", name, out)
@@ -279,6 +298,14 @@ func TestCNPGReportLogLineRedactsEverySQLFormat(t *testing.T) {
 	keep := record("checkpoint complete: wrote 3 buffers", "")
 	if out := cnpgReportLogLine(keep, false); !strings.Contains(out, "checkpoint complete: wrote 3 buffers") {
 		t.Errorf("a message without SQL was redacted: %s", out)
+	}
+	deadlock := record("deadlock detected", "Process 101 waits for ShareLock on transaction 7; blocked by process 102.\nProcess 101: UPDATE t")
+	if out := cnpgReportLogLine(deadlock, false); !strings.Contains(out, "blocked by process 102") || strings.Contains(out, "UPDATE t") {
+		t.Errorf("a deadlock keeps its wait graph and loses the statements: %s", out)
+	}
+	audit, _ := json.Marshal(map[string]any{"record": map[string]any{"audit": map[string]any{"class": "WRITE", "command": "INSERT", "statement": "INSERT INTO t VALUES (1)"}}})
+	if out := cnpgReportLogLine(string(audit), false); !strings.Contains(out, `"command":"INSERT"`) || strings.Contains(out, "VALUES") {
+		t.Errorf("a pgaudit record keeps its class and command and loses the statement: %s", out)
 	}
 }
 
@@ -601,7 +628,7 @@ func TestCNPGReportRedactsAllContainerKindsWithoutChangingSources(t *testing.T) 
 	}
 	obj := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"name": "pooler", "command": []any{"psql", "postgresql://app:template-secret@db/pg"}, "args": []any{"--port=5432"}}}}}}}}
 	template := obj.Object["spec"].(map[string]any)["template"].(map[string]any)
-	template["metadata"] = map[string]any{"annotations": map[string]any{"cnpg.io/podSpec": "template-secret", "kubectl.kubernetes.io/last-applied-configuration": "template-secret", "cnpg.io/instanceRole": "primary"}}
+	template["metadata"] = map[string]any{"annotations": map[string]any{"cnpg.io/podSpec": "template-secret", "cnpg.io/podPatch": `[{"op":"add","path":"/spec/containers/0/env/-","value":{"name":"TOKEN","value":"template-secret"}}]`, "kubectl.kubernetes.io/last-applied-configuration": "template-secret", "cnpg.io/instanceRole": "primary"}}
 	manifest, _ := json.Marshal(cnpgReportCleanObject(obj))
 	if strings.Contains(string(manifest), "template-secret") || !strings.Contains(string(manifest), "--port=5432") || !strings.Contains(string(manifest), "cnpg.io/instanceRole") {
 		t.Fatalf("template command redaction: %s", manifest)

@@ -27,11 +27,12 @@ type cnpgNamespaceBackupEvidence struct {
 	schedules []*unstructured.Unstructured
 	backups   []*unstructured.Unstructured
 	stores    []*unstructured.Unstructured
-	// schedulesKnown, backupsKnown, storesKnown: the kind is watched and its
-	// list was read, so an empty list means none rather than unread. A run is
-	// judged missed only from evidence that was read: without schedules
-	// nothing is evaluated, without Backups no cluster is, and without
-	// ObjectStores no cluster whose backups land in one is.
+	// schedulesKnown, backupsKnown, storesKnown: the kind is watched, synced
+	// in the namespace and its list was read, so an empty list means none
+	// rather than unread. A run is judged missed only from evidence that was
+	// read: without schedules nothing is evaluated, without Backups no
+	// cluster is, and without ObjectStores no cluster whose backups land in
+	// one is.
 	schedulesKnown bool
 	backupsKnown   bool
 	storesKnown    bool
@@ -67,19 +68,23 @@ func detectCNPGScheduledRunIssues(p Provider, clusterGVR schema.GroupVersionReso
 		if e, ok := evidence[ns]; ok {
 			return e
 		}
-		e := &cnpgNamespaceBackupEvidence{}
-		if items, err := p.ListDynamic(schedGVR, ns); err == nil {
-			e.schedules, e.schedulesKnown = items, true
-		}
-		if g, ok := gvrs[cnpgGroup+"/Backup"]; ok {
-			if items, err := p.ListDynamic(g, ns); err == nil {
-				e.backups, e.backupsKnown = items, true
+		// Synced is read before the list: the list may start the informer,
+		// and only one already synced makes an empty answer mean none.
+		read := func(g schema.GroupVersionResource) ([]*unstructured.Unstructured, bool) {
+			synced := true
+			if sp, ok := p.(dynamicSyncProvider); ok {
+				synced = sp.DynamicNamespaceSynced(g, ns)
 			}
+			items, err := p.ListDynamic(g, ns)
+			return items, err == nil && synced
+		}
+		e := &cnpgNamespaceBackupEvidence{}
+		e.schedules, e.schedulesKnown = read(schedGVR)
+		if g, ok := gvrs[cnpgGroup+"/Backup"]; ok {
+			e.backups, e.backupsKnown = read(g)
 		}
 		if g, ok := gvrs[cnpgBarmanGroup+"/ObjectStore"]; ok {
-			if items, err := p.ListDynamic(g, ns); err == nil {
-				e.stores, e.storesKnown = items, true
-			}
+			e.stores, e.storesKnown = read(g)
 		}
 		evidence[ns] = e
 		return e

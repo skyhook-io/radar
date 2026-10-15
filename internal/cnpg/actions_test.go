@@ -479,6 +479,30 @@ func TestCNPGActionUIDMismatchAndMissingFacts(t *testing.T) {
 	}
 }
 
+// The restart plan the dialog showed comes from the spec's primary update
+// strategy and method, so a spec change since review refuses the restart.
+func TestCNPGActionRestartBindsGeneration(t *testing.T) {
+	edited := cnpgActionCluster(func(o map[string]any) {
+		o["metadata"].(map[string]any)["generation"] = int64(2)
+		o["spec"].(map[string]any)["primaryUpdateMethod"] = "restart"
+	})
+	facts := cnpgActionFacts()
+	facts["generation"] = int64(1)
+	env := newCNPGActionEnv(t, []runtime.Object{edited})
+	_, err := RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "restart", cnpgActionReq(t, facts, nil))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeChanged || !strings.Contains(ae.Error(), "generation") {
+		t.Fatalf("err = %v, want 409 changed naming generation", err)
+	}
+	if len(env.patches) != 0 {
+		t.Error("a write went out after the spec changed")
+	}
+	delete(facts, "generation")
+	_, err = RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "restart", cnpgActionReq(t, facts, nil))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusBadRequest {
+		t.Fatalf("err = %v, want 400 without the reviewed generation", err)
+	}
+}
+
 func TestCNPGActionReviewedContext(t *testing.T) {
 	if err := integration.CheckReviewedContext("kind-a", "kind-a"); err != nil {
 		t.Errorf("matching context refused: %v", err)
@@ -602,6 +626,107 @@ func TestCNPGActionRestartInstance(t *testing.T) {
 			cnpgActionReq(t, cnpgActionFacts(), map[string]any{"pod": "pg-1", "podUID": "u1"}))
 		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeBlocked {
 			t.Fatalf("err = %v, want 409 blocked", err)
+		}
+	})
+}
+
+func TestCNPGActionPromotionGuards(t *testing.T) {
+	standby := func(pod string) CNPGInstanceFact {
+		return CNPGInstanceFact{Pod: pod, Role: "standby", PodReadable: true, PodExists: true, Ready: true}
+	}
+	healthy := CNPGClusterFacts{CurrentPrimary: "pg-1", TargetPrimary: "pg-1", Phase: cnpgPhaseHealthy}
+	switching := CNPGClusterFacts{CurrentPrimary: "pg-1", TargetPrimary: "pg-2", Phase: cnpgPhaseSwitchover}
+	failing := CNPGClusterFacts{CurrentPrimary: "pg-1", TargetPrimary: "pg-2", Phase: cnpgPhaseFailover}
+	requested := CNPGClusterFacts{CurrentPrimary: "pg-1", TargetPrimary: "pg-2", Phase: cnpgPhaseHealthy}
+	settling := CNPGClusterFacts{CurrentPrimary: "pg-2", TargetPrimary: "pg-2", Phase: cnpgPhaseSwitchover}
+	pending := CNPGClusterFacts{CurrentPrimary: "pg-1", TargetPrimary: "pending", Phase: cnpgPhaseFailover}
+	for _, tc := range []struct {
+		name           string
+		f              CNPGClusterFacts
+		pod            string
+		restartBlocked bool
+		fenceBlocked   bool
+	}{
+		{"standby of a healthy cluster", healthy, "pg-2", false, false},
+		{"switchover target", switching, "pg-2", true, true},
+		{"failover target", failing, "pg-2", true, true},
+		{"target before the phase is written", requested, "pg-2", true, true},
+		{"other standby during a switchover", switching, "pg-3", true, false},
+		{"other standby during a failover", failing, "pg-3", true, false},
+		{"standby while the switchover phase settles", settling, "pg-3", true, false},
+		{"promoted primary while the phase settles", settling, "pg-2", true, false},
+		{"standby while a failover is pending", pending, "pg-2", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := standby(tc.pod)
+			if tc.pod == tc.f.CurrentPrimary {
+				i.Role = "primary"
+			}
+			if got := cnpgGuardRestartInstance(tc.f, i) != ""; got != tc.restartBlocked {
+				t.Errorf("restart blocked = %v (%q), want %v", got, cnpgGuardRestartInstance(tc.f, i), tc.restartBlocked)
+			}
+			if got := cnpgGuardFenceInstance(tc.f, i) != ""; got != tc.fenceBlocked {
+				t.Errorf("fence blocked = %v (%q), want %v", got, cnpgGuardFenceInstance(tc.f, i), tc.fenceBlocked)
+			}
+		})
+	}
+}
+
+// The capabilities and the POST refuse the same promotion target.
+func TestCNPGActionPromotionTargetRefusedEndToEnd(t *testing.T) {
+	switching := func() *unstructured.Unstructured {
+		return cnpgActionCluster(func(o map[string]any) {
+			st := o["status"].(map[string]any)
+			st["targetPrimary"] = "pg-2"
+			st["phase"] = cnpgPhaseSwitchover
+		})
+	}
+	facts := func() map[string]any {
+		f := cnpgActionFacts()
+		f["targetPrimary"] = "pg-2"
+		return f
+	}
+	pods := []runtime.Object{cnpgActionPod("pg-1", "u1", true), cnpgActionPod("pg-2", "u2", true), cnpgActionPod("pg-3", "u3", true)}
+
+	env := newCNPGActionEnv(t, []runtime.Object{switching()}, pods...)
+	resp, err := newTestReader(nil).ClusterCapabilities(context.Background(), env.clients(), "kind-test", "db", "pg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ia := resp.InstanceActions["pg-2"]; ia.Restart.Allowed || ia.Fence.Allowed {
+		t.Errorf("pg-2 restart=%v fence=%v, want both refused for the switchover target", ia.Restart.Allowed, ia.Fence.Allowed)
+	}
+	if ia := resp.InstanceActions["pg-3"]; ia.Restart.Allowed || !ia.Fence.Allowed {
+		t.Errorf("pg-3 restart=%v (%q) fence=%v (%q), want restart refused and fence allowed", ia.Restart.Allowed, ia.Restart.Reason, ia.Fence.Allowed, ia.Fence.Reason)
+	}
+
+	t.Run("restart of the target", func(t *testing.T) {
+		env := newCNPGActionEnv(t, []runtime.Object{switching()}, pods...)
+		_, err := RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "restartInstance",
+			cnpgActionReq(t, facts(), map[string]any{"pod": "pg-2", "podUID": "u2"}))
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeBlocked {
+			t.Fatalf("err = %v, want 409 blocked", err)
+		}
+		if len(env.deletes) != 0 || len(env.patches) != 0 {
+			t.Error("a write went out")
+		}
+	})
+	t.Run("fence of the target", func(t *testing.T) {
+		env := newCNPGActionEnv(t, []runtime.Object{switching()}, pods...)
+		_, err := RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "fence",
+			cnpgActionReq(t, facts(), map[string]any{"instances": []string{"pg-3", "pg-2"}}))
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeBlocked {
+			t.Fatalf("err = %v, want 409 blocked", err)
+		}
+		if len(env.patches) != 0 {
+			t.Error("a write went out")
+		}
+	})
+	t.Run("fence of another standby", func(t *testing.T) {
+		env := newCNPGActionEnv(t, []runtime.Object{switching()}, pods...)
+		if _, err := RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "fence",
+			cnpgActionReq(t, facts(), map[string]any{"instances": []string{"pg-3"}})); err != nil {
+			t.Fatalf("fence: %v", err)
 		}
 	})
 }
@@ -735,6 +860,11 @@ func TestCNPGActionUnfenceWaitsForColdSnapshot(t *testing.T) {
 		{"finished cold snapshot", []runtime.Object{cnpgSnapshotBackup("cold", "completed", false)}, nil, false},
 		{"running online snapshot", []runtime.Object{cnpgSnapshotBackup("hot", "running", true)}, nil, false},
 		{"online by default", []runtime.Object{cnpgSnapshotBackup("hot", "running", nil)}, nil, false},
+		{"cold snapshot of a previous same-named cluster", []runtime.Object{func() *unstructured.Unstructured {
+			b := cnpgSnapshotBackup("old", "running", false)
+			b.Object["status"].(map[string]any)["pluginMetadata"] = map[string]any{"clusterUID": "a-previous-cluster"}
+			return b
+		}()}, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

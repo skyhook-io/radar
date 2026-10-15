@@ -152,7 +152,7 @@ type CNPGOperatorDiagnosis struct {
 	Events      CNPGOperatorEvents           `json:"events"`
 }
 
-// cnpgOperatorDiagnoses takes podsOf so the Pods each operator Deployment's
+// operatorDiagnoses takes podsOf so the Pods each operator Deployment's
 // component already read are not listed again.
 func (s *Reader) operatorDiagnoses(ctx context.Context, typed kubernetes.Interface, operators []*appsv1.Deployment, podsOf func(*appsv1.Deployment) cnpgDeploymentPodRead) []CNPGOperatorDiagnosis {
 	out := []CNPGOperatorDiagnosis{}
@@ -198,7 +198,7 @@ type cnpgDeploymentPodRead struct {
 	coverage integration.ReadSource
 }
 
-// cnpgDeploymentPods lists the Pods a Deployment's selector matches, as the
+// deploymentPods lists the Pods a Deployment's selector matches, as the
 // caller, sorted by name.
 func (s *Reader) deploymentPods(ctx context.Context, typed kubernetes.Interface, d *appsv1.Deployment) cnpgDeploymentPodRead {
 	if d.Spec.Selector == nil {

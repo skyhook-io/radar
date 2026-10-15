@@ -34,7 +34,20 @@ it('keeps the ordinary workspace destinations and CRD facts without new measurem
 it('enables new measurements only once the server advertises their contracts', () => {
   state.capabilities = { features: { cnpgWorkspace: true } }
   renderToStaticMarkup(<Host />)
-  expect(state.diskEnabled).toEqual([true, true])
-  expect(state.metricsEnabled).toEqual([true, true])
+  expect(state.diskEnabled).toEqual([true, false])
+  expect(state.metricsEnabled).toEqual([true, false])
   expect(state.result.fleet.rows[0].disk).toMatchObject({ text: 'Unavailable', tone: 'unknown', source: 'Disk usage could not be read: Live disk needs a newer Radar' })
+})
+it('the Resources sidebar reads disk and lag only on the CloudNativePG views', () => {
+  state.capabilities = { features: { cnpgWorkspace: true } }
+  const apiResources = [{ name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io', namespaced: true }] as any
+  function Sidebar({ active }: { active: boolean }) {
+    state.result = useCNPGSidebarWorkspace({ apiResources, namespaces: ['db'], active: active ? { screen: 'overview' } : undefined })
+    return null
+  }
+  renderToStaticMarkup(<Sidebar active={false} />)
+  expect(state.diskEnabled).toEqual([false])
+  renderToStaticMarkup(<Sidebar active />)
+  expect(state.diskEnabled).toEqual([false, true])
+  expect(state.metricsEnabled).toEqual([false, true])
 })

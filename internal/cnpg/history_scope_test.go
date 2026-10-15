@@ -60,3 +60,53 @@ func TestClusterHistoryPreservesPVCIsolationFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterHistoryMemoSkipsFailedReads(t *testing.T) {
+	cluster := cnpgActionCluster(func(o map[string]any) { o["metadata"].(map[string]any)["uid"] = "history-memo-uid" })
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: k8sfake.NewSimpleClientset(), ResourceTypes: map[string]bool{"pods": true, "persistentvolumeclaims": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	reader := newTestReader(nil)
+	reader.Access.MetricsRead = func(context.Context, string, string, string, string) bool { return true }
+	reader.Metrics.Connection = func(context.Context) (bool, error) { return true, nil }
+	reader.Metrics.CNPGScope = func(context.Context, string, string, []prom.WorkloadPodIdentity, time.Duration) (string, prometheuspkg.SeriesIsolation, error) {
+		return "", prometheuspkg.SeriesIsolation{}, nil
+	}
+	reader.Metrics.PVCScope = func(context.Context, string, []string, []prom.WorkloadPodIdentity, time.Duration) (string, prometheuspkg.SeriesIsolation, error) {
+		return "", prometheuspkg.SeriesIsolation{}, nil
+	}
+	calls := 0
+	var next []prometheuspkg.CNPGHistoryChart
+	reader.Metrics.History = func(context.Context, prometheuspkg.CNPGHistoryRequest) ([]prometheuspkg.CNPGHistoryChart, error) {
+		calls++
+		return next, nil
+	}
+	// A 10-minute step keeps the memo key stable for the whole test.
+	rng, _ := prometheuspkg.ParseCNPGHistoryRange("24h")
+	read := func(ctx context.Context) {
+		reader.ClusterHistory(ctx, &k8s.ResourceCache{ResourceCache: core}, cluster, rng)
+	}
+	ok := []prometheuspkg.CNPGHistoryChart{{ID: "lag", State: prometheuspkg.CNPGHistoryStateOK}}
+
+	next = []prometheuspkg.CNPGHistoryChart{ok[0], {ID: "sessions", State: prometheuspkg.CNPGHistoryStateError, Reason: "Prometheus query failed"}}
+	read(context.Background())
+	read(context.Background())
+	if calls != 2 {
+		t.Fatalf("calls = %d after a chart failed, want each request to query again", calls)
+	}
+
+	next = ok
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	read(cancelled)
+	read(context.Background())
+	if calls != 4 {
+		t.Fatalf("calls = %d after a cancelled read, want the next request to query again", calls)
+	}
+	read(context.Background())
+	if calls != 4 {
+		t.Fatalf("calls = %d, want a complete read served from the memo", calls)
+	}
+}

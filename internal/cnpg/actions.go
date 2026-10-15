@@ -596,6 +596,12 @@ func cnpgGuardRestartInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
 		}
 		return ""
 	}
+	if r := cnpgGuardPromotionTarget(f, i); r != "" {
+		return r
+	}
+	if f.switchoverInFlight() != "" || f.Phase == cnpgPhaseSwitchover || f.Phase == cnpgPhaseFailover {
+		return "A switchover or failover is in progress"
+	}
 	if i.PodReadable && !i.PodExists {
 		return "Its Pod does not exist"
 	}
@@ -626,6 +632,29 @@ func cnpgGuardFence(f CNPGClusterFacts) string {
 		return "Every instance is fenced already"
 	}
 	return ""
+}
+
+// cnpgGuardPromotionTarget refuses disrupting the standby a switchover or
+// failover is promoting: stopping it mid-promotion can leave no primary.
+func cnpgGuardPromotionTarget(f CNPGClusterFacts, i CNPGInstanceFact) string {
+	if i.Pod != f.TargetPrimary || i.Pod == f.CurrentPrimary {
+		return ""
+	}
+	if f.switchoverInFlight() != "" || f.Phase == cnpgPhaseSwitchover || f.Phase == cnpgPhaseFailover {
+		return "It is the target of a switchover or failover in progress"
+	}
+	return ""
+}
+
+// cnpgGuardFenceInstance is cnpgGuardFence for fencing one named instance.
+func cnpgGuardFenceInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
+	if r := cnpgGuardFence(f); r != "" {
+		return r
+	}
+	if i.Fenced {
+		return "It is fenced already"
+	}
+	return cnpgGuardPromotionTarget(f, i)
 }
 
 func cnpgGuardUnfence(f CNPGClusterFacts) string {
@@ -663,7 +692,7 @@ func cnpgRunningColdSnapshot(ctx context.Context, dyn dynamic.Interface, cluster
 	}
 	for i := range list.Items {
 		b := &list.Items[i]
-		if name, _, _ := unstructured.NestedString(b.Object, "spec", "cluster", "name"); name != cluster.GetName() {
+		if !cnpg.BackupMatchesCluster(b, cluster) {
 			continue
 		}
 		method, _, _ := unstructured.NestedString(b.Object, "status", "method")
@@ -719,8 +748,7 @@ var (
 	cnpgGrantDeletePods     = auth.Grant{Verb: "delete", Resource: "pods"}
 	grantGetPods            = auth.Grant{Verb: "get", Resource: "pods"}
 	cnpgGrantPatchSchedules = auth.Grant{Verb: "patch", Group: Group, Resource: "scheduledbackups"}
-	cnpgClusterActionGrants = map[string]auth.Grant{"backup": cnpgGrantCreateBackups, "switchover": cnpgGrantPatchStatus, "restart": GrantPatchClusters, "reload": GrantPatchClusters, "fence": GrantPatchClusters, "unfence": GrantPatchClusters, "hibernate": GrantPatchClusters, "rehydrate": GrantPatchClusters}
-	scheduleActionGrants    = map[string]auth.Grant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups, "setSchedule": cnpgGrantPatchSchedules, "repairMethod": cnpgGrantPatchSchedules}
+	scheduleActions         = map[string]bool{"suspend": true, "resume": true, "run": true, "setSchedule": true, "repairMethod": true}
 	clusterActionsOrdered   = []string{"backup", "switchover", "restart", "restartInstance", "reload", "fence", "unfence", "hibernate", "rehydrate", "cancelBackend", "terminateBackend", "destroyInstance"}
 )
 
@@ -773,10 +801,6 @@ func (s *Reader) ClusterCapabilities(callerCtx context.Context, c ActionClients,
 		if tg := cnpgGuardSwitchoverTarget(facts, inst); tg != "" {
 			switchGuard = tg
 		}
-		fenceGuard := cnpgGuardFence(facts)
-		if fenceGuard == "" && inst.Fenced {
-			fenceGuard = "It is fenced already"
-		}
 		unfenceGuard := cnpgGuardUnfence(facts)
 		if unfenceGuard == "" {
 			switch {
@@ -798,7 +822,7 @@ func (s *Reader) ClusterCapabilities(callerCtx context.Context, c ActionClients,
 		instanceActions[inst.Pod] = CNPGInstanceActions{
 			Restart:          restart,
 			SwitchoverTarget: one(switchGuard, cnpgGrantPatchStatus, grantGetPods),
-			Fence:            one(fenceGuard, GrantPatchClusters),
+			Fence:            one(cnpgGuardFenceInstance(facts, inst), GrantPatchClusters),
 			Unfence:          one(unfenceGuard, GrantPatchClusters),
 			Psql:             one(cnpgGuardPsql(facts, inst), grantCreateExec),
 			Destroy:          destroy,
@@ -856,7 +880,7 @@ func cnpgApplyOperatorGuard(resp *CNPGClusterCapabilitiesResponse) {
 	}
 }
 
-// ifNoGuard returns guard when set, fallback otherwise.
+// cnpgIfNoGuard returns guard when set, fallback otherwise.
 func cnpgIfNoGuard(guard, fallback string) string {
 	if guard != "" {
 		return guard
@@ -1114,7 +1138,7 @@ type cnpgClusterRunner struct {
 var clusterActionRunners = map[string]cnpgClusterRunner{
 	"backup":           {binds: []string{"hibernation", "generation"}, run: cnpgRunBackup},
 	"switchover":       {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunSwitchover},
-	"restart":          {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances"}, run: cnpgRunRestart},
+	"restart":          {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances", "generation"}, run: cnpgRunRestart},
 	"restartInstance":  {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunRestartInstance},
 	"reload":           {binds: []string{"hibernation"}, run: cnpgRunReload},
 	"fence":            {binds: []string{"currentPrimary", "hibernation", "fencedInstances"}, run: cnpgRunFence},
@@ -1628,11 +1652,15 @@ func cnpgRunFence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, er
 		next[n] = true
 	}
 	for _, n := range names {
-		if _, ok := x.facts.instance(n); !ok {
+		inst, ok := x.facts.instance(n)
+		if !ok {
 			return nil, integration.RefuseAction(http.StatusBadRequest, "", "%s is not an instance of this cluster", n)
 		}
 		if next[n] {
 			return nil, integration.BlockedAction(n + " is fenced already")
+		}
+		if r := cnpgGuardPromotionTarget(x.facts, inst); r != "" {
+			return nil, integration.BlockedAction(n + " cannot be fenced: " + r)
 		}
 		next[n] = true
 	}
@@ -1892,22 +1920,6 @@ func cnpgBackupSpecFromSchedule(sched *unstructured.Unstructured) map[string]any
 	return spec
 }
 
-func GrantFor(action string) (auth.Grant, bool) {
-	if action == "configureArchiving" {
-		return GrantPatchClusters, true
-	}
-	if g, ok := cnpgClusterActionGrants[action]; ok {
-		return g, true
-	}
-	if g, ok := scheduleActionGrants[action]; ok {
-		return g, true
-	}
-	if g, ok := cnpgExtraActionGrants[action]; ok {
-		return g, true
-	}
-	return auth.Grant{}, false
-}
-
 func IsClusterAction(action string) bool {
 	_, ok := clusterActionRunners[action]
 	return ok || action == "configureArchiving"
@@ -1917,4 +1929,4 @@ func ClusterActions() []string {
 	return append(append([]string(nil), clusterActionsOrdered...), "configureArchiving")
 }
 
-func IsScheduleAction(action string) bool { _, ok := scheduleActionGrants[action]; return ok }
+func IsScheduleAction(action string) bool { return scheduleActions[action] }

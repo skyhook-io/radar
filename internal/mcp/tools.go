@@ -31,6 +31,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/internal/summarycontext"
@@ -3225,26 +3226,6 @@ func splitCSVStr(v string) []string {
 	return out
 }
 
-func intersectAllowedNamespaces(allowed, requested []string) []string {
-	if allowed == nil {
-		return requested
-	}
-	if len(requested) == 0 {
-		return allowed
-	}
-	set := make(map[string]struct{}, len(allowed))
-	for _, ns := range allowed {
-		set[ns] = struct{}{}
-	}
-	out := make([]string, 0, len(requested))
-	for _, ns := range requested {
-		if _, ok := set[ns]; ok {
-			out = append(out, ns)
-		}
-	}
-	return out
-}
-
 // mcpSensitiveSearchKinds is the MCP mirror of the REST sensitiveSearchKinds —
 // cluster-scoped kinds that need their own list-SAR per user. Secrets are
 // namespaced and handled by mcpSearchSecretsRBAC instead, which supports
@@ -3349,7 +3330,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	if allowed != nil && len(allowed) == 0 {
 		return toJSONResult(search.Result{Hits: []search.Hit{}})
 	}
-	scanNamespaces := intersectAllowedNamespaces(allowed, parsed.NSFilter)
+	scanNamespaces := readscope.SelectNamespaces(allowed, parsed.NSFilter)
 	if allowed != nil && len(scanNamespaces) == 0 {
 		return toJSONResult(search.Result{Hits: []search.Hit{}})
 	}

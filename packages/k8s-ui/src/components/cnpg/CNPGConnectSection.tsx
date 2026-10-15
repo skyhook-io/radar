@@ -7,17 +7,16 @@ import { CNPG_DEFAULT_PORT, cnpgEndpointAvailability, cnpgConnectionURI, cnpgCon
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { FactGrid, FactRow } from '../facts'
 import { SectionHeading } from '../ui/FoldSection'
+import { copyText } from '../../utils/clipboard'
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)
   const copy = () => {
-    navigator.clipboard?.writeText(text).then(
-      () => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-      },
-      () => {},
-    )
+    void copyText(text).then((ok) => {
+      if (!ok) return
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
   }
   return (
     <Tooltip content={copied ? 'Copied' : `Copy ${label}`} position="top">

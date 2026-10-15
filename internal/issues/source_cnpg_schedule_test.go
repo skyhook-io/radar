@@ -236,6 +236,48 @@ func TestCNPGScheduledRunNeedsReadableBackups(t *testing.T) {
 	}
 }
 
+var _ dynamicSyncProvider = (*CacheProvider)(nil)
+
+type cnpgSyncProvider struct {
+	*fakeProvider
+	unsynced map[schema.GroupVersionResource]bool
+}
+
+func (p *cnpgSyncProvider) DynamicNamespaceSynced(gvr schema.GroupVersionResource, _ string) bool {
+	return !p.unsynced[gvr]
+}
+
+// An informer that has not synced lists empty with no error; that is not
+// evidence that no backup succeeded.
+func TestCNPGScheduledRunNeedsSyncedEvidence(t *testing.T) {
+	plain := cnpgCluster(nil, nil)
+	plugin := cnpgCluster(map[string]any{"plugins": []any{map[string]any{
+		"name": "barman-cloud.cloudnative-pg.io", "parameters": map[string]any{"barmanObjectName": "store", "serverName": "main-v2"},
+	}}}, nil)
+	for _, tc := range []struct {
+		name     string
+		cluster  *unstructured.Unstructured
+		unsynced schema.GroupVersionResource
+		want     int
+	}{
+		{"all synced", plain, schema.GroupVersionResource{}, 1},
+		{"backups unsynced", plain, cnpgBackupGVR, 0},
+		{"schedules unsynced", plain, cnpgScheduledBackupGVR, 0},
+		{"plugin cluster, all synced", plugin, schema.GroupVersionResource{}, 1},
+		{"object stores unsynced", plugin, cnpgObjectStoreGVR, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &cnpgSyncProvider{
+				fakeProvider: cnpgScheduleProvider([]*unstructured.Unstructured{tc.cluster}, []*unstructured.Unstructured{cnpgHourly(false)}, nil, nil),
+				unsynced:     map[schema.GroupVersionResource]bool{tc.unsynced: true},
+			}
+			if got := detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{tc.cluster}, cnpgScheduleNow); len(got) != tc.want {
+				t.Errorf("issues = %v, want %d", reasonsOf(got), tc.want)
+			}
+		})
+	}
+}
+
 // The Compose path attributes the finding to the Cluster, next to its own
 // condition-derived issues.
 func TestCNPGScheduledRunThroughCompose(t *testing.T) {

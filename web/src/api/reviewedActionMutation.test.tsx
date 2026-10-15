@@ -14,6 +14,7 @@ describe('reviewed action lifetime', () => {
   it.each([
     new TypeError('Connection lost'),
     new ApiError('One write completed', 409, { code: 'partial', completed: ['Pod removed'] }),
+    new ApiError('upstream connect error or disconnect/reset before headers', 503),
   ])('retains an ambiguous result through remount and prevents another request: %s', async (failure) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
     const host = document.body.appendChild(document.createElement('div'))
@@ -91,6 +92,7 @@ describe('reviewed action lifetime', () => {
   })
   it.each([
     new ApiError('Facts changed', 409, { code: 'changed' }),
+    new ApiError('The operator webhook did not answer', 503, { code: 'operator_webhook_unavailable' }),
     new RadarFeatureUnsupportedError('cnpgWorkspace', {}),
   ])('keeps a known refusal retryable after remount: %s', async (failure) => {
     const client = new QueryClient()

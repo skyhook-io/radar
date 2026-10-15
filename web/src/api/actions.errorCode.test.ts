@@ -12,8 +12,15 @@ describe('cnpgActionErrorCode', () => {
     expect(cnpgActionErrorCode(new ApiError('timeout', 504))).toBe('outcome_unknown')
     expect(cnpgActionErrorCode(new ApiError('internal', 500))).toBe('outcome_unknown')
   })
+  it('treats an uncoded 503 as unknown: a proxy may have forwarded the write before the upstream reset', () => {
+    const reset = new ApiError('upstream connect error or disconnect/reset before headers', 503)
+    expect(cnpgActionErrorCode(reset)).toBe('outcome_unknown')
+    expect(actionOutcomeLocked(reset)).toBe(true)
+  })
   it('treats refusals before any write as known failures', () => {
-    expect(cnpgActionErrorCode(new ApiError('not connected', 503))).toBeUndefined()
+    expect(cnpgActionErrorCode(new ApiError('webhook down', 503, { code: 'operator_webhook_unavailable' }))).toBe('operator_webhook_unavailable')
+    expect(actionOutcomeLocked(new ApiError('webhook down', 503, { code: 'operator_webhook_unavailable' }))).toBe(false)
+    expect(actionOutcomeLocked(new ApiError('Not connected to cluster', 503, { error: 'Not connected to cluster', code: 'unavailable' }))).toBe(false)
     expect(cnpgActionErrorCode(new ApiError('forbidden', 403))).toBeUndefined()
     expect(cnpgActionErrorCode(null)).toBeUndefined()
   })

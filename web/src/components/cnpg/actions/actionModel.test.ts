@@ -80,6 +80,18 @@ describe('switchover concerns', () => {
     // Without the primary's replication rows, connection is not judged.
     expect(switchoverConcerns({ state: 'partial', timeline: 7, replication: null }, { pod: 'pg-1', status: { state: 'ok', timeline: 7 } })).toEqual([])
   })
+  it('trusts a standby streaming from the primary over the timeline of its last checkpoint', () => {
+    // After a switchover the old primary rejoins and streams, but reports the
+    // previous timeline until its next restartpoint.
+    const promoted = { state: 'ok', timeline: 2, replication: [{ applicationName: 'pg-1', state: 'streaming' }] }
+    expect(switchoverConcerns(promoted, { pod: 'pg-1', status: { state: 'ok', timeline: 1, roleDetail: 'streaming' } })).toEqual([])
+    expect(pickDefaultStandby([{ pod: 'pg-1', podUID: '1', concerns: switchoverConcerns(promoted, { pod: 'pg-1', status: { state: 'ok', timeline: 1 } }) }])?.pod).toBe('pg-1')
+  })
+  it('keeps the timeline concern for a standby that is not streaming', () => {
+    const catchingUp = { state: 'ok', timeline: 2, replication: [{ applicationName: 'pg-1', state: 'catchup' }] }
+    expect(switchoverConcerns(catchingUp, { pod: 'pg-1', status: { state: 'ok', timeline: 1 } })).toEqual([{ code: 'timeline_mismatch', text: 'timeline 1, primary on 2' }])
+    expect(switchoverConcerns({ state: 'ok', timeline: 2, replication: [] }, { pod: 'pg-1', status: { state: 'ok', timeline: 1 } }).map((c) => c.code)).toEqual(['not_receiving', 'timeline_mismatch'])
+  })
   it('never picks a standby with concerns by default while a clean one exists', () => {
     expect(
       pickDefaultStandby([

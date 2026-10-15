@@ -48,11 +48,11 @@ const (
 
 var grantCreateExec = auth.Grant{Verb: "create", Resource: "pods", Subresource: "exec"}
 
-// cnpgExecSlots bounds concurrent execs across all callers: each one holds a
+// execSlots bounds concurrent execs across all callers: each one holds a
 // streaming connection to a kubelet.
 var execSlots = make(chan struct{}, cnpgExecConcurrency)
 
-// cnpgExecFunc runs argv in a container with stdin and returns stdout. The
+// ExecFunc runs argv in a container with stdin and returns stdout. The
 // error carries the command's stderr.
 type ExecFunc func(ctx context.Context, namespace, pod, container string, argv []string, stdin string) ([]byte, error)
 

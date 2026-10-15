@@ -43,7 +43,7 @@ var (
 	GrantGetCluster     = auth.Grant{Verb: "get", Group: Group, Resource: "clusters"}
 )
 
-// cnpgGatedRead runs read when the caller holds g in namespace. The SAR comes
+// gatedRead runs read when the caller holds g in namespace. The SAR comes
 // first so a denial names the grant; the read itself is made with the caller's
 // client, so the apiserver has the final say either way.
 func (s *Reader) gatedRead(ctx context.Context, g auth.Grant, namespace string, read func() error) integration.ReadSource {
@@ -134,7 +134,10 @@ type CNPGRecoveryPod struct {
 }
 
 type CNPGRecoveryJob struct {
-	Name        string `json:"name"`
+	Name string `json:"name"`
+	// Role is the operator's cnpg.io/jobRole label (full-recovery,
+	// snapshot-recovery, join, major-upgrade, …).
+	Role        string `json:"role,omitempty"`
 	Active      int32  `json:"active"`
 	Succeeded   int32  `json:"succeeded"`
 	Failed      int32  `json:"failed"`
@@ -348,7 +351,7 @@ func cnpgRecoverySpecOf(cluster *unstructured.Unstructured) *CNPGRecoverySpec {
 }
 
 func cnpgRecoveryJobOf(j *batchv1.Job) CNPGRecoveryJob {
-	out := CNPGRecoveryJob{Name: j.Name, Active: j.Status.Active, Succeeded: j.Status.Succeeded, Failed: j.Status.Failed}
+	out := CNPGRecoveryJob{Name: j.Name, Role: j.Labels[jobRoleLabel], Active: j.Status.Active, Succeeded: j.Status.Succeeded, Failed: j.Status.Failed}
 	if j.Status.StartTime != nil {
 		out.StartedAt = j.Status.StartTime.UTC().Format(time.RFC3339)
 	}
