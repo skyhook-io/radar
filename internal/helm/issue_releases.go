@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"time"
 
@@ -14,11 +13,8 @@ import (
 
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/release"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/metadata"
 )
@@ -45,20 +41,20 @@ var secretsResource = schema.GroupVersionResource{Version: "v1", Resource: "secr
 //
 // Helm labels every release Secret with the release name, revision and
 // status. Those labels are read first, without the encoded releases, and only
-// releases whose newest revision is failed or pending are read in full, along
-// with any release sharing their name in the same read so revisions are
-// grouped exactly as a full read groups them. Every other release is left
-// out: it cannot raise an issue.
+// releases whose newest revision is failed or pending are read, along with any
+// release sharing their name in the same read so revisions are grouped exactly
+// as a full read groups them. Every other release is left out: it cannot raise
+// an issue.
 func (c *Client) ListIssueReleasesAcrossNamespaces(ctx context.Context, namespaces []string, username string, groups []string) ([]HelmRelease, error) {
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil
 	}
 	contextName := k8s.GetContextName()
-	client, labelsClient, err := c.issueStorageClients(username, groups)
+	client, labelsClient, err := c.releaseStorageClients(username, groups)
 	if err != nil {
 		return nil, err
 	}
-	return listIssueReleasesWithClients(ctx, client, labelsClient, contextName, namespaces)
+	return c.listIssueReleasesWithClients(ctx, client, labelsClient, contextName, namespaces)
 }
 
 // IssueReadDenied reports whether a failed ListIssueReleasesAcrossNamespaces
@@ -79,22 +75,33 @@ func IssueReadUnchecked(ctx context.Context, err error) bool {
 
 // Only a 403 skips a namespace here. A 401 in one namespace fails the whole
 // read, so IssueReadUnchecked sees it even when another namespace succeeded.
-func listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, contextName string, namespaces []string) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, false, isReleaseReadForbidden, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
-		snapshot, skipped, err := helmIssueStorageSnapshot(ctx, client, labelsClient, namespace)
+func (c *Client) listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, contextName string, namespaces []string) ([]HelmRelease, error) {
+	return listReleaseRows(ctx, contextName, namespaces, false, isReleaseReadForbidden, c.issueReleaseReader(client, labelsClient, contextName))
+}
+
+// issueReleaseReader reads release storage for issue detection: only the
+// releases that can raise an issue, without resource health.
+func (c *Client) issueReleaseReader(client kubernetes.Interface, labelsClient metadata.Interface, contextName string) func(context.Context, string) (*helmReleaseStorageSnapshot, error) {
+	return func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+		stored, err := c.listReleaseLabels(ctx, labelsClient, namespace)
+		if err != nil {
+			return nil, err
+		}
+		names, skipped := issueReleaseNames(stored)
+		snapshot, err := c.summarizedSnapshot(ctx, client, namespace, stored, names, false)
 		if err != nil {
 			return nil, err
 		}
 		forgetUninstallStarts(contextName, skipped)
 		return snapshot, nil
-	})
+	}
 }
 
-// issueStorageClients builds the label and Secret clients from one config,
+// releaseStorageClients builds the label and Secret clients from one config,
 // so a context switch between the two lists can't send them to different
 // clusters. Like storageClient, it uses c's own rest.Config when it has one,
 // else Radar's current cluster.
-func (c *Client) issueStorageClients(username string, groups []string) (kubernetes.Interface, metadata.Interface, error) {
+func (c *Client) releaseStorageClients(username string, groups []string) (kubernetes.Interface, metadata.Interface, error) {
 	c.mu.RLock()
 	restConfig := c.restConfig
 	c.mu.RUnlock()
@@ -127,24 +134,19 @@ type storedRelease struct {
 	status    string
 }
 
-// helmIssueStorageSnapshot is helmReleaseStorageSnapshotWithClient limited to
-// the releases that can raise an issue. It also returns the releases it
-// skipped. When any release Secret lacks Helm's labels it falls back to the
-// full read.
-func helmIssueStorageSnapshot(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, namespace string) (*helmReleaseStorageSnapshot, []storedRelease, error) {
-	list, err := labelsClient.Resource(secretsResource).Namespace(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "owner=helm",
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to inspect release storage namespaces: %w", err)
-	}
+// issueReleaseNames returns the names of the releases in stored that can
+// raise an issue: those whose newest revision is failed or pending. Reading
+// every revision of each, in every storage namespace of the read, groups
+// revisions exactly as a full read groups them. It also returns the releases
+// it leaves out. It returns nil names, for a read of every release, when a
+// release Secret lacks Helm's labels.
+func issueReleaseNames(stored []metav1.PartialObjectMetadata) (map[string]bool, []storedRelease) {
 	newest := make(map[string]storedRelease)
-	for _, item := range list.Items {
+	for _, item := range stored {
 		name, status := item.Labels["name"], item.Labels["status"]
 		revision, err := strconv.Atoi(item.Labels["version"])
 		if name == "" || status == "" || err != nil {
-			snapshot, err := helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
-			return snapshot, nil, err
+			return nil, nil
 		}
 		// Helm keys a release's history by storage namespace and name. A
 		// full read keys it by the release's own namespace instead, which
@@ -156,47 +158,19 @@ func helmIssueStorageSnapshot(ctx context.Context, client kubernetes.Interface, 
 		}
 	}
 
-	read := make(map[string]bool)
+	names := make(map[string]bool)
 	for _, rel := range newest {
 		if issueStatuses[rel.status] {
-			read[rel.name] = true
+			names[rel.name] = true
 		}
 	}
 	var skipped []storedRelease
 	for _, rel := range newest {
-		if !read[rel.name] {
+		if !names[rel.name] {
 			skipped = append(skipped, rel)
 		}
 	}
-
-	names := make([]string, 0, len(read))
-	for name := range read {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	var secrets []corev1.Secret
-	for chunk := range slices.Chunk(names, issueReleaseNamesPerList) {
-		named, err := labels.NewRequirement("name", selection.In, chunk)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to select release Secrets: %w", err)
-		}
-		owned, err := labels.NewRequirement("owner", selection.Equals, []string{"helm"})
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to select release Secrets: %w", err)
-		}
-		page, err := client.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: labels.NewSelector().Add(*owned, *named).String(),
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to inspect release storage namespaces: %w", err)
-		}
-		secrets = append(secrets, page.Items...)
-	}
-	snapshot, err := helmReleaseStorageSnapshotFromSecrets(ctx, secrets)
-	if err != nil {
-		return nil, nil, err
-	}
-	return snapshot, skipped, nil
+	return names, skipped
 }
 
 // forgetUninstallStarts does for skipped releases what analyzeReleaseHistory

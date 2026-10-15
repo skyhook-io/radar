@@ -13,6 +13,12 @@ The Helm list shows:
 - `lastOperation` for current failed upgrades, rollback-after-failure patterns, explicit rollbacks, and stuck pending operations (including uninstalls).
 - A capped operation trail for failed upgrades, rollbacks, rollback-after-failure, and stuck pending operations (including uninstalls).
 
+### Where the list comes from
+
+The list, the dashboard, the MCP Helm tools and Issues build their rows from a small summary of each release revision: name, namespace, revision, status, description, update and uninstall times, chart name, chart version and app version. For revisions that are not superseded it also holds the resources the manifest declares, for resource health. Radar keeps each summary in memory for as long as the revision's Secret is unchanged, so it decodes each revision once instead of on every read.
+
+Each read first lists, as the caller, only the labels and versions of the release Secrets they may list, so the API server decides access every time. Radar then reads, as the caller, the revisions it has no summary for at that version: one at a time when there are a few, as after a Helm upgrade, otherwise 50 at a time. The first read after Radar starts summarizes every revision, a few milliseconds each. A release too large to summarize (over 16 MiB uncompressed, or a summary over 64 KiB) is read in full on every read, as is a release's newest revision when it is superseded and the read needs its resources. Release detail, history, values, manifest, diffs and the upgrade check still read releases in full.
+
 When `storageNamespace` is present, use it for Helm detail/API/MCP calls. Helm stores release history there even when the chart deploys resources into another namespace. Rollback, upgrade, values preview/apply, and uninstall use the release’s recorded target namespace for objects without an explicit `metadata.namespace`, while history stays in the storage namespace. Objects with an explicit namespace retain it.
 
 ## Release Detail
@@ -54,7 +60,7 @@ Helm rewrites `Info.Deleted` at the start of every uninstall attempt, before the
 
 The issue suggests checking pre-delete hook Jobs and surviving resources with finalizers before retrying the uninstall (Helm re-runs an uninstall stuck in this state). When a hook is the blocker, `helm uninstall --no-hooks` completes the uninstall, but Helm does not remove the Jobs and Pods the hook created, and resources held by finalizers stay Terminating. Radar no longer ties either to the release afterwards, so the issue tells the operator to delete the hook's leftovers and check for Terminating resources. These are investigation steps, not verified blocker diagnoses.
 
-To find them, Radar first lists only the labels of the Helm release Secrets the caller can read. Helm labels each one with the release name, revision and status. Radar then reads in full only the releases whose newest revision is failed or pending, plus any release with the same name in the same read. If any release Secret lacks those labels, Radar reads them all in full, as before. Releases stored with Helm's ConfigMap or SQL drivers are not read for issues. `/api/issues` waits for this read, and the read stops as soon as the caller disconnects.
+To find them, Radar first lists only the labels of the Helm release Secrets the caller can read. Helm labels each one with the release name, revision and status. Radar then reads only the releases whose newest revision is failed or pending, plus any release with the same name in the same read, from their summaries where it has them (see [Where the list comes from](#where-the-list-comes-from)). If any release Secret lacks those labels, Radar reads them all. Releases stored with Helm's ConfigMap or SQL drivers are not read for issues. `/api/issues` waits for this read, and the read stops as soon as the caller disconnects.
 
 When that read fails, for example because the API server returns an error or Radar's 60-second request limit runs out, `/api/issues` still answers, with `"unchecked_sources": [{"source": "helm", "reason": "read_failed"}]`: failed or stuck Helm releases may be missing from the response. The MCP `issues` tool returns the same field. A caller that may not list release Secrets gets no Helm issues and no `helm` entry, the same as for any other kind it can't list.
 
