@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -37,27 +39,6 @@ func logAPIServer(t *testing.T, status int, contentType, body string) *kubernete
 		t.Fatal(err)
 	}
 	return client
-}
-
-// Asking for an earlier run of a container that never restarted is an ordinary
-// fact about the pod. It arrives as a 400 from the apiserver, and surfacing it
-// as a 500 told the reader Radar had broken.
-func TestIsNoPreviousContainer(t *testing.T) {
-	client := logAPIServer(t, http.StatusBadRequest, "application/json",
-		`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"previous terminated container \"app\" in pod \"api-0\" not found","reason":"BadRequest","code":400}`)
-	_, err := k8score.GetContainerLogs(context.Background(), client, "default", "api-0", "app", k8score.LogOptions{Previous: true})
-	if !isNoPreviousContainer(err) {
-		t.Errorf("the apiserver's no-earlier-run answer should be recognised, got %v", err)
-	}
-	if isNoPreviousContainer(errors.New(`previous terminated container "app" in pod "api-0" not found`)) {
-		t.Error("only the apiserver's 400 answer should be recognised, not any error with the same words")
-	}
-	if isNoPreviousContainer(errors.New("connection refused")) {
-		t.Error("an unrelated failure must not be reported as a missing earlier run")
-	}
-	if isNoPreviousContainer(nil) {
-		t.Error("no error is not a missing earlier run")
-	}
 }
 
 // The CNPG live view emits a stream's last line even when it arrives with the
@@ -222,5 +203,117 @@ func TestPodLogs_LogsUnavailableCarriesCode(t *testing.T) {
 	status, body := getPodLogsError(t, "/api/pods/default/nginx-abc-xyz/logs?container=nginx")
 	if status != http.StatusNotFound || body["error_code"] != "logs_unavailable" || body["error"] != k8score.ErrLogsUnavailable.Error() {
 		t.Fatalf("got %d %v", status, body)
+	}
+}
+
+const waitingAnswer = `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"container \"postgres\" in pod \"pulling\" is waiting to start: trying and failing to pull image","reason":"BadRequest","code":400}`
+
+func waitingPod(name string) *corev1.Pod {
+	pod := cnpgPod("notstarted", name, "x")
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.ContainerStatuses[0] = corev1.ContainerStatus{
+		Name:  "postgres",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: `Back-off pulling image "pg:nope"`}},
+	}
+	return pod
+}
+
+// A container that has not started (an image that cannot be pulled, a missing
+// ConfigMap, ContainerCreating) is a fact about the pod. It reached the viewer
+// as a 500, which told the reader Radar had broken.
+func TestPodLogs_ContainerNotStartedIsAnAnswer(t *testing.T) {
+	seedCNPGPods(t, waitingPod("pulling"))
+	client := logAPIServer(t, http.StatusBadRequest, "application/json", waitingAnswer)
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+
+	status, body := getPodLogsError(t, "/api/pods/notstarted/pulling/logs?container=postgres")
+	want := `This container has not started yet, so it has no logs. Kubernetes reports ImagePullBackOff: Back-off pulling image "pg:nope".`
+	if status != http.StatusNotFound || body["error_code"] != "container_not_started" || body["error"] != want {
+		t.Fatalf("got %d %v, want 404 container_not_started %q", status, body, want)
+	}
+}
+
+// The live view of a pending pod used to end on a red error. It now waits for
+// the container, says why once, clears that when the container starts, and
+// then streams its lines.
+func TestPodLogsStream_WaitsForContainerToStart(t *testing.T) {
+	pod := waitingPod("pulling")
+	seedCNPGPods(t, pod)
+	prevInterval := containerStartPollInterval
+	containerStartPollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { containerStartPollInterval = prevInterval })
+
+	var started atomic.Bool
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if !started.Load() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(waitingAnswer))
+			return
+		}
+		_, _ = w.Write([]byte("2026-10-14T10:00:00Z database system is ready\n"))
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+
+	// The container starts after a while: the pod cache sees it running.
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		if n := requests.Load(); n != 1 {
+			t.Errorf("apiserver asked %d times while the cache showed the container waiting, want once", n)
+		}
+		started.Store(true)
+		running := pod.DeepCopy()
+		running.Status.Phase = corev1.PodRunning
+		running.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+		if _, err := testFakeClient.CoreV1().Pods(running.Namespace).UpdateStatus(context.Background(), running, metav1.UpdateOptions{}); err != nil {
+			t.Errorf("update pod status: %v", err)
+		}
+	}()
+
+	stream := readSSEFor(t, "/api/pods/notstarted/pulling/logs/stream?container=postgres", 3*time.Second)
+	if strings.Contains(stream, "event: error") {
+		t.Fatalf("a container that has not started must not end the stream with an error:\n%s", stream)
+	}
+	if n := strings.Count(stream, `"notice_code":"container_not_started"`); n != 1 {
+		t.Fatalf("waiting notice sent %d times, want once:\n%s", n, stream)
+	}
+	if !strings.Contains(stream, "ImagePullBackOff") || !strings.Contains(stream, "Logs will show here once it starts.") {
+		t.Fatalf("the notice must say why and what happens next:\n%s", stream)
+	}
+	cleared := strings.Index(stream, `{"notice":""}`)
+	line := strings.Index(stream, "database system is ready")
+	if cleared < 0 || line < 0 || cleared > line {
+		t.Fatalf("the notice must be cleared before the first line:\n%s", stream)
+	}
+}
+
+// A container can wait minutes for an image. The notice is sent once, so the
+// stream must still write something periodically or an idle-timeout proxy
+// closes it before the first line arrives.
+func TestPodLogsStream_WaitingStreamSendsKeepalives(t *testing.T) {
+	seedCNPGPods(t, waitingPod("pulling"))
+	prevInterval, prevKeepalive := containerStartPollInterval, waitingKeepaliveInterval
+	containerStartPollInterval, waitingKeepaliveInterval = 20*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { containerStartPollInterval, waitingKeepaliveInterval = prevInterval, prevKeepalive })
+
+	client := logAPIServer(t, http.StatusBadRequest, "application/json", waitingAnswer)
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+
+	stream := readSSEFor(t, "/api/pods/notstarted/pulling/logs/stream?container=postgres", 400*time.Millisecond)
+	if n := strings.Count(stream, ": waiting\n"); n < 2 {
+		t.Fatalf("got %d keepalive comments in 400ms, want at least 2:\n%s", n, stream)
+	}
+	if n := strings.Count(stream, `"notice_code":"container_not_started"`); n != 1 {
+		t.Fatalf("waiting notice sent %d times, want once:\n%s", n, stream)
 	}
 }

@@ -347,7 +347,7 @@ func collectHookLogs(ctx context.Context, client kubernetes.Interface, namespace
 			if len(logs) >= maxHookEvidenceLogs {
 				break
 			}
-			if podlogs.ContainerRestartCount(pod, container) > 0 {
+			if hadEarlierRun, _ := podlogs.EarlierRun(pod, container); hadEarlierRun {
 				if log, ok := fetchHookLog(ctx, client, namespace, pod.Name, container, true); ok {
 					logs = append(logs, log)
 				}

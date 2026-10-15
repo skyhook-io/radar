@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/rollouts"
@@ -615,20 +616,8 @@ type podLogEntry struct {
 // zero restart count with no last termination covers both an apiserver
 // "not found" response and an empty successful previous-log stream.
 func expectedPreviousLogAbsence(pod *corev1.Pod, container string) bool {
-	if pod == nil {
-		return false
-	}
-	for _, statuses := range [][]corev1.ContainerStatus{
-		pod.Status.ContainerStatuses,
-		pod.Status.InitContainerStatuses,
-	} {
-		matching := filterContainerStatuses(statuses, container)
-		if len(matching) == 0 {
-			continue
-		}
-		return matching[0].RestartCount == 0 && matching[0].LastTerminationState.Terminated == nil
-	}
-	return false
+	had, known := podlogs.EarlierRun(pod, container)
+	return known && !had
 }
 
 // fetchPodLogs fans out kubectl-logs requests across the given pods x containers.
@@ -673,8 +662,7 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 				if err != nil {
 					log.Printf("[mcp] Failed to get logs for %s/%s: %v", podName, containerName, err)
 					entry.Error = fmt.Sprintf("failed to get logs: %v", err)
-					entry.previousLogNotFound = previous && apierrors.IsBadRequest(err) &&
-						strings.Contains(err.Error(), fmt.Sprintf("previous terminated container %q in pod %q not found", containerName, podName))
+					entry.previousLogNotFound = previous && podlogs.IsNoPreviousRun(err)
 					mu.Lock()
 					allLogs = append(allLogs, entry)
 					mu.Unlock()
