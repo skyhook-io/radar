@@ -34,6 +34,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/kube"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
@@ -3607,7 +3608,7 @@ func (c *Client) UpdateRepository(repoName string) error {
 	}
 
 	// Create chart repository and download index
-	chartRepo, err := repo.NewChartRepository(repoEntry, nil)
+	chartRepo, err := repo.NewChartRepository(repoEntry, getter.All(c.settings))
 	if err != nil {
 		return fmt.Errorf("failed to create chart repository: %w", err)
 	}
