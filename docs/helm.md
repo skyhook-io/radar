@@ -25,7 +25,7 @@ The drawer includes:
 - Resources: live status for resources rendered by the current release.
 - Hooks: hook events, path, weight, status, run times, delete policies, output-log policies, and diagnostics for failed/running hooks.
 
-Compare opens a full-page workspace instead of rendering inside the drawer. The drawer links to Compare from history rows and operation banners when Radar can identify a useful revision pair.
+Compare opens as a full page instead of rendering inside the drawer. The drawer links to Compare from history rows and operation banners when Radar can identify a useful revision pair.
 
 ## Operation Insight
 

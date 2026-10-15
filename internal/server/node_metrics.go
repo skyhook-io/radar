@@ -6,11 +6,10 @@ import (
 	"log"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	v1listers "k8s.io/client-go/listers/core/v1"
 )
 
 // Shared metrics-server plumbing — consumed by both /api/dashboard and
@@ -71,27 +70,6 @@ func parseCPUToMillis(s string) int64 { return k8s.ParseCPUToMillis(s) }
 
 // parseMemoryToBytes delegates to k8s.ParseMemoryToBytes.
 func parseMemoryToBytes(s string) int64 { return k8s.ParseMemoryToBytes(s) }
-
-// listPodsScoped lists pods either cluster-wide (namespaces nil) or across
-// the caller's allowed namespaces — the scoping shape every metrics/vitals
-// consumer shares.
-func listPodsScoped(podLister v1listers.PodLister, namespaces []string) []*corev1.Pod {
-	if podLister == nil {
-		return nil
-	}
-	// Sentinel contract (parseNamespacesForUser): nil = all namespaces;
-	// non-nil EMPTY = no namespace access — zero pods, never cluster-wide.
-	if namespaces == nil {
-		pods, _ := podLister.List(labels.Everything())
-		return pods
-	}
-	var pods []*corev1.Pod
-	for _, ns := range namespaces {
-		items, _ := podLister.Pods(ns).List(labels.Everything())
-		pods = append(pods, items...)
-	}
-	return pods
-}
 
 // capacityRequests carries the informer-derived halves of the capacity
 // picture: node allocatable capacity plus scheduled-pod requests (completed pods

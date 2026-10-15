@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/skyhook-io/radar/internal/readscope"
 	"net/http"
 	"slices"
 
@@ -26,7 +27,7 @@ func (s *Server) capacityNamespacesForUser(r *http.Request) []string {
 }
 
 func (s *Server) capacityNamespacesForSource(r *http.Request, namespaces []string, group, resource string) []string {
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		return namespaces
 	}
 	if namespaces == nil {
@@ -57,7 +58,7 @@ func capacityNamespacesWithinCache(cache capacityInformerScope, resource string,
 		return result
 	}
 	result.limited = true
-	if noNamespaceAccess(requested) {
+	if readscope.NoNamespaceAccess(requested) {
 		return result
 	}
 	cached := cache.KindNamespaces(resource)
@@ -66,7 +67,7 @@ func capacityNamespacesWithinCache(cache capacityInformerScope, resource string,
 		result.unavailable = true
 		return result
 	}
-	result.namespaces = intersectNamespaces(cached, requested)
+	result.namespaces = readscope.SelectNamespaces(cached, requested)
 	if requested == nil {
 		result.partial = true
 		return result

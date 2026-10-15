@@ -130,7 +130,7 @@ func TestEventMatchesGroup(t *testing.T) {
 
 // HasNamespaceAccess is the gitopsRequest method that handlers call before
 // running the (potentially expensive) topology+tree build. It mirrors the
-// noNamespaceAccess contract (tested in server_auth_test.go) but as a
+// readscope.NoNamespaceAccess contract (tested in server_auth_test.go) but as a
 // method on the request struct, so this guards against the predicate
 // drifting out of sync with the underlying helper.
 func TestGitopsRequestHasNamespaceAccess(t *testing.T) {

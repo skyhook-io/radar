@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/podlogs"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -64,7 +65,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	sinceSecondsStr := r.URL.Query().Get("sinceSeconds")
 
 	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -161,7 +162,7 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 	tailLinesStr := r.URL.Query().Get("tailLines")
 
 	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}

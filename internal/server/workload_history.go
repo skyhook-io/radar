@@ -17,6 +17,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/readscope"
+
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -61,7 +63,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}

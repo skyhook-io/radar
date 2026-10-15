@@ -3,13 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/k8s"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 )

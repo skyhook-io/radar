@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
@@ -51,19 +52,12 @@ func canListEvidence(authz EvidenceAuthorizer, group, resource, namespace string
 	return authz.CanList(group, resource, namespace).Allowed
 }
 
-// noNamespaceAccess returns true when a namespace filter explicitly grants no
-// access (non-nil empty slice from auth filtering). Mirrors the server-side
-// helper of the same name.
-func noNamespaceAccess(namespaces []string) bool {
-	return namespaces != nil && len(namespaces) == 0
-}
-
 // ResolveHelmNamespaces applies Helm's Secret-specific RBAC and
 // no-auth fallback behavior to an already resolved workload namespace scope.
 // Shared by Server.resolveHelmNamespacesForScope (HTTP) and the upgrade scan
 // (both surfaces via the authorizer seam).
 func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namespaces []string) ([]string, bool) {
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		return nil, false
 	}
 	if namespaces == nil {
@@ -95,7 +89,7 @@ func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namesp
 }
 
 func resolveCachedEvidenceNamespaces(authz EvidenceAuthorizer, group, resource string, namespaces []string) []string {
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		return []string{}
 	}
 	if canListEvidence(authz, group, resource, "") {
@@ -138,7 +132,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	if err != nil {
 		return nil, err
 	}
-	noAccess := noNamespaceAccess(namespaces)
+	noAccess := readscope.NoNamespaceAccess(namespaces)
 	var scanInput *k8s.ResourceCache
 	if !noAccess {
 		scanInput = cache

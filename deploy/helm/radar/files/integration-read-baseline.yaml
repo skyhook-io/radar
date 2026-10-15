@@ -613,7 +613,7 @@ entries:
     reason: "Includes spec.externalClusters[].connectionParameters; inline connection settings (potentially passwords) are intentionally visible, like Helm values."
     source: "https://cloudnative-pg.io/docs/1.28/logical_replication/"
   - group: "postgresql.cnpg.io"
-    resources: ["backups","databases","imagecatalogs","poolers","publications","scheduledbackups","subscriptions"]
+    resources: ["backups","databaseroles","databases","failoverquorums","imagecatalogs","poolers","publications","scheduledbackups","subscriptions"]
     scope: Namespaced
     collection: "cloudnativePg"
     decision: grant

@@ -37,7 +37,7 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
-import { resourceExpandedPath } from './integrations/resourceHosts'
+import { resourceExpandedPath, resourceKindListTitle } from './integrations/resourceHosts'
 import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
 import { WorkspaceScreen } from './integrations/workspaceScreens'
 import { currentPageLabel } from './utils/page-links'
@@ -262,6 +262,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     const resourceName = decode(pathSegments[1] ?? '')
     if (!resourceName) return 'Resources'
     const group = new URLSearchParams(search).get('apiGroup') || ''
+    const hostTitle = resourceKindListTitle({ name: resourceName, group })
+    if (hostTitle) return hostTitle
     const match = findAPIResourceForRoute(apiResources, resourceName, group)
     return pluralKindTitle(match?.kind ?? pluralToKind(resourceName), resourceName)
   }

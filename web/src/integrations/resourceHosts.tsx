@@ -1,11 +1,14 @@
+import { useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
-import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import { PaneLoader, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import { useRadarFeature } from '../api/client'
+import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
 import {
-  composeDetailSlots, composeResourceHosts, hostsForResource, resourceHostForSlot,
-  type DetailSlots, type HostResource,
+  composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
+  type DetailSlots, type HostResource, type HostFeatures, type HostKind, type KindListProps,
   type ResourceHost,
 } from './resourceHost'
 import { RayJobRenderer } from '../components/resources/renderers/RayJobRenderer'
@@ -77,4 +80,40 @@ export function ResourceDrawerNavigation({ resource }: { resource: SelectedResou
     const Component = navigation.Component
     return <Component key={host.id} resource={resource} />
   })}</>
+}
+
+export function useResourceHostFeatures(): HostFeatures {
+  // Hook order is fixed here; selected adapters mount components that own their data hooks.
+  const { support } = useRadarFeature('cnpgWorkspace')
+  return useMemo(() => ({ cnpgWorkspace: support }), [support])
+}
+
+
+export function decorateResourceDiagnose(render: RenderDiagnoseAction | undefined): RenderDiagnoseAction | undefined {
+  return resourceHosts.reduce((current, host) => host.diagnoseAction?.(current) ?? current, render)
+}
+
+
+function kindListHost(kind: Pick<HostKind, 'name' | 'group'> | null) {
+  return kind ? resourceHosts.flatMap(host => (host.kindLists ?? []).map(list => ({ host, list })))
+    .find(({ list }) => list.kind.name === kind.name && list.kind.group === kind.group) : undefined
+}
+
+export function resourceKindListMode(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean) {
+  const contribution = kindListHost(kind)
+  return contribution?.list.mode(hostSupport(contribution.host, features), pending) ?? 'table'
+}
+
+export function resourceKindListTitle(kind: Pick<HostKind, 'name' | 'group'>): string | null {
+  return kindListHost(kind)?.list.title ?? null
+}
+
+export function renderResourceKindList(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean, props: KindListProps) {
+  const contribution = kindListHost(kind)
+  if (!contribution) return null
+  const mode = contribution.list.mode(hostSupport(contribution.host, features), pending)
+  if (mode === 'wait') return <PaneLoader label="Loading…" className="flex-1" />
+  if (mode === 'table') return null
+  const Component = contribution.list.Component
+  return <Component {...props} />
 }

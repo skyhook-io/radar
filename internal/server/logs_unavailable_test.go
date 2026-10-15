@@ -11,12 +11,10 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/podlogs"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -57,43 +55,6 @@ func TestIsNoPreviousContainer(t *testing.T) {
 	}
 	if isNoPreviousContainer(nil) {
 		t.Error("no error is not a missing earlier run")
-	}
-}
-
-// The CNPG live view emits a stream's last line even when it arrives with the
-// end of the stream, so the kubelet's notice used to show up as a Postgres line,
-// again every time the view reopened the stream.
-func TestFollowCNPGContainerLogs_DropsLogsUnavailableNotice(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		body    string
-		want    []string
-		wantErr error
-	}{
-		{"kubelet notice", "unable to retrieve container logs for containerd://6e2396b58f81ea5e", nil, k8score.ErrLogsUnavailable},
-		{"last line without a newline", "2026-09-28T14:19:58.5Z database system is ready\n2026-09-28T14:19:59.5Z received fast shutdown request", []string{"database system is ready", "received fast shutdown request"}, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := logAPIServer(t, http.StatusOK, "", tc.body)
-			logCh := make(chan podlogs.Entry, 10)
-			err := followCNPGContainerLogs(context.Background(), client, "db", "pg-orders-2", corev1.PodLogOptions{Container: "postgres", Timestamps: true, Follow: true}, 1, logCh)
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("err = %v, want %v", err, tc.wantErr)
-			}
-			close(logCh)
-			var got []string
-			for entry := range logCh {
-				got = append(got, entry.Content)
-			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("got %q, want %q", got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Fatalf("got %q, want %q", got, tc.want)
-				}
-			}
-		})
 	}
 }
 

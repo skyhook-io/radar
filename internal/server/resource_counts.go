@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 type ResourceCountsResponse struct {
@@ -59,7 +61,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, ResourceCountsResponse{Counts: map[string]int{}})
 		return
 	}

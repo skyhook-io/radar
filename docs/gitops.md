@@ -1,6 +1,6 @@
 # GitOps (Argo CD & Flux)
 
-Radar's GitOps workspace gives Argo CD and Flux first-class treatment. Instead of treating Applications and Kustomizations as generic CRDs, you get a typed fleet view, a per-app detail page that diagnoses *why* something is misbehaving, and the controls you'd otherwise reach for `argocd` / `flux` CLI to run.
+Radar's GitOps view gives Argo CD and Flux first-class treatment. Instead of treating Applications and Kustomizations as generic CRDs, you get a typed fleet view, a per-app detail page that diagnoses *why* something is misbehaving, and the controls you'd otherwise reach for `argocd` / `flux` CLI to run.
 
 The hard part of GitOps tooling isn't sync — it's diagnosis. Radar surfaces drift, recent events, controller-failure attribution, and lifecycle state inline so you don't have to context-switch between `kubectl get`, `argocd app diff`, controller logs, and a YAML viewer to understand a stuck reconcile.
 

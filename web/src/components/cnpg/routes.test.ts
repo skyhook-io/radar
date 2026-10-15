@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgDetailKindFor, cnpgDetailPath, decodeDrawerTrail, encodeDrawerTrail, parseCNPGRoute, sameResource } from './routes'
+import { cnpgClusterKindListMode, cnpgDetailKindFor, cnpgDetailPath, cnpgViewNamedForKind, parseCNPGRoute } from './routes'
+import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
 
 describe('CNPG routes', () => {
   it('parses workspace screens and falls back to Overview for unknown or unavailable ones', () => {
@@ -30,8 +31,8 @@ describe('CNPG routes', () => {
   it('distinguishes same-named kinds from different groups', () => {
     const cnpg = { kind: 'clusters', group: 'postgresql.cnpg.io', namespace: 'a', name: 'x' }
     const capi = { kind: 'clusters', group: 'cluster.x-k8s.io', namespace: 'a', name: 'x' }
-    expect(sameResource(cnpg, capi)).toBe(false)
-    expect(sameResource(cnpg, { ...cnpg })).toBe(true)
+    expect(sameSelectedResource(cnpg, capi)).toBe(false)
+    expect(sameSelectedResource(cnpg, { ...cnpg })).toBe(true)
   })
 
   it('parses full-detail routes for every CNPG kind and the cluster-scoped placeholder', () => {
@@ -56,5 +57,35 @@ describe('CNPG routes', () => {
     expect(cnpgDetailKindFor('clusters', 'postgresql.cnpg.io')).toBe('clusters')
     expect(cnpgDetailKindFor('clusters', 'cluster.x-k8s.io')).toBeNull()
     expect(cnpgDetailKindFor('backups', 'velero.io')).toBeNull()
+  })
+})
+
+describe('cnpgViewNamedForKind', () => {
+  it('is true only for the kind the crumb’s view is named after', () => {
+    expect(cnpgViewNamedForKind('clusters')).toBe(true)
+    expect(cnpgViewNamedForKind('backups')).toBe(true)
+    expect(cnpgViewNamedForKind('poolers')).toBe(true)
+    // Also under Backups, but not what the view is named after.
+    expect(cnpgViewNamedForKind('scheduledbackups')).toBe(false)
+    expect(cnpgViewNamedForKind('objectstores')).toBe(false)
+    expect(cnpgViewNamedForKind('databases')).toBe(false)
+    expect(cnpgViewNamedForKind('pods')).toBe(false)
+  })
+})
+
+describe('cnpgClusterKindListMode', () => {
+  const cnpg = { name: 'clusters', group: 'postgresql.cnpg.io' }
+  it('shows the Clusters view for the CloudNativePG Cluster kind when this Radar serves it', () => {
+    expect(cnpgClusterKindListMode(cnpg, 'supported', false)).toBe('view')
+  })
+  it('waits, rather than flashing the table, only while capabilities first load', () => {
+    expect(cnpgClusterKindListMode(cnpg, 'unknown', true)).toBe('wait')
+    expect(cnpgClusterKindListMode(cnpg, 'unknown', false)).toBe('table')
+  })
+  it('keeps the table on a Radar without the views, and for every other kind', () => {
+    expect(cnpgClusterKindListMode(cnpg, 'unsupported', false)).toBe('table')
+    expect(cnpgClusterKindListMode({ name: 'clusters', group: 'cluster.x-k8s.io' }, 'supported', false)).toBe('table')
+    expect(cnpgClusterKindListMode({ name: 'backups', group: 'postgresql.cnpg.io' }, 'supported', false)).toBe('table')
+    expect(cnpgClusterKindListMode(null, 'supported', false)).toBe('table')
   })
 })

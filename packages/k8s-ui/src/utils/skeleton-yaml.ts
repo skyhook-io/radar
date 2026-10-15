@@ -198,8 +198,24 @@ spec:
           image: nginx:latest`,
 }
 
+// Keyed by group as well as kind: CloudNativePG and Cluster API both name a
+// kind Cluster.
+const groupSkeletons: Record<string, string> = {
+  'postgresql.cnpg.io/Cluster': `apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: my-cluster
+  namespace: default
+spec:
+  instances: 3
+  storage:
+    size: 1Gi`,
+}
+
 // Returns skeleton YAML for a known kind, or a generic template for unknown kinds.
 export function getSkeletonYaml(kind: string, group?: string): string {
+  const grouped = group ? groupSkeletons[`${group}/${kind}`] : undefined
+  if (grouped) return grouped
   const skeleton = skeletons[kind]
   if (skeleton) return skeleton
 

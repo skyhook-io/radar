@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { CNPGBackupSummary, CNPGScheduledBackupSummary } from './CNPGBackupSummary'
 import { CNPGObjectStoreSummary } from './CNPGObjectStoreSummary'
-import { CNPGDatabaseSummary } from './CNPGDeclarativeSummary'
+import { CNPGDatabaseSummary, CNPGPublicationSummary, CNPGSubscriptionSummary } from './CNPGDeclarativeSummary'
 import { CNPGPoolerSummary } from './CNPGPoolerSummary'
 import { CNPGImageCatalogSummary } from './CNPGImageCatalogSummary'
+import { ClusterLink } from './CNPGSharedSummary'
 import { CNPG_WORKSPACE_KEYS, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
 
 const PG = 'postgresql.cnpg.io/v1'
@@ -77,6 +78,22 @@ describe('CNPGBackupSummary', () => {
     expect(t).toContain('an earlier schedule of that name')
   })
 
+  it('distinguishes a replaced Cluster from a missing or unread one without linking to its replacement', () => {
+    const previous = { ...b, status: { ...b.status, pluginMetadata: { clusterUID: 'old' } } }
+    const replacement = { ...mainCluster, metadata: { ...mainCluster.metadata, uid: 'new' } }
+    const html = renderToString(<ClusterLink resource={previous} workspace={ws({ clusters: [replacement] })} onNavigate={nav} />)
+    expect(text(html)).toContain('main · an earlier Cluster of that name; the current one is a different object')
+    expect(html).not.toContain('<button')
+    expect(text(html)).not.toContain('not found')
+    const missing = text(renderToString(<ClusterLink resource={previous} workspace={ws({ clusters: [] })} onNavigate={nav} />))
+    expect(missing).toContain('not found in this namespace')
+    const unread = text(renderToString(<ClusterLink resource={previous} workspace={ws({}, { coverage: { clusters: { state: 'denied' } } })} onNavigate={nav} />))
+    expect(unread).not.toContain('not found')
+    expect(unread).not.toContain('earlier Cluster')
+    const current = renderToString(<ClusterLink resource={b} workspace={ws({ clusters: [replacement] })} onNavigate={nav} />)
+    expect(current).toContain('<button')
+  })
+
   it('shows its own issues on top', () => {
     const issues = [
       { id: 'i1', severity: 'critical' as const, kind: 'Backup', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main-20260901', reason: 'CNPGBackupFailed', message: 'Backup failed' },
@@ -99,6 +116,34 @@ describe('CNPGScheduledBackupSummary', () => {
     expect(t).toContain('run-1')
     expect(t).toContain('Completed')
     expect(t).toContain('Backups older than 7 days are not listed')
+  })
+
+  it("shows the server's reading and next runs only for the schedule it read", () => {
+    const sched = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg' }, spec: { cluster: { name: 'main' }, schedule: '0 30 2 * * *' } }
+    const preview = {
+      schedule: '0 30 2 * * *',
+      valid: true,
+      description: 'every day at 02:30:00 UTC',
+      nextRuns: ['2026-10-01T02:30:00Z', '2026-10-02T02:30:00Z', '2026-10-03T02:30:00Z'],
+      basis: 'lastCheckTime' as const,
+      clock: { zone: 'UTC', declared: true, source: 'Operator Deployment declares TZ=UTC' },
+    }
+    const t = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={preview} />))
+    expect(t).toContain('every day at 02:30:00 UTC')
+    expect(t).toContain('2026-10-01 02:30:00 UTC')
+    expect(t).toContain('Calculated upcoming times')
+    expect(t).toContain('Next run reported by the operatorNot reported')
+    expect(t).toContain("operator's last check")
+    const estimate = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, clock: { zone: 'UTC', declared: false, source: 'Operator clock is unknown' } }} />))
+    expect(estimate).toContain('Estimated upcoming times')
+    expect(estimate).toContain('UTC estimate')
+    expect(estimate).not.toContain('Calculated upcoming times')
+    const stale = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, schedule: '0 0 0 * * *' }} />))
+    expect(stale).not.toContain('every day at')
+    const due = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, runsImmediately: true }} />))
+    expect(due).toContain('due (2026-10-01 02:30:00 UTC)')
+    expect(due).toContain('A run is due on the declared clock')
+    expect(due).toContain('at most one catch-up backup')
   })
 
   it('says when Backups are not readable instead of listing none', () => {
@@ -196,9 +241,44 @@ describe('CNPGPoolerSummary', () => {
   it('reports unknown scheduled count and unmeasured pressure', () => {
     const pooler = { apiVersion: PG, kind: 'Pooler', metadata: { name: 'main-rw', namespace: 'pg' }, spec: { cluster: { name: 'main' }, type: 'rw', instances: 2 } }
     const t = text(renderToString(<CNPGPoolerSummary resource={pooler} workspace={ws({})} onNavigate={nav} />))
-    expect(t).toContain('Scheduled count not reported')
+    expect(t).toContain('Pooler instance count not reported')
     expect(t).toContain('Not measured')
     expect(t).toContain('main-rw')
+  })
+
+  it('shows Deployment readiness, limits with PgBouncer defaults, observed pause and the Service path when live data is provided', () => {
+    const pooler = {
+      apiVersion: PG,
+      kind: 'Pooler',
+      metadata: { name: 'main-rw', namespace: 'pg' },
+      spec: { cluster: { name: 'main' }, type: 'rw', instances: 2, pgbouncer: { paused: true, parameters: { max_client_conn: '200' } } },
+      status: { instances: 2 },
+    }
+    const t = text(
+      renderToString(
+        <CNPGPoolerSummary
+          resource={pooler}
+          workspace={ws({})}
+          onNavigate={nav}
+          live={{
+            deployment: { name: 'main-rw', state: 'ok', replicas: 2, readyReplicas: 1 },
+            service: { name: 'main-rw', state: 'ok', type: 'ClusterIP', port: 5432 },
+            pressure: { state: 'ok', pods: [{ pod: 'a', state: 'ok', pools: [{ database: 'app', user: 'app', clActive: 4, clWaiting: 2 }] }] },
+            observed: { state: 'ok', pods: [{ pod: 'a', state: 'ok', paused: true }, { pod: 'b', state: 'ok', paused: false }] },
+          }}
+        />,
+      ),
+    )
+    expect(t).toContain('from Deployment main-rw')
+    expect(t).toContain('Pause requested')
+    expect(t).toContain('1/2 ready')
+    expect(t).toContain('Pause state')
+    expect(t).toContain('Observed: Paused on 1 of 2 PgBouncers')
+    expect(t).toContain('PgBouncer uses 20')
+    expect(t).toContain('200')
+    expect(t).toContain('main-rw')
+    expect(t).toContain('app/app')
+    expect(t).not.toContain('Not measured')
   })
 })
 
@@ -233,4 +313,115 @@ describe('CNPGImageCatalogSummary', () => {
     const t = text(renderToString(<CNPGImageCatalogSummary resource={catalog} workspace={ws({}, { coverage: { clusters: { state: 'denied' } } })} />))
     expect(t).toContain('No access to Clusters')
   })
+})
+
+describe('logical replication summaries', () => {
+  const src = { apiVersion: PG, kind: 'Cluster', metadata: { name: 'src', namespace: 'pg' }, spec: { instances: 2 } }
+  const dst = { apiVersion: PG, kind: 'Cluster', metadata: { name: 'dst', namespace: 'pg' }, spec: { instances: 1, externalClusters: [{ name: 'src', connectionParameters: { host: 'src-rw', dbname: 'app' } }] } }
+  const pub = { apiVersion: PG, kind: 'Publication', metadata: { name: 'orders-pub', namespace: 'pg' }, spec: { cluster: { name: 'src' }, name: 'orders_pub', dbname: 'app', target: { allTables: true } }, status: { applied: true } }
+  const sub = { apiVersion: PG, kind: 'Subscription', metadata: { name: 'orders-sub', namespace: 'pg' }, spec: { cluster: { name: 'dst' }, name: 'orders_sub', dbname: 'app', publicationName: 'orders_pub', externalClusterName: 'src' }, status: { applied: true } }
+  const w = ws({ clusters: [src, dst], publications: [pub], subscriptions: [sub] })
+
+  it('shows the subscription path with the slot unread and the failover verdict', () => {
+    const t = text(renderToString(<CNPGSubscriptionSummary resource={sub} workspace={w} onNavigate={nav} />))
+    expect(t).toContain('Replication path')
+    expect(t).toContain('orders_pub')
+    expect(t).toContain('Slot orders_sub: not read')
+    expect(t).toContain('Lost on failover')
+    expect(t).toContain('no pg_stat_subscription query')
+  })
+
+  it('never says no Publication declares it when Publications are unreadable', () => {
+    const denied = ws({ clusters: [src, dst], subscriptions: [sub] }, { coverage: { publications: { state: 'denied' } } })
+    const t = text(renderToString(<CNPGSubscriptionSummary resource={sub} workspace={denied} onNavigate={nav} />))
+    expect(t).toContain('Unknown: No access to Publications in pg')
+    expect(t).not.toContain('No Publication object declares it')
+  })
+
+  it('lists the subscribers of a publication', () => {
+    const t = text(renderToString(<CNPGPublicationSummary resource={pub} workspace={w} onNavigate={nav} />))
+    expect(t).toContain('Subscribers')
+    expect(t).toContain('orders_sub')
+  })
+})
+
+it('shows the stale declaration as pending in its drawer', () => {
+  const resource = { apiVersion: PG, kind: 'Database', metadata: { name: 'app', namespace: 'pg', generation: 3 }, spec: { name: 'app' }, status: { applied: true, observedGeneration: 2 } }
+  const t = text(renderToString(<CNPGDatabaseSummary resource={resource} workspace={ws({})} />))
+  expect(t).toContain('Pending · awaiting the operator for the current spec')
+  expect(t).toContain('AppliedPending')
+})
+
+it('keeps Deployment readiness beside the pause request even when no Pods are ready', () => {
+  const resource = { metadata: { name: 'p' }, spec: { pgbouncer: { paused: true } } }
+  const t = text(renderToString(<CNPGPoolerSummary resource={resource} workspace={ws({})} live={{ deployment: { name: 'p', state: 'ok', replicas: 2, readyReplicas: 0 } }} />))
+  expect(t).toContain('0/2 ready')
+  expect(t).toContain('Pause requested')
+  expect(t).not.toContain('Observed: Paused')
+})
+
+it('puts the pending Pooler cause under readiness and names the Pod whose metric read failed', () => {
+  const html = renderToString(<CNPGPoolerSummary resource={{ metadata: { name: 'pooler', namespace: 'pg' } }} workspace={ws({})} onNavigate={nav} live={{ deployment: { name: 'pooler', state: 'ok', replicas: 1, readyReplicas: 0 }, pressure: { state: 'ok', pods: [{ pod: 'pooler-pod', state: 'unreachable', error: 'address not allowed', schedulingReason: 'Unschedulable: insufficient cpu' }] } }} />)
+  const t = text(html)
+  expect(t).toContain('0/1 ready')
+  expect(t).toContain('Cannot be scheduled: insufficient cpu.')
+  expect(t).toContain('Not measured: PgBouncer did not answer')
+  expect(t).toContain('pooler-pod')
+  expect(t).toContain('Measurement details')
+  expect(t).toContain('address not allowed')
+  expect(t.indexOf('Cannot be scheduled')).toBeGreaterThan(-1)
+  expect(t.indexOf('Cannot be scheduled')).toBeLessThan(t.indexOf('pooler-pod'))
+  expect(t.indexOf('Cannot be scheduled')).toBeLessThan(t.indexOf('Connections'))
+  expect(t.indexOf('address not allowed')).toBeGreaterThan(t.indexOf('Connections'))
+  expect(html).toContain('button')
+})
+
+it('never calls an incomplete empty Pooler read idle and names the unread Pod', () => {
+  const t = text(renderToString(<CNPGPoolerSummary resource={{}} workspace={ws({})} live={{ pressure: { state: 'ok', pods: [{ pod: 'a', state: 'ok', pools: [] }, { pod: 'b', state: 'unreachable', error: 'timeout' }] } }} />))
+  expect(t).toContain('No pools seen in what was read')
+  expect(t).toContain('b: not read (timeout)')
+  expect(t).not.toContain('Idle:')
+})
+
+it('leads Pooler observations with the scheduling cause and labels the operator count', () => {
+  const pod = { pod: 'orders-pooler-pod', state: 'unreachable', reason: 'PgBouncer has not started (Pod cannot be scheduled)', schedulingReason: 'Unschedulable: 0/2 nodes are available: 2 Too many pods. preemption: no victims.' }
+  const html = renderToString(<CNPGPoolerSummary resource={{ metadata: { name: 'p', namespace: 'db' }, spec: { instances: 1 }, status: { instances: 1 } }} workspace={ws({})} live={{ pressure: { state: 'ok', pods: [pod] }, observed: { state: 'ok', pods: [{ ...pod, error: pod.reason }] } }} />)
+  const t = text(html)
+  expect(t).toContain('Pooler status reports 1 instance · 1 requested')
+  expect(t).toContain('Cannot be scheduled: both nodes have reached their Pod limit')
+  expect(t).toContain('Not measured: PgBouncer has not started (Pod cannot be scheduled)')
+  expect(t).toContain('1 not read: orders-pooler-pod (PgBouncer has not started (Pod cannot be scheduled))')
+  expect(html).toContain('aria-expanded="false"')
+  expect(t).toContain('preemption: no victims.')
+})
+
+it('shows the schedule destination blocker only when the target Cluster is readable', () => {
+  const schedule = { metadata: { name: 'payments-nightly', namespace: 'pg' }, spec: { cluster: { name: 'payments' } } }
+  const cluster = { apiVersion: PG, kind: 'Cluster', metadata: { name: 'payments', namespace: 'pg' }, spec: {} }
+  const render = (workspace: CNPGWorkspaceResponse) => text(renderToString(<CNPGScheduledBackupSummary resource={schedule} workspace={workspace} />))
+  const t = render(ws({ clusters: [cluster] }))
+  expect(t).toContain('Enabled · not run yetNo backup destination')
+  expect(t).toContain('The resource list status comes from the ScheduledBackup alone.')
+  expect(render(ws({}))).not.toContain('No backup destination')
+  expect(render(ws({}))).not.toContain('The resource list status')
+  expect(render(ws({ clusters: [{ ...cluster, spec: { backup: { barmanObjectStore: { destinationPath: 's3://backups' } } } }] }))).not.toContain('The resource list status')
+  expect(text(renderToString(<CNPGScheduledBackupSummary resource={{ ...schedule, spec: { ...schedule.spec, suspend: true } }} workspace={ws({ clusters: [cluster] })} />))).not.toContain('The resource list status')
+  expect(text(renderToString(<CNPGScheduledBackupSummary resource={{ ...schedule, spec: { ...schedule.spec, suspend: true } }} workspace={ws({ clusters: [cluster] })} />))).not.toContain('No backup destination')
+})
+
+it('names visible database declarations without claiming a SQL inventory', () => {
+  const resource = { metadata: { name: 'orders-appdb', namespace: 'pg' }, spec: { name: 'appdb', cluster: { name: 'orders' } } }
+  const t = text(renderToString(<CNPGDatabaseSummary resource={resource} workspace={ws({})} />))
+  expect(t).toContain('No visible Publication declarations')
+  expect(t).toContain('No visible Subscription declarations')
+  expect(t.match(/Objects created in SQL are not shown/g)).toHaveLength(1)
+  const denied = text(renderToString(<CNPGDatabaseSummary resource={resource} workspace={ws({}, { coverage: { publications: { state: 'denied' }, subscriptions: { state: 'denied' } } })} />))
+  expect(denied).toContain('No access to Publications')
+  expect(denied).not.toContain('No visible Publication declarations')
+})
+
+it.each([['session', 'A client keeps one server connection for its whole session.'], ['transaction', 'A client uses a server connection only for each transaction.']])('explains %s pool mode before its raw value', (poolMode, explanation) => {
+  const t = text(renderToString(<CNPGPoolerSummary resource={{ spec: { pgbouncer: { poolMode } } }} workspace={ws({})} />))
+  expect(t).toContain(explanation)
+  expect(t.indexOf(explanation)).toBeLessThan(t.indexOf(poolMode, t.indexOf(explanation) + explanation.length))
 })

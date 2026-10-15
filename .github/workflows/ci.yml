@@ -75,10 +75,10 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      - name: Evaluate PVC scope PromQL in Prometheus
+      - name: Evaluate PVC and CNPG PromQL in Prometheus
         env:
           RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./internal/prometheus -run '^TestPVCScopePromQL$' -count=1
+        run: go test ./internal/prometheus -run '^(TestPVCScopePromQL|TestCNPGDiskGrowthPromQL)$' -count=1
 
       - name: Run PostgreSQL integration tests
         env:

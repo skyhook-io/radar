@@ -168,9 +168,11 @@ export interface FeatureCapabilities {
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean
+  cnpgWorkspace?: boolean
+  cnpgProtectionSetup?: boolean
+  gitopsWriteEvidence?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
-  gitopsWriteEvidence?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

@@ -1,0 +1,37 @@
+# DatabaseRole (CloudNativePG 1.30+): one PostgreSQL role as its own object.
+# Applied only when the CRD is served, so the default 1.27 demo skips it; use
+# CNPG_VERSION=1.30.x on a fresh cluster (see README).
+#
+# Reconciled by the primary's instance manager, not the controller, so these
+# reach their real states even with the operator frozen.
+#
+#   demo-reader         applied: a login role with no password
+#   demo-broken-role    not applied: its password Secret does not exist, and
+#                       the operator says so in status.message
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: demo-reader
+  namespace: pg
+spec:
+  cluster:
+    name: pg-healthy
+  name: demo_reader
+  login: true
+  disablePassword: true
+  inRoles:
+    - pg_read_all_data
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: demo-broken-role
+  namespace: pg
+spec:
+  cluster:
+    name: pg-healthy
+  name: demo_broken
+  login: true
+  passwordSecret:
+    name: demo-broken-role-password-does-not-exist

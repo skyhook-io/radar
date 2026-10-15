@@ -1,0 +1,24 @@
+# The barman-cloud plugin's destination. Must live in the same namespace as the
+# Cluster that references it — the plugin resolves `barmanObjectName` locally.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: minio-store
+  namespace: pgrt
+spec:
+  retentionPolicy: 7d
+  configuration:
+    destinationPath: s3://cnpg/
+    endpointURL: http://minio.pgrt.svc:9000
+    s3Credentials:
+      accessKeyId:
+        name: minio-creds
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: minio-creds
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+      immediateCheckpoint: true

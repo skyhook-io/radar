@@ -11,7 +11,7 @@ import {
   getCNPGScheduledBackupIsImmediate,
   getCNPGBackupPlugin,
   getCNPGScheduledBackupOwnerRef,
-  CNPG_BARMAN_OBJECTSTORE_GROUP,
+  CNPG_BARMAN_PLUGIN_NAME,
 } from '../resource-utils-cnpg'
 
 interface CNPGScheduledBackupRendererProps {
@@ -64,23 +64,15 @@ export function CNPGScheduledBackupRenderer({ data, onNavigate }: CNPGScheduledB
             return clusterName
           })()} />
           <Property label="Method" value={getCNPGScheduledBackupMethod(data)} />
-          {/* Under the plugin method the destination lives on an ObjectStore in
-              another API group, so naming it is the only route from here to
-              where these backups will actually land. */}
           {schedulePlugin && <Property label="Plugin" value={schedulePlugin.name} />}
-          {schedulePlugin?.parameters?.barmanObjectName && (
+          {schedulePlugin && (
             <Property
-              label="Object Store"
-              value={
-                <ResourceLink
-                  name={schedulePlugin.parameters.barmanObjectName}
-                  kind="objectstores"
-                  group={CNPG_BARMAN_OBJECTSTORE_GROUP}
-                  namespace={data.metadata?.namespace || ''}
-                  onNavigate={onNavigate}
-                />
-              }
+              label="Destination"
+              value={schedulePlugin.name === CNPG_BARMAN_PLUGIN_NAME ? "From the Cluster's barman-cloud plugin" : 'Unknown: Radar does not model this plugin’s destination'}
             />
+          )}
+          {schedulePlugin?.name === CNPG_BARMAN_PLUGIN_NAME && schedulePlugin.parameters && Object.keys(schedulePlugin.parameters).length > 0 && (
+            <Property label="Plugin parameters" value="Ignored by the barman-cloud plugin; the destination comes from the Cluster" />
           )}
           <Property label="Owner Reference" value={getCNPGScheduledBackupOwnerRef(data)} />
         </PropertyList>
