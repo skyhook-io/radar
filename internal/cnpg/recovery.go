@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -27,8 +28,12 @@ import (
 
 const (
 	cnpgRestoreValidationAnno = "radar.skyhook.io/restore-validation"
-	cnpgRestoreValidationMax  = 2000
-	cnpgRecoveryEventLimit    = 40
+	// cnpgRestoreValidationVersion is the annotation's format. The note lives
+	// on the Cluster, where Radars of other versions read it: a reader skips a
+	// format it does not know rather than read it with this one's meaning.
+	cnpgRestoreValidationVersion = 1
+	cnpgRestoreValidationMax     = 2000
+	cnpgRecoveryEventLimit       = 40
 
 	cnpgReadOK       = "ok"
 	cnpgReadDenied   = "denied"
@@ -203,7 +208,7 @@ func (s *Reader) RecoverySnapshot(callerCtx context.Context, typed kubernetes.In
 		Coverage:   map[string]integration.ReadSource{},
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	resp.Validation, resp.ValidationError = parseCNPGRestoreValidation(cluster.GetAnnotations()[cnpgRestoreValidationAnno])
+	resp.Validation, resp.ValidationError = parseCNPGRestoreValidation(cluster.GetAnnotations()[cnpgRestoreValidationAnno], cluster.GetUID())
 
 	selector := labels.SelectorFromSet(labels.Set{clusterLabel: name}).String()
 	var jobs []batchv1.Job
@@ -452,7 +457,7 @@ func cnpgRecoveryEventsOf(events []corev1.Event, subjects map[types.UID]bool, li
 	return out
 }
 
-func parseCNPGRestoreValidation(raw string) (*CNPGRestoreValidation, string) {
+func parseCNPGRestoreValidation(raw string, clusterUID types.UID) (*CNPGRestoreValidation, string) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, ""
 	}
@@ -460,8 +465,14 @@ func parseCNPGRestoreValidation(raw string) (*CNPGRestoreValidation, string) {
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		return nil, "the " + cnpgRestoreValidationAnno + " annotation is not valid JSON"
 	}
+	if v.Version != cnpgRestoreValidationVersion {
+		return nil, fmt.Sprintf("the %s annotation has format version %d, which this Radar does not read", cnpgRestoreValidationAnno, v.Version)
+	}
 	if v.RecordedAt == "" || v.Checked == "" {
 		return nil, "the " + cnpgRestoreValidationAnno + " annotation is missing recordedAt or checked"
+	}
+	if v.Target.UID != "" && v.Target.UID != string(clusterUID) {
+		return nil, "the " + cnpgRestoreValidationAnno + " annotation was recorded on an earlier Cluster of this name"
 	}
 	return &v, ""
 }
@@ -506,7 +517,7 @@ func RecordCNPGRestoreValidation(ctx context.Context, dyn dynamic.Interface, nam
 		return nil, integration.BlockedAction("This Cluster was not bootstrapped from a backup (spec.bootstrap.recovery is not set)")
 	}
 	note := &CNPGRestoreValidation{
-		Version:    1,
+		Version:    cnpgRestoreValidationVersion,
 		RecordedAt: now.UTC().Format(time.RFC3339),
 		RecordedBy: recordedBy,
 		Checked:    checked,

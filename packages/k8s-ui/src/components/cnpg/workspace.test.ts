@@ -613,10 +613,12 @@ it('does not attribute predecessor plugin restores or notes to a recreated sourc
   expect(fact(pinned, [oldBackup]).text).toBe('None recorded')
   const pitr = { ...restored, spec: { ...restored.spec, bootstrap: { recovery: { source: 'origin', recoveryTarget: { targetTime: '2026-09-30T23:00:00Z' } } } } }
   expect(fact(pitr).text).toBe('None recorded')
-  const withNote = (sourceUID?: string, targetUID = 'restored') => ({ ...restored, metadata: { ...restored.metadata, annotations: { 'radar.skyhook.io/restore-validation': JSON.stringify({ recordedAt: '2026-10-02T02:00:00Z', checked: 'application data', source: { namespace: 'db', name: 'pg-a', uid: sourceUID, verified: !!sourceUID }, target: { namespace: 'db', name: 'restored', uid: targetUID, verified: true } }) } } })
+  const withNote = (sourceUID?: string, targetUID = 'restored', version = 1) => ({ ...restored, metadata: { ...restored.metadata, annotations: { 'radar.skyhook.io/restore-validation': JSON.stringify({ version, recordedAt: '2026-10-02T02:00:00Z', checked: 'application data', source: { namespace: 'db', name: 'pg-a', uid: sourceUID, verified: !!sourceUID }, target: { namespace: 'db', name: 'restored', uid: targetUID, verified: true } }) } } })
   expect(fact(withNote('previous')).text).toBe('None recorded')
   expect(fact(withNote()).text).toBe('Archive restored into restored')
   expect(fact(withNote('current')).text).toBe('Validation recorded')
+  expect(getCNPGRestoreValidation(withNote('current', 'restored', 2))).toBeNull()
+  expect(fact(withNote('current', 'restored', 2)).text).toBe('Archive restored into restored')
   const copied = withNote('current', 'previous-target')
   expect(getCNPGRestoreValidation(copied)).toBeNull()
   expect(fact(copied).text).toBe('Archive restored into restored')

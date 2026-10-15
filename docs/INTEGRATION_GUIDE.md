@@ -225,6 +225,16 @@ unknown, partial and denied values first: every piece here exists to keep them.
   - Gate new contracts while retaining already-shipped reads whose producer
     contract is unchanged. Hide unsupported new destinations or fall back to
     standard detail views.
+  - Once a flag has shipped, its responses only grow. A new route or action,
+    a newly required parameter, or a newly bound fact on an existing action
+    needs a new flag: an older Radar answers those with 404 or 400, not with
+    "needs a newer Radar".
+  - A record Radar writes onto a cluster object (CNPG's restore-validation
+    note) carries a format version, and readers skip a version they do not
+    know: Radars of other versions read the same object.
+  - An action error `code` tells the client the write was refused before it
+    took effect. Never put a code on a failure that may follow a write; use
+    `outcome_unknown`, or `partial` with what completed.
 - [ ] **Guided multi-resource setup.** Keep integration-specific target models and workflow state in the app. CNPG reuses its target fields between Create and Restore, its schedule inputs between Edit and Create, and the shared strict-create/YAML review for both. Put preflight and reviewed conditional writes in the integration service, with thin HTTP adapters and a new feature flag when the endpoint/verb is new. Each independent write needs its own review and observed follow-through; saving declarations is not end-to-end success. Do not grow a universal provisioning registry around one integration. A future second concrete setup flow should extract only the seam it actually shares.
 - [ ] **Domain rules.** Put interpretation reused by checks, findings and actions in a pure integration package (CNPG uses `pkg/cnpg`), independent of HTTP and caller permissions. Keep matching frontend derivations together; share fixture cases for rules represented in both languages. Put request-independent orchestration in an integration service (`internal/cnpg` is the current example), with caller-scoped observations/clients supplied by server adapters. Share typed service reads between endpoints and reports rather than invoking handlers through a response recorder. Keep HTTP requests, routing and process-wide client resolution outside the service.
 - [ ] **Findings.** The Issues engine owns findings from cached Kubernetes objects. Cross-resource findings retain their inventory operations in `Issue.RequiredReads`; hosts supply `CanReadEvidence` for both composition and cached related-issue projections. A live proxy or Prometheus measurement stays in the workspace with `source: 'measurement'` and `measuredBy`; identity limitations such as CNPG's `unverifiedMatch` stay in its domain model. Map domain severity to a non-healthy `HealthLevel` when presenting a `WorkspaceProblem`. Title reasons the Issues page already titles with `issueReasonTitle`. Carry semantic reasons/states through presentation; never branch on generated IDs or display text.

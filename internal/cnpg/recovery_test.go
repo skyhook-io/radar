@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -210,14 +211,28 @@ func TestRecordCNPGRestoreValidationRefusals(t *testing.T) {
 }
 
 func TestParseCNPGRestoreValidation(t *testing.T) {
-	if v, e := parseCNPGRestoreValidation(""); v != nil || e != "" {
+	if v, e := parseCNPGRestoreValidation("", "u"); v != nil || e != "" {
 		t.Fatal("absent is not an error")
 	}
-	if _, e := parseCNPGRestoreValidation("{"); e == "" {
+	if _, e := parseCNPGRestoreValidation("{", "u"); e == "" {
 		t.Fatal("malformed must be reported")
 	}
-	if _, e := parseCNPGRestoreValidation(`{"recordedAt":"2026-09-30T00:00:00Z"}`); e == "" {
+	if _, e := parseCNPGRestoreValidation(`{"version":1,"recordedAt":"2026-09-30T00:00:00Z"}`, "u"); e == "" {
 		t.Fatal("a note without what was checked is not a note")
+	}
+	note := func(version int, targetUID string) string {
+		return fmt.Sprintf(`{"version":%d,"recordedAt":"2026-09-30T00:00:00Z","checked":"row counts","target":{"namespace":"db","name":"pg","uid":%q,"verified":true}}`, version, targetUID)
+	}
+	if v, e := parseCNPGRestoreValidation(note(1, "u"), "u"); v == nil || e != "" {
+		t.Fatalf("a v1 note on its Cluster = %v, %q", v, e)
+	}
+	for _, version := range []int{0, 2} {
+		if v, e := parseCNPGRestoreValidation(note(version, "u"), "u"); v != nil || !strings.Contains(e, "format version") {
+			t.Errorf("version %d = %v, %q; want it skipped as unknown", version, v, e)
+		}
+	}
+	if v, e := parseCNPGRestoreValidation(note(1, "earlier"), "u"); v != nil || e == "" {
+		t.Errorf("a note recorded on an earlier Cluster of this name = %v, %q; want it skipped", v, e)
 	}
 }
 

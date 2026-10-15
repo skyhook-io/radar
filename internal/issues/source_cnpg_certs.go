@@ -14,10 +14,6 @@ import (
 // operator writes status.certificates.expirations.
 const CNPGCertExpiryLayout = "2006-01-02 15:04:05.999999999 -0700 MST"
 
-// ParseCNPGCertExpiry reads one status.certificates.expirations value. A
-// monotonic-clock suffix ("m=+0.1") can follow Time.String(); it is dropped.
-// ok is false when the value does not parse: the expiry is then unknown.
-
 // A certificate past its expiry and one approaching it are separate reasons
 // so a consumer can word them without reading the message.
 const (
@@ -25,6 +21,9 @@ const (
 	ReasonCNPGCertificateExpired  = "CNPGCertificateExpired"
 )
 
+// ParseCNPGCertExpiry reads one status.certificates.expirations value. A
+// monotonic-clock suffix ("m=+0.1") can follow Time.String(); it is dropped.
+// ok is false when the value does not parse: the expiry is then unknown.
 func ParseCNPGCertExpiry(v string) (time.Time, bool) {
 	v = strings.TrimSpace(v)
 	if i := strings.Index(v, " m="); i >= 0 {

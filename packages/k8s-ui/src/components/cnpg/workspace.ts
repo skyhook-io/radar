@@ -646,8 +646,11 @@ function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
 }
 
 export const CNPG_RESTORE_VALIDATION_ANNOTATION = 'radar.skyhook.io/restore-validation'
+/** Radars of other versions read the note on the Cluster; a format this one does not know is skipped. */
+export const CNPG_RESTORE_VALIDATION_VERSION = 1
 
 export interface CNPGRestoreValidationNote {
+  version: number
   recordedAt: string
   recordedBy?: string
   checked: string
@@ -656,12 +659,13 @@ export interface CNPGRestoreValidationNote {
   target?: { namespace: string; name: string; uid?: string; verified: boolean }
 }
 
-/** The validation note recorded on a restored Cluster, or null when absent or malformed. */
+/** The validation note recorded on a restored Cluster, or null when absent, malformed or in another format. */
 export function getCNPGRestoreValidation(cluster: any): CNPGRestoreValidationNote | null {
   const raw = cluster?.metadata?.annotations?.[CNPG_RESTORE_VALIDATION_ANNOTATION]
   if (typeof raw !== 'string' || !raw.trim()) return null
   try {
     const v = JSON.parse(raw)
+    if (v?.version !== CNPG_RESTORE_VALIDATION_VERSION) return null
     if (typeof v?.recordedAt !== 'string' || typeof v?.checked !== 'string' || !v.checked) return null
     if (v.target?.uid && v.target.uid !== cluster.metadata?.uid) return null
     return v as CNPGRestoreValidationNote
