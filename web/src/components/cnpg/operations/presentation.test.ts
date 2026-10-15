@@ -44,7 +44,8 @@ describe('local operation presentation', () => {
     const west = { apiBase: '/c/west/api', context: 'in-cluster', namespace: 'db', name: 'pg', uid: 'uid' }
     expect(cnpgOperationsForCluster([hub], west)).toEqual([])
     expect(cnpgOperationsForCluster([hub], { ...west, apiBase: '/c/east/api' })).toEqual([hub])
-    const { apiBase: _, ...unstamped } = hub
+    const unstamped = { ...hub } as Partial<CNPGTrackedOperation>
+    delete unstamped.apiBase
     expect(cnpgOperationsForCluster([unstamped as CNPGTrackedOperation], { ...west, apiBase: '/c/east/api' })).toEqual([])
   })
 
