@@ -889,7 +889,15 @@ The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.
 
 [CloudNativePG](https://cloudnative-pg.io/) (CNPG) is the Kubernetes operator for PostgreSQL, covering the full lifecycle from bootstrapping to monitoring, with high availability, automated failover, and backup management.
 
-Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) composes them into fleet, protection, declaration, pooling and operator screens. Cluster creation and restore share target inputs; Backups guides attachment to existing ObjectStores and matching schedule creation/repair, followed by observed upload/backup evidence. It does not provision storage providers or credentials — see [cnpg.md](cnpg.md).
+Beyond the per-kind views below, CloudNativePG gets its own views under Resources (`/cnpg`): the fleet, backups and recovery evidence, declarations, pooling and the operator. Each Cluster has a page organized by task (what needs attention, replication, storage, performance, backups) and guarded actions such as switchover, fencing, backup setup and restore, each followed until Radar observes the outcome. Radar does not provision object storage or credentials. Design detail is in [cnpg.md](cnpg.md).
+
+**Fleet:** every Cluster ordered by urgency, each with its top problem.
+
+![CloudNativePG Clusters view: three PostgreSQL clusters, two needing attention, each with its top problem](images/cnpg/fleet.png)
+
+**Cluster page:** the cause first, then one line per health dimension.
+
+![A Cluster stuck because its first instance can't be scheduled: the scheduler's reason first, then Serving, Replication, Storage and Backups at a glance](images/cnpg/cluster-overview.png)
 
 ### What Radar Shows
 
