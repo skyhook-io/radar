@@ -116,10 +116,10 @@ type Server struct {
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
-	// (new cluster ⇒ old picks meaningless). The pick is a per-user view
-	// filter — intersected with the user's RBAC-allowed namespaces at read
-	// time. Picking does NOT narrow the shared informer cache (would corrupt
-	// other users' views).
+	// (new cluster ⇒ old picks meaningless). The pick is a remembered per-user
+	// UI preference: the namespace-scope GET echoes it and the UI sends it on
+	// its reads, but data reads never inherit it. Picking does NOT narrow the
+	// shared informer cache (would corrupt other users' views).
 	nsPreferences sync.Map
 
 	// scopeMutationMu serializes a forced (--namespace-scope) namespace change so
@@ -134,7 +134,7 @@ type Server struct {
 	rootHintOnce sync.Once
 
 	// nsPickMu serializes namespace-pick mutations: the POST handler's
-	// persist+set pair and the read-path stale-pick prune. Without it, a
+	// persist+set pair and the preference GET's stale-pick prune. Without it, a
 	// prune computed from a stale snapshot can land after a user's fresh
 	// pick and silently revert it.
 	nsPickMu sync.Mutex
@@ -1474,14 +1474,15 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 // or an empty non-nil slice when the user has no namespace access.
 // Use noNamespaceAccess() to check the no-access case.
 //
-// If the request omits an explicit namespace filter, falls back to the user's
-// in-app namespace pick (from the namespace switcher). The pick is treated as
-// a view filter — it's still intersected with the user's RBAC-allowed
-// namespaces in getUserNamespaces.
+// A request that names no namespaces reads everything the caller may see:
+// data reads never inherit a stored view selection. The namespace picker's
+// selection is a remembered UI preference that the UI sends explicitly, so a
+// caller acting as the same user for another purpose (Radar Hub's fan-outs,
+// background pollers seeded by --namespaces) isn't silently narrowed by a
+// pick made while browsing. The --namespace-scope clamp still applies — it is
+// the real extent of the cache.
 func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	namespaces := parseNamespaces(r.URL.Query())
-	pickFallback := false
-	pickCtx := ""
 	if k8s.ForceNamespaceScope {
 		target := k8s.GetNamespaceScopeTarget()
 		if target == "" {
@@ -1495,38 +1496,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 			return []string{}
 		}
 	}
-	if namespaces == nil {
-		// No explicit filter — use the user's saved picks if any, pruned of
-		// namespaces that were deleted from the cluster since the pick was made.
-		// When every pick is stale, fall through with no filter so the user sees
-		// the full cluster instead of a silently-empty UI. Read the pick and its
-		// context as one snapshot so the empty-fallback clear below commits
-		// against the same context, not one switched in mid-request.
-		s.loadSavedNamespacePreference(r)
-		if ctx, picks := s.getActiveNamespaceForUserInContext(r); len(picks) > 0 {
-			picks = s.pruneDeletedNamespacePicks(r, ctx, picks)
-			if len(picks) > 0 {
-				namespaces = picks
-				pickFallback = true
-				pickCtx = ctx
-			}
-		}
-	}
-	filtered, discoveryFailed := s.getUserNamespacesWithStatus(r, namespaces)
-	// If picks lost RBAC mid-session, the filter shrinks the set. When the
-	// intersection is empty every read returns []; recover by dropping the
-	// stale pick entirely and recomputing as if no filter were set, so the
-	// user sees their full RBAC ceiling instead of a silently-empty UI.
-	// Symmetric with handleGetNamespaceScope's partial-revocation eviction.
-	// namespaces holds the pruned picks this fallback filtered on; clear only
-	// if it's still the live pick, so a stale read can't wipe a concurrent
-	// POST or clear across a context switch. A failed access check is empty
-	// for the wrong reason and must not cost the user their pick.
-	if pickFallback && !discoveryFailed && noNamespaceAccess(filtered) {
-		s.commitPickMutation(r, pickCtx, namespaces, nil, false)
-		filtered = s.getUserNamespaces(r, nil)
-	}
-	return filtered
+	return s.getUserNamespaces(r, namespaces)
 }
 
 // resolveHelmNamespaces decides which namespaces a Helm list (releases, upgrade

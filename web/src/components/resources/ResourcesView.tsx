@@ -313,7 +313,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const { data: topNodeMetrics } = useTopNodeMetrics({ enabled: topNodeMetricsEnabled })
 
   // Certificate expiry
-  const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry()
+  const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry(namespaces)
 
   // An ExternalSecret names a store; only the store says which backend it reads
   // from. Two list calls per page beat one lookup per row, and the column shows

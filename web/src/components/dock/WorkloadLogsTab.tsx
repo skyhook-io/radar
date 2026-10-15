@@ -5,12 +5,14 @@ interface WorkloadLogsTabProps {
   namespace: string
   workloadKind: string
   workloadName: string
+  viewNamespaces?: string[]
 }
 
 export function WorkloadLogsTab({
   namespace,
   workloadKind,
   workloadName,
+  viewNamespaces,
 }: WorkloadLogsTabProps) {
   const normalizedKind = workloadKind.toLowerCase()
   const isScheduled = normalizedKind === 'cronjob' || normalizedKind === 'cronjobs' ||
@@ -27,6 +29,7 @@ export function WorkloadLogsTab({
           kind={workloadKind}
           namespace={namespace}
           name={workloadName}
+          viewNamespaces={viewNamespaces}
         />
       ) : (
         <WorkloadLogsViewer

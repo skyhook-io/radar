@@ -212,7 +212,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                 />
               </BandItem>
               <BandItem>
-                <CostCard onNavigate={() => onNavigateToView('cost')} />
+                <CostCard namespaces={namespaces} onNavigate={() => onNavigateToView('cost')} />
               </BandItem>
             </div>
 

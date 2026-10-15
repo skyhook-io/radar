@@ -134,6 +134,20 @@ export function openExternal(url: string): void {
     })
 }
 
+/** The header picker's namespace selection as the URL carries it: App keeps
+ *  ?namespaces= in sync with its state (legacy ?namespace= still read). */
+export function namespacesFromSearch(params: URLSearchParams): string[] {
+  const nsParam = params.get('namespaces')
+  if (nsParam) {
+    return nsParam.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  const ns = params.get('namespace')
+  if (ns) {
+    return [ns]
+  }
+  return []
+}
+
 // setMainView's cross-view params. A navigation whose search omits
 // ?namespaces= reads as an empty pick to App's URL sync, which clears the
 // user's namespace scope.

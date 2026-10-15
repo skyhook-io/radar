@@ -1,3 +1,4 @@
+import { useCallback } from 'react'
 import { BottomDock as K8sBottomDock, DockTab, useDock, Input } from '@skyhook-io/k8s-ui'
 import { TerminalTab } from './TerminalTab'
 import { LogsTab } from './LogsTab'
@@ -8,7 +9,7 @@ import { TrafficFlowListTab } from './TrafficFlowListTab'
 import { useFlowSearch } from '../traffic/TrafficFlowListContext'
 import { Search } from 'lucide-react'
 
-function renderTabContent(tab: DockTab, isActive: boolean) {
+function renderTabContent(tab: DockTab, isActive: boolean, viewNamespaces: string[]) {
   if (tab.type === 'terminal') {
     return (
       <TerminalTab
@@ -40,6 +41,7 @@ function renderTabContent(tab: DockTab, isActive: boolean) {
         namespace={tab.namespace!}
         workloadKind={tab.workloadKind!}
         workloadName={tab.workloadName!}
+        viewNamespaces={viewNamespaces}
       />
     )
   }
@@ -90,8 +92,9 @@ function renderTabHeaderExtra(tab: DockTab) {
   return null
 }
 
-export function BottomDock() {
+export function BottomDock({ viewNamespaces }: { viewNamespaces: string[] }) {
   const { leftOffset, tabs } = useDock()
   const hasTrafficFlows = tabs.some(t => t.type === 'traffic-flows')
-  return <K8sBottomDock renderTabContent={renderTabContent} renderTabHeaderExtra={renderTabHeaderExtra} leftOffset={leftOffset} defaultHeight={hasTrafficFlows ? 300 : undefined} />
+  const renderContent = useCallback((tab: DockTab, isActive: boolean) => renderTabContent(tab, isActive, viewNamespaces), [viewNamespaces])
+  return <K8sBottomDock renderTabContent={renderContent} renderTabHeaderExtra={renderTabHeaderExtra} leftOffset={leftOffset} defaultHeight={hasTrafficFlows ? 300 : undefined} />
 }

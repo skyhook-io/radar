@@ -46,6 +46,7 @@ import {
   pluralToKind,
   relatedResourcePath,
   buildWorkloadPath,
+  namespacesFromSearch,
   type NavigateToResource,
 } from '../../utils/navigation'
 import {
@@ -485,6 +486,8 @@ export function WorkloadView({
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
+  const viewNamespacesKey = namespacesFromSearch(searchParams).join(',')
+  const viewNamespaces = useMemo(() => (viewNamespacesKey ? viewNamespacesKey.split(',') : []), [viewNamespacesKey])
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
@@ -552,6 +555,7 @@ export function WorkloadView({
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
     refetchActive: true,
     clusterScoped: batchKind === 'ClusterWorkflowTemplate',
+    namespaces: viewNamespaces,
   })
   const relatedTimelineEvents = useMemo(
     () => batchKind === 'JobSet' ? [] : workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
@@ -1167,6 +1171,7 @@ export function WorkloadView({
             group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
+            viewNamespaces={viewNamespaces}
           />
         )}
         {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
@@ -1185,6 +1190,7 @@ export function WorkloadView({
               onSwitchToLogs={() => handleTabChange('logs')}
               onSwitchToTimeline={() => handleTabChange('timeline')}
               onNavigateToResource={rest.onNavigateToResource}
+              viewNamespaces={viewNamespaces}
             />
           ) : null
         }
@@ -1429,6 +1435,7 @@ function LogsTabContent({
   onConsumeInitialContainer,
   selectedRunKey,
   onSelectRun,
+  viewNamespaces,
 }: {
   kind: string
   apiKind: string
@@ -1443,6 +1450,7 @@ function LogsTabContent({
   onConsumeInitialContainer: () => void
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
+  viewNamespaces: string[]
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1453,6 +1461,7 @@ function LogsTabContent({
           name={name}
           selectedRunKey={selectedRunKey}
           onSelectRun={onSelectRun}
+          viewNamespaces={viewNamespaces}
         />
       </div>
     )

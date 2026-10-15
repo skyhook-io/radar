@@ -116,9 +116,11 @@ interface BatchExecutionProps {
   onSwitchToLogs?: () => void
   onSwitchToTimeline?: () => void
   onNavigateToResource?: (resource: ResourceNavigationTarget) => void
+  /** The view's namespace selection; narrows a cluster-scoped template's runs. */
+  viewNamespaces?: string[]
 }
 
-export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource }: BatchExecutionProps) {
+export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource, viewNamespaces }: BatchExecutionProps) {
   const scheduled = SCHEDULED_KINDS.has(kind)
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
   const jobSetRoot = isJobSetV1Alpha2(resource)
@@ -127,7 +129,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   const debouncedSearch = useDebouncedValue(runSearch, 250, value => value === '')
   const [roleFilter, setRoleFilter] = useState('')
   const memberOptions = { role: roleFilter, search: debouncedSearch, state: runFilter, selected: selectedRunKey }
-  const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped, ...(jobSetRoot ? memberOptions : {}) })
+  const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped, namespaces: viewNamespaces, ...(jobSetRoot ? memberOptions : {}) })
   const resourcesQuery = useJobSetResources(namespace, name, jobSetRoot ? resource.metadata?.uid : undefined, memberOptions)
   const memberCollection = runsQuery.data?.collection === 'members'
   const memberShell = memberCollection || (!runsQuery.data && jobSetRoot)
