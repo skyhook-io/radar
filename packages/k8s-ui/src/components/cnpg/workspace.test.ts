@@ -646,3 +646,9 @@ it('keeps newly unreported kind coverage unknown in the shipped workspace envelo
   data.coverage.databaseRoles = { state: 'notInstalled' }
   expect(buildCNPGFleet(data).incompleteKinds).not.toContain('databaseRoles')
 })
+
+it('a single-instance replica cluster does not read its replication as calm', () => {
+  const solo = (replica?: any) => buildCNPGFleet(resp({ clusters: [cluster('pg', 'db', { spec: { instances: 1, ...(replica ? { replica } : {}) } })] })).rows[0].replication
+  expect(solo()).toMatchObject({ text: 'Single instance', tone: 'neutral' })
+  expect(solo({ enabled: true, source: 'origin' })).toMatchObject({ text: 'Single instance · upstream feed not assessed', tone: 'unknown' })
+})

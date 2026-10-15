@@ -539,7 +539,12 @@ export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
     const pod = recoveryPods.find((p) => p.job === failedJob.name)
     return { ...base, state: 'failed', tone: 'unhealthy', title: `Recovery Job ${failedJob.name} failed`, detail: failedJob.failedWith, logsPod: pod ? { name: pod.name, container: failingContainer(pod)?.name } : undefined }
   }
-  const finishedJob = recoveryJobs.find((j) => j.complete || j.succeeded > 0)
+  // A full recovery Job runs PostgreSQL until recovery ends. A snapshot
+  // recovery Job without a WAL source only puts the files in place; PostgreSQL
+  // first starts on the instance, so that Job proves nothing.
+  const provesRestore = (j: { name: string; role?: string }) =>
+    (j.role ?? (j.name.endsWith('-full-recovery') ? 'full-recovery' : '')) === 'full-recovery' || !!snap.recovery?.source
+  const finishedJob = recoveryJobs.find((j) => (j.complete || j.succeeded > 0) && provesRestore(j))
   const primaryUp = cnpgRestoredPrimaryUp(snap) || (c.readyInstances ?? 0) >= 1
   if (finishedJob || primaryUp) {
     return {

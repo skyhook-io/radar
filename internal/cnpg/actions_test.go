@@ -731,6 +731,38 @@ func TestCNPGActionPromotionTargetRefusedEndToEnd(t *testing.T) {
 	})
 }
 
+// A Pod labelled primary that the Cluster status does not name primary must
+// not take the standby path: deleting it or fencing it would stop a primary.
+func TestCNPGActionPrimaryLabelDisagreementRefused(t *testing.T) {
+	labelled := cnpgActionPod("pg-2", "u2", true)
+	labelled.Labels["cnpg.io/instanceRole"] = "primary"
+	pods := []runtime.Object{cnpgActionPod("pg-1", "u1", true), labelled}
+
+	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)}, pods...)
+	resp, err := newTestReader(nil).ClusterCapabilities(context.Background(), env.clients(), "kind-test", "db", "pg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ia := resp.InstanceActions["pg-2"]; ia.Restart.Allowed || ia.Fence.Allowed {
+		t.Errorf("pg-2 restart=%v fence=%v, want both refused while labels and status disagree", ia.Restart.Allowed, ia.Fence.Allowed)
+	}
+	for action, params := range map[string]map[string]any{
+		"restartInstance": {"pod": "pg-2", "podUID": "u2"},
+		"fence":           {"instances": []string{"pg-2"}},
+	} {
+		t.Run(action, func(t *testing.T) {
+			env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)}, pods...)
+			_, err := RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", action, cnpgActionReq(t, cnpgActionFacts(), params))
+			if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeBlocked {
+				t.Fatalf("err = %v, want 409 blocked", err)
+			}
+			if len(env.deletes) != 0 || len(env.patches) != 0 {
+				t.Error("a write went out")
+			}
+		})
+	}
+}
+
 func TestCNPGActionFencing(t *testing.T) {
 	withFence := func(raw string) (*unstructured.Unstructured, map[string]any) {
 		c := cnpgActionCluster(func(o map[string]any) {

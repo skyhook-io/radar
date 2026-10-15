@@ -174,7 +174,7 @@ export function CNPGRestoreProgress({ namespace, name, nextSteps }: { namespace:
           </div>
         )}
         <div className="text-[11px] text-theme-text-tertiary">
-          Complete once the recovery Job completes or a restored instance is ready. Sampled {formatAge(snapshot.capturedAt)} ago.
+          Complete once a full recovery Job completes or a restored instance is ready. Sampled {formatAge(snapshot.capturedAt)} ago.
         </div>
       </div>
     </section>

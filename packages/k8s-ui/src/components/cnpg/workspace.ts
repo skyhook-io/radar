@@ -782,7 +782,11 @@ function pgVersion(cluster: any): string | null {
 function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean, podsCov: CNPGKindCoverage): Fact {
   if (hibernated) return { text: 'Hibernated', tone: 'neutral' }
   const desired = cluster?.spec?.instances
-  if (desired === 1) return { text: 'Single instance', tone: 'neutral' }
+  if (desired === 1) {
+    return getCNPGClusterIsReplica(cluster)
+      ? { text: 'Single instance · upstream feed not assessed', tone: 'unknown', source: 'The designated primary replays WAL from an external cluster; Radar does not assess that feed' }
+      : { text: 'Single instance', tone: 'neutral' }
+  }
   if (!coverageReadable(podsCov, cluster?.metadata?.namespace)) {
     return { text: cnpgCoverageGap(podsCov, 'Pods', cluster?.metadata?.namespace), tone: 'unknown' }
   }
@@ -1538,7 +1542,7 @@ function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | unde
       if (lag.seconds === undefined) break
       // The lag covers the standbys whose lag was read; one that is not read is unknown, not caught up.
       const partial = expectedStandbys !== undefined && expectedStandbys !== null && lag.lagStandbys !== undefined && lag.lagStandbys < expectedStandbys
-      const coverage = partial ? ` (${lag.lagStandbys} of ${expectedStandbys} ${designated ? 'instances' : 'standbys'} reporting)` : ''
+      const coverage = partial ? ` (${lag.lagStandbys} of ${expectedStandbys} ${designated !== undefined ? 'instances' : 'standbys'} reporting)` : ''
       const lagTone = cnpgLagTone(lag.seconds)
       // A replica cluster's lag is replay behind what arrived; a dead upstream
       // feed delivers nothing and still reads 0.
@@ -1583,7 +1587,7 @@ export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetri
         row.replication,
         reading,
         src,
-        row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined,
+        row.replicaCluster ? (row.cluster?.status?.currentPrimary ?? '') : undefined,
         // Every instance of a replica cluster is in recovery, its designated primary included.
         row.instances.desired !== null ? (row.replicaCluster ? row.instances.desired : Math.max(0, row.instances.desired - 1)) : null,
       )

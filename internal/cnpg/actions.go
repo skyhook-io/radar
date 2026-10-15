@@ -81,6 +81,8 @@ type CNPGInstanceFact struct {
 	Fenced      bool   `json:"fenced"`
 	PodReadable bool   `json:"podReadable"`
 	PodExists   bool   `json:"podExists"`
+	// LabelledPrimary: the Pod's own cnpg.io/instanceRole says primary.
+	LabelledPrimary bool `json:"labelledPrimary,omitempty"`
 }
 
 // CNPGBackupMethodFact is one backup method the Cluster declares. Capability
@@ -467,6 +469,7 @@ func cnpgClusterFactsOf(ctx context.Context, typed kubernetes.Interface, cluster
 					inst.PodExists = true
 					inst.PodUID = string(pod.UID)
 					inst.Ready = cnpgActionPodReady(pod)
+					inst.LabelledPrimary = cnpgPodLabelledPrimary(pod)
 					pods[n] = pod
 				}
 			case apierrors.IsNotFound(err):
@@ -599,6 +602,9 @@ func cnpgGuardRestartInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
 		}
 		return ""
 	}
+	if r := cnpgGuardPrimaryDisagreement(f, i); r != "" {
+		return r
+	}
 	if r := cnpgGuardPromotionTarget(f, i); r != "" {
 		return r
 	}
@@ -639,6 +645,16 @@ func cnpgGuardFence(f CNPGClusterFacts) string {
 
 // cnpgGuardPromotionTarget refuses disrupting the standby a switchover or
 // failover is promoting: stopping it mid-promotion can leave no primary.
+// cnpgGuardPrimaryDisagreement refuses an instance action that would take
+// the standby path for a Pod labelled primary: the Cluster status and the
+// labels disagree about which instance is primary.
+func cnpgGuardPrimaryDisagreement(f CNPGClusterFacts, i CNPGInstanceFact) string {
+	if i.LabelledPrimary && i.Pod != f.CurrentPrimary {
+		return fmt.Sprintf("Its Pod is labelled primary while the Cluster status names %q; wait until they agree", f.CurrentPrimary)
+	}
+	return ""
+}
+
 func cnpgGuardPromotionTarget(f CNPGClusterFacts, i CNPGInstanceFact) string {
 	if i.Pod != f.TargetPrimary || i.Pod == f.CurrentPrimary {
 		return ""
@@ -656,6 +672,9 @@ func cnpgGuardFenceInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
 	}
 	if i.Fenced {
 		return "It is fenced already"
+	}
+	if r := cnpgGuardPrimaryDisagreement(f, i); r != "" {
+		return r
 	}
 	return cnpgGuardPromotionTarget(f, i)
 }
@@ -1154,7 +1173,7 @@ var clusterActionRunners = map[string]cnpgClusterRunner{
 	"restart":          {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances", "generation"}, run: cnpgRunRestart},
 	"restartInstance":  {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunRestartInstance},
 	"reload":           {binds: []string{"hibernation"}, run: cnpgRunReload},
-	"fence":            {binds: []string{"currentPrimary", "hibernation", "fencedInstances"}, run: cnpgRunFence},
+	"fence":            {binds: []string{"currentPrimary", "hibernation", "fencedInstances"}, needsPods: true, run: cnpgRunFence},
 	"unfence":          {binds: []string{"currentPrimary", "fencedInstances"}, run: cnpgRunUnfence},
 	"hibernate":        {binds: []string{"hibernation"}, run: cnpgRunHibernation("on")},
 	"rehydrate":        {binds: []string{"hibernation"}, run: cnpgRunHibernation("off")},
@@ -1671,6 +1690,9 @@ func cnpgRunFence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, er
 		}
 		if next[n] {
 			return nil, integration.BlockedAction(n + " is fenced already")
+		}
+		if r := cnpgGuardPrimaryDisagreement(x.facts, inst); r != "" {
+			return nil, integration.BlockedAction(n + " cannot be fenced: " + r)
 		}
 		if r := cnpgGuardPromotionTarget(x.facts, inst); r != "" {
 			return nil, integration.BlockedAction(n + " cannot be fenced: " + r)

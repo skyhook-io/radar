@@ -243,5 +243,8 @@ describe('fleet lag covers the standbys that report', () => {
     const all = applyCNPGFleetMetrics(replica, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-1', lagStandbys: 3, standbys: 3, receiving: 3 })], { source: 'prometheus' })
     expect(row(all, 'ha').replication.text).not.toContain('reporting')
     expect(row(all, 'ha').replication).toMatchObject({ text: expect.stringContaining('upstream feed not assessed'), tone: 'unknown' })
+    r.cluster = { ...r.cluster, status: { ...r.cluster?.status, currentPrimary: undefined } }
+    const unnamed = applyCNPGFleetMetrics(replica, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-1', lagStandbys: 3, standbys: 3, receiving: 3 })], { source: 'prometheus' })
+    expect(row(unnamed, 'ha').replication).toMatchObject({ text: expect.stringContaining('upstream feed not assessed'), tone: 'unknown' })
   })
 })

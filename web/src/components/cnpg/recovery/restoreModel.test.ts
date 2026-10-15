@@ -397,6 +397,9 @@ describe('observeRestore', () => {
       expect(hibernated.detail).toBe('Recovery Job r-1-full-recovery completed · 0/3 instances ready · Cluster in hibernation')
       expect(observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [down('r-1')], jobs: [{ ...recovered, role: undefined, complete: false }] })).state).toBe('completed')
       expect(observeRestore(snapshot({ phase: 'Waiting for the instances to become active', ready: 0, pods: [down('r-1')], jobs: [{ name: 'r-1-join', role: 'join', active: 0, succeeded: 1, failed: 0, complete: true }] })).state).toBe('progressing')
+      const snapshotJob = { name: 'r-1-snapshot-recovery', role: 'snapshot-recovery', active: 0, succeeded: 1, failed: 0, complete: true }
+      expect(observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [down('r-1')], jobs: [snapshotJob] })).state).toBe('progressing')
+      expect(observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [down('r-1')], jobs: [{ ...snapshotJob, role: undefined }] })).state).toBe('progressing')
       const noJobs = { pods: { state: 'ok' as const }, jobs: { state: 'denied' as const }, events: { state: 'ok' as const } }
       expect(observeRestore(snapshot({ phase: 'Setting up primary', ready: 0, pods: [down('r-1')], coverage: noJobs }))).toMatchObject({ state: 'progressing', title: 'Waiting for the recovery to start' })
     })
