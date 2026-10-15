@@ -19,14 +19,20 @@ describe('parseArgoRollbackID', () => {
   test('empty string returns null (would be Number("") === 0)', () => {
     expect(parseArgoRollbackID('')).toBeNull()
   })
-  test('"0" returns null (non-positive, Argo history starts at 1)', () => {
-    expect(parseArgoRollbackID('0')).toBeNull()
+  // Argo numbers history from 0, so the first deploy is a rollback target.
+  test('"0" is the first history entry', () => {
+    expect(parseArgoRollbackID('0')).toBe(0)
   })
   test('negative numbers return null', () => {
     expect(parseArgoRollbackID('-5')).toBeNull()
   })
   test('Flux condition type string returns null', () => {
     expect(parseArgoRollbackID('Ready')).toBeNull()
+  })
+  // Number() reads each of these as a number; with 0 now valid, a blank id
+  // would otherwise target the first deploy.
+  test.each([' ', '0x1f', '1e3', '1.5', '+1', ' 1'])('%j returns null', (id) => {
+    expect(parseArgoRollbackID(id)).toBeNull()
   })
   test('positive integer returns the number', () => {
     expect(parseArgoRollbackID('42')).toBe(42)

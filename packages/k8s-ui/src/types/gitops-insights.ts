@@ -233,6 +233,10 @@ export interface GitOpsHistoryItem {
   rawMessage?: string
   source?: string
   initiatedBy?: string
+  // Argo CD history entries: whether the rollback API accepts this entry
+  // (false when it records no source). Absent on the current-operation row,
+  // and on every row from a Radar that predates the field.
+  rollbackable?: boolean
 }
 
 export interface GitOpsCapabilities {

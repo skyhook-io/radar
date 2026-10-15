@@ -22,6 +22,8 @@ import {
   getGitOpsResourceStatus,
   getGitOpsTool,
   isDestinationRef,
+  isArgoAutoSyncEnabled,
+  isArgoAutoSyncSwitchedOff,
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
@@ -31,6 +33,7 @@ import {
   normalizeFluxHelmRelease,
   normalizeFluxKustomization,
   parseArgoRollbackID,
+  radarUpgradeNoteText,
   toggleSet,
   type APIResource,
   type ArgoActionHandlers,
@@ -69,6 +72,7 @@ import {
   useFluxSyncWithSource,
   useGitOpsInsights,
   useGitOpsTree,
+  useRadarFeature,
   useResource,
 } from '../../api/client'
 import { useAPIResources, GITOPS_KINDS } from '../../api/apiResources'
@@ -133,6 +137,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const fluxSyncWithSource = useFluxSyncWithSource()
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
+  const { upgrade: argoResumeUpgrade } = useRadarFeature('argoAutoSyncEnable')
 
   const [syncDialogRow, setSyncDialogRow] = useState<GitOpsRow | null>(null)
   const [pendingActions, setPendingActions] = useState<Map<string, Set<GitOpsRowAction>>>(new Map())
@@ -316,6 +321,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         }}
         onRowAction={handleRowAction}
         pendingRowActions={pendingActions}
+        argoResumeUpgrade={argoResumeUpgrade}
         searchHotkey
         globalNamespaces={namespaces}
         onClearNamespaces={onClearNamespaces}
@@ -375,11 +381,12 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const switchFlow = useContextSwitchFlow()
   const status = resourceQ.data ? getGitOpsResourceStatus(kind, resourceQ.data) : null
   const tool = getGitOpsTool(kind, group)
-  // Argo "auto-sync ON" is determined by spec.syncPolicy.automated being set,
-  // not by health.status === Suspended (which is Argo's CronJob-style suspend).
+  // Argo "auto-sync ON" is read from spec.syncPolicy.automated (honoring
+  // `enabled: false`), not from health.status === Suspended (which is Argo's
+  // CronJob-style suspend).
   // The toggle button reads from this so the label flips correctly when an
   // app is in Manual mode or suspended via Radar's annotations.
-  const argoAutoSyncEnabled = kind === 'applications' && Boolean(resourceQ.data?.spec?.syncPolicy?.automated)
+  const argoAutoSyncEnabled = kind === 'applications' && isArgoAutoSyncEnabled(resourceQ.data)
   // Radar-driven Argo suspension is signaled by annotations that record the
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
   // the app is in a deliberately-paused state (vs. Manual mode, which is a
@@ -430,6 +437,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const argoSuspend = useArgoSuspend()
   const argoResume = useArgoResume()
   const argoRollback = useArgoRollback()
+  const { upgrade: argoRollbackUpgrade } = useRadarFeature('argoRollback')
+  const { upgrade: argoResumeUpgrade } = useRadarFeature('argoAutoSyncEnable')
   const applyResource = useApplyResource()
   const fluxReconcile = useFluxReconcile()
   const fluxSyncWithSource = useFluxSyncWithSource()
@@ -631,6 +640,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     autoSyncEnabled: argoAutoSyncEnabled,
     isRunning,
     operationInProgress,
+    resumeUpgrade: isArgoAutoSyncSwitchedOff(resourceQ.data) ? argoResumeUpgrade : null,
   } : undefined
 
   const fluxHandlers: FluxActionHandlers | undefined = isFlux ? {
@@ -780,6 +790,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 if (parseArgoRollbackID(item.id) == null) return
                 setRollbackTarget(item)
               } : undefined}
+              rollbackUpgrade={argoRollbackUpgrade}
             />
           )
         }
@@ -885,6 +896,12 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             pending={argoRollback.isPending}
             onCancel={() => setRollbackTarget(null)}
             onConfirm={(opts) => {
+              // The dialog may have opened before /api/capabilities answered.
+              if (argoRollbackUpgrade) {
+                showError('Rollback unavailable', radarUpgradeNoteText(argoRollbackUpgrade))
+                setRollbackTarget(null)
+                return
+              }
               const id = parseArgoRollbackID(rollbackTarget?.id)
               if (id == null) {
                 showError('Rollback target became invalid', 'The history entry changed while the dialog was open. Reselect a target and try again.')

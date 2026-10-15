@@ -11,7 +11,9 @@ import { compareVersions } from '../utils/version'
 // an entry here with that flag and `flagShippedWithEndpoint: true`, and guard
 // its hook with useRadarFeature. TestFeatureFlagsHaveFrontendGates keeps the
 // two lists in step. `minimumVersion` can wait for the release to be cut:
-// until then the note asks for the latest Radar.
+// until then the note asks for the latest Radar. A behavior change on an
+// existing endpoint is gated the same way, except that the control relying on
+// it is disabled: an older Radar still answers the request, wrongly.
 export interface RadarFeatureSpec {
   /** Plural noun phrase; the upgrade note reads "<label> need Radar vX or newer." */
   label: string
@@ -39,6 +41,10 @@ export const RADAR_FEATURES = {
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
+  // One flag, two controls. An older Radar's rollback never runs, and its
+  // resume reports success while leaving automated.enabled: false in place.
+  argoRollback: { label: 'Argo CD rollbacks', flag: 'argoRollbackSync', flagShippedWithEndpoint: true },
+  argoAutoSyncEnable: { label: 'Auto-sync controls for Applications with automated.enabled: false', flag: 'argoRollbackSync', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES
@@ -81,6 +87,16 @@ export function radarFeatureSupport(
   currentVersion: string | undefined,
 ): RadarFeatureSupport {
   return radarSpecSupport(RADAR_FEATURES[feature], capabilities, currentVersion)
+}
+
+/**
+ * Whether a control backed by `feature` renders disabled with the upgrade
+ * note. A request can be probed, but a control's outcome can't, so a control
+ * also stays disabled when /api/capabilities failed, as CapabilitiesContext
+ * fails closed on the same error. While it loads, the control stays enabled.
+ */
+export function radarControlBlocked(support: RadarFeatureSupport, capabilitiesFailed: boolean): boolean {
+  return support === 'unsupported' || (support === 'unknown' && capabilitiesFailed)
 }
 
 export function radarUpgradeRequirement(feature: RadarFeature, versions: RadarVersions): RadarUpgradeRequirement {

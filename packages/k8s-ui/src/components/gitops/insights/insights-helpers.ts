@@ -151,6 +151,18 @@ export function entryTone(item: GitOpsHistoryItem): EntryTone {
   return { dot: SEVERITY_DOT.neutral, inferredFrom: 'no phase information' }
 }
 
+// historyRollbackBlockedReason is why a history row's Rollback button is
+// disabled, or undefined when it can roll back. An entry the backend marks
+// not rollbackable is refused by the rollback API whatever else changes, so
+// its reason wins over the app-wide one (auto-sync), which the operator can
+// fix. A Radar that predates `rollbackable` omits it; the API decides there.
+export function historyRollbackBlockedReason(item: GitOpsHistoryItem, appBlockedReason?: string): string | undefined {
+  if (item.rollbackable === false) {
+    return "This entry records no source, so Argo CD can't roll back to it. Sync to its revision instead."
+  }
+  return appBlockedReason
+}
+
 // Compact a source string for inline display. Argo emits the full GitHub URL
 // followed by " · path/within/repo", which dominates the timeline row when
 // rendered raw. Strip the protocol+host (full string still shown on hover via

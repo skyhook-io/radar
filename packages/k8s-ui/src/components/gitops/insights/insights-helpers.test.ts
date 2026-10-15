@@ -8,6 +8,7 @@ import {
   entryTone,
   gitopsToSeverity,
   healthStatusRank,
+  historyRollbackBlockedReason,
   isArgoResourceSyncEligible,
   messageToPhase,
   phaseToTone,
@@ -195,5 +196,26 @@ describe('syncStatusRank / healthStatusRank', () => {
   it('ascending health rank surfaces Missing/Degraded before Healthy', () => {
     expect(healthStatusRank('Missing')).toBeLessThan(healthStatusRank('Degraded'))
     expect(healthStatusRank('Degraded')).toBeLessThan(healthStatusRank('Healthy'))
+  })
+})
+
+describe('historyRollbackBlockedReason', () => {
+  const autoSync = 'Auto-sync is enabled.'
+  it('allows an entry the backend marks rollbackable', () => {
+    expect(historyRollbackBlockedReason({ id: '0', rollbackable: true })).toBeUndefined()
+  })
+  it('blocks an entry that records no source', () => {
+    expect(historyRollbackBlockedReason({ id: '1', rollbackable: false })).toMatch(/records no source/)
+  })
+  // Turning auto-sync off would not make this entry rollbackable.
+  it('names the missing source over auto-sync', () => {
+    expect(historyRollbackBlockedReason({ id: '1', rollbackable: false }, autoSync)).toMatch(/records no source/)
+  })
+  it('passes the app-wide reason through for a rollbackable entry', () => {
+    expect(historyRollbackBlockedReason({ id: '0', rollbackable: true }, autoSync)).toBe(autoSync)
+  })
+  // A Radar that predates the field omits it; the rollback API decides.
+  it('leaves an entry without the field enabled', () => {
+    expect(historyRollbackBlockedReason({ id: '2' })).toBeUndefined()
   })
 })

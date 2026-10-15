@@ -24,6 +24,7 @@ import (
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -2341,24 +2342,20 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
-	// Check sync policy changes (auto-sync enabled/disabled)
-	oldAutoSync, oldAutoExists, _ := unstructured.NestedMap(oldApp.Object, "spec", "syncPolicy", "automated")
-	newAutoSync, newAutoExists, _ := unstructured.NestedMap(newApp.Object, "spec", "syncPolicy", "automated")
-
-	if !oldAutoExists && newAutoExists {
+	// Check sync policy changes (auto-sync enabled/disabled). Argo CD 3.x can
+	// switch automation off in place with `automated.enabled: false`, so
+	// compare the effective state, not whether the block exists.
+	if oldAutoEnabled, newAutoEnabled := gitops.ArgoAutoSyncEnabled(oldApp), gitops.ArgoAutoSyncEnabled(newApp); oldAutoEnabled != newAutoEnabled {
 		changes = append(changes, FieldChange{
 			Path:     "spec.syncPolicy.automated",
-			OldValue: nil,
-			NewValue: newAutoSync,
+			OldValue: argoAutomatedBlock(oldApp),
+			NewValue: argoAutomatedBlock(newApp),
 		})
-		summary = append(summary, "auto-sync enabled")
-	} else if oldAutoExists && !newAutoExists {
-		changes = append(changes, FieldChange{
-			Path:     "spec.syncPolicy.automated",
-			OldValue: oldAutoSync,
-			NewValue: nil,
-		})
-		summary = append(summary, "auto-sync disabled")
+		if newAutoEnabled {
+			summary = append(summary, "auto-sync enabled")
+		} else {
+			summary = append(summary, "auto-sync disabled")
+		}
 	}
 
 	// Check target revision change
@@ -2436,6 +2433,15 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	return changes, summary
+}
+
+// argoAutomatedBlock returns spec.syncPolicy.automated, or nil (not a nil map)
+// when the block is absent, so the change record reads null.
+func argoAutomatedBlock(app *unstructured.Unstructured) any {
+	if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+		return automated
+	}
+	return nil
 }
 
 // Step index, weights, pause conditions and abort/promoteFull all move without
