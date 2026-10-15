@@ -15,9 +15,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/skyhook-io/radar/internal/argocd"
-	"github.com/skyhook-io/radar/internal/readscope"
-
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"

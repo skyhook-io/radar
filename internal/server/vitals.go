@@ -1,7 +1,6 @@
 package server
 
 import (
-	"github.com/skyhook-io/radar/internal/readscope"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )

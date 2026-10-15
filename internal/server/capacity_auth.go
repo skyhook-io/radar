@@ -1,11 +1,11 @@
 package server
 
 import (
-	"github.com/skyhook-io/radar/internal/readscope"
 	"net/http"
 	"slices"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 )
 
 func (s *Server) capacityNamespacesForUser(r *http.Request) []string {

@@ -5,12 +5,13 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 

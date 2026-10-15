@@ -20,10 +20,9 @@ import (
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/connections"
-	"github.com/skyhook-io/radar/internal/readscope"
-
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/finalizers"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"

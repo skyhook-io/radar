@@ -6,10 +6,9 @@ import (
 	"log"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-
 	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // Shared metrics-server plumbing — consumed by both /api/dashboard and

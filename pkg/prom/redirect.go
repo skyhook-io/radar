@@ -7,12 +7,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
-// NormalizeOrigin compares scheme, hostname and effective port, including the
-// default HTTP(S) port when it is omitted. Paths are not part of an origin.
-func NormalizeOrigin(raw string) (string, bool) {
-	return urlutil.NormalizeOrigin(raw)
-}
-
 // SameOriginRedirectClient copies a client, preserving its transport and stricter
 // redirect policy while refusing redirects that could expose configured headers.
 func SameOriginRedirectClient(client *http.Client) *http.Client {
@@ -24,9 +18,9 @@ func SameOriginRedirectClient(client *http.Client) *http.Client {
 		if len(via) == 0 {
 			return errors.New("redirect has no original request")
 		}
-		origin, ok := NormalizeOrigin(via[0].URL.String())
+		origin, ok := urlutil.NormalizeOrigin(via[0].URL.String())
 		check := func() error {
-			destination, valid := NormalizeOrigin(next.URL.String())
+			destination, valid := urlutil.NormalizeOrigin(next.URL.String())
 			if !ok || !valid || destination != origin {
 				return errors.New("cross-origin redirect refused: configure the final backend URL directly")
 			}

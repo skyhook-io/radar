@@ -149,8 +149,9 @@ func edgesForNode(topo *Topology, idx *RelationshipsIndex, nodeID string) (incom
 	return incoming, outgoing
 }
 
-// GetCascadeDeletePreview walks topology management edges to approximate the
-// resources Kubernetes may garbage-collect with root.
+// GetCascadeDeletePreview walks topology management edges to identify related
+// resources deletion may affect. Edges include GitOps attribution and sources;
+// this is not a prediction of Kubernetes garbage collection or controller pruning.
 func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvider) *CascadeDeletePreview {
 	preview := &CascadeDeletePreview{
 		Root:       root,

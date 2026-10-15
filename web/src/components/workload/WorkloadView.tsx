@@ -401,7 +401,8 @@ function useActionsBarProps(
     isDeleting: deleteMutation.isPending,
     cascadeDependents: cascadePreview?.dependents,
     cascadeLoading,
-    cascadeRootResolved: cascadeError ? false : cascadePreview?.rootResolved,
+    cascadeRootResolved: cascadePreview?.rootResolved,
+    cascadePreviewFailed: Boolean(cascadeError),
     onRestart: rolloutAllows('restart')
       ? (params: Parameters<typeof restartWorkloadMutation.mutate>[0]) =>
           restartWorkloadMutation.mutate(params)

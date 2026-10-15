@@ -1,7 +1,6 @@
 package server
 
 import (
-	"github.com/skyhook-io/radar/internal/readscope"
 	"log"
 	"net/http"
 	"net/url"
@@ -13,6 +12,7 @@ import (
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	internaltimeline "github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"

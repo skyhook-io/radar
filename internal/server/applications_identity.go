@@ -10,11 +10,10 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
 
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/resourceid"
-
-	"github.com/skyhook-io/radar/internal/readscope"
 )
 
 // resourceLister is the slice of the resource cache the app identity resolver

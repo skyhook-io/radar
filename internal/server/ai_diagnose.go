@@ -15,9 +15,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/config"
-	"github.com/skyhook-io/radar/internal/readscope"
-
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/checks"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )

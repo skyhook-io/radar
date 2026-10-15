@@ -5,9 +5,8 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/internal/readscope"
-
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 )
 
 func TestUpgradeReadinessNamespacesIgnoresBrowsingFilter(t *testing.T) {

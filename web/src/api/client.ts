@@ -4350,7 +4350,7 @@ export function useUpdateResource() {
   });
 }
 
-// Cascade delete preview — shows resources that will be garbage-collected
+// Cascade delete preview — visible related resources deletion may affect.
 export interface CascadeDeletePreview {
   root: { kind: string; namespace: string; name: string; group?: string };
   rootResolved: boolean;

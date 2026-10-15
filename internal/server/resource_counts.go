@@ -6,11 +6,10 @@ import (
 	"net/http"
 	"slices"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 type ResourceCountsResponse struct {

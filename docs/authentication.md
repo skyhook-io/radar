@@ -32,6 +32,8 @@ Issues follow the same rule: you see an issue only if you could open its resourc
 
 **If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). See [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for the `rbac.create: false` + custom `Role` setup.
 
+Deletion-impact previews require read access to the root resource and use the caller's visible topology. Related resources describe observed management relationships, not a guarantee of Kubernetes garbage collection. Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
+
 ### Prometheus metrics
 
 Charts of a specific resource are gated like the resource itself: you see them only if you can read what they chart. The surfaces that can't be tied to one resource — raw PromQL, metric discovery, alert rules and the cluster-wide aggregate — are gated on listing Pods in **every** namespace, because a PromQL expression can't be namespace-filtered by inspecting it. Kubernetes' built-in `view` ClusterRole meets that bar, so binding `view` also grants read access to everything the Prometheus backend holds, `kube-system` and node-level series included.

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 // validateStartupPrometheusURL deliberately accepts userinfo and query
@@ -24,8 +25,8 @@ func ValidatePrometheusHeaderDestination(savedURL, launchURL string, inheritsHea
 	if !inheritsHeaders || strings.TrimSpace(savedURL) == "" {
 		return nil
 	}
-	saved, savedOK := prom.NormalizeOrigin(savedURL)
-	launch, launchOK := prom.NormalizeOrigin(launchURL)
+	saved, savedOK := urlutil.NormalizeOrigin(savedURL)
+	launch, launchOK := urlutil.NormalizeOrigin(launchURL)
 	if savedOK && launchOK && saved == launch {
 		return nil
 	}

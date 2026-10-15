@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 func TestWebSocketOriginPolicy(t *testing.T) {
@@ -120,9 +121,9 @@ func trustedOriginSet(t *testing.T, origins ...string) map[string]struct{} {
 	t.Helper()
 	set := make(map[string]struct{}, len(origins))
 	for _, origin := range origins {
-		normalized, ok := normalizeOrigin(origin)
+		normalized, ok := urlutil.NormalizeOrigin(origin)
 		if !ok {
-			t.Fatalf("normalizeOrigin(%q) failed", origin)
+			t.Fatalf("urlutil.NormalizeOrigin(%q) failed", origin)
 		}
 		set[normalized] = struct{}{}
 	}
