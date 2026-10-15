@@ -15,7 +15,8 @@ type KindReadAssessment struct {
 }
 
 // AssessKindRead keeps unread cache entries from becoming absence claims.
-// The host adapter supplies an already-authorized namespace target.
+// A nil target means all namespaces; an empty target means none. The host supplies
+// an authorized target and must restrict returned names to caller-visible namespaces.
 func AssessKindRead(cache *k8s.ResourceCache, resource string, requested []string) KindReadAssessment {
 	assessment := KindReadAssessment{}
 	if cache == nil || cache.ResourceCache == nil {

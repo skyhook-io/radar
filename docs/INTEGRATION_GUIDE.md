@@ -195,15 +195,16 @@ unknown, partial and denied values first: every piece here exists to keep them.
     details to avoid opening a same-named object in another cluster; Capacity
     follows the active cluster.
 - [ ] **One aggregate endpoint.**
-  - List each kind with `readWorkspaceKind` (dynamic kinds) or
-    `typedKindScope` (typed kinds such as Pods), both in
-    `internal/server/kind_access.go`. Their answer's `Coverage()` is a
-    `internal/integration.KindCoverage`: `full|partial|denied|notInstalled|syncing|uncached|error`,
-    with denied and uncached namespaces named only when the caller supplied the
-    namespace list.
-  - Radar's own cache scope comes from `readscope.NamespacesWithinCache`
-    (`internal/readscope/scope.go`). Scope alone does not establish initial readiness;
-    check `KindReadinessFor` before claiming complete or empty observations.
+  - List dynamic kinds with `readWorkspaceKind` in `internal/server/kind_access.go`.
+    Its `Coverage()` returns `internal/integration.KindCoverage`:
+    `full|partial|denied|notInstalled|syncing|uncached|error`, with denied and
+    uncached namespaces named only when the caller supplied the namespace list.
+  - Typed-kind scope assessment is currently CNPG-local: `cnpg.AssessKindRead`
+    (`internal/cnpg/read_scope.go`), with the caller adapter in
+    `internal/server/cnpg_read_scope.go`. It is not a shared integration helper.
+    Namespace selection utilities live in `internal/readscope`; scope alone
+    does not establish initial readiness. Check `KindReadinessFor` before
+    claiming complete or empty observations.
   - Reviewed writes use `useReviewedActionMutation` in `web/src/api/reviewedActionMutation.ts`
     to retain in-flight and uncertain results through dialog remounts and connection cache resets.
     Pass its retained error through `actionDialogResult` to the dialog's single `result` prop.
