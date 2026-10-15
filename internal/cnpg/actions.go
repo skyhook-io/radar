@@ -670,8 +670,17 @@ func cnpgGuardFenceInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
 	if r := cnpgGuardFence(f); r != "" {
 		return r
 	}
+	return cnpgGuardFenceTarget(f, i)
+}
+
+// cnpgGuardFenceTarget refuses an instance whose Pod cannot be read: only
+// its role label shows a primary the Cluster status does not name yet.
+func cnpgGuardFenceTarget(f CNPGClusterFacts, i CNPGInstanceFact) string {
 	if i.Fenced {
 		return "It is fenced already"
+	}
+	if !i.PodReadable {
+		return "Its Pod cannot be read, so its role cannot be verified"
 	}
 	if r := cnpgGuardPrimaryDisagreement(f, i); r != "" {
 		return r
@@ -1691,10 +1700,7 @@ func cnpgRunFence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, er
 		if next[n] {
 			return nil, integration.BlockedAction(n + " is fenced already")
 		}
-		if r := cnpgGuardPrimaryDisagreement(x.facts, inst); r != "" {
-			return nil, integration.BlockedAction(n + " cannot be fenced: " + r)
-		}
-		if r := cnpgGuardPromotionTarget(x.facts, inst); r != "" {
+		if r := cnpgGuardFenceTarget(x.facts, inst); r != "" {
 			return nil, integration.BlockedAction(n + " cannot be fenced: " + r)
 		}
 		next[n] = true

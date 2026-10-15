@@ -763,6 +763,52 @@ func TestCNPGActionPrimaryLabelDisagreementRefused(t *testing.T) {
 	}
 }
 
+// Without the Pod there is no role label to compare with the status, so a
+// named fence could stop a primary the status does not name yet. Fencing
+// every instance does not depend on the role and stays available.
+func TestCNPGActionFenceRefusesUnreadablePod(t *testing.T) {
+	for name, getErr := range map[string]error{
+		"forbidden": apiForbidden("pods"),
+		"transient": errors.New("connection reset"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			newEnv := func() *cnpgActionEnv {
+				env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)}, cnpgActionPod("pg-1", "u1", true), cnpgActionPod("pg-2", "u2", true))
+				env.typed.PrependReactor("get", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+					if a.(k8stesting.GetAction).GetName() == "pg-2" {
+						return true, nil, getErr
+					}
+					return false, nil, nil
+				})
+				return env
+			}
+			resp, err := newTestReader(nil).ClusterCapabilities(context.Background(), newEnv().clients(), "kind-test", "db", "pg")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ia := resp.InstanceActions["pg-2"]; ia.Fence.Allowed {
+				t.Error("fence of pg-2 allowed with its Pod unreadable")
+			}
+
+			env := newEnv()
+			_, err = RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "fence",
+				cnpgActionReq(t, cnpgActionFacts(), map[string]any{"instances": []string{"pg-2"}}))
+			if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeBlocked {
+				t.Fatalf("err = %v, want 409 blocked", err)
+			}
+			if len(env.patches) != 0 {
+				t.Error("a write went out")
+			}
+
+			env = newEnv()
+			if _, err := RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "fence",
+				cnpgActionReq(t, cnpgActionFacts(), map[string]any{"instances": "*"})); err != nil {
+				t.Fatalf("fence all: %v", err)
+			}
+		})
+	}
+}
+
 func TestCNPGActionFencing(t *testing.T) {
 	withFence := func(raw string) (*unstructured.Unstructured, map[string]any) {
 		c := cnpgActionCluster(func(o map[string]any) {
