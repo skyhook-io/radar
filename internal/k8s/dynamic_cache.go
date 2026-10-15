@@ -178,6 +178,8 @@ type supportedCRDResource struct {
 // drift checks. Only installed catalog entries are warmed, so watch identities
 // stay bounded even when discovery exposes an unbounded CRD set.
 var supportedCRDFallbacks = []supportedCRDResource{
+	{Group: "core.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "strimzipodsets", Kind: "StrimziPodSet", Namespaced: true},
+	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnects", Kind: "KafkaConnect", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnectors", Kind: "KafkaConnector", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applications", Kind: "Application", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applicationsets", Kind: "ApplicationSet", Namespaced: true},

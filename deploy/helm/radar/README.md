@@ -465,7 +465,7 @@ retain their finite grants.
 | `reflector` | `reflector.v1.k8s.emberstack.com` |
 | `reloader` | `reloader.stakater.com` |
 | `sealedSecrets` | `bitnami.com` |
-| `strimzi` | `strimzi.io`, `kafka.strimzi.io` |
+| `strimzi` | `strimzi.io`, `kafka.strimzi.io`, `core.strimzi.io` (`strimzipodsets` only) |
 | `tekton` | `tekton.dev` |
 | `traefik` | `traefik.io`, `traefik.containo.us` |
 | `trivy` | `aquasecurity.github.io` |

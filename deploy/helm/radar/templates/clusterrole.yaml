@@ -514,6 +514,9 @@ rules:
   - apiGroups: ["strimzi.io", "kafka.strimzi.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["core.strimzi.io"]
+    resources: ["strimzipodsets"]
+    verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.tekton }}
   - apiGroups: ["tekton.dev"]

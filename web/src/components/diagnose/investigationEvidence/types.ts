@@ -109,6 +109,7 @@ export interface InvestigationResourceContext extends DiagnosisResourceContext {
     highestSeverity?: string;
     topFinding?: string;
   };
+  relatedApplicationFindings?: unknown;
   policySummary?: unknown;
   podSummary?: unknown;
 }
@@ -370,6 +371,7 @@ export type InvestigationEvidenceData =
   | {
       type: "issue";
       issue: Issue;
+      applicationSource?: DiagnosisResourceRef;
       /**
        * A broad `issues` query can return failures from other resources. Keep
        * those factual observations, but do not let agent selection alone imply
