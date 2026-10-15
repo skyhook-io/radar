@@ -19,6 +19,7 @@ import {
   stringArray,
 } from "../parse";
 import { type InvestigationEvidenceSource } from "../types";
+import { uncheckedSourceLines } from "../../../issues/uncheckedSources";
 
 export function adaptIssues(
   builder: ProjectionBuilder,
@@ -101,6 +102,19 @@ export function adaptIssues(
         : `Radar reported ${visibility.state} visibility for this issue query.`,
       "unknown",
     );
+  }
+  // A source Radar couldn't check makes an empty answer unknown, not clean.
+  const rawUnchecked = value.unchecked_sources;
+  if (rawUnchecked !== undefined && !Array.isArray(rawUnchecked)) {
+    invalidPayload(builder, source, "Issues");
+  } else {
+    const unchecked = (rawUnchecked ?? []).map((item) => {
+      const name = record(item)?.source;
+      return { source: typeof name === "string" ? name : "" };
+    });
+    for (const line of uncheckedSourceLines(unchecked)) {
+      builder.limit(source, "Issues", line, "unknown");
+    }
   }
   const issueChangesRaw = value.recent_changes;
   if (Array.isArray(issueChangesRaw)) {
