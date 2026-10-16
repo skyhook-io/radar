@@ -389,8 +389,10 @@ type denyAllIngressImpact struct {
 	// lastCreated is the newest creation time among the affected Services and
 	// pods: isolation can't be dated earlier than objects it applies to.
 	lastCreated time.Time
-	pods        map[string]bool
-	owners      map[issuesapi.Ref]bool
+	// selectors are the affected Services' pod selectors.
+	selectors []labels.Selector
+	pods      map[string]bool
+	owners    map[issuesapi.Ref]bool
 	// alsoDenying names the other policies leaving the same pods without
 	// inbound traffic; each gets its own issue, and each issue names the rest.
 	alsoDenying map[string]bool
@@ -458,6 +460,7 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 				}
 				if n := len(impact.services); n == 0 || impact.services[n-1] != svc.Name {
 					impact.services = append(impact.services, svc.Name)
+					impact.selectors = append(impact.selectors, labels.SelectorFromSet(svc.Spec.Selector))
 					if created := svc.CreationTimestamp.Time; created.After(impact.lastCreated) {
 						impact.lastCreated = created
 					}
@@ -667,14 +670,16 @@ const onsetObservationMargin = time.Minute
 // and only when it's established that creating it started the isolation:
 //   - its spec was never changed (generation 1), so creation set the rules;
 //   - every affected Service and pod already existed then;
-//   - this process watched NetworkPolicy and Service changes from before
-//     then and kept every event since (watchedSince is set), and none show
-//     another NetworkPolicy in the namespace, or an affected Service, created,
-//     changed or deleted at or after it (deleting an allow policy or changing
-//     a selector would start the isolation later).
+//   - this process watched from before then and kept every event since
+//     (watchedSince is set), and none show another NetworkPolicy in the
+//     namespace, an affected Service, or a pod its selector matches, created,
+//     changed or deleted at or after it (deleting an allow policy, changing a
+//     selector, or losing a backend the policy didn't isolate would start the
+//     isolation later).
 //
-// A pod relabeled into the policy's selector afterwards isn't checked, since
-// pod label edits aren't recorded; that is the remaining way to backdate.
+// A pod relabeled into a Service's selector afterwards is matched by its new
+// labels only, so a relabel isn't caught; that is the remaining way to
+// backdate.
 // Anything less leaves the onset unknown: a backdated onset would mislead.
 func networkPolicyIsolationOnset(watchedSince time.Time, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
 	created := np.CreationTimestamp.Time
@@ -687,8 +692,14 @@ func networkPolicyIsolationOnset(watchedSince time.Time, np *networkingv1.Networ
 		return time.Time{}, false
 	}
 	for _, e := range events {
+		if e.Kind == "NetworkPolicy" && e.Name == np.Name {
+			continue
+		}
+		if e.Kind == "Pod" && !matchesAny(impact.selectors, e.Labels) {
+			continue
+		}
 		// An equal timestamp can't establish order, so it counts as after.
-		if (e.Kind != "NetworkPolicy" || e.Name != np.Name) && !e.Timestamp.Before(created) {
+		if !e.Timestamp.Before(created) {
 			return time.Time{}, false
 		}
 	}
@@ -729,9 +740,9 @@ func networkPolicyWatchedSince(cache *ResourceCache) time.Time {
 	return start
 }
 
-// isolationInputEventsSince returns the namespace's NetworkPolicy events and
-// the named Services' events since t, and false when a query fails or hits
-// its cap.
+// isolationInputEventsSince returns the namespace's NetworkPolicy and Pod
+// events and the named Services' events since t, and false when a query
+// fails or hits its cap.
 func isolationInputEventsSince(namespace string, services []string, t time.Time) ([]timeline.TimelineEvent, bool) {
 	const limit = 500
 	query := func(opts timeline.QueryOptions) ([]timeline.TimelineEvent, bool) {
@@ -750,7 +761,20 @@ func isolationInputEventsSince(namespace string, services []string, t time.Time)
 	if !ok {
 		return nil, false
 	}
-	return append(policies, svcs...), true
+	pods, ok := query(timeline.QueryOptions{Kinds: []string{"Pod"}, APIGroups: []string{""}, IncludeManaged: true})
+	if !ok {
+		return nil, false
+	}
+	return append(append(policies, svcs...), pods...), true
+}
+
+func matchesAny(selectors []labels.Selector, podLabels map[string]string) bool {
+	for _, sel := range selectors {
+		if sel.Matches(labels.Set(podLabels)) {
+			return true
+		}
+	}
+	return false
 }
 
 // affectedRefs lists the isolated Services, then their pods' owning workloads,

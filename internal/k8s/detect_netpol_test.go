@@ -13,6 +13,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	fakediscovery "k8s.io/client-go/discovery/fake"
@@ -593,11 +594,14 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 		np.CreationTimestamp, np.Generation = metav1.NewTime(created), generation
 		return np
 	}
-	olderObjects := &denyAllIngressImpact{services: []string{"recommendation"}, lastCreated: created.Add(-time.Hour)}
+	recSelector := labels.SelectorFromSet(map[string]string{"app": "rec"})
+	olderObjects := &denyAllIngressImpact{services: []string{"recommendation"}, selectors: []labels.Selector{recSelector}, lastCreated: created.Add(-time.Hour)}
 
 	t.Run("unchanged policy, watched since before it existed", func(t *testing.T) {
 		setup(t)
 		appendEvent(timeline.TimelineEvent{ID: "own-add", Timestamp: created, Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Name: "deny-all", EventType: timeline.EventTypeAdd})
+		// A pod the Services don't select is irrelevant.
+		appendEvent(timeline.TimelineEvent{ID: "other-pod", Timestamp: created.Add(time.Minute), Kind: "Pod", APIVersion: "v1", Name: "web-1", EventType: timeline.EventTypeUpdate, Labels: map[string]string{"app": "web"}})
 		if got, ok := networkPolicyIsolationOnset(watchedSince, policy(1), olderObjects); !ok || !got.Equal(created) {
 			t.Fatalf("got %v %v, want creation", got, ok)
 		}
@@ -618,6 +622,8 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 			event: &timeline.TimelineEvent{ID: "allow-gone", Timestamp: created.Add(10 * time.Minute), Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Name: "allow-web", EventType: timeline.EventTypeDelete}},
 		{name: "another policy added at the same moment", watchedSince: watchedSince, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "same-time", Timestamp: created, Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Name: "allow-web", EventType: timeline.EventTypeAdd}},
+		{name: "a backend pod went away afterwards", watchedSince: watchedSince, generation: 1, impact: olderObjects,
+			event: &timeline.TimelineEvent{ID: "pod-gone", Timestamp: created.Add(5 * time.Minute), Kind: "Pod", APIVersion: "v1", Name: "rec-old", EventType: timeline.EventTypeDelete, Labels: map[string]string{"app": "rec"}}},
 		{name: "affected Service changed afterwards", watchedSince: watchedSince, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "svc-edit", Timestamp: created.Add(5 * time.Minute), Kind: "Service", APIVersion: "v1", Name: "recommendation", EventType: timeline.EventTypeUpdate}},
 	} {
