@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/netpol"
 	"github.com/skyhook-io/radar/pkg/timeutil"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 const (
@@ -77,10 +78,10 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 	}
 	sort.Strings(namespaces)
 
-	otherPoliciesMayApply := otherPolicyAPIsLookup()
+	otherPolicies := newOtherPolicyView()
 	var out []Detection
 	for _, ns := range namespaces {
-		if otherPoliciesMayApply(ns) {
+		if otherPolicies.mayApply(ns, podsByNamespace[ns], namespaceLabels(cache, ns)) {
 			continue
 		}
 		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], now)...)
@@ -89,23 +90,22 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 }
 
 // otherPolicyAPIs can allow traffic that the core NetworkPolicies alone would
-// deny: Cilium and Antrea policies add allow rules to the same pods, and
-// Calico policies and admin network policies are evaluated ahead of them.
-// Radar evaluates none of them, so a namespace where any of them may apply
-// gets no deny-all verdict. Calico's staged kinds are previews and enforce
-// nothing.
+// deny: Cilium, Antrea and AWS VPC CNI policies add allow rules to the same
+// pods, and admin-tier cluster policies are evaluated ahead of them. Radar
+// doesn't evaluate their rules, so a namespace where any of them may apply
+// gets no deny-all verdict. Calico policies are matched per pod instead, in
+// otherPolicyView.calicoMaySelect, because a cluster-wide Calico policy
+// usually targets only some workloads.
 var otherPolicyAPIs = []struct {
 	kind, group string
 	namespaced  bool
 }{
 	{"CiliumNetworkPolicy", "cilium.io", true},
 	{"CiliumClusterwideNetworkPolicy", "cilium.io", false},
-	{"NetworkPolicy", "projectcalico.org", true},
-	{"GlobalNetworkPolicy", "projectcalico.org", false},
-	{"NetworkPolicy", "crd.projectcalico.org", true},
-	{"GlobalNetworkPolicy", "crd.projectcalico.org", false},
 	{"NetworkPolicy", "crd.antrea.io", true},
 	{"ClusterNetworkPolicy", "crd.antrea.io", false},
+	{"ApplicationNetworkPolicy", "networking.k8s.aws", true},
+	{"ClusterNetworkPolicy", "networking.k8s.aws", false},
 	{"AdminNetworkPolicy", "policy.networking.k8s.io", false},
 	{"ClusterNetworkPolicy", "policy.networking.k8s.io", false},
 }
@@ -119,58 +119,155 @@ type policyObjectLister interface {
 	IsSynced(gvr schema.GroupVersionResource) bool
 }
 
-func otherPolicyAPIsLookup() func(namespace string) bool {
-	discovery := GetResourceDiscovery()
-	if discovery == nil {
-		return func(string) bool { return true }
-	}
-	var lister policyObjectLister
-	if dynamicCache := GetDynamicResourceCache(); dynamicCache != nil {
-		lister = dynamicCache
-	}
-	return otherPoliciesMayApply(discovery, lister)
+// otherPolicyView answers, per namespace, whether a policy Radar doesn't
+// evaluate may apply there. Anything it can't rule out counts as applying: an
+// API that is served but can't be listed or isn't synced, a missing dynamic
+// cache, or a selector Radar can't judge.
+type otherPolicyView struct {
+	discovery policyAPIDiscovery
+	lister    policyObjectLister // nil when no dynamic cache exists
+
+	clusterChecked bool
+	clusterApplies bool
+	globalCalico   []*unstructured.Unstructured
 }
 
-// otherPoliciesMayApply reports, per namespace, whether a policy from
-// otherPolicyAPIs exists there (or cluster-wide) or can't be ruled out: an API
-// that is served but can't be listed, or isn't synced yet, counts as present.
-// lister may be nil when no dynamic cache exists.
-func otherPoliciesMayApply(discovery policyAPIDiscovery, lister policyObjectLister) func(namespace string) bool {
-	present := func(gvr schema.GroupVersionResource, namespace string) bool {
-		if lister == nil {
-			return true
-		}
-		items, err := lister.List(gvr, namespace)
-		return err != nil || !lister.IsSynced(gvr) || len(items) > 0
+func newOtherPolicyView() *otherPolicyView {
+	discovery := GetResourceDiscovery()
+	if discovery == nil {
+		return nil
 	}
-	var clusterWide *bool
-	return func(namespace string) bool {
-		if clusterWide == nil {
-			found := false
-			for _, api := range otherPolicyAPIs {
-				if api.namespaced {
-					continue
-				}
-				if gvr, ok := discovery.GetGVRWithGroup(api.kind, api.group); ok && present(gvr, "") {
-					found = true
-					break
-				}
-			}
-			clusterWide = &found
+	view := &otherPolicyView{discovery: discovery}
+	if dynamicCache := GetDynamicResourceCache(); dynamicCache != nil {
+		view.lister = dynamicCache
+	}
+	return view
+}
+
+// list returns the objects, or known=false when the API is served but its
+// contents can't be read completely.
+func (v *otherPolicyView) list(kind, group, namespace string) (items []*unstructured.Unstructured, known bool) {
+	gvr, served := v.discovery.GetGVRWithGroup(kind, group)
+	if !served {
+		return nil, true
+	}
+	if v.lister == nil {
+		return nil, false
+	}
+	items, err := v.lister.List(gvr, namespace)
+	if err != nil || !v.lister.IsSynced(gvr) {
+		return nil, false
+	}
+	return items, true
+}
+
+// mayApply reports whether a policy outside core NetworkPolicy may select any
+// of pods, which all live in namespace. namespaceLabels is nil when the
+// Namespace object couldn't be read.
+func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, namespaceLabels map[string]string) bool {
+	if v == nil {
+		return true
+	}
+	if !v.clusterChecked {
+		v.clusterChecked = true
+		v.clusterApplies = v.clusterWidePolicyApplies()
+	}
+	if v.clusterApplies {
+		return true
+	}
+	for _, api := range otherPolicyAPIs {
+		if !api.namespaced {
+			continue
 		}
-		if *clusterWide {
+		items, known := v.list(api.kind, api.group, namespace)
+		if !known || len(items) > 0 {
 			return true
 		}
-		for _, api := range otherPolicyAPIs {
-			if !api.namespaced {
+	}
+	for _, group := range topology.CalicoAPIGroups() {
+		for _, def := range topology.CalicoPolicyKinds() {
+			if !def.Namespaced || def.Staged {
 				continue
 			}
-			if gvr, ok := discovery.GetGVRWithGroup(api.kind, api.group); ok && present(gvr, namespace) {
+			items, known := v.list(def.Kind, group, namespace)
+			if !known {
+				return true
+			}
+			for _, policy := range items {
+				if calicoMaySelect(policy, pods, namespaceLabels) {
+					return true
+				}
+			}
+		}
+	}
+	for _, policy := range v.globalCalico {
+		if calicoMaySelect(policy, pods, namespaceLabels) {
+			return true
+		}
+	}
+	return false
+}
+
+// clusterWidePolicyApplies reports whether a cluster-scoped policy from
+// otherPolicyAPIs may apply anywhere, and loads the cluster-wide Calico
+// policies for per-namespace matching.
+func (v *otherPolicyView) clusterWidePolicyApplies() bool {
+	for _, api := range otherPolicyAPIs {
+		if api.namespaced {
+			continue
+		}
+		items, known := v.list(api.kind, api.group, "")
+		if !known {
+			return true
+		}
+		for _, item := range items {
+			// A Baseline-tier cluster policy is evaluated after
+			// NetworkPolicies and only for traffic they don't select, so it
+			// can't allow what one denies.
+			if tier, _, _ := unstructured.NestedString(item.Object, "spec", "tier"); tier != "Baseline" {
 				return true
 			}
 		}
-		return false
 	}
+	for _, group := range topology.CalicoAPIGroups() {
+		for _, def := range topology.CalicoPolicyKinds() {
+			if def.Namespaced || def.Staged {
+				continue
+			}
+			items, known := v.list(def.Kind, group, "")
+			if !known {
+				return true
+			}
+			v.globalCalico = append(v.globalCalico, items...)
+		}
+	}
+	return false
+}
+
+// calicoMaySelect reports whether a Calico policy selects any of the pods, or
+// can't be ruled out: an unusable selector, a namespace selector with unknown
+// namespace labels, or a service-account selector (Radar doesn't read
+// ServiceAccount labels here).
+func calicoMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, namespaceLabels map[string]string) bool {
+	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "serviceAccountSelector"); !calicoSelectsAll(sel) {
+		return true
+	}
+	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "namespaceSelector"); namespaceLabels == nil && !calicoSelectsAll(sel) {
+		return true
+	}
+	matcher := topology.CompileCalicoPolicyMatcher(policy)
+	for _, pod := range pods {
+		matched, valid := matcher.Matches(topology.CalicoEndpointLabels(pod.Namespace, pod.Labels), namespaceLabels, pod.Spec.ServiceAccountName, nil)
+		if matched || !valid {
+			return true
+		}
+	}
+	return false
+}
+
+func calicoSelectsAll(selector string) bool {
+	trimmed := strings.ReplaceAll(strings.TrimSpace(selector), " ", "")
+	return trimmed == "" || trimmed == "all()"
 }
 
 type denyAllIngressImpact struct {
@@ -381,4 +478,23 @@ func networkPolicyEvidenceReads(namespace string) []issuesapi.EvidenceRead {
 		{Resource: "services", Namespace: namespace, Verb: "list"},
 		{Resource: "pods", Namespace: namespace, Verb: "list"},
 	}
+}
+
+func namespaceLabels(cache *ResourceCache, namespace string) map[string]string {
+	lister := cache.Namespaces()
+	if lister == nil {
+		return nil
+	}
+	ns, err := lister.Get(namespace)
+	if err != nil {
+		return nil
+	}
+	// Calico adds these to every namespace's selectable labels.
+	out := make(map[string]string, len(ns.Labels)+2)
+	for k, v := range ns.Labels {
+		out[k] = v
+	}
+	out["kubernetes.io/metadata.name"] = ns.Name
+	out["projectcalico.org/name"] = ns.Name
+	return out
 }

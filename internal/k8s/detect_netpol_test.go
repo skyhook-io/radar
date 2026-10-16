@@ -281,7 +281,7 @@ func (f fakePolicyDiscovery) GetGVRWithGroup(kind, group string) (schema.GroupVe
 }
 
 type fakePolicyLister struct {
-	objects  map[schema.GroupVersionResource]map[string]int // namespace ("" = all) -> count
+	objects  map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured // namespace ("" = cluster-wide)
 	unsynced bool
 	err      error
 }
@@ -290,45 +290,63 @@ func (f fakePolicyLister) List(gvr schema.GroupVersionResource, namespace string
 	if f.err != nil {
 		return nil, f.err
 	}
-	return make([]*unstructured.Unstructured, f.objects[gvr][namespace]), nil
+	return f.objects[gvr][namespace], nil
 }
 
 func (f fakePolicyLister) IsSynced(schema.GroupVersionResource) bool { return !f.unsynced }
 
-func TestOtherPoliciesMayApply(t *testing.T) {
+func policyObject(spec map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+}
+
+func TestOtherPolicyViewMayApply(t *testing.T) {
 	cnp := schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}
 	gnp := schema.GroupVersionResource{Group: "crd.projectcalico.org", Version: "v1", Resource: "globalnetworkpolicies"}
+	clusterNP := schema.GroupVersionResource{Group: "policy.networking.k8s.io", Version: "v1alpha2", Resource: "clusternetworkpolicies"}
 	served := fakePolicyDiscovery{
-		"cilium.io/CiliumNetworkPolicy":             cnp,
-		"crd.projectcalico.org/GlobalNetworkPolicy": gnp,
+		"cilium.io/CiliumNetworkPolicy":                 cnp,
+		"crd.projectcalico.org/GlobalNetworkPolicy":     gnp,
+		"policy.networking.k8s.io/ClusterNetworkPolicy": clusterNP,
+	}
+	shopPods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true)}
+	shopLabels := map[string]string{"projectcalico.org/name": "shop", "team": "shop"}
+	objects := func(gvr schema.GroupVersionResource, ns string, items ...*unstructured.Unstructured) map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured {
+		return map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured{gvr: {ns: items}}
 	}
 
 	tests := []struct {
 		name   string
 		disc   policyAPIDiscovery
 		lister policyObjectLister
-		want   map[string]bool
+		labels map[string]string
+		want   bool
 	}{
-		{"no other policy API served", fakePolicyDiscovery{}, nil, map[string]bool{"shop": false}},
-		{"served but empty", served, fakePolicyLister{}, map[string]bool{"shop": false}},
-		{"namespaced policy only counts in its namespace", served,
-			fakePolicyLister{objects: map[schema.GroupVersionResource]map[string]int{cnp: {"shop": 1}}},
-			map[string]bool{"shop": true, "other": false}},
-		{"cluster-wide policy counts everywhere", served,
-			fakePolicyLister{objects: map[schema.GroupVersionResource]map[string]int{gnp: {"": 1}}},
-			map[string]bool{"shop": true, "other": true}},
-		{"unsynced is unknown", served, fakePolicyLister{unsynced: true}, map[string]bool{"shop": true}},
-		{"list error is unknown", served, fakePolicyLister{err: errors.New("forbidden")}, map[string]bool{"shop": true}},
-		{"served without a dynamic cache is unknown", served, nil, map[string]bool{"shop": true}},
+		{"no other policy API served", fakePolicyDiscovery{}, nil, shopLabels, false},
+		{"served but empty", served, fakePolicyLister{}, shopLabels, false},
+		{"Cilium policy in the namespace", served, fakePolicyLister{objects: objects(cnp, "shop", policyObject(nil))}, shopLabels, true},
+		{"Cilium policy in another namespace", served, fakePolicyLister{objects: objects(cnp, "other", policyObject(nil))}, shopLabels, false},
+		{"admin-tier cluster policy", served, fakePolicyLister{objects: objects(clusterNP, "", policyObject(map[string]any{"tier": "Admin"}))}, shopLabels, true},
+		{"baseline-tier cluster policy can't override", served, fakePolicyLister{objects: objects(clusterNP, "", policyObject(map[string]any{"tier": "Baseline"}))}, shopLabels, false},
+		{"Calico global policy selecting the pods", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app == 'rec'"}))}, shopLabels, true},
+		{"Calico global policy selecting other pods", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app == 'web'"}))}, shopLabels, false},
+		{"Calico global policy for another namespace", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"namespaceSelector": "team == 'other'"}))}, shopLabels, false},
+		{"Calico namespace selector with unknown namespace labels", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"namespaceSelector": "team == 'other'"}))}, nil, true},
+		{"Calico service-account selector can't be judged", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"serviceAccountSelector": "role == 'x'"}))}, shopLabels, true},
+		{"Calico selector Radar can't parse", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app ==="}))}, shopLabels, true},
+		{"unsynced is unknown", served, fakePolicyLister{unsynced: true}, shopLabels, true},
+		{"list error is unknown", served, fakePolicyLister{err: errors.New("forbidden")}, shopLabels, true},
+		{"served without a dynamic cache is unknown", served, nil, shopLabels, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mayApply := otherPoliciesMayApply(tt.disc, tt.lister)
-			for ns, want := range tt.want {
-				if got := mayApply(ns); got != want {
-					t.Errorf("mayApply(%q) = %v, want %v", ns, got, want)
-				}
+			view := &otherPolicyView{discovery: tt.disc, lister: tt.lister}
+			if got := view.mayApply("shop", shopPods, tt.labels); got != tt.want {
+				t.Errorf("mayApply = %v, want %v", got, tt.want)
 			}
 		})
+	}
+	var noDiscovery *otherPolicyView
+	if !noDiscovery.mayApply("shop", shopPods, shopLabels) {
+		t.Error("without discovery nothing can be ruled out")
 	}
 }
