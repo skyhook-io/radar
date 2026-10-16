@@ -2,7 +2,10 @@ package topology
 
 import (
 	"fmt"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"reflect"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -52,7 +55,7 @@ func TestCertificateIssuerEdgesDefaultsScopeAndCachedResolution(t *testing.T) {
 	} {
 		name := fmt.Sprintf("cert-%d", i)
 		certs = append(certs, unstructured.Unstructured{Object: map[string]any{"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": map[string]any{"namespace": "team", "name": name}, "spec": map[string]any{"issuerRef": issuerRef}}})
-		nodes = append(nodes, Node{ID: "certificate/team/" + name, Kind: KindCertificate, Name: name, Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
+		nodes = append(nodes, Node{observed: true, ID: "certificate/team/" + name, Kind: KindCertificate, Name: name, Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}})
 	}
 	opts := DefaultBuildOptions()
 	opts.Namespaces = []string{"team"}
@@ -89,7 +92,7 @@ func TestCertificateIssuerEdgesReportsUnavailableLookup(t *testing.T) {
 		"metadata": map[string]any{"name": "tls", "namespace": "team"},
 		"spec":     map[string]any{"issuerRef": map[string]any{"name": "ca"}},
 	}}
-	nodes, edges, warnings := addCertificateIssuerEdges([]Node{{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}}}, nil, []unstructured.Unstructured{cert}, p, DefaultBuildOptions())
+	nodes, edges, warnings := addCertificateIssuerEdges([]Node{{observed: true, ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}}}, nil, []unstructured.Unstructured{cert}, p, DefaultBuildOptions())
 	if len(nodes) != 1 || len(edges) != 0 || len(warnings) != 1 || p.getCalls != 0 {
 		t.Fatalf("unavailable lookup: nodes=%d edges=%d warnings=%v gets=%d", len(nodes), len(edges), warnings, p.getCalls)
 	}
@@ -102,8 +105,8 @@ func TestReferencedIssuerRetainsGenericOwnerWithoutDuplicateNodesOrEdges(t *test
 	cert := genericIdentityObject(schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1"}, "Certificate", "team", "tls")
 	cert.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
 	nodes := []Node{
-		{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}},
-		{ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}},
+		{observed: true, ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}},
+		{observed: true, ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}},
 	}
 	nodes, edges, warnings := addCertificateIssuerEdges(nodes, nil, []unstructured.Unstructured{*cert}, p, DefaultBuildOptions())
 	if len(warnings) != 0 {
@@ -119,5 +122,137 @@ func TestReferencedIssuerRetainsGenericOwnerWithoutDuplicateNodesOrEdges(t *test
 	rel := GetRelationshipsWithObject("Issuer", "team", "ca", issuer, &Topology{Nodes: nodes, Edges: edges}, nil, p, nil)
 	if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Deployment" || rel.Owner.Name != "operator" || len(rel.Dependents) != 1 {
 		t.Fatalf("referenced issuer owner/dependent = %+v", rel)
+	}
+}
+
+func TestIssuanceIssuerReferenceContracts(t *testing.T) {
+	for _, tc := range []struct {
+		group, kind string
+		valid       bool
+	}{
+		{"cert-manager.io", "Certificate", true}, {"cert-manager.io", "CertificateRequest", true},
+		{"acme.cert-manager.io", "Order", true}, {"acme.cert-manager.io", "Challenge", true},
+		{"other.example", "CertificateRequest", false}, {"cert-manager.io", "Order", false}, {"acme.cert-manager.io", "Certificate", false},
+	} {
+		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": tc.group + "/v1", "kind": tc.kind, "metadata": map[string]any{"name": "child", "namespace": "team"}, "spec": map[string]any{"issuerRef": map[string]any{"name": "ca"}}}}
+		before := obj.DeepCopy()
+		ref, ok := certificateIssuerDependency(obj)
+		if ok != tc.valid {
+			t.Fatalf("%s/%s valid=%v", tc.group, tc.kind, ok)
+		}
+		if ok && (ref.Source.Group != tc.group || ref.Source.Kind != tc.kind || ref.Target.Group != "cert-manager.io" || ref.Target.Kind != "Issuer" || ref.Target.Namespace != "team") {
+			t.Fatalf("defaulted issuer = %+v", ref)
+		}
+		if !reflect.DeepEqual(obj, before) {
+			t.Fatal("issuer parser mutated source")
+		}
+	}
+}
+
+func TestIssuanceIssuerJoinsAllObservedChildrenWithSharedOwnerPass(t *testing.T) {
+	issuerGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
+	issuer := genericIdentityObject(issuerGVR, "Issuer", "team", "ca", metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "operator", UID: "operator-current"})
+	issuer.SetUID("issuer-current")
+	resources := map[schema.GroupVersionResource][]*unstructured.Unstructured{issuerGVR: {issuer}}
+	gvrs := map[string]schema.GroupVersionResource{"Issuer": issuerGVR}
+	nodes := []Node{{observed: true, uid: "operator-current", ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}}}
+	for _, kind := range []string{"CertificateRequest", "Order", "Challenge"} {
+		group := "acme.cert-manager.io"
+		if kind == "CertificateRequest" {
+			group = "cert-manager.io"
+		}
+		gvr := schema.GroupVersionResource{Group: group, Version: "v1", Resource: strings.ToLower(kind) + "s"}
+		gvrs[kind] = gvr
+		for i := 0; i < 30; i++ {
+			name := fmt.Sprintf("child-%d", i)
+			child := genericIdentityObject(gvr, kind, "team", name)
+			child.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
+			resources[gvr] = append(resources[gvr], child)
+			nodes = append(nodes, Node{ID: strings.ToLower(kind) + "/team/" + name + "/" + group, Kind: NodeKind(kind), Name: name, Data: map[string]any{"namespace": "team", "apiVersion": group + "/v1"}})
+		}
+	}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: resources}, listCalls: map[string]int{}}
+	nodes, edges, warnings := (&Builder{dynamic: p}).addIssuanceIssuerEdges(nodes, nil, DefaultBuildOptions())
+	if len(edges) != 90 {
+		t.Fatalf("stage join produced non-dependency edges: %+v", edges)
+	}
+	edges = addObservedOwnerEdges(nodes, edges)
+	if len(warnings) != 0 || len(nodes) != 92 || len(edges) != 91 {
+		t.Fatalf("issuance joins nodes=%d edges=%d warnings=%v", len(nodes), len(edges), warnings)
+	}
+	if p.getCalls != 0 || p.listCalls["issuers"] != 1 || p.listCalls["certificaterequests"] != 1 || p.listCalls["orders"] != 1 || p.listCalls["challenges"] != 1 {
+		t.Fatalf("cache fanout: gets=%d lists=%v", p.getCalls, p.listCalls)
+	}
+	topo := &Topology{Nodes: nodes, Edges: edges}
+	request := GetRelationships("CertificateRequest", "team", "child-0", topo, nil, p)
+	if request == nil || len(request.Dependencies) != 1 || request.Dependencies[0].Kind != "Issuer" || request.Dependencies[0].Group != "cert-manager.io" {
+		t.Fatalf("request dependencies = %+v", request)
+	}
+	issuerRel := GetRelationships("Issuer", "team", "ca", topo, nil, p)
+	if issuerRel == nil || issuerRel.Owner == nil || issuerRel.Owner.Name != "operator" || len(issuerRel.Dependents) != 90 {
+		t.Fatalf("issuer context = %+v", issuerRel)
+	}
+	if nodes[len(nodes)-1].uid != "issuer-current" {
+		t.Fatal("late dependency lost observed UID")
+	}
+}
+
+func TestAbsentIssuanceKindsStartNoCacheRead(t *testing.T) {
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{}, listCalls: map[string]int{}}
+	nodes, edges, warnings := (&Builder{dynamic: p}).addIssuanceIssuerEdges(nil, nil, DefaultBuildOptions())
+	if len(nodes) != 0 || len(edges) != 0 || len(warnings) != 0 || len(p.listCalls) != 0 || p.getCalls != 0 {
+		t.Fatalf("unused issuance kind did work: %+v %v", p.listCalls, warnings)
+	}
+}
+
+func TestIssuanceIssuerSkipsUnrepresentedAndReplacedSources(t *testing.T) {
+	requestGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificaterequests"}
+	obj := genericIdentityObject(requestGVR, "CertificateRequest", "team", "request")
+	obj.SetUID("new-request")
+	obj.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: map[string]schema.GroupVersionResource{"CertificateRequest": requestGVR, "Issuer": {Group: "cert-manager.io", Version: "v1", Resource: "issuers"}}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{requestGVR: {obj}}}, listCalls: map[string]int{}}
+	nodes := []Node{{uid: "old-request", ID: "certificaterequest/team/request/cert-manager.io", Kind: "CertificateRequest", Name: "request", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}}}
+	nodes, edges, warnings := (&Builder{dynamic: p}).addIssuanceIssuerEdges(nodes, nil, DefaultBuildOptions())
+	if len(nodes) != 1 || len(edges) != 0 || len(warnings) != 0 || p.listCalls["issuers"] != 0 {
+		t.Fatalf("replaced source triggered issuer lookup: %+v %v %v", nodes, p.listCalls, warnings)
+	}
+}
+
+func TestLateIssuanceIssuerJoinDoesNotReopenGenericEnrollment(t *testing.T) {
+	issuerGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
+	requestGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificaterequests"}
+	owner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "operator", UID: "operator"}
+	var issuers []*unstructured.Unstructured
+	for i := range 100 {
+		issuers = append(issuers, genericIdentityObject(issuerGVR, "Issuer", "team", fmt.Sprintf("issuer-%d", i), owner))
+	}
+	target := genericIdentityObject(issuerGVR, "Issuer", "team", "ca", owner)
+	target.SetUID("issuer-current")
+	issuers = append(issuers, target)
+	request := genericIdentityObject(requestGVR, "CertificateRequest", "team", "request", owner)
+	request.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
+	provider := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{issuerGVR, requestGVR},
+		kinds:     map[schema.GroupVersionResource]string{issuerGVR: "Issuer", requestGVR: "CertificateRequest"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{issuerGVR: issuers, requestGVR: {request}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	parent := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "team", UID: "operator"}}
+	topo, err := NewBuilder(&mockProvider{deployments: []*appsv1.Deployment{parent}}).WithDynamic(provider).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topo.Nodes) != 53 || len(topo.Edges) != 53 || len(topo.Warnings) != 0 {
+		t.Fatalf("late join reopened generic enrollment: nodes=%d edges=%+v warnings=%v", len(topo.Nodes), topo.Edges, topo.Warnings)
+	}
+	if provider.getCalls != 0 || provider.listCalls[issuerGVR] != 3 || provider.listCalls[requestGVR] != 3 {
+		t.Fatalf("cache fanout: gets=%d lists=%v", provider.getCalls, provider.listCalls)
+	}
+	issuerRel := GetRelationships("Issuer", "team", "ca", topo, nil, provider)
+	if issuerRel == nil || issuerRel.Owner == nil || issuerRel.Owner.Name != "operator" || len(issuerRel.Dependents) != 1 || issuerRel.Dependents[0].Kind != "CertificateRequest" {
+		t.Fatalf("late issuer lost shared ownership or reverse dependency: %+v", issuerRel)
+	}
+	if node := nodeByID(topo.Nodes, "issuer/team/ca/cert-manager.io"); node == nil || node.uid != "issuer-current" {
+		t.Fatalf("late issuer lost observed identity: %+v", node)
 	}
 }

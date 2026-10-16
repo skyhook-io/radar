@@ -690,3 +690,14 @@ other writers, and later template/configuration edits can explain differences.
 Candidate inspection is non-exhaustive and does not perform live admission calls
 or start watches. Verify provenance with configuration history or
 [Kubernetes admission audit records](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#monitoring-admission-webhooks).
+
+Generic CRD owner links reject a same-named replacement when its observed UID
+differs from the owner reference. Resource context applies the same check when
+deriving `owner` from the resource's owner references. Missing UID evidence does
+not verify the owner's identity.
+
+On resource-graph edges, `ownerController: true` identifies an observed
+controller owner; `false` identifies an observed non-controller owner. A singular
+`owner` or an ownership-based `managedBy` chain prefers the controller. Management
+links based on labels, spec references or GitOps inventory do not by themselves
+establish Kubernetes ownership.

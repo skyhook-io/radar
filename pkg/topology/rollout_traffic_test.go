@@ -213,7 +213,7 @@ func TestBuildResourcesTopology_RolloutOwnedReplicaSetsShowOnlyWhenLive(t *testi
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-newhash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "newhash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &liveReplicas},
 			},
@@ -221,7 +221,7 @@ func TestBuildResourcesTopology_RolloutOwnedReplicaSetsShowOnlyWhenLive(t *testi
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-oldhash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "oldhash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &deadReplicas},
 			},
@@ -277,7 +277,7 @@ func TestBuildResourcesTopology_SettledRolloutReplicaSetCollapsesLikeDeployment(
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-samehash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "samehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &replicas},
 			},
@@ -287,7 +287,7 @@ func TestBuildResourcesTopology_SettledRolloutReplicaSetCollapsesLikeDeployment(
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-samehash-abc", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "samehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-samehash"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-samehash"}},
 				},
 			},
 		},
@@ -355,7 +355,7 @@ func TestBuildResourcesTopology_PodTrafficRoleForCanaryAndStable(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-canaryhash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "canaryhash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &replicas},
 			},
@@ -363,7 +363,7 @@ func TestBuildResourcesTopology_PodTrafficRoleForCanaryAndStable(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-stablehash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "stablehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &replicas},
 			},
@@ -373,14 +373,14 @@ func TestBuildResourcesTopology_PodTrafficRoleForCanaryAndStable(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-canaryhash-abc", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "canaryhash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-canaryhash"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-canaryhash"}},
 				},
 			},
 			{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-stablehash-abc", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "stablehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-stablehash"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-stablehash"}},
 				},
 			},
 		},
@@ -463,7 +463,7 @@ func TestBuildResourcesTopology_LargePodGroupWithMixedTrafficRoles(t *testing.T)
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-canaryhash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "canaryhash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &canaryReplicas},
 			},
@@ -471,7 +471,7 @@ func TestBuildResourcesTopology_LargePodGroupWithMixedTrafficRoles(t *testing.T)
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-stablehash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "stablehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &stableReplicas},
 			},
@@ -484,7 +484,7 @@ func TestBuildResourcesTopology_LargePodGroupWithMixedTrafficRoles(t *testing.T)
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("web-canaryhash-%d", i), Namespace: "prod",
 				Labels:          map[string]string{"app": "web", rolloutPodTemplateHashLabel: "canaryhash"},
-				OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-canaryhash"}},
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-canaryhash"}},
 			},
 		})
 	}
@@ -493,7 +493,7 @@ func TestBuildResourcesTopology_LargePodGroupWithMixedTrafficRoles(t *testing.T)
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("web-stablehash-%d", i), Namespace: "prod",
 				Labels:          map[string]string{"app": "web", rolloutPodTemplateHashLabel: "stablehash"},
-				OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-stablehash"}},
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-stablehash"}},
 			},
 		})
 	}
@@ -624,7 +624,7 @@ func TestBuildResourcesTopology_BasicCanaryWeightDerivedFromLiveReplicaCounts(t 
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-canaryhash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "canaryhash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &canaryReplicas},
 			},
@@ -632,7 +632,7 @@ func TestBuildResourcesTopology_BasicCanaryWeightDerivedFromLiveReplicaCounts(t 
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-stablehash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "stablehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &stableReplicas},
 			},
@@ -686,7 +686,7 @@ func TestBuildResourcesTopology_AbortedCanaryWeightReflectsLiveReplicasNotLastSt
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-canaryhash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "canaryhash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &canaryReplicas},
 			},
@@ -694,7 +694,7 @@ func TestBuildResourcesTopology_AbortedCanaryWeightReflectsLiveReplicasNotLastSt
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-stablehash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "stablehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &stableReplicas},
 			},
@@ -743,7 +743,7 @@ func TestBuildResourcesTopology_CanaryWeightOmittedOncePromoted(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "web-samehash", Namespace: "prod",
 					Labels:          map[string]string{rolloutPodTemplateHashLabel: "samehash"},
-					OwnerReferences: []metav1.OwnerReference{{Kind: "Rollout", Name: "web"}},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}},
 				},
 				Spec: appsv1.ReplicaSetSpec{Replicas: &replicas},
 			},

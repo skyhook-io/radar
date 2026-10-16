@@ -95,7 +95,7 @@ func addObservedDependencyEdges(nodes []Node, edges []Edge, refs []declaredDepen
 					data[clusterScopedGroupKey] = gvr.Group
 					data[clusterScopedResourceKey] = gvr.Resource
 				}
-				nodes = append(nodes, Node{ID: target, Kind: NodeKind(kind.Kind), Name: obj.GetName(), Status: extractGenericStatus(obj), Data: data})
+				nodes = append(nodes, Node{uid: obj.GetUID(), ownerReferences: obj.GetOwnerReferences(), observed: true, ID: target, Kind: NodeKind(kind.Kind), Name: obj.GetName(), Status: extractGenericStatus(obj), Data: data})
 				byResource[ref.Target.Key()] = target
 			}
 			edgeType := EdgeUses
