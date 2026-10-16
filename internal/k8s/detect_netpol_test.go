@@ -241,8 +241,8 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 		t.Fatalf("got %d detections, want one per contributing policy", len(pair))
 	}
 	for _, d := range pair {
-		if !strings.Contains(d.Message, "1 of the pods behind Service rec-a") {
-			t.Errorf("%s message = %q, want it to say this policy covers some of the pods", d.Name, d.Message)
+		if !strings.Contains(d.Message, "the 1 pod behind Service rec-a") {
+			t.Errorf("%s message = %q: both policies cover the Service's only pod", d.Name, d.Message)
 		}
 	}
 	for i, other := range []string{"deny-in", "default-deny"} {
@@ -629,6 +629,8 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 			event: &timeline.TimelineEvent{ID: "same-time", Timestamp: created, Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Name: "allow-web", EventType: timeline.EventTypeAdd}},
 		{name: "a Cilium allow policy deleted afterwards", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "cnp-gone", Timestamp: created.Add(10 * time.Minute), Kind: "CiliumNetworkPolicy", APIVersion: "cilium.io/v2", Name: "allow-rec", EventType: timeline.EventTypeDelete}},
+		{name: "the namespace relabeled afterwards", window: window, generation: 1, impact: olderObjects,
+			event: &timeline.TimelineEvent{ID: "ns-relabel", Timestamp: created.Add(10 * time.Minute), Kind: "Namespace", APIVersion: "v1", Name: "shop", EventType: timeline.EventTypeUpdate}},
 		{name: "a backend pod went away afterwards", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "pod-gone", Timestamp: created.Add(5 * time.Minute), Kind: "Pod", APIVersion: "v1", Name: "rec-old", EventType: timeline.EventTypeDelete, Labels: map[string]string{"app": "rec"}}},
 		{name: "affected Service changed afterwards", window: window, generation: 1, impact: olderObjects,
@@ -726,5 +728,50 @@ func TestDenyAllIngressPublishNotReadyBackends(t *testing.T) {
 		if got := denyAllIngressDetections(policies, []*corev1.Service{svc}, []*corev1.Pod{p}, denyAllEnv{}, time.Now()); len(got) != 0 {
 			t.Errorf("%s pod counted as a backend: %+v", name, got)
 		}
+	}
+}
+
+// Two deny-all policies that split a Service's pods each say they cover only
+// part of them, and removing one alone frees only some backends.
+func TestDenyAllIngressSplitSelectors(t *testing.T) {
+	pods := []*corev1.Pod{
+		netpolTestPod("rec-a", map[string]string{"app": "rec", "tier": "a"}, true),
+		netpolTestPod("rec-b", map[string]string{"app": "rec", "tier": "b"}, true),
+	}
+	got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
+		netpolTestPolicy("deny-a", map[string]string{"tier": "a"}, ingressOnly),
+		netpolTestPolicy("deny-b", map[string]string{"tier": "b"}, ingressOnly),
+	}, []*corev1.Service{netpolTestService("rec", map[string]string{"app": "rec"})}, pods, denyAllEnv{}, time.Now())
+	if len(got) != 2 {
+		t.Fatalf("got %d detections, want one per policy", len(got))
+	}
+	for _, d := range got {
+		if !strings.Contains(d.Message, "1 of the 2 pods behind Service rec") || !strings.Contains(d.Action, "restores only some backends") {
+			t.Errorf("%s: message %q / action %q", d.Name, d.Message, d.Action)
+		}
+	}
+}
+
+// A capped event query can't show the window is clean, so no onset.
+func TestNetworkPolicyIsolationOnsetQueryCap(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	created := time.Now().Add(-time.Hour)
+	for i := range 500 {
+		if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+			ID: fmt.Sprintf("np-%d", i), Timestamp: created.Add(-time.Duration(i+1) * time.Second).Add(time.Hour), Source: timeline.SourceInformer,
+			ClusterContext: ActiveClusterContext(), Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Namespace: "other", Name: fmt.Sprintf("p%d", i), EventType: timeline.EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	np := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
+	np.CreationTimestamp, np.Generation = metav1.NewTime(created), 1
+	window := isolationWindow{since: created.Add(-time.Hour), policyKinds: []string{"NetworkPolicy"}}
+	if _, ok := networkPolicyIsolationOnset(window, np, &denyAllIngressImpact{lastCreated: created.Add(-time.Hour)}); ok {
+		t.Fatal("claimed an onset although the event query hit its cap")
 	}
 }

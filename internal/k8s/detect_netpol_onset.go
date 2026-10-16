@@ -31,9 +31,10 @@ type isolationWindow struct {
 //   - its spec was never changed (generation 1), so creation set the rules;
 //   - every affected Service and pod already existed then;
 //   - the window covers it, and no other policy in the namespace or cluster
-//     scope (core or another engine's), affected Service, or pod those
-//     Services select was created, changed or deleted at or after it
-//     (deleting an allow policy, changing a selector, or losing a backend the
+//     scope (core or another engine's), affected Service, pod those Services
+//     select, or the Namespace itself was created, changed or deleted at or
+//     after it (deleting an allow policy, changing a selector or the
+//     namespace's labels another engine selects on, or losing a backend the
 //     policy didn't isolate would start the isolation later).
 //
 // A backend the policy didn't isolate that is relabeled out of a Service's
@@ -151,8 +152,9 @@ func otherPolicyAPIList() []struct{ kind, group string } {
 }
 
 // isolationInputEventsSince returns, since t, the events of the policy kinds
-// in every namespace and at cluster scope, and the namespace's events for the
-// named Services and for pods. false when a query fails or hits its cap.
+// in every namespace and at cluster scope, the Namespace's own events, and the
+// namespace's events for the named Services and for pods. false when a query
+// fails or hits its cap.
 func isolationInputEventsSince(policyKinds []string, namespace string, services []string, t time.Time) ([]timeline.TimelineEvent, bool) {
 	const limit = 500
 	query := func(opts timeline.QueryOptions) ([]timeline.TimelineEvent, bool) {
@@ -175,7 +177,11 @@ func isolationInputEventsSince(policyKinds []string, namespace string, services 
 	if !ok {
 		return nil, false
 	}
-	return append(append(policies, svcs...), pods...), true
+	ns, ok := query(timeline.QueryOptions{Kinds: []string{"Namespace"}, APIGroups: []string{""}, Names: []string{namespace}})
+	if !ok {
+		return nil, false
+	}
+	return append(append(append(policies, svcs...), pods...), ns...), true
 }
 
 func matchesAny(selectors []labels.Selector, podLabels map[string]string) bool {

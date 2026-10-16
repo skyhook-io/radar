@@ -386,6 +386,9 @@ func calicoSelectsAll(selector string) bool {
 
 type denyAllIngressImpact struct {
 	services []string
+	// backends are all ready backend pods of the services, whether or not
+	// this policy selects them.
+	backends map[string]bool
 	// lastCreated is the newest creation time among the affected Services and
 	// pods: isolation can't be dated earlier than objects it applies to.
 	lastCreated time.Time
@@ -455,12 +458,15 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 			for _, np := range isolation.of(pod).ingressDenying {
 				impact := impacts[np]
 				if impact == nil {
-					impact = &denyAllIngressImpact{pods: map[string]bool{}, owners: map[issuesapi.Ref]bool{}, alsoDenying: map[string]bool{}, egressDenied: true}
+					impact = &denyAllIngressImpact{pods: map[string]bool{}, backends: map[string]bool{}, owners: map[issuesapi.Ref]bool{}, alsoDenying: map[string]bool{}, egressDenied: true}
 					impacts[np] = impact
 				}
 				if n := len(impact.services); n == 0 || impact.services[n-1] != svc.Name {
 					impact.services = append(impact.services, svc.Name)
 					impact.selectors = append(impact.selectors, labels.SelectorFromSet(svc.Spec.Selector))
+					for _, b := range backends {
+						impact.backends[b.Name] = true
+					}
 					if created := svc.CreationTimestamp.Time; created.After(impact.lastCreated) {
 						impact.lastCreated = created
 					}
@@ -606,11 +612,10 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	if len(impact.pods) == 1 {
 		podWord = "pod"
 	}
-	// With other policies isolating some of the pods too, this one may cover
-	// only part of the backends.
+	partial := len(impact.pods) < len(impact.backends)
 	podsBehind := fmt.Sprintf("the %d %s behind %s", len(impact.pods), podWord, target)
-	if len(impact.alsoDenying) > 0 {
-		podsBehind = fmt.Sprintf("%d of the pods behind %s", len(impact.pods), target)
+	if partial {
+		podsBehind = fmt.Sprintf("%d of the %d pods behind %s", len(impact.pods), len(impact.backends), target)
 	}
 	message := fmt.Sprintf("Would block all inbound traffic to %s: no NetworkPolicy selecting them allows any ingress", podsBehind)
 	if impact.egressDenied {
@@ -644,6 +649,8 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 		action = fmt.Sprintf("This is a namespace-wide default-deny, so these pods need a NetworkPolicy that allows their expected clients. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
 	case len(impact.alsoDenying) > 0:
 		action = fmt.Sprintf("Other policies isolate these pods too, so removing this one alone may not restore traffic; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
+	case partial:
+		action = fmt.Sprintf("Other policies isolate the rest of these Services' pods, so removing this one alone restores only some backends; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
 	}
 
 	age := now.Sub(np.CreationTimestamp.Time)
