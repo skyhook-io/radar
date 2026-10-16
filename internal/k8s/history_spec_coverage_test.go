@@ -191,7 +191,7 @@ func TestComputeDiff_DeploymentUntrackedSpecFieldReported(t *testing.T) {
 	newDep.Spec.Template.Spec.TerminationGracePeriodSeconds = &grace
 
 	diff := ComputeDiff("Deployment", oldDep, newDep)
-	if diff == nil || !strings.Contains(diff.Summary, "other spec changes: spec.template.spec.terminationGracePeriodSeconds") {
+	if diff == nil || !strings.Contains(diff.Summary, "other spec changes: terminationGracePeriodSeconds") {
 		t.Fatalf("summary = %+v", diff)
 	}
 	change := findChange(diff, "spec.template.spec.terminationGracePeriodSeconds")
@@ -337,7 +337,7 @@ func TestComputeDiff_InitContainerReorderWithOtherChange(t *testing.T) {
 	newDep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "seed", Image: "s:1"}, {Name: "migrate", Image: "m:2"}}
 
 	diff := ComputeDiff("Deployment", oldDep, newDep)
-	if diff == nil || !strings.Contains(diff.Summary, "other spec changes: spec.template.spec.initContainers order") {
+	if diff == nil || !strings.Contains(diff.Summary, "other spec changes: initContainers order") {
 		t.Fatalf("summary = %+v", diff)
 	}
 	if findChange(diff, "spec.template.spec.initContainers[migrate].image") == nil {
@@ -435,7 +435,7 @@ func TestComputeDiff_CronJob(t *testing.T) {
 			name:        "job template field without a row",
 			mutate:      func(c *batchv1.CronJob) { c.Spec.JobTemplate.Spec.BackoffLimit = int32Ptr(0) },
 			wantPath:    "spec.jobTemplate.spec.backoffLimit",
-			wantSummary: "other spec changes: spec.jobTemplate.spec.backoffLimit",
+			wantSummary: "other spec changes: jobTemplate.backoffLimit",
 		},
 	}
 	for _, tt := range tests {
@@ -573,7 +573,7 @@ func TestComputeDiff_ServicePolicyAndBackstop(t *testing.T) {
 	updated.Spec.AllocateLoadBalancerNodePorts = func() *bool { f := false; return &f }()
 
 	diff := ComputeDiff("Service", base, updated)
-	if diff == nil || diff.Summary != "externalTrafficPolicy: Cluster→Local, sessionAffinity: None→ClientIP, other spec changes: spec.allocateLoadBalancerNodePorts" {
+	if diff == nil || diff.Summary != "externalTrafficPolicy: Cluster→Local, sessionAffinity: None→ClientIP, other spec changes: allocateLoadBalancerNodePorts" {
 		t.Fatalf("summary = %+v", diff)
 	}
 
@@ -703,6 +703,108 @@ func TestComputeDiff_HPAExternalMetricSelectorChange(t *testing.T) {
 
 	diff := ComputeDiff("HorizontalPodAutoscaler", base, updated)
 	if diff == nil || diff.Summary != "metric external/queue_depth{queue=orders} removed, metric external/queue_depth{queue=payments} added (target 100)" {
+		t.Fatalf("summary = %+v", diff)
+	}
+}
+
+func TestShortSpecPath(t *testing.T) {
+	for path, want := range map[string]string{
+		"spec.template.spec.terminationGracePeriodSeconds":                     "terminationGracePeriodSeconds",
+		"spec.template.spec.containers[web].lifecycle.preStop":                 "containers[web].lifecycle.preStop",
+		"spec.template.metadata.annotations[checksum/config]":                  "template.metadata.annotations[checksum/config]",
+		"spec.jobTemplate.spec.backoffLimit":                                   "jobTemplate.backoffLimit",
+		"spec.jobTemplate.spec.template.spec.containers[job].resources.limits": "containers[job].resources.limits",
+		"spec.rules[0].backendRefs[web].weight":                                "rules[0].backendRefs[web].weight",
+		"spec.sessionAffinityConfig":                                           "sessionAffinityConfig",
+	} {
+		if got := shortSpecPath(path); got != want {
+			t.Errorf("shortSpecPath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func namedRoute(gen int64, rules ...map[string]any) *unstructured.Unstructured {
+	list := make([]any, 0, len(rules))
+	for _, r := range rules {
+		list = append(list, r)
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1",
+		"kind":       "HTTPRoute",
+		"metadata":   map[string]any{"name": "web", "uid": "r", "generation": gen},
+		"spec":       map[string]any{"rules": list},
+	}}
+}
+
+func routeRule(name string, stable int64) map[string]any {
+	rule := map[string]any{"backendRefs": []any{
+		map[string]any{"name": "web", "port": int64(80), "weight": stable},
+		map[string]any{"name": "web-canary", "port": int64(80), "weight": 100 - stable},
+	}}
+	if name != "" {
+		rule["name"] = name
+	}
+	return rule
+}
+
+// With names, adding a rule no longer hides an edit to an existing one.
+func TestComputeDiff_HTTPRouteNamedRulesAddAndEdit(t *testing.T) {
+	admin := map[string]any{"name": "admin", "backendRefs": []any{map[string]any{"name": "admin", "port": int64(8080)}}}
+	diff := ComputeDiff("HTTPRoute", namedRoute(1, routeRule("main", 90)), namedRoute(2, routeRule("main", 10), admin))
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	want := "rule admin added, other spec changes: rules[main].backendRefs[web].weight, rules[main].backendRefs[web-canary].weight"
+	if diff.Summary != want {
+		t.Fatalf("summary = %q, want %q", diff.Summary, want)
+	}
+	added := findChange(diff, "spec.rules[admin]")
+	if added == nil || fmt.Sprint(added.NewValue) != "[admin:8080]" {
+		t.Fatalf("added rule row = %+v", added)
+	}
+	if findChange(diff, "spec.rules[main].backendRefs[web].weight") == nil {
+		t.Fatalf("weight row missing: %+v", diff.Fields)
+	}
+}
+
+// One unnamed rule on either side means positions are all there is.
+func TestComputeDiff_HTTPRouteUnnamedRulesFallBackToCount(t *testing.T) {
+	diff := ComputeDiff("HTTPRoute", namedRoute(1, routeRule("main", 90)), namedRoute(2, routeRule("main", 10), routeRule("", 50)))
+	if diff == nil || diff.Summary != "rules: 1→2" {
+		t.Fatalf("summary = %+v", diff)
+	}
+}
+
+func TestComputeDiff_IngressRulesKeyedByHost(t *testing.T) {
+	prefix := networkingv1.PathTypePrefix
+	rule := func(host, svc string) networkingv1.IngressRule {
+		return networkingv1.IngressRule{Host: host, IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{
+			Path: "/", PathType: &prefix,
+			Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: svc, Port: networkingv1.ServiceBackendPort{Number: 80}}},
+		}}}}}
+	}
+	base := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "web", UID: "ing", Generation: 1},
+		Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{rule("shop.example.com", "web")}}}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.Rules = []networkingv1.IngressRule{rule("shop.example.com", "web-v2"), rule("admin.example.com", "admin")}
+
+	diff := ComputeDiff("Ingress", base, updated)
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	if want := "rule admin.example.com added, other spec changes: rules[shop.example.com].http.paths[0].backend.service.name"; diff.Summary != want {
+		t.Errorf("summary = %q, want %q", diff.Summary, want)
+	}
+
+	// Rules without hosts fall back to the count.
+	noHost := base.DeepCopy()
+	noHost.Spec.Rules[0].Host = ""
+	noHostUpdated := noHost.DeepCopy()
+	noHostUpdated.Generation = 2
+	noHostUpdated.Spec.Rules = append(noHostUpdated.Spec.Rules, rule("admin.example.com", "admin"))
+	diff = ComputeDiff("Ingress", noHost, noHostUpdated)
+	if diff == nil || !strings.Contains(diff.Summary, "rules: 1→2") {
 		t.Fatalf("summary = %+v", diff)
 	}
 }

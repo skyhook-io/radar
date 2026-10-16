@@ -1575,14 +1575,22 @@ func diffIngress(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
-	// Check rules count
-	if len(oldIng.Spec.Rules) != len(newIng.Spec.Rules) {
-		changes = append(changes, FieldChange{
-			Path:     "spec.rules",
-			OldValue: len(oldIng.Spec.Rules),
-			NewValue: len(newIng.Spec.Rules),
-		})
-		summary = append(summary, fmt.Sprintf("rules: %d→%d", len(oldIng.Spec.Rules), len(newIng.Spec.Rules)))
+	// Rules keyed by host report which rule came or went; otherwise only the
+	// count is comparable.
+	rulesKeyedByHost := false
+	if !reflect.DeepEqual(oldIng.Spec.Rules, newIng.Spec.Rules) {
+		if ruleChanges, ruleSummary, keyed := keyedRuleChanges(ingressRulesList(oldIng), ingressRulesList(newIng), ingressRuleBackends); keyed {
+			rulesKeyedByHost = true
+			changes = append(changes, ruleChanges...)
+			summary = append(summary, ruleSummary...)
+		} else if len(oldIng.Spec.Rules) != len(newIng.Spec.Rules) {
+			changes = append(changes, FieldChange{
+				Path:     "spec.rules",
+				OldValue: len(oldIng.Spec.Rules),
+				NewValue: len(newIng.Spec.Rules),
+			})
+			summary = append(summary, fmt.Sprintf("rules: %d→%d", len(oldIng.Spec.Rules), len(newIng.Spec.Rules)))
+		}
 	}
 
 	// Check TLS
@@ -1634,7 +1642,10 @@ func diffIngress(oldObj, newObj any) ([]FieldChange, []string) {
 			OldValue: oldHosts,
 			NewValue: newHosts,
 		})
-		summary = append(summary, "hosts changed")
+		// Host-keyed rule rows already name each host that came or went.
+		if !rulesKeyedByHost {
+			summary = append(summary, "hosts changed")
+		}
 	}
 
 	return changes, summary
@@ -3949,10 +3960,14 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("hostnames: %s→%s", strings.Join(oldHostnames, ","), strings.Join(newHostnames, ",")))
 	}
 
-	// Check rules count
+	// Named rules report which rule came or went; otherwise only the count
+	// is comparable.
 	oldRules, _, _ := unstructured.NestedSlice(oldRoute.Object, "spec", "rules")
 	newRules, _, _ := unstructured.NestedSlice(newRoute.Object, "spec", "rules")
-	if len(oldRules) != len(newRules) {
+	if ruleChanges, ruleSummary, keyed := keyedRuleChanges(oldRules, newRules, routeRuleBackends); keyed {
+		changes = append(changes, ruleChanges...)
+		summary = append(summary, ruleSummary...)
+	} else if len(oldRules) != len(newRules) {
 		changes = append(changes, FieldChange{
 			Path:     "spec.rules",
 			OldValue: fmt.Sprintf("%d rules", len(oldRules)),

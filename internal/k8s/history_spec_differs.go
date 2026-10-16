@@ -137,6 +137,70 @@ func clientIPTimeout(c *corev1.SessionAffinityConfig) any {
 	return int32PtrValue(c.ClientIP.TimeoutSeconds)
 }
 
+// keyedRuleChanges reports added and removed rules when every rule on both
+// sides is identified: by name for Gateway routes (an optional field), by
+// host for Ingress (which has no rule names). Edits inside a kept rule are
+// left to the backstop, which keys the rules the same way. ok is false when
+// the rules can only be compared by position.
+func keyedRuleChanges(oldRules, newRules []any, describe func(map[string]any) []string) (changes []FieldChange, summary []string, ok bool) {
+	field := listKeyField(oldRules, newRules)
+	if field == "" {
+		return nil, nil, false
+	}
+	oldByKey, _ := listByKey(oldRules, field)
+	newByKey, _ := listByKey(newRules, field)
+	for _, key := range unionKeys(oldByKey, newByKey) {
+		oldRule, oldOK := oldByKey[key].(map[string]any)
+		newRule, newOK := newByKey[key].(map[string]any)
+		switch {
+		case !oldOK:
+			changes = append(changes, FieldChange{Path: "spec.rules[" + key + "]", OldValue: nil, NewValue: describe(newRule)})
+			summary = append(summary, fmt.Sprintf("rule %s added", key))
+		case !newOK:
+			changes = append(changes, FieldChange{Path: "spec.rules[" + key + "]", OldValue: describe(oldRule), NewValue: nil})
+			summary = append(summary, fmt.Sprintf("rule %s removed", key))
+		}
+	}
+	return changes, summary, true
+}
+
+// routeRuleBackends names a Gateway route rule by where it sends traffic.
+func routeRuleBackends(rule map[string]any) []string {
+	refs, _, _ := unstructured.NestedSlice(rule, "backendRefs")
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		m, _ := ref.(map[string]any)
+		name, _ := m["name"].(string)
+		if port, ok := m["port"]; ok {
+			name += fmt.Sprintf(":%v", port)
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// ingressRuleBackends names an Ingress rule by its paths and services.
+func ingressRuleBackends(rule map[string]any) []string {
+	paths, _, _ := unstructured.NestedSlice(rule, "http", "paths")
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		m, _ := p.(map[string]any)
+		path, _ := m["path"].(string)
+		svc, _, _ := unstructured.NestedString(m, "backend", "service", "name")
+		out = append(out, path+"→"+svc)
+	}
+	return out
+}
+
+func ingressRulesList(ing *networkingv1.Ingress) []any {
+	spec, ok := specMapOf(ing)
+	if !ok {
+		return nil
+	}
+	rules, _ := spec["rules"].([]any)
+	return rules
+}
+
 func ingressBackendString(b *networkingv1.IngressBackend) any {
 	switch {
 	case b == nil:

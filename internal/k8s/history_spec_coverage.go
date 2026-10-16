@@ -288,7 +288,7 @@ func untrackedSpecChanges(oldObj, newObj any, tracked []FieldChange) ([]FieldCha
 	var changes []FieldChange
 	labels := make([]string, 0, len(untracked))
 	for _, c := range untracked {
-		label := c.path
+		label := shortSpecPath(c.path)
 		if c.order {
 			label += " order"
 		}
@@ -313,6 +313,24 @@ func untrackedSpecChanges(oldObj, newObj any, tracked []FieldChange) ([]FieldCha
 		summary += fmt.Sprintf(" (+%d more)", extra)
 	}
 	return changes, []string{summary}
+}
+
+// shortSpecPath trims a path for the summary line to what a reader names the
+// field by: pod-template fields relative to the pod spec, everything else
+// relative to the object's spec. Field rows keep the full path.
+func shortSpecPath(path string) string {
+	for _, prefix := range []struct{ from, to string }{
+		{"spec.jobTemplate.spec.template.spec.", ""},
+		{"spec.jobTemplate.spec.template.", "template."},
+		{"spec.jobTemplate.spec.", "jobTemplate."},
+		{"spec.template.spec.", ""},
+		{"spec.", ""},
+	} {
+		if strings.HasPrefix(path, prefix.from) {
+			return prefix.to + strings.TrimPrefix(path, prefix.from)
+		}
+	}
+	return path
 }
 
 // changedSpecPath is one difference found by collectChangedSpecPaths. An
@@ -364,14 +382,14 @@ func collectChangedSpecPaths(path string, oldV, newV any, out *[]changedSpecPath
 			*out = append(*out, changedSpecPath{path: path})
 			return
 		}
-		oldByName, oldNamed := listByName(o)
-		newByName, newNamed := listByName(n)
-		if oldNamed && newNamed {
-			if oldOrder, newOrder := sharedNameOrder(o, newByName), sharedNameOrder(n, oldByName); !equalStringSlices(oldOrder, newOrder) {
+		if field := listKeyField(o, n); field != "" {
+			oldByKey, _ := listByKey(o, field)
+			newByKey, _ := listByKey(n, field)
+			if oldOrder, newOrder := sharedKeyOrder(o, newByKey, field), sharedKeyOrder(n, oldByKey, field); !equalStringSlices(oldOrder, newOrder) {
 				*out = append(*out, changedSpecPath{path: path, order: true, oldOrder: oldOrder, newOrder: newOrder})
 			}
-			for _, k := range unionKeys(oldByName, newByName) {
-				collectChangedSpecPaths(path+"["+k+"]", oldByName[k], newByName[k], out)
+			for _, k := range unionKeys(oldByKey, newByKey) {
+				collectChangedSpecPaths(path+"["+k+"]", oldByKey[k], newByKey[k], out)
 			}
 			return
 		}
@@ -387,15 +405,15 @@ func collectChangedSpecPaths(path string, oldV, newV any, out *[]changedSpecPath
 	}
 }
 
-func sharedNameOrder(items []any, other map[string]any) []string {
-	var names []string
+func sharedKeyOrder(items []any, other map[string]any, field string) []string {
+	var keys []string
 	for _, item := range items {
-		name, _ := item.(map[string]any)["name"].(string)
-		if _, ok := other[name]; ok {
-			names = append(names, name)
+		key, _ := item.(map[string]any)[field].(string)
+		if _, ok := other[key]; ok {
+			keys = append(keys, key)
 		}
 	}
-	return names
+	return keys
 }
 
 func unionKeys(a, b map[string]any) []string {
@@ -412,21 +430,44 @@ func unionKeys(a, b map[string]any) []string {
 	return keys
 }
 
-func listByName(items []any) (map[string]any, bool) {
+// listKeyFields are the fields that identify list items, in order of
+// preference: most named lists use name; Ingress rules have no name and are
+// identified by host.
+var listKeyFields = []string{"name", "host"}
+
+// listKeyField returns the field that uniquely identifies every item in all
+// the given lists, or "" when the lists must be compared by position.
+func listKeyField(lists ...[]any) string {
+	for _, field := range listKeyFields {
+		keyed := true
+		for _, list := range lists {
+			if _, ok := listByKey(list, field); !ok {
+				keyed = false
+				break
+			}
+		}
+		if keyed {
+			return field
+		}
+	}
+	return ""
+}
+
+func listByKey(items []any, field string) (map[string]any, bool) {
 	out := make(map[string]any, len(items))
 	for _, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
 			return nil, false
 		}
-		name, _ := m["name"].(string)
-		if name == "" {
+		key, _ := m[field].(string)
+		if key == "" {
 			return nil, false
 		}
-		if _, dup := out[name]; dup {
+		if _, dup := out[key]; dup {
 			return nil, false
 		}
-		out[name] = m
+		out[key] = m
 	}
 	return out, true
 }
@@ -527,9 +568,12 @@ func lookupSpecPath(root map[string]any, path string) (any, bool) {
 			case map[string]any:
 				cur = typed[key]
 			case []any:
-				if byName, ok := listByName(typed); ok {
-					cur = byName[key]
-					continue
+				if field := listKeyField(typed); field != "" {
+					byKey, _ := listByKey(typed, field)
+					if v, found := byKey[key]; found {
+						cur = v
+						continue
+					}
 				}
 				var idx int
 				if _, err := fmt.Sscanf(key, "%d", &idx); err != nil || idx < 0 || idx >= len(typed) {
