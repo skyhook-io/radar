@@ -323,7 +323,7 @@ func (v *otherPolicyView) calicoMaySelect(policy *unstructured.Unstructured, pod
 		v.matchers[key] = matcher
 	}
 	for _, pod := range pods {
-		matched, valid := matcher.Matches(calicoPodLabels(pod), namespaceLabels, pod.Spec.ServiceAccountName, nil)
+		matched, valid := matcher.Matches(topology.CalicoEndpointLabels(pod.Namespace, pod.Labels, pod.Spec.ServiceAccountName), namespaceLabels, pod.Spec.ServiceAccountName, nil)
 		if matched || !valid {
 			return true
 		}
@@ -369,21 +369,6 @@ func calicoCovers(policy *unstructured.Unstructured, dir netpol.Direction) bool 
 		return len(egress) > 0
 	}
 	return len(ingress) > 0 || len(egress) == 0
-}
-
-// calicoPodLabels adds the service-account label Calico sets on a pod's
-// endpoint (for names short enough to be a label value) to the shared
-// endpoint labels.
-func calicoPodLabels(pod *corev1.Pod) map[string]string {
-	out := topology.CalicoEndpointLabels(pod.Namespace, pod.Labels)
-	sa := pod.Spec.ServiceAccountName
-	if sa == "" {
-		sa = "default"
-	}
-	if len(sa) < 63 {
-		out["projectcalico.org/serviceaccount"] = sa
-	}
-	return out
 }
 
 func calicoSelectsAll(selector string) bool {

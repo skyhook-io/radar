@@ -312,6 +312,9 @@ func TestCalicoEndpointSelectorsUseAutomaticLabels(t *testing.T) {
 		{name: "orchestrator", selector: "projectcalico.org/orchestrator == 'k8s'", wantMatch: true},
 		{name: "wrong namespace", selector: "projectcalico.org/namespace == 'other'", wantMatch: false},
 		{name: "wrong orchestrator", selector: "projectcalico.org/orchestrator == 'calico'", wantMatch: false},
+		{name: "service account", selector: "projectcalico.org/serviceaccount == 'default'", wantMatch: true},
+		{name: "has service account", selector: "has(projectcalico.org/serviceaccount)", wantMatch: true},
+		{name: "wrong service account", selector: "projectcalico.org/serviceaccount == 'payments-api'", wantMatch: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			policy := calicoTestObject("projectcalico.org", "v3", "NetworkPolicy", "demo", test.name, map[string]any{"selector": test.selector})
@@ -320,6 +323,26 @@ func TestCalicoEndpointSelectorsUseAutomaticLabels(t *testing.T) {
 				t.Fatalf("selector %q matched=%v valid=%v, want matched=%v valid=true", test.selector, matched, valid, test.wantMatch)
 			}
 		})
+	}
+}
+
+// Calico labels every pod endpoint with its service account, defaulting an
+// unset one, and only when the name fits in a label value.
+func TestCalicoEndpointLabelsServiceAccount(t *testing.T) {
+	long := strings.Repeat("a", 63)
+	for _, test := range []struct {
+		serviceAccount string
+		want           string
+		present        bool
+	}{
+		{"payments-api", "payments-api", true},
+		{"", "default", true},
+		{long, "", false},
+	} {
+		got, ok := CalicoEndpointLabels("demo", nil, test.serviceAccount)["projectcalico.org/serviceaccount"]
+		if ok != test.present || got != test.want {
+			t.Errorf("CalicoEndpointLabels(sa=%q) serviceaccount label = %q (present %v), want %q (present %v)", test.serviceAccount, got, ok, test.want, test.present)
+		}
 	}
 }
 

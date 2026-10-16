@@ -1855,7 +1855,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				coveredIfStaged[workload.key] = true
 			}
 		}
-		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels)
+		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
 		for _, policy := range calicoPolicies {
 			if policy.definition.Namespaced && policy.policy.GetNamespace() != workload.namespace {
 				continue
