@@ -2116,6 +2116,35 @@ func (d *DynamicResourceCache) ReadServer(gvr schema.GroupVersionResource, names
 	return DynamicReadServer{entries: entries}, entriesSynced(entries)
 }
 
+// ReadableObject gets one object from the informers serving gvr in namespace
+// now ("" for a cluster-scoped resource), without probing, starting a watch or
+// waiting for one. found reports whether they hold it; ok is false unless they
+// had completed their initial list before the read, in which case a miss
+// proves nothing. server identifies the informers that answered, for a caller
+// that must know later reads came from the same ones.
+//
+// The object is the cached one, not a copy: callers must not modify it or keep
+// it beyond the computation that read it.
+func (d *DynamicResourceCache) ReadableObject(gvr schema.GroupVersionResource, namespace, name string) (obj *unstructured.Unstructured, server DynamicReadServer, found, ok bool) {
+	server, ok = d.ReadServer(gvr, namespace)
+	if !ok {
+		return nil, server, false, false
+	}
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
+	}
+	item, found, err := getByKeyFromEntries(server.entries, key)
+	if err != nil {
+		return nil, server, false, false
+	}
+	if !found {
+		return nil, server, false, true
+	}
+	u, isUnstructured := item.(*unstructured.Unstructured)
+	return u, server, isUnstructured, isUnstructured
+}
+
 // ---------------------------------------------------------------------------
 // Introspection
 // ---------------------------------------------------------------------------

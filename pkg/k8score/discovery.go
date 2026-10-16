@@ -45,6 +45,9 @@ type ResourceDiscovery struct {
 	cacheTTL    time.Duration
 	refreshMu   sync.Mutex
 	mu          sync.RWMutex
+
+	// generation counts changes to resources; see DiscoveryCatalog.
+	generation uint64
 }
 
 // DiscoveryOption is a functional option for NewResourceDiscovery.
@@ -262,6 +265,7 @@ func (d *ResourceDiscovery) refresh() error {
 	d.lastRefresh = time.Now()
 	d.partial = partial
 	d.failedGroup = failedGroups
+	d.generation++
 	log.Printf("Discovered %d API resources (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
 
 	return nil
@@ -298,6 +302,7 @@ func (d *ResourceDiscovery) AddAPIResource(resource APIResource) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.addResourceLocked(resource)
+	d.generation++
 }
 
 func (d *ResourceDiscovery) addResourceLocked(resource APIResource) {
