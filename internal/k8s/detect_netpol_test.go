@@ -227,6 +227,27 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 		t.Fatalf("ingress-only deny must not claim outbound is blocked: %+v", ingress)
 	}
 
+	pair := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
+		netpolTestPolicy("default-deny", nil, ingressOnly),
+		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
+	}, services[:1], pods, time.Now())
+	if len(pair) != 2 {
+		t.Fatalf("got %d detections, want one per contributing policy", len(pair))
+	}
+	for i, other := range []string{"deny-in", "default-deny"} {
+		if !strings.Contains(pair[i].Cause, "NetworkPolicy "+other+" isolates them the same way") {
+			t.Errorf("%s cause doesn't name %s: %q", pair[i].Name, other, pair[i].Cause)
+		}
+	}
+	// Deleting a namespace default-deny is the wrong first advice; the pods
+	// need an allow policy.
+	if !strings.Contains(pair[0].Action, "namespace-wide default-deny") || strings.Contains(pair[0].Action, "delete the policy") {
+		t.Errorf("default-deny action = %q", pair[0].Action)
+	}
+	if !strings.Contains(pair[1].Action, "delete the policy") {
+		t.Errorf("targeted deny action = %q", pair[1].Action)
+	}
+
 	brokenEgress := netpolTestPolicy("broken-egress", nil, egressOnly)
 	brokenEgress.Spec.PodSelector = metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "app", Operator: "Bogus"}}}
 	undecided := denyAllIngressDetections([]*networkingv1.NetworkPolicy{

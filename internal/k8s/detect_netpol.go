@@ -273,6 +273,9 @@ func calicoSelectsAll(selector string) bool {
 type denyAllIngressImpact struct {
 	services []string
 	pods     map[string]bool
+	// alsoDenying names the other policies leaving the same pods without
+	// inbound traffic; each gets its own issue, and each issue names the rest.
+	alsoDenying map[string]bool
 	// egressDenied is true only while every affected Service's evaluated pods
 	// are also denied all outbound traffic.
 	egressDenied bool
@@ -313,7 +316,7 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 			for _, np := range isolation.of(pod).ingressDenying {
 				impact := impacts[np]
 				if impact == nil {
-					impact = &denyAllIngressImpact{pods: map[string]bool{}, egressDenied: true}
+					impact = &denyAllIngressImpact{pods: map[string]bool{}, alsoDenying: map[string]bool{}, egressDenied: true}
 					impacts[np] = impact
 				}
 				if n := len(impact.services); n == 0 || impact.services[n-1] != svc.Name {
@@ -321,6 +324,11 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 				}
 				impact.egressDenied = impact.egressDenied && egressDenied
 				impact.pods[pod.Name] = true
+				for _, other := range isolation.of(pod).ingressDenying {
+					if other != np {
+						impact.alsoDenying[other.Name] = true
+					}
+				}
 			}
 		}
 	}
@@ -443,10 +451,27 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 		message += "; their outbound traffic, including DNS, would be blocked too"
 	}
 
-	cause := fmt.Sprintf("NetworkPolicy %s isolates these pods for ingress and has no ingress rules, and no other NetworkPolicy selecting them allows ingress, so new connections to them would be dropped. "+
-		"Connections opened before the policy existed can keep working until they close, so traffic can look healthy for a while. "+
-		"Whether the policy is enforced depends on the cluster's network plugin.", np.Name)
+	others := ""
+	if len(impact.alsoDenying) > 0 {
+		names := make([]string, 0, len(impact.alsoDenying))
+		for name := range impact.alsoDenying {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		others = fmt.Sprintf(" NetworkPolicies %s isolate them the same way.", strings.Join(names, ", "))
+		if len(names) == 1 {
+			others = fmt.Sprintf(" NetworkPolicy %s isolates them the same way.", names[0])
+		}
+	}
+	cause := fmt.Sprintf("NetworkPolicy %s isolates these pods for ingress and has no ingress rules, and no NetworkPolicy selecting them allows ingress, so new connections to them would be dropped.%s "+
+		"Connections opened before the isolation existed can keep working until they close, so traffic can look healthy for a while. "+
+		"Whether the policy is enforced depends on the cluster's network plugin.", np.Name, others)
+	// A namespace-wide default-deny is usually intended; what's missing is an
+	// allow policy for these pods, so deleting it is the wrong first advice.
 	action := fmt.Sprintf("If this isolation is not intended, delete the policy or add an ingress rule for the expected clients. Inspect it with: kubectl describe networkpolicy %s -n %s", np.Name, np.Namespace)
+	if podSelectorDisplay(&np.Spec.PodSelector) == "all pods" {
+		action = fmt.Sprintf("This is a namespace-wide default-deny, so these pods need a NetworkPolicy that allows their expected clients. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
+	}
 
 	age := now.Sub(np.CreationTimestamp.Time)
 	return Detection{
