@@ -311,9 +311,13 @@ type fakePolicyLister struct {
 	objects  map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured // namespace ("" = cluster-wide)
 	unsynced bool
 	err      error
+	calls    *int
 }
 
 func (f fakePolicyLister) List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	if f.calls != nil {
+		*f.calls++
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -345,7 +349,7 @@ func TestOtherPolicyViewMayApply(t *testing.T) {
 	cilium := func(selector map[string]any, rules ...string) *unstructured.Unstructured {
 		spec := map[string]any{"endpointSelector": selector}
 		for _, r := range rules {
-			spec[r] = []any{map[string]any{}}
+			spec[r] = []any{map[string]any{"fromEntities": []any{"cluster"}}}
 		}
 		return policyObject(spec)
 	}
@@ -366,12 +370,12 @@ func TestOtherPolicyViewMayApply(t *testing.T) {
 		{"Cilium deny-only policy can't allow inbound", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchRec, "ingressDeny"))}, shopNS, false},
 		{"Cilium policy with no rule sections may allow", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchRec))}, shopNS, true},
 		{"Cilium specs list: deny for these pods, allow for others", served, fakePolicyLister{objects: objects(cnp, "shop", &unstructured.Unstructured{Object: map[string]any{"specs": []any{
-			map[string]any{"endpointSelector": matchRec, "ingressDeny": []any{map[string]any{}}},
-			map[string]any{"endpointSelector": matchWeb, "ingress": []any{map[string]any{}}},
+			map[string]any{"endpointSelector": matchRec, "ingressDeny": []any{map[string]any{"fromEntities": []any{"world"}}}},
+			map[string]any{"endpointSelector": matchWeb, "ingress": []any{map[string]any{"fromEntities": []any{"cluster"}}}},
 		}}})}, shopNS, false},
 		{"Cilium specs list with an allowing spec for these pods", served, fakePolicyLister{objects: objects(cnp, "shop", &unstructured.Unstructured{Object: map[string]any{"specs": []any{
-			map[string]any{"endpointSelector": matchWeb, "ingressDeny": []any{map[string]any{}}},
-			map[string]any{"endpointSelector": matchRec, "ingress": []any{map[string]any{}}},
+			map[string]any{"endpointSelector": matchWeb, "ingressDeny": []any{map[string]any{"fromEntities": []any{"world"}}}},
+			map[string]any{"endpointSelector": matchRec, "ingress": []any{map[string]any{"fromEntities": []any{"cluster"}}}},
 		}}})}, shopNS, true},
 		{"Cilium egress-only policy can't allow inbound", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchRec, "egress"))}, shopNS, false},
 		{"Cilium policy in another namespace", served, fakePolicyLister{objects: objects(cnp, "other", cilium(matchRec, "ingress"))}, shopNS, false},
@@ -453,7 +457,7 @@ func TestOtherPolicyViewDirections(t *testing.T) {
 	served := fakePolicyDiscovery{"cilium.io/CiliumNetworkPolicy": cnp, "crd.projectcalico.org/GlobalNetworkPolicy": gnp}
 	pods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true)}
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}}
-	ciliumEgress := policyObject(map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "rec"}}, "egress": []any{map[string]any{}}})
+	ciliumEgress := policyObject(map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "rec"}}, "egress": []any{map[string]any{"toEntities": []any{"world"}}}})
 	calicoEgress := policyObject(map[string]any{"selector": "app == 'rec'", "egress": []any{map[string]any{"action": "Allow"}}})
 	for name, lister := range map[string]fakePolicyLister{
 		"Cilium": {objects: map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured{cnp: {"shop": {ciliumEgress}}}},
@@ -466,5 +470,31 @@ func TestOtherPolicyViewDirections(t *testing.T) {
 		if !view.mayApply("shop", pods, ns, netpol.DirectionEgress) {
 			t.Errorf("%s egress policy not counted for outbound", name)
 		}
+	}
+}
+
+// Lists are read once per scan, and a cluster-wide Calico policy compiled for
+// known namespace labels isn't reused for a namespace whose labels are unknown.
+func TestOtherPolicyViewMemoizes(t *testing.T) {
+	gnp := schema.GroupVersionResource{Group: "crd.projectcalico.org", Version: "v1", Resource: "globalnetworkpolicies"}
+	calls := 0
+	lister := fakePolicyLister{calls: &calls, objects: map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured{
+		gnp: {"": {policyObject(map[string]any{"namespaceSelector": "team == 'other'"})}},
+	}}
+	view := &otherPolicyView{discovery: fakePolicyDiscovery{"crd.projectcalico.org/GlobalNetworkPolicy": gnp}, lister: lister}
+	pods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true)}
+	known := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Labels: map[string]string{"team": "shop"}}}
+
+	steps := []struct {
+		ns   *corev1.Namespace
+		want bool
+	}{{known, false}, {nil, true}, {known, false}}
+	for i, step := range steps {
+		if got := view.mayApply("shop", pods, step.ns, netpol.DirectionIngress); got != step.want {
+			t.Errorf("step %d: mayApply = %v, want %v", i, got, step.want)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("List called %d times, want 1 for the whole scan", calls)
 	}
 }

@@ -15,9 +15,15 @@ func TestCiliumMayAllowIgnoresDenyOnlySpecs(t *testing.T) {
 	policy := func(sections ...string) *unstructured.Unstructured {
 		spec := map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "rec"}}}
 		for _, s := range sections {
-			spec[s] = []any{map[string]any{}}
+			spec[s] = []any{map[string]any{"fromEntities": []any{"cluster"}}}
 		}
 		return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	}
+	denyAllForm := func(section string, rules []any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
+			"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "rec"}},
+			section:            rules,
+		}}}
 	}
 	tests := []struct {
 		name            string
@@ -30,6 +36,9 @@ func TestCiliumMayAllowIgnoresDenyOnlySpecs(t *testing.T) {
 		{"egress allow, asked about ingress", policy("egress"), DirectionIngress, false, false},
 		{"egress allow", policy("egress"), DirectionEgress, true, true},
 		{"no rule sections", policy(), DirectionIngress, true, true},
+		{"empty ingress rule is Cilium's deny-all", denyAllForm("ingress", []any{map[string]any{}}), DirectionIngress, true, false},
+		{"empty ingress section", denyAllForm("ingress", []any{}), DirectionIngress, true, false},
+		{"empty egress rule is Cilium's deny-all", denyAllForm("egress", []any{map[string]any{}}), DirectionEgress, true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

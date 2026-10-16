@@ -108,17 +108,29 @@ func ciliumSpecCovers(spec map[string]any, dir Direction) bool {
 	return has("egress") || has("egressDeny")
 }
 
-// ciliumSpecMayAllow reports whether a spec has allow rules for dir. A spec
-// with no rule sections at all is read as possibly allowing.
+// ciliumSpecMayAllow reports whether a spec has allow rules for dir. An empty
+// section or an empty rule (ingress: [{}]) is Cilium's deny-all form and
+// allows nothing. A spec with no rule sections at all is read as possibly
+// allowing.
 func ciliumSpecMayAllow(spec map[string]any, dir Direction) bool {
 	has := func(key string) bool { _, ok := spec[key]; return ok }
 	if !has("ingress") && !has("ingressDeny") && !has("egress") && !has("egressDeny") {
 		return true
 	}
+	key := "egress"
 	if dir == DirectionIngress {
-		return has("ingress")
+		key = "ingress"
 	}
-	return has("egress")
+	rules, ok := spec[key].([]any)
+	if !ok {
+		return has(key)
+	}
+	for _, rule := range rules {
+		if m, ok := rule.(map[string]any); !ok || len(m) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ciliumSelectorMatches evaluates an endpointSelector against the identity.
