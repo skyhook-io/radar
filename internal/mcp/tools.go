@@ -393,7 +393,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"PVCs, Nodes, references, pod startup, native Helm, and False controller conditions. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
 			"`unchecked_sources` lists sources Radar couldn't check, so their issues may be " +
-			"missing; don't call them healthy. `helm` means failed or stuck Helm releases. " +
+			"missing; don't call them healthy. `kinds`/`namespaces` narrow the gap when present; " +
+			"`kind_sync_pending` means still loading, so ask again shortly. " +
 			"`diagnostic_context.role` marks roots, rollups, symptoms, or context; " +
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
@@ -2805,7 +2806,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 					log.Printf("[mcp] Dashboard helm list failed: %v", err)
 				}
 				d.HelmReleases.Unavailable = true
-				if helm.IsForbiddenError(err) {
+				if helm.ReleaseReadDeniedForCaller(err) {
 					d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope."
 				} else {
 					d.HelmReleases.UnavailableReason = "Helm read failed: " + err.Error()
@@ -3102,13 +3103,13 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	helmIssues, helmUnchecked := nativeHelmIssuesForContext(ctx, allowedNamespaces, filters)
+	helmIssues, helmUnchecked, helmIncomplete := nativeHelmIssuesForContext(ctx, allowedNamespaces, filters)
 	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse), then MCP-specific
 	// enrichments below.
 	resp := issues.NewListResponse(out, stats)
-	if helmUnchecked {
-		resp.UncheckedSources = []issuesapi.UncheckedSource{{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonReadFailed}}
+	if helmIncomplete {
+		resp.UncheckedSources = append(resp.UncheckedSources, helmUnchecked)
 	}
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
@@ -3170,13 +3171,13 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	return toJSONResult(resp)
 }
 
-func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked bool) {
+func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
-		return nil, false
+		return nil, unchecked, false
 	}
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return nil, false
+		return nil, unchecked, false
 	}
 	username, groups := userFromContext(ctx)
 	helmNamespaces := namespaces
@@ -3184,13 +3185,8 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 		helmNamespaces = resolveHelmListNamespaces(ctx, "")
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
-	if err != nil {
-		if !errors.Is(ctx.Err(), context.Canceled) && !helm.IssueReadDenied(err) {
-			log.Printf("[mcp] Failed to list Helm releases for issue stream: %v", err)
-		}
-		return nil, helm.IssueReadUnchecked(ctx, err)
-	}
-	return issues.NativeHelmReleaseIssues(releases, time.Now()), false
+	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 
 func parseSeverityList(v string) ([]issues.Severity, error) {

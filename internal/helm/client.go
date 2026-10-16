@@ -375,42 +375,90 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
 func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, IsForbiddenError, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+	rows, err := listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		return helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
+
+// PartialReadError reports the release storage namespaces whose read failed
+// while other namespaces were read. The releases returned with it come from
+// those other namespaces.
+type PartialReadError struct {
+	Namespaces []string
+	// Err is the first failure; Errs holds every failure, so callers can tell
+	// whether the namespaces failed for one reason or several.
+	Err  error
+	Errs []error
+}
+
+func (e *PartialReadError) Error() string {
+	return fmt.Sprintf("failed to read Helm releases in %d namespace(s) (%s): %v", len(e.Namespaces), strings.Join(e.Namespaces, ", "), e.Err)
+}
+
+func (e *PartialReadError) Unwrap() error { return e.Err }
 
 // listReleaseRows reads one storage snapshot per namespace scope (nil means
 // one cluster-wide read) and builds a row for each release in it. A namespace
-// whose read fails with an error that denied matches is skipped; any other
-// failure fails the whole read.
-func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
+// whose read fails with an error that denied matches is skipped. Any other
+// failure fails the whole read, unless keepGoing is set: then the remaining
+// namespaces are still read, and when at least one namespace was read the
+// rows come back with a *PartialReadError naming the namespaces that failed.
+func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
 	scopes := namespaces
 	if scopes == nil {
 		scopes = []string{""}
 	}
 	fluxMap := fluxHelmReleaseMap(ctx)
 	all := make([]HelmRelease, 0)
-	var lastForbidden error
+	var lastForbidden, firstFailure error
+	var failed []string
+	var failures []error
 	authorized := false
-	for _, ns := range scopes {
+	for index, ns := range scopes {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			if !keepGoing || !authorized {
+				return nil, err
+			}
+			failed = append(failed, scopes[index:]...)
+			failures = append(failures, err)
+			if firstFailure == nil {
+				firstFailure = err
+			}
+			break
 		}
 		snapshot, err := read(ctx, ns)
-		if err != nil {
-			if denied(err) {
-				lastForbidden = err
+		if err == nil {
+			var rows []HelmRelease
+			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, includeResourceHealth)
+			if err == nil {
+				authorized = true
+				all = append(all, rows...)
 				continue
 			}
+		}
+		if denied(err) {
+			lastForbidden = err
+			continue
+		}
+		if !keepGoing {
 			return nil, err
 		}
-		rows, err := helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, includeResourceHealth)
-		if err != nil {
-			return nil, err
+		failed = append(failed, ns)
+		failures = append(failures, err)
+		if firstFailure == nil {
+			firstFailure = err
 		}
-		authorized = true
-		all = append(all, rows...)
+	}
+	if firstFailure != nil {
+		if !authorized {
+			return nil, firstFailure
+		}
+		sortHelmReleases(all)
+		return all, &PartialReadError{Namespaces: failed, Err: firstFailure, Errs: failures}
 	}
 	if !authorized && lastForbidden != nil {
 		return nil, lastForbidden

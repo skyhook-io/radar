@@ -58,6 +58,10 @@ To find them, Radar first lists only the labels of the Helm release Secrets the 
 
 When that read fails, for example because the API server returns an error or Radar's 60-second request limit runs out, `/api/issues` still answers, with `"unchecked_sources": [{"source": "helm", "reason": "read_failed"}]`: failed or stuck Helm releases may be missing from the response. The MCP `issues` tool returns the same field. A caller that may not list release Secrets gets no Helm issues and no `helm` entry, the same as for any other kind it can't list.
 
+When the read covers several namespaces and only some fail, the issues from the others are kept, and the entry names the ones that failed: `{"source": "helm", "reason": "read_failed", "namespaces": ["payments"]}`. When Radar's ServiceAccount is not allowed to impersonate the user, every user is refused the same way. That is Radar's own access failing, not the user's permissions, so the entry says `"reason": "collector_access_denied"` instead of the read counting as a denial.
+
+The Home Helm card and the MCP `get_dashboard` tool make the same split: they say access is restricted only when Kubernetes denied the caller's own read. Rejected credentials (401) and a missing `impersonate` permission show as a failed read, with the error.
+
 ## Failed Upgrades And Rollback Inference
 
 Helm history does not persist whether `helm upgrade --atomic` was set. Radar infers an atomic-style rollback from the revision sequence:

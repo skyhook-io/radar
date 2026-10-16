@@ -760,9 +760,21 @@ export interface IssuesResponse {
   // mean "can't see" rather than "nothing broken" — the UI must say so.
   visibility?: { state?: string; impact?: string };
   // Issue sources Radar couldn't check, so their issues may be missing: an
-  // empty list is not an all-clear. Today only "helm"; a newer Radar may send
-  // others. Absent when every source was checked, and from older Radars.
-  unchecked_sources?: { source: string; reason: string }[];
+  // empty list is not an all-clear. A newer Radar may send sources and
+  // reasons this version doesn't know. Absent when every source was checked,
+  // and from older Radars.
+  unchecked_sources?: UncheckedSource[];
+}
+
+export interface UncheckedSource {
+  source: string;
+  reason: string;
+  // The kinds within the source that went unchecked; absent means the whole
+  // source, or that Radar couldn't tell which kinds.
+  kinds?: { group?: string; kind: string }[];
+  // The namespaces whose read failed while the others were read; absent
+  // means the gap isn't limited to particular namespaces.
+  namespaces?: string[];
 }
 
 export function useIssues(namespaces: string[] = [], enabled = true) {
