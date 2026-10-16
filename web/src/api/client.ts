@@ -2517,9 +2517,37 @@ export function useApplicationHistory(
 }
 
 // How often a page asks again while Radar is still connecting to argocd-server,
-// and while it retries a connect that failed.
+// and while it retries after a failure. Radar re-checks a failed connection at
+// most every 30s, so asking more often while retrying adds requests without
+// making the server reconnect sooner.
+// A page whose last fetch failed and was waiting on something keeps asking at
+// the slow rate, so a Radar or proxy outage doesn't strand it. It stops when
+// Radar answered that the object is gone or the caller can't read it, since
+// asking again won't change that answer.
 const ARGO_CONNECTING_POLL_MS = 2000;
-const ARGO_RETRYING_POLL_MS = 10_000;
+const ARGO_RETRYING_POLL_MS = 30_000;
+
+type PollState<T> = {
+  state: { status: string; data?: T; error?: unknown };
+};
+
+function afterFailedFetch(error: unknown, wanted: number | false): number | false {
+  if (wanted === false) return false;
+  if (error instanceof ApiError && [401, 403, 404].includes(error.status)) return false;
+  return ARGO_RETRYING_POLL_MS;
+}
+
+export function gitopsTreeRefetchInterval(
+  query: PollState<Pick<GitOpsResourceTree, "healthApiPending" | "healthApiRetrying">>,
+): number | false {
+  const data = query.state.data;
+  const wanted = data?.healthApiPending
+    ? ARGO_CONNECTING_POLL_MS
+    : data?.healthApiRetrying
+      ? ARGO_RETRYING_POLL_MS
+      : false;
+  return query.state.status === "error" ? afterFailedFetch(query.state.error, wanted) : wanted;
+}
 
 export function useGitOpsTree(
   kind: string,
@@ -2545,12 +2573,7 @@ export function useGitOpsTree(
     staleTime: 5000,
     // Radar answers at once while it connects to argocd-server; ask again
     // until Argo's per-resource health is in.
-    refetchInterval: (query) =>
-      query.state.data?.healthApiPending
-        ? ARGO_CONNECTING_POLL_MS
-        : query.state.data?.healthApiRetrying
-          ? ARGO_RETRYING_POLL_MS
-          : false,
+    refetchInterval: gitopsTreeRefetchInterval,
   });
 }
 
@@ -2559,6 +2582,27 @@ export function useGitOpsTree(
 // operationState.phase from Running/Terminating to a terminal phase, so this
 // auto-quiesces on completion.
 const INSIGHTS_RUNNING_POLL_MS = 2000;
+
+export function gitopsInsightsRefetchInterval(
+  query: PollState<{
+    summary?: Partial<
+      Pick<GitOpsInsight["summary"], "operationPhase" | "resourceHealthApiPending" | "resourceHealthApiRetrying">
+    >;
+    capabilities?: Pick<NonNullable<GitOpsInsight["capabilities"]>, "argoConnecting" | "argoRetrying">;
+  }>,
+): number | false {
+  const data = query.state.data;
+  const phase = data?.summary?.operationPhase;
+  let wanted: number | false = false;
+  if (phase === "Running" || phase === "Terminating") {
+    wanted = INSIGHTS_RUNNING_POLL_MS;
+  } else if (data?.summary?.resourceHealthApiPending || data?.capabilities?.argoConnecting) {
+    wanted = ARGO_CONNECTING_POLL_MS;
+  } else if (data?.summary?.resourceHealthApiRetrying || data?.capabilities?.argoRetrying) {
+    wanted = ARGO_RETRYING_POLL_MS;
+  }
+  return query.state.status === "error" ? afterFailedFetch(query.state.error, wanted) : wanted;
+}
 
 export function useGitOpsInsights(
   kind: string,
@@ -2581,19 +2625,7 @@ export function useGitOpsInsights(
       ),
     enabled: Boolean(kind && name),
     staleTime: 5000,
-    refetchInterval: (query) => {
-      const phase = query.state.data?.summary?.operationPhase;
-      if (phase === "Running" || phase === "Terminating") {
-        return INSIGHTS_RUNNING_POLL_MS;
-      }
-      const summary = query.state.data?.summary;
-      if (summary?.resourceHealthApiPending || query.state.data?.capabilities?.argoConnecting) {
-        return ARGO_CONNECTING_POLL_MS;
-      }
-      return summary?.resourceHealthApiRetrying || query.state.data?.capabilities?.argoRetrying
-        ? ARGO_RETRYING_POLL_MS
-        : false;
-    },
+    refetchInterval: gitopsInsightsRefetchInterval,
   });
 }
 
