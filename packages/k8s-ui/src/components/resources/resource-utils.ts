@@ -738,6 +738,19 @@ export function getDefaultContainerName(pod: any): string | undefined {
   return containers[0]?.name
 }
 
+/**
+ * The containers a terminal can target: the regular containers, then native
+ * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),
+ * which keep running for the pod's lifetime like regular containers.
+ */
+export function getExecContainerNames(pod: any): string[] {
+  const regular = (pod?.spec?.containers || []).map((c: any) => c.name)
+  const sidecars = (pod?.spec?.initContainers || [])
+    .filter((c: any) => c.restartPolicy === 'Always')
+    .map((c: any) => c.name)
+  return [...regular, ...sidecars].filter(Boolean)
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []

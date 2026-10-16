@@ -28,7 +28,7 @@ import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
-import { getDefaultContainerName } from '../resources/resource-utils'
+import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
@@ -254,7 +254,7 @@ export function ResourceActionsBar({
         namespace: resource.namespace,
         podName: resource.name,
         containerName: getDefaultContainerName(data) || containers[0],
-        containers,
+        containers: getExecContainerNames(data),
       })
     }
   }

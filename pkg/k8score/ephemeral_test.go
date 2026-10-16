@@ -326,3 +326,46 @@ func rejectFirstRestrictedPodSecurityUpdate(client *fake.Clientset) {
 }
 
 func int64Ptr(v int64) *int64 { return &v }
+
+func TestCreateEphemeralContainerUsesNativeSidecarUserAndGroupOnRestrictedRetry(t *testing.T) {
+	sidecarUser := int64(1001)
+	sidecarGroup := int64(1002)
+	podUser := int64(2002)
+	always := corev1.ContainerRestartPolicyAlways
+	client := fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "team-a",
+			Name:      "app-0",
+		},
+		Spec: corev1.PodSpec{
+			SecurityContext: &corev1.PodSecurityContext{RunAsUser: &podUser},
+			InitContainers: []corev1.Container{{
+				Name:          "log-shipper",
+				RestartPolicy: &always,
+				SecurityContext: &corev1.SecurityContext{
+					RunAsGroup: &sidecarGroup,
+					RunAsUser:  &sidecarUser,
+				},
+			}},
+			Containers: []corev1.Container{{Name: "app"}},
+		},
+	})
+	rejectFirstRestrictedPodSecurityUpdate(client)
+
+	ec, err := CreateEphemeralContainer(context.Background(), client, EphemeralContainerOptions{
+		Namespace:       "team-a",
+		PodName:         "app-0",
+		TargetContainer: "log-shipper",
+		Image:           "busybox:latest",
+		ContainerName:   "debugger",
+	})
+	if err != nil {
+		t.Fatalf("CreateEphemeralContainer returned error: %v", err)
+	}
+	if ec.SecurityContext == nil || ec.SecurityContext.RunAsUser == nil || *ec.SecurityContext.RunAsUser != sidecarUser {
+		t.Fatalf("runAsUser = %#v, want %d", ec.SecurityContext, sidecarUser)
+	}
+	if ec.SecurityContext.RunAsGroup == nil || *ec.SecurityContext.RunAsGroup != sidecarGroup {
+		t.Fatalf("runAsGroup = %#v, want %d", ec.SecurityContext, sidecarGroup)
+	}
+}
