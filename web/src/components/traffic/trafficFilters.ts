@@ -695,3 +695,16 @@ export function connectionRows<T extends AggregatedFlow>(flows: T[]): T[] {
   keyed.sort(byProblemsThenVolume)
   return keyed.map(k => k.flow)
 }
+
+/**
+ * The verdict filter's choices, from the verdicts the flows contain. Caretta,
+ * Beyla and Istio report every flow forwarded unless they saw an error, so when
+ * forwarded is the only verdict present the filter would match everything and
+ * none is offered. Any other verdict, even one without a chip of its own (Hubble
+ * also reports redirected, audit and more), makes Forwarded a real choice.
+ */
+export function verdictChoices(seen: Iterable<string>): string[] {
+  const present = new Set(seen)
+  if (present.size === 1 && present.has('forwarded')) return []
+  return ['forwarded', 'dropped', 'error'].filter(v => present.has(v))
+}
