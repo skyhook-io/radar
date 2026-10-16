@@ -142,6 +142,7 @@ func (s *Server) handleTraceInCluster(w http.ResponseWriter, r *http.Request) {
 		AllowedNamespaces: namespaces,
 		IssueAccess: trace.IssueAccess{
 			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadRelated:       s.issueRelatedResourceAccess(r),
 			CanReadSubject:       s.issueSubjectAccess(r),
 			CanReadEvidence:      s.issueEvidenceAccess(r),
 		},

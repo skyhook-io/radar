@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
@@ -288,6 +289,20 @@ func SetTestContextName(name string) string {
 	contextName = name
 	clientMu.Unlock()
 	return prev
+}
+
+// SetTestResourceDiscovery installs discovery built from the given API
+// resource lists and returns a restore func.
+func SetTestResourceDiscovery(client discovery.DiscoveryInterface) (func(), error) {
+	core, err := k8score.NewResourceDiscovery(client)
+	if err != nil {
+		return nil, err
+	}
+	ResetResourceDiscovery()
+	discoveryMu.Lock()
+	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	discoveryMu.Unlock()
+	return ResetResourceDiscovery, nil
 }
 
 // SetTestLocalMode makes IsInCluster report local mode and returns a restore func.

@@ -78,8 +78,12 @@ type Deps struct {
 // IssueAccess carries the caller's issue authorizers into the trace walk.
 type IssueAccess struct {
 	CanReadClusterScoped func(kind, group string) bool
-	CanReadSubject       func(issues.Ref) bool
-	CanReadEvidence      func(issues.EvidenceRead) bool
+	// CanReadRelated authorizes issues that reach a hop through a link from
+	// another subject, such as a NetworkPolicy issue on the Service it
+	// isolates. nil shows none of them.
+	CanReadRelated  func(issues.Ref) bool
+	CanReadSubject  func(issues.Ref) bool
+	CanReadEvidence func(issues.EvidenceRead) bool
 }
 
 // NamespaceAllowed reports whether the caller's RBAC scope permits

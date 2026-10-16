@@ -17,7 +17,6 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/netpol"
 )
 
@@ -187,7 +186,7 @@ func TestDenyAllIngressDetections(t *testing.T) {
 			}
 			for _, d := range got {
 				if d.Kind != "NetworkPolicy" || d.Group != "networking.k8s.io" || d.Severity != "warning" ||
-					d.Reason != NetworkPolicyDenyAllIngressReason || d.Fingerprint != networkPolicyDenyAllIngressFingerprint {
+					d.Reason != NetworkPolicyDenyAllIngressReason || d.Fingerprint != NetworkPolicyDenyAllIngressFingerprint {
 					t.Errorf("unexpected detection identity: %+v", d)
 				}
 				if len(d.RequiredReads) != 3 {
@@ -282,13 +281,11 @@ func TestDetectProblemsIncludesNetworkPolicyDenyAll(t *testing.T) {
 		GroupVersion: "networking.k8s.io/v1",
 		APIResources: []metav1.APIResource{{Name: "networkpolicies", Kind: "NetworkPolicy", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}}},
 	}}
-	coreDiscovery, err := k8score.NewResourceDiscovery(fakeDisc)
+	restore, err := SetTestResourceDiscovery(fakeDisc)
 	if err != nil {
-		t.Fatalf("NewResourceDiscovery: %v", err)
+		t.Fatalf("SetTestResourceDiscovery: %v", err)
 	}
-	ResetResourceDiscovery()
-	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: coreDiscovery}
-	defer ResetResourceDiscovery()
+	defer restore()
 	cache := GetResourceCache()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

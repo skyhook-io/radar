@@ -98,10 +98,11 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		if g.DiagnosticContext != nil {
 			for _, fact := range g.DiagnosticContext.Facts {
 				if fact.Type == factNetworkPolicyIsolates {
-					// The refs were already reduced to what the caller can
-					// read (redactUnreadableRelatedRefs in Compose).
+					// Compose already dropped the links the caller can't read.
+					// A nil authorizer fails closed, as for every
+					// cross-resource reference.
 					for _, ref := range fact.Refs {
-						if match(ref.Group, ref.Kind, ref.Namespace, ref.Name) && canReadSubject(g) && canReadEvidence(g) {
+						if match(ref.Group, ref.Kind, ref.Namespace, ref.Name) && opts.CanReadRelated != nil && opts.CanReadRelated(ref) && canReadSubject(g) && canReadEvidence(g) {
 							matched[g.ID] = true
 							break
 						}

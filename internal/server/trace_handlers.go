@@ -81,6 +81,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		Issues:    issues.NewCacheProvider(),
 		IssueAccess: trace.IssueAccess{
 			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadRelated:       s.issueRelatedResourceAccess(r),
 			CanReadSubject:       s.issueSubjectAccess(r),
 			CanReadEvidence:      s.issueEvidenceAccess(r),
 		},

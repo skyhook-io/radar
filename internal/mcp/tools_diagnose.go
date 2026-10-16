@@ -1123,6 +1123,7 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 		Issues:    issues.NewCacheProvider(),
 		IssueAccess: trace.IssueAccess{
 			CanReadClusterScoped: issueClusterScopedAccess(ctx),
+			CanReadRelated:       issueRelatedResourceAccess(ctx),
 			CanReadSubject:       issueSubjectAccess(ctx),
 			CanReadEvidence:      issueEvidenceAccess(ctx),
 		},

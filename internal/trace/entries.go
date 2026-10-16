@@ -874,6 +874,11 @@ func podFanoutFindings(deps Deps, pods []*corev1.Pod) []Finding {
 		ref := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		cause, command := podDiagnosis(pod)
 		for _, f := range hopFindings(deps, ref) {
+			// The hop's own policy evaluation reports the same isolation per
+			// port (netpol:would-deny); the policy issue shows on the Service.
+			if f.Code == k8s.NetworkPolicyDenyAllIngressFingerprint {
+				continue
+			}
 			prev, ok := seen[f.Code]
 			if !ok || severityRank(f.Severity) > severityRank(prev.Severity) {
 				podRef := ref

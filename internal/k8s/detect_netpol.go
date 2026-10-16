@@ -21,7 +21,7 @@ import (
 
 const (
 	NetworkPolicyDenyAllIngressReason      = "NetworkPolicy denies all ingress"
-	networkPolicyDenyAllIngressFingerprint = "netpol:deny-all-ingress"
+	NetworkPolicyDenyAllIngressFingerprint = "netpol:deny-all-ingress"
 	maxNamedServicesPerPolicy              = 3
 )
 
@@ -618,7 +618,7 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 		Message:           message,
 		Cause:             cause,
 		Action:            action,
-		Fingerprint:       networkPolicyDenyAllIngressFingerprint,
+		Fingerprint:       NetworkPolicyDenyAllIngressFingerprint,
 		Age:               timeutil.FormatAgeShort(age),
 		AgeSeconds:        int64(age.Seconds()),
 		ResourceCreatedAt: np.CreationTimestamp.Time,

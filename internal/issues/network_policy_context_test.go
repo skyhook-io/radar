@@ -28,14 +28,20 @@ var netpolAffected = []Ref{
 // lookup the resource drawer, diagnose and get_resource use.
 func TestNetworkPolicyIssueRelatesToIsolatedResources(t *testing.T) {
 	p := &fakeProvider{problems: []k8s.Detection{netpolDetection(netpolAffected...)}}
+	readAll := RelatedIssueOptions{CanReadRelated: func(Ref) bool { return true }}
 	for _, ref := range append([]Ref{{Group: "networking.k8s.io", Kind: "NetworkPolicy", Namespace: "shop", Name: "deny-all"}}, netpolAffected...) {
-		got := RelatedIssues(p, RelatedIssueOptions{}, ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		got := RelatedIssues(p, readAll, ref.Group, ref.Kind, ref.Namespace, ref.Name)
 		if len(got) != 1 || got[0].Kind != "NetworkPolicy" || got[0].Category != issuesapi.CategoryNetworkPolicyBlock {
 			t.Errorf("RelatedIssues(%s %s) = %+v, want the NetworkPolicy issue", ref.Kind, ref.Name, got)
 		}
 	}
-	if got := RelatedIssues(p, RelatedIssueOptions{}, "", "Service", "shop", "frontend"); len(got) != 0 {
+	if got := RelatedIssues(p, readAll, "", "Service", "shop", "frontend"); len(got) != 0 {
 		t.Errorf("RelatedIssues(unaffected Service) = %+v, want none", got)
+	}
+	// Without an authorizer the links fail closed, like every cross-resource
+	// reference; the policy's own lookup still finds it.
+	if got := RelatedIssues(p, RelatedIssueOptions{}, "", "Service", "shop", "recommendation"); len(got) != 0 {
+		t.Errorf("RelatedIssues(Service, nil authorizer) = %+v, want none", got)
 	}
 }
 
