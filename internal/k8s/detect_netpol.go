@@ -91,8 +91,10 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 			otherMayApply: func(pods []*corev1.Pod, dir netpol.Direction) bool {
 				return otherPolicies.mayApply(ns, pods, nsObj, dir)
 			},
-			ownerOf:        func(pod *corev1.Pod) (string, string, string) { return podOwnerKindName(cache, pod) },
-			isolationOnset: networkPolicyIsolationOnset,
+			ownerOf: func(pod *corev1.Pod) (string, string, string) { return podOwnerKindName(cache, pod) },
+			isolationOnset: func(np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, string, bool) {
+				return networkPolicyIsolationOnset(networkPolicyWatchedSince(cache), np, impact)
+			},
 		}
 		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], env, now)...)
 	}
@@ -668,16 +670,16 @@ const onsetObservationMargin = time.Minute
 //     its spec never changed, or an observed edit that removed its last
 //     ingress rules;
 //   - every affected Service and pod already existed then;
-//   - this process watched from before that time, and saw no other
-//     NetworkPolicy in the namespace created, changed or deleted after it
-//     (deleting an allow policy would start the isolation later).
+//   - NetworkPolicy changes were watched and retained from before that time
+//     (watchedSince), and no other NetworkPolicy in the namespace was created,
+//     changed or deleted at or after it (deleting an allow policy would start
+//     the isolation later).
 //
 // Anything less leaves the onset unknown, which is honest; a backdated onset
 // would mislead.
-func networkPolicyIsolationOnset(np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, string, bool) {
+func networkPolicyIsolationOnset(watchedSince time.Time, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, string, bool) {
 	created := np.CreationTimestamp.Time
-	start := timeline.ObservationStart()
-	if created.IsZero() || start.IsZero() || start.After(created.Add(-onsetObservationMargin)) {
+	if created.IsZero() || watchedSince.IsZero() || watchedSince.After(created.Add(-onsetObservationMargin)) {
 		return time.Time{}, "", false
 	}
 	events, ok := networkPolicyEventsSince(np.Namespace, created)
@@ -696,11 +698,52 @@ func networkPolicyIsolationOnset(np *networkingv1.NetworkPolicy, impact *denyAll
 		return time.Time{}, "", false
 	}
 	for _, e := range events {
-		if e.Name != np.Name && e.Timestamp.After(since) {
+		// An equal timestamp can't establish order, so it counts as after.
+		if e.Name != np.Name && !e.Timestamp.Before(since) {
 			return time.Time{}, "", false
 		}
 	}
 	return since, timing, true
+}
+
+// networkPolicyWatchedSince returns the start of the window in which every
+// NetworkPolicy change was recorded and is still retained: the later of when
+// this process began recording, when its NetworkPolicy informer synced, and
+// the oldest event the store still holds if it has evicted any (ring overflow
+// or retention cleanup). Zero when no such window is known.
+func networkPolicyWatchedSince(cache *ResourceCache) time.Time {
+	start := timeline.ObservationStart()
+	if start.IsZero() || cache == nil {
+		return time.Time{}
+	}
+	synced := time.Time{}
+	for _, s := range cache.GetSyncStatus().Informers {
+		if s.Key == "networkpolicies" && s.Synced {
+			synced, _ = time.Parse(time.RFC3339, s.SyncedAt)
+		}
+	}
+	if synced.IsZero() {
+		return time.Time{}
+	}
+	if synced.After(start) {
+		start = synced
+	}
+	store := timeline.GetStore()
+	if store == nil {
+		return time.Time{}
+	}
+	// After an eviction the retained window starts at the oldest kept event
+	// (the store drops oldest first); a second covers equal timestamps that
+	// may have gone with it.
+	if stats := store.Stats(); stats.EventsEvicted {
+		if stats.OldestEvent.IsZero() {
+			return time.Time{}
+		}
+		if floor := stats.OldestEvent.Add(time.Second); floor.After(start) {
+			start = floor
+		}
+	}
+	return start
 }
 
 // networkPolicyEventsSince returns the namespace's NetworkPolicy adds, edits

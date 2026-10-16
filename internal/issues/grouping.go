@@ -52,6 +52,10 @@ func OtherSubject(i Issue, group, kind, namespace, name string) *Ref {
 	if Concerns(i, group, kind, namespace, name) {
 		return nil
 	}
+	// Members are capped, so a resource beyond the cap may still be one.
+	if i.MembersTruncated {
+		return nil
+	}
 	wantGroup := resolveGroup(group, kind)
 	for _, m := range i.Members {
 		if strings.EqualFold(m.Kind, kind) && m.Namespace == namespace && m.Name == name && resolveGroup(m.Group, m.Kind) == wantGroup {

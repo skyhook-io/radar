@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -578,15 +579,16 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 			t.Fatalf("append: %v", err)
 		}
 	}
+	var watchedSince time.Time
 	setup := func(t *testing.T, observedFrom time.Time) {
 		t.Helper()
 		timeline.ResetStore()
 		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 50}); err != nil {
 			t.Fatalf("InitStore: %v", err)
 		}
-		timeline.SetObservationStartForTest(observedFrom)
+		watchedSince = observedFrom
 	}
-	t.Cleanup(func() { timeline.ResetStore(); timeline.SetObservationStartForTest(time.Time{}) })
+	t.Cleanup(timeline.ResetStore)
 	policy := func(generation int64) *networkingv1.NetworkPolicy {
 		np := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
 		np.CreationTimestamp, np.Generation = metav1.NewTime(created), generation
@@ -597,35 +599,42 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 
 	t.Run("unchanged policy watched since before it existed", func(t *testing.T) {
 		setup(t, created.Add(-time.Hour))
-		got, timing, ok := networkPolicyIsolationOnset(policy(1), olderObjects)
+		got, timing, ok := networkPolicyIsolationOnset(watchedSince, policy(1), olderObjects)
 		if !ok || !got.Equal(created) || timing != "started_at_resource_creation" {
 			t.Fatalf("got %v %q %v, want creation", got, timing, ok)
 		}
 	})
 	t.Run("not watched since before the policy existed", func(t *testing.T) {
 		setup(t, created.Add(-30*time.Second))
-		if _, _, ok := networkPolicyIsolationOnset(policy(1), olderObjects); ok {
+		if _, _, ok := networkPolicyIsolationOnset(watchedSince, policy(1), olderObjects); ok {
 			t.Fatal("claimed an onset without watching the whole window")
 		}
 	})
 	t.Run("a pod or Service newer than the policy", func(t *testing.T) {
 		setup(t, created.Add(-time.Hour))
-		if _, _, ok := networkPolicyIsolationOnset(policy(1), &denyAllIngressImpact{lastCreated: created.Add(time.Minute)}); ok {
+		if _, _, ok := networkPolicyIsolationOnset(watchedSince, policy(1), &denyAllIngressImpact{lastCreated: created.Add(time.Minute)}); ok {
 			t.Fatal("claimed an onset earlier than an object it applies to")
 		}
 	})
 	t.Run("another policy deleted afterwards", func(t *testing.T) {
 		setup(t, created.Add(-time.Hour))
 		appendEvent(timeline.TimelineEvent{ID: "allow-gone", Timestamp: created.Add(10 * time.Minute), Name: "allow-web", EventType: timeline.EventTypeDelete})
-		if _, _, ok := networkPolicyIsolationOnset(policy(1), olderObjects); ok {
+		if _, _, ok := networkPolicyIsolationOnset(watchedSince, policy(1), olderObjects); ok {
 			t.Fatal("claimed creation as onset although an allow policy was deleted later")
+		}
+	})
+	t.Run("another policy added at the same moment", func(t *testing.T) {
+		setup(t, created.Add(-time.Hour))
+		appendEvent(timeline.TimelineEvent{ID: "same-time", Timestamp: created, Name: "allow-web", EventType: timeline.EventTypeAdd})
+		if _, _, ok := networkPolicyIsolationOnset(watchedSince, policy(1), olderObjects); ok {
+			t.Fatal("an equal timestamp can't establish order, but an onset was claimed")
 		}
 	})
 	t.Run("edit that removed the last ingress rules", func(t *testing.T) {
 		setup(t, created.Add(-time.Hour))
 		edited := created.Add(20 * time.Minute)
 		appendEvent(timeline.TimelineEvent{ID: "edit", Timestamp: edited, Name: "deny-all", EventType: timeline.EventTypeUpdate, Diff: removeRules})
-		got, timing, ok := networkPolicyIsolationOnset(policy(2), olderObjects)
+		got, timing, ok := networkPolicyIsolationOnset(watchedSince, policy(2), olderObjects)
 		if !ok || !got.Equal(edited) || timing != "started_after_resource_was_healthy" {
 			t.Fatalf("got %v %q %v, want the edit", got, timing, ok)
 		}
@@ -635,8 +644,45 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 		appendEvent(timeline.TimelineEvent{ID: "edit", Timestamp: created.Add(20 * time.Minute), Name: "deny-all", EventType: timeline.EventTypeUpdate, Diff: removeRules})
 		appendEvent(timeline.TimelineEvent{ID: "egress", Timestamp: created.Add(30 * time.Minute), Name: "deny-all", EventType: timeline.EventTypeUpdate,
 			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.egress", OldValue: []any{}, NewValue: []any{"to anywhere ports all"}}}}})
-		if _, _, ok := networkPolicyIsolationOnset(policy(3), olderObjects); ok {
+		if _, _, ok := networkPolicyIsolationOnset(watchedSince, policy(3), olderObjects); ok {
 			t.Fatal("dated the isolation from an edit that didn't start it")
 		}
 	})
+}
+
+// The watched window needs the recorder running and the NetworkPolicy
+// informer synced, and starts no earlier than the oldest event the store still
+// holds once it has evicted any.
+func TestNetworkPolicyWatchedSince(t *testing.T) {
+	defer ResetTestState()
+	timeline.ResetStore()
+	t.Cleanup(func() { timeline.ResetStore(); timeline.SetObservationStartForTest(time.Time{}) })
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 2}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if err := InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cache.IsKindReady("networkpolicies") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	start := time.Now().Add(-time.Hour)
+	timeline.SetObservationStartForTest(start)
+	got := networkPolicyWatchedSince(cache)
+	if got.IsZero() || got.Before(start) {
+		t.Fatalf("watched since %v, want the later of observation start and informer sync", got)
+	}
+	for i := range 3 {
+		if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+			ID: fmt.Sprintf("e%d", i), Timestamp: time.Now(), Source: timeline.SourceInformer, ClusterContext: ActiveClusterContext(),
+			Kind: "ConfigMap", Namespace: "shop", Name: "x", EventType: timeline.EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if got := networkPolicyWatchedSince(cache); !got.After(time.Now().Add(-time.Minute)) {
+		t.Fatalf("watched since %v after the store evicted the window's start, want it moved to the oldest kept event", got)
+	}
 }
