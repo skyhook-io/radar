@@ -311,11 +311,13 @@ func TestRESTRelatedIssuesAuthorizeNetworkPolicyIsolationLinks(t *testing.T) {
 	s.permCache.Set("shop-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
 	s.permCache.Set("other-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"other"}})
 	svc := issues.Ref{Kind: "Service", Namespace: "shop", Name: "recommendation"}
+	links := []issuesapi.Ref{svc, {Kind: "Pod", Namespace: "shop", Name: "rec-a"}}
 	policyIssue := issues.Issue{
 		ID: "netpol", Group: "networking.k8s.io", Kind: "NetworkPolicy", Namespace: "shop", Name: "deny-all",
+		AffectedRefs: links,
 		DiagnosticContext: &issuesapi.DiagnosticContext{Facts: []issuesapi.DiagnosticFact{{
 			Type: "network_policy_isolates",
-			Refs: []issuesapi.Ref{svc, {Kind: "Pod", Namespace: "shop", Name: "rec-a"}},
+			Refs: links,
 		}}},
 	}
 	lookup := func(user string) ([]issues.Issue, issues.Issue) {

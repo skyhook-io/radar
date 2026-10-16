@@ -202,6 +202,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	if reason == p.Reason {
 		if ctx := networkPolicyIsolationContext(p); ctx != nil {
 			iss.DiagnosticContext = ctx
+			iss.AffectedRefs = p.AffectedRefs
 		}
 	}
 	if p.OwnerKind != "" {

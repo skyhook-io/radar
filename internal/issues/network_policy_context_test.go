@@ -71,8 +71,15 @@ func TestNetworkPolicyIsolationRefsCap(t *testing.T) {
 	if len(fact.Refs) != maxNetworkPolicyIsolationRefs || fact.Refs[0].Kind != "Service" || fact.Refs[1].Kind != "Deployment" {
 		t.Fatalf("refs = %+v", fact.Refs)
 	}
-	if !strings.Contains(fact.Message, fmt.Sprintf("Showing %d of %d links", maxNetworkPolicyIsolationRefs, len(refs))) {
-		t.Errorf("message = %q", fact.Message)
+	if !strings.Contains(fact.Message, "Only the first links are shown") || strings.ContainsAny(fact.Message, "0123456789") {
+		t.Errorf("message = %q, want a cap note without counts", fact.Message)
+	}
+
+	// A resource past the display cap still finds the issue.
+	p := &fakeProvider{problems: []k8s.Detection{netpolDetection(refs...)}}
+	readAll := RelatedIssueOptions{CanReadRelated: func(Ref) bool { return true }}
+	if got := RelatedIssues(p, readAll, "", "Pod", "shop", "rec-11"); len(got) != 1 {
+		t.Errorf("RelatedIssues(Pod past the cap) = %d, want 1", len(got))
 	}
 	if networkPolicyIsolationContext(netpolDetection()) != nil {
 		t.Error("a detection without refs got a context")
@@ -102,5 +109,23 @@ func TestNetworkPolicyIsolationRefsReadGate(t *testing.T) {
 	readNothing := Compose(p, Filters{Limit: NoLimit, CanReadRelated: func(Ref) bool { return false }})
 	if len(readNothing) != 1 || readNothing[0].DiagnosticContext != nil {
 		t.Errorf("with no readable links the issue should stay and lose its fact, got %+v", readNothing)
+	}
+}
+
+// A user-agnostic composed pair (a shared memo) still returns only the links
+// the caller can read.
+func TestRelatedIssuesFromRedactsIsolationLinks(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{netpolDetection(netpolAffected...)}}
+	flat := Compose(p, Filters{Limit: NoLimit})
+	grouped := GroupIssues(flat)
+	noPods := RelatedIssueOptions{CanReadRelated: func(ref Ref) bool { return ref.Kind != "Pod" }}
+	got := RelatedIssuesFrom(flat, grouped, noPods, "", "Service", "shop", "recommendation")
+	if len(got) != 1 {
+		t.Fatalf("RelatedIssuesFrom = %+v, want the issue", got)
+	}
+	for _, ref := range append(append([]Ref(nil), got[0].AffectedRefs...), got[0].DiagnosticContext.Facts[0].Refs...) {
+		if ref.Kind == "Pod" {
+			t.Errorf("unreadable Pod link returned: %+v", ref)
+		}
 	}
 }

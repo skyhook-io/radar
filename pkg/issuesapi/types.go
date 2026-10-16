@@ -463,19 +463,23 @@ type Issue struct {
 	// RequiredReads describe the inventories behind a cross-resource finding.
 	// They are retained internally so cached and grouped projections can authorize it.
 	RequiredReads []EvidenceRead `json:"-"`
-	Severity      Severity       `json:"severity"`
-	Source        Source         `json:"source"`
-	Category      Category       `json:"category"`
-	CategoryGroup CategoryGroup  `json:"category_group"`
-	ID            string         `json:"id"`
-	GroupingScope Scope          `json:"grouping_scope"`
-	Kind          string         `json:"kind"`
-	Group         string         `json:"group,omitempty"`
-	Namespace     string         `json:"namespace,omitempty"`
-	Name          string         `json:"name"`
-	Reason        string         `json:"reason"`
-	Message       string         `json:"message,omitempty"`
-	RawMessage    string         `json:"raw_message,omitempty"`
+	// AffectedRefs are the resources a finding about another subject affects,
+	// all of them rather than the capped links a diagnostic fact shows.
+	// Related-issue lookup matches them; they are never serialized.
+	AffectedRefs  []Ref         `json:"-"`
+	Severity      Severity      `json:"severity"`
+	Source        Source        `json:"source"`
+	Category      Category      `json:"category"`
+	CategoryGroup CategoryGroup `json:"category_group"`
+	ID            string        `json:"id"`
+	GroupingScope Scope         `json:"grouping_scope"`
+	Kind          string        `json:"kind"`
+	Group         string        `json:"group,omitempty"`
+	Namespace     string        `json:"namespace,omitempty"`
+	Name          string        `json:"name"`
+	Reason        string        `json:"reason"`
+	Message       string        `json:"message,omitempty"`
+	RawMessage    string        `json:"raw_message,omitempty"`
 	// Cause / Action / Remediation* carry parsed domain diagnosis. They give the
 	// Issues page + MCP a plain-English cause + next step when a detector has
 	// enough evidence. All optional — empty for issues without a parser.

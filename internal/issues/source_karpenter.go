@@ -291,7 +291,19 @@ func newKarpenterConditionIssue(gvr schema.GroupVersionResource, kind string, ob
 // capacity-issues memo, whose per-user gates apply at read time) — no
 // redaction there; every per-user surface wires an authorizer.
 func RedactIssueRelatedRefs(issue Issue, canRead func(Ref) bool) Issue {
-	if canRead == nil || issue.DiagnosticContext == nil {
+	if canRead == nil {
+		return issue
+	}
+	if len(issue.AffectedRefs) > 0 {
+		readable := make([]Ref, 0, len(issue.AffectedRefs))
+		for _, ref := range issue.AffectedRefs {
+			if canRead(ref) {
+				readable = append(readable, ref)
+			}
+		}
+		issue.AffectedRefs = readable
+	}
+	if issue.DiagnosticContext == nil {
 		return issue
 	}
 	facts := issue.DiagnosticContext.Facts

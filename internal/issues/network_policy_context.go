@@ -1,8 +1,6 @@
 package issues
 
 import (
-	"fmt"
-
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -12,8 +10,8 @@ import (
 // shows up on those resources (RelatedIssuesFrom matches its refs).
 const factNetworkPolicyIsolates = "network_policy_isolates"
 
-// maxNetworkPolicyIsolationRefs bounds the links. Services and workloads come
-// first, so the cap only drops Pod links, whose owners stay linked.
+// maxNetworkPolicyIsolationRefs bounds the links the fact shows. Matching uses
+// the issue's uncapped AffectedRefs, so a capped link still finds the issue.
 const maxNetworkPolicyIsolationRefs = 10
 
 func networkPolicyIsolationContext(p k8s.Detection) *issuesapi.DiagnosticContext {
@@ -21,9 +19,11 @@ func networkPolicyIsolationContext(p k8s.Detection) *issuesapi.DiagnosticContext
 		return nil
 	}
 	refs := limitRefs(p.AffectedRefs, maxNetworkPolicyIsolationRefs)
+	// No counts: after per-caller redaction a total would describe resources
+	// the caller can't read.
 	message := "This policy leaves these resources with no allowed inbound traffic."
 	if len(refs) < len(p.AffectedRefs) {
-		message += fmt.Sprintf(" Showing %d of %d links.", len(refs), len(p.AffectedRefs))
+		message += " Only the first links are shown; Services and workloads come first."
 	}
 	return &issuesapi.DiagnosticContext{
 		Role: issuesapi.DiagnosticRoleCandidate,

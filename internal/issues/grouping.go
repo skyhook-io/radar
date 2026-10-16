@@ -95,20 +95,17 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		if match(g.Group, g.Kind, g.Namespace, g.Name) && canReadSubject(g) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) && canReadEvidence(g) {
 			matched[g.ID] = true
 		}
+		// A finding about another subject matches every resource it affects,
+		// not only the capped links its fact shows. A nil authorizer fails
+		// closed, as for every cross-resource reference.
+		for _, ref := range g.AffectedRefs {
+			if match(ref.Group, ref.Kind, ref.Namespace, ref.Name) && opts.CanReadRelated != nil && opts.CanReadRelated(ref) && canReadSubject(g) && canReadEvidence(g) {
+				matched[g.ID] = true
+				break
+			}
+		}
 		if g.DiagnosticContext != nil {
 			for _, fact := range g.DiagnosticContext.Facts {
-				if fact.Type == factNetworkPolicyIsolates {
-					// Compose already dropped the links the caller can't read.
-					// A nil authorizer fails closed, as for every
-					// cross-resource reference.
-					for _, ref := range fact.Refs {
-						if match(ref.Group, ref.Kind, ref.Namespace, ref.Name) && opts.CanReadRelated != nil && opts.CanReadRelated(ref) && canReadSubject(g) && canReadEvidence(g) {
-							matched[g.ID] = true
-							break
-						}
-					}
-					continue
-				}
 				if fact.Type != karpenterFactReferencedByNodePools {
 					continue
 				}
@@ -134,7 +131,9 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 			continue
 		}
 		if shown, ok := forEvidence(g); ok {
-			out = append(out, shown)
+			// The pair may be user-agnostic (a shared memo), so drop the
+			// links this caller can't read before returning the row.
+			out = append(out, RedactIssueRelatedRefs(shown, opts.CanReadRelated))
 		}
 	}
 	return out
@@ -217,6 +216,7 @@ func foldGroup(members []Issue) Issue {
 		// so without this the regroup would drop the representative's causal
 		// links / change context.
 		DiagnosticContext: rep.DiagnosticContext,
+		AffectedRefs:      rep.AffectedRefs,
 		ChangeContext:     rep.ChangeContext,
 		Degraded:          rep.Degraded,
 	}
