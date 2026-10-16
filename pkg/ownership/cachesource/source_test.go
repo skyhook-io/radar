@@ -67,6 +67,23 @@ func typedObjects() []runtime.Object {
 	}
 }
 
+// fullWidget carries every field ownership reads, so a copy that drops or
+// shares one shows.
+func fullWidget() *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.io/v1", "kind": "Widget",
+		"metadata": map[string]any{
+			"name": "w2", "namespace": "alpha", "uid": "uid-w2",
+			"deletionTimestamp": deletedAt.UTC().Format(time.RFC3339),
+			"finalizers":        []any{"example.io/keep"},
+			"ownerReferences": []any{map[string]any{
+				"apiVersion": "apps/v1", "kind": "Deployment", "name": "web", "uid": "uid-deploy",
+				"controller": true, "blockOwnerDeletion": false,
+			}},
+		},
+	}}
+}
+
 func widget(namespace, name, uid string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "example.io/v1", "kind": "Widget",
@@ -117,7 +134,7 @@ func newFixture(t *testing.T, cfg k8score.CacheConfig, prepare func(*fixture)) *
 		typed: fake.NewClientset(typedObjects()...),
 		dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 			map[schema.GroupVersionResource]string{widgets: "WidgetList", gadgets: "GadgetList", summaries: "SummaryList"},
-			widget("alpha", "w1", "uid-widget")),
+			widget("alpha", "w1", "uid-widget"), fullWidget()),
 	}
 	f.typed.Discovery().(*fakediscovery.FakeDiscovery).Resources = discoveryLists()
 	if prepare != nil {
@@ -231,6 +248,36 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 	if again := s.Object(ref("example.io", "Widget", "alpha", "w1")); again.Object.OwnerReferences[0].Name != "web" {
 		t.Fatal("changing an observation changed the cached Widget")
 	}
+
+	w2 := s.Object(ref("example.io", "Widget", "alpha", "w2"))
+	wantW2 := ownership.Observation{
+		Ref: ref("example.io", "Widget", "alpha", "w2"), APIVersion: "example.io/v1", UID: "uid-w2",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "uid-deploy", Controller: ptr(true), BlockOwnerDeletion: ptr(false)}},
+		Finalizers:      []string{"example.io/keep"},
+	}
+	if w2.State != ownership.Present || w2.Object.DeletionTimestamp == nil || !w2.Object.DeletionTimestamp.Equal(&deletedAt) {
+		t.Fatalf("w2 = %v %+v; want present with its deletion timestamp", w2.State, w2.Object)
+	}
+	gotW2 := w2.Object
+	gotW2.DeletionTimestamp = nil
+	if !reflect.DeepEqual(gotW2, wantW2) {
+		t.Fatalf("w2 = %+v\nwant %+v", gotW2, wantW2)
+	}
+	*w2.Object.OwnerReferences[0].Controller = false
+	*w2.Object.OwnerReferences[0].BlockOwnerDeletion = true
+	w2.Object.Finalizers[0] = "changed"
+	w2.Object.DeletionTimestamp.Time = time.Time{}
+	reread := s.Object(ref("example.io", "Widget", "alpha", "w2"))
+	if !*reread.Object.OwnerReferences[0].Controller || *reread.Object.OwnerReferences[0].BlockOwnerDeletion ||
+		reread.Object.Finalizers[0] != "example.io/keep" || !reread.Object.DeletionTimestamp.Equal(&deletedAt) {
+		t.Fatal("changing an observation changed the cached Widget's owner flags, finalizers or deletion timestamp")
+	}
+	cachedW2, _, _, _ := f.caches.Dynamic.ReadableObject(widgets, "alpha", "w2")
+	unstructured.SetNestedStringSlice(cachedW2.Object, []string{"changed in the cache"}, "metadata", "finalizers")
+	if reread.Object.Finalizers[0] != "example.io/keep" {
+		t.Fatal("an observation shares the cached Widget's finalizers")
+	}
+	unstructured.SetNestedStringSlice(cachedW2.Object, []string{"example.io/keep"}, "metadata", "finalizers")
 
 	if node := s.Object(ref("", "Node", "", "n1")); node.State != ownership.Present || node.Object.UID != "uid-node" {
 		t.Fatalf("Node = %v %+v", node.State, node.Object)
@@ -618,17 +665,19 @@ func TestReasonsForEveryCacheState(t *testing.T) {
 	}
 }
 
-func TestObjectReportsATypedKindRadarWasRefused(t *testing.T) {
+// Radar's access probe leaves a typed kind off when Kubernetes refuses it,
+// when the probe can't tell, and when the kind isn't installed. The cache
+// knows only that it is off.
+func TestObjectOfATypedKindLeftOffIsNotWatched(t *testing.T) {
 	f := newFixture(t, k8score.CacheConfig{ResourceScopes: map[string]k8score.ResourceScope{
 		k8score.Pods:    {Enabled: true},
 		k8score.Secrets: {},
 	}}, nil)
 	s := begin(t, f.source())
-	if got := s.Object(ref("", "Secret", "alpha", "s")); got.State != ownership.Unavailable || got.Gap.Reason != readreason.CollectorForbidden {
-		t.Fatalf("Secret Radar's access probe left off = %v %+v; want collector_forbidden", got.State, got.Gap)
-	}
-	if got := s.Object(ref("", "ConfigMap", "alpha", "c")); got.Gap.Reason != readreason.KindNotWatched {
-		t.Fatalf("ConfigMap the probe never named = %v %+v; want kind_not_watched", got.State, got.Gap)
+	for _, r := range []resourceid.Ref{ref("", "Secret", "alpha", "s"), ref("", "ConfigMap", "alpha", "c")} {
+		if got := s.Object(r); got.State != ownership.Unavailable || got.Gap.Reason != readreason.KindNotWatched {
+			t.Fatalf("%v = %v %+v; want unavailable kind_not_watched", r, got.State, got.Gap)
+		}
 	}
 }
 
@@ -732,5 +781,53 @@ func TestObjectIgnoresAWatchOfAnUnservedVersion(t *testing.T) {
 	s := begin(t, f.source())
 	if got := s.Object(ref("example.io", "Widget", "alpha", "w1")); got.State != ownership.Unavailable || got.Gap.Reason != readreason.KindNotWatched {
 		t.Fatalf("Widget with only an unserved version watched = %v %+v; want unavailable kind_not_watched", got.State, got.Gap)
+	}
+}
+
+// Validate must notice a replaced store even when another version's store
+// that answered the same read survives.
+func TestValidateFailsWhenOneVersionsStoreIsReplaced(t *testing.T) {
+	beta := schema.GroupVersionResource{Group: "example.io", Version: "v1beta1", Resource: "widgets"}
+	var promoteBeta atomic.Bool
+	f := newFixture(t, k8score.CacheConfig{}, func(f *fixture) {
+		f.dynamic = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{widgets: "WidgetList", beta: "WidgetList", gadgets: "GadgetList", summaries: "SummaryList"},
+			widget("alpha", "w1", "uid-widget"), betaWidget(widget("alpha", "w1", "uid-widget")))
+		f.dynamic.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if a.GetResource().Version == "v1beta1" && a.GetNamespace() == "" && !promoteBeta.Load() {
+				return true, nil, apierrors.NewForbidden(beta.GroupResource(), "", errors.New("cluster-wide list denied"))
+			}
+			return false, nil, nil
+		})
+	})
+	f.watch(t, widgets)
+	if _, err := f.caches.Dynamic.List(beta, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "alpha's v1beta1 watch", func() bool { return f.caches.Dynamic.IsNamespaceSynced(beta, "alpha") })
+	s := begin(t, f.source())
+	if got := s.Object(ref("example.io", "Widget", "alpha", "w1")); got.State != ownership.Present {
+		t.Fatalf("Widget both versions hold = %v %+v", got.State, got.Gap)
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	promoteBeta.Store(true)
+	if err := f.caches.Dynamic.EnsureWatching(beta); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Validate(); !errors.Is(err, ownership.ErrStoreReplaced) {
+		t.Fatalf("Validate after v1beta1's store was replaced = %v, want ErrStoreReplaced", err)
+	}
+}
+
+func waitUntil(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

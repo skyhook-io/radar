@@ -107,6 +107,19 @@ func TestCatalogGenerationCountsOnlyChangesToResources(t *testing.T) {
 	if c := d.Catalog(); c.Generation != 4 || c.Complete || !c.Partial || !slices.Equal(c.FailedGroups, []string{"metrics.k8s.io"}) {
 		t.Fatalf("partial refresh: generation %d, complete %v, partial %v, failed %v", c.Generation, c.Complete, c.Partial, c.FailedGroups)
 	}
+
+	// Any error alongside resources leaves the answer incomplete, whatever its
+	// type.
+	client.err = errors.New("discovery interrupted")
+	_ = d.Refresh()
+	if c := d.Catalog(); c.Generation != 5 || c.Complete {
+		t.Fatalf("refresh with an error and resources: generation %d, complete %v; want 5, incomplete", c.Generation, c.Complete)
+	}
+	client.err = nil
+	_ = d.Refresh()
+	if !d.Catalog().Complete {
+		t.Fatal("a clean refresh must make the catalog complete again")
+	}
 }
 
 func TestStoppedReportsAStoppedCache(t *testing.T) {

@@ -65,8 +65,8 @@ type Observation struct {
 
 // Gap is what a read could not establish: Kind in Namespace, or cluster-wide
 // for a cluster-scoped kind, and why. Reasons describe Radar's caches; a host
-// refines them with what only it knows, such as whether Kubernetes rejected
-// Radar's credentials or that a namespace is outside Radar's
+// refines them with what only it knows, such as why its access probe left a
+// typed kind uncollected or that a namespace is outside Radar's
 // --namespace-scope.
 type Gap struct {
 	Kind      resourceid.GroupKind

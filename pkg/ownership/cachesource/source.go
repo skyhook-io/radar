@@ -254,7 +254,11 @@ func typedReason(rc *k8score.ResourceCache, resource, namespace string) readreas
 	a := rc.AssessKindRead(resource, []string{namespace})
 	switch {
 	case a.Readiness == k8score.KindUnavailable:
-		return typedUnavailableReason(rc, resource)
+		// Radar's access probe leaves a kind off when its identity is
+		// refused, when the probe can't tell, and when the kind isn't
+		// installed; the cache knows only that it is off, and the host can
+		// say which.
+		return readreason.KindNotWatched
 	case len(a.Uncovered) > 0:
 		return readreason.CollectorScopeLimited
 	case len(a.Failed) > 0:
@@ -263,17 +267,6 @@ func typedReason(rc *k8score.ResourceCache, resource, namespace string) readreas
 		// Loading, or it finished loading after the read.
 		return readreason.KindSyncPending
 	}
-}
-
-// typedUnavailableReason says why the typed cache has no informer for a kind.
-// One Radar's access probe left off was refused or couldn't be checked; like
-// the MCP read path, Radar reports it as refused, and the host can tell
-// rejected credentials apart.
-func typedUnavailableReason(rc *k8score.ResourceCache, resource string) readreason.Code {
-	if rc.KindDisabled(resource) {
-		return readreason.CollectorForbidden
-	}
-	return readreason.KindNotWatched
 }
 
 func dynamicReason(o k8score.DynamicResourceObservation) readreason.Code {

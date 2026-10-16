@@ -46,10 +46,10 @@ type ResourceDiscovery struct {
 	refreshMu   sync.Mutex
 	mu          sync.RWMutex
 
-	// generation counts changes to resources, and enumerated records that a
-	// discovery request returned them; see DiscoveryCatalog.
+	// generation counts changes to resources, and complete records that the
+	// discovery request that set them returned no error; see DiscoveryCatalog.
 	generation uint64
-	enumerated bool
+	complete   bool
 }
 
 // DiscoveryOption is a functional option for NewResourceDiscovery.
@@ -268,7 +268,7 @@ func (d *ResourceDiscovery) refresh() error {
 	d.partial = partial
 	d.failedGroup = failedGroups
 	d.generation++
-	d.enumerated = true
+	d.complete = err == nil
 	log.Printf("Discovered %d API resources (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
 
 	return nil

@@ -12,8 +12,8 @@ type DiscoveryCatalog struct {
 	Resources []APIResource
 	// Generation increases whenever Resources change.
 	Generation uint64
-	// Complete: a discovery request answered for every group, so a kind
-	// absent from Resources wasn't served when it ran. Resources added
+	// Complete: the discovery request that set Resources returned no error,
+	// so a kind absent from them wasn't served when it ran. Resources added
 	// without such a request never make a catalog complete.
 	Complete bool
 	// Partial: the last discovery request missed the groups in FailedGroups.
@@ -28,7 +28,7 @@ func (d *ResourceDiscovery) Catalog() DiscoveryCatalog {
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	c := DiscoveryCatalog{Resources: slices.Clone(d.resources), Generation: d.generation, Complete: d.enumerated && !d.partial, Partial: d.partial}
+	c := DiscoveryCatalog{Resources: slices.Clone(d.resources), Generation: d.generation, Complete: d.complete, Partial: d.partial}
 	for group := range d.failedGroup {
 		c.FailedGroups = append(c.FailedGroups, group)
 	}
