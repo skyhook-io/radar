@@ -14,7 +14,7 @@ func (b *Builder) addReflectionRelationships(t *Topology, opts BuildOptions) {
 	var objects []configrefs.Object
 	observed := map[configrefs.Ref]Node{}
 	if opts.IncludeConfigMaps {
-		items, err := b.provider.ConfigMaps()
+		items, err := readTopologyInventory(b.inventory, "configmaps", b.provider.ConfigMaps)
 		if err == nil {
 			for _, o := range items {
 				if opts.MatchesNamespaceFilter(o.Namespace) {
@@ -26,7 +26,7 @@ func (b *Builder) addReflectionRelationships(t *Topology, opts BuildOptions) {
 		}
 	}
 	if opts.IncludeSecrets {
-		items, err := b.provider.Secrets()
+		items, err := readTopologyInventory(b.inventory, "secrets", b.provider.Secrets)
 		if err == nil {
 			for _, o := range items {
 				if opts.MatchesNamespaceFilter(o.Namespace) {

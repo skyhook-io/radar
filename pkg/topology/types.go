@@ -189,15 +189,16 @@ const (
 // Topology represents the complete graph
 type Topology struct {
 	podConsumers            map[string][]ResourceRef
-	Nodes                   []Node   `json:"nodes"`
-	Edges                   []Edge   `json:"edges"`
-	Warnings                []string `json:"warnings,omitempty"`                // Warnings about resources that failed to load
-	LargeCluster            bool     `json:"largeCluster,omitempty"`            // True if cluster exceeds large cluster threshold
-	HiddenKinds             []string `json:"hiddenKinds,omitempty"`             // Resource kinds auto-hidden for performance
-	RequiresNamespaceFilter bool     `json:"requiresNamespaceFilter,omitempty"` // True if cluster is too large for all-namespace topology
-	CRDDiscoveryStatus      string   `json:"crdDiscoveryStatus,omitempty"`      // CRD discovery status: idle, discovering, ready
-	EstimatedNodes          int      `json:"estimatedNodes,omitempty"`          // Pre-build node count estimate from the large-cluster optimizer; exposed so SSE / UI can tune debounce + render mode off the same signal
-	SummaryMode             bool     `json:"summaryMode,omitempty"`             // True when the pod tier was collapsed into per-workload/service counts (see SummaryModeThreshold)
+	Nodes                   []Node             `json:"nodes"`
+	Edges                   []Edge             `json:"edges"`
+	IncompleteInventories   []InventoryWarning `json:"incompleteInventories,omitempty"`
+	Warnings                []string           `json:"warnings,omitempty"`                // Warnings about resources that failed to load
+	LargeCluster            bool               `json:"largeCluster,omitempty"`            // True if cluster exceeds large cluster threshold
+	HiddenKinds             []string           `json:"hiddenKinds,omitempty"`             // Resource kinds auto-hidden for performance
+	RequiresNamespaceFilter bool               `json:"requiresNamespaceFilter,omitempty"` // True if cluster is too large for all-namespace topology
+	CRDDiscoveryStatus      string             `json:"crdDiscoveryStatus,omitempty"`      // CRD discovery status: idle, discovering, ready
+	EstimatedNodes          int                `json:"estimatedNodes,omitempty"`          // Pre-build node count estimate from the large-cluster optimizer; exposed so SSE / UI can tune debounce + render mode off the same signal
+	SummaryMode             bool               `json:"summaryMode,omitempty"`             // True when the pod tier was collapsed into per-workload/service counts (see SummaryModeThreshold)
 }
 
 // MarshalJSON guarantees the wire contract the frontend types promise:
@@ -455,13 +456,16 @@ type ReflectionRelationships struct {
 
 // Relationships holds computed relationships for a resource
 type Relationships struct {
-	// PodPlacementObserved and PodPlacementUnavailable carry in-process lookup
-	// state for context builders. They are not transport fields or cached counts.
-	PodPlacementObserved    bool `json:"-"`
-	PodPlacementUnavailable bool `json:"-"`
+	// PodPlacementObserved and PodPlacementError carry in-process lookup state
+	// for context builders. They are not transport fields or cached counts.
+	PodPlacementObserved    bool  `json:"-"`
+	PodPlacementError       error `json:"-"`
+	PodPlacementUnavailable bool  `json:"-"`
 
 	// IstioServiceDomain is the configured registry domain or upstream default; omitted when unknown.
-	IstioServiceDomain string `json:"istioServiceDomain,omitempty"`
+	IstioServiceDomain    string             `json:"istioServiceDomain,omitempty"`
+	IncompleteInventories []InventoryWarning `json:"incompleteInventories,omitempty"`
+	Warnings              []string           `json:"warnings,omitempty"` // Supporting inventories that could not establish complete relationships.
 	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 
@@ -586,6 +590,24 @@ type ResourceProvider interface {
 	Nodes() ([]*corev1.Node, error)
 	// GetResourceStatus returns health status for a resource; nil if unknown.
 	GetResourceStatus(kind, namespace, name string) *ResourceStatus
+}
+
+// NamespacedResourceProvider optionally narrows cached namespaced lists without
+// changing the shared provider or its cluster-scoped lists. An empty namespace
+// retains the provider's existing cache scope. Scoped views retain optional
+// provider capabilities and must reject incomplete inventories. Authorization remains the caller's
+// responsibility; this capability adds no API reads or permissions.
+type NamespacedResourceProvider interface {
+	ForNamespace(namespace string) ResourceProvider
+}
+
+// ResourceInventoryProvider reports whether a cached list can establish absence
+// in a namespace, or cluster-wide when namespace is empty. Resource is a lowercase
+// plural (e.g. "pods"). A global list may still return its visible subset; callers
+// using that subset as relationship evidence must preserve this error separately.
+// It adds no API reads or authorization grants.
+type ResourceInventoryProvider interface {
+	InventoryError(resource, namespace string) error
 }
 
 // ServiceAccountProvider is implemented by providers that can expose workload identities.

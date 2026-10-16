@@ -2804,7 +2804,8 @@ func informerKeyForKind(kind string) string {
 // through with ok=true so the handlers' existing dynamic/forbidden semantics
 // apply unchanged; the dynamic path keeps the connected gate (the dynamic
 // cache exists only after full initialization).
-func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k8s.ResourceCache, bool) {
+func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string, namespace ...string) (*k8s.ResourceCache, bool) {
+	kind = normalizeKind(kind)
 	key := informerKeyForKind(kind)
 	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) {
 		if !s.requireConnected(w) {
@@ -2843,6 +2844,10 @@ func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k
 		}
 		return cache, true
 	default: // KindReady
+		if key != "limitranges" && len(namespace) > 0 && namespace[0] != "" && !cache.KindCoversNamespace(key, namespace[0]) {
+			s.writeErrorCode(w, http.StatusConflict, "kind_namespace_uncovered", "Radar does not watch "+key+" in namespace "+namespace[0])
+			return nil, false
+		}
 		return cache, true
 	}
 }
@@ -2983,7 +2988,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cache, ok := s.gateResourceRead(w, kind, group)
+	cache, ok := s.gateResourceRead(w, kind, group, namespace)
 	if !ok {
 		return
 	}

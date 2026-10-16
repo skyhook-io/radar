@@ -485,6 +485,8 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 | `get_cost` | Estimated costs from OpenCost or Kubecost: namespace summary, workload/node breakdown, or summarized trend. Hourly rates and 730-hour projections; availability, scope and missing evidence are explicit. See [evidence limits](#cost-and-rightsizing-evidence-limits). | `view` (summary default, workloads, nodes, trend), `namespace` (required for workloads; filters summary/trend), `kind` + `name` (one workload), `name` (one node), `range` (trend: 6h, 24h default, 7d), `include_points` (trend only, default false), `limit` (row views: 1–100, default 20) |
 | `get_rightsizing` | CPU/memory request recommendations from 7 days of usage. Workload scope is cheap; namespace/cluster scans run in the background for up to three minutes. Running responses include `scanId`, `scanStatus`, and `nextCall`; follow that call to retrieve progress without restarting completed batches. Scans are retained up to 15 minutes; use `refresh=true` after changes. Results prioritize evidenced safety risks, then increases, reductions, and routine reviews; ties use replica-weighted request delta. Check confidence and manual-review reasons; reductions do not directly imply bill savings. | `scope` (required: workload, namespace, cluster), `kind` + `name` (workload), `namespace` (workload or namespace scope), `namespaces` (namespace scope only, nonempty array; mutually exclusive with namespace), `include_all` (default false; workload always returns all), `classification` (scan only: reduction, increase, review, need_data, in_range), `limit` (scan only: 1–100, default 20), `scan_id` (retrieve one scan with the same scope/namespaces), `refresh` (scan only; start fresh, cannot combine with scan_id) |
 
+For minified REST reads, `context=none` can return a ready typed inventory during startup. Enriched reads wait for the full connection so a missing context index cannot look like complete evidence. An unfiltered list uses Radar's configured namespace pin when one exists; otherwise it requires cluster-wide inventory coverage. For a cache with per-kind namespace limits, specify a watched namespace for a complete list. An unwatched namespace is a scope limitation, not a cluster outage.
+
 API group is part of a resource's identity. Radar infers the canonical group for built-in kinds, but callers should pass `group` for a supported CRD or whenever a Kind can exist in more than one group. For example, diagnose an Argo Rollout with:
 
 ```json
@@ -544,6 +546,38 @@ older VictoriaMetrics operators place such finalizers on managed objects.
 
 For `issues`, `unchecked_sources` lists the issue sources Radar couldn't check for this answer, so their issues may be missing; don't read the response as healthy for them. Today the only source is `helm` (failed or stuck Helm releases), with reason `read_failed`. Treat any other value as unchecked too. Read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
+Topology graph responses retain observed resources while inventories are
+incomplete. `incompleteInventories` identifies recorded typed-inventory gaps and
+dynamic-list errors by `group`,
+`resource`, `state` and `message`; an omitted `group` means core Kubernetes.
+States are `pending`, `failed`, `uncovered` and `unavailable`. Summary responses
+carry the messages in `warnings`. An incomplete result does not establish absence.
+This does not track dynamic informer initial-sync completeness or continuous
+watch freshness. Supporting relationship notices qualify known relevant sources;
+generic custom controllers conservatively include potential ownership sources.
+An omitted notice is not proof that every integration or neighborhood hop was
+evaluated.
+
+Resource context marks incomplete `relationships`, `scaledBy` and
+`scaledBy.hpaSummary` in `omitted`. Loading inventories use `cache_cold`; failed,
+uncovered, disabled or otherwise unreadable inventories use `unavailable`.
+These omissions prevent treating missing relationships or autoscalers as
+evidence of absence.
+
+A neighborhood root with a loading or failed built-in inventory returns an
+error (REST 503 with `kind_sync_pending` or `kind_sync_failed`).
+REST 409 `kind_namespace_uncovered` means Radar's configured inventory does not
+cover the requested namespace scope. Retrying unchanged will not resolve it;
+choose a watched namespace from the error guidance or change Radar's watch scope.
+A missing root in a ready, covered inventory keeps its not-found result.
+Incomplete supporting inventories mark `subgraph.nodes` in `omitted` with
+`cache_cold` for loading data or `unavailable` for other unreadable data.
+
+For permitted Secret reads, `GET /api/secrets/certificate-expiry` returns REST
+503 while inventory is loading or failed. A disabled Secret inventory returns
+an empty map. Namespace-limited inventories return observed certificates within
+the requested scope.
+
 Resource context distinguishes observed dependency references (`dependencies` and
 `dependents`) from autoscalers (`scaledBy`). A Certificate depends on its issuer;
 it does not scale it. These references carry API group and namespace identity,
@@ -575,9 +609,10 @@ permission-filtered, with field paths and a bounded visible-only count; they
 describe declarations rather than proving a successful mount or active read.
 Capped results round-robin readable resource kinds, preserving examples of
 workload templates, revision templates and admitted Pods even with many replicas.
-If any consumer inventory fails, `omitted` marks `referencedBy` as `unavailable`.
+If a consumer inventory is still loading, `omitted` marks `referencedBy` as
+`cache_cold`; failed, uncovered or otherwise unreadable inventories use `unavailable`.
 References from inventories that loaded remain available; an empty result with
-this omission does not establish that no consumers exist.
+either omission does not establish that no consumers exist.
 Only named PodSpec declarations are included: implicit workload defaults and
 template-generated PVC names are not inferred. An absent omission does not by
 itself establish cache freshness or complete namespace coverage.
@@ -634,16 +669,10 @@ sorted deterministically and capped at 20. `total` counts only readable Pods;
 `truncated` marks the item cap. This is observed placement in Radar's cache scope,
 not a cluster-wide workload count or a list of potential scheduling candidates.
 When Relationships already collected placement, context reuses that result.
-Unavailable Pod data, including a missing placement provider, records
-`omitted: [{field: "referencedBy", reason:
-"unavailable"}]`, distinguishing a failed lookup from an observed empty result.
-
-ConfigMap and Secret reverse-reference context uses the same omission when a
-scanned workload or Pod source cannot be read. References from available sources
-remain visible. This projection scans selected built-in workload templates and
-controllerless Pods; absence of an omission does not establish complete consumer
-coverage or prove that a resource is unused. Storage audit uses its own consumer
-inventory and coverage rules.
+Pod data that is still loading keeps the visible Pods and marks `referencedBy`
+as `cache_cold` in `omitted`. Failed, uncovered or unreadable Pod data, including
+a missing placement provider, uses `unavailable`. An empty result with either
+omission does not establish that no Pods are assigned.
 
 ### Pod/template differences in issue context
 

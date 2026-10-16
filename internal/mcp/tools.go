@@ -885,7 +885,13 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	//   []string{} — user has no namespace access
 	//   [...]     — restrict reads to these namespaces
 	allowed := filterNamespacesForUser(ctx, requested)
+	if !clusterScoped {
+		allowed = scopedNamespacesForUser(ctx, requested)
+	}
 	if !clusterScoped && allowed != nil && len(allowed) == 0 {
+		if deniedScopeReason(requested) == ReasonOutsideNamespaceScope {
+			return nil, nil, fmt.Errorf("requested namespace is outside Radar's configured namespace scope")
+		}
 		return toJSONResult([]any{})
 	}
 
@@ -926,6 +932,21 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	// Mirrors the group-aware dispatch in the REST handlers.
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
+	}
+
+	scopes := listScope
+	if len(scopes) == 0 {
+		scopes = []string{""}
+	}
+	for _, namespace := range scopes {
+		if err := typedResourceInventoryError(cache, kind, group, namespace); err != nil {
+			if gvr, known := k8s.BuiltinGVRAnyGroup(kind); known {
+				if hint := k8s.InventoryNamespaceHint(cache, gvr.Resource, listScope); hint != "" {
+					return nil, nil, fmt.Errorf("%w. %s", err, hint)
+				}
+			}
+			return nil, nil, err
+		}
 	}
 
 	// Try typed cache first (group=="" → core/built-in lookup).
@@ -1063,6 +1084,10 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		if !canReadInNamespace(ctx, "", "secrets", namespace, "get") {
 			return nil, nil, fmt.Errorf("forbidden: no access to secrets in namespace %q", namespace)
 		}
+	}
+
+	if err := typedResourceInventoryError(cache, kind, group, namespace); err != nil {
+		return nil, nil, err
 	}
 
 	// Fetch the resource. When group is set, skip the typed cache and route

@@ -1,10 +1,14 @@
 package topology
 
 import (
+	"errors"
+	"slices"
 	"sort"
 	"strings"
 
+	k8score "github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -394,11 +398,37 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		return resourceRefForNode(nodeByID[id], dp)
 	}
 
+	if namespace != "" {
+		if scoped, ok := provider.(NamespacedResourceProvider); ok {
+			provider = scoped.ForNamespace(namespace)
+		}
+	}
 	rel := &Relationships{}
 	if node := nodeByID[nodeID]; node != nil {
 		rel.IstioServiceDomain, _ = node.Data["istioServiceDomain"].(string)
 	}
+	recordLookupError := func(kind string, err error) {
+		if err != nil {
+			warning := InventoryWarningFor(kind, err)
+			if !slices.Contains(rel.Warnings, warning.Message) {
+				rel.Warnings = append(rel.Warnings, warning.Message)
+				rel.IncompleteInventories = append(rel.IncompleteInventories, warning)
+			}
+		}
+	}
 	kindLower := strings.ToLower(kind)
+	queriedObj := obj
+	if queriedObj == nil {
+		var err error
+		queriedObj, err = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
+		recordLookupError(resourceKind, err)
+	}
+	for _, warning := range relevantInventoryWarnings(topo, resourceKind, resourceGroup, namespace, queriedObj, provider) {
+		if !slices.Contains(rel.Warnings, warning.Message) {
+			rel.Warnings = append(rel.Warnings, warning.Message)
+			rel.IncompleteInventories = append(rel.IncompleteInventories, warning)
+		}
+	}
 
 	for _, edge := range outgoingEdges {
 		// This resource points TO something (outgoing edge)
@@ -607,7 +637,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if provider != nil && builtinKind && resourceGroup == builtinGroup {
 		switch kindLower {
 		case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-			pvcs, _ := provider.PersistentVolumeClaims()
+			pvcs, err := provider.PersistentVolumeClaims()
+			if err == nil {
+				if inventory, ok := provider.(ResourceInventoryProvider); ok {
+					err = inventory.InventoryError("persistentvolumeclaims", namespace)
+				}
+			}
+			recordLookupError("PersistentVolumeClaim", err)
 			for _, pvc := range pvcs {
 				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
@@ -617,7 +653,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		case "persistentvolume", "persistentvolumes", "pv", "pvs":
-			pvs, _ := provider.PersistentVolumes()
+			pvs, err := provider.PersistentVolumes()
+			if err == nil {
+				if inventory, ok := provider.(ResourceInventoryProvider); ok {
+					err = inventory.InventoryError("persistentvolumes", namespace)
+				}
+			}
+			recordLookupError("PersistentVolume", err)
 			for _, pv := range pvs {
 				if pv.Name == name {
 					if pv.Spec.ClaimRef != nil {
@@ -634,7 +676,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		case "storageclass", "storageclasses", "sc":
-			pvs, _ := provider.PersistentVolumes()
+			pvs, err := provider.PersistentVolumes()
+			if err == nil {
+				if inventory, ok := provider.(ResourceInventoryProvider); ok {
+					err = inventory.InventoryError("persistentvolumes", namespace)
+				}
+			}
+			recordLookupError("PersistentVolume", err)
 			for _, pv := range pvs {
 				if pv.Spec.StorageClassName == name {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
@@ -646,10 +694,19 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			if resourceGroup != "" {
 				break
 			}
-			allPods, podsErr := provider.Pods()
+			allPods, listErr := provider.Pods()
+			err := listErr
+			if err == nil {
+				if inventory, ok := provider.(ResourceInventoryProvider); ok {
+					err = inventory.InventoryError("pods", namespace)
+				}
+			}
+			recordLookupError("Pod", err)
 			rel.PodPlacementObserved = true
-			rel.PodPlacementUnavailable = podsErr != nil
-			if podsErr != nil {
+			rel.PodPlacementError = err
+			rel.PodPlacementUnavailable = err != nil
+			var incomplete *InventoryError
+			if listErr != nil && !errors.As(listErr, &incomplete) {
 				break
 			}
 			for _, pod := range allPods {
@@ -669,10 +726,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// resource (already disambiguated by group at fetch time) and avoids the
 	// group-blind kind/name lookup. Fall back to lookupObjectMetadata only
 	// when obj is nil (back-compat path).
-	queriedObj := obj
-	if queriedObj == nil {
-		queriedObj = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
-	}
+
 	if pod, ok := queriedObj.(*corev1.Pod); ok {
 
 		for _, declaration := range configrefs.PodSpecReferences(pod.Namespace, pod.Spec) {
@@ -798,7 +852,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		*refs = uniqueResourceRefs(*refs)
 	}
 
-	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
+	if len(rel.Warnings) == 0 && rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
@@ -975,160 +1029,230 @@ func isScalingRelationship(source, target *ResourceRef) bool {
 // (HelmRelease, ExternalSecret, Certificate, etc.) still drive the chip —
 // without the fallback, the UI's chip would silently disappear for any
 // resource kind not in the typed switch below.
-func lookupObjectMetadata(kindLower, namespace, name string, provider ResourceProvider, dp DynamicProvider) any {
+func lookupObjectMetadata(kindLower, namespace, name string, provider ResourceProvider, dp DynamicProvider) (any, error) {
 	if provider != nil {
-		if obj := lookupTypedMetadata(kindLower, namespace, name, provider); obj != nil {
-			return obj
+		if scoped, ok := provider.(NamespacedResourceProvider); ok {
+			provider = scoped.ForNamespace(namespace)
+		}
+		if obj, err, handled := lookupTypedMetadata(kindLower, namespace, name, provider); handled {
+			return obj, err
 		}
 	}
 	// Fallback for CRDs and any kind not in the typed switch. dp.Get
 	// returns a *unstructured.Unstructured, which satisfies metav1.Object.
 	if dp != nil {
 		if gvr, ok := dp.GetGVR(kindLower); ok {
-			if u, err := dp.Get(gvr, namespace, name); err == nil && u != nil {
-				return u
+			obj, err := dp.Get(gvr, namespace, name)
+			if errors.Is(err, k8score.ErrResourceNotFound) || apierrors.IsNotFound(err) {
+				return nil, nil
 			}
+			if err != nil {
+				return nil, &InventoryError{Resource: gvr.Resource, Group: gvr.Group, State: InventoryUnavailable, Namespace: namespace}
+			}
+			if obj == nil {
+				return nil, nil
+			}
+			return obj, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // lookupTypedMetadata is the original typed-resource switch. Split out from
 // lookupObjectMetadata so the CRD fallback path is clearly the second tier.
-func lookupTypedMetadata(kindLower, namespace, name string, provider ResourceProvider) any {
+func lookupTypedMetadata(kindLower, namespace, name string, provider ResourceProvider) (any, error, bool) {
 	switch kindLower {
 	case "pod", "pods":
-		pods, _ := provider.Pods()
+		pods, err := provider.Pods()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, p := range pods {
 			if p.Namespace == namespace && p.Name == name {
-				return p
+				return p, nil, true
 			}
 		}
 	case "deployment", "deployments":
-		ds, _ := provider.Deployments()
+		ds, err := provider.Deployments()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, d := range ds {
 			if d.Namespace == namespace && d.Name == name {
-				return d
+				return d, nil, true
 			}
 		}
 	case "statefulset", "statefulsets":
-		ss, _ := provider.StatefulSets()
+		ss, err := provider.StatefulSets()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, s := range ss {
 			if s.Namespace == namespace && s.Name == name {
-				return s
+				return s, nil, true
 			}
 		}
 	case "daemonset", "daemonsets":
-		ds, _ := provider.DaemonSets()
+		ds, err := provider.DaemonSets()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, d := range ds {
 			if d.Namespace == namespace && d.Name == name {
-				return d
+				return d, nil, true
 			}
 		}
 	case "replicaset", "replicasets":
-		rs, _ := provider.ReplicaSets()
+		rs, err := provider.ReplicaSets()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, r := range rs {
 			if r.Namespace == namespace && r.Name == name {
-				return r
+				return r, nil, true
 			}
 		}
 	case "job", "jobs":
-		jobs, _ := provider.Jobs()
+		jobs, err := provider.Jobs()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, j := range jobs {
 			if j.Namespace == namespace && j.Name == name {
-				return j
+				return j, nil, true
 			}
 		}
 	case "cronjob", "cronjobs":
-		cjs, _ := provider.CronJobs()
+		cjs, err := provider.CronJobs()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, c := range cjs {
 			if c.Namespace == namespace && c.Name == name {
-				return c
+				return c, nil, true
 			}
 		}
 	case "service", "services":
-		svcs, _ := provider.Services()
+		svcs, err := provider.Services()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, s := range svcs {
 			if s.Namespace == namespace && s.Name == name {
-				return s
+				return s, nil, true
 			}
 		}
 	case "configmap", "configmaps":
-		cms, _ := provider.ConfigMaps()
+		cms, err := provider.ConfigMaps()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, c := range cms {
 			if c.Namespace == namespace && c.Name == name {
-				return c
+				return c, nil, true
 			}
 		}
 	case "secret", "secrets":
-		ss, _ := provider.Secrets()
+		ss, err := provider.Secrets()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, s := range ss {
 			if s.Namespace == namespace && s.Name == name {
-				return s
+				return s, nil, true
 			}
 		}
 	case "serviceaccount", "serviceaccounts":
+		if _, ok := provider.(ServiceAccountProvider); !ok {
+			return nil, nil, false
+		}
 		if serviceAccountProvider, ok := provider.(ServiceAccountProvider); ok {
-			serviceAccounts, _ := serviceAccountProvider.ServiceAccounts()
+			serviceAccounts, err := serviceAccountProvider.ServiceAccounts()
+			if err != nil {
+				return nil, err, true
+			}
 			for _, serviceAccount := range serviceAccounts {
 				if serviceAccount.Namespace == namespace && serviceAccount.Name == name {
-					return serviceAccount
+					return serviceAccount, nil, true
 				}
 			}
 		}
 	case "ingress", "ingresses":
-		is, _ := provider.Ingresses()
+		is, err := provider.Ingresses()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, i := range is {
 			if i.Namespace == namespace && i.Name == name {
-				return i
+				return i, nil, true
 			}
 		}
 	case "poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs":
-		pdbs, _ := provider.PodDisruptionBudgets()
+		pdbs, err := provider.PodDisruptionBudgets()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, p := range pdbs {
 			if p.Namespace == namespace && p.Name == name {
-				return p
+				return p, nil, true
 			}
 		}
 	case "networkpolicy", "networkpolicies", "netpol":
-		nps, _ := provider.NetworkPolicies()
+		nps, err := provider.NetworkPolicies()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, n := range nps {
 			if n.Namespace == namespace && n.Name == name {
-				return n
+				return n, nil, true
 			}
 		}
 	case "horizontalpodautoscaler", "horizontalpodautoscalers", "hpa", "hpas":
-		hpas, _ := provider.HorizontalPodAutoscalers()
+		hpas, err := provider.HorizontalPodAutoscalers()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, h := range hpas {
 			if h.Namespace == namespace && h.Name == name {
-				return h
+				return h, nil, true
 			}
 		}
 	case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-		pvcs, _ := provider.PersistentVolumeClaims()
+		pvcs, err := provider.PersistentVolumeClaims()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, p := range pvcs {
 			if p.Namespace == namespace && p.Name == name {
-				return p
+				return p, nil, true
 			}
 		}
 	case "persistentvolume", "persistentvolumes", "pv", "pvs":
 		// Cluster-scoped: ignore namespace.
-		pvs, _ := provider.PersistentVolumes()
+		pvs, err := provider.PersistentVolumes()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, p := range pvs {
 			if p.Name == name {
-				return p
+				return p, nil, true
 			}
 		}
 	case "node", "nodes":
 		// Cluster-scoped: ignore namespace.
-		nodes, _ := provider.Nodes()
+		nodes, err := provider.Nodes()
+		if err != nil {
+			return nil, err, true
+		}
 		for _, n := range nodes {
 			if n.Name == name {
-				return n
+				return n, nil, true
 			}
 		}
+	default:
+		return nil, nil, false
 	}
-	return nil
+	return nil, nil, true
 }
 
 var topologyNodeKindAliases = map[string]string{

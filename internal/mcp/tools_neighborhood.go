@@ -78,6 +78,10 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		}
 	}
 
+	if err := typedResourceInventoryError(cache, input.Kind, input.Group, input.Namespace); err != nil {
+		return nil, nil, err
+	}
+
 	opts := topology.NeighborhoodOptions{
 		Profile:  resolveProfile(input.Profile),
 		Hops:     input.Hops,
@@ -175,6 +179,17 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 			"subgraph capped at %d nodes (returned %d) — reduce hops (current %d, max 2), tighten profile (auto is narrower than all), or raise max_nodes (cap 200)",
 			opts.MaxNodes, len(sub.Nodes), opts.Hops,
 		)
+	}
+	seenInventoryReasons := map[resourcecontext.OmittedReason]bool{}
+	for _, warning := range topology.NeighborhoodInventoryWarnings(topo, sub, opts, k8s.NewTopologyResourceProvider(cache), dp) {
+		reason := resourcecontext.OmittedUnavailable
+		if warning.State == topology.InventoryPending {
+			reason = resourcecontext.OmittedCacheCold
+		}
+		if !seenInventoryReasons[reason] {
+			result.Omitted = append(result.Omitted, resourcecontext.OmittedField{Field: "subgraph.nodes", Reason: reason})
+			seenInventoryReasons[reason] = true
+		}
 	}
 	if sub.RBACDenied > 0 {
 		// Aggregated rather than per-node — denied node refs would
@@ -291,4 +306,27 @@ func allowPseudoKindTuplesMCP(ctx context.Context, tuples []topology.SARTuple, f
 		}
 	}
 	return false
+}
+
+func typedResourceInventoryError(cache *k8s.ResourceCache, kind, group, namespace string) error {
+	if gvr, ok := k8s.BuiltinGVRAnyGroup(kind); ok && (group == "" || k8s.TypedKindOwnsGroup(kind, group)) {
+		switch cache.KindReadinessFor(gvr.Resource) {
+		case k8s.KindPending:
+			return fmt.Errorf("%s inventory is still syncing; retry shortly", gvr.Resource)
+		case k8s.KindFailed:
+			return fmt.Errorf("%s inventory sync failed; absence is not established", gvr.Resource)
+
+		}
+		if builtin, known := resourceid.BuiltinForName(kind); known && builtin.Namespaced && cache.KindReadinessFor(gvr.Resource) == k8s.KindReady && !cache.KindCoversNamespace(gvr.Resource, namespace) {
+			if gvr.Resource == "limitranges" {
+				return fmt.Errorf("forbidden: Radar does not have LimitRange visibility for namespace %q", namespace)
+			}
+			if namespace == "" {
+				return fmt.Errorf("Radar only watches selected namespaces for %s; cluster-wide absence is not established. Specify a watched namespace for a complete list", gvr.Resource)
+			}
+			return fmt.Errorf("Radar does not watch %s in namespace %s; absence is not established", gvr.Resource, namespace)
+		}
+	}
+
+	return nil
 }

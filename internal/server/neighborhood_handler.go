@@ -94,9 +94,8 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 
 	opts := parseNeighborhoodOptions(r)
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ready := s.gateResourceRead(w, rawKind, group, namespace)
+	if !ready {
 		return
 	}
 
@@ -188,6 +187,17 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 			Edges: sub.Edges,
 		},
 		Truncated: sub.Truncated,
+	}
+	seenInventoryReasons := map[resourcecontext.OmittedReason]bool{}
+	for _, warning := range topology.NeighborhoodInventoryWarnings(topo, sub, opts, k8s.NewTopologyResourceProvider(cache), dp) {
+		reason := resourcecontext.OmittedUnavailable
+		if warning.State == topology.InventoryPending {
+			reason = resourcecontext.OmittedCacheCold
+		}
+		if !seenInventoryReasons[reason] {
+			resp.Omitted = append(resp.Omitted, resourcecontext.OmittedField{Field: "subgraph.nodes", Reason: reason})
+			seenInventoryReasons[reason] = true
+		}
 	}
 	if sub.RBACDenied > 0 {
 		// Single aggregated omission rather than per-node entries —

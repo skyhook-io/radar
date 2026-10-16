@@ -2,6 +2,8 @@ package k8s
 
 import (
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // newAdapterCache builds a k8s.ResourceCache wrapping a k8score.ResourceCache
@@ -36,11 +39,6 @@ func newAdapterCache(t *testing.T, enabled, deferred map[string]bool, timeout ti
 	return &ResourceCache{ResourceCache: core}
 }
 
-// TestTopologyAdapter_ConfigMaps_DeferredPending verifies that while the
-// ConfigMaps informer is still deferred-pending, the adapter returns
-// (nil, nil) instead of a misleading "RBAC not granted" error. This is the
-// core fix for issue #460 — one failing sibling must not produce misleading
-// topology warnings for healthy-but-not-yet-synced resources.
 func TestTopologyAdapter_ConfigMaps_DeferredPending(t *testing.T) {
 	// Make ConfigMaps LIST hang long enough to observe the pending state.
 	// A reactor that returns no items but takes >100ms keeps HasSynced=false
@@ -67,8 +65,8 @@ func TestTopologyAdapter_ConfigMaps_DeferredPending(t *testing.T) {
 
 	adapter := NewTopologyResourceProvider(cache)
 	cms, err := adapter.ConfigMaps()
-	if err != nil {
-		t.Errorf("expected no error during deferred-pending, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "still syncing") {
+		t.Errorf("expected pending sync error, got: %v", err)
 	}
 	if cms != nil {
 		t.Errorf("expected nil slice during deferred-pending, got %d items", len(cms))
@@ -141,10 +139,6 @@ func TestTopologyAdapter_ConfigMaps_Synced(t *testing.T) {
 	}
 }
 
-// TestTopologyAdapter_NetworkPolicies_DeferredPending verifies that the same
-// (nil, nil) behavior applies to NetworkPolicies — the guard was added to
-// six methods, and at least one other should be exercised so a regression
-// that only fixes ConfigMaps doesn't pass.
 func TestTopologyAdapter_NetworkPolicies_DeferredPending(t *testing.T) {
 	cache := newAdapterCache(t,
 		map[string]bool{k8score.Pods: true, k8score.NetworkPolicies: true},
@@ -164,10 +158,215 @@ func TestTopologyAdapter_NetworkPolicies_DeferredPending(t *testing.T) {
 
 	adapter := NewTopologyResourceProvider(cache)
 	nps, err := adapter.NetworkPolicies()
-	if err != nil {
-		t.Errorf("expected no error during deferred-pending, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "still syncing") {
+		t.Errorf("expected pending sync error, got: %v", err)
 	}
 	if nps != nil {
 		t.Errorf("expected nil slice during deferred-pending, got %d items", len(nps))
+	}
+}
+
+func TestTopologyAdapter_ForNamespaceUsesCachedIndex(t *testing.T) {
+	client := fake.NewClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "one", Namespace: "a"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "two", Namespace: "b"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}},
+	)
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: client, ResourceTypes: map[string]bool{k8score.Pods: true, k8score.Nodes: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &ResourceCache{ResourceCache: core}
+	adapter := NewTopologyResourceProvider(cache)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		pods, _ := adapter.Pods()
+		nodes, _ := adapter.Nodes()
+		if len(pods) == 2 && len(nodes) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client.ClearActions()
+	scoped := adapter.(topology.NamespacedResourceProvider).ForNamespace("a")
+	pods, err := scoped.Pods()
+	if err != nil || len(pods) != 1 || pods[0].Namespace != "a" {
+		t.Fatalf("scoped Pods: %v %v", pods, err)
+	}
+	nodes, err := scoped.Nodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("cluster list narrowed: %v %v", nodes, err)
+	}
+	pods, err = adapter.Pods()
+	if err != nil || len(pods) != 2 {
+		t.Fatalf("shared adapter mutated: %v %v", pods, err)
+	}
+	pods, err = adapter.(topology.NamespacedResourceProvider).ForNamespace("").Pods()
+	if err != nil || len(pods) != 2 {
+		t.Fatalf("empty scope: %v %v", pods, err)
+	}
+	pods, err = scoped.(topology.NamespacedResourceProvider).ForNamespace("").Pods()
+	if err != nil || len(pods) != 1 || pods[0].Namespace != "a" {
+		t.Fatalf("empty scope widened a scoped view: %v %v", pods, err)
+	}
+	pods, err = adapter.(topology.NamespacedResourceProvider).ForNamespace("unobserved").Pods()
+	if err != nil || len(pods) != 0 {
+		t.Fatalf("unobserved scope: %v %v", pods, err)
+	}
+	if actions := client.Actions(); len(actions) != 0 {
+		t.Fatalf("namespace projection made API calls: %v", actions)
+	}
+	if _, err := scoped.ReplicaSets(); err == nil {
+		t.Fatal("disabled informer should retain its availability error")
+	}
+}
+
+// Some listers (notably ServiceAccounts) exist before HasSynced. Readiness
+// must precede lister access, for both global and namespace-scoped adapters.
+func TestTopologyAdapter_AllTypedListsRejectPendingStores(t *testing.T) {
+	keys := map[string]string{
+		"Pods": k8score.Pods, "Services": k8score.Services,
+		"Deployments": k8score.Deployments, "DaemonSets": k8score.DaemonSets,
+		"StatefulSets": k8score.StatefulSets, "ReplicaSets": k8score.ReplicaSets,
+		"Jobs": k8score.Jobs, "CronJobs": k8score.CronJobs,
+		"Ingresses": k8score.Ingresses, "ConfigMaps": k8score.ConfigMaps,
+		"Secrets": k8score.Secrets, "ServiceAccounts": k8score.ServiceAccounts,
+		"Namespaces": k8score.Namespaces, "Nodes": k8score.Nodes,
+		"PersistentVolumeClaims":   k8score.PersistentVolumeClaims,
+		"PersistentVolumes":        k8score.PersistentVolumes,
+		"HorizontalPodAutoscalers": k8score.HorizontalPodAutoscalers,
+		"PodDisruptionBudgets":     k8score.PodDisruptionBudgets,
+		"NetworkPolicies":          k8score.NetworkPolicies,
+	}
+	enabled := map[string]bool{}
+	for _, key := range keys {
+		enabled[key] = true
+	}
+	release := make(chan struct{})
+	cache := newAdapterCache(t, enabled, enabled, 3*time.Second, func(c *fake.Clientset) {
+		c.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+			<-release
+			return true, nil, fmt.Errorf("fixture stopped")
+		})
+	})
+	t.Cleanup(func() { close(release) })
+	if cache.ServiceAccounts() == nil {
+		t.Fatal("fixture must expose a non-nil, unsynced ServiceAccount lister")
+	}
+	adapter := NewTopologyResourceProvider(cache)
+	scoped := adapter.(topology.NamespacedResourceProvider).ForNamespace("team")
+	for method, key := range keys {
+		t.Run(method, func(t *testing.T) {
+			if got := cache.KindReadinessFor(key); got != k8score.KindPending {
+				t.Fatalf("fixture readiness = %v, want pending", got)
+			}
+			for _, provider := range []topology.ResourceProvider{adapter, scoped} {
+				result := reflect.ValueOf(provider).MethodByName(method).Call(nil)
+				if result[1].IsNil() || provider == scoped && !result[0].IsNil() {
+					t.Fatalf("%s lost inventory error or exposed partial data in a complete view: %v", method, result)
+				}
+				err := result[1].Interface().(error)
+				if !strings.Contains(err.Error(), "still syncing") || strings.Contains(err.Error(), "RBAC") {
+					t.Fatalf("wrong readiness error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestTopologyAdapter_ServiceAccountsRejectFailedSync(t *testing.T) {
+	cache := newAdapterCache(t,
+		map[string]bool{k8score.ServiceAccounts: true},
+		map[string]bool{k8score.ServiceAccounts: true},
+		100*time.Millisecond,
+		func(c *fake.Clientset) {
+			c.PrependReactor("list", "serviceaccounts", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, fmt.Errorf("fixture unavailable")
+			})
+		})
+	deadline := time.Now().Add(2 * time.Second)
+	for cache.KindReadinessFor(k8score.ServiceAccounts) != k8score.KindFailed && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	accounts, err := NewTopologyResourceProvider(cache).(topology.ServiceAccountProvider).ServiceAccounts()
+	if len(accounts) != 0 || err == nil || !strings.Contains(err.Error(), "sync failed") {
+		t.Fatalf("failed inventory = %v, %v", accounts, err)
+	}
+}
+
+func TestTopologyAdapter_NamespaceCoverageIsNotEmptyInventory(t *testing.T) {
+	client := fake.NewClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "one", Namespace: "a"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "two", Namespace: "b"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}},
+	)
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:        client,
+		ResourceTypes: map[string]bool{k8score.Pods: true, k8score.Nodes: true},
+		DeferredTypes: map[string]bool{},
+		ResourceScopes: map[string]k8score.ResourceScope{
+			k8score.Pods:  {Enabled: true, Namespace: "a"},
+			k8score.Nodes: {Enabled: true},
+		},
+		ResourceScopeNamespaces: map[string][]string{k8score.Pods: {"a", "b"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &ResourceCache{ResourceCache: core}
+	provider := NewTopologyResourceProvider(cache)
+	client.ClearActions()
+	for _, ns := range []string{"a", "b"} {
+		scoped := provider.(topology.NamespacedResourceProvider).ForNamespace(ns)
+		pods, err := scoped.Pods()
+		if err != nil || len(pods) != 1 || pods[0].Namespace != ns {
+			t.Fatalf("%s: %v %v", ns, pods, err)
+		}
+		if err := scoped.(topology.ResourceInventoryProvider).InventoryError("pods", ns); err != nil {
+			t.Fatal(err)
+		}
+		if err := scoped.(topology.ResourceInventoryProvider).InventoryError("pods", ""); err == nil {
+			t.Fatal("scoped view claimed cluster-wide coverage")
+		}
+		if nodes, err := scoped.Nodes(); err != nil || len(nodes) != 1 {
+			t.Fatalf("cluster scoped list narrowed: %v %v", nodes, err)
+		}
+	}
+	scoped := provider.(topology.NamespacedResourceProvider).ForNamespace("c")
+	if pods, err := scoped.Pods(); pods != nil || err == nil || !strings.Contains(err.Error(), "does not cover") {
+		t.Fatalf("uncovered namespace reported empty: %v %v", pods, err)
+	}
+	if pods, err := provider.Pods(); err != nil || len(pods) != 2 {
+		t.Fatalf("global visible inventory changed: %v %v", pods, err)
+	}
+	if err := provider.(topology.ResourceInventoryProvider).InventoryError("pods", ""); err == nil {
+		t.Fatal("namespace union claimed cluster-wide coverage")
+	}
+	if err := provider.(topology.ResourceInventoryProvider).InventoryError("nodes", ""); err != nil {
+		t.Fatalf("cluster-wide Node inventory: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		scope []string
+		want  string
+	}{
+		{"unrestricted", nil, "Watched namespaces within this authorized scope: a, b. Request one of these namespaces for a complete list."},
+		{"authorized subset", []string{"a", "c"}, "Watched namespaces within this authorized scope: a. Request one of these namespaces for a complete list."},
+		{"denied", []string{}, ""},
+		{"uncovered", []string{"c"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if hint := InventoryNamespaceHint(cache, "pods", tc.scope); hint != tc.want {
+				t.Fatalf("hint = %q, want %q", hint, tc.want)
+			}
+		})
+	}
+	if hint := InventoryNamespaceHint(cache, "secrets", nil); hint != "" {
+		t.Fatalf("unavailable inventory offered recovery: %s", hint)
+	}
+	if actions := client.Actions(); len(actions) != 0 {
+		t.Fatalf("coverage read made API calls: %v", actions)
 	}
 }

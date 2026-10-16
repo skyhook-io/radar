@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -130,11 +131,41 @@ type CertExpiry struct {
 // keyed by "namespace/name". If namespaces is non-empty, only matching
 // namespaces are included.
 func GetCertificateExpiry(provider ResourceProvider, namespaces []string) (map[string]CertExpiry, error) {
+	if namespaces != nil && len(namespaces) == 0 {
+		return map[string]CertExpiry{}, nil
+	}
+	if inventory, ok := provider.(ResourceInventoryProvider); ok {
+		if len(namespaces) > 0 {
+			var uncovered error
+			covered := false
+			for _, namespace := range namespaces {
+				err := inventory.InventoryError("secrets", namespace)
+				if err == nil {
+					covered = true
+					continue
+				}
+				var state *InventoryError
+				if errors.As(err, &state) && state.State == InventoryUncovered {
+					uncovered = err
+				}
+			}
+			if !covered && uncovered != nil {
+				return nil, uncovered
+			}
+		}
+		if err := inventory.InventoryError("secrets", ""); err != nil {
+			var state *InventoryError
+			if errors.As(err, &state) && state.State == InventoryUnavailable {
+				return map[string]CertExpiry{}, nil
+			}
+			if !errors.As(err, &state) || state.State != InventoryUncovered {
+				return nil, err
+			}
+		}
+	}
 	secrets, err := provider.Secrets()
 	if err != nil {
-		// RBAC not granted or lister unavailable — return empty (not an error).
-		// Matches topology builder pattern: log + continue with empty data.
-		return make(map[string]CertExpiry), nil
+		return nil, err
 	}
 
 	result := make(map[string]CertExpiry)

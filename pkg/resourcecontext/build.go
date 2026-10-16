@@ -2,6 +2,7 @@ package resourcecontext
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sort"
 	"time"
@@ -184,6 +185,22 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			topology.KindForGVK(ident.Kind, ident.Group), ident.Namespace, ident.Name, obj,
 			opts.Topology, opts.Provider, opts.DynamicProv, opts.RelIndex,
 		)
+	}
+
+	if rel != nil && len(rel.Warnings) > 0 {
+		if len(rel.IncompleteInventories) == 0 {
+			omitted.add("relationships", OmittedUnavailable)
+		}
+		for _, warning := range rel.IncompleteInventories {
+			reason := OmittedUnavailable
+			if warning.State == topology.InventoryPending {
+				reason = OmittedCacheCold
+			}
+			omitted.add("relationships", reason)
+			if ident.Namespace != "" && warning.Resource == "horizontalpodautoscalers" && warning.Group == "autoscaling" {
+				omitted.add("scaledBy", reason)
+			}
+		}
 	}
 
 	// 1. ManagedBy — prefer Relationships.ManagedBy (server-synthesized when
@@ -583,9 +600,8 @@ const (
 func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, rel *topology.Relationships, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
 	if node, ok := obj.(*corev1.Node); ok {
 		if rel != nil && rel.PodPlacementObserved {
-			if rel.PodPlacementUnavailable {
-				omitted.add("referencedBy", OmittedUnavailable)
-				return nil
+			if rel.PodPlacementError != nil {
+				omitted.add("referencedBy", inventoryOmissionReason(rel.PodPlacementError))
 			}
 			var refs []ReferenceUse
 			for _, pod := range rel.Pods {
@@ -601,8 +617,16 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 		pods, err := provider.Pods()
 		if err != nil {
-			omitted.add("referencedBy", OmittedUnavailable)
-			return nil
+			omitted.add("referencedBy", inventoryOmissionReason(err))
+			var incomplete *topology.InventoryError
+			if !errors.As(err, &incomplete) {
+				return nil
+			}
+		}
+		if inventory, ok := provider.(topology.ResourceInventoryProvider); ok {
+			if err := inventory.InventoryError("pods", ""); err != nil {
+				omitted.add("referencedBy", inventoryOmissionReason(err))
+			}
 		}
 		var refs []ReferenceUse
 		for _, pod := range pods {
@@ -632,6 +656,10 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		return nil
 	}
 
+	if scoped, ok := provider.(topology.NamespacedResourceProvider); ok {
+		provider = scoped.ForNamespace(ident.Namespace)
+	}
+
 	var refs []ReferenceUse
 	appendRef := func(ref ReferenceUse) {
 		if len(ref.Paths) == 0 || ref.Namespace != target.namespace {
@@ -642,7 +670,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 
 	if target.kind == "Secret" {
 		if ingresses, err := provider.Ingresses(); err != nil {
-			omitted.add("referencedBy", OmittedUnavailable)
+			omitted.add("referencedBy", inventoryOmissionReason(err))
 		} else {
 			for _, ing := range ingresses {
 				if ing == nil || ing.Namespace != target.namespace {
@@ -658,7 +686,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	}
 
 	if deployments, err := provider.Deployments(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
+		omitted.add("referencedBy", inventoryOmissionReason(err))
 	} else {
 		for _, d := range deployments {
 			if d == nil || d.Namespace != target.namespace {
@@ -668,7 +696,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 	}
 	if statefulSets, err := provider.StatefulSets(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
+		omitted.add("referencedBy", inventoryOmissionReason(err))
 	} else {
 		for _, s := range statefulSets {
 			if s == nil || s.Namespace != target.namespace {
@@ -678,7 +706,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 	}
 	if daemonSets, err := provider.DaemonSets(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
+		omitted.add("referencedBy", inventoryOmissionReason(err))
 	} else {
 		for _, d := range daemonSets {
 			if d == nil || d.Namespace != target.namespace {
@@ -688,7 +716,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 	}
 	if replicaSets, err := provider.ReplicaSets(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
+		omitted.add("referencedBy", inventoryOmissionReason(err))
 	} else {
 		for _, replicaSet := range replicaSets {
 			if replicaSet == nil || replicaSet.Namespace != target.namespace {
@@ -698,7 +726,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 	}
 	if jobs, err := provider.Jobs(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
+		omitted.add("referencedBy", inventoryOmissionReason(err))
 	} else {
 		for _, j := range jobs {
 			if j == nil || j.Namespace != target.namespace {
@@ -708,7 +736,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 	}
 	if cronJobs, err := provider.CronJobs(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
+		omitted.add("referencedBy", inventoryOmissionReason(err))
 	} else {
 		for _, c := range cronJobs {
 			if c == nil || c.Namespace != target.namespace {
@@ -718,7 +746,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 	}
 	if pods, err := provider.Pods(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
+		omitted.add("referencedBy", inventoryOmissionReason(err))
 	} else {
 		for _, p := range pods {
 			if p == nil || p.Namespace != target.namespace {
@@ -1221,8 +1249,17 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 		entry := ScalerRef{ContextRef: ref}
 		if isHPARef(ref) && provider != nil {
 			if !hpasLoaded {
-				hpas = indexHPAs(provider)
+				var err error
+				hpas, err = indexHPAs(provider)
+				if err != nil {
+					omitted.add("scaledBy.hpaSummary", inventoryOmissionReason(err))
+				}
 				hpasLoaded = true
+			}
+			if inventory, ok := provider.(topology.ResourceInventoryProvider); ok {
+				if err := inventory.InventoryError("horizontalpodautoscalers", ref.Namespace); err != nil {
+					omitted.add("scaledBy.hpaSummary", inventoryOmissionReason(err))
+				}
 			}
 			if hpa := hpas[hpaKey(ref.Namespace, ref.Name)]; hpa != nil {
 				entry.HPASummary = buildHPASummary(hpa)
@@ -1269,8 +1306,11 @@ func kedaScaledObjectRef(ctx context.Context, hpa *autoscalingv2.HorizontalPodAu
 // A workload can name several scalers and the cluster can hold thousands of
 // HPAs, so scanning the list per ref makes a context build quadratic in the
 // worst case. The list itself is the provider's only read API.
-func indexHPAs(provider topology.ResourceProvider) map[string]*autoscalingv2.HorizontalPodAutoscaler {
-	list, _ := provider.HorizontalPodAutoscalers()
+func indexHPAs(provider topology.ResourceProvider) (map[string]*autoscalingv2.HorizontalPodAutoscaler, error) {
+	list, err := provider.HorizontalPodAutoscalers()
+	if err != nil {
+		return nil, err
+	}
 	byKey := make(map[string]*autoscalingv2.HorizontalPodAutoscaler, len(list))
 	for _, hpa := range list {
 		if hpa == nil {
@@ -1283,7 +1323,7 @@ func indexHPAs(provider topology.ResourceProvider) map[string]*autoscalingv2.Hor
 			byKey[key] = hpa
 		}
 	}
-	return byKey
+	return byKey, nil
 }
 
 func hpaKey(namespace, name string) string {
@@ -1882,4 +1922,12 @@ func (t *omittedTracker) collect() []OmittedField {
 		return nil
 	}
 	return t.items
+}
+
+func inventoryOmissionReason(err error) OmittedReason {
+	var inventory *topology.InventoryError
+	if errors.As(err, &inventory) && inventory.State == topology.InventoryPending {
+		return OmittedCacheCold
+	}
+	return OmittedUnavailable
 }

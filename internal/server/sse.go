@@ -982,6 +982,13 @@ func (b *SSEBroadcaster) heartbeat() {
 		case <-b.stopCh:
 			return
 		case <-ticker.C:
+			b.cachedTopologyMu.RLock()
+			topo := b.cachedTopology
+			b.cachedTopologyMu.RUnlock()
+			if topology.InventoryWarningsChanged(topo, k8s.NewTopologyResourceProvider(k8s.GetResourceCache())) {
+				b.markCachedTopologyDirty()
+				b.requestTopologyBroadcast()
+			}
 			b.Broadcast(SSEEvent{
 				Event: "heartbeat",
 				Data: map[string]any{
@@ -1140,6 +1147,10 @@ func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {
 	topo := b.cachedTopology
 	b.cachedTopologyMu.RUnlock()
 
+	if !dirty && topology.InventoryWarningsChanged(topo, k8s.NewTopologyResourceProvider(k8s.GetResourceCache())) {
+		b.markCachedTopologyDirty()
+		dirty = true
+	}
 	if dirty && k8s.GetResourceCache() != nil {
 		// Gate: only one goroutine proceeds to rebuild
 		b.cachedTopologyMu.Lock()

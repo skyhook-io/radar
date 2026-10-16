@@ -890,12 +890,16 @@ func calicoKubernetesPodSelector(policy *unstructured.Unstructured) (labels.Sele
 	return selector, true
 }
 
-func calicoNamespaceLabels(provider ResourceProvider) map[string]map[string]string {
+func calicoNamespaceLabels(provider ResourceProvider, inventory ...*topologyInventoryTracker) map[string]map[string]string {
 	namespaceProvider, ok := provider.(NamespaceProvider)
 	if !ok {
 		return nil
 	}
-	namespaces, err := namespaceProvider.Namespaces()
+	var tracker *topologyInventoryTracker
+	if len(inventory) > 0 {
+		tracker = inventory[0]
+	}
+	namespaces, err := readTopologyInventory(tracker, "namespaces", namespaceProvider.Namespaces)
 	if err != nil {
 		return nil
 	}
@@ -914,12 +918,16 @@ func calicoNamespaceLabels(provider ResourceProvider) map[string]map[string]stri
 	return result
 }
 
-func calicoServiceAccounts(provider ResourceProvider) map[string]map[string]string {
+func calicoServiceAccounts(provider ResourceProvider, inventory ...*topologyInventoryTracker) map[string]map[string]string {
 	serviceAccountProvider, ok := provider.(ServiceAccountProvider)
 	if !ok {
 		return nil
 	}
-	serviceAccounts, err := serviceAccountProvider.ServiceAccounts()
+	var tracker *topologyInventoryTracker
+	if len(inventory) > 0 {
+		tracker = inventory[0]
+	}
+	serviceAccounts, err := readTopologyInventory(tracker, "serviceaccounts", serviceAccountProvider.ServiceAccounts)
 	if err != nil {
 		return nil
 	}
@@ -1004,8 +1012,8 @@ func (b *Builder) addCalicoPolicyNodes(
 		return nodes, edges
 	}
 
-	namespaceLabels := calicoNamespaceLabels(b.provider)
-	serviceAccounts := calicoServiceAccounts(b.provider)
+	var namespaceLabels, serviceAccounts map[string]map[string]string
+	labelsLoaded := false
 	// Only this function creates Calico policy nodes, so an index it fills as it
 	// goes is complete, and the second API group's pass becomes a lookup rather
 	// than a scan of every node in the graph.
@@ -1066,6 +1074,11 @@ func (b *Builder) addCalicoPolicyNodes(
 			for _, policy := range policies {
 				if policy == nil {
 					continue
+				}
+				if !labelsLoaded {
+					namespaceLabels = calicoNamespaceLabels(b.provider, b.inventory)
+					serviceAccounts = calicoServiceAccounts(b.provider, b.inventory)
+					labelsLoaded = true
 				}
 				namespace := policy.GetNamespace()
 				if definition.namespaced && !opts.MatchesNamespaceFilter(namespace) {
