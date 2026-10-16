@@ -491,6 +491,71 @@ func TestEfficiencyChecks_LimitRangePartialDefaults(t *testing.T) {
 	}
 }
 
+func TestEfficiencyChecks_PodLevelResources(t *testing.T) {
+	deploy := func(name string, res *corev1.ResourceRequirements) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Resources:  res,
+						Containers: []corev1.Container{{Name: "app", Image: "nginx:1.25"}},
+					},
+				},
+			},
+		}
+	}
+	tests := []struct {
+		name string
+		res  *corev1.ResourceRequirements
+		want []string
+	}{
+		{
+			name: "requests and limits",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+		},
+		{
+			name: "limits only",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+		},
+		{
+			name: "cpu requests only",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+			},
+			want: []string{"memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := &CheckInput{
+				Deployments: []*appsv1.Deployment{deploy("podlevel", tt.res)},
+				LimitRanges: []*corev1.LimitRange{},
+			}
+			flagged := map[string]bool{}
+			for _, f := range RunChecks(input).Findings {
+				flagged[f.CheckID] = true
+			}
+			want := map[string]bool{}
+			for _, id := range tt.want {
+				want[id] = true
+			}
+			for _, id := range []string{"cpuRequestMissing", "memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"} {
+				if flagged[id] != want[id] {
+					t.Errorf("%s: flagged=%v, want %v", id, flagged[id], want[id])
+				}
+			}
+		})
+	}
+}
+
 func TestSecurityChecks_AutomountDefaultServiceAccount(t *testing.T) {
 	// Pod doesn't set ServiceAccountName — implicit "default" SA applies.
 	// If the default SA has automount=false, no finding should fire.
