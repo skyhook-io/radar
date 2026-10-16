@@ -92,7 +92,7 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 				return otherPolicies.mayApply(ns, pods, nsObj, dir)
 			},
 			ownerOf: func(pod *corev1.Pod) (string, string, string) { return podOwnerKindName(cache, pod) },
-			isolationOnset: func(np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, string, bool) {
+			isolationOnset: func(np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
 				return networkPolicyIsolationOnset(networkPolicyWatchedSince(cache), np, impact)
 			},
 		}
@@ -411,9 +411,8 @@ type denyAllEnv struct {
 	otherMayApply func([]*corev1.Pod, netpol.Direction) bool
 	ownerOf       func(*corev1.Pod) (group, kind, name string)
 	// isolationOnset returns when the policy began isolating the impact's
-	// pods, with the matching issue timing, or false when that isn't
-	// established.
-	isolationOnset func(*networkingv1.NetworkPolicy, *denyAllIngressImpact) (time.Time, string, bool)
+	// pods, or false when that isn't established.
+	isolationOnset func(*networkingv1.NetworkPolicy, *denyAllIngressImpact) (time.Time, bool)
 }
 
 func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, env denyAllEnv, now time.Time) []Detection {
@@ -486,10 +485,10 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 	for np, impact := range impacts {
 		d := denyAllIngressDetection(np, impact, now)
 		if env.isolationOnset != nil {
-			if since, timing, ok := env.isolationOnset(np, impact); ok {
+			if since, ok := env.isolationOnset(np, impact); ok {
 				setDetectionOnset(&d, now, since)
 				if !d.OnsetUnknown {
-					d.IssueTiming, d.IssueTimingBasis = timing, "spec"
+					d.IssueTiming, d.IssueTimingBasis = "started_at_resource_creation", "spec"
 				}
 			}
 		}
@@ -664,53 +663,43 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 // stamps creation times, and this process, which stamps observations.
 const onsetObservationMargin = time.Minute
 
-// networkPolicyIsolationOnset dates the isolation only when it is established
-// that this policy started it:
-//   - the policy's ingress isolation began at a known time: its creation when
-//     its spec never changed, or an observed edit that removed its last
-//     ingress rules;
+// networkPolicyIsolationOnset dates the isolation from the policy's creation,
+// and only when it's established that creating it started the isolation:
+//   - its spec was never changed (generation 1), so creation set the rules;
 //   - every affected Service and pod already existed then;
-//   - NetworkPolicy changes were watched and retained from before that time
-//     (watchedSince), and no other NetworkPolicy in the namespace was created,
-//     changed or deleted at or after it (deleting an allow policy would start
-//     the isolation later).
+//   - this process watched NetworkPolicy and Service changes from before
+//     then and kept every event since (watchedSince is set), and none show
+//     another NetworkPolicy in the namespace, or an affected Service, created,
+//     changed or deleted at or after it (deleting an allow policy or changing
+//     a selector would start the isolation later).
 //
-// Anything less leaves the onset unknown, which is honest; a backdated onset
-// would mislead.
-func networkPolicyIsolationOnset(watchedSince time.Time, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, string, bool) {
+// A pod relabeled into the policy's selector afterwards isn't checked, since
+// pod label edits aren't recorded; that is the remaining way to backdate.
+// Anything less leaves the onset unknown: a backdated onset would mislead.
+func networkPolicyIsolationOnset(watchedSince time.Time, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
 	created := np.CreationTimestamp.Time
-	if created.IsZero() || watchedSince.IsZero() || watchedSince.After(created.Add(-onsetObservationMargin)) {
-		return time.Time{}, "", false
+	if created.IsZero() || np.Generation > 1 || impact.lastCreated.After(created) ||
+		watchedSince.IsZero() || watchedSince.After(created.Add(-onsetObservationMargin)) {
+		return time.Time{}, false
 	}
-	events, ok := networkPolicyEventsSince(np.Namespace, created)
+	events, ok := isolationInputEventsSince(np.Namespace, impact.services, created)
 	if !ok {
-		return time.Time{}, "", false
-	}
-	since, timing := created, "started_at_resource_creation"
-	if np.Generation > 1 {
-		edit, found := lastOwnEdit(np.Name, events)
-		if !found || !removedAllIngressRules(edit) {
-			return time.Time{}, "", false
-		}
-		since, timing = edit.Timestamp, "started_after_resource_was_healthy"
-	}
-	if impact.lastCreated.After(since) {
-		return time.Time{}, "", false
+		return time.Time{}, false
 	}
 	for _, e := range events {
 		// An equal timestamp can't establish order, so it counts as after.
-		if e.Name != np.Name && !e.Timestamp.Before(since) {
-			return time.Time{}, "", false
+		if (e.Kind != "NetworkPolicy" || e.Name != np.Name) && !e.Timestamp.Before(created) {
+			return time.Time{}, false
 		}
 	}
-	return since, timing, true
+	return created, true
 }
 
 // networkPolicyWatchedSince returns the start of the window in which every
 // NetworkPolicy change was recorded and is still retained: the later of when
-// this process began recording, when its NetworkPolicy informer synced, and
-// the oldest event the store still holds if it has evicted any (ring overflow
-// or retention cleanup). Zero when no such window is known.
+// this process began recording and when its NetworkPolicy informer synced.
+// Zero when no such window is known, including once the store has evicted
+// anything (ring overflow or retention cleanup).
 func networkPolicyWatchedSince(cache *ResourceCache) time.Time {
 	start := timeline.ObservationStart()
 	if start.IsZero() || cache == nil {
@@ -732,82 +721,36 @@ func networkPolicyWatchedSince(cache *ResourceCache) time.Time {
 	if store == nil {
 		return time.Time{}
 	}
-	// After an eviction the retained window starts at the oldest kept event
-	// (the store drops oldest first); a second covers equal timestamps that
-	// may have gone with it.
-	if stats := store.Stats(); stats.EventsEvicted {
-		if stats.OldestEvent.IsZero() {
-			return time.Time{}
-		}
-		if floor := stats.OldestEvent.Add(time.Second); floor.After(start) {
-			start = floor
-		}
+	// A store that evicted anything may have dropped part of the window: the
+	// ring drops by arrival, so the oldest timestamp it keeps doesn't bound it.
+	if store.Stats().EventsEvicted {
+		return time.Time{}
 	}
 	return start
 }
 
-// networkPolicyEventsSince returns the namespace's NetworkPolicy adds, edits
-// and deletes since t, and false when the query fails or hits its cap.
-func networkPolicyEventsSince(namespace string, t time.Time) ([]timeline.TimelineEvent, bool) {
+// isolationInputEventsSince returns the namespace's NetworkPolicy events and
+// the named Services' events since t, and false when a query fails or hits
+// its cap.
+func isolationInputEventsSince(namespace string, services []string, t time.Time) ([]timeline.TimelineEvent, bool) {
 	const limit = 500
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	events, err := timeline.QueryEvents(ctx, timeline.QueryOptions{
-		Namespaces:     []string{namespace},
-		Kinds:          []string{"NetworkPolicy"},
-		APIGroups:      []string{"networking.k8s.io"},
-		Since:          t,
-		Sources:        []timeline.EventSource{timeline.SourceInformer},
-		ClusterContext: ActiveClusterContext(),
-		Limit:          limit,
-	})
-	if err != nil || len(events) >= limit {
+	query := func(opts timeline.QueryOptions) ([]timeline.TimelineEvent, bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		opts.Namespaces, opts.Since, opts.Limit = []string{namespace}, t, limit
+		opts.Sources, opts.ClusterContext = []timeline.EventSource{timeline.SourceInformer}, ActiveClusterContext()
+		events, err := timeline.QueryEvents(ctx, opts)
+		return events, err == nil && len(events) < limit
+	}
+	policies, ok := query(timeline.QueryOptions{Kinds: []string{"NetworkPolicy"}, APIGroups: []string{"networking.k8s.io"}})
+	if !ok {
 		return nil, false
 	}
-	return events, true
-}
-
-// lastOwnEdit returns the policy's newest recorded update, whatever it changed.
-func lastOwnEdit(name string, events []timeline.TimelineEvent) (timeline.TimelineEvent, bool) {
-	var newest timeline.TimelineEvent
-	found := false
-	for _, e := range events {
-		if e.Name != name || e.EventType != timeline.EventTypeUpdate {
-			continue
-		}
-		if !found || e.Timestamp.After(newest.Timestamp) {
-			newest, found = e, true
-		}
+	svcs, ok := query(timeline.QueryOptions{Kinds: []string{"Service"}, APIGroups: []string{""}, Names: services})
+	if !ok {
+		return nil, false
 	}
-	return newest, found
-}
-
-// removedAllIngressRules reports whether an edit took the policy from some
-// ingress rules to none, the transition that starts its isolation.
-func removedAllIngressRules(e timeline.TimelineEvent) bool {
-	if e.Diff == nil {
-		return false
-	}
-	for _, f := range e.Diff.Fields {
-		if f.Path != "spec.ingress" {
-			continue
-		}
-		return listLen(f.OldValue) > 0 && listLen(f.NewValue) == 0
-	}
-	return false
-}
-
-// listLen counts a diff value's rules; a persisted event decodes the list as
-// []any rather than []string.
-func listLen(v any) int {
-	switch l := v.(type) {
-	case []string:
-		return len(l)
-	case []any:
-		return len(l)
-	default:
-		return 0
-	}
+	return append(policies, svcs...), true
 }
 
 // affectedRefs lists the isolated Services, then their pods' owning workloads,
