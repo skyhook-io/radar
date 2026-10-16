@@ -68,6 +68,16 @@ type ResourceCache struct {
 	// as failed off the deferred-timeout flag — a late Events LIST on a big
 	// cluster is normal, not terminal.
 	backgroundKeys map[string]bool
+
+	// disabledKinds are the kinds ResourceScopes listed as disabled.
+	disabledKinds map[string]bool
+}
+
+// KindDisabled reports whether the cache's ResourceScopes listed resource and
+// left it off — what Radar's access probe does with a kind its identity may
+// not list — rather than never naming it.
+func (rc *ResourceCache) KindDisabled(resource string) bool {
+	return rc != nil && rc.disabledKinds[resource]
 }
 
 // InformerSyncStatus tracks the sync state of a single informer.
@@ -374,10 +384,13 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	// This single map drives both the enabled set and which factory each
 	// informer is wired into.
 	scopes := make(map[string]ResourceScope)
+	disabled := make(map[string]bool)
 	if cfg.ResourceScopes != nil {
 		for k, s := range cfg.ResourceScopes {
 			if s.Enabled {
 				scopes[k] = s
+			} else {
+				disabled[k] = true
 			}
 		}
 	} else {
@@ -492,6 +505,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		changes:          changes,
 		stopCh:           stopCh,
 		enabledResources: enabled,
+		disabledKinds:    disabled,
 		config:           cfg,
 		stdlog:           stdlog,
 	}

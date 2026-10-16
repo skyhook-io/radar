@@ -20,6 +20,9 @@ const (
 	// Absent: the store serving the object's kind and namespace had loaded in
 	// full and does not hold it.
 	Absent
+	// Excluded: the kind is outside ownership. Radar keeps none of an Event's
+	// owner references, so it can't say what owns one.
+	Excluded
 )
 
 func (s ReadState) String() string {
@@ -28,6 +31,8 @@ func (s ReadState) String() string {
 		return "present"
 	case Absent:
 		return "absent"
+	case Excluded:
+		return "excluded"
 	default:
 		return "unavailable"
 	}
@@ -60,8 +65,9 @@ type Observation struct {
 
 // Gap is what a read could not establish: Kind in Namespace, or cluster-wide
 // for a cluster-scoped kind, and why. Reasons describe Radar's caches; a host
-// refines them with what only it knows, such as why a kind is not collected or
-// that a namespace is outside Radar's --namespace-scope.
+// refines them with what only it knows, such as whether Kubernetes rejected
+// Radar's credentials or that a namespace is outside Radar's
+// --namespace-scope.
 type Gap struct {
 	Kind      resourceid.GroupKind
 	Namespace string

@@ -70,7 +70,7 @@ func (s *Source) catalogFor(discovery *k8score.ResourceDiscovery) *ownership.Cat
 			Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs,
 		})
 	}
-	catalog := ownership.NewCatalog(served, snapshot.Generation > 0 && !snapshot.Partial)
+	catalog := ownership.NewCatalog(served, snapshot.Complete)
 	s.catalog.Store(&catalogEntry{discovery: discovery, generation: snapshot.Generation, catalog: catalog})
 	return catalog
 }
@@ -92,8 +92,10 @@ type session struct {
 	current func() Caches
 	catalog *ownership.Catalog
 	// watched holds the versions each dynamically watched resource is watched
-	// at, most stable first, as of the session's first dynamic read.
+	// at, as of the session's first dynamic read.
 	watched map[schema.GroupResource][]schema.GroupVersionResource
+	// versions holds the versions the session reads each resource at.
+	versions map[schema.GroupResource][]schema.GroupVersionResource
 	// served records the informers that first answered each resource and
 	// namespace the session read dynamically.
 	served map[servedKey]k8score.DynamicReadServer
@@ -111,6 +113,9 @@ func (s *session) Catalog() *ownership.Catalog {
 func (s *session) Object(ref resourceid.Ref) ownership.ObjectRead {
 	if ref.Kind == "" || ref.Name == "" {
 		return unavailable(ref, readreason.ReadError)
+	}
+	if ownership.IsEvent(ref.GroupKind()) {
+		return ownership.ObjectRead{State: ownership.Excluded}
 	}
 	if b, ok := typedKinds[ref.GroupKind()]; ok {
 		return s.typedObject(ref, b)
@@ -133,6 +138,9 @@ func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownershi
 }
 
 func (s *session) dynamicObject(ref resourceid.Ref) ownership.ObjectRead {
+	if s.catalog.Ambiguous(ref.GroupKind()) {
+		return unavailable(ref, readreason.ReadError)
+	}
 	kind, known := s.catalog.Kind(ref.GroupKind())
 	if !known {
 		return unavailable(ref, readreason.KindUnknown)
@@ -143,36 +151,63 @@ func (s *session) dynamicObject(ref resourceid.Ref) ownership.ObjectRead {
 	if s.caches.Dynamic == nil {
 		return unavailable(ref, readreason.KindNotWatched)
 	}
-	versions := s.watchedVersions(schema.GroupResource{Group: kind.Group, Resource: kind.Resource})
+	versions := s.servingVersions(kind)
+	var answer ownership.ObjectRead
+	answered := false
 	for _, gvr := range versions {
 		obj, server, found, ok := s.caches.Dynamic.ReadableObject(gvr, ref.Namespace, ref.Name)
 		if !ok {
 			continue
 		}
 		s.record(gvr, ref.Namespace, server)
-		if !found {
-			return ownership.ObjectRead{State: ownership.Absent}
+		read := ownership.ObjectRead{State: ownership.Absent}
+		if found {
+			read = observe(ref, gvr.GroupVersion().String(), obj)
 		}
-		return observe(ref, gvr.GroupVersion().String(), obj)
+		switch {
+		case !answered:
+			answer, answered = read, true
+		case read.State != answer.State || read.Object.UID != answer.Object.UID:
+			// Two version watches disagree: one hasn't caught up yet.
+			return unavailable(ref, readreason.KindSyncPending)
+		}
 	}
-	reasonFrom := schema.GroupVersionResource{Group: kind.Group, Version: mostStable(kind.Versions), Resource: kind.Resource}
-	if len(versions) > 0 {
-		reasonFrom = versions[0]
+	if !answered {
+		return unavailable(ref, dynamicReason(s.caches.Dynamic.NamespaceObservation(versions[0], ref.Namespace)))
 	}
-	return unavailable(ref, dynamicReason(s.caches.Dynamic.NamespaceObservation(reasonFrom, ref.Namespace)))
+	return answer
 }
 
-func (s *session) watchedVersions(gr schema.GroupResource) []schema.GroupVersionResource {
+// servingVersions returns the versions the session reads kind's resource at,
+// most stable first: the watched versions the catalog serves. With none
+// watched it is the most stable served version, whose observation says why.
+// The list holds for the session.
+func (s *session) servingVersions(kind ownership.Kind) []schema.GroupVersionResource {
+	gr := schema.GroupResource{Group: kind.Group, Resource: kind.Resource}
+	if versions, chosen := s.versions[gr]; chosen {
+		return versions
+	}
 	if s.watched == nil {
 		s.watched = map[schema.GroupResource][]schema.GroupVersionResource{}
 		for _, gvr := range s.caches.Dynamic.WatchedGVRs() {
 			s.watched[gvr.GroupResource()] = append(s.watched[gvr.GroupResource()], gvr)
 		}
-		for _, gvrs := range s.watched {
-			slices.SortFunc(gvrs, func(a, b schema.GroupVersionResource) int { return stabilityOrder(a.Version, b.Version) })
+	}
+	var versions []schema.GroupVersionResource
+	for _, gvr := range s.watched[gr] {
+		if slices.Contains(kind.Versions, gvr.Version) {
+			versions = append(versions, gvr)
 		}
 	}
-	return s.watched[gr]
+	slices.SortFunc(versions, func(a, b schema.GroupVersionResource) int { return stabilityOrder(a.Version, b.Version) })
+	if len(versions) == 0 {
+		versions = []schema.GroupVersionResource{{Group: kind.Group, Version: mostStable(kind.Versions), Resource: kind.Resource}}
+	}
+	if s.versions == nil {
+		s.versions = map[schema.GroupResource][]schema.GroupVersionResource{}
+	}
+	s.versions[gr] = versions
+	return versions
 }
 
 func (s *session) record(gvr schema.GroupVersionResource, namespace string, server k8score.DynamicReadServer) {
@@ -219,7 +254,7 @@ func typedReason(rc *k8score.ResourceCache, resource, namespace string) readreas
 	a := rc.AssessKindRead(resource, []string{namespace})
 	switch {
 	case a.Readiness == k8score.KindUnavailable:
-		return readreason.KindNotWatched
+		return typedUnavailableReason(rc, resource)
 	case len(a.Uncovered) > 0:
 		return readreason.CollectorScopeLimited
 	case len(a.Failed) > 0:
@@ -228,6 +263,17 @@ func typedReason(rc *k8score.ResourceCache, resource, namespace string) readreas
 		// Loading, or it finished loading after the read.
 		return readreason.KindSyncPending
 	}
+}
+
+// typedUnavailableReason says why the typed cache has no informer for a kind.
+// One Radar's access probe left off was refused or couldn't be checked; like
+// the MCP read path, Radar reports it as refused, and the host can tell
+// rejected credentials apart.
+func typedUnavailableReason(rc *k8score.ResourceCache, resource string) readreason.Code {
+	if rc.KindDisabled(resource) {
+		return readreason.CollectorForbidden
+	}
+	return readreason.KindNotWatched
 }
 
 func dynamicReason(o k8score.DynamicResourceObservation) readreason.Code {

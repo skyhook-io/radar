@@ -19,15 +19,19 @@ type Source interface {
 
 // Session reads observations and records which store served each read, so an
 // answer assembled from several reads can be checked for having mixed a store
-// with its replacement. A session is not safe for concurrent use.
+// with its replacement. Reads are not a snapshot: each sees its store as it is
+// when read, so an answer should read each object once. A session is not safe
+// for concurrent use.
 type Session interface {
 	// Catalog is the served API as of Begin. It never changes.
 	Catalog() *Catalog
 	// Object reads one object. It does no I/O and waits for nothing.
 	Object(ref resourceid.Ref) ObjectRead
-	// Validate returns nil if every store the session read still serves what
-	// it served then; otherwise ErrCachesReplaced or ErrStoreReplaced. An
-	// answer built in a session must pass Validate before it is used.
+	// Validate returns nil if every store the session read is still the one
+	// serving what it served then; otherwise ErrCachesReplaced or
+	// ErrStoreReplaced. It says the reads came from live stores, not that
+	// they are still current. An answer built in a session must pass Validate
+	// before it is used.
 	Validate() error
 }
 

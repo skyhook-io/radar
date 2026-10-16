@@ -36,8 +36,11 @@ type Kind struct {
 
 // Catalog is the served API a session reads against. It is immutable.
 type Catalog struct {
-	kinds    map[resourceid.GroupKind]Kind
-	complete bool
+	kinds map[resourceid.GroupKind]Kind
+	// ambiguous are the kinds two resources of one group serve: a reference
+	// names a kind, not a resource, so it can't say which it means.
+	ambiguous []resourceid.GroupKind
+	complete  bool
 }
 
 // NewCatalog builds a catalog from discovery's resources. complete says
@@ -51,14 +54,13 @@ func NewCatalog(resources []ServedResource, complete bool) *Catalog {
 	}
 	c := &Catalog{kinds: make(map[resourceid.GroupKind]Kind, len(byKind)), complete: complete}
 	for gk, served := range byKind {
-		// A kind served by two resources of one group is rare; settle on one
-		// so lookups don't depend on discovery's order.
-		resource := slices.MinFunc(served, func(a, b ServedResource) int { return cmp.Compare(a.Resource, b.Resource) }).Resource
+		resource := served[0].Resource
+		if slices.ContainsFunc(served, func(r ServedResource) bool { return r.Resource != resource }) {
+			c.ambiguous = append(c.ambiguous, gk)
+			continue
+		}
 		kind := Kind{GroupKind: gk, Resource: resource}
 		for _, r := range served {
-			if r.Resource != resource {
-				continue
-			}
 			kind.Namespaced = r.Namespaced
 			kind.Versions = append(kind.Versions, r.Version)
 			kind.GarbageCollected = kind.GarbageCollected || hasVerbs(r.Verbs, "delete", "list", "watch")
@@ -67,7 +69,12 @@ func NewCatalog(resources []ServedResource, complete bool) *Catalog {
 		kind.Versions = slices.Compact(kind.Versions)
 		c.kinds[gk] = kind
 	}
+	slices.SortFunc(c.ambiguous, compareGroupKinds)
 	return c
+}
+
+func compareGroupKinds(a, b resourceid.GroupKind) int {
+	return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Kind, b.Kind))
 }
 
 func hasVerbs(verbs []string, want ...string) bool {
@@ -79,10 +86,23 @@ func hasVerbs(verbs []string, want ...string) bool {
 	return true
 }
 
-// Kind returns what the catalog knows about gk.
+// Kind returns what the catalog knows about gk. An ambiguous kind is not
+// found.
 func (c *Catalog) Kind(gk resourceid.GroupKind) (Kind, bool) {
 	k, ok := c.kinds[gk]
 	return k, ok
+}
+
+// Ambiguous reports whether two resources of gk's group serve gk.
+func (c *Catalog) Ambiguous(gk resourceid.GroupKind) bool {
+	_, found := slices.BinarySearchFunc(c.ambiguous, gk, compareGroupKinds)
+	return found
+}
+
+// AmbiguousKinds returns the kinds two resources of one group serve, sorted
+// by group and kind. They are in no other answer of the catalog.
+func (c *Catalog) AmbiguousKinds() []resourceid.GroupKind {
+	return slices.Clone(c.ambiguous)
 }
 
 // Serves reports whether version is a version serving gk.
@@ -98,8 +118,8 @@ func (c *Catalog) Complete() bool {
 
 // DependentKinds returns the kinds whose objects can be dependents the
 // garbage collector acts on, sorted by group and kind. Events are left out:
-// Radar doesn't index their owners, so an answer about an object's dependents
-// covers every kind but Events.
+// Radar keeps none of their owner references, so an answer about an object's
+// dependents covers every kind but Events.
 func (c *Catalog) DependentKinds() []Kind {
 	var out []Kind
 	for gk, k := range c.kinds {
@@ -107,9 +127,7 @@ func (c *Catalog) DependentKinds() []Kind {
 			out = append(out, k)
 		}
 	}
-	slices.SortFunc(out, func(a, b Kind) int {
-		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Kind, b.Kind))
-	})
+	slices.SortFunc(out, func(a, b Kind) int { return compareGroupKinds(a.GroupKind, b.GroupKind) })
 	return out
 }
 

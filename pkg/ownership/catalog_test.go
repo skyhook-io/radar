@@ -43,15 +43,26 @@ func TestCatalogMergesVersionsAndKeepsTheGarbageCollectorsKinds(t *testing.T) {
 	}
 }
 
-func TestCatalogSettlesAKindServedByTwoResources(t *testing.T) {
-	for _, order := range [][]ServedResource{
-		{{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "widgets"}, {Group: "example.io", Version: "v1", Kind: "Widget", Resource: "awidgets", Namespaced: true}},
-		{{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "awidgets", Namespaced: true}, {Group: "example.io", Version: "v1", Kind: "Widget", Resource: "widgets"}},
-	} {
-		k, _ := NewCatalog(order, true).Kind(resourceid.GroupKind{Group: "example.io", Kind: "Widget"})
-		if k.Resource != "awidgets" || !k.Namespaced {
-			t.Fatalf("Widget settled on %+v; want awidgets whatever discovery's order", k)
+// A reference names a kind, not a resource, so a kind two resources of one
+// group serve can't be read or searched as either.
+func TestCatalogMarksAKindServedByTwoResourcesAmbiguous(t *testing.T) {
+	widget := resourceid.GroupKind{Group: "example.io", Kind: "Widget"}
+	getOnly := ServedResource{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "awidgets", Verbs: []string{"get"}}
+	collected := ServedResource{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "widgets", Namespaced: true, Verbs: []string{"delete", "list", "watch"}}
+	for _, order := range [][]ServedResource{{getOnly, collected}, {collected, getOnly}} {
+		c := NewCatalog(order, true)
+		if _, found := c.Kind(widget); found || !c.Ambiguous(widget) || c.Serves(widget, "v1") {
+			t.Fatalf("Widget must be ambiguous, never resolved to one resource: found=%v ambiguous=%v", found, c.Ambiguous(widget))
 		}
+		if got := c.AmbiguousKinds(); !slices.Equal(got, []resourceid.GroupKind{widget}) {
+			t.Fatalf("AmbiguousKinds = %v", got)
+		}
+		if len(c.DependentKinds()) != 0 {
+			t.Fatal("an ambiguous kind must not join the dependent kinds as one of its resources")
+		}
+	}
+	if NewCatalog([]ServedResource{collected}, true).Ambiguous(widget) {
+		t.Fatal("one resource serving a kind is not ambiguous")
 	}
 }
 

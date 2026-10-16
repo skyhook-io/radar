@@ -50,8 +50,8 @@ func TestCatalogKeepsEveryServedVersionWithoutRefreshing(t *testing.T) {
 	if want := []string{"example.io/v1/widgets", "example.io/v1beta1/widgets"}; !slices.Equal(versions, want) {
 		t.Fatalf("catalog resources = %v, want %v (every served version, no subresources)", versions, want)
 	}
-	if c.Generation != 1 || c.Partial || c.FailedGroups != nil {
-		t.Fatalf("catalog = generation %d, partial %v, failed %v; want generation 1, complete", c.Generation, c.Partial, c.FailedGroups)
+	if c.Generation != 1 || !c.Complete || c.Partial || c.FailedGroups != nil {
+		t.Fatalf("catalog = generation %d, complete %v, partial %v, failed %v; want generation 1, complete", c.Generation, c.Complete, c.Partial, c.FailedGroups)
 	}
 	c.Resources[0].Kind = "Changed"
 	if d.Catalog().Resources[0].Kind != "Widget" {
@@ -68,29 +68,35 @@ func TestCatalogGenerationCountsOnlyChangesToResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := d.Catalog(); c.Generation != 0 || len(c.Resources) != 0 {
-		t.Fatalf("discovery that never answered: generation %d, %d resources; want 0, 0", c.Generation, len(c.Resources))
+	if c := d.Catalog(); c.Generation != 0 || len(c.Resources) != 0 || c.Complete {
+		t.Fatalf("discovery that never answered: generation %d, %d resources, complete %v; want 0, 0, incomplete", c.Generation, len(c.Resources), c.Complete)
+	}
+	// Resources added without a discovery answer change the catalog but say
+	// nothing about what else is served.
+	d.AddAPIResource(APIResource{Group: "example.io", Version: "v1", Kind: "Widget", Name: "widgets", Namespaced: true})
+	if c := d.Catalog(); c.Generation != 1 || c.Complete {
+		t.Fatalf("after adding a resource to unanswered discovery: generation %d, complete %v; want 1, incomplete", c.Generation, c.Complete)
 	}
 
 	client.lists, client.err = widgetLists(), nil
 	if err := d.Refresh(); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.Generation(); got != 1 {
-		t.Fatalf("after a refresh that returned resources: generation %d, want 1", got)
+	if c := d.Catalog(); c.Generation != 2 || !c.Complete {
+		t.Fatalf("after a refresh that returned resources: generation %d, complete %v; want 2, complete", c.Generation, c.Complete)
 	}
 
 	client.lists, client.err = nil, errors.New("discovery unavailable")
 	if err := d.Refresh(); err == nil {
 		t.Fatal("a refresh returning nothing must fail")
 	}
-	if c := d.Catalog(); c.Generation != 1 || len(c.Resources) != 2 {
-		t.Fatalf("a failed refresh changed the catalog: generation %d, %d resources", c.Generation, len(c.Resources))
+	if c := d.Catalog(); c.Generation != 2 || len(c.Resources) != 2 || !c.Complete {
+		t.Fatalf("a failed refresh changed the catalog: generation %d, %d resources, complete %v", c.Generation, len(c.Resources), c.Complete)
 	}
 
 	d.AddAPIResource(APIResource{Group: "example.io", Version: "v1", Kind: "Gadget", Name: "gadgets", Namespaced: true})
-	if got := d.Generation(); got != 2 {
-		t.Fatalf("after adding a resource: generation %d, want 2", got)
+	if got := d.Generation(); got != 3 {
+		t.Fatalf("after adding a resource: generation %d, want 3", got)
 	}
 
 	client.lists = widgetLists()
@@ -98,8 +104,8 @@ func TestCatalogGenerationCountsOnlyChangesToResources(t *testing.T) {
 		{Group: "metrics.k8s.io", Version: "v1beta1"}: errors.New("service unavailable"),
 	}}
 	_ = d.Refresh()
-	if c := d.Catalog(); c.Generation != 3 || !c.Partial || !slices.Equal(c.FailedGroups, []string{"metrics.k8s.io"}) {
-		t.Fatalf("partial refresh: generation %d, partial %v, failed %v", c.Generation, c.Partial, c.FailedGroups)
+	if c := d.Catalog(); c.Generation != 4 || c.Complete || !c.Partial || !slices.Equal(c.FailedGroups, []string{"metrics.k8s.io"}) {
+		t.Fatalf("partial refresh: generation %d, complete %v, partial %v, failed %v", c.Generation, c.Complete, c.Partial, c.FailedGroups)
 	}
 }
 
