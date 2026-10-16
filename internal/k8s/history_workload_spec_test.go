@@ -361,3 +361,23 @@ func TestComputeDiff_EnvReorderAndResourceClaimsReported(t *testing.T) {
 		t.Fatalf("resource claims hidden behind the resources row: %+v", diff)
 	}
 }
+
+func TestComputeDiff_RiskLineAndRestartValueEdgeCases(t *testing.T) {
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
+	newDep := bumped(oldDep)
+	newDep.Spec.Strategy = appsv1.DeploymentStrategy{
+		Type:          appsv1.RollingUpdateDeploymentStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateDeployment{MaxUnavailable: intOrStrPtr("100%"), MaxSurge: intOrStrPtr("0")},
+	}
+	newDep.Spec.Template.Annotations = map[string]string{"kubectl.kubernetes.io/restartedAt": "not-a-time-secret"}
+
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	if diff == nil || strings.Contains(diff.Summary, "unavailable at once") {
+		t.Fatalf("Recreate→RollingUpdate must not read as newly risky: %+v", diff)
+	}
+	restart := findChange(diff, "spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]")
+	if restart == nil || restart.NewValue != "changed" {
+		t.Fatalf("non-timestamp restartedAt value recorded: %+v", restart)
+	}
+}

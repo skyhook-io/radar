@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,7 +88,8 @@ func diffDeploymentRolloutConfig(oldDep, newDep *appsv1.Deployment) ([]FieldChan
 
 	// The strategy values alone don't say whether they are dangerous for this
 	// replica count; name the consequence when the update newly allows it.
-	if risk := rolloutdiag.Analyze(newDep); risk != nil && rolloutdiag.Analyze(oldDep) == nil {
+	// Recreate already replaced every pod at once, so leaving it adds no risk.
+	if risk := rolloutdiag.Analyze(newDep); risk != nil && rolloutdiag.Analyze(oldDep) == nil && oldSpec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
 		s.summary = append(s.summary, fmt.Sprintf("rollout can now take all %d replicas unavailable at once", risk.Replicas))
 	}
 	return s.changes, s.summary
@@ -188,13 +190,13 @@ func changedMapKeys(oldMap, newMap map[string]string) []string {
 	return keys
 }
 
-// Annotation values are free-form (often whole config blobs), so only the
-// restart timestamp is shown.
+// Annotation values are free-form (often whole config blobs), so only a
+// well-formed restart timestamp is shown.
 func templateAnnotationValue(key, v string, ok bool) any {
 	if !ok {
 		return nil
 	}
-	if key == restartedAtAnnotation {
+	if _, err := time.Parse(time.RFC3339, v); err == nil && key == restartedAtAnnotation {
 		return v
 	}
 	return "changed"
@@ -345,8 +347,6 @@ func collectChangedSpecPaths(path string, oldV, newV any, out *[]changedSpecPath
 	}
 }
 
-// sharedNameOrder lists the names in items that other also contains, in
-// items' order.
 func sharedNameOrder(items []any, other map[string]any) []string {
 	var names []string
 	for _, item := range items {
