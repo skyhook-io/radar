@@ -615,7 +615,11 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		}
 	}
 
-	deleteOpts := metav1.DeleteOptions{}
+	// Background propagation, as kubectl sends. Without a policy the API
+	// server applies each kind's legacy default, which orphans the Pods of a
+	// batch/v1 Job or a ReplicationController.
+	background := metav1.DeletePropagationBackground
+	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &background}
 	if opts.Force {
 		gracePeriod := int64(0)
 		deleteOpts.GracePeriodSeconds = &gracePeriod
