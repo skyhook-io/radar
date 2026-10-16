@@ -1,10 +1,10 @@
 package k8s
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,7 +14,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/netpol"
 	"github.com/skyhook-io/radar/pkg/timeutil"
@@ -84,6 +83,7 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 	sort.Strings(namespaces)
 
 	otherPolicies := newOtherPolicyView()
+	window := sync.OnceValue(func() isolationWindow { return networkPolicyWatchWindow(cache) })
 	var out []Detection
 	for _, ns := range namespaces {
 		nsObj := namespaceObject(cache, ns)
@@ -93,7 +93,7 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 			},
 			ownerOf: func(pod *corev1.Pod) (string, string, string) { return podOwnerKindName(cache, pod) },
 			isolationOnset: func(np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
-				return networkPolicyIsolationOnset(networkPolicyWatchedSince(cache), np, impact)
+				return networkPolicyIsolationOnset(window(), np, impact)
 			},
 		}
 		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], env, now)...)
@@ -401,9 +401,6 @@ type denyAllIngressImpact struct {
 	egressDenied bool
 }
 
-// denyAllIngressDetections evaluates one namespace. A Service whose backends
-// another policy engine may allow inbound traffic to is skipped, and the
-// outbound note is dropped when one may allow outbound traffic.
 // denyAllEnv carries what denyAllIngressDetections reads beyond the
 // namespace's policies, Services and pods. Zero fields mean "nothing": no
 // other policy engine applies, and no owners are resolved.
@@ -417,6 +414,9 @@ type denyAllEnv struct {
 	isolationOnset func(*networkingv1.NetworkPolicy, *denyAllIngressImpact) (time.Time, bool)
 }
 
+// denyAllIngressDetections evaluates one namespace. A Service whose backends
+// another policy engine may allow inbound traffic to is skipped, and the
+// outbound note is dropped when one may allow outbound traffic.
 func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, env denyAllEnv, now time.Time) []Detection {
 	if len(policies) == 0 || len(services) == 0 || len(pods) == 0 {
 		return nil
@@ -432,7 +432,7 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 		}
 		var backends []*corev1.Pod
 		for _, pod := range podsMatchingService(svc, pods) {
-			if svc.Spec.PublishNotReadyAddresses || isPodReadyForProblem(pod) {
+			if isPodReadyForProblem(pod) || (svc.Spec.PublishNotReadyAddresses && publishableNotReady(pod)) {
 				backends = append(backends, pod)
 			}
 		}
@@ -606,7 +606,13 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	if len(impact.pods) == 1 {
 		podWord = "pod"
 	}
-	message := fmt.Sprintf("Would block all inbound traffic to the %d %s behind %s: no NetworkPolicy selecting them allows any ingress", len(impact.pods), podWord, target)
+	// With other policies isolating some of the pods too, this one may cover
+	// only part of the backends.
+	podsBehind := fmt.Sprintf("the %d %s behind %s", len(impact.pods), podWord, target)
+	if len(impact.alsoDenying) > 0 {
+		podsBehind = fmt.Sprintf("%d of the pods behind %s", len(impact.pods), target)
+	}
+	message := fmt.Sprintf("Would block all inbound traffic to %s: no NetworkPolicy selecting them allows any ingress", podsBehind)
 	if impact.egressDenied {
 		message += "; their outbound traffic, including DNS, would be blocked too"
 	}
@@ -627,14 +633,14 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	if impact.egressDenied {
 		outbound = " Their outbound traffic, including DNS, would be blocked too."
 	}
-	cause := fmt.Sprintf("NetworkPolicy %s leaves the %d %s behind %s with no allowed inbound traffic: it isolates them for ingress and has no ingress rules, and no NetworkPolicy selecting them allows ingress.%s%s "+
+	cause := fmt.Sprintf("NetworkPolicy %s leaves %s with no allowed inbound traffic: it isolates them for ingress and has no ingress rules, and no NetworkPolicy selecting them allows ingress.%s%s "+
 		"New connections to them would be dropped, while connections opened before the isolation existed can keep working until they close, so traffic can look healthy for a while. "+
-		"Whether the policy is enforced depends on the cluster's network plugin.", np.Name, len(impact.pods), podWord, target, outbound, others)
+		"Whether the policy is enforced depends on the cluster's network plugin.", np.Name, podsBehind, outbound, others)
 	// A namespace-wide default-deny is usually intended; what's missing is an
 	// allow policy for these pods, so deleting it is the wrong first advice.
 	action := fmt.Sprintf("If this isolation is not intended, delete the policy or add an ingress rule for the expected clients. Inspect it with: kubectl describe networkpolicy %s -n %s", np.Name, np.Namespace)
 	switch {
-	case podSelectorDisplay(&np.Spec.PodSelector) == "all pods":
+	case len(np.Spec.PodSelector.MatchLabels)+len(np.Spec.PodSelector.MatchExpressions) == 0:
 		action = fmt.Sprintf("This is a namespace-wide default-deny, so these pods need a NetworkPolicy that allows their expected clients. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
 	case len(impact.alsoDenying) > 0:
 		action = fmt.Sprintf("Other policies isolate these pods too, so removing this one alone may not restore traffic; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
@@ -662,119 +668,11 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	}
 }
 
-// onsetObservationMargin absorbs clock skew between the API server, which
-// stamps creation times, and this process, which stamps observations.
-const onsetObservationMargin = time.Minute
-
-// networkPolicyIsolationOnset dates the isolation from the policy's creation,
-// and only when it's established that creating it started the isolation:
-//   - its spec was never changed (generation 1), so creation set the rules;
-//   - every affected Service and pod already existed then;
-//   - this process watched from before then and kept every event since
-//     (watchedSince is set), and none show another NetworkPolicy in the
-//     namespace, an affected Service, or a pod its selector matches, created,
-//     changed or deleted at or after it (deleting an allow policy, changing a
-//     selector, or losing a backend the policy didn't isolate would start the
-//     isolation later).
-//
-// A pod relabeled into a Service's selector afterwards is matched by its new
-// labels only, so a relabel isn't caught; that is the remaining way to
-// backdate.
-// Anything less leaves the onset unknown: a backdated onset would mislead.
-func networkPolicyIsolationOnset(watchedSince time.Time, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
-	created := np.CreationTimestamp.Time
-	if created.IsZero() || np.Generation > 1 || impact.lastCreated.After(created) ||
-		watchedSince.IsZero() || watchedSince.After(created.Add(-onsetObservationMargin)) {
-		return time.Time{}, false
-	}
-	events, ok := isolationInputEventsSince(np.Namespace, impact.services, created)
-	if !ok {
-		return time.Time{}, false
-	}
-	for _, e := range events {
-		if e.Kind == "NetworkPolicy" && e.Name == np.Name {
-			continue
-		}
-		if e.Kind == "Pod" && !matchesAny(impact.selectors, e.Labels) {
-			continue
-		}
-		// An equal timestamp can't establish order, so it counts as after.
-		if !e.Timestamp.Before(created) {
-			return time.Time{}, false
-		}
-	}
-	return created, true
-}
-
-// networkPolicyWatchedSince returns the start of the window in which every
-// NetworkPolicy change was recorded and is still retained: the later of when
-// this process began recording and when its NetworkPolicy informer synced.
-// Zero when no such window is known, including once the store has evicted
-// anything (ring overflow or retention cleanup).
-func networkPolicyWatchedSince(cache *ResourceCache) time.Time {
-	start := timeline.ObservationStart()
-	if start.IsZero() || cache == nil {
-		return time.Time{}
-	}
-	synced := time.Time{}
-	for _, s := range cache.GetSyncStatus().Informers {
-		if s.Key == "networkpolicies" && s.Synced {
-			synced, _ = time.Parse(time.RFC3339, s.SyncedAt)
-		}
-	}
-	if synced.IsZero() {
-		return time.Time{}
-	}
-	if synced.After(start) {
-		start = synced
-	}
-	store := timeline.GetStore()
-	if store == nil {
-		return time.Time{}
-	}
-	// A store that evicted anything may have dropped part of the window: the
-	// ring drops by arrival, so the oldest timestamp it keeps doesn't bound it.
-	if store.Stats().EventsEvicted {
-		return time.Time{}
-	}
-	return start
-}
-
-// isolationInputEventsSince returns the namespace's NetworkPolicy and Pod
-// events and the named Services' events since t, and false when a query
-// fails or hits its cap.
-func isolationInputEventsSince(namespace string, services []string, t time.Time) ([]timeline.TimelineEvent, bool) {
-	const limit = 500
-	query := func(opts timeline.QueryOptions) ([]timeline.TimelineEvent, bool) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		opts.Namespaces, opts.Since, opts.Limit = []string{namespace}, t, limit
-		opts.Sources, opts.ClusterContext = []timeline.EventSource{timeline.SourceInformer}, ActiveClusterContext()
-		events, err := timeline.QueryEvents(ctx, opts)
-		return events, err == nil && len(events) < limit
-	}
-	policies, ok := query(timeline.QueryOptions{Kinds: []string{"NetworkPolicy"}, APIGroups: []string{"networking.k8s.io"}})
-	if !ok {
-		return nil, false
-	}
-	svcs, ok := query(timeline.QueryOptions{Kinds: []string{"Service"}, APIGroups: []string{""}, Names: services})
-	if !ok {
-		return nil, false
-	}
-	pods, ok := query(timeline.QueryOptions{Kinds: []string{"Pod"}, APIGroups: []string{""}, IncludeManaged: true})
-	if !ok {
-		return nil, false
-	}
-	return append(append(policies, svcs...), pods...), true
-}
-
-func matchesAny(selectors []labels.Selector, podLabels map[string]string) bool {
-	for _, sel := range selectors {
-		if sel.Matches(labels.Set(podLabels)) {
-			return true
-		}
-	}
-	return false
+// publishableNotReady reports whether a not-ready pod still gets an endpoint
+// when its Service publishes not-ready addresses: it must have an IP and not
+// have failed.
+func publishableNotReady(pod *corev1.Pod) bool {
+	return pod.Status.PodIP != "" && pod.Status.Phase != corev1.PodFailed
 }
 
 // affectedRefs lists the isolated Services, then their pods' owning workloads,

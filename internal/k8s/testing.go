@@ -291,8 +291,8 @@ func SetTestContextName(name string) string {
 	return prev
 }
 
-// SetTestResourceDiscovery installs discovery built from the given API
-// resource lists and returns a restore func.
+// SetTestResourceDiscovery installs discovery backed by client and returns a
+// restore func.
 func SetTestResourceDiscovery(client discovery.DiscoveryInterface) (func(), error) {
 	core, err := k8score.NewResourceDiscovery(client)
 	if err != nil {

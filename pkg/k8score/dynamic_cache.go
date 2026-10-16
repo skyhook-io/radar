@@ -1975,6 +1975,22 @@ func (d *DynamicResourceCache) IsSynced(gvr schema.GroupVersionResource) bool {
 	return entriesSynced(d.entriesForGVR(gvr))
 }
 
+// WatchedSince returns when the cache started watching gvr: the latest start
+// among its informers, so every change after it was delivered. ok is false
+// when gvr isn't watched or an informer hasn't synced yet.
+func (d *DynamicResourceCache) WatchedSince(gvr schema.GroupVersionResource) (since time.Time, ok bool) {
+	entries := d.entriesForGVR(gvr)
+	if len(entries) == 0 || !entriesSynced(entries) {
+		return time.Time{}, false
+	}
+	for _, e := range entries {
+		if e.startedAt.After(since) {
+			since = e.startedAt
+		}
+	}
+	return since, true
+}
+
 // IsClusterWideSynced reports whether gvr is served by a single cluster-wide
 // informer that has finished syncing. When true, ListWatched(gvr) is
 // authoritative for EVERY namespace — the caller can safely conclude an object

@@ -283,7 +283,8 @@ func newKarpenterConditionIssue(gvr schema.GroupVersionResource, kind string, ob
 
 // RedactIssueRelatedRefs strips referenced-by-NodePool facts — the names AND
 // the count — from an issue whose caller cannot read every referenced
-// NodePool, and drops the NetworkPolicy isolation links the caller can't read. CanReadIssueRelatedRefs below is the mirror gate: it drops issues
+// NodePool. It also drops the NetworkPolicy isolation links the caller can't
+// read. CanReadIssueRelatedRefs below is the mirror gate: it drops issues
 // whose PRIMARY diagnosis depends on an unreadable NodeClass; here the issue
 // itself (e.g. NodeClass not ready) is legitimately visible to a
 // NodeClass-readable caller — only the identities of the referencing NodePools

@@ -240,6 +240,11 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	if len(pair) != 2 {
 		t.Fatalf("got %d detections, want one per contributing policy", len(pair))
 	}
+	for _, d := range pair {
+		if !strings.Contains(d.Message, "1 of the pods behind Service rec-a") {
+			t.Errorf("%s message = %q, want it to say this policy covers some of the pods", d.Name, d.Message)
+		}
+	}
 	for i, other := range []string{"deny-in", "default-deny"} {
 		if !strings.Contains(pair[i].Cause, "NetworkPolicy "+other+" also isolates some of these pods") {
 			t.Errorf("%s cause doesn't name %s: %q", pair[i].Name, other, pair[i].Cause)
@@ -573,7 +578,7 @@ func TestDenyAllIngressOnsetIsApplied(t *testing.T) {
 func TestNetworkPolicyIsolationOnset(t *testing.T) {
 	now := time.Now()
 	created := now.Add(-time.Hour)
-	watchedSince := created.Add(-time.Hour)
+	window := isolationWindow{since: created.Add(-time.Hour), policyKinds: []string{"NetworkPolicy", "CiliumNetworkPolicy"}}
 	appendEvent := func(e timeline.TimelineEvent) {
 		t.Helper()
 		e.Source, e.ClusterContext, e.Namespace = timeline.SourceInformer, ActiveClusterContext(), "shop"
@@ -602,29 +607,31 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 		appendEvent(timeline.TimelineEvent{ID: "own-add", Timestamp: created, Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Name: "deny-all", EventType: timeline.EventTypeAdd})
 		// A pod the Services don't select is irrelevant.
 		appendEvent(timeline.TimelineEvent{ID: "other-pod", Timestamp: created.Add(time.Minute), Kind: "Pod", APIVersion: "v1", Name: "web-1", EventType: timeline.EventTypeUpdate, Labels: map[string]string{"app": "web"}})
-		if got, ok := networkPolicyIsolationOnset(watchedSince, policy(1), olderObjects); !ok || !got.Equal(created) {
+		if got, ok := networkPolicyIsolationOnset(window, policy(1), olderObjects); !ok || !got.Equal(created) {
 			t.Fatalf("got %v %v, want creation", got, ok)
 		}
 	})
 	for _, tt := range []struct {
-		name         string
-		watchedSince time.Time
-		generation   int64
-		impact       *denyAllIngressImpact
-		event        *timeline.TimelineEvent
+		name       string
+		window     isolationWindow
+		generation int64
+		impact     *denyAllIngressImpact
+		event      *timeline.TimelineEvent
 	}{
-		{name: "not watched since before the policy existed", watchedSince: created.Add(-30 * time.Second), generation: 1, impact: olderObjects},
+		{name: "not watched since before the policy existed", window: isolationWindow{since: created.Add(-30 * time.Second), policyKinds: window.policyKinds}, generation: 1, impact: olderObjects},
 		{name: "no known watched window", generation: 1, impact: olderObjects},
-		{name: "spec edited since creation", watchedSince: watchedSince, generation: 2, impact: olderObjects},
-		{name: "a pod or Service newer than the policy", watchedSince: watchedSince, generation: 1,
+		{name: "spec edited since creation", window: window, generation: 2, impact: olderObjects},
+		{name: "a pod or Service newer than the policy", window: window, generation: 1,
 			impact: &denyAllIngressImpact{services: []string{"recommendation"}, lastCreated: created.Add(time.Minute)}},
-		{name: "another policy deleted afterwards", watchedSince: watchedSince, generation: 1, impact: olderObjects,
+		{name: "another policy deleted afterwards", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "allow-gone", Timestamp: created.Add(10 * time.Minute), Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Name: "allow-web", EventType: timeline.EventTypeDelete}},
-		{name: "another policy added at the same moment", watchedSince: watchedSince, generation: 1, impact: olderObjects,
+		{name: "another policy added at the same moment", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "same-time", Timestamp: created, Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Name: "allow-web", EventType: timeline.EventTypeAdd}},
-		{name: "a backend pod went away afterwards", watchedSince: watchedSince, generation: 1, impact: olderObjects,
+		{name: "a Cilium allow policy deleted afterwards", window: window, generation: 1, impact: olderObjects,
+			event: &timeline.TimelineEvent{ID: "cnp-gone", Timestamp: created.Add(10 * time.Minute), Kind: "CiliumNetworkPolicy", APIVersion: "cilium.io/v2", Name: "allow-rec", EventType: timeline.EventTypeDelete}},
+		{name: "a backend pod went away afterwards", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "pod-gone", Timestamp: created.Add(5 * time.Minute), Kind: "Pod", APIVersion: "v1", Name: "rec-old", EventType: timeline.EventTypeDelete, Labels: map[string]string{"app": "rec"}}},
-		{name: "affected Service changed afterwards", watchedSince: watchedSince, generation: 1, impact: olderObjects,
+		{name: "affected Service changed afterwards", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "svc-edit", Timestamp: created.Add(5 * time.Minute), Kind: "Service", APIVersion: "v1", Name: "recommendation", EventType: timeline.EventTypeUpdate}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -632,23 +639,25 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 			if tt.event != nil {
 				appendEvent(*tt.event)
 			}
-			if got, ok := networkPolicyIsolationOnset(tt.watchedSince, policy(tt.generation), tt.impact); ok {
+			if got, ok := networkPolicyIsolationOnset(tt.window, policy(tt.generation), tt.impact); ok {
 				t.Fatalf("claimed onset %v", got)
 			}
 		})
 	}
 }
 
-// The watched window needs the recorder running and the NetworkPolicy
-// informer synced, and is gone once the store has evicted anything.
-func TestNetworkPolicyWatchedSince(t *testing.T) {
+// The watch window needs the recorder running and the NetworkPolicy informer
+// synced, and is gone once the store has evicted anything or another served
+// policy API isn't being watched.
+func TestNetworkPolicyWatchWindow(t *testing.T) {
 	defer ResetTestState()
 	timeline.ResetStore()
 	t.Cleanup(func() { timeline.ResetStore(); timeline.SetObservationStartForTest(time.Time{}) })
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 2}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
-	if err := InitTestResourceCache(fake.NewClientset()); err != nil {
+	client := fake.NewClientset()
+	if err := InitTestResourceCache(client); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	cache := GetResourceCache()
@@ -656,12 +665,36 @@ func TestNetworkPolicyWatchedSince(t *testing.T) {
 	for !cache.IsKindReady("networkpolicies") && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
+	setDiscovery := func(lists ...*metav1.APIResourceList) {
+		t.Helper()
+		fakeDisc := client.Discovery().(*fakediscovery.FakeDiscovery)
+		fakeDisc.Resources = lists
+		restore, err := SetTestResourceDiscovery(fakeDisc)
+		if err != nil {
+			t.Fatalf("SetTestResourceDiscovery: %v", err)
+		}
+		t.Cleanup(restore)
+	}
+	core := &metav1.APIResourceList{GroupVersion: "networking.k8s.io/v1", APIResources: []metav1.APIResource{
+		{Name: "networkpolicies", Kind: "NetworkPolicy", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}},
+	}}
 	start := time.Now().Add(-time.Hour)
 	timeline.SetObservationStartForTest(start)
-	got := networkPolicyWatchedSince(cache)
-	if got.IsZero() || got.Before(start) {
-		t.Fatalf("watched since %v, want the later of observation start and informer sync", got)
+
+	setDiscovery(core)
+	got := networkPolicyWatchWindow(cache)
+	if got.since.IsZero() || got.since.Before(start) || len(got.policyKinds) != 1 {
+		t.Fatalf("window = %+v, want the later of observation start and informer sync, core kind only", got)
 	}
+
+	setDiscovery(core, &metav1.APIResourceList{GroupVersion: "cilium.io/v2", APIResources: []metav1.APIResource{
+		{Name: "ciliumnetworkpolicies", Kind: "CiliumNetworkPolicy", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}},
+	}})
+	if got := networkPolicyWatchWindow(cache); !got.since.IsZero() {
+		t.Fatalf("window = %+v while a served Cilium policy API isn't watched", got)
+	}
+
+	setDiscovery(core)
 	for i := range 3 {
 		if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
 			ID: fmt.Sprintf("e%d", i), Timestamp: time.Now(), Source: timeline.SourceInformer, ClusterContext: ActiveClusterContext(),
@@ -670,7 +703,28 @@ func TestNetworkPolicyWatchedSince(t *testing.T) {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	if got := networkPolicyWatchedSince(cache); !got.IsZero() {
-		t.Fatalf("watched since %v after the store evicted events", got)
+	if got := networkPolicyWatchWindow(cache); !got.since.IsZero() {
+		t.Fatalf("window = %+v after the store evicted events", got)
+	}
+}
+
+// With publishNotReadyAddresses, only not-ready pods that still get an
+// endpoint count as backends: a failed or IP-less pod doesn't.
+func TestDenyAllIngressPublishNotReadyBackends(t *testing.T) {
+	svc := netpolTestService("headless", map[string]string{"app": "rec"})
+	svc.Spec.PublishNotReadyAddresses = true
+	policies := []*networkingv1.NetworkPolicy{netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)}
+	pod := func(phase corev1.PodPhase, ip string) *corev1.Pod {
+		p := netpolTestPod("rec-1", map[string]string{"app": "rec"}, false)
+		p.Status.Phase, p.Status.PodIP = phase, ip
+		return p
+	}
+	if got := denyAllIngressDetections(policies, []*corev1.Service{svc}, []*corev1.Pod{pod(corev1.PodRunning, "10.0.0.1")}, denyAllEnv{}, time.Now()); len(got) != 1 {
+		t.Fatalf("not-ready pod with an IP: got %d detections, want 1", len(got))
+	}
+	for name, p := range map[string]*corev1.Pod{"failed": pod(corev1.PodFailed, "10.0.0.1"), "no IP": pod(corev1.PodPending, "")} {
+		if got := denyAllIngressDetections(policies, []*corev1.Service{svc}, []*corev1.Pod{p}, denyAllEnv{}, time.Now()); len(got) != 0 {
+			t.Errorf("%s pod counted as a backend: %+v", name, got)
+		}
 	}
 }
