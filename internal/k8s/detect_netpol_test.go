@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/netpol"
 )
 
 func netpolTestPod(name string, lbls map[string]string, ready bool) *corev1.Pod {
@@ -362,6 +363,16 @@ func TestOtherPolicyViewMayApply(t *testing.T) {
 		{"served but empty", served, fakePolicyLister{}, shopNS, false},
 		{"Cilium policy selecting the pods", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchRec, "ingress"))}, shopNS, true},
 		{"Cilium policy selecting other pods", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchWeb, "ingress"))}, shopNS, false},
+		{"Cilium deny-only policy can't allow inbound", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchRec, "ingressDeny"))}, shopNS, false},
+		{"Cilium policy with no rule sections may allow", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchRec))}, shopNS, true},
+		{"Cilium specs list: deny for these pods, allow for others", served, fakePolicyLister{objects: objects(cnp, "shop", &unstructured.Unstructured{Object: map[string]any{"specs": []any{
+			map[string]any{"endpointSelector": matchRec, "ingressDeny": []any{map[string]any{}}},
+			map[string]any{"endpointSelector": matchWeb, "ingress": []any{map[string]any{}}},
+		}}})}, shopNS, false},
+		{"Cilium specs list with an allowing spec for these pods", served, fakePolicyLister{objects: objects(cnp, "shop", &unstructured.Unstructured{Object: map[string]any{"specs": []any{
+			map[string]any{"endpointSelector": matchWeb, "ingressDeny": []any{map[string]any{}}},
+			map[string]any{"endpointSelector": matchRec, "ingress": []any{map[string]any{}}},
+		}}})}, shopNS, true},
 		{"Cilium egress-only policy can't allow inbound", served, fakePolicyLister{objects: objects(cnp, "shop", cilium(matchRec, "egress"))}, shopNS, false},
 		{"Cilium policy in another namespace", served, fakePolicyLister{objects: objects(cnp, "other", cilium(matchRec, "ingress"))}, shopNS, false},
 		{"Cilium cluster-wide policy selecting the pods", served, fakePolicyLister{objects: objects(ccnp, "", cilium(map[string]any{"matchLabels": map[string]any{"k8s:io.kubernetes.pod.namespace": "shop"}}, "ingress"))}, shopNS, true},
@@ -387,13 +398,13 @@ func TestOtherPolicyViewMayApply(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			view := &otherPolicyView{discovery: tt.disc, lister: tt.lister}
-			if got := view.mayApply("shop", shopPods, tt.ns); got != tt.want {
+			if got := view.mayApply("shop", shopPods, tt.ns, netpol.DirectionIngress); got != tt.want {
 				t.Errorf("mayApply = %v, want %v", got, tt.want)
 			}
 		})
 	}
 	var noDiscovery *otherPolicyView
-	if !noDiscovery.mayApply("shop", shopPods, shopNS) {
+	if !noDiscovery.mayApply("shop", shopPods, shopNS, netpol.DirectionIngress) {
 		t.Error("without discovery nothing can be ruled out")
 	}
 }
@@ -409,7 +420,7 @@ func TestDenyAllIngressSkipsOnlyServicesOtherPoliciesSelect(t *testing.T) {
 		netpolTestService("recommendation", map[string]string{"app": "rec"}),
 		netpolTestService("web", map[string]string{"app": "web"}),
 	}
-	selectsWeb := func(backends []*corev1.Pod) bool {
+	selectsWeb := func(backends []*corev1.Pod, _ netpol.Direction) bool {
 		for _, p := range backends {
 			if p.Labels["app"] == "web" {
 				return true
@@ -420,5 +431,40 @@ func TestDenyAllIngressSkipsOnlyServicesOtherPoliciesSelect(t *testing.T) {
 	got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{netpolTestPolicy("default-deny", nil, ingressOnly)}, services, pods, selectsWeb, time.Now())
 	if len(got) != 1 || !strings.Contains(got[0].Message, "Service recommendation") || strings.Contains(got[0].Message, "web") {
 		t.Fatalf("detections = %+v, want only Service recommendation", got)
+	}
+}
+
+// Another engine's outbound allow makes the outbound note false, while the
+// inbound finding stands.
+func TestDenyAllIngressOutboundNoteRespectsOtherPolicies(t *testing.T) {
+	pods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true)}
+	services := []*corev1.Service{netpolTestService("recommendation", map[string]string{"app": "rec"})}
+	policies := []*networkingv1.NetworkPolicy{netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress)}
+	egressOnly := func(_ []*corev1.Pod, dir netpol.Direction) bool { return dir == netpol.DirectionEgress }
+	got := denyAllIngressDetections(policies, services, pods, egressOnly, time.Now())
+	if len(got) != 1 || strings.Contains(got[0].Message, "outbound") {
+		t.Fatalf("detections = %+v, want the inbound finding without the outbound note", got)
+	}
+}
+
+func TestOtherPolicyViewDirections(t *testing.T) {
+	cnp := schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}
+	gnp := schema.GroupVersionResource{Group: "crd.projectcalico.org", Version: "v1", Resource: "globalnetworkpolicies"}
+	served := fakePolicyDiscovery{"cilium.io/CiliumNetworkPolicy": cnp, "crd.projectcalico.org/GlobalNetworkPolicy": gnp}
+	pods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true)}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}}
+	ciliumEgress := policyObject(map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "rec"}}, "egress": []any{map[string]any{}}})
+	calicoEgress := policyObject(map[string]any{"selector": "app == 'rec'", "egress": []any{map[string]any{"action": "Allow"}}})
+	for name, lister := range map[string]fakePolicyLister{
+		"Cilium": {objects: map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured{cnp: {"shop": {ciliumEgress}}}},
+		"Calico": {objects: map[schema.GroupVersionResource]map[string][]*unstructured.Unstructured{gnp: {"": {calicoEgress}}}},
+	} {
+		view := &otherPolicyView{discovery: served, lister: lister}
+		if view.mayApply("shop", pods, ns, netpol.DirectionIngress) {
+			t.Errorf("%s egress policy counted for inbound", name)
+		}
+		if !view.mayApply("shop", pods, ns, netpol.DirectionEgress) {
+			t.Errorf("%s egress policy not counted for outbound", name)
+		}
 	}
 }

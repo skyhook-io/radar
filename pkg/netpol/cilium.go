@@ -47,7 +47,20 @@ func CiliumIdentityFor(pod *corev1.Pod, ns *corev1.Namespace) CiliumIdentity {
 // means the policy governs it. A spec without any rule sections is read
 // conservatively as governing both directions. decided is false when the
 // selector cannot be judged from what Radar knows.
+//
+// The caller scopes the policies: a CiliumNetworkPolicy applies only to pods
+// in its own namespace, which this function does not check.
 func CiliumGoverns(obj *unstructured.Unstructured, id CiliumIdentity, dir Direction) (selects, decided bool, why string) {
+	return ciliumSelects(obj, id, func(spec map[string]any) bool { return ciliumSpecCovers(spec, dir) })
+}
+
+// CiliumMayAllow is CiliumGoverns narrowed to specs that can allow traffic in
+// dir: a deny-only spec can't, so it doesn't count. Same caller scoping.
+func CiliumMayAllow(obj *unstructured.Unstructured, id CiliumIdentity, dir Direction) (selects, decided bool, why string) {
+	return ciliumSelects(obj, id, func(spec map[string]any) bool { return ciliumSpecMayAllow(spec, dir) })
+}
+
+func ciliumSelects(obj *unstructured.Unstructured, id CiliumIdentity, covers func(map[string]any) bool) (selects, decided bool, why string) {
 	var specs []map[string]any
 	if spec, ok, _ := unstructured.NestedMap(obj.Object, "spec"); ok {
 		specs = append(specs, spec)
@@ -66,7 +79,7 @@ func CiliumGoverns(obj *unstructured.Unstructured, id CiliumIdentity, dir Direct
 			// A spec without an endpointSelector selects nodes, not pods.
 			continue
 		}
-		if !ciliumSpecCovers(spec, dir) {
+		if !covers(spec) {
 			continue
 		}
 		matches, decided, why := ciliumSelectorMatches(selMap, id)
@@ -93,6 +106,19 @@ func ciliumSpecCovers(spec map[string]any, dir Direction) bool {
 		return has("ingress") || has("ingressDeny")
 	}
 	return has("egress") || has("egressDeny")
+}
+
+// ciliumSpecMayAllow reports whether a spec has allow rules for dir. A spec
+// with no rule sections at all is read as possibly allowing.
+func ciliumSpecMayAllow(spec map[string]any, dir Direction) bool {
+	has := func(key string) bool { _, ok := spec[key]; return ok }
+	if !has("ingress") && !has("ingressDeny") && !has("egress") && !has("egressDeny") {
+		return true
+	}
+	if dir == DirectionIngress {
+		return has("ingress")
+	}
+	return has("egress")
 }
 
 // ciliumSelectorMatches evaluates an endpointSelector against the identity.

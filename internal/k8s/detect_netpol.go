@@ -85,7 +85,9 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 	var out []Detection
 	for _, ns := range namespaces {
 		nsObj := namespaceObject(cache, ns)
-		otherMayApply := func(pods []*corev1.Pod) bool { return otherPolicies.mayApply(ns, pods, nsObj) }
+		otherMayApply := func(pods []*corev1.Pod, dir netpol.Direction) bool {
+			return otherPolicies.mayApply(ns, pods, nsObj, dir)
+		}
 		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], otherMayApply, now)...)
 	}
 	return out
@@ -131,6 +133,21 @@ type otherPolicyView struct {
 	clusterApplies bool
 	globalCalico   []*unstructured.Unstructured
 	globalCilium   []*unstructured.Unstructured
+
+	// Per-scan memos: many Services share a namespace, and the dynamic cache
+	// copies every object it lists.
+	lists    map[string]listResult
+	matchers map[calicoMatcherKey]*topology.CalicoPolicyMatcher
+}
+
+type listResult struct {
+	items []*unstructured.Unstructured
+	known bool
+}
+
+type calicoMatcherKey struct {
+	policy          *unstructured.Unstructured
+	namespaceLabels bool
 }
 
 func newOtherPolicyView() *otherPolicyView {
@@ -148,6 +165,19 @@ func newOtherPolicyView() *otherPolicyView {
 // list returns the objects, or known=false when the API is served but its
 // contents can't be read completely.
 func (v *otherPolicyView) list(kind, group, namespace string) (items []*unstructured.Unstructured, known bool) {
+	key := group + "/" + kind + "/" + namespace
+	if r, ok := v.lists[key]; ok {
+		return r.items, r.known
+	}
+	items, known = v.listUncached(kind, group, namespace)
+	if v.lists == nil {
+		v.lists = map[string]listResult{}
+	}
+	v.lists[key] = listResult{items: items, known: known}
+	return items, known
+}
+
+func (v *otherPolicyView) listUncached(kind, group, namespace string) ([]*unstructured.Unstructured, bool) {
 	gvr, served := v.discovery.GetGVRWithGroup(kind, group)
 	if !served {
 		return nil, true
@@ -162,10 +192,10 @@ func (v *otherPolicyView) list(kind, group, namespace string) (items []*unstruct
 	return items, true
 }
 
-// mayApply reports whether a policy outside core NetworkPolicy may select any
-// of pods (a Service's backends), which all live in namespace. ns is nil when the Namespace object
-// couldn't be read.
-func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, ns *corev1.Namespace) bool {
+// mayApply reports whether a policy outside core NetworkPolicy may allow
+// traffic in dir for any of pods (a Service's backends), which all live in
+// namespace. ns is nil when the Namespace object couldn't be read.
+func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, ns *corev1.Namespace, dir netpol.Direction) bool {
 	if v == nil {
 		return true
 	}
@@ -196,14 +226,14 @@ func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, ns *cor
 				return true
 			}
 			for _, policy := range items {
-				if calicoMaySelect(policy, pods, namespaceLabels) {
+				if v.calicoMaySelect(policy, pods, namespaceLabels, dir) {
 					return true
 				}
 			}
 		}
 	}
 	for _, policy := range v.globalCalico {
-		if calicoMaySelect(policy, pods, namespaceLabels) {
+		if v.calicoMaySelect(policy, pods, namespaceLabels, dir) {
 			return true
 		}
 	}
@@ -212,7 +242,7 @@ func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, ns *cor
 		return true
 	}
 	for _, policy := range append(append([]*unstructured.Unstructured(nil), items...), v.globalCilium...) {
-		if ciliumMaySelect(policy, pods, ns) {
+		if ciliumMaySelect(policy, pods, ns, dir) {
 			return true
 		}
 	}
@@ -260,13 +290,13 @@ func (v *otherPolicyView) clusterWidePolicyApplies() bool {
 	return false
 }
 
-// ciliumMaySelect reports whether a Cilium policy governs inbound traffic for
+// ciliumMaySelect reports whether a Cilium policy has allow rules in dir for
 // any of the pods, or can't be ruled out (a selector on a label Radar can't
 // reproduce). Cilium adds its allow rules to those of core policies, so such
 // a policy may allow what they deny.
-func ciliumMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, ns *corev1.Namespace) bool {
+func ciliumMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, ns *corev1.Namespace, dir netpol.Direction) bool {
 	for _, pod := range pods {
-		selects, decided, _ := netpol.CiliumGoverns(policy, netpol.CiliumIdentityFor(pod, ns), netpol.DirectionIngress)
+		selects, decided, _ := netpol.CiliumMayAllow(policy, netpol.CiliumIdentityFor(pod, ns), dir)
 		if selects || !decided {
 			return true
 		}
@@ -274,24 +304,24 @@ func ciliumMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, ns *
 	return false
 }
 
-// calicoMaySelect reports whether a Calico policy that can allow inbound
-// traffic selects any of the pods, or can't be ruled out. Radar doesn't read
-// ServiceAccount labels here, and namespace labels may be unknown, so those
-// selectors are dropped before matching: what remains can still exclude the
-// pods, but a match only means the policy may apply.
-func calicoMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, namespaceLabels map[string]string) bool {
-	if !calicoGovernsIngress(policy) {
+// calicoMaySelect reports whether a Calico policy that covers dir selects any
+// of the pods, or can't be ruled out. Radar doesn't read ServiceAccount labels
+// here, and namespace labels may be unknown, so those selectors are dropped
+// before matching: what remains can still exclude the pods, but a match only
+// means the policy may apply.
+func (v *otherPolicyView) calicoMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, namespaceLabels map[string]string, dir netpol.Direction) bool {
+	if !calicoCovers(policy, dir) {
 		return false
 	}
-	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "serviceAccountSelector"); !calicoSelectsAll(sel) {
-		policy = policy.DeepCopy()
-		unstructured.RemoveNestedField(policy.Object, "spec", "serviceAccountSelector")
+	key := calicoMatcherKey{policy: policy, namespaceLabels: namespaceLabels != nil}
+	matcher, ok := v.matchers[key]
+	if !ok {
+		matcher = compileCalicoMayMatcher(policy, namespaceLabels != nil)
+		if v.matchers == nil {
+			v.matchers = map[calicoMatcherKey]*topology.CalicoPolicyMatcher{}
+		}
+		v.matchers[key] = matcher
 	}
-	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "namespaceSelector"); namespaceLabels == nil && !calicoSelectsAll(sel) {
-		policy = policy.DeepCopy()
-		unstructured.RemoveNestedField(policy.Object, "spec", "namespaceSelector")
-	}
-	matcher := topology.CompileCalicoPolicyMatcher(policy)
 	for _, pod := range pods {
 		matched, valid := matcher.Matches(calicoPodLabels(pod), namespaceLabels, pod.Spec.ServiceAccountName, nil)
 		if matched || !valid {
@@ -301,17 +331,33 @@ func calicoMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, name
 	return false
 }
 
-// calicoGovernsIngress applies Calico's types defaulting: without explicit
-// types a policy covers Ingress unless it has egress rules and no ingress
-// rules.
-func calicoGovernsIngress(policy *unstructured.Unstructured) bool {
+func compileCalicoMayMatcher(policy *unstructured.Unstructured, namespaceLabelsKnown bool) *topology.CalicoPolicyMatcher {
+	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "serviceAccountSelector"); !calicoSelectsAll(sel) {
+		policy = policy.DeepCopy()
+		unstructured.RemoveNestedField(policy.Object, "spec", "serviceAccountSelector")
+	}
+	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "namespaceSelector"); !namespaceLabelsKnown && !calicoSelectsAll(sel) {
+		policy = policy.DeepCopy()
+		unstructured.RemoveNestedField(policy.Object, "spec", "namespaceSelector")
+	}
+	return topology.CompileCalicoPolicyMatcher(policy)
+}
+
+// calicoCovers applies Calico's types defaulting: without explicit types a
+// policy covers Ingress unless it has egress rules and no ingress rules, and
+// covers Egress when it has egress rules.
+func calicoCovers(policy *unstructured.Unstructured, dir netpol.Direction) bool {
+	want := "Ingress"
+	if dir == netpol.DirectionEgress {
+		want = "Egress"
+	}
 	types, found, err := unstructured.NestedStringSlice(policy.Object, "spec", "types")
 	if err != nil {
 		return true
 	}
 	if found && len(types) > 0 {
 		for _, t := range types {
-			if strings.EqualFold(t, "Ingress") {
+			if strings.EqualFold(t, want) {
 				return true
 			}
 		}
@@ -319,6 +365,9 @@ func calicoGovernsIngress(policy *unstructured.Unstructured) bool {
 	}
 	ingress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "ingress")
 	egress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+	if dir == netpol.DirectionEgress {
+		return len(egress) > 0
+	}
 	return len(ingress) > 0 || len(egress) == 0
 }
 
@@ -354,9 +403,11 @@ type denyAllIngressImpact struct {
 }
 
 // denyAllIngressDetections evaluates one namespace. otherMayApply reports
-// whether a policy Radar doesn't evaluate may select any of a Service's
-// backends; such a Service is skipped. nil means no other policy applies.
-func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, otherMayApply func([]*corev1.Pod) bool, now time.Time) []Detection {
+// whether a policy Radar doesn't evaluate may allow traffic in a direction for
+// any of a Service's backends: a Service it may allow inbound traffic to is
+// skipped, and the outbound note is dropped when it may allow outbound
+// traffic. nil means no other policy applies.
+func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, otherMayApply func([]*corev1.Pod, netpol.Direction) bool, now time.Time) []Detection {
 	if len(policies) == 0 || len(services) == 0 || len(pods) == 0 {
 		return nil
 	}
@@ -384,8 +435,11 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 			allDenied = allDenied && len(iso.ingressDenying) > 0
 			egressDenied = egressDenied && iso.egressDenied
 		}
-		if !allDenied || (otherMayApply != nil && otherMayApply(backends)) {
+		if !allDenied || (otherMayApply != nil && otherMayApply(backends, netpol.DirectionIngress)) {
 			continue
+		}
+		if egressDenied && otherMayApply != nil && otherMayApply(backends, netpol.DirectionEgress) {
+			egressDenied = false
 		}
 		for _, pod := range backends {
 			for _, np := range isolation.of(pod).ingressDenying {
