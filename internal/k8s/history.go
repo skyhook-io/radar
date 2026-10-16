@@ -267,7 +267,7 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 	// Objects without a generation would otherwise report only their
 	// conditions when spec changed in the same update.
 	if !genChanged && len(changes) > 0 && !reflect.DeepEqual(oldU.Object["spec"], newU.Object["spec"]) {
-		changes = append(changes, FieldChange{Path: "spec", OldValue: "changed", NewValue: "changed"})
+		changes = append(changes, FieldChange{Path: "spec", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker})
 		summary = append(summary, "spec changed (fields not specifically tracked)")
 	}
 

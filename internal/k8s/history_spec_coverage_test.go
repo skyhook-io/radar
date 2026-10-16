@@ -383,7 +383,7 @@ func TestComputeDiff_RiskLineAndRestartValueEdgeCases(t *testing.T) {
 		t.Fatalf("Recreate→RollingUpdate must not read as newly risky: %+v", diff)
 	}
 	restart := findChange(diff, "spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]")
-	if restart == nil || restart.NewValue != "changed" {
+	if restart == nil || restart.NewValue != hiddenSetMarker {
 		t.Fatalf("non-timestamp restartedAt value recorded: %+v", restart)
 	}
 }
@@ -469,7 +469,7 @@ func TestComputeDiff_CronJobScheduleUpdates(t *testing.T) {
 	}{
 		{name: "routine tick", old: at(1), new: at(2)},
 		{name: "first run", old: nil, new: at(1), wantSummary: "first run scheduled"},
-		{name: "after stale gap", old: at(0), new: at(30), wantSummary: "scheduled after 30h0m0s without a run"},
+		{name: "after stale gap", old: at(0), new: at(30), wantSummary: "scheduled after 30h without a run"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -850,13 +850,13 @@ func TestComputeDiff_WebhookBackstop(t *testing.T) {
 			name:        "matchConditions only",
 			old:         specTestWebhookConfig(1, "Fail", "Q0EtMQ=="),
 			new:         specTestWebhookConfig(2, "Fail", "Q0EtMQ==", notSystem),
-			wantSummary: "other spec changes: webhooks[pods.policy.example.com].matchConditions",
+			wantSummary: "other changes: webhooks[pods.policy.example.com].matchConditions",
 		},
 		{
 			name:        "failurePolicy and matchConditions together",
 			old:         specTestWebhookConfig(1, "Fail", "Q0EtMQ==", "true"),
 			new:         specTestWebhookConfig(2, "Ignore", "Q0EtMQ==", notSystem),
-			wantSummary: "webhook pods.policy.example.com changed, other spec changes: webhooks[pods.policy.example.com].matchConditions[c0].expression",
+			wantSummary: "webhook pods.policy.example.com changed, other changes: webhooks[pods.policy.example.com].matchConditions[c0].expression",
 		},
 	}
 	for _, tt := range tests {
@@ -964,7 +964,7 @@ func TestComputeDiff_GatewayClassAndReferenceGrantBackstop(t *testing.T) {
 		}}
 	}
 	diff = ComputeDiff("ReferenceGrant", rg(1, "web"), rg(2, "web-v2"))
-	if diff == nil || diff.Summary != "other spec changes: to[web], to[web-v2]" {
+	if diff == nil || diff.Summary != "other spec changes: to[web] (removed), to[web-v2] (added)" {
 		t.Fatalf("ReferenceGrant summary = %+v", diff)
 	}
 }
@@ -988,5 +988,38 @@ func TestDiffGenericUnstructured_SpecChangeBesideConditions(t *testing.T) {
 	_, summary = diffGenericUnstructured(obj(1, "True"), obj(1, "False"))
 	if strings.Join(summary, ", ") != "status.conditions[Ready] changed" {
 		t.Fatalf("condition-only summary = %q", summary)
+	}
+}
+
+func TestHiddenValueMarkers(t *testing.T) {
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Template.Annotations = map[string]string{"checksum/config": "aaa", "checksum/secret": "bbb"}
+	newDep := bumped(oldDep)
+	newDep.Spec.Template.Annotations = map[string]string{"checksum/config": "ccc", "example.com/new": "x"}
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	for path, want := range map[string][2]any{
+		"spec.template.metadata.annotations[checksum/config]": {hiddenValueMarker, hiddenValueMarker},
+		"spec.template.metadata.annotations[checksum/secret]": {hiddenSetMarker, nil},
+		"spec.template.metadata.annotations[example.com/new]": {nil, hiddenSetMarker},
+	} {
+		change := findChange(diff, path)
+		if change == nil || change.OldValue != want[0] || change.NewValue != want[1] {
+			t.Errorf("%s = %+v, want %v→%v", path, change, want[0], want[1])
+		}
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		45 * time.Minute:              "45m",
+		30 * time.Hour:                "30h",
+		90 * time.Minute:              "1h30m",
+		76 * time.Hour:                "3d4h",
+		72 * time.Hour:                "3d",
+		30*time.Hour + 20*time.Second: "30h",
+	} {
+		if got := humanDuration(d); got != want {
+			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
+		}
 	}
 }

@@ -53,7 +53,7 @@ func diffCronJob(oldObj, newObj any) ([]FieldChange, []string) {
 		if oldLast == nil {
 			s.summary = append(s.summary, "first run scheduled")
 		} else {
-			s.summary = append(s.summary, fmt.Sprintf("scheduled after %s without a run", newLast.Sub(oldLast.Time).Round(time.Minute)))
+			s.summary = append(s.summary, fmt.Sprintf("scheduled after %s without a run", humanDuration(newLast.Sub(oldLast.Time))))
 		}
 	}
 
@@ -511,4 +511,27 @@ func unionStringKeys(a, b map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// humanDuration renders a gap the way a person says it: "30h", "3d4h", "45m".
+func humanDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	days := int(d / (24 * time.Hour))
+	hours := int(d % (24 * time.Hour) / time.Hour)
+	minutes := int(d % time.Hour / time.Minute)
+	switch {
+	case days >= 3:
+		if hours == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd%dh", days, hours)
+	case d >= time.Hour:
+		total := int(d / time.Hour)
+		if minutes == 0 {
+			return fmt.Sprintf("%dh", total)
+		}
+		return fmt.Sprintf("%dh%dm", total, minutes)
+	default:
+		return fmt.Sprintf("%dm", minutes)
+	}
 }

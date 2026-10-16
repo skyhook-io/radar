@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { clsx } from 'clsx'
-import { ArrowRight, Plus, Minus, RefreshCw } from 'lucide-react'
+import { ArrowRight, EyeOff, Plus, Minus, RefreshCw } from 'lucide-react'
 import type { DiffInfo, FieldChange } from '../../types'
 
 interface DiffViewerProps {
@@ -46,7 +46,42 @@ interface FieldChangeRowProps {
   field: FieldChange
 }
 
+// The backend never sends values it keeps out of the feed (secrets, config
+// blobs, large structures); it sends one of these markers instead. Older
+// events carry a bare "changed" on both sides.
+const HIDDEN_VALUE = '(value hidden)'
+const HIDDEN_SET = '(set)'
+
+function hiddenChange(field: FieldChange): 'changed' | 'set' | 'removed' | null {
+  const { oldValue, newValue } = field
+  const absent = (v: unknown) => v === null || v === undefined
+  if ((oldValue === HIDDEN_VALUE && newValue === HIDDEN_VALUE) || (oldValue === 'changed' && newValue === 'changed')) {
+    return 'changed'
+  }
+  if (absent(oldValue) && newValue === HIDDEN_SET) return 'set'
+  if (oldValue === HIDDEN_SET && absent(newValue)) return 'removed'
+  return null
+}
+
 function FieldChangeRow({ field }: FieldChangeRowProps) {
+  const hidden = hiddenChange(field)
+  if (hidden) {
+    const Icon = hidden === 'set' ? Plus : hidden === 'removed' ? Minus : RefreshCw
+    return (
+      <div className="rounded bg-theme-surface/50 border border-theme-border px-3 py-2">
+        <div className="text-xs font-mono text-theme-text-tertiary mb-1 break-words [overflow-wrap:anywhere]">{field.path}</div>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-theme-text-secondary">
+          <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden />
+          <span>{hidden === 'set' ? 'Set' : hidden === 'removed' ? 'Removed' : 'Changed'}</span>
+          <span className="inline-flex items-center gap-1 rounded-full bg-theme-elevated px-2 py-0.5 text-xs text-theme-text-tertiary">
+            <EyeOff className="w-3 h-3" aria-hidden />
+            value hidden
+          </span>
+        </div>
+      </div>
+    )
+  }
+
   const isAdded = field.oldValue === null || field.oldValue === undefined
   const isRemoved = field.newValue === null || field.newValue === undefined
   const isModified = !isAdded && !isRemoved

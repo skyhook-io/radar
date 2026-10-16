@@ -152,10 +152,11 @@ func diffPodTemplateMetadata(oldMeta, newMeta metav1.ObjectMeta) ([]FieldChange,
 	for _, key := range changedMapKeys(oldMeta.Annotations, newMeta.Annotations) {
 		oldVal, oldOK := oldMeta.Annotations[key]
 		newVal, newOK := newMeta.Annotations[key]
+		oldShown, newShown := templateAnnotationValues(key, oldVal, oldOK, newVal, newOK)
 		changes = append(changes, FieldChange{
 			Path:     specPathKey("spec.template.metadata.annotations", key),
-			OldValue: templateAnnotationValue(key, oldVal, oldOK),
-			NewValue: templateAnnotationValue(key, newVal, newOK),
+			OldValue: oldShown,
+			NewValue: newShown,
 		})
 		if key == restartedAtAnnotation && newOK {
 			summary = append(summary, "rollout restarted")
@@ -194,14 +195,41 @@ func changedMapKeys(oldMap, newMap map[string]string) []string {
 
 // Annotation values are free-form (often whole config blobs), so only a
 // well-formed restart timestamp is shown.
-func templateAnnotationValue(key, v string, ok bool) any {
+func templateAnnotationValues(key, oldVal string, oldOK bool, newVal string, newOK bool) (any, any) {
+	if key == restartedAtAnnotation && isTimestamp(oldVal, oldOK) && isTimestamp(newVal, newOK) {
+		return valueOrNil(oldVal, oldOK), valueOrNil(newVal, newOK)
+	}
+	return hiddenValues(oldOK, newOK)
+}
+
+func isTimestamp(v string, ok bool) bool {
 	if !ok {
-		return nil
+		return true
 	}
-	if _, err := time.Parse(time.RFC3339, v); err == nil && key == restartedAtAnnotation {
-		return v
+	_, err := time.Parse(time.RFC3339, v)
+	return err == nil
+}
+
+// Markers for a value the feed does not show (a secret, a config blob, or a
+// structure too large to diff). Absence stays nil on either side, so a row
+// still says whether the field was set, changed or removed; the UI renders
+// these as a badge rather than as a value.
+const (
+	hiddenValueMarker = "(value hidden)"
+	hiddenSetMarker   = "(set)"
+)
+
+func hiddenValues(oldPresent, newPresent bool) (any, any) {
+	switch {
+	case oldPresent && newPresent:
+		return hiddenValueMarker, hiddenValueMarker
+	case newPresent:
+		return nil, hiddenSetMarker
+	case oldPresent:
+		return hiddenSetMarker, nil
+	default:
+		return nil, nil
 	}
-	return "changed"
 }
 
 func templateLabelValue(key, v string, ok bool) any {
@@ -296,9 +324,16 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 	var changes []FieldChange
 	labels := make([]string, 0, len(untracked))
 	for _, c := range untracked {
+		oldVal, oldFound := lookupSpecPath(oldU, root, c.path)
+		newVal, newFound := lookupSpecPath(newU, root, c.path)
 		label := shortSpecPath(c.path)
-		if c.order {
+		switch {
+		case c.order:
 			label += " order"
+		case strings.HasSuffix(c.path, "]") && !oldFound && newFound:
+			label += " (added)"
+		case strings.HasSuffix(c.path, "]") && oldFound && !newFound:
+			label += " (removed)"
 		}
 		labels = append(labels, label)
 		if len(changes) == maxUntrackedSpecRows {
@@ -308,15 +343,19 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 			changes = append(changes, FieldChange{Path: c.path, OldValue: c.oldOrder, NewValue: c.newOrder})
 			continue
 		}
-		oldVal, _ := lookupSpecPath(oldU, root, c.path)
-		newVal, _ := lookupSpecPath(newU, root, c.path)
-		changes = append(changes, FieldChange{Path: c.path, OldValue: untrackedDisplayValue(c.path, oldVal), NewValue: untrackedDisplayValue(c.path, newVal)})
+		oldShown, newShown := untrackedDisplayValues(c.path, oldVal, newVal)
+		changes = append(changes, FieldChange{Path: c.path, OldValue: oldShown, NewValue: newShown})
 	}
 	shown := labels
 	if len(shown) > maxUntrackedSummary {
 		shown = shown[:maxUntrackedSummary]
 	}
-	summary := "other spec changes: " + strings.Join(shown, ", ")
+	// Webhook configurations have no spec; their root is the webhooks list.
+	prefix := "other spec changes: "
+	if root != "spec" {
+		prefix = "other changes: "
+	}
+	summary := prefix + strings.Join(shown, ", ")
 	if extra := len(labels) - len(shown); extra > 0 {
 		summary += fmt.Sprintf(" (+%d more)", extra)
 	}
@@ -653,20 +692,29 @@ func lookupSpecPath(rootValue any, root, path string) (any, bool) {
 // env values, args, exec hooks and header values carry credentials whose
 // sensitivity only the explicit differs' key-aware redaction can judge, and a
 // value they redacted to an equal marker reaches here as "untracked".
-func untrackedDisplayValue(path string, v any) any {
-	switch typed := v.(type) {
-	case nil:
-		return nil
-	case string:
-		if untrackedPathSensitive(path) {
-			return "changed"
-		}
-		return truncateConfigScalar(aicontext.RedactSecrets(typed), 200)
-	case bool, int64, float64:
-		return typed
-	default:
-		return "changed"
+func untrackedDisplayValues(path string, oldV, newV any) (any, any) {
+	if untrackedValueHidden(path, oldV) || untrackedValueHidden(path, newV) {
+		return hiddenValues(oldV != nil, newV != nil)
 	}
+	return untrackedScalar(oldV), untrackedScalar(newV)
+}
+
+func untrackedValueHidden(path string, v any) bool {
+	switch v.(type) {
+	case nil, bool, int64, float64:
+		return false
+	case string:
+		return untrackedPathSensitive(path)
+	default:
+		return true
+	}
+}
+
+func untrackedScalar(v any) any {
+	if s, ok := v.(string); ok {
+		return truncateConfigScalar(aicontext.RedactSecrets(s), 200)
+	}
+	return v
 }
 
 func untrackedPathSensitive(path string) bool {
