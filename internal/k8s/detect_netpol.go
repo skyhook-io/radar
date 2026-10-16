@@ -45,8 +45,8 @@ const (
 //
 // A policy is declared intent: whether it is enforced depends on the network
 // plugin, so the copy says "would", and the severity stays warning. Policy
-// APIs Radar doesn't evaluate can allow what core policies deny, so a
-// namespace where one may apply is skipped.
+// APIs Radar doesn't evaluate can allow what core policies deny, so a Service
+// whose backends one of them may select is skipped.
 func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, podsByNamespace map[string][]*corev1.Pod, now time.Time) []Detection {
 	// A partly synced policy list can hold a deny-all without the policy that
 	// allows the same pods.
@@ -84,10 +84,9 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 	otherPolicies := newOtherPolicyView()
 	var out []Detection
 	for _, ns := range namespaces {
-		if otherPolicies.mayApply(ns, podsByNamespace[ns], namespaceObject(cache, ns)) {
-			continue
-		}
-		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], now)...)
+		nsObj := namespaceObject(cache, ns)
+		otherMayApply := func(pods []*corev1.Pod) bool { return otherPolicies.mayApply(ns, pods, nsObj) }
+		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], otherMayApply, now)...)
 	}
 	return out
 }
@@ -164,7 +163,7 @@ func (v *otherPolicyView) list(kind, group, namespace string) (items []*unstruct
 }
 
 // mayApply reports whether a policy outside core NetworkPolicy may select any
-// of pods, which all live in namespace. ns is nil when the Namespace object
+// of pods (a Service's backends), which all live in namespace. ns is nil when the Namespace object
 // couldn't be read.
 func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, ns *corev1.Namespace) bool {
 	if v == nil {
@@ -354,7 +353,10 @@ type denyAllIngressImpact struct {
 	egressDenied bool
 }
 
-func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, now time.Time) []Detection {
+// denyAllIngressDetections evaluates one namespace. otherMayApply reports
+// whether a policy Radar doesn't evaluate may select any of a Service's
+// backends; such a Service is skipped. nil means no other policy applies.
+func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, otherMayApply func([]*corev1.Pod) bool, now time.Time) []Detection {
 	if len(policies) == 0 || len(services) == 0 || len(pods) == 0 {
 		return nil
 	}
@@ -382,7 +384,7 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 			allDenied = allDenied && len(iso.ingressDenying) > 0
 			egressDenied = egressDenied && iso.egressDenied
 		}
-		if !allDenied {
+		if !allDenied || (otherMayApply != nil && otherMayApply(backends)) {
 			continue
 		}
 		for _, pod := range backends {

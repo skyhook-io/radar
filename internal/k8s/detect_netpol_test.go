@@ -174,7 +174,7 @@ func TestDenyAllIngressDetections(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := denyAllIngressDetections(tt.policies, tt.services, tt.pods, time.Now())
+			got := denyAllIngressDetections(tt.policies, tt.services, tt.pods, nil, time.Now())
 			var names []string
 			for _, d := range got {
 				names = append(names, d.Name)
@@ -206,7 +206,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 
 	both := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress),
-	}, services, pods, time.Now())
+	}, services, pods, nil, time.Now())
 	if len(both) != 1 {
 		t.Fatalf("got %d detections, want 1", len(both))
 	}
@@ -222,7 +222,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 
 	ingress := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
-	}, services[:1], pods, time.Now())
+	}, services[:1], pods, nil, time.Now())
 	if len(ingress) != 1 || strings.Contains(ingress[0].Message, "outbound") {
 		t.Fatalf("ingress-only deny must not claim outbound is blocked: %+v", ingress)
 	}
@@ -230,7 +230,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	pair := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("default-deny", nil, ingressOnly),
 		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
-	}, services[:1], pods, time.Now())
+	}, services[:1], pods, nil, time.Now())
 	if len(pair) != 2 {
 		t.Fatalf("got %d detections, want one per contributing policy", len(pair))
 	}
@@ -249,7 +249,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	}
 	if solo := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
-	}, services[:1], pods, time.Now()); !strings.Contains(solo[0].Action, "delete the policy") {
+	}, services[:1], pods, nil, time.Now()); !strings.Contains(solo[0].Action, "delete the policy") {
 		t.Errorf("lone targeted deny action = %q", solo[0].Action)
 	}
 
@@ -257,7 +257,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	brokenEgress.Spec.PodSelector = metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "app", Operator: "Bogus"}}}
 	undecided := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress), brokenEgress,
-	}, services[:1], pods, time.Now())
+	}, services[:1], pods, nil, time.Now())
 	if len(undecided) != 1 || strings.Contains(undecided[0].Message, "outbound") {
 		t.Fatalf("an unparseable egress policy might allow outbound traffic, so no outbound claim: %+v", undecided)
 	}
@@ -395,5 +395,30 @@ func TestOtherPolicyViewMayApply(t *testing.T) {
 	var noDiscovery *otherPolicyView
 	if !noDiscovery.mayApply("shop", shopPods, shopNS) {
 		t.Error("without discovery nothing can be ruled out")
+	}
+}
+
+// A policy Radar doesn't evaluate silences only the Services whose backends it
+// may select, not the whole namespace.
+func TestDenyAllIngressSkipsOnlyServicesOtherPoliciesSelect(t *testing.T) {
+	pods := []*corev1.Pod{
+		netpolTestPod("rec-1", map[string]string{"app": "rec"}, true),
+		netpolTestPod("web-1", map[string]string{"app": "web"}, true),
+	}
+	services := []*corev1.Service{
+		netpolTestService("recommendation", map[string]string{"app": "rec"}),
+		netpolTestService("web", map[string]string{"app": "web"}),
+	}
+	selectsWeb := func(backends []*corev1.Pod) bool {
+		for _, p := range backends {
+			if p.Labels["app"] == "web" {
+				return true
+			}
+		}
+		return false
+	}
+	got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{netpolTestPolicy("default-deny", nil, ingressOnly)}, services, pods, selectsWeb, time.Now())
+	if len(got) != 1 || !strings.Contains(got[0].Message, "Service recommendation") || strings.Contains(got[0].Message, "web") {
+		t.Fatalf("detections = %+v, want only Service recommendation", got)
 	}
 }
