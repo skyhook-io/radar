@@ -7,6 +7,8 @@ package ownership
 import (
 	"errors"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -27,6 +29,10 @@ type Session interface {
 	Catalog() *Catalog
 	// Object reads one object. It does no I/O and waits for nothing.
 	Object(ref resourceid.Ref) ObjectRead
+	// OwnerCandidates finds the objects of the catalog's dependent kinds in
+	// domain whose owner references name uid, at most limit of them (0 for
+	// no limit). It does no I/O and waits for nothing.
+	OwnerCandidates(uid types.UID, domain Domain, limit int) CandidateRead
 	// Validate returns nil if every store the session read is still the one
 	// serving what it served then; otherwise ErrCachesReplaced or
 	// ErrStoreReplaced. It says the reads came from live stores, not that

@@ -99,6 +99,12 @@ type session struct {
 	// served records the informers that first answered each resource and
 	// namespace the session read dynamically.
 	served map[servedKey]k8score.DynamicReadServer
+	// byNamespace holds the namespaces each resource version is watched in
+	// when it is watched namespace by namespace (nil otherwise).
+	byNamespace map[schema.GroupVersionResource][]string
+	// unwatched holds why each resource with no watched version is unread
+	// ("" for a watched one).
+	unwatched map[schema.GroupResource]readreason.Code
 }
 
 type servedKey struct {
