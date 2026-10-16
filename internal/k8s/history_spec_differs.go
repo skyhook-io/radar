@@ -1,0 +1,404 @@
+package k8s
+
+import (
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"time"
+
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/cronsched"
+)
+
+// diffCronJob covers the schedule controls and the job template. Routine
+// status (lastScheduleTime, the active list) is left out: it moves on every
+// run, and each run is recorded on its own Job. Only the schedule updates
+// that change CronJob health are kept — the first run, and a run that ends a
+// stale gap.
+func diffCronJob(oldObj, newObj any) ([]FieldChange, []string) {
+	oldCJ, ok1 := oldObj.(*batchv1.CronJob)
+	newCJ, ok2 := newObj.(*batchv1.CronJob)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	var s specChangeSet
+	oldSpec, newSpec := oldCJ.Spec, newCJ.Spec
+	s.add("spec.schedule", "schedule", oldSpec.Schedule, newSpec.Schedule)
+	s.add("spec.timeZone", "timeZone", stringPtrValue(oldSpec.TimeZone), stringPtrValue(newSpec.TimeZone))
+	if oldSuspend, newSuspend := boolPtrTrue(oldSpec.Suspend), boolPtrTrue(newSpec.Suspend); oldSuspend != newSuspend {
+		s.changes = append(s.changes, FieldChange{Path: "spec.suspend", OldValue: oldSuspend, NewValue: newSuspend})
+		if newSuspend {
+			s.summary = append(s.summary, "suspended")
+		} else {
+			s.summary = append(s.summary, "resumed")
+		}
+	}
+	s.add("spec.concurrencyPolicy", "concurrencyPolicy", string(oldSpec.ConcurrencyPolicy), string(newSpec.ConcurrencyPolicy))
+	s.add("spec.startingDeadlineSeconds", "startingDeadlineSeconds", int64PtrValue(oldSpec.StartingDeadlineSeconds), int64PtrValue(newSpec.StartingDeadlineSeconds))
+	s.add("spec.successfulJobsHistoryLimit", "successfulJobsHistoryLimit", int32PtrValue(oldSpec.SuccessfulJobsHistoryLimit), int32PtrValue(newSpec.SuccessfulJobsHistoryLimit))
+	s.add("spec.failedJobsHistoryLimit", "failedJobsHistoryLimit", int32PtrValue(oldSpec.FailedJobsHistoryLimit), int32PtrValue(newSpec.FailedJobsHistoryLimit))
+
+	oldLast, newLast := oldCJ.Status.LastScheduleTime, newCJ.Status.LastScheduleTime
+	if newLast != nil && (oldLast == nil || newLast.Sub(oldLast.Time) > cronsched.StaleThreshold(newSpec.Schedule)) {
+		s.changes = append(s.changes, FieldChange{Path: "status.lastScheduleTime", OldValue: timePtrValue(oldLast), NewValue: newLast.UTC().Format(time.RFC3339)})
+		if oldLast == nil {
+			s.summary = append(s.summary, "first run scheduled")
+		} else {
+			s.summary = append(s.summary, fmt.Sprintf("scheduled after %s without a run", newLast.Sub(oldLast.Time).Round(time.Minute)))
+		}
+	}
+
+	// The pod-template differs speak in Deployment paths; rebase them onto
+	// the job template so the rows name the CronJob's real fields.
+	oldTemplate, newTemplate := oldSpec.JobTemplate.Spec.Template, newSpec.JobTemplate.Spec.Template
+	for _, diff := range []func() ([]FieldChange, []string){
+		func() ([]FieldChange, []string) { return diffContainerImages(oldTemplate.Spec, newTemplate.Spec) },
+		func() ([]FieldChange, []string) { return diffPodTemplateConfig(oldTemplate.Spec, newTemplate.Spec) },
+		func() ([]FieldChange, []string) {
+			return diffPodTemplateMetadata(oldTemplate.ObjectMeta, newTemplate.ObjectMeta)
+		},
+	} {
+		changes, summary := diff()
+		for _, change := range changes {
+			change.Path = "spec.jobTemplate.spec." + strings.TrimPrefix(change.Path, "spec.")
+			s.changes = append(s.changes, change)
+		}
+		s.summary = append(s.summary, summary...)
+	}
+	return s.changes, s.summary
+}
+
+// diffPDB covers the disruption budget. Status is left out: disruptionsAllowed
+// drops to 0 and back on every routine pod replacement, and a budget that
+// keeps blocking evictions is reported by the PDB issue detector.
+func diffPDB(oldObj, newObj any) ([]FieldChange, []string) {
+	oldPDB, ok1 := oldObj.(*policyv1.PodDisruptionBudget)
+	newPDB, ok2 := newObj.(*policyv1.PodDisruptionBudget)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	var s specChangeSet
+	s.add("spec.minAvailable", "minAvailable", intOrStringValue(oldPDB.Spec.MinAvailable), intOrStringValue(newPDB.Spec.MinAvailable))
+	s.add("spec.maxUnavailable", "maxUnavailable", intOrStringValue(oldPDB.Spec.MaxUnavailable), intOrStringValue(newPDB.Spec.MaxUnavailable))
+	s.add("spec.selector", "selector", labelSelectorString(oldPDB.Spec.Selector), labelSelectorString(newPDB.Spec.Selector))
+	s.add("spec.unhealthyPodEvictionPolicy", "unhealthyPodEvictionPolicy", stringPtrValue((*string)(oldPDB.Spec.UnhealthyPodEvictionPolicy)), stringPtrValue((*string)(newPDB.Spec.UnhealthyPodEvictionPolicy)))
+
+	return s.changes, s.summary
+}
+
+func diffServicePolicy(oldObj, newObj any) ([]FieldChange, []string) {
+	oldSvc, ok1 := oldObj.(*corev1.Service)
+	newSvc, ok2 := newObj.(*corev1.Service)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	var s specChangeSet
+	o, n := oldSvc.Spec, newSvc.Spec
+	s.add("spec.externalTrafficPolicy", "externalTrafficPolicy", string(o.ExternalTrafficPolicy), string(n.ExternalTrafficPolicy))
+	s.add("spec.internalTrafficPolicy", "internalTrafficPolicy", stringPtrValue((*string)(o.InternalTrafficPolicy)), stringPtrValue((*string)(n.InternalTrafficPolicy)))
+	s.add("spec.sessionAffinity", "sessionAffinity", string(o.SessionAffinity), string(n.SessionAffinity))
+	// The API server fills in the ClientIP timeout when affinity is turned on,
+	// so the timeout only earns a summary entry when it changes on its own.
+	s.addRow("spec.sessionAffinityConfig.clientIP.timeoutSeconds", "sessionAffinity timeout", clientIPTimeout(o.SessionAffinityConfig), clientIPTimeout(n.SessionAffinityConfig), o.SessionAffinity == n.SessionAffinity)
+	s.add("spec.publishNotReadyAddresses", "publishNotReadyAddresses", o.PublishNotReadyAddresses, n.PublishNotReadyAddresses)
+	s.add("spec.loadBalancerClass", "loadBalancerClass", stringPtrValue(o.LoadBalancerClass), stringPtrValue(n.LoadBalancerClass))
+	if !equalStringSlices(o.LoadBalancerSourceRanges, n.LoadBalancerSourceRanges) {
+		s.changes = append(s.changes, FieldChange{Path: "spec.loadBalancerSourceRanges", OldValue: o.LoadBalancerSourceRanges, NewValue: n.LoadBalancerSourceRanges})
+		s.summary = append(s.summary, "loadBalancerSourceRanges changed")
+	}
+	return s.changes, s.summary
+}
+
+func diffIngressRouting(oldObj, newObj any) ([]FieldChange, []string) {
+	oldIng, ok1 := oldObj.(*networkingv1.Ingress)
+	newIng, ok2 := newObj.(*networkingv1.Ingress)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	var s specChangeSet
+	s.add("spec.ingressClassName", "ingressClassName", stringPtrValue(oldIng.Spec.IngressClassName), stringPtrValue(newIng.Spec.IngressClassName))
+	s.add("spec.defaultBackend", "defaultBackend", ingressBackendString(oldIng.Spec.DefaultBackend), ingressBackendString(newIng.Spec.DefaultBackend))
+	return s.changes, s.summary
+}
+
+func clientIPTimeout(c *corev1.SessionAffinityConfig) any {
+	if c == nil || c.ClientIP == nil {
+		return nil
+	}
+	return int32PtrValue(c.ClientIP.TimeoutSeconds)
+}
+
+func ingressBackendString(b *networkingv1.IngressBackend) any {
+	switch {
+	case b == nil:
+		return nil
+	case b.Service != nil:
+		port := b.Service.Port.Name
+		if port == "" {
+			port = fmt.Sprint(b.Service.Port.Number)
+		}
+		return b.Service.Name + ":" + port
+	case b.Resource != nil:
+		return b.Resource.Kind + "/" + b.Resource.Name
+	default:
+		return "set"
+	}
+}
+
+// diffHPAScalingConfig covers what the HPA scales and on which signals. Min
+// and max replicas are in diffHPA.
+func diffHPAScalingConfig(oldObj, newObj any) ([]FieldChange, []string) {
+	oldHPA, ok1 := oldObj.(*autoscalingv2.HorizontalPodAutoscaler)
+	newHPA, ok2 := newObj.(*autoscalingv2.HorizontalPodAutoscaler)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	var s specChangeSet
+	o, n := oldHPA.Spec, newHPA.Spec
+	s.add("spec.scaleTargetRef", "scaleTargetRef", o.ScaleTargetRef.Kind+"/"+o.ScaleTargetRef.Name, n.ScaleTargetRef.Kind+"/"+n.ScaleTargetRef.Name)
+
+	oldMetrics, newMetrics := hpaMetricTargets(o.Metrics), hpaMetricTargets(n.Metrics)
+	if !reflect.DeepEqual(oldMetrics, newMetrics) {
+		s.changes = append(s.changes, FieldChange{Path: "spec.metrics", OldValue: hpaMetricList(oldMetrics), NewValue: hpaMetricList(newMetrics)})
+		for _, key := range unionStringKeys(oldMetrics, newMetrics) {
+			oldTarget, oldOK := oldMetrics[key]
+			newTarget, newOK := newMetrics[key]
+			switch {
+			case !oldOK:
+				s.summary = append(s.summary, fmt.Sprintf("metric %s added (target %s)", key, newTarget))
+			case !newOK:
+				s.summary = append(s.summary, fmt.Sprintf("metric %s removed", key))
+			case oldTarget != newTarget:
+				s.summary = append(s.summary, fmt.Sprintf("%s target: %s→%s", key, oldTarget, newTarget))
+			}
+		}
+	}
+
+	var oldBehavior, newBehavior autoscalingv2.HorizontalPodAutoscalerBehavior
+	if o.Behavior != nil {
+		oldBehavior = *o.Behavior
+	}
+	if n.Behavior != nil {
+		newBehavior = *n.Behavior
+	}
+	for _, dir := range []struct {
+		name     string
+		old, new *autoscalingv2.HPAScalingRules
+		defaults string
+	}{
+		{"scaleUp", oldBehavior.ScaleUp, newBehavior.ScaleUp, hpaDefaultScaleUp},
+		{"scaleDown", oldBehavior.ScaleDown, newBehavior.ScaleDown, hpaDefaultScaleDown},
+	} {
+		oldRules, newRules := hpaScalingRulesString(dir.old, dir.defaults), hpaScalingRulesString(dir.new, dir.defaults)
+		if oldRules != newRules {
+			s.changes = append(s.changes, FieldChange{Path: "spec.behavior." + dir.name, OldValue: oldRules, NewValue: newRules})
+			s.summary = append(s.summary, fmt.Sprintf("%s behavior changed", dir.name))
+		}
+	}
+	return s.changes, s.summary
+}
+
+// hpaMetricTargets keys each metric by what it measures, so a change of
+// target reads as one edit rather than a remove plus an add.
+func hpaMetricTargets(metrics []autoscalingv2.MetricSpec) map[string]string {
+	out := make(map[string]string, len(metrics))
+	for _, m := range metrics {
+		var key string
+		var target autoscalingv2.MetricTarget
+		switch {
+		case m.Resource != nil:
+			key, target = string(m.Resource.Name), m.Resource.Target
+		case m.ContainerResource != nil:
+			key, target = m.ContainerResource.Container+"/"+string(m.ContainerResource.Name), m.ContainerResource.Target
+		case m.Pods != nil:
+			key, target = "pods/"+m.Pods.Metric.Name, m.Pods.Target
+		case m.Object != nil:
+			key, target = "object/"+m.Object.DescribedObject.Kind+"/"+m.Object.DescribedObject.Name+"/"+m.Object.Metric.Name, m.Object.Target
+		case m.External != nil:
+			key, target = "external/"+m.External.Metric.Name, m.External.Target
+		default:
+			key = string(m.Type)
+		}
+		out[key] = metricTargetString(target)
+	}
+	return out
+}
+
+func metricTargetString(t autoscalingv2.MetricTarget) string {
+	switch {
+	case t.AverageUtilization != nil:
+		return fmt.Sprintf("%d%%", *t.AverageUtilization)
+	case t.AverageValue != nil:
+		return "avg " + t.AverageValue.String()
+	case t.Value != nil:
+		return t.Value.String()
+	default:
+		return string(t.Type)
+	}
+}
+
+func hpaMetricList(targets map[string]string) []string {
+	out := make([]string, 0, len(targets))
+	for key, target := range targets {
+		out = append(out, key+"="+target)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// The API server writes these defaults into any direction left unset once
+// spec.behavior exists, so an unset direction compares equal to them.
+const (
+	hpaDefaultScaleUp   = "stabilization=0s, select=Max, Pods 4/15s, Percent 100/15s"
+	hpaDefaultScaleDown = "stabilization=300s, select=Max, Percent 100/15s"
+)
+
+func hpaScalingRulesString(r *autoscalingv2.HPAScalingRules, defaults string) string {
+	if r == nil {
+		return defaults
+	}
+	var parts []string
+	if r.StabilizationWindowSeconds != nil {
+		parts = append(parts, fmt.Sprintf("stabilization=%ds", *r.StabilizationWindowSeconds))
+	}
+	if r.SelectPolicy != nil {
+		parts = append(parts, "select="+string(*r.SelectPolicy))
+	}
+	for _, p := range r.Policies {
+		parts = append(parts, fmt.Sprintf("%s %d/%ds", p.Type, p.Value, p.PeriodSeconds))
+	}
+	if len(parts) == 0 {
+		return defaults
+	}
+	return strings.Join(parts, ", ")
+}
+
+// diffRolloutSpec adds the Argo Rollout strategy and pod-template config to
+// diffRollout, which covers images, replicas and rollout progress.
+func diffRolloutSpec(oldObj, newObj any) ([]FieldChange, []string) {
+	oldRO, ok1 := oldObj.(*unstructured.Unstructured)
+	newRO, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+	var s specChangeSet
+	s.add("spec.strategy", "strategy", rolloutStrategyKind(oldRO), rolloutStrategyKind(newRO))
+	for _, field := range []struct{ path, label string }{
+		{"canary.maxSurge", "maxSurge"},
+		{"canary.maxUnavailable", "maxUnavailable"},
+		{"blueGreen.autoPromotionEnabled", "autoPromotionEnabled"},
+		{"blueGreen.activeService", "activeService"},
+		{"blueGreen.previewService", "previewService"},
+	} {
+		fields := append([]string{"spec", "strategy"}, strings.Split(field.path, ".")...)
+		oldVal, _, _ := unstructured.NestedFieldNoCopy(oldRO.Object, fields...)
+		newVal, _, _ := unstructured.NestedFieldNoCopy(newRO.Object, fields...)
+		s.add("spec.strategy."+field.path, field.label, scalarOrNil(oldVal), scalarOrNil(newVal))
+	}
+	oldSteps, _, _ := unstructured.NestedSlice(oldRO.Object, "spec", "strategy", "canary", "steps")
+	newSteps, _, _ := unstructured.NestedSlice(newRO.Object, "spec", "strategy", "canary", "steps")
+	if !reflect.DeepEqual(oldSteps, newSteps) {
+		s.changes = append(s.changes, FieldChange{Path: "spec.strategy.canary.steps", OldValue: len(oldSteps), NewValue: len(newSteps)})
+		s.summary = append(s.summary, fmt.Sprintf("canary steps changed (%d→%d steps)", len(oldSteps), len(newSteps)))
+	}
+
+	oldTemplate, oldOK := rolloutPodTemplate(oldRO)
+	newTemplate, newOK := rolloutPodTemplate(newRO)
+	if oldOK && newOK {
+		changes, summary := diffPodTemplateConfig(oldTemplate.Spec, newTemplate.Spec)
+		s.changes = append(s.changes, changes...)
+		s.summary = append(s.summary, summary...)
+		changes, summary = diffPodTemplateMetadata(oldTemplate.ObjectMeta, newTemplate.ObjectMeta)
+		s.changes = append(s.changes, changes...)
+		s.summary = append(s.summary, summary...)
+	}
+	return s.changes, s.summary
+}
+
+func rolloutStrategyKind(u *unstructured.Unstructured) string {
+	strategy, _, _ := unstructured.NestedMap(u.Object, "spec", "strategy")
+	for _, kind := range []string{"canary", "blueGreen"} {
+		if _, ok := strategy[kind]; ok {
+			return kind
+		}
+	}
+	return ""
+}
+
+func rolloutPodTemplate(u *unstructured.Unstructured) (corev1.PodTemplateSpec, bool) {
+	var out corev1.PodTemplateSpec
+	template, found, _ := unstructured.NestedMap(u.Object, "spec", "template")
+	if !found {
+		return out, false
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(template, &out); err != nil {
+		return out, false
+	}
+	return out, true
+}
+
+func scalarOrNil(v any) any {
+	switch typed := v.(type) {
+	case nil:
+		return nil
+	case string, bool, int64, float64:
+		return typed
+	default:
+		return fmt.Sprint(typed)
+	}
+}
+
+func timePtrValue(t *metav1.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func stringPtrValue(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func int64PtrValue(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func boolPtrTrue(p *bool) bool {
+	return p != nil && *p
+}
+
+func labelSelectorString(sel *metav1.LabelSelector) any {
+	if sel == nil {
+		return nil
+	}
+	return metav1.FormatLabelSelector(sel)
+}
+
+func unionStringKeys(a, b map[string]string) []string {
+	keys := make([]string, 0, len(a)+len(b))
+	for k := range a {
+		keys = append(keys, k)
+	}
+	for k := range b {
+		if _, ok := a[k]; !ok {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}

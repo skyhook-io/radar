@@ -9,7 +9,9 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -223,23 +225,46 @@ func mapKeyVerb(oldOK, newOK bool) string {
 	}
 }
 
-// untrackedSpecChanges is the completeness backstop for workload differs: any
+// chainDiffs runs several diff functions over the same pair, in order.
+func chainDiffs(fns ...kindDiffFunc) kindDiffFunc {
+	return func(oldObj, newObj any) ([]FieldChange, []string) {
+		var changes []FieldChange
+		var summary []string
+		for _, fn := range fns {
+			c, s := fn(oldObj, newObj)
+			changes = append(changes, c...)
+			summary = append(summary, s...)
+		}
+		return changes, summary
+	}
+}
+
+// untrackedSpecChanges is the completeness backstop for diff functions: any
 // spec leaf that changed but is not under a path in tracked becomes its own
 // row, so a field the explicit differs don't know about is never hidden behind
 // the fields they do report. Values are shown only for scalars.
-func untrackedSpecChanges(oldMeta, newMeta metav1.ObjectMeta, oldSpec, newSpec any, tracked []FieldChange) ([]FieldChange, []string) {
-	// Every spec write bumps generation; skipping equal generations keeps the
-	// conversion off the status-update hot path. A UID change is a recreate,
-	// which restarts generation.
-	if oldMeta.Generation == newMeta.Generation && oldMeta.UID == newMeta.UID {
-		return nil, nil
-	}
-	oldU, err := runtime.DefaultUnstructuredConverter.ToUnstructured(oldSpec)
+func untrackedSpecChanges(oldObj, newObj any, tracked []FieldChange) ([]FieldChange, []string) {
+	oldMeta, err := meta.Accessor(oldObj)
 	if err != nil {
 		return nil, nil
 	}
-	newU, err := runtime.DefaultUnstructuredConverter.ToUnstructured(newSpec)
+	newMeta, err := meta.Accessor(newObj)
 	if err != nil {
+		return nil, nil
+	}
+	// Every spec write bumps a non-zero generation; skipping equal ones keeps
+	// the conversion off the status-update hot path. A UID change is a
+	// recreate, which restarts generation. Kinds without a generation
+	// (Service) are always compared.
+	if oldMeta.GetGeneration() == newMeta.GetGeneration() && newMeta.GetGeneration() > 0 && oldMeta.GetUID() == newMeta.GetUID() {
+		return nil, nil
+	}
+	oldU, ok := specMapOf(oldObj)
+	if !ok {
+		return nil, nil
+	}
+	newU, ok := specMapOf(newObj)
+	if !ok {
 		return nil, nil
 	}
 
@@ -298,6 +323,21 @@ type changedSpecPath struct {
 	path               string
 	order              bool
 	oldOrder, newOrder []string
+}
+
+func specMapOf(obj any) (map[string]any, bool) {
+	var full map[string]any
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		full = u.Object
+	} else {
+		converted, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+		if err != nil {
+			return nil, false
+		}
+		full = converted
+	}
+	spec, ok := full["spec"].(map[string]any)
+	return spec, ok
 }
 
 // collectChangedSpecPaths records the shallowest path at which old and new
@@ -445,8 +485,8 @@ func trackedCoverage(path string) [][]string {
 }
 
 // specPathCovered reports whether a tracked row explains a changed path: one
-// is a prefix of the other, with `[*]` in the tracked path matching any list
-// key. An order change is explained only by a row at or above the list, since
+// is a prefix of the other, with `[*]` or `[]` in the tracked path matching
+// any list key. An order change is explained only by a row at or above the list, since
 // rows for individual items don't describe their sequence.
 func specPathCovered(tracked [][]string, path []string, order bool) bool {
 	for _, t := range tracked {
@@ -466,7 +506,7 @@ func specPathsOverlap(tracked, path []string) bool {
 		if tracked[i] == path[i] {
 			continue
 		}
-		if tracked[i] == "[*]" && strings.HasPrefix(path[i], "[") {
+		if (tracked[i] == "[*]" || tracked[i] == "[]") && strings.HasPrefix(path[i], "[") {
 			continue
 		}
 		return false
@@ -510,10 +550,10 @@ func lookupSpecPath(root map[string]any, path string) (any, bool) {
 	return cur, cur != nil
 }
 
-// untrackedDisplayValue never shows strings from container specs: env values,
-// args and exec hooks carry credentials whose sensitivity only the explicit
-// differs' key-aware redaction can judge, and a value they redacted to an
-// equal marker reaches here as "untracked".
+// untrackedDisplayValue never shows strings from container specs or headers:
+// env values, args, exec hooks and header values carry credentials whose
+// sensitivity only the explicit differs' key-aware redaction can judge, and a
+// value they redacted to an equal marker reaches here as "untracked".
 func untrackedDisplayValue(path string, v any) any {
 	switch typed := v.(type) {
 	case nil:
@@ -535,6 +575,11 @@ func untrackedPathSensitive(path string) bool {
 		key := strings.TrimSuffix(strings.TrimPrefix(seg, "["), "]")
 		switch key {
 		case "containers", "initContainers", "ephemeralContainers":
+			return true
+		}
+		// Header modifiers and header matches (Gateway API routes) carry
+		// Authorization and cookie values keyed by header name.
+		if strings.Contains(strings.ToLower(key), "header") {
 			return true
 		}
 		if envNameLooksSecret(key) {

@@ -4,11 +4,17 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -379,5 +385,299 @@ func TestComputeDiff_RiskLineAndRestartValueEdgeCases(t *testing.T) {
 	restart := findChange(diff, "spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]")
 	if restart == nil || restart.NewValue != "changed" {
 		t.Fatalf("non-timestamp restartedAt value recorded: %+v", restart)
+	}
+}
+
+func specTestCronJob() *batchv1.CronJob {
+	f := false
+	return &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "shop", UID: "cj", Generation: 1},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "0 * * * *",
+			Suspend:  &f,
+			JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{
+				BackoffLimit: int32Ptr(6),
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					Containers:    []corev1.Container{{Name: "job", Image: "backup:1"}},
+				}},
+			}},
+		},
+	}
+}
+
+func TestComputeDiff_CronJob(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*batchv1.CronJob)
+		wantPath    string
+		wantSummary string
+	}{
+		{
+			name:        "suspend",
+			mutate:      func(c *batchv1.CronJob) { tr := true; c.Spec.Suspend = &tr },
+			wantPath:    "spec.suspend",
+			wantSummary: "suspended",
+		},
+		{
+			name:        "schedule",
+			mutate:      func(c *batchv1.CronJob) { c.Spec.Schedule = "*/5 * * * *" },
+			wantPath:    "spec.schedule",
+			wantSummary: "schedule: 0 * * * *→*/5 * * * *",
+		},
+		{
+			name:        "job template image",
+			mutate:      func(c *batchv1.CronJob) { c.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image = "backup:2" },
+			wantPath:    "spec.jobTemplate.spec.template.spec.containers[job].image",
+			wantSummary: "image(job): backup:1→backup:2",
+		},
+		{
+			name:        "job template field without a row",
+			mutate:      func(c *batchv1.CronJob) { c.Spec.JobTemplate.Spec.BackoffLimit = int32Ptr(0) },
+			wantPath:    "spec.jobTemplate.spec.backoffLimit",
+			wantSummary: "other spec changes: spec.jobTemplate.spec.backoffLimit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldCJ := specTestCronJob()
+			newCJ := oldCJ.DeepCopy()
+			newCJ.Generation++
+			tt.mutate(newCJ)
+			diff := ComputeDiff("CronJob", oldCJ, newCJ)
+			if findChange(diff, tt.wantPath) == nil {
+				t.Fatalf("missing %s in %+v", tt.wantPath, diff)
+			}
+			if diff.Summary != tt.wantSummary {
+				t.Fatalf("summary = %q, want %q", diff.Summary, tt.wantSummary)
+			}
+		})
+	}
+}
+
+// Every scheduled run moves CronJob status; the run is recorded on its Job.
+// Only schedule updates that change CronJob health are kept.
+func TestComputeDiff_CronJobScheduleUpdates(t *testing.T) {
+	at := func(h int) *metav1.Time {
+		v := metav1.NewTime(time.Date(2026, 1, 1, h, 0, 0, 0, time.UTC))
+		return &v
+	}
+	tests := []struct {
+		name        string
+		old, new    *metav1.Time
+		wantSummary string
+	}{
+		{name: "routine tick", old: at(1), new: at(2)},
+		{name: "first run", old: nil, new: at(1), wantSummary: "first run scheduled"},
+		{name: "after stale gap", old: at(0), new: at(30), wantSummary: "scheduled after 30h0m0s without a run"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldCJ := specTestCronJob()
+			oldCJ.Status.LastScheduleTime = tt.old
+			newCJ := oldCJ.DeepCopy()
+			newCJ.Status.LastScheduleTime = tt.new
+			newCJ.Status.Active = []corev1.ObjectReference{{Name: "backup-1"}}
+			diff := ComputeDiff("CronJob", oldCJ, newCJ)
+			if tt.wantSummary == "" {
+				if diff != nil {
+					t.Fatalf("expected routine tick to be dropped, got %+v", diff)
+				}
+				return
+			}
+			if diff == nil || diff.Summary != tt.wantSummary {
+				t.Fatalf("summary = %+v, want %q", diff, tt.wantSummary)
+			}
+		})
+	}
+}
+
+func TestComputeDiff_PDB(t *testing.T) {
+	one := intstr.FromInt(1)
+	base := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "pdb", Generation: 1},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MinAvailable: &one,
+			Selector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+		},
+		Status: policyv1.PodDisruptionBudgetStatus{DisruptionsAllowed: 2, CurrentHealthy: 3},
+	}
+
+	spec := base.DeepCopy()
+	spec.Generation = 2
+	spec.Spec.MinAvailable = intOrStrPtr("100%")
+	diff := ComputeDiff("PodDisruptionBudget", base, spec)
+	if diff == nil || diff.Summary != "minAvailable: 1→100%" {
+		t.Fatalf("summary = %+v", diff)
+	}
+
+	// disruptionsAllowed flips on every routine pod replacement.
+	blocked := base.DeepCopy()
+	blocked.Status.DisruptionsAllowed = 0
+	blocked.Status.CurrentHealthy = 2
+	if diff := ComputeDiff("PodDisruptionBudget", base, blocked); diff != nil {
+		t.Fatalf("status churn must not record, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_HPAScalingConfig(t *testing.T) {
+	util := func(v int32) *int32 { return &v }
+	base := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "hpa", Generation: 1},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
+			MinReplicas:    int32Ptr(2),
+			MaxReplicas:    10,
+			Metrics: []autoscalingv2.MetricSpec{{
+				Type:     autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{Name: corev1.ResourceCPU, Target: autoscalingv2.MetricTarget{Type: autoscalingv2.UtilizationMetricType, AverageUtilization: util(80)}},
+			}},
+		},
+	}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.Metrics[0].Resource.Target.AverageUtilization = util(50)
+	// As stored by the API server: setting scaleDown alone defaults scaleUp.
+	maxPolicy := autoscalingv2.MaxChangePolicySelect
+	updated.Spec.Behavior = &autoscalingv2.HorizontalPodAutoscalerBehavior{
+		ScaleDown: &autoscalingv2.HPAScalingRules{StabilizationWindowSeconds: util(0), SelectPolicy: &maxPolicy, Policies: []autoscalingv2.HPAScalingPolicy{{Type: autoscalingv2.PercentScalingPolicy, Value: 100, PeriodSeconds: 15}}},
+		ScaleUp: &autoscalingv2.HPAScalingRules{StabilizationWindowSeconds: util(0), SelectPolicy: &maxPolicy, Policies: []autoscalingv2.HPAScalingPolicy{
+			{Type: autoscalingv2.PodsScalingPolicy, Value: 4, PeriodSeconds: 15},
+			{Type: autoscalingv2.PercentScalingPolicy, Value: 100, PeriodSeconds: 15},
+		}},
+	}
+
+	diff := ComputeDiff("HorizontalPodAutoscaler", base, updated)
+	if diff == nil || diff.Summary != "cpu target: 80%→50%, scaleDown behavior changed" {
+		t.Fatalf("summary = %+v", diff)
+	}
+	if change := findChange(diff, "spec.behavior.scaleDown"); change == nil || change.OldValue != hpaDefaultScaleDown || change.NewValue != "stabilization=0s, select=Max, Percent 100/15s" {
+		t.Fatalf("behavior row = %+v", change)
+	}
+}
+
+func TestComputeDiff_ServicePolicyAndBackstop(t *testing.T) {
+	base := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "svc"},
+		Spec: corev1.ServiceSpec{
+			Type:                  corev1.ServiceTypeLoadBalancer,
+			Selector:              map[string]string{"app": "web"},
+			ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyCluster,
+			SessionAffinity:       corev1.ServiceAffinityNone,
+		},
+	}
+	updated := base.DeepCopy()
+	updated.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+	updated.Spec.SessionAffinity = corev1.ServiceAffinityClientIP
+	updated.Spec.SessionAffinityConfig = &corev1.SessionAffinityConfig{ClientIP: &corev1.ClientIPConfig{TimeoutSeconds: int32Ptr(10800)}}
+	updated.Spec.AllocateLoadBalancerNodePorts = func() *bool { f := false; return &f }()
+
+	diff := ComputeDiff("Service", base, updated)
+	if diff == nil || diff.Summary != "externalTrafficPolicy: Cluster→Local, sessionAffinity: None→ClientIP, other spec changes: spec.allocateLoadBalancerNodePorts" {
+		t.Fatalf("summary = %+v", diff)
+	}
+
+	// Services have no generation, so status-only updates reach the backstop
+	// and must find nothing.
+	lb := base.DeepCopy()
+	lb.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.1"}}
+	diff = ComputeDiff("Service", base, lb)
+	if diff == nil || strings.Contains(diff.Summary, "other spec changes") {
+		t.Fatalf("summary = %+v", diff)
+	}
+}
+
+func TestComputeDiff_IngressClass(t *testing.T) {
+	class := func(s string) *string { return &s }
+	base := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "web", UID: "ing", Generation: 1}, Spec: networkingv1.IngressSpec{IngressClassName: class("nginx")}}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.IngressClassName = class("alb")
+	diff := ComputeDiff("Ingress", base, updated)
+	if diff == nil || diff.Summary != "ingressClassName: nginx→alb" {
+		t.Fatalf("summary = %+v", diff)
+	}
+}
+
+// A traffic shift keeps the rule count, which is all diffGatewayRoute compares.
+func TestComputeDiff_HTTPRouteBackendWeightShift(t *testing.T) {
+	route := func(gen int64, stable, canary int64) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata":   map[string]any{"name": "web", "uid": "r", "generation": gen},
+			"spec": map[string]any{"rules": []any{map[string]any{"backendRefs": []any{
+				map[string]any{"name": "web-stable", "port": int64(80), "weight": stable},
+				map[string]any{"name": "web-canary", "port": int64(80), "weight": canary},
+			}}}},
+		}}
+	}
+	diff := ComputeDiff("HTTPRoute", route(1, 90, 10), route(2, 10, 90))
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	change := findChange(diff, "spec.rules[0].backendRefs[web-canary].weight")
+	if change == nil || change.OldValue != int64(10) || change.NewValue != int64(90) {
+		t.Fatalf("weight row = %+v in %+v", change, diff)
+	}
+}
+
+func TestComputeDiff_RolloutStrategyAndTemplate(t *testing.T) {
+	rollout := func(gen int64, maxUnavailable any, steps []any, image, env string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Rollout",
+			"metadata":   map[string]any{"name": "web", "uid": "ro", "generation": gen},
+			"spec": map[string]any{
+				"strategy": map[string]any{"canary": map[string]any{"maxUnavailable": maxUnavailable, "steps": steps}},
+				"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
+					"name": "web", "image": image, "env": []any{map[string]any{"name": "MODE", "value": env}},
+				}}}},
+			},
+		}}
+	}
+	oldRO := rollout(1, int64(1), canarySteps(4), "web:1", "a")
+	newRO := rollout(2, "100%", canarySteps(2), "web:2", "b")
+
+	diff := ComputeDiff("Rollout", oldRO, newRO)
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	for _, want := range []string{"maxUnavailable: 1→100%", "canary steps changed (4→2 steps)", "image: web:2"} {
+		if !strings.Contains(diff.Summary, want) {
+			t.Errorf("summary %q missing %q", diff.Summary, want)
+		}
+	}
+	if findChange(diff, "spec.template.spec.containers[web].env[MODE]") == nil {
+		t.Errorf("env row missing: %+v", diff)
+	}
+	if strings.Contains(diff.Summary, "other spec changes") {
+		t.Errorf("tracked fields leaked into the backstop: %q", diff.Summary)
+	}
+}
+
+func TestComputeDiff_HTTPRouteHeaderValuesNeverShown(t *testing.T) {
+	route := func(gen int64, auth string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata":   map[string]any{"name": "web", "uid": "r", "generation": gen},
+			"spec": map[string]any{"rules": []any{map[string]any{
+				"filters": []any{map[string]any{"type": "RequestHeaderModifier", "requestHeaderModifier": map[string]any{
+					"set": []any{map[string]any{"name": "Authorization", "value": auth}},
+				}}},
+				"matches": []any{map[string]any{"headers": []any{map[string]any{"name": "X-Token", "value": auth + "-match"}}}},
+			}}},
+		}}
+	}
+	diff := ComputeDiff("HTTPRoute", route(1, "Basic dXNlcjpvbGQ="), route(2, "Basic dXNlcjpuZXc="))
+	if diff == nil || findChange(diff, "spec.rules[0].filters[0].requestHeaderModifier.set[Authorization].value") == nil {
+		t.Fatalf("expected the header change to be reported, got %+v", diff)
+	}
+	rendered := fmt.Sprintf("%+v", diff)
+	for _, secret := range []string{"dXNlcjpvbGQ", "dXNlcjpuZXc"} {
+		if strings.Contains(rendered, secret) {
+			t.Fatalf("diff leaked %q: %s", secret, rendered)
+		}
 	}
 }

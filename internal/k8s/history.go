@@ -19,6 +19,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -39,6 +40,10 @@ type kindDiffFunc func(oldObj, newObj any) ([]FieldChange, []string)
 type kindDiffRegistration struct {
 	group string
 	diff  kindDiffFunc
+	// specBackstop reports spec changes the diff function has no row for
+	// (see untrackedSpecChanges). Set it only for kinds whose diff function
+	// uses the same path notation, or the backstop repeats its rows.
+	specBackstop bool
 }
 
 // diffFunctions is the single source of truth for kinds with audited diff
@@ -51,18 +56,20 @@ type kindDiffRegistration struct {
 // Versions within a group intentionally share a differ; a same-kind object
 // from any other group uses the generic unstructured differ instead.
 var diffFunctions = map[string]kindDiffRegistration{
-	"Deployment":                     {group: "apps", diff: diffDeployment},
+	"Deployment":                     {group: "apps", diff: diffDeployment, specBackstop: true},
 	"Pod":                            {group: "", diff: diffPod},
-	"Service":                        {group: "", diff: diffService},
+	"Service":                        {group: "", diff: chainDiffs(diffService, diffServicePolicy), specBackstop: true},
 	"ConfigMap":                      {group: "", diff: diffConfigMap},
 	"Secret":                         {group: "", diff: diffSecret},
 	"SealedSecret":                   {group: "bitnami.com", diff: diffSealedSecret},
-	"Ingress":                        {group: "networking.k8s.io", diff: diffIngress},
+	"Ingress":                        {group: "networking.k8s.io", diff: chainDiffs(diffIngress, diffIngressRouting), specBackstop: true},
 	"ReplicaSet":                     {group: "apps", diff: diffReplicaSet},
-	"DaemonSet":                      {group: "apps", diff: diffDaemonSet},
-	"StatefulSet":                    {group: "apps", diff: diffStatefulSet},
-	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: diffHPA},
-	"Job":                            {group: "batch", diff: diffJob},
+	"DaemonSet":                      {group: "apps", diff: diffDaemonSet, specBackstop: true},
+	"StatefulSet":                    {group: "apps", diff: diffStatefulSet, specBackstop: true},
+	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: chainDiffs(diffHPA, diffHPAScalingConfig), specBackstop: true},
+	"Job":                            {group: "batch", diff: diffJob, specBackstop: true},
+	"CronJob":                        {group: "batch", diff: diffCronJob, specBackstop: true},
+	"PodDisruptionBudget":            {group: "policy", diff: diffPDB, specBackstop: true},
 	"Node":                           {group: "", diff: diffNode},
 	"PersistentVolumeClaim":          {group: "", diff: diffPVC},
 	"Application":                    {group: "argoproj.io", diff: diffApplication},
@@ -73,17 +80,17 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"HelmRepository":                 {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") }},
 	"Gateway":                        {group: "gateway.networking.k8s.io", diff: diffGateway},
 	"GatewayClass":                   {group: "gateway.networking.k8s.io", diff: diffGatewayClass},
-	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"UDPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
+	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
+	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
+	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
+	"UDPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
+	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
 	"ReferenceGrant":                 {group: "gateway.networking.k8s.io", diff: diffReferenceGrant},
 	"ResourceQuota":                  {group: "", diff: diffResourceQuota},
 	"LimitRange":                     {group: "", diff: diffLimitRange},
 	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
 	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
-	"Rollout":                        {group: "argoproj.io", diff: diffRollout},
+	"Rollout":                        {group: "argoproj.io", diff: chainDiffs(diffRollout, diffRolloutSpec), specBackstop: true},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and
@@ -119,6 +126,11 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		newObj = diffInputForUnstructured(kind, newU)
 	}
 	changes, summaryParts := registration.diff(oldObj, newObj)
+	if registration.specBackstop {
+		untracked, untrackedSummary := untrackedSpecChanges(oldObj, newObj, changes)
+		changes = append(changes, untracked...)
+		summaryParts = append(summaryParts, untrackedSummary...)
+	}
 	if len(changes) == 0 {
 		return nil
 	}
@@ -157,6 +169,10 @@ func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
 		return typedOrUnstructured[autoscalingv2.HorizontalPodAutoscaler](u)
 	case "Job":
 		return typedOrUnstructured[batchv1.Job](u)
+	case "CronJob":
+		return typedOrUnstructured[batchv1.CronJob](u)
+	case "PodDisruptionBudget":
+		return typedOrUnstructured[policyv1.PodDisruptionBudget](u)
 	case "Node":
 		return typedOrUnstructured[corev1.Node](u)
 	case "PersistentVolumeClaim":
@@ -451,10 +467,6 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
 		}
 	}
-
-	untrackedChanges, untrackedSummary := untrackedSpecChanges(oldDep.ObjectMeta, newDep.ObjectMeta, &oldDep.Spec, &newDep.Spec, changes)
-	changes = append(changes, untrackedChanges...)
-	summary = append(summary, untrackedSummary...)
 
 	return changes, summary
 }
@@ -1799,10 +1811,6 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
-	untrackedChanges, untrackedSummary := untrackedSpecChanges(oldDS.ObjectMeta, newDS.ObjectMeta, &oldDS.Spec, &newDS.Spec, changes)
-	changes = append(changes, untrackedChanges...)
-	summary = append(summary, untrackedSummary...)
-
 	return changes, summary
 }
 
@@ -1893,10 +1901,6 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 			summary = append(summary, fmt.Sprintf("available: %d→%d", oldSTS.Status.AvailableReplicas, newSTS.Status.AvailableReplicas))
 		}
 	}
-
-	untrackedChanges, untrackedSummary := untrackedSpecChanges(oldSTS.ObjectMeta, newSTS.ObjectMeta, &oldSTS.Spec, &newSTS.Spec, changes)
-	changes = append(changes, untrackedChanges...)
-	summary = append(summary, untrackedSummary...)
 
 	return changes, summary
 }
