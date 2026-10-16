@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -184,6 +185,10 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 	if len(policies) == 0 || len(services) == 0 || len(pods) == 0 {
 		return nil
 	}
+	isolation, ok := newPodIsolation(policies)
+	if !ok {
+		return nil
+	}
 	impacts := map[*networkingv1.NetworkPolicy]*denyAllIngressImpact{}
 	for _, svc := range services {
 		if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
@@ -195,23 +200,30 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 				backends = append(backends, pod)
 			}
 		}
-		denying, ok := policiesDenyingAllIngress(backends, policies)
-		if !ok {
+		if len(backends) == 0 {
 			continue
 		}
-		egressDenied := everyPodDeniedAllEgress(backends, policies)
-		for _, np := range denying {
-			impact := impacts[np]
-			if impact == nil {
-				impact = &denyAllIngressImpact{pods: map[string]bool{}, egressDenied: true}
-				impacts[np] = impact
-			}
-			impact.services = append(impact.services, svc.Name)
-			impact.egressDenied = impact.egressDenied && egressDenied
-			for _, pod := range backends {
-				if selects, _ := netpol.Selects(np, pod); selects {
-					impact.pods[pod.Name] = true
+		allDenied, egressDenied := true, true
+		for _, pod := range backends {
+			iso := isolation.of(pod)
+			allDenied = allDenied && len(iso.ingressDenying) > 0
+			egressDenied = egressDenied && iso.egressDenied
+		}
+		if !allDenied {
+			continue
+		}
+		for _, pod := range backends {
+			for _, np := range isolation.of(pod).ingressDenying {
+				impact := impacts[np]
+				if impact == nil {
+					impact = &denyAllIngressImpact{pods: map[string]bool{}, egressDenied: true}
+					impacts[np] = impact
 				}
+				if n := len(impact.services); n == 0 || impact.services[n-1] != svc.Name {
+					impact.services = append(impact.services, svc.Name)
+				}
+				impact.egressDenied = impact.egressDenied && egressDenied
+				impact.pods[pod.Name] = true
 			}
 		}
 	}
@@ -229,78 +241,85 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 	return out
 }
 
-// policiesDenyingAllIngress returns the Ingress-isolating policies selecting
-// the pods when every pod is denied all inbound traffic, and ok=false
-// otherwise. Any unparseable selector among the Ingress-isolating policies makes
-// the answer undecidable — that policy might be the one allowing traffic — so
-// it also returns ok=false.
-func policiesDenyingAllIngress(pods []*corev1.Pod, policies []*networkingv1.NetworkPolicy) ([]*networkingv1.NetworkPolicy, bool) {
-	if len(pods) == 0 {
-		return nil, false
-	}
-	seen := map[*networkingv1.NetworkPolicy]bool{}
-	var denying []*networkingv1.NetworkPolicy
-	for _, pod := range pods {
-		// hostNetwork pods sit outside pod-network policy semantics, which
-		// vary by network plugin.
-		if pod.Spec.HostNetwork {
-			return nil, false
-		}
-		selected := false
-		for _, np := range policies {
-			if !netpol.EffectivePolicyTypes(np).Ingress {
-				continue
-			}
-			selects, err := netpol.Selects(np, pod)
-			if err != nil {
-				return nil, false
-			}
-			if !selects {
-				continue
-			}
-			if len(np.Spec.Ingress) > 0 {
-				return nil, false
-			}
-			selected = true
-			if !seen[np] {
-				seen[np] = true
-				denying = append(denying, np)
-			}
-		}
-		if !selected {
-			return nil, false
-		}
-	}
-	return denying, true
+type compiledPolicy struct {
+	policy   *networkingv1.NetworkPolicy
+	selector labels.Selector
+	types    netpol.PolicyTypes
 }
 
-// everyPodDeniedAllEgress reports whether each pod is selected by an
-// Egress-isolating policy and no policy selecting it has an egress rule. An
-// unparseable selector means "can't say", which reads as false.
-func everyPodDeniedAllEgress(pods []*corev1.Pod, policies []*networkingv1.NetworkPolicy) bool {
-	for _, pod := range pods {
-		selected := false
-		for _, np := range policies {
-			if !netpol.EffectivePolicyTypes(np).Egress {
-				continue
+type podIsolationResult struct {
+	// ingressDenying lists the Ingress-isolating policies selecting the pod
+	// when none of them has an ingress rule; empty when any inbound traffic
+	// may be allowed.
+	ingressDenying []*networkingv1.NetworkPolicy
+	egressDenied   bool
+}
+
+// podIsolation evaluates one namespace's policies per pod, compiling each
+// selector once and memoizing per pod, since a pod can back several Services.
+type podIsolation struct {
+	policies []compiledPolicy
+	// egressUndecidable is set when an Egress-only policy's selector can't be
+	// parsed: the egress claim is then never made.
+	egressUndecidable bool
+	memo              map[*corev1.Pod]podIsolationResult
+}
+
+// newPodIsolation returns ok=false when an Ingress-isolating policy's selector
+// can't be parsed: that policy might be the one allowing traffic, so no
+// deny-all verdict can be built for the namespace.
+func newPodIsolation(policies []*networkingv1.NetworkPolicy) (*podIsolation, bool) {
+	iso := &podIsolation{memo: map[*corev1.Pod]podIsolationResult{}}
+	for _, np := range policies {
+		types := netpol.EffectivePolicyTypes(np)
+		selector, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+		if err != nil {
+			if types.Ingress {
+				return nil, false
 			}
-			selects, err := netpol.Selects(np, pod)
-			if err != nil {
-				return false
-			}
-			if !selects {
-				continue
-			}
-			if len(np.Spec.Egress) > 0 {
-				return false
-			}
-			selected = true
+			iso.egressUndecidable = true
+			continue
 		}
-		if !selected {
-			return false
-		}
+		iso.policies = append(iso.policies, compiledPolicy{policy: np, selector: selector, types: types})
 	}
-	return len(pods) > 0
+	return iso, true
+}
+
+func (iso *podIsolation) of(pod *corev1.Pod) podIsolationResult {
+	if result, ok := iso.memo[pod]; ok {
+		return result
+	}
+	var result podIsolationResult
+	// hostNetwork pods sit outside pod-network policy semantics, which vary
+	// by network plugin.
+	if !pod.Spec.HostNetwork {
+		podLabels := labels.Set(pod.Labels)
+		ingressAllowed, egressSelected, egressAllowed := false, false, iso.egressUndecidable
+		var denying []*networkingv1.NetworkPolicy
+		for _, cp := range iso.policies {
+			if cp.policy.Namespace != pod.Namespace || !cp.selector.Matches(podLabels) {
+				continue
+			}
+			if cp.types.Ingress {
+				if len(cp.policy.Spec.Ingress) > 0 {
+					ingressAllowed = true
+				}
+				denying = append(denying, cp.policy)
+			}
+			if cp.types.Egress {
+				egressSelected = true
+				if len(cp.policy.Spec.Egress) > 0 {
+					egressAllowed = true
+				}
+			}
+		}
+		if !ingressAllowed {
+			result.ingressDenying = denying
+		}
+		result.egressDenied = egressSelected && !egressAllowed
+	}
+	iso.memo[pod] = result
+	return result
 }
 
 func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact, now time.Time) Detection {

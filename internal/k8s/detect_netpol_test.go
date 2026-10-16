@@ -226,6 +226,15 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	if len(ingress) != 1 || strings.Contains(ingress[0].Message, "outbound") {
 		t.Fatalf("ingress-only deny must not claim outbound is blocked: %+v", ingress)
 	}
+
+	brokenEgress := netpolTestPolicy("broken-egress", nil, egressOnly)
+	brokenEgress.Spec.PodSelector = metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "app", Operator: "Bogus"}}}
+	undecided := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
+		netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress), brokenEgress,
+	}, services[:1], pods, time.Now())
+	if len(undecided) != 1 || strings.Contains(undecided[0].Message, "outbound") {
+		t.Fatalf("an unparseable egress policy might allow outbound traffic, so no outbound claim: %+v", undecided)
+	}
 }
 
 func TestDetectProblemsIncludesNetworkPolicyDenyAll(t *testing.T) {
