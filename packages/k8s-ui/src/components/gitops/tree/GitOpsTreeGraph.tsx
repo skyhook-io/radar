@@ -124,19 +124,7 @@ function GitOpsTreeGraphInner({
   useEffect(() => {
     if (preset !== 'compact') setExpandedGroups(new Set())
   }, [preset])
-  const causeByRef = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const issue of issues ?? []) {
-      const cause = issue.cause
-      const ref = issue.refs?.[0]
-      if (!cause || !ref) continue
-      const key = refKey(ref)
-      // First match wins — issues arrive ranked by severity, so a node
-      // that's the subject of multiple issues keeps its most severe cause.
-      if (!map.has(key)) map.set(key, cause)
-    }
-    return map
-  }, [issues])
+  const causeByRef = useMemo(() => buildCauseByRef(issues), [issues])
   const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups, causeByRef), [tree, preset, query, filters, expandedGroups, causeByRef])
 
   useEffect(() => {
@@ -330,7 +318,7 @@ function getEdgeColor(type: string): string {
   }
 }
 
-function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, string>): { nodes: Node[]; edges: Edge[] } {
+function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, NodeCause>): { nodes: Node[]; edges: Edge[] } {
   if (!tree) return { nodes: [], edges: [] }
   const visibleTree = applyGraphFilters(applyPreset(tree, preset, expandedGroups), filters)
   const byID = new Map(visibleTree.nodes.map(node => [node.id, node]))
@@ -550,7 +538,7 @@ function positionRanks(ranks: Map<number, string[]>, nodes: Map<string, GitOpsTr
   return positioned
 }
 
-const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: string }>>) {
+const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: NodeCause }>>) {
   const node = data.node
   const kind = normalizeDisplayKind(node)
   const status = normalizeHealth(node.topologyStatus)
@@ -559,8 +547,6 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
   const KindIcon = getTopologyIcon(kind)
-  // Only unhealthy nodes carry a cause worth surfacing — a healthy node
-  // matched by a stale/unrelated issue ref shouldn't show a tooltip.
   const cause = nodeCause(node, data.cause)
   // Only declared resources can carry the controller's verdict, so only
   // there does "this one is Radar's" mean anything. Generated children
@@ -745,13 +731,42 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   return chips
 }
 
-// nodeCause returns the matched issue's cause when the node's hover should
-// show it: only on a node that is actually failing (Degraded or Missing,
-// topology 'unhealthy'). 'degraded' is also where Progressing and Suspended
-// land, and a cause there reads as "this is broken" on a rollout in flight
-// or a deliberate pause.
-export function nodeCause(node: GitOpsTreeNode, cause?: string): string | undefined {
-  return normalizeHealth(node.topologyStatus) === 'unhealthy' ? cause : undefined
+export interface NodeCause {
+  text: string
+  // An issue that names a resource as a lead without saying it failed: Argo's
+  // Warning-event lead (Go: degradedResourceFromEvents) and the Flux
+  // source/dependency blockers (Go: attachFluxBlocker, fluxSourceWarnings).
+  lead: boolean
+}
+
+const LEAD_REASONS = new Set(['PossibleCause', 'SourceNotReady', 'ArtifactFailed', 'DependencyNotReady'])
+
+export function buildCauseByRef(issues?: GitOpsIssue[]): Map<string, NodeCause> {
+  const map = new Map<string, NodeCause>()
+  for (const issue of issues ?? []) {
+    const cause = issue.cause
+    const ref = issue.refs?.[0]
+    if (!cause || !ref) continue
+    const key = refKey(ref)
+    // First match wins — issues arrive ranked by severity, so a node
+    // that's the subject of multiple issues keeps its most severe cause.
+    if (!map.has(key)) map.set(key, { text: cause, lead: LEAD_REASONS.has(issue.reason) })
+  }
+  return map
+}
+
+// A failing node (topology 'unhealthy') shows any cause as is. A failure
+// verdict on a Progressing node would read as "this is broken" on a rollout
+// in flight, so elsewhere only a lead shows, framed as possible. That is where
+// leads land: the Warning-event lead is only emitted when no resource reads
+// as failing, and a Flux source mid-retry reads Progressing while its fetch
+// error is still the answer. Healthy and Suspended nodes show nothing.
+export function nodeCause(node: GitOpsTreeNode, cause?: NodeCause): string | undefined {
+  if (!cause) return undefined
+  const status = normalizeHealth(node.topologyStatus)
+  if (status === 'unhealthy') return cause.text
+  if (!cause.lead || status === 'healthy' || node.health === 'Suspended') return undefined
+  return `Possible cause: ${cause.text}`
 }
 
 // The subtitle is the node's one line of prose, and sync, health and the
