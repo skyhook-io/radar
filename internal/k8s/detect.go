@@ -96,12 +96,15 @@ type Detection struct {
 	Reason                     string
 	Message                    string
 	RawMessage                 string
-	Age                        string // human-readable
-	AgeSeconds                 int64  // for sorting
-	Duration                   string // how long the problem has persisted
-	DurationSeconds            int64
-	OnsetAt                    time.Time
-	ResourceCreatedAt          time.Time
+	// MessageSource is issuesapi.MessageSourceRadar when Message is Radar's
+	// own summary rather than text from Kubernetes or a controller.
+	MessageSource     string
+	Age               string // human-readable
+	AgeSeconds        int64  // for sorting
+	Duration          string // how long the problem has persisted
+	DurationSeconds   int64
+	OnsetAt           time.Time
+	ResourceCreatedAt time.Time
 	// OnsetUnknown is set when the snapshot proves the issue exists but carries
 	// no defensible evidence for when the failing state began. Resource age may
 	// still be populated independently.

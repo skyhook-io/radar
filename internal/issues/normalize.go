@@ -167,6 +167,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		Reason:               reason,
 		Message:              p.Message,
 		RawMessage:           p.RawMessage,
+		MessageSource:        p.MessageSource,
 		Cause:                cause,
 		Action:               action,
 		ConditionalCleanup:   cleanup,

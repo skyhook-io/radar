@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/netpol"
 )
@@ -519,5 +521,109 @@ func TestDenyAllIngressAffectedRefs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got[0].AffectedRefs, want) {
 		t.Fatalf("AffectedRefs = %+v, want %+v", got[0].AffectedRefs, want)
+	}
+}
+
+// The cause names the Service, the pod count and the outbound effect on its
+// own, because the UI shows it instead of the message.
+func TestDenyAllIngressCauseStandsAlone(t *testing.T) {
+	pods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true), netpolTestPod("rec-2", map[string]string{"app": "rec"}, true)}
+	got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress)},
+		[]*corev1.Service{netpolTestService("recommendation", map[string]string{"app": "rec"})}, pods, denyAllEnv{}, time.Now())
+	if len(got) != 1 {
+		t.Fatalf("got %d detections", len(got))
+	}
+	for _, want := range []string{"leaves the 2 pods behind Service recommendation with no allowed inbound traffic", "outbound traffic, including DNS, would be blocked too"} {
+		if !strings.Contains(got[0].Cause, want) {
+			t.Errorf("cause %q missing %q", got[0].Cause, want)
+		}
+	}
+	if got[0].MessageSource != issuesapi.MessageSourceRadar {
+		t.Errorf("MessageSource = %q, want radar", got[0].MessageSource)
+	}
+}
+
+func TestDenyAllIngressOnset(t *testing.T) {
+	now := time.Now()
+	pods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true)}
+	policy := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
+	policy.CreationTimestamp = metav1.NewTime(now.Add(-10 * time.Minute))
+	service := func(age time.Duration) []*corev1.Service {
+		s := netpolTestService("recommendation", map[string]string{"app": "rec"})
+		s.CreationTimestamp = metav1.NewTime(now.Add(-age))
+		return []*corev1.Service{s}
+	}
+	at := func(age time.Duration) func(*networkingv1.NetworkPolicy) (time.Time, bool) {
+		return func(*networkingv1.NetworkPolicy) (time.Time, bool) { return now.Add(-age), true }
+	}
+	unknown := func(*networkingv1.NetworkPolicy) (time.Time, bool) { return time.Time{}, false }
+
+	tests := []struct {
+		name       string
+		services   []*corev1.Service
+		onset      func(*networkingv1.NetworkPolicy) (time.Time, bool)
+		wantOnset  time.Duration // age; 0 = unknown
+		wantTiming string
+	}{
+		{"policy unchanged since creation", service(time.Hour), at(10 * time.Minute), 10 * time.Minute, "started_at_resource_creation"},
+		{"policy spec changed later", service(time.Hour), at(3 * time.Minute), 3 * time.Minute, "started_after_resource_was_healthy"},
+		{"Service created after the policy", service(2 * time.Minute), at(10 * time.Minute), 2 * time.Minute, ""},
+		{"spec time unknown", service(time.Hour), unknown, 0, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{policy}, tt.services, pods, denyAllEnv{policyOnset: tt.onset}, now)
+			if len(got) != 1 {
+				t.Fatalf("got %d detections", len(got))
+			}
+			d := got[0]
+			if tt.wantOnset == 0 {
+				if !d.OnsetUnknown || !d.OnsetAt.IsZero() {
+					t.Errorf("onset = %v (unknown %v), want unknown", d.OnsetAt, d.OnsetUnknown)
+				}
+			} else if d.OnsetUnknown || !d.OnsetAt.Equal(now.Add(-tt.wantOnset).UTC()) {
+				t.Errorf("onset = %v (unknown %v), want %v", d.OnsetAt, d.OnsetUnknown, now.Add(-tt.wantOnset))
+			}
+			if d.IssueTiming != tt.wantTiming {
+				t.Errorf("IssueTiming = %q, want %q", d.IssueTiming, tt.wantTiming)
+			}
+		})
+	}
+}
+
+// A policy's spec time comes from its creation when never edited, else from
+// the timeline, and only when this process has watched since before the policy
+// existed.
+func TestNetworkPolicySpecSince(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(func() { timeline.ResetStore(); timeline.SetObservationStartForTest(time.Time{}) })
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	now := time.Now()
+	policy := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
+	policy.CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+
+	policy.Generation = 1
+	if got, ok := networkPolicySpecSince(policy); !ok || !got.Equal(policy.CreationTimestamp.Time) {
+		t.Fatalf("unchanged policy: got %v %v, want creation", got, ok)
+	}
+
+	policy.Generation = 2
+	edited := now.Add(-5 * time.Minute)
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+		ID: "np-edit", Timestamp: edited, Source: timeline.SourceInformer, ClusterContext: ActiveClusterContext(),
+		Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Namespace: "shop", Name: "deny-all", EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.ingress", OldValue: []string{"x"}, NewValue: []string{}}}},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	timeline.SetObservationStartForTest(now.Add(-30 * time.Minute))
+	if _, ok := networkPolicySpecSince(policy); ok {
+		t.Fatal("watched only since after the policy existed, but claimed a spec time")
+	}
+	timeline.SetObservationStartForTest(now.Add(-2 * time.Hour))
+	if got, ok := networkPolicySpecSince(policy); !ok || !got.Equal(edited) {
+		t.Fatalf("edited policy: got %v %v, want %v", got, ok, edited)
 	}
 }

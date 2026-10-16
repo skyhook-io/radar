@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // RelatedIssues returns the grouped issues whose subject OR an affected member
@@ -41,6 +42,25 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 			Ref{Group: group, Kind: kind, Namespace: namespace, Name: name})
 	}
 	return matched
+}
+
+// OtherSubject returns the issue's own subject when the issue reaches the
+// resource through another subject (a NetworkPolicy issue on the Service it
+// isolates), and nil when the issue is about the resource or its owner.
+func OtherSubject(i Issue, group, kind, namespace, name string) *Ref {
+	if Concerns(i, group, kind, namespace, name) {
+		return nil
+	}
+	return &Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name}
+}
+
+// SummarySubject is OtherSubject shaped for a resource-context issue summary.
+func SummarySubject(i Issue, group, kind, namespace, name string) *resourcecontext.ContextRef {
+	ref := OtherSubject(i, group, kind, namespace, name)
+	if ref == nil {
+		return nil
+	}
+	return &resourcecontext.ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}
 }
 
 // Concerns reports whether an issue is about the resource: its own subject,
@@ -203,6 +223,7 @@ func foldGroup(members []Issue) Issue {
 		Reason:               rep.Reason,
 		Message:              rep.Message,
 		RawMessage:           rep.RawMessage,
+		MessageSource:        rep.MessageSource,
 		Fingerprint:          rep.Fingerprint,
 		RestartCount:         rep.RestartCount,
 		LastTerminatedReason: rep.LastTerminatedReason,

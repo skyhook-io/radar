@@ -15,6 +15,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/checks"
@@ -104,11 +105,15 @@ func (s *Server) detectDiagnoseHealth(r *http.Request, kind, group, namespace, n
 		signal.HighestSeverity = issueSum.HighestSeverity
 		signal.TopReason = issueSum.TopReason
 		for _, row := range issueRows[:min(len(issueRows), maxHealthLines)] {
-			signal.Issues = append(signal.Issues, ai.HealthLine{
+			line := ai.HealthLine{
 				Severity: string(row.Severity),
 				Reason:   row.Reason,
 				Message:  capHealthMessage(row.Message),
-			})
+			}
+			if ref := issues.OtherSubject(row, gvk.Group, canonicalKind, namespace, name); ref != nil {
+				line.Subject = ref.Kind + " " + strings.TrimPrefix(ref.Namespace+"/"+ref.Name, "/")
+			}
+			signal.Issues = append(signal.Issues, line)
 		}
 	}
 	if summary := resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{IssueCount: issueCount}); summary != nil {

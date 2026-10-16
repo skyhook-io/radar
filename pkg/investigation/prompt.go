@@ -93,6 +93,9 @@ type HealthLine struct {
 	Severity string `json:"severity,omitempty"`
 	Reason   string `json:"reason,omitempty"`  // issue Reason / audit CheckID
 	Message  string `json:"message,omitempty"` // human detail, capped
+	// Subject names the resource an issue is about when it isn't the
+	// investigated one ("NetworkPolicy shop/deny-all").
+	Subject string `json:"subject,omitempty"`
 }
 
 // MetricsAvailability is what the investigation prompt needs to know about
@@ -343,6 +346,9 @@ func healthFrame(target string, health *HealthSignal) string {
 		b.WriteString(".")
 		for _, line := range health.Issues {
 			fmt.Fprintf(&b, " [%s] %s", line.Severity, line.Reason)
+			if line.Subject != "" {
+				fmt.Fprintf(&b, " (on %s)", line.Subject)
+			}
 			if line.Message != "" {
 				fmt.Fprintf(&b, ": %s", line.Message)
 			}

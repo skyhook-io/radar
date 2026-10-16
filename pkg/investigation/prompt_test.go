@@ -246,3 +246,13 @@ func TestExplanationPromptPreservesHealthyAndInconclusive(t *testing.T) {
 		}
 	}
 }
+
+// An issue about another resource names it, so the agent knows where to look.
+func TestHealthFrameNamesAnIssuesOtherSubject(t *testing.T) {
+	frame := healthFrame("Service shop/recommendation", &HealthSignal{IssueCount: 1, Issues: []HealthLine{{
+		Severity: "warning", Reason: "NetworkPolicy denies all ingress", Subject: "NetworkPolicy shop/deny-all",
+	}}})
+	if !strings.Contains(frame, "[warning] NetworkPolicy denies all ingress (on NetworkPolicy shop/deny-all)") {
+		t.Fatalf("frame = %q", frame)
+	}
+}

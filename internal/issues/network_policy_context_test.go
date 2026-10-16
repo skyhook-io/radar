@@ -129,3 +129,21 @@ func TestRelatedIssuesFromRedactsIsolationLinks(t *testing.T) {
 		}
 	}
 }
+
+// A resource's issue summary names the policy when the top issue is about it,
+// so an agent reading the Service's context needs no second lookup.
+func TestSummarySubjectNamesTheOtherSubject(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{netpolDetection(netpolAffected...)}}
+	readAll := RelatedIssueOptions{CanReadRelated: func(Ref) bool { return true }}
+	got := RelatedIssues(p, readAll, "", "Service", "shop", "recommendation")
+	if len(got) != 1 {
+		t.Fatalf("RelatedIssues = %d, want 1", len(got))
+	}
+	ref := SummarySubject(got[0], "", "Service", "shop", "recommendation")
+	if ref == nil || ref.Kind != "NetworkPolicy" || ref.Name != "deny-all" || ref.Group != "networking.k8s.io" {
+		t.Fatalf("SummarySubject = %+v, want the NetworkPolicy", ref)
+	}
+	if SummarySubject(got[0], "networking.k8s.io", "NetworkPolicy", "shop", "deny-all") != nil {
+		t.Error("the policy's own summary named itself as another subject")
+	}
+}

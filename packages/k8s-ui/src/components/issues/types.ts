@@ -201,6 +201,10 @@ export interface Issue {
   reason: string;
   message?: string;
   raw_message?: string;
+  /** 'radar' when `message` is Radar's own summary rather than text from
+   *  Kubernetes or a controller. Such a message is never shown as raw output;
+   *  the server writes a `cause` that stands without it. */
+  message_source?: 'radar';
   /** Parsed domain diagnosis: plain-English cause, suggested next step, and
    *  an optional structured one-click fix.
    *  Server-emitted (omitempty); empty for issues without a parser. */

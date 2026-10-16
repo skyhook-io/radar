@@ -145,6 +145,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		Count:           len(matched),
 		HighestSeverity: string(matched[0].Severity),
 		TopReason:       matched[0].Reason,
+		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
 	}, matched
 }

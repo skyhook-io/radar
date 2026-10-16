@@ -184,6 +184,9 @@ func GroupOf(c Category) CategoryGroup {
 	return GroupUnknown
 }
 
+// MessageSourceRadar marks an issue Message that Radar wrote.
+const MessageSourceRadar = "radar"
+
 type Scope string
 
 const (
@@ -480,6 +483,11 @@ type Issue struct {
 	Reason        string        `json:"reason"`
 	Message       string        `json:"message,omitempty"`
 	RawMessage    string        `json:"raw_message,omitempty"`
+	// MessageSource is MessageSourceRadar when Message is Radar's own summary
+	// rather than text from Kubernetes or a controller, so a UI doesn't present
+	// it as raw output. A detector that sets it writes a Cause that stands on
+	// its own without Message.
+	MessageSource string `json:"message_source,omitempty"`
 	// Cause / Action / Remediation* carry parsed domain diagnosis. They give the
 	// Issues page + MCP a plain-English cause + next step when a detector has
 	// enough evidence. All optional — empty for issues without a parser.

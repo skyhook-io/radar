@@ -52,6 +52,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Dependent pods';
     case 'admission_webhook_backend':
       return 'Admission dependency';
+    case 'network_policy_isolates':
+      return 'Affected resources';
     default:
       return type.replace(/_/g, ' ');
   }

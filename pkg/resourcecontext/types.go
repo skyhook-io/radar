@@ -705,10 +705,14 @@ type HPAMetricSummary struct {
 // the subject resource. Pre-computed by callers and passed into the
 // generator — this package does not import internal/issues.
 type IssueSummary struct {
-	Count           int            `json:"count"`
-	HighestSeverity string         `json:"highestSeverity,omitempty"`
-	TopReason       string         `json:"topReason,omitempty"`
-	BySource        map[string]int `json:"bySource,omitempty"`
+	Count           int    `json:"count"`
+	HighestSeverity string `json:"highestSeverity,omitempty"`
+	TopReason       string `json:"topReason,omitempty"`
+	// TopSubject names the resource the top issue is about when that isn't
+	// the summarized resource, such as the NetworkPolicy isolating a Service,
+	// so a reader can go to it without another lookup.
+	TopSubject *ContextRef    `json:"topSubject,omitempty"`
+	BySource   map[string]int `json:"bySource,omitempty"`
 }
 
 // AuditSummary is a rollup of static posture findings scoped to the subject

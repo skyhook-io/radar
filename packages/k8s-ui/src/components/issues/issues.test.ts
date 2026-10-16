@@ -537,4 +537,22 @@ describe('IssueRow diagnosis raw messages', () => {
     expect(html).toContain('app path does not exist')
     expect(html).toContain('rpc error: code = Unknown desc = app path does not exist')
   })
+
+  it("doesn't present Radar's own summary as a raw error", () => {
+    const base = {
+      category: 'network_policy_block',
+      category_group: 'networking',
+      severity: 'warning' as const,
+      reason: 'NetworkPolicy denies all ingress',
+      message: 'Would block all inbound traffic to the 2 pods behind Service recommendation',
+      cause: 'NetworkPolicy deny-all leaves the 2 pods behind Service recommendation with no allowed inbound traffic.',
+    }
+    const radar = renderToString(createElement(IssueRow, { issue: mk({ ...base, message_source: 'radar' }), open: true, onToggle: () => undefined, as: 'div' }))
+    expect(radar).not.toContain('Raw error')
+    expect(radar).toContain('leaves the 2 pods behind Service recommendation')
+
+    // Without the marker the message is still treated as detector output.
+    const unmarked = renderToString(createElement(IssueRow, { issue: mk(base), open: true, onToggle: () => undefined, as: 'div' }))
+    expect(unmarked).toContain('Raw error')
+  })
 })

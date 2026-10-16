@@ -628,6 +628,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		Count:           count,
 		HighestSeverity: string(topSeverity),
 		TopReason:       topReason,
+		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
 	}, matched
 }
