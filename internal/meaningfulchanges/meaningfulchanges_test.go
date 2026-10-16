@@ -192,6 +192,65 @@ func TestRecentSurfacesWebhookConfigUpdate(t *testing.T) {
 	}
 }
 
+// A NetworkPolicy that newly isolates running pods often causes no traffic
+// symptom, so its add and its rule edits must reach the feed — including for
+// an explicit kind=NetworkPolicy query.
+func TestRecentSurfacesNetworkPolicyChanges(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+	for _, e := range []timeline.TimelineEvent{
+		{
+			ID: "np-add", Timestamp: now.Add(-time.Minute), Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1",
+			Namespace: "shop", Name: "deny-all", EventType: timeline.EventTypeAdd,
+		},
+		{
+			ID: "np-update", Timestamp: now, Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1",
+			Namespace: "shop", Name: "allow-web", EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{
+				Fields:  []timeline.FieldChange{{Path: "spec.ingress", OldValue: []string{"from anywhere ports TCP/80"}, NewValue: []string{}}},
+				Summary: "ingress rules 1→0",
+			},
+		},
+		{
+			// A Calico policy shares the kind name but is not the core object.
+			ID: "calico-add", Timestamp: now, Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: "NetworkPolicy", APIVersion: "projectcalico.org/v3",
+			Namespace: "shop", Name: "calico-policy", EventType: timeline.EventTypeAdd,
+		},
+	} {
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	for _, q := range []Query{
+		{Namespaces: []string{"shop"}, Limit: 5},
+		{Namespaces: []string{"shop"}, Kinds: []string{"networkpolicy"}, Limit: 5},
+	} {
+		result, err := Recent(context.Background(), q)
+		if err != nil {
+			t.Fatalf("Recent(%+v): %v", q, err)
+		}
+		got := map[string]issuesapi.ChangeCategory{}
+		for _, c := range result.Changes {
+			got[c.Name] = c.ChangeCategory
+		}
+		if got["deny-all"] != issuesapi.ChangeCategoryLifecycle || got["allow-web"] != issuesapi.ChangeCategorySpecConfig {
+			t.Errorf("Recent(kinds=%v) = %+v, want deny-all lifecycle and allow-web spec_config", q.Kinds, result.Changes)
+		}
+		if _, ok := got["calico-policy"]; ok {
+			t.Errorf("Recent(kinds=%v) included a Calico policy as a core NetworkPolicy change", q.Kinds)
+		}
+	}
+}
+
 // A Service delete followed by a burst of status-churn updates must still
 // surface: lifecycle events are fetched in a query of their own, so the
 // newest-N candidate window for updates cannot starve them out before

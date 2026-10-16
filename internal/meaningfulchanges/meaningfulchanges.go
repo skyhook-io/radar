@@ -169,6 +169,10 @@ var (
 		"ResourceQuota", "LimitRange",
 		"CronJob", "PodDisruptionBudget",
 		"Gateway", "HTTPRoute", "GRPCRoute", "TCPRoute", "UDPRoute", "TLSRoute", "ReferenceGrant",
+		// A policy that newly isolates running pods often has no traffic
+		// symptom (established connections survive), so the object change is
+		// the only evidence.
+		"NetworkPolicy",
 		// Cluster-scoped (namespace==""), so they surface in a cluster-wide
 		// get_changes, not in a single-namespace query — correct, since one
 		// webhook config gates admission across all namespaces.
@@ -781,6 +785,7 @@ var trackedKindGroups = map[string]string{
 	"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps",
 	"Rollout":                        "argoproj.io",
 	"Ingress":                        "networking.k8s.io",
+	"NetworkPolicy":                  "networking.k8s.io",
 	"HorizontalPodAutoscaler":        "autoscaling",
 	"Application":                    "argoproj.io",
 	"Kustomization":                  "kustomize.toolkit.fluxcd.io",

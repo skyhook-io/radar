@@ -391,7 +391,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Name: "issues",
 		Description: "Use for 'what's broken right now?': live state, not posture. Returns " +
 			"grouped critical/warning failures across workloads, Jobs/CronJobs, HPAs, " +
-			"PVCs, Nodes, references, pod startup, native Helm, and False controller conditions. " +
+			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, and False controller conditions. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
 			"`unchecked_sources` lists sources Radar couldn't check, so their issues may be " +
 			"missing; don't call them healthy. `helm` means failed or stuck Helm releases. " +

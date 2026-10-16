@@ -40,6 +40,7 @@ var recreateStashKinds = map[string]bool{
 	"Rollout":                 true,
 	"Service":                 true,
 	"Ingress":                 true,
+	"NetworkPolicy":           true,
 	"HorizontalPodAutoscaler": true,
 	"CronJob":                 true,
 	"ResourceQuota":           true,

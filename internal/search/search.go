@@ -72,6 +72,7 @@ var typedKinds = []struct {
 	{"Job", "jobs", "batch"},
 	{"CronJob", "cronjobs", "batch"},
 	{"Ingress", "ingresses", "networking.k8s.io"},
+	{"NetworkPolicy", "networkpolicies", "networking.k8s.io"},
 	{"ConfigMap", "configmaps", ""},
 	{"Secret", "secrets", ""},
 	{"PersistentVolumeClaim", "persistentvolumeclaims", ""},

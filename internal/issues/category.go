@@ -24,9 +24,8 @@ type classifyInput struct {
 // exact reason vocabulary emitted by the detector layer in internal/k8s and the
 // CRD-condition source in internal/issues.
 //
-// Coverage is intentionally partial: signals without a clean mapping (and
-// categories whose detectors don't exist yet — network policy, broad DNS)
-// fall to unknown rather than being force-fit.
+// Coverage is intentionally partial: signals without a clean mapping fall to
+// unknown rather than being force-fit.
 func Classify(in classifyInput) issuesapi.Category {
 	switch in.Source {
 	case SourceScheduling:
@@ -205,6 +204,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryDNSFailure
 	case "DuplicateEnvVar", "StaleSecretEnv":
 		return issuesapi.CategoryInvalidConfiguration
+	case k8s.NetworkPolicyDenyAllIngressReason:
+		return issuesapi.CategoryNetworkPolicyBlock
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":
