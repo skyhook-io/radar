@@ -543,87 +543,100 @@ func TestDenyAllIngressCauseStandsAlone(t *testing.T) {
 	}
 }
 
-func TestDenyAllIngressOnset(t *testing.T) {
+func TestDenyAllIngressOnsetIsApplied(t *testing.T) {
 	now := time.Now()
 	pods := []*corev1.Pod{netpolTestPod("rec-1", map[string]string{"app": "rec"}, true)}
-	policy := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
-	policy.CreationTimestamp = metav1.NewTime(now.Add(-10 * time.Minute))
-	service := func(age time.Duration) []*corev1.Service {
-		s := netpolTestService("recommendation", map[string]string{"app": "rec"})
-		s.CreationTimestamp = metav1.NewTime(now.Add(-age))
-		return []*corev1.Service{s}
+	services := []*corev1.Service{netpolTestService("recommendation", map[string]string{"app": "rec"})}
+	policies := []*networkingv1.NetworkPolicy{netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)}
+	known := func(*networkingv1.NetworkPolicy, *denyAllIngressImpact) (time.Time, string, bool) {
+		return now.Add(-3 * time.Minute), "started_at_resource_creation", true
 	}
-	at := func(age time.Duration) func(*networkingv1.NetworkPolicy) (time.Time, bool) {
-		return func(*networkingv1.NetworkPolicy) (time.Time, bool) { return now.Add(-age), true }
+	unknown := func(*networkingv1.NetworkPolicy, *denyAllIngressImpact) (time.Time, string, bool) {
+		return time.Time{}, "", false
 	}
-	unknown := func(*networkingv1.NetworkPolicy) (time.Time, bool) { return time.Time{}, false }
 
-	tests := []struct {
-		name       string
-		services   []*corev1.Service
-		onset      func(*networkingv1.NetworkPolicy) (time.Time, bool)
-		wantOnset  time.Duration // age; 0 = unknown
-		wantTiming string
-	}{
-		{"policy unchanged since creation", service(time.Hour), at(10 * time.Minute), 10 * time.Minute, "started_at_resource_creation"},
-		{"policy spec changed later", service(time.Hour), at(3 * time.Minute), 3 * time.Minute, "started_after_resource_was_healthy"},
-		{"Service created after the policy", service(2 * time.Minute), at(10 * time.Minute), 2 * time.Minute, ""},
-		{"spec time unknown", service(time.Hour), unknown, 0, ""},
+	got := denyAllIngressDetections(policies, services, pods, denyAllEnv{isolationOnset: known}, now)
+	if d := got[0]; d.OnsetUnknown || !d.OnsetAt.Equal(now.Add(-3*time.Minute).UTC()) || d.IssueTiming != "started_at_resource_creation" || d.IssueTimingBasis != "spec" {
+		t.Fatalf("known onset not applied: %+v", d)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{policy}, tt.services, pods, denyAllEnv{policyOnset: tt.onset}, now)
-			if len(got) != 1 {
-				t.Fatalf("got %d detections", len(got))
-			}
-			d := got[0]
-			if tt.wantOnset == 0 {
-				if !d.OnsetUnknown || !d.OnsetAt.IsZero() {
-					t.Errorf("onset = %v (unknown %v), want unknown", d.OnsetAt, d.OnsetUnknown)
-				}
-			} else if d.OnsetUnknown || !d.OnsetAt.Equal(now.Add(-tt.wantOnset).UTC()) {
-				t.Errorf("onset = %v (unknown %v), want %v", d.OnsetAt, d.OnsetUnknown, now.Add(-tt.wantOnset))
-			}
-			if d.IssueTiming != tt.wantTiming {
-				t.Errorf("IssueTiming = %q, want %q", d.IssueTiming, tt.wantTiming)
-			}
-		})
+	got = denyAllIngressDetections(policies, services, pods, denyAllEnv{isolationOnset: unknown}, now)
+	if d := got[0]; !d.OnsetUnknown || d.IssueTiming != "" {
+		t.Fatalf("unknown onset was claimed: %+v", d)
 	}
 }
 
-// A policy's spec time comes from its creation when never edited, else from
-// the timeline, and only when this process has watched since before the policy
-// existed.
-func TestNetworkPolicySpecSince(t *testing.T) {
-	timeline.ResetStore()
-	t.Cleanup(func() { timeline.ResetStore(); timeline.SetObservationStartForTest(time.Time{}) })
-	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
-		t.Fatalf("InitStore: %v", err)
-	}
+// The isolation is dated only when the policy is established as its start:
+// watched from before, with nothing it applies to newer, and no other policy
+// in the namespace changed afterwards.
+func TestNetworkPolicyIsolationOnset(t *testing.T) {
 	now := time.Now()
-	policy := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
-	policy.CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+	created := now.Add(-time.Hour)
+	appendEvent := func(e timeline.TimelineEvent) {
+		t.Helper()
+		e.Source, e.ClusterContext, e.Kind, e.APIVersion, e.Namespace = timeline.SourceInformer, ActiveClusterContext(), "NetworkPolicy", "networking.k8s.io/v1", "shop"
+		if err := timeline.GetStore().Append(context.Background(), e); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	setup := func(t *testing.T, observedFrom time.Time) {
+		t.Helper()
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 50}); err != nil {
+			t.Fatalf("InitStore: %v", err)
+		}
+		timeline.SetObservationStartForTest(observedFrom)
+	}
+	t.Cleanup(func() { timeline.ResetStore(); timeline.SetObservationStartForTest(time.Time{}) })
+	policy := func(generation int64) *networkingv1.NetworkPolicy {
+		np := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
+		np.CreationTimestamp, np.Generation = metav1.NewTime(created), generation
+		return np
+	}
+	olderObjects := &denyAllIngressImpact{lastCreated: created.Add(-time.Hour)}
+	removeRules := &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.ingress", OldValue: []any{"from anywhere ports TCP/80"}, NewValue: []any{}}}}
 
-	policy.Generation = 1
-	if got, ok := networkPolicySpecSince(policy); !ok || !got.Equal(policy.CreationTimestamp.Time) {
-		t.Fatalf("unchanged policy: got %v %v, want creation", got, ok)
-	}
-
-	policy.Generation = 2
-	edited := now.Add(-5 * time.Minute)
-	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
-		ID: "np-edit", Timestamp: edited, Source: timeline.SourceInformer, ClusterContext: ActiveClusterContext(),
-		Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1", Namespace: "shop", Name: "deny-all", EventType: timeline.EventTypeUpdate,
-		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.ingress", OldValue: []string{"x"}, NewValue: []string{}}}},
-	}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	timeline.SetObservationStartForTest(now.Add(-30 * time.Minute))
-	if _, ok := networkPolicySpecSince(policy); ok {
-		t.Fatal("watched only since after the policy existed, but claimed a spec time")
-	}
-	timeline.SetObservationStartForTest(now.Add(-2 * time.Hour))
-	if got, ok := networkPolicySpecSince(policy); !ok || !got.Equal(edited) {
-		t.Fatalf("edited policy: got %v %v, want %v", got, ok, edited)
-	}
+	t.Run("unchanged policy watched since before it existed", func(t *testing.T) {
+		setup(t, created.Add(-time.Hour))
+		got, timing, ok := networkPolicyIsolationOnset(policy(1), olderObjects)
+		if !ok || !got.Equal(created) || timing != "started_at_resource_creation" {
+			t.Fatalf("got %v %q %v, want creation", got, timing, ok)
+		}
+	})
+	t.Run("not watched since before the policy existed", func(t *testing.T) {
+		setup(t, created.Add(-30*time.Second))
+		if _, _, ok := networkPolicyIsolationOnset(policy(1), olderObjects); ok {
+			t.Fatal("claimed an onset without watching the whole window")
+		}
+	})
+	t.Run("a pod or Service newer than the policy", func(t *testing.T) {
+		setup(t, created.Add(-time.Hour))
+		if _, _, ok := networkPolicyIsolationOnset(policy(1), &denyAllIngressImpact{lastCreated: created.Add(time.Minute)}); ok {
+			t.Fatal("claimed an onset earlier than an object it applies to")
+		}
+	})
+	t.Run("another policy deleted afterwards", func(t *testing.T) {
+		setup(t, created.Add(-time.Hour))
+		appendEvent(timeline.TimelineEvent{ID: "allow-gone", Timestamp: created.Add(10 * time.Minute), Name: "allow-web", EventType: timeline.EventTypeDelete})
+		if _, _, ok := networkPolicyIsolationOnset(policy(1), olderObjects); ok {
+			t.Fatal("claimed creation as onset although an allow policy was deleted later")
+		}
+	})
+	t.Run("edit that removed the last ingress rules", func(t *testing.T) {
+		setup(t, created.Add(-time.Hour))
+		edited := created.Add(20 * time.Minute)
+		appendEvent(timeline.TimelineEvent{ID: "edit", Timestamp: edited, Name: "deny-all", EventType: timeline.EventTypeUpdate, Diff: removeRules})
+		got, timing, ok := networkPolicyIsolationOnset(policy(2), olderObjects)
+		if !ok || !got.Equal(edited) || timing != "started_after_resource_was_healthy" {
+			t.Fatalf("got %v %q %v, want the edit", got, timing, ok)
+		}
+	})
+	t.Run("newest edit didn't change ingress", func(t *testing.T) {
+		setup(t, created.Add(-time.Hour))
+		appendEvent(timeline.TimelineEvent{ID: "edit", Timestamp: created.Add(20 * time.Minute), Name: "deny-all", EventType: timeline.EventTypeUpdate, Diff: removeRules})
+		appendEvent(timeline.TimelineEvent{ID: "egress", Timestamp: created.Add(30 * time.Minute), Name: "deny-all", EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.egress", OldValue: []any{}, NewValue: []any{"to anywhere ports all"}}}}})
+		if _, _, ok := networkPolicyIsolationOnset(policy(3), olderObjects); ok {
+			t.Fatal("dated the isolation from an edit that didn't start it")
+		}
+	})
 }

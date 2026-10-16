@@ -91,8 +91,8 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 			otherMayApply: func(pods []*corev1.Pod, dir netpol.Direction) bool {
 				return otherPolicies.mayApply(ns, pods, nsObj, dir)
 			},
-			ownerOf:     func(pod *corev1.Pod) (string, string, string) { return podOwnerKindName(cache, pod) },
-			policyOnset: networkPolicySpecSince,
+			ownerOf:        func(pod *corev1.Pod) (string, string, string) { return podOwnerKindName(cache, pod) },
+			isolationOnset: networkPolicyIsolationOnset,
 		}
 		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], env, now)...)
 	}
@@ -384,10 +384,11 @@ func calicoSelectsAll(selector string) bool {
 
 type denyAllIngressImpact struct {
 	services []string
-	// firstServiceCreated is the earliest creation time among the services.
-	firstServiceCreated time.Time
-	pods                map[string]bool
-	owners              map[issuesapi.Ref]bool
+	// lastCreated is the newest creation time among the affected Services and
+	// pods: isolation can't be dated earlier than objects it applies to.
+	lastCreated time.Time
+	pods        map[string]bool
+	owners      map[issuesapi.Ref]bool
 	// alsoDenying names the other policies leaving the same pods without
 	// inbound traffic; each gets its own issue, and each issue names the rest.
 	alsoDenying map[string]bool
@@ -407,9 +408,10 @@ type denyAllEnv struct {
 	// traffic in a direction for any of a Service's backends.
 	otherMayApply func([]*corev1.Pod, netpol.Direction) bool
 	ownerOf       func(*corev1.Pod) (group, kind, name string)
-	// policyOnset returns when the policy's current spec took effect, or
-	// false when that isn't known.
-	policyOnset func(*networkingv1.NetworkPolicy) (time.Time, bool)
+	// isolationOnset returns when the policy began isolating the impact's
+	// pods, with the matching issue timing, or false when that isn't
+	// established.
+	isolationOnset func(*networkingv1.NetworkPolicy, *denyAllIngressImpact) (time.Time, string, bool)
 }
 
 func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, env denyAllEnv, now time.Time) []Detection {
@@ -455,12 +457,15 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 				}
 				if n := len(impact.services); n == 0 || impact.services[n-1] != svc.Name {
 					impact.services = append(impact.services, svc.Name)
-					if created := svc.CreationTimestamp.Time; impact.firstServiceCreated.IsZero() || created.Before(impact.firstServiceCreated) {
-						impact.firstServiceCreated = created
+					if created := svc.CreationTimestamp.Time; created.After(impact.lastCreated) {
+						impact.lastCreated = created
 					}
 				}
 				impact.egressDenied = impact.egressDenied && egressDenied
 				impact.pods[pod.Name] = true
+				if created := pod.CreationTimestamp.Time; created.After(impact.lastCreated) {
+					impact.lastCreated = created
+				}
 				if env.ownerOf != nil {
 					if group, kind, name := env.ownerOf(pod); kind != "" {
 						impact.owners[issuesapi.Ref{Group: group, Kind: kind, Namespace: pod.Namespace, Name: name}] = true
@@ -478,7 +483,14 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 	out := make([]Detection, 0, len(impacts))
 	for np, impact := range impacts {
 		d := denyAllIngressDetection(np, impact, now)
-		setDenyAllIngressOnset(&d, np, impact, env.policyOnset, now)
+		if env.isolationOnset != nil {
+			if since, timing, ok := env.isolationOnset(np, impact); ok {
+				setDetectionOnset(&d, now, since)
+				if !d.OnsetUnknown {
+					d.IssueTiming, d.IssueTimingBasis = timing, "spec"
+				}
+			}
+		}
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -646,88 +658,113 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	}
 }
 
-// setDenyAllIngressOnset dates the finding from when the policy's current
-// spec took effect, or from when the first affected Service was created if
-// that came later. With an unknown spec time the onset stays unknown.
-func setDenyAllIngressOnset(d *Detection, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact, policyOnset func(*networkingv1.NetworkPolicy) (time.Time, bool), now time.Time) {
-	if policyOnset == nil {
-		return
+// onsetObservationMargin absorbs clock skew between the API server, which
+// stamps creation times, and this process, which stamps observations.
+const onsetObservationMargin = time.Minute
+
+// networkPolicyIsolationOnset dates the isolation only when it is established
+// that this policy started it:
+//   - the policy's ingress isolation began at a known time: its creation when
+//     its spec never changed, or an observed edit that removed its last
+//     ingress rules;
+//   - every affected Service and pod already existed then;
+//   - this process watched from before that time, and saw no other
+//     NetworkPolicy in the namespace created, changed or deleted after it
+//     (deleting an allow policy would start the isolation later).
+//
+// Anything less leaves the onset unknown, which is honest; a backdated onset
+// would mislead.
+func networkPolicyIsolationOnset(np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, string, bool) {
+	created := np.CreationTimestamp.Time
+	start := timeline.ObservationStart()
+	if created.IsZero() || start.IsZero() || start.After(created.Add(-onsetObservationMargin)) {
+		return time.Time{}, "", false
 	}
-	since, ok := policyOnset(np)
+	events, ok := networkPolicyEventsSince(np.Namespace, created)
 	if !ok {
-		return
+		return time.Time{}, "", false
 	}
-	// The finding can't predate the first Service it's about, and then it
-	// says nothing about the policy's own timing.
-	if impact.firstServiceCreated.After(since) {
-		setDetectionOnset(d, now, impact.firstServiceCreated)
-		return
+	since, timing := created, "started_at_resource_creation"
+	if np.Generation > 1 {
+		edit, found := lastOwnEdit(np.Name, events)
+		if !found || !removedAllIngressRules(edit) {
+			return time.Time{}, "", false
+		}
+		since, timing = edit.Timestamp, "started_after_resource_was_healthy"
 	}
-	setDetectionOnset(d, now, since)
-	if d.OnsetUnknown {
-		return
+	if impact.lastCreated.After(since) {
+		return time.Time{}, "", false
 	}
-	d.IssueTimingBasis = "spec"
-	d.IssueTiming = "started_at_resource_creation"
-	if since.After(np.CreationTimestamp.Time) {
-		d.IssueTiming = "started_after_resource_was_healthy"
+	for _, e := range events {
+		if e.Name != np.Name && e.Timestamp.After(since) {
+			return time.Time{}, "", false
+		}
 	}
+	return since, timing, true
 }
 
-// networkPolicySpecSince returns when the policy's current spec took effect: its
-// creation when the spec was never changed (generation 1), else the newest spec
-// change in the timeline, trusted only when this process has watched since
-// before the policy existed, so no change can have been missed.
-func networkPolicySpecSince(np *networkingv1.NetworkPolicy) (time.Time, bool) {
-	created := np.CreationTimestamp.Time
-	if created.IsZero() {
-		return time.Time{}, false
-	}
-	if np.Generation <= 1 {
-		return created, true
-	}
-	start := timeline.ObservationStart()
-	if start.IsZero() || start.After(created) {
-		return time.Time{}, false
-	}
+// networkPolicyEventsSince returns the namespace's NetworkPolicy adds, edits
+// and deletes since t, and false when the query fails or hits its cap.
+func networkPolicyEventsSince(namespace string, t time.Time) ([]timeline.TimelineEvent, bool) {
+	const limit = 500
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	events, err := timeline.QueryEvents(ctx, timeline.QueryOptions{
-		Namespaces:     []string{np.Namespace},
+		Namespaces:     []string{namespace},
 		Kinds:          []string{"NetworkPolicy"},
-		Names:          []string{np.Name},
 		APIGroups:      []string{"networking.k8s.io"},
-		Since:          created,
+		Since:          t,
 		Sources:        []timeline.EventSource{timeline.SourceInformer},
-		EventTypes:     []timeline.EventType{timeline.EventTypeUpdate},
 		ClusterContext: ActiveClusterContext(),
-		Limit:          200,
+		Limit:          limit,
 	})
-	if err != nil || len(events) >= 200 {
-		return time.Time{}, false
+	if err != nil || len(events) >= limit {
+		return nil, false
 	}
-	var newest time.Time
-	for _, e := range events {
-		if e.Diff == nil || !hasSpecFieldChange(e.Diff.Fields) {
-			continue
-		}
-		if e.Timestamp.After(newest) {
-			newest = e.Timestamp
-		}
-	}
-	if newest.IsZero() {
-		return time.Time{}, false
-	}
-	return newest, true
+	return events, true
 }
 
-func hasSpecFieldChange(fields []timeline.FieldChange) bool {
-	for _, f := range fields {
-		if strings.HasPrefix(f.Path, "spec.") {
-			return true
+// lastOwnEdit returns the policy's newest recorded update, whatever it changed.
+func lastOwnEdit(name string, events []timeline.TimelineEvent) (timeline.TimelineEvent, bool) {
+	var newest timeline.TimelineEvent
+	found := false
+	for _, e := range events {
+		if e.Name != name || e.EventType != timeline.EventTypeUpdate {
+			continue
+		}
+		if !found || e.Timestamp.After(newest.Timestamp) {
+			newest, found = e, true
 		}
 	}
+	return newest, found
+}
+
+// removedAllIngressRules reports whether an edit took the policy from some
+// ingress rules to none, the transition that starts its isolation.
+func removedAllIngressRules(e timeline.TimelineEvent) bool {
+	if e.Diff == nil {
+		return false
+	}
+	for _, f := range e.Diff.Fields {
+		if f.Path != "spec.ingress" {
+			continue
+		}
+		return listLen(f.OldValue) > 0 && listLen(f.NewValue) == 0
+	}
 	return false
+}
+
+// listLen counts a diff value's rules; a persisted event decodes the list as
+// []any rather than []string.
+func listLen(v any) int {
+	switch l := v.(type) {
+	case []string:
+		return len(l)
+	case []any:
+		return len(l)
+	default:
+		return 0
+	}
 }
 
 // affectedRefs lists the isolated Services, then their pods' owning workloads,

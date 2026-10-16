@@ -46,10 +46,17 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 
 // OtherSubject returns the issue's own subject when the issue reaches the
 // resource through another subject (a NetworkPolicy issue on the Service it
-// isolates), and nil when the issue is about the resource or its owner.
+// isolates), and nil when the issue is about the resource, its owner, or a
+// group the resource is a member of (a Pod under its Deployment's issue).
 func OtherSubject(i Issue, group, kind, namespace, name string) *Ref {
 	if Concerns(i, group, kind, namespace, name) {
 		return nil
+	}
+	wantGroup := resolveGroup(group, kind)
+	for _, m := range i.Members {
+		if strings.EqualFold(m.Kind, kind) && m.Namespace == namespace && m.Name == name && resolveGroup(m.Group, m.Kind) == wantGroup {
+			return nil
+		}
 	}
 	return &Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name}
 }

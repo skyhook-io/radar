@@ -147,3 +147,18 @@ func TestSummarySubjectNamesTheOtherSubject(t *testing.T) {
 		t.Error("the policy's own summary named itself as another subject")
 	}
 }
+
+// A Pod's own grouped Deployment issue isn't "another subject".
+func TestOtherSubjectSkipsOwnGroup(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{
+		{Kind: "Pod", Namespace: "prod", Name: "web-abc-1", Reason: "CrashLoopBackOff", Severity: "critical",
+			OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web"},
+	}}
+	got := RelatedIssues(p, RelatedIssueOptions{}, "", "Pod", "prod", "web-abc-1")
+	if len(got) != 1 {
+		t.Fatalf("RelatedIssues = %d, want 1", len(got))
+	}
+	if ref := OtherSubject(got[0], "", "Pod", "prod", "web-abc-1"); ref != nil {
+		t.Fatalf("OtherSubject = %+v, want nil for the Pod's own Deployment issue", ref)
+	}
+}
