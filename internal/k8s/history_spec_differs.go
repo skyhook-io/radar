@@ -137,35 +137,72 @@ func clientIPTimeout(c *corev1.SessionAffinityConfig) any {
 	return int32PtrValue(c.ClientIP.TimeoutSeconds)
 }
 
-// keyedRuleChanges reports added and removed rules when every rule on both
-// sides is identified: by name for Gateway routes (an optional field), by
-// host for Ingress (which has no rule names). Edits inside a kept rule are
-// left to the backstop, which keys the rules the same way. ok is false when
-// the rules can only be compared by position.
-func keyedRuleChanges(oldRules, newRules []any, describe func(map[string]any) []string) (changes []FieldChange, summary []string, ok bool) {
-	field := listKeyField(oldRules, newRules)
+// keyedListChanges reports added and removed items of a list whose items are
+// all identified on both sides: by name (Gateway listeners, and route rules,
+// where the name is optional), or by host for Ingress rules, which have no
+// name. Edits inside a kept item are left to the backstop, which keys the
+// list the same way. ok is false when the items can only be compared by
+// position.
+func keyedListChanges(path, noun string, oldItems, newItems []any, describe func(map[string]any) any) (changes []FieldChange, summary []string, ok bool) {
+	field := listKeyField(oldItems, newItems)
 	if field == "" {
 		return nil, nil, false
 	}
-	oldByKey, _ := listByKey(oldRules, field)
-	newByKey, _ := listByKey(newRules, field)
+	oldByKey, _ := listByKey(oldItems, field)
+	newByKey, _ := listByKey(newItems, field)
 	for _, key := range unionKeys(oldByKey, newByKey) {
-		oldRule, oldOK := oldByKey[key].(map[string]any)
-		newRule, newOK := newByKey[key].(map[string]any)
+		oldItem, oldOK := oldByKey[key].(map[string]any)
+		newItem, newOK := newByKey[key].(map[string]any)
 		switch {
 		case !oldOK:
-			changes = append(changes, FieldChange{Path: "spec.rules[" + key + "]", OldValue: nil, NewValue: describe(newRule)})
-			summary = append(summary, fmt.Sprintf("rule %s added", key))
+			changes = append(changes, FieldChange{Path: path + "[" + key + "]", OldValue: nil, NewValue: describe(newItem)})
+			summary = append(summary, fmt.Sprintf("%s %s added", noun, key))
 		case !newOK:
-			changes = append(changes, FieldChange{Path: "spec.rules[" + key + "]", OldValue: describe(oldRule), NewValue: nil})
-			summary = append(summary, fmt.Sprintf("rule %s removed", key))
+			changes = append(changes, FieldChange{Path: path + "[" + key + "]", OldValue: describe(oldItem), NewValue: nil})
+			summary = append(summary, fmt.Sprintf("%s %s removed", noun, key))
 		}
 	}
 	return changes, summary, true
 }
 
+// gatewayListenerString names a listener by what it accepts.
+func gatewayListenerString(listener map[string]any) any {
+	protocol, _ := listener["protocol"].(string)
+	out := fmt.Sprintf("%s:%v", protocol, listener["port"])
+	if host, _ := listener["hostname"].(string); host != "" {
+		out += " " + host
+	}
+	return out
+}
+
+// webhookSummaryFields are the webhook fields webhookSummary compares; the
+// backstop reports changes to any other webhook field.
+var webhookSummaryFields = []string{
+	"failurePolicy", "clientConfig", "sideEffects", "matchPolicy", "timeoutSeconds",
+	"reinvocationPolicy", "namespaceSelector", "objectSelector", "rules",
+}
+
+// webhookControllerWrittenPaths are rewritten by CA injectors (cert-manager's
+// cainjector, Istio, Knative and most operators' cert controllers) on every
+// certificate renewal. The webhook row already reports a rotation, by digest
+// only, as "caBundle rotated"; the backstop never reports it again.
+var webhookControllerWrittenPaths = []string{"webhooks[*].clientConfig.caBundle"}
+
+// webhookSummaryWithoutCA drops the CA digest from a webhookSummary so a
+// rotation can be told apart from a change to what the webhook does.
+func webhookSummaryWithoutCA(summary string) string {
+	parts := strings.Fields(summary)
+	out := parts[:0]
+	for _, part := range parts {
+		if !strings.HasPrefix(part, "caBundle=") {
+			out = append(out, part)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // routeRuleBackends names a Gateway route rule by where it sends traffic.
-func routeRuleBackends(rule map[string]any) []string {
+func routeRuleBackends(rule map[string]any) any {
 	refs, _, _ := unstructured.NestedSlice(rule, "backendRefs")
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
@@ -180,7 +217,7 @@ func routeRuleBackends(rule map[string]any) []string {
 }
 
 // ingressRuleBackends names an Ingress rule by its paths and services.
-func ingressRuleBackends(rule map[string]any) []string {
+func ingressRuleBackends(rule map[string]any) any {
 	paths, _, _ := unstructured.NestedSlice(rule, "http", "paths")
 	out := make([]string, 0, len(paths))
 	for _, p := range paths {

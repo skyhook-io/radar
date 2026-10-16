@@ -808,3 +808,185 @@ func TestComputeDiff_IngressRulesKeyedByHost(t *testing.T) {
 		t.Fatalf("summary = %+v", diff)
 	}
 }
+
+func specTestWebhookConfig(gen int64, failurePolicy, ca string, conditions ...string) *unstructured.Unstructured {
+	hook := map[string]any{
+		"name":                    "pods.policy.example.com",
+		"failurePolicy":           failurePolicy,
+		"sideEffects":             "None",
+		"admissionReviewVersions": []any{"v1"},
+		"clientConfig":            map[string]any{"caBundle": ca, "service": map[string]any{"namespace": "policy", "name": "policy-webhook"}},
+		"rules":                   []any{map[string]any{"operations": []any{"CREATE"}, "apiGroups": []any{""}, "apiVersions": []any{"v1"}, "resources": []any{"pods"}}},
+	}
+	if len(conditions) > 0 {
+		list := make([]any, 0, len(conditions))
+		for i, expr := range conditions {
+			list = append(list, map[string]any{"name": fmt.Sprintf("c%d", i), "expression": expr})
+		}
+		hook["matchConditions"] = list
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind":       "ValidatingWebhookConfiguration",
+		"metadata":   map[string]any{"name": "policy", "uid": "w", "generation": gen},
+		"webhooks":   []any{hook},
+	}}
+}
+
+func TestComputeDiff_WebhookBackstop(t *testing.T) {
+	const notSystem = "!request.userInfo.username.startsWith('system:')"
+	tests := []struct {
+		name        string
+		old, new    *unstructured.Unstructured
+		wantSummary string
+	}{
+		{
+			name:        "CA rotation only",
+			old:         specTestWebhookConfig(1, "Fail", "Q0EtMQ=="),
+			new:         specTestWebhookConfig(2, "Fail", "Q0EtMg=="),
+			wantSummary: "webhook pods.policy.example.com caBundle rotated",
+		},
+		{
+			name:        "matchConditions only",
+			old:         specTestWebhookConfig(1, "Fail", "Q0EtMQ=="),
+			new:         specTestWebhookConfig(2, "Fail", "Q0EtMQ==", notSystem),
+			wantSummary: "other spec changes: webhooks[pods.policy.example.com].matchConditions",
+		},
+		{
+			name:        "failurePolicy and matchConditions together",
+			old:         specTestWebhookConfig(1, "Fail", "Q0EtMQ==", "true"),
+			new:         specTestWebhookConfig(2, "Ignore", "Q0EtMQ==", notSystem),
+			wantSummary: "webhook pods.policy.example.com changed, other spec changes: webhooks[pods.policy.example.com].matchConditions[c0].expression",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diff := ComputeDiff("ValidatingWebhookConfiguration", tt.old, tt.new)
+			if diff == nil || diff.Summary != tt.wantSummary {
+				t.Fatalf("summary = %+v, want %q", diff, tt.wantSummary)
+			}
+			if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "Q0EtM") {
+				t.Fatalf("caBundle bytes leaked: %s", rendered)
+			}
+		})
+	}
+}
+
+func TestComputeDiff_ResourceQuotaBackstop(t *testing.T) {
+	base := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "team", UID: "rq"},
+		Spec:       corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{"requests.cpu": resource.MustParse("4")}},
+	}
+	updated := base.DeepCopy()
+	updated.Spec.Hard["requests.cpu"] = resource.MustParse("8")
+	updated.Spec.Scopes = []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}
+	diff := ComputeDiff("ResourceQuota", base, updated)
+	if diff == nil || diff.Summary != "quota requests.cpu: 4→8, other spec changes: scopes" {
+		t.Fatalf("summary = %+v", diff)
+	}
+
+	// No generation on quotas: usage updates must stay off the backstop.
+	used := base.DeepCopy()
+	used.Status.Used = corev1.ResourceList{"requests.cpu": resource.MustParse("3")}
+	if diff := ComputeDiff("ResourceQuota", base, used); diff != nil {
+		t.Fatalf("usage update recorded: %+v", diff)
+	}
+}
+
+func TestComputeDiff_LimitRangeRatioTracked(t *testing.T) {
+	base := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{Name: "limits", UID: "lr", Generation: 1},
+		Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
+			Type: corev1.LimitTypeContainer, Max: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+		}}},
+	}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.Limits[0].MaxLimitRequestRatio = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")}
+	diff := ComputeDiff("LimitRange", base, updated)
+	if diff == nil || diff.Summary != "limit ranges changed" {
+		t.Fatalf("summary = %+v", diff)
+	}
+}
+
+func TestComputeDiff_GatewayListenersKeyed(t *testing.T) {
+	gw := func(gen int64, listeners ...any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "Gateway",
+			"metadata":   map[string]any{"name": "edge", "uid": "g", "generation": gen},
+			"spec":       map[string]any{"gatewayClassName": "istio", "listeners": listeners},
+		}}
+	}
+	listener := func(name string, port int64, host string) any {
+		l := map[string]any{"name": name, "protocol": "HTTP", "port": port}
+		if host != "" {
+			l["hostname"] = host
+		}
+		return l
+	}
+	diff := ComputeDiff("Gateway",
+		gw(1, listener("http", 80, "shop.example.com")),
+		gw(2, listener("http", 80, "*.example.com"), listener("admin", 8080, "")))
+	want := "listener admin added, other spec changes: listeners[http].hostname"
+	if diff == nil || diff.Summary != want {
+		t.Fatalf("summary = %+v, want %q", diff, want)
+	}
+	if added := findChange(diff, "spec.listeners[admin]"); added == nil || added.NewValue != "HTTP:8080" {
+		t.Fatalf("listener row = %+v", added)
+	}
+}
+
+func TestComputeDiff_GatewayClassAndReferenceGrantBackstop(t *testing.T) {
+	gc := func(gen int64, params string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "GatewayClass",
+			"metadata":   map[string]any{"name": "istio", "uid": "gc", "generation": gen},
+			"spec": map[string]any{"controllerName": "istio.io/gateway-controller",
+				"parametersRef": map[string]any{"group": "", "kind": "ConfigMap", "name": params, "namespace": "istio-system"}},
+		}}
+	}
+	diff := ComputeDiff("GatewayClass", gc(1, "gw-options"), gc(2, "gw-options-v2"))
+	if diff == nil || diff.Summary != "other spec changes: parametersRef.name" {
+		t.Fatalf("GatewayClass summary = %+v", diff)
+	}
+
+	rg := func(gen int64, to string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1beta1",
+			"kind":       "ReferenceGrant",
+			"metadata":   map[string]any{"name": "allow", "uid": "rg", "generation": gen},
+			"spec": map[string]any{
+				"from": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "apps"}},
+				"to":   []any{map[string]any{"group": "", "kind": "Service", "name": to}},
+			},
+		}}
+	}
+	diff = ComputeDiff("ReferenceGrant", rg(1, "web"), rg(2, "web-v2"))
+	if diff == nil || diff.Summary != "other spec changes: to[web], to[web-v2]" {
+		t.Fatalf("ReferenceGrant summary = %+v", diff)
+	}
+}
+
+// An object without a generation must not let a condition change hide a spec
+// change in the same update.
+func TestDiffGenericUnstructured_SpecChangeBesideConditions(t *testing.T) {
+	obj := func(replicas int64, ready string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "example.com/v1",
+			"kind":       "Widget",
+			"metadata":   map[string]any{"name": "w"},
+			"spec":       map[string]any{"replicas": replicas},
+			"status":     map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": ready}}},
+		}}
+	}
+	_, summary := diffGenericUnstructured(obj(1, "True"), obj(2, "False"))
+	if strings.Join(summary, ", ") != "status.conditions[Ready] changed, spec changed (fields not specifically tracked)" {
+		t.Fatalf("summary = %q", summary)
+	}
+	_, summary = diffGenericUnstructured(obj(1, "True"), obj(1, "False"))
+	if strings.Join(summary, ", ") != "status.conditions[Ready] changed" {
+		t.Fatalf("condition-only summary = %q", summary)
+	}
+}

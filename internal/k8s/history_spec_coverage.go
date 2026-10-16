@@ -240,10 +240,12 @@ func chainDiffs(fns ...kindDiffFunc) kindDiffFunc {
 }
 
 // untrackedSpecChanges is the completeness backstop for diff functions: any
-// spec leaf that changed but is not under a path in tracked becomes its own
-// row, so a field the explicit differs don't know about is never hidden behind
-// the fields they do report. Values are shown only for scalars.
-func untrackedSpecChanges(oldObj, newObj any, tracked []FieldChange) ([]FieldChange, []string) {
+// leaf under root (the object's desired state: spec, or webhooks for admission
+// webhook configurations) that changed but is not under a path in tracked or
+// ignored becomes its own row, so a field the explicit differs don't know
+// about is never hidden behind the fields they do report. Values are shown
+// only for scalars.
+func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tracked []FieldChange) ([]FieldChange, []string) {
 	oldMeta, err := meta.Accessor(oldObj)
 	if err != nil {
 		return nil, nil
@@ -255,25 +257,31 @@ func untrackedSpecChanges(oldObj, newObj any, tracked []FieldChange) ([]FieldCha
 	// Every spec write bumps a non-zero generation; skipping equal ones keeps
 	// the conversion off the status-update hot path. A UID change is a
 	// recreate, which restarts generation. Kinds without a generation
-	// (Service) are always compared.
+	// (Service, ResourceQuota) compare the root field first, which is cheap.
 	if oldMeta.GetGeneration() == newMeta.GetGeneration() && newMeta.GetGeneration() > 0 && oldMeta.GetUID() == newMeta.GetUID() {
 		return nil, nil
 	}
-	oldU, ok := specMapOf(oldObj)
+	if rootFieldsEqual(oldObj, newObj, root) {
+		return nil, nil
+	}
+	oldU, ok := backstopRootOf(oldObj, root)
 	if !ok {
 		return nil, nil
 	}
-	newU, ok := specMapOf(newObj)
+	newU, ok := backstopRootOf(newObj, root)
 	if !ok {
 		return nil, nil
 	}
 
 	var found []changedSpecPath
-	collectChangedSpecPaths("spec", oldU, newU, &found)
+	collectChangedSpecPaths(root, oldU, newU, &found)
 
-	trackedSegments := make([][]string, 0, len(tracked))
+	trackedSegments := make([][]string, 0, len(tracked)+len(ignored))
 	for _, change := range tracked {
 		trackedSegments = append(trackedSegments, trackedCoverage(change.Path)...)
+	}
+	for _, path := range ignored {
+		trackedSegments = append(trackedSegments, splitSpecPath(path))
 	}
 	var untracked []changedSpecPath
 	for _, c := range found {
@@ -300,8 +308,8 @@ func untrackedSpecChanges(oldObj, newObj any, tracked []FieldChange) ([]FieldCha
 			changes = append(changes, FieldChange{Path: c.path, OldValue: c.oldOrder, NewValue: c.newOrder})
 			continue
 		}
-		oldVal, _ := lookupSpecPath(oldU, c.path)
-		newVal, _ := lookupSpecPath(newU, c.path)
+		oldVal, _ := lookupSpecPath(oldU, root, c.path)
+		newVal, _ := lookupSpecPath(newU, root, c.path)
 		changes = append(changes, FieldChange{Path: c.path, OldValue: untrackedDisplayValue(c.path, oldVal), NewValue: untrackedDisplayValue(c.path, newVal)})
 	}
 	shown := labels
@@ -343,7 +351,9 @@ type changedSpecPath struct {
 	oldOrder, newOrder []string
 }
 
-func specMapOf(obj any) (map[string]any, bool) {
+// backstopRootOf returns the object's root field (a map for spec, a list for
+// webhooks) in unstructured form.
+func backstopRootOf(obj any, root string) (any, bool) {
 	var full map[string]any
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		full = u.Object
@@ -354,8 +364,39 @@ func specMapOf(obj any) (map[string]any, bool) {
 		}
 		full = converted
 	}
-	spec, ok := full["spec"].(map[string]any)
+	value, ok := full[root]
+	return value, ok && value != nil
+}
+
+func specMapOf(obj any) (map[string]any, bool) {
+	value, ok := backstopRootOf(obj, "spec")
+	if !ok {
+		return nil, false
+	}
+	spec, ok := value.(map[string]any)
 	return spec, ok
+}
+
+// rootFieldsEqual compares the root field without converting the objects:
+// directly for unstructured objects, through the typed struct's field for
+// typed ones. false means "different or unknown".
+func rootFieldsEqual(oldObj, newObj any, root string) bool {
+	oldU, oldIsU := oldObj.(*unstructured.Unstructured)
+	newU, newIsU := newObj.(*unstructured.Unstructured)
+	if oldIsU && newIsU {
+		return reflect.DeepEqual(oldU.Object[root], newU.Object[root])
+	}
+	field := strings.ToUpper(root[:1]) + root[1:]
+	oldV := reflect.Indirect(reflect.ValueOf(oldObj))
+	newV := reflect.Indirect(reflect.ValueOf(newObj))
+	if oldV.Kind() != reflect.Struct || newV.Kind() != reflect.Struct {
+		return false
+	}
+	oldF, newF := oldV.FieldByName(field), newV.FieldByName(field)
+	if !oldF.IsValid() || !newF.IsValid() {
+		return false
+	}
+	return reflect.DeepEqual(oldF.Interface(), newF.Interface())
 }
 
 // collectChangedSpecPaths records the shallowest path at which old and new
@@ -519,8 +560,22 @@ func splitSpecPath(path string) []string {
 // Deployment resources row compares only limits and requests, not claims.
 func trackedCoverage(path string) [][]string {
 	segments := splitSpecPath(path)
-	if path == "spec.template.spec.containers[*].resources" {
+	switch {
+	case path == "spec.template.spec.containers[*].resources":
 		return [][]string{append(slices.Clone(segments), "limits"), append(slices.Clone(segments), "requests")}
+	case len(segments) == 2 && segments[0] == "webhooks":
+		// A webhook row compares a summary of these fields only; anything else
+		// on the webhook (matchConditions, admissionReviewVersions) is left
+		// to the backstop. An added or removed webhook is still covered whole,
+		// since its path is a prefix of every entry here.
+		out := make([][]string, 0, len(webhookSummaryFields))
+		for _, field := range webhookSummaryFields {
+			out = append(out, append(slices.Clone(segments), field))
+		}
+		return out
+	case strings.HasPrefix(path, "spec.hard."):
+		// Quota names contain dots (requests.cpu); the backstop brackets them.
+		return [][]string{splitSpecPath(specPathKey("spec.hard", strings.TrimPrefix(path, "spec.hard.")))}
 	}
 	return [][]string{segments}
 }
@@ -555,12 +610,12 @@ func specPathsOverlap(tracked, path []string) bool {
 	return true
 }
 
-func lookupSpecPath(root map[string]any, path string) (any, bool) {
+func lookupSpecPath(rootValue any, root, path string) (any, bool) {
 	segments := splitSpecPath(path)
-	if len(segments) == 0 || segments[0] != "spec" {
+	if len(segments) == 0 || segments[0] != root {
 		return nil, false
 	}
-	var cur any = root
+	var cur any = rootValue
 	for _, seg := range segments[1:] {
 		if strings.HasPrefix(seg, "[") {
 			key := strings.TrimSuffix(strings.TrimPrefix(seg, "["), "]")

@@ -40,10 +40,15 @@ type kindDiffFunc func(oldObj, newObj any) ([]FieldChange, []string)
 type kindDiffRegistration struct {
 	group string
 	diff  kindDiffFunc
-	// specBackstop reports spec changes the diff function has no row for
-	// (see untrackedSpecChanges). Set it only for kinds whose diff function
-	// uses the same path notation, or the backstop repeats its rows.
-	specBackstop bool
+	// backstopRoot names the field whose changes the backstop reports when
+	// the diff function has no row for them (see untrackedSpecChanges): spec,
+	// or webhooks for admission webhook configurations. Set it only for kinds
+	// whose diff function uses the same path notation, or the backstop
+	// repeats its rows. Empty disables the backstop.
+	backstopRoot string
+	// backstopIgnored are paths under backstopRoot that controllers rewrite
+	// on their own, which the backstop does not report.
+	backstopIgnored []string
 }
 
 // diffFunctions is the single source of truth for kinds with audited diff
@@ -56,20 +61,20 @@ type kindDiffRegistration struct {
 // Versions within a group intentionally share a differ; a same-kind object
 // from any other group uses the generic unstructured differ instead.
 var diffFunctions = map[string]kindDiffRegistration{
-	"Deployment":                     {group: "apps", diff: diffDeployment, specBackstop: true},
+	"Deployment":                     {group: "apps", diff: diffDeployment, backstopRoot: "spec"},
 	"Pod":                            {group: "", diff: diffPod},
-	"Service":                        {group: "", diff: chainDiffs(diffService, diffServicePolicy), specBackstop: true},
+	"Service":                        {group: "", diff: chainDiffs(diffService, diffServicePolicy), backstopRoot: "spec"},
 	"ConfigMap":                      {group: "", diff: diffConfigMap},
 	"Secret":                         {group: "", diff: diffSecret},
 	"SealedSecret":                   {group: "bitnami.com", diff: diffSealedSecret},
-	"Ingress":                        {group: "networking.k8s.io", diff: chainDiffs(diffIngress, diffIngressRouting), specBackstop: true},
+	"Ingress":                        {group: "networking.k8s.io", diff: chainDiffs(diffIngress, diffIngressRouting), backstopRoot: "spec"},
 	"ReplicaSet":                     {group: "apps", diff: diffReplicaSet},
-	"DaemonSet":                      {group: "apps", diff: diffDaemonSet, specBackstop: true},
-	"StatefulSet":                    {group: "apps", diff: diffStatefulSet, specBackstop: true},
-	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: chainDiffs(diffHPA, diffHPAScalingConfig), specBackstop: true},
-	"Job":                            {group: "batch", diff: diffJob, specBackstop: true},
-	"CronJob":                        {group: "batch", diff: diffCronJob, specBackstop: true},
-	"PodDisruptionBudget":            {group: "policy", diff: diffPDB, specBackstop: true},
+	"DaemonSet":                      {group: "apps", diff: diffDaemonSet, backstopRoot: "spec"},
+	"StatefulSet":                    {group: "apps", diff: diffStatefulSet, backstopRoot: "spec"},
+	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: chainDiffs(diffHPA, diffHPAScalingConfig), backstopRoot: "spec"},
+	"Job":                            {group: "batch", diff: diffJob, backstopRoot: "spec"},
+	"CronJob":                        {group: "batch", diff: diffCronJob, backstopRoot: "spec"},
+	"PodDisruptionBudget":            {group: "policy", diff: diffPDB, backstopRoot: "spec"},
 	"Node":                           {group: "", diff: diffNode},
 	"PersistentVolumeClaim":          {group: "", diff: diffPVC},
 	"Application":                    {group: "argoproj.io", diff: diffApplication},
@@ -78,19 +83,19 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"GitRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") }},
 	"OCIRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") }},
 	"HelmRepository":                 {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") }},
-	"Gateway":                        {group: "gateway.networking.k8s.io", diff: diffGateway},
-	"GatewayClass":                   {group: "gateway.networking.k8s.io", diff: diffGatewayClass},
-	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
-	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
-	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
-	"UDPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
-	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, specBackstop: true},
-	"ReferenceGrant":                 {group: "gateway.networking.k8s.io", diff: diffReferenceGrant},
-	"ResourceQuota":                  {group: "", diff: diffResourceQuota},
-	"LimitRange":                     {group: "", diff: diffLimitRange},
-	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
-	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
-	"Rollout":                        {group: "argoproj.io", diff: chainDiffs(diffRollout, diffRolloutSpec), specBackstop: true},
+	"Gateway":                        {group: "gateway.networking.k8s.io", diff: diffGateway, backstopRoot: "spec"},
+	"GatewayClass":                   {group: "gateway.networking.k8s.io", diff: diffGatewayClass, backstopRoot: "spec"},
+	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"UDPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"ReferenceGrant":                 {group: "gateway.networking.k8s.io", diff: diffReferenceGrant, backstopRoot: "spec"},
+	"ResourceQuota":                  {group: "", diff: diffResourceQuota, backstopRoot: "spec"},
+	"LimitRange":                     {group: "", diff: diffLimitRange, backstopRoot: "spec"},
+	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
+	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
+	"Rollout":                        {group: "argoproj.io", diff: chainDiffs(diffRollout, diffRolloutSpec), backstopRoot: "spec"},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and
@@ -126,8 +131,8 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		newObj = diffInputForUnstructured(kind, newU)
 	}
 	changes, summaryParts := registration.diff(oldObj, newObj)
-	if registration.specBackstop {
-		untracked, untrackedSummary := untrackedSpecChanges(oldObj, newObj, changes)
+	if registration.backstopRoot != "" {
+		untracked, untrackedSummary := untrackedSpecChanges(oldObj, newObj, registration.backstopRoot, registration.backstopIgnored, changes)
 		changes = append(changes, untracked...)
 		summaryParts = append(summaryParts, untrackedSummary...)
 	}
@@ -253,9 +258,17 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 		summary = append(summary, fmt.Sprintf("spec changed (gen %d→%d, fields not specifically tracked)", oldGen, newGen))
 	}
 
+	genChanged := len(changes) > 0
 	for _, change := range genericConditionChanges(oldU, newU, "status", "conditions") {
 		changes = append(changes, change)
 		summary = append(summary, fmt.Sprintf("%s changed", change.Path))
+	}
+
+	// Objects without a generation would otherwise report only their
+	// conditions when spec changed in the same update.
+	if !genChanged && len(changes) > 0 && !reflect.DeepEqual(oldU.Object["spec"], newU.Object["spec"]) {
+		changes = append(changes, FieldChange{Path: "spec", OldValue: "changed", NewValue: "changed"})
+		summary = append(summary, "spec changed (fields not specifically tracked)")
 	}
 
 	if len(changes) > 0 {
@@ -814,6 +827,7 @@ func limitRangeItemRefs(items []corev1.LimitRangeItem) []string {
 		appendQuantities("min", item.Min)
 		appendQuantities("default", item.Default)
 		appendQuantities("defaultRequest", item.DefaultRequest)
+		appendQuantities("maxLimitRequestRatio", item.MaxLimitRequestRatio)
 		out = append(out, strings.Join(parts, " "))
 	}
 	sort.Strings(out)
@@ -869,6 +883,8 @@ func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []str
 			summary = append(summary, "webhook "+name+" added")
 		case !newOK:
 			summary = append(summary, "webhook "+name+" removed")
+		case webhookSummaryWithoutCA(oldS) == webhookSummaryWithoutCA(newS):
+			summary = append(summary, "webhook "+name+" caBundle rotated")
 		default:
 			summary = append(summary, "webhook "+name+" changed")
 		}
@@ -1579,7 +1595,7 @@ func diffIngress(oldObj, newObj any) ([]FieldChange, []string) {
 	// count is comparable.
 	rulesKeyedByHost := false
 	if !reflect.DeepEqual(oldIng.Spec.Rules, newIng.Spec.Rules) {
-		if ruleChanges, ruleSummary, keyed := keyedRuleChanges(ingressRulesList(oldIng), ingressRulesList(newIng), ingressRuleBackends); keyed {
+		if ruleChanges, ruleSummary, keyed := keyedListChanges("spec.rules", "rule", ingressRulesList(oldIng), ingressRulesList(newIng), ingressRuleBackends); keyed {
 			rulesKeyedByHost = true
 			changes = append(changes, ruleChanges...)
 			summary = append(summary, ruleSummary...)
@@ -3896,7 +3912,10 @@ func diffGateway(oldObj, newObj any) ([]FieldChange, []string) {
 	// Check listener count
 	oldListeners, _, _ := unstructured.NestedSlice(oldGW.Object, "spec", "listeners")
 	newListeners, _, _ := unstructured.NestedSlice(newGW.Object, "spec", "listeners")
-	if len(oldListeners) != len(newListeners) {
+	if listenerChanges, listenerSummary, keyed := keyedListChanges("spec.listeners", "listener", oldListeners, newListeners, gatewayListenerString); keyed {
+		changes = append(changes, listenerChanges...)
+		summary = append(summary, listenerSummary...)
+	} else if len(oldListeners) != len(newListeners) {
 		changes = append(changes, FieldChange{
 			Path:     "spec.listeners",
 			OldValue: fmt.Sprintf("%d listeners", len(oldListeners)),
@@ -3964,7 +3983,7 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 	// is comparable.
 	oldRules, _, _ := unstructured.NestedSlice(oldRoute.Object, "spec", "rules")
 	newRules, _, _ := unstructured.NestedSlice(newRoute.Object, "spec", "rules")
-	if ruleChanges, ruleSummary, keyed := keyedRuleChanges(oldRules, newRules, routeRuleBackends); keyed {
+	if ruleChanges, ruleSummary, keyed := keyedListChanges("spec.rules", "rule", oldRules, newRules, routeRuleBackends); keyed {
 		changes = append(changes, ruleChanges...)
 		summary = append(summary, ruleSummary...)
 	} else if len(oldRules) != len(newRules) {
