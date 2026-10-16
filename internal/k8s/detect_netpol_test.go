@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/netpol"
 )
@@ -175,7 +177,7 @@ func TestDenyAllIngressDetections(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := denyAllIngressDetections(tt.policies, tt.services, tt.pods, nil, time.Now())
+			got := denyAllIngressDetections(tt.policies, tt.services, tt.pods, denyAllEnv{}, time.Now())
 			var names []string
 			for _, d := range got {
 				names = append(names, d.Name)
@@ -207,7 +209,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 
 	both := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress),
-	}, services, pods, nil, time.Now())
+	}, services, pods, denyAllEnv{}, time.Now())
 	if len(both) != 1 {
 		t.Fatalf("got %d detections, want 1", len(both))
 	}
@@ -223,7 +225,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 
 	ingress := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
-	}, services[:1], pods, nil, time.Now())
+	}, services[:1], pods, denyAllEnv{}, time.Now())
 	if len(ingress) != 1 || strings.Contains(ingress[0].Message, "outbound") {
 		t.Fatalf("ingress-only deny must not claim outbound is blocked: %+v", ingress)
 	}
@@ -231,7 +233,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	pair := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("default-deny", nil, ingressOnly),
 		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
-	}, services[:1], pods, nil, time.Now())
+	}, services[:1], pods, denyAllEnv{}, time.Now())
 	if len(pair) != 2 {
 		t.Fatalf("got %d detections, want one per contributing policy", len(pair))
 	}
@@ -250,7 +252,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	}
 	if solo := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
-	}, services[:1], pods, nil, time.Now()); !strings.Contains(solo[0].Action, "delete the policy") {
+	}, services[:1], pods, denyAllEnv{}, time.Now()); !strings.Contains(solo[0].Action, "delete the policy") {
 		t.Errorf("lone targeted deny action = %q", solo[0].Action)
 	}
 
@@ -258,7 +260,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	brokenEgress.Spec.PodSelector = metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "app", Operator: "Bogus"}}}
 	undecided := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
 		netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress), brokenEgress,
-	}, services[:1], pods, nil, time.Now())
+	}, services[:1], pods, denyAllEnv{}, time.Now())
 	if len(undecided) != 1 || strings.Contains(undecided[0].Message, "outbound") {
 		t.Fatalf("an unparseable egress policy might allow outbound traffic, so no outbound claim: %+v", undecided)
 	}
@@ -432,7 +434,7 @@ func TestDenyAllIngressSkipsOnlyServicesOtherPoliciesSelect(t *testing.T) {
 		}
 		return false
 	}
-	got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{netpolTestPolicy("default-deny", nil, ingressOnly)}, services, pods, selectsWeb, time.Now())
+	got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{netpolTestPolicy("default-deny", nil, ingressOnly)}, services, pods, denyAllEnv{otherMayApply: selectsWeb}, time.Now())
 	if len(got) != 1 || !strings.Contains(got[0].Message, "Service recommendation") || strings.Contains(got[0].Message, "web") {
 		t.Fatalf("detections = %+v, want only Service recommendation", got)
 	}
@@ -445,7 +447,7 @@ func TestDenyAllIngressOutboundNoteRespectsOtherPolicies(t *testing.T) {
 	services := []*corev1.Service{netpolTestService("recommendation", map[string]string{"app": "rec"})}
 	policies := []*networkingv1.NetworkPolicy{netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressAndEgress)}
 	egressOnly := func(_ []*corev1.Pod, dir netpol.Direction) bool { return dir == netpol.DirectionEgress }
-	got := denyAllIngressDetections(policies, services, pods, egressOnly, time.Now())
+	got := denyAllIngressDetections(policies, services, pods, denyAllEnv{otherMayApply: egressOnly}, time.Now())
 	if len(got) != 1 || strings.Contains(got[0].Message, "outbound") {
 		t.Fatalf("detections = %+v, want the inbound finding without the outbound note", got)
 	}
@@ -496,5 +498,29 @@ func TestOtherPolicyViewMemoizes(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("List called %d times, want 1 for the whole scan", calls)
+	}
+}
+
+// The detection links the isolated Services, their pods' owners and the pods,
+// so the issue also shows on those resources.
+func TestDenyAllIngressAffectedRefs(t *testing.T) {
+	pods := []*corev1.Pod{
+		netpolTestPod("rec-b", map[string]string{"app": "rec"}, true),
+		netpolTestPod("rec-a", map[string]string{"app": "rec"}, true),
+	}
+	env := denyAllEnv{ownerOf: func(*corev1.Pod) (string, string, string) { return "apps", "Deployment", "recommendation" }}
+	got := denyAllIngressDetections([]*networkingv1.NetworkPolicy{netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)},
+		[]*corev1.Service{netpolTestService("recommendation", map[string]string{"app": "rec"})}, pods, env, time.Now())
+	if len(got) != 1 {
+		t.Fatalf("got %d detections", len(got))
+	}
+	want := []issuesapi.Ref{
+		{Kind: "Service", Namespace: "shop", Name: "recommendation"},
+		{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "recommendation"},
+		{Kind: "Pod", Namespace: "shop", Name: "rec-a"},
+		{Kind: "Pod", Namespace: "shop", Name: "rec-b"},
+	}
+	if !reflect.DeepEqual(got[0].AffectedRefs, want) {
+		t.Fatalf("AffectedRefs = %+v, want %+v", got[0].AffectedRefs, want)
 	}
 }

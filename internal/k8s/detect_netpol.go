@@ -85,10 +85,13 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 	var out []Detection
 	for _, ns := range namespaces {
 		nsObj := namespaceObject(cache, ns)
-		otherMayApply := func(pods []*corev1.Pod, dir netpol.Direction) bool {
-			return otherPolicies.mayApply(ns, pods, nsObj, dir)
+		env := denyAllEnv{
+			otherMayApply: func(pods []*corev1.Pod, dir netpol.Direction) bool {
+				return otherPolicies.mayApply(ns, pods, nsObj, dir)
+			},
+			ownerOf: func(pod *corev1.Pod) (string, string, string) { return podOwnerKindName(cache, pod) },
 		}
-		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], otherMayApply, now)...)
+		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], env, now)...)
 	}
 	return out
 }
@@ -379,6 +382,7 @@ func calicoSelectsAll(selector string) bool {
 type denyAllIngressImpact struct {
 	services []string
 	pods     map[string]bool
+	owners   map[issuesapi.Ref]bool
 	// alsoDenying names the other policies leaving the same pods without
 	// inbound traffic; each gets its own issue, and each issue names the rest.
 	alsoDenying map[string]bool
@@ -387,12 +391,20 @@ type denyAllIngressImpact struct {
 	egressDenied bool
 }
 
-// denyAllIngressDetections evaluates one namespace. otherMayApply reports
-// whether a policy Radar doesn't evaluate may allow traffic in a direction for
-// any of a Service's backends: a Service it may allow inbound traffic to is
-// skipped, and the outbound note is dropped when it may allow outbound
-// traffic. nil means no other policy applies.
-func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, otherMayApply func([]*corev1.Pod, netpol.Direction) bool, now time.Time) []Detection {
+// denyAllIngressDetections evaluates one namespace. A Service whose backends
+// another policy engine may allow inbound traffic to is skipped, and the
+// outbound note is dropped when one may allow outbound traffic.
+// denyAllEnv carries what denyAllIngressDetections reads beyond the
+// namespace's policies, Services and pods. Zero fields mean "nothing": no
+// other policy engine applies, and no owners are resolved.
+type denyAllEnv struct {
+	// otherMayApply reports whether a policy Radar doesn't evaluate may allow
+	// traffic in a direction for any of a Service's backends.
+	otherMayApply func([]*corev1.Pod, netpol.Direction) bool
+	ownerOf       func(*corev1.Pod) (group, kind, name string)
+}
+
+func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services []*corev1.Service, pods []*corev1.Pod, env denyAllEnv, now time.Time) []Detection {
 	if len(policies) == 0 || len(services) == 0 || len(pods) == 0 {
 		return nil
 	}
@@ -420,17 +432,17 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 			allDenied = allDenied && len(iso.ingressDenying) > 0
 			egressDenied = egressDenied && iso.egressDenied
 		}
-		if !allDenied || (otherMayApply != nil && otherMayApply(backends, netpol.DirectionIngress)) {
+		if !allDenied || (env.otherMayApply != nil && env.otherMayApply(backends, netpol.DirectionIngress)) {
 			continue
 		}
-		if egressDenied && otherMayApply != nil && otherMayApply(backends, netpol.DirectionEgress) {
+		if egressDenied && env.otherMayApply != nil && env.otherMayApply(backends, netpol.DirectionEgress) {
 			egressDenied = false
 		}
 		for _, pod := range backends {
 			for _, np := range isolation.of(pod).ingressDenying {
 				impact := impacts[np]
 				if impact == nil {
-					impact = &denyAllIngressImpact{pods: map[string]bool{}, alsoDenying: map[string]bool{}, egressDenied: true}
+					impact = &denyAllIngressImpact{pods: map[string]bool{}, owners: map[issuesapi.Ref]bool{}, alsoDenying: map[string]bool{}, egressDenied: true}
 					impacts[np] = impact
 				}
 				if n := len(impact.services); n == 0 || impact.services[n-1] != svc.Name {
@@ -438,6 +450,11 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 				}
 				impact.egressDenied = impact.egressDenied && egressDenied
 				impact.pods[pod.Name] = true
+				if env.ownerOf != nil {
+					if group, kind, name := env.ownerOf(pod); kind != "" {
+						impact.owners[issuesapi.Ref{Group: group, Kind: kind, Namespace: pod.Namespace, Name: name}] = true
+					}
+				}
 				for _, other := range isolation.of(pod).ingressDenying {
 					if other != np {
 						impact.alsoDenying[other.Name] = true
@@ -609,7 +626,37 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 		// onset, and edits carry no timestamp of their own.
 		OnsetUnknown:  true,
 		RequiredReads: networkPolicyEvidenceReads(np.Namespace),
+		AffectedRefs:  affectedRefs(np.Namespace, impact),
 	}
+}
+
+// affectedRefs lists the isolated Services, then their pods' owning workloads,
+// then the pods, so a cap keeps the most useful links.
+func affectedRefs(namespace string, impact *denyAllIngressImpact) []issuesapi.Ref {
+	refs := make([]issuesapi.Ref, 0, len(impact.services)+len(impact.owners)+len(impact.pods))
+	for _, name := range impact.services {
+		refs = append(refs, issuesapi.Ref{Kind: "Service", Namespace: namespace, Name: name})
+	}
+	owners := make([]issuesapi.Ref, 0, len(impact.owners))
+	for ref := range impact.owners {
+		owners = append(owners, ref)
+	}
+	sort.Slice(owners, func(i, j int) bool {
+		if owners[i].Kind != owners[j].Kind {
+			return owners[i].Kind < owners[j].Kind
+		}
+		return owners[i].Name < owners[j].Name
+	})
+	refs = append(refs, owners...)
+	pods := make([]string, 0, len(impact.pods))
+	for name := range impact.pods {
+		pods = append(pods, name)
+	}
+	sort.Strings(pods)
+	for _, name := range pods {
+		refs = append(refs, issuesapi.Ref{Kind: "Pod", Namespace: namespace, Name: name})
+	}
+	return refs
 }
 
 // The finding rests on the namespace's policies, Services and pods; a caller

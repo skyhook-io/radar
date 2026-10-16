@@ -118,6 +118,11 @@ type Detection struct {
 	// RestartLoop is set on a Pod crashloop row emitted because a container is
 	// in an active restart loop (see activeRestartLoop). Nil otherwise.
 	RestartLoop *issuesapi.RestartLoop
+	// AffectedRefs names resources a detection on another subject affects
+	// (the Services, workloads and Pods a NetworkPolicy isolates), so the issue
+	// also shows up on those resources. Ordered most to least important; the
+	// issues layer caps them.
+	AffectedRefs []issuesapi.Ref `json:"-"`
 	// RequiredReads names the inventories a detection read beyond its own
 	// resource whose access is checked per kind, such as a Secret's history.
 	// A caller who can't make them gets Degraded instead, or nothing when

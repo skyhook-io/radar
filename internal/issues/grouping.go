@@ -97,6 +97,17 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		}
 		if g.DiagnosticContext != nil {
 			for _, fact := range g.DiagnosticContext.Facts {
+				if fact.Type == factNetworkPolicyIsolates {
+					// The refs were already reduced to what the caller can
+					// read (redactUnreadableRelatedRefs in Compose).
+					for _, ref := range fact.Refs {
+						if match(ref.Group, ref.Kind, ref.Namespace, ref.Name) && canReadSubject(g) && canReadEvidence(g) {
+							matched[g.ID] = true
+							break
+						}
+					}
+					continue
+				}
 				if fact.Type != karpenterFactReferencedByNodePools {
 					continue
 				}

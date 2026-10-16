@@ -199,6 +199,11 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		}
 		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleContext, Facts: []issuesapi.DiagnosticFact{{Type: factNodeStartupCorroboration, Message: message, Refs: refs}}}
 	}
+	if reason == p.Reason {
+		if ctx := networkPolicyIsolationContext(p); ctx != nil {
+			iss.DiagnosticContext = ctx
+		}
+	}
 	if p.OwnerKind != "" {
 		// Prefer the owner group resolved at detection (carries the real group
 		// for CRD controllers like Argo Rollout); fall back to the builtin
