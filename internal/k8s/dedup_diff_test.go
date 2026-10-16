@@ -99,7 +99,7 @@ func TestRecordToTimelineStore_DeploymentGenerationFallbackRequiresSpecChange(t 
 			},
 		},
 		{
-			name: "untracked spec field",
+			name: "spec field",
 			mutate: func(deployment *appsv1.Deployment) {
 				deployment.Spec.MinReadySeconds = 5
 			},
@@ -130,8 +130,8 @@ func TestRecordToTimelineStore_DeploymentGenerationFallbackRequiresSpecChange(t 
 			if len(events) != tt.wantEvents {
 				t.Fatalf("recorded %d events, want %d: %+v", len(events), tt.wantEvents, events)
 			}
-			if tt.wantEvents == 1 && (events[0].Diff == nil || len(events[0].Diff.Fields) != 1 || events[0].Diff.Fields[0].Path != "metadata.generation") {
-				t.Fatalf("expected generation fallback for untracked spec change, got %+v", events[0].Diff)
+			if tt.wantEvents == 1 && (events[0].Diff == nil || len(events[0].Diff.Fields) != 1 || events[0].Diff.Fields[0].Path != "spec.minReadySeconds") {
+				t.Fatalf("expected the spec field change, got %+v", events[0].Diff)
 			}
 		})
 	}

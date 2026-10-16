@@ -392,6 +392,14 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 	changes = append(changes, podTemplateChanges...)
 	summary = append(summary, podTemplateSummary...)
 
+	templateMetaChanges, templateMetaSummary := diffPodTemplateMetadata(oldDep.Spec.Template.ObjectMeta, newDep.Spec.Template.ObjectMeta)
+	changes = append(changes, templateMetaChanges...)
+	summary = append(summary, templateMetaSummary...)
+
+	rolloutChanges, rolloutSummary := diffDeploymentRolloutConfig(oldDep, newDep)
+	changes = append(changes, rolloutChanges...)
+	summary = append(summary, rolloutSummary...)
+
 	// Check paused state
 	if oldDep.Spec.Paused != newDep.Spec.Paused {
 		changes = append(changes, FieldChange{
@@ -443,6 +451,10 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
 		}
 	}
+
+	untrackedChanges, untrackedSummary := untrackedSpecChanges(oldDep.ObjectMeta, newDep.ObjectMeta, &oldDep.Spec, &newDep.Spec, changes)
+	changes = append(changes, untrackedChanges...)
+	summary = append(summary, untrackedSummary...)
 
 	return changes, summary
 }
@@ -1724,6 +1736,14 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 	changes = append(changes, podTemplateChanges...)
 	summary = append(summary, podTemplateSummary...)
 
+	templateMetaChanges, templateMetaSummary := diffPodTemplateMetadata(oldDS.Spec.Template.ObjectMeta, newDS.Spec.Template.ObjectMeta)
+	changes = append(changes, templateMetaChanges...)
+	summary = append(summary, templateMetaSummary...)
+
+	rolloutChanges, rolloutSummary := diffDaemonSetRolloutConfig(oldDS.Spec, newDS.Spec)
+	changes = append(changes, rolloutChanges...)
+	summary = append(summary, rolloutSummary...)
+
 	// Check desired/ready
 	if oldDS.Status.DesiredNumberScheduled != newDS.Status.DesiredNumberScheduled {
 		changes = append(changes, FieldChange{
@@ -1779,6 +1799,10 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
+	untrackedChanges, untrackedSummary := untrackedSpecChanges(oldDS.ObjectMeta, newDS.ObjectMeta, &oldDS.Spec, &newDS.Spec, changes)
+	changes = append(changes, untrackedChanges...)
+	summary = append(summary, untrackedSummary...)
+
 	return changes, summary
 }
 
@@ -1818,6 +1842,14 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
 	changes = append(changes, podTemplateChanges...)
 	summary = append(summary, podTemplateSummary...)
+
+	templateMetaChanges, templateMetaSummary := diffPodTemplateMetadata(oldSTS.Spec.Template.ObjectMeta, newSTS.Spec.Template.ObjectMeta)
+	changes = append(changes, templateMetaChanges...)
+	summary = append(summary, templateMetaSummary...)
+
+	rolloutChanges, rolloutSummary := diffStatefulSetRolloutConfig(oldSTS.Spec, newSTS.Spec)
+	changes = append(changes, rolloutChanges...)
+	summary = append(summary, rolloutSummary...)
 
 	// Check ready replicas
 	if oldSTS.Status.ReadyReplicas != newSTS.Status.ReadyReplicas {
@@ -1861,6 +1893,10 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 			summary = append(summary, fmt.Sprintf("available: %d→%d", oldSTS.Status.AvailableReplicas, newSTS.Status.AvailableReplicas))
 		}
 	}
+
+	untrackedChanges, untrackedSummary := untrackedSpecChanges(oldSTS.ObjectMeta, newSTS.ObjectMeta, &oldSTS.Spec, &newSTS.Spec, changes)
+	changes = append(changes, untrackedChanges...)
+	summary = append(summary, untrackedSummary...)
 
 	return changes, summary
 }
