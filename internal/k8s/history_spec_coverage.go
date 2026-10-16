@@ -143,9 +143,16 @@ func diffDaemonSetRolloutConfig(oldSpec, newSpec appsv1.DaemonSetSpec) ([]FieldC
 	return s.changes, s.summary
 }
 
+// newTemplateRevision states only what a pod-template metadata change is
+// known to cause. Whether and when pods are replaced depends on the kind,
+// strategy, pause state and partition, and what an annotation such as
+// checksum/config hashes is a chart convention Radar cannot verify.
+const newTemplateRevision = " (new pod template revision)"
+
 // diffPodTemplateMetadata covers pod-template labels and annotations. Changing
-// either rolls the workload, and they carry common rollout triggers:
-// `kubectl rollout restart` and config-checksum annotations from Helm charts.
+// either creates a new pod template revision, and they carry common rollout
+// triggers: `kubectl rollout restart` and config-checksum annotations from
+// Helm charts.
 func diffPodTemplateMetadata(oldMeta, newMeta metav1.ObjectMeta) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
@@ -158,11 +165,7 @@ func diffPodTemplateMetadata(oldMeta, newMeta metav1.ObjectMeta) ([]FieldChange,
 			OldValue: oldShown,
 			NewValue: newShown,
 		})
-		if key == restartedAtAnnotation && newOK {
-			summary = append(summary, "rollout restarted")
-		} else {
-			summary = append(summary, fmt.Sprintf("pod template annotation %s %s", key, mapKeyVerb(oldOK, newOK)))
-		}
+		summary = append(summary, fmt.Sprintf("pod template annotation %s %s%s", key, mapKeyVerb(oldOK, newOK), newTemplateRevision))
 	}
 	for _, key := range changedMapKeys(oldMeta.Labels, newMeta.Labels) {
 		oldVal, oldOK := oldMeta.Labels[key]
@@ -172,7 +175,7 @@ func diffPodTemplateMetadata(oldMeta, newMeta metav1.ObjectMeta) ([]FieldChange,
 			OldValue: templateLabelValue(key, oldVal, oldOK),
 			NewValue: templateLabelValue(key, newVal, newOK),
 		})
-		summary = append(summary, fmt.Sprintf("pod template label %s %s", key, mapKeyVerb(oldOK, newOK)))
+		summary = append(summary, fmt.Sprintf("pod template label %s %s%s", key, mapKeyVerb(oldOK, newOK), newTemplateRevision))
 	}
 	return changes, summary
 }

@@ -150,7 +150,7 @@ func TestComputeDiff_DeploymentRolloutFields(t *testing.T) {
 				d.Spec.Template.Annotations = map[string]string{"kubectl.kubernetes.io/restartedAt": "2026-10-16T10:00:00Z"}
 			},
 			wantPath:    "spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]",
-			wantSummary: "rollout restarted",
+			wantSummary: "pod template annotation kubectl.kubernetes.io/restartedAt added (new pod template revision)",
 		},
 		{
 			name: "config checksum annotation",
@@ -158,13 +158,13 @@ func TestComputeDiff_DeploymentRolloutFields(t *testing.T) {
 				d.Spec.Template.Annotations = map[string]string{"checksum/config": "abc"}
 			},
 			wantPath:    "spec.template.metadata.annotations[checksum/config]",
-			wantSummary: "pod template annotation checksum/config added",
+			wantSummary: "pod template annotation checksum/config added (new pod template revision)",
 		},
 		{
 			name:        "template label",
 			mutate:      func(d *appsv1.Deployment) { d.Spec.Template.Labels["version"] = "v2" },
 			wantPath:    "spec.template.metadata.labels.version",
-			wantSummary: "pod template label version added",
+			wantSummary: "pod template label version added (new pod template revision)",
 		},
 	}
 	for _, tt := range tests {

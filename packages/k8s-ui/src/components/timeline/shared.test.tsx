@@ -228,7 +228,7 @@ describe('isRolloutEvent', () => {
   }) as any
 
   it('does not treat a pod-template edit alone as a rollout (OnDelete and paused workloads do not roll)', () => {
-    expect(isRolloutEvent(ev('Deployment', [{ path: 'spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]' }], 'rollout restarted'))).toBe(false)
+    expect(isRolloutEvent(ev('Deployment', [{ path: 'spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]' }], 'pod template annotation kubectl.kubernetes.io/restartedAt added (new pod template revision)'))).toBe(false)
     expect(isRolloutEvent(ev('DaemonSet', [{ path: 'spec.template.metadata.annotations[checksum/config]' }]))).toBe(false)
     expect(isRolloutEvent(ev('Rollout', [{ path: 'spec.template.spec.containers[].image' }], 'image: web:2'))).toBe(false)
   })
