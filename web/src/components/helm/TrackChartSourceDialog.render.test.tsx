@@ -2,7 +2,7 @@
 import { act, type InputHTMLAttributes, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ChartSourceStatus, HelmRepository } from '../../types'
+import type { ArtifactHubSourceCandidate, ChartSourceStatus, HelmRepository } from '../../types'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
 
 const state = vi.hoisted(() => ({
@@ -10,6 +10,8 @@ const state = vi.hoisted(() => ({
   repositories: [] as HelmRepository[],
   isOwner: true,
   addRepository: vi.fn(),
+  discoverArtifactHub: vi.fn(),
+  recoverArtifactHub: vi.fn(),
 }))
 
 vi.mock('@skyhook-io/k8s-ui/components/ui/DialogPortal', () => ({
@@ -32,6 +34,8 @@ vi.mock('../../api/client', () => {
     useAddOCISource: () => idle,
     useRemoveOCISource: () => idle,
     useSetHelmSource: () => idle,
+    useDiscoverArtifactHubSources: () => ({ mutateAsync: state.discoverArtifactHub, isPending: false }),
+    useRecoverArtifactHubSource: () => ({ mutate: state.recoverArtifactHub, isPending: false }),
   }
 })
 
@@ -51,6 +55,8 @@ beforeEach(() => {
   state.repositories = []
   state.isOwner = true
   state.addRepository.mockReset()
+  state.discoverArtifactHub.mockReset()
+  state.recoverArtifactHub.mockReset()
   const element = document.createElement('div')
   document.body.appendChild(element)
   root = createRoot(element)
@@ -116,5 +122,56 @@ describe('TrackChartSourceDialog one-click add of the recorded repository', () =
       await renderDialog()
       expect(addRecordedButton()).toBeUndefined()
     }
+  })
+})
+
+const classicCandidate: ArtifactHubSourceCandidate = {
+  type: 'repository',
+  reference: 'community',
+  url: 'https://charts.example.test',
+  repositoryName: 'community',
+  publisher: 'Example Org',
+  official: true,
+  verifiedPublisher: true,
+}
+
+describe('TrackChartSourceDialog ArtifactHub recovery', () => {
+  beforeEach(() => {
+    state.status = { configured: false, available: false }
+  })
+
+  it('shows trust metadata without verifying during search', async () => {
+    state.discoverArtifactHub.mockResolvedValue([classicCandidate])
+    await renderDialog()
+    const search = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Search ArtifactHub')
+    await act(async () => search?.click())
+
+    expect(state.discoverArtifactHub).toHaveBeenCalledOnce()
+    expect(state.recoverArtifactHub).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Example Org')
+    expect(document.body.textContent).toContain('Official')
+    expect(document.body.textContent).toContain('Verified publisher')
+    expect(document.body.textContent).toContain('https://charts.example.test')
+  })
+
+  it('verifies only the candidate the operator selects', async () => {
+    const ociCandidate: ArtifactHubSourceCandidate = {
+      type: 'oci', reference: 'oci://ghcr.io/example/charts/podinfo', repositoryName: 'oci', publisher: 'Other Org', official: false, verifiedPublisher: false,
+    }
+    state.discoverArtifactHub.mockResolvedValue([classicCandidate, ociCandidate])
+    await renderDialog()
+    await act(async () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Search ArtifactHub')?.click())
+
+    const verifyButtons = Array.from(document.querySelectorAll('button')).filter(button => button.textContent === 'Verify and use')
+    expect(verifyButtons).toHaveLength(2)
+    expect(state.recoverArtifactHub).not.toHaveBeenCalled()
+    await act(async () => verifyButtons[1]?.click())
+    expect(state.recoverArtifactHub).toHaveBeenCalledWith(ociCandidate, expect.anything())
+  })
+
+  it('does not offer ArtifactHub while a configured exact source exists', async () => {
+    state.status = { configured: false, available: false, candidates: [{ type: 'repository', reference: 'local', url: 'https://local.example.test' }] }
+    await renderDialog()
+    expect(document.querySelector('[data-testid="artifacthub-recovery"]')).toBeNull()
   })
 })

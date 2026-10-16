@@ -1106,6 +1106,18 @@ export interface ChartSourceStatus {
   candidates?: ChartSourceCandidate[]
 }
 
+// Unverified ArtifactHub discovery metadata. The operator chooses one result;
+// only that source is downloaded and compared with the installed chart.
+export interface ArtifactHubSourceCandidate {
+  type: 'repository' | 'oci'
+  reference: string
+  url?: string
+  repositoryName: string
+  publisher: string
+  official: boolean
+  verifiedPublisher: boolean
+}
+
 // Batch upgrade info keyed by "storageNamespace/name".
 export interface BatchUpgradeInfo {
   releases: Record<string, UpgradeInfo>

@@ -68,6 +68,8 @@ func TestChartSourceRoutesAndWriteAuthorization(t *testing.T) {
 	}{
 		{http.MethodPut, "/helm/releases/default/example/source", `{"type":"repository","reference":"repo","url":"https://example.test"}`},
 		{http.MethodPost, "/helm/repositories", `{"name":"repo","url":"https://example.test","namespace":"default","releaseName":"example"}`},
+		{http.MethodPost, "/helm/releases/default/example/source-discovery/artifacthub", ``},
+		{http.MethodPost, "/helm/releases/default/example/source-recovery/artifacthub", `{"type":"repository","reference":"repo","url":"https://example.test"}`},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "chart-source-viewer", Groups: []string{"radar:viewer"}}))
@@ -91,6 +93,8 @@ func TestChartSourceErrorStatus(t *testing.T) {
 		{name: "missing release", err: fmt.Errorf("get release: %w", driver.ErrReleaseNotFound), want: http.StatusNotFound},
 		{name: "kubernetes denial", err: fmt.Errorf("update release: %w", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "sh.helm.release.v1.example.v1", errors.New("denied"))), want: http.StatusForbidden},
 		{name: "repository 401", err: errors.New("failed to fetch https://charts.example.test/index.yaml : 401 Unauthorized"), want: http.StatusInternalServerError},
+		{name: "ArtifactHub repository authentication", err: &artifactHubVerificationError{kind: "authentication", err: errors.New("401 Unauthorized")}, want: http.StatusUnprocessableEntity},
+		{name: "ArtifactHub infrastructure", err: &artifactHubVerificationError{kind: "infrastructure", err: errors.New("timeout")}, want: http.StatusBadGateway},
 		{name: "storage failure", err: errors.New("storage unavailable"), want: http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

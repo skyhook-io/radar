@@ -304,6 +304,19 @@ type ChartSourceStatus struct {
 	Candidates []ChartSourceCandidate `json:"candidates,omitempty"`
 }
 
+// ArtifactHubSourceCandidate is unverified discovery metadata. Trust signals
+// and publisher identity are shown to the operator before one source is
+// selected for independent chart reconstruction and comparison.
+type ArtifactHubSourceCandidate struct {
+	Type              string `json:"type"`
+	Reference         string `json:"reference"`
+	URL               string `json:"url,omitempty"`
+	RepositoryName    string `json:"repositoryName"`
+	Publisher         string `json:"publisher"`
+	Official          bool   `json:"official"`
+	VerifiedPublisher bool   `json:"verifiedPublisher"`
+}
+
 // UpgradeInfo contains information about available upgrades
 type UpgradeInfo struct {
 	CurrentVersion  string `json:"currentVersion"`
@@ -437,6 +450,7 @@ type ArtifactHubChart struct {
 	LogoURL     string                `json:"logoUrl,omitempty"`
 	HomeURL     string                `json:"homeUrl,omitempty"`
 	Deprecated  bool                  `json:"deprecated,omitempty"`
+	Official    bool                  `json:"official,omitempty"`
 	Repository  ArtifactHubRepository `json:"repository"`
 	Stars       int                   `json:"stars"`
 	License     string                `json:"license,omitempty"`
@@ -451,11 +465,14 @@ type ArtifactHubChart struct {
 
 // ArtifactHubRepository contains repository info from ArtifactHub
 type ArtifactHubRepository struct {
-	Name              string `json:"name"`
-	URL               string `json:"url"`
-	Official          bool   `json:"official,omitempty"`
-	VerifiedPublisher bool   `json:"verifiedPublisher,omitempty"`
-	OrganizationName  string `json:"organizationName,omitempty"`
+	Name                    string `json:"name"`
+	URL                     string `json:"url"`
+	Official                bool   `json:"official,omitempty"`
+	VerifiedPublisher       bool   `json:"verifiedPublisher,omitempty"`
+	OrganizationName        string `json:"organizationName,omitempty"`
+	OrganizationDisplayName string `json:"organizationDisplayName,omitempty"`
+	UserAlias               string `json:"userAlias,omitempty"`
+	DisplayName             string `json:"displayName,omitempty"`
 }
 
 // ArtifactHubSecurity contains security report summary

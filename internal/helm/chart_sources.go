@@ -713,10 +713,20 @@ func (c *Client) setSourceWith(actionConfig *action.Configuration, name string, 
 	if persisted == nil {
 		return fmt.Errorf("%w: selected source does not publish %s version %s", errInvalidChartSource, rel.Chart.Metadata.Name, rel.Chart.Metadata.Version)
 	}
+	return c.persistVerifiedSource(actionConfig, rel, *persisted)
+}
+
+// persistVerifiedSource records a source only after the caller has verified it
+// against this exact release. The final re-read prevents an ArtifactHub fetch
+// or manual source check from overwriting a concurrent Helm operation.
+func (c *Client) persistVerifiedSource(actionConfig *action.Configuration, rel *release.Release, persisted ChartSourceCandidate) error {
+	if err := validateChartSourceCandidate(&persisted); err != nil {
+		return err
+	}
 	// Update rewrites the whole release record. Refuse while another operation
 	// is in flight, and re-read so a revision written while sources were being
 	// checked is not overwritten with this stale copy.
-	latest, err := actionConfig.Releases.Last(name)
+	latest, err := actionConfig.Releases.Last(rel.Name)
 	if err != nil {
 		return err
 	}
@@ -724,9 +734,9 @@ func (c *Client) setSourceWith(actionConfig *action.Configuration, name string, 
 		latest.Chart == nil || latest.Chart.Metadata == nil ||
 		latest.Chart.Metadata.Name != rel.Chart.Metadata.Name || latest.Chart.Metadata.Version != rel.Chart.Metadata.Version ||
 		!latest.Info.FirstDeployed.Equal(rel.Info.FirstDeployed) {
-		return fmt.Errorf("%w: another Helm operation on %s is in progress or just finished; try again", errReleaseChanging, name)
+		return fmt.Errorf("%w: another Helm operation on %s is in progress or just finished; try again", errReleaseChanging, rel.Name)
 	}
-	latest.Labels = mergeChartSourceLabels(latest.Labels, persisted)
+	latest.Labels = mergeChartSourceLabels(latest.Labels, &persisted)
 	return actionConfig.Releases.Update(latest)
 }
 

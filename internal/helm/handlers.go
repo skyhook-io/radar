@@ -145,6 +145,8 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
 		r.Put("/releases/{namespace}/{name}/values", h.handleApplyValues)
 		r.Put("/releases/{namespace}/{name}/source", h.handleSetSource)
+		r.Post("/releases/{namespace}/{name}/source-discovery/artifacthub", h.handleArtifactHubSourceDiscovery)
+		r.Post("/releases/{namespace}/{name}/source-recovery/artifacthub", h.handleArtifactHubSourceRecovery)
 		r.Delete("/releases/{namespace}/{name}", h.handleUninstall)
 
 		// Chart browser (local repositories)
@@ -216,6 +218,62 @@ func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "success"})
+}
+
+func (h *Handlers) handleArtifactHubSourceDiscovery(w http.ResponseWriter, r *http.Request) {
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	if !requireHelmWrite(w, r, namespace) {
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	var candidates []ArtifactHubSourceCandidate
+	var err error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		candidates, err = client.SearchArtifactHubRecoverySourcesAsUser(r.Context(), namespace, name, user.Username, user.Groups)
+	} else {
+		candidates, err = client.SearchArtifactHubRecoverySources(r.Context(), namespace, name)
+	}
+	if err != nil {
+		writeChartSourceOperationError(w, err, "search-artifacthub", namespace, name)
+		return
+	}
+	writeJSON(w, candidates)
+}
+
+func (h *Handlers) handleArtifactHubSourceRecovery(w http.ResponseWriter, r *http.Request) {
+	if h.ConfigWriteAllowed != nil && !h.ConfigWriteAllowed(w, r) {
+		return
+	}
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	if !requireHelmWrite(w, r, namespace) {
+		return
+	}
+	var selected ArtifactHubSourceCandidate
+	if err := json.NewDecoder(r.Body).Decode(&selected); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	var source *ChartSourceCandidate
+	var err error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		source, err = client.RecoverArtifactHubSourceAsUser(r.Context(), namespace, name, selected, user.Username, user.Groups)
+	} else {
+		source, err = client.RecoverArtifactHubSource(r.Context(), namespace, name, selected)
+	}
+	if err != nil {
+		writeChartSourceOperationError(w, err, "recover-artifacthub-source", namespace, name)
+		return
+	}
+	writeJSON(w, map[string]any{"status": "success", "source": source})
 }
 
 // handleListReleases returns all Helm releases
@@ -1029,6 +1087,15 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 }
 
 func chartSourceErrorStatus(err error) int {
+	var artifactHubErr *artifactHubVerificationError
+	if errors.As(err, &artifactHubErr) {
+		if artifactHubErr.kind == "infrastructure" {
+			return http.StatusBadGateway
+		}
+		if artifactHubErr.kind == "authentication" {
+			return http.StatusUnprocessableEntity
+		}
+	}
 	switch {
 	case errors.Is(err, driver.ErrReleaseNotFound):
 		return http.StatusNotFound
