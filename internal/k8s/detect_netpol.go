@@ -48,7 +48,10 @@ const (
 // APIs Radar doesn't evaluate can allow what core policies deny, so a
 // namespace where one may apply is skipped.
 func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, podsByNamespace map[string][]*corev1.Pod, now time.Time) []Detection {
-	if cache == nil || cache.NetworkPolicies() == nil || cache.Services() == nil {
+	// A partly synced policy list can hold a deny-all without the policy that
+	// allows the same pods.
+	if cache == nil || cache.NetworkPolicies() == nil || cache.Services() == nil ||
+		!cache.IsKindReady("networkpolicies") || !cache.IsKindReady("services") || !cache.IsKindReady("pods") {
 		return nil
 	}
 	var policies []*networkingv1.NetworkPolicy

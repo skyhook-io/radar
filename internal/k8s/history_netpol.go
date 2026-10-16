@@ -129,7 +129,9 @@ func peersDisplay(peers []networkingv1.NetworkPolicyPeer) string {
 		case peer.IPBlock != nil:
 			block := peer.IPBlock.CIDR
 			if len(peer.IPBlock.Except) > 0 {
-				block += " except " + strings.Join(peer.IPBlock.Except, ",")
+				except := append([]string(nil), peer.IPBlock.Except...)
+				sort.Strings(except)
+				block += " except " + strings.Join(except, ",")
 			}
 			parts = append(parts, block)
 		case peer.PodSelector != nil && peer.NamespaceSelector != nil:

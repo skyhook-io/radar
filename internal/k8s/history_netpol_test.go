@@ -44,6 +44,14 @@ func TestDiffNetworkPolicy(t *testing.T) {
 		t.Fatalf("identical policies produced a diff: %+v", changes)
 	}
 
+	reordered := base.DeepCopy()
+	reordered.Spec.Ingress[0].From[1].IPBlock.Except = []string{"10.2.0.0/16", "10.1.0.0/16"}
+	withBoth := base.DeepCopy()
+	withBoth.Spec.Ingress[0].From[1].IPBlock.Except = []string{"10.1.0.0/16", "10.2.0.0/16"}
+	if changes, _ := diffNetworkPolicy(withBoth, reordered); len(changes) != 0 {
+		t.Fatalf("reordering ipBlock.except produced a diff: %+v", changes)
+	}
+
 	relabeled := base.DeepCopy()
 	relabeled.Labels = map[string]string{"team": "shop"}
 	if changes, _ := diffNetworkPolicy(base, relabeled); len(changes) != 0 {
