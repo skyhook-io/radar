@@ -2,6 +2,7 @@ import type { DashboardHelmSummary } from '../../api/client'
 import { Package, ArrowRight, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from '../ui/Tooltip'
+import { useHelmReadIdentity } from '../helm/helmReadIdentity'
 
 interface HelmSummaryProps {
   data?: DashboardHelmSummary
@@ -41,6 +42,7 @@ function getHealthDot(health?: string): string {
 }
 
 export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
+  const helmReadIdentity = useHelmReadIdentity()
   return (
     <button
       onClick={onNavigate}
@@ -77,21 +79,27 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
             ))}
           </div>
         ) : data.restricted ? (
-          <div className="flex flex-col items-center justify-center h-full py-4 text-theme-text-tertiary">
+          <div className="flex flex-col items-center justify-center h-full py-4 px-3 text-center text-theme-text-tertiary">
             <Shield className="w-8 h-8 text-amber-400 mb-2" />
-            <span className="text-xs font-medium text-theme-text-secondary">Access Restricted</span>
-            <span className="text-[11px] mt-1">Insufficient permissions to list Helm releases</span>
+            <span className="text-xs font-medium text-theme-text-secondary">Can't list Helm releases</span>
+            <span className="text-[11px] mt-1">
+              {helmReadIdentity === 'serviceAccount'
+                ? "Radar's ServiceAccount can't read Secrets, where Helm stores releases."
+                : helmReadIdentity === 'pending' || helmReadIdentity === 'unknown'
+                  ? "Radar can't list Secrets, where Helm stores releases."
+                  : "Your Kubernetes identity can't list Secrets, where Helm stores releases."}
+            </span>
           </div>
         ) : data.error ? (
           <div className="flex flex-col items-center justify-center h-full py-4 text-theme-text-tertiary">
             <Shield className="w-8 h-8 text-amber-400 mb-2" />
             <span className="text-xs font-medium text-theme-text-secondary">
-              {data.errorCode === 'unconfigured' ? 'Helm not configured' : 'Helm unavailable'}
+              {data.errorCode === 'unconfigured' ? 'Helm not connected' : 'Helm unavailable'}
             </span>
             <Tooltip content={data.error} wrapperClassName="!block mt-1 min-w-0 text-center">
             <span className="text-[11px] text-center px-2 truncate max-w-full">
               {data.errorCode === 'unconfigured'
-                ? 'Set rbac.helm=true in the Radar Helm chart values.'
+                ? "Radar's Helm client isn't connected to this cluster yet."
                 : data.error}
             </span>
             </Tooltip>

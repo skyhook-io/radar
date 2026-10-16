@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
-import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input } from '@skyhook-io/k8s-ui'
+import { Package, Search, ArrowUpCircle, LayoutGrid, List, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
+import { PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, RestrictedState } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
@@ -11,6 +11,7 @@ import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '../../utils/badge-c
 import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
 import { InstallWizard } from './InstallWizard'
+import { HELM_SECRETS_DOCS_URL, useHelmReadIdentity } from './helmReadIdentity'
 
 type ViewTab = 'releases' | 'charts'
 
@@ -27,6 +28,7 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
 
   const { data: releases, isLoading, error: releasesError, dataUpdatedAt: releasesUpdatedAt, isFetching: releasesFetching, refetch: refetchReleases } = useHelmReleases(namespaces)
   const isForbidden = isForbiddenError(releasesError)
+  const helmReadIdentity = useHelmReadIdentity()
   const releasesErrorMessage = releasesError instanceof Error ? releasesError.message : 'Failed to load Helm releases'
 
   // Lazy load upgrade info after releases are loaded
@@ -257,13 +259,25 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                   Upgrade checks failed: {upgradeErrorMessage}
                 </div>
               )}
-              {isLoading ? (
+              {isLoading || (isForbidden && helmReadIdentity === 'pending') ? (
                 <PaneLoader className="h-full" />
               ) : isForbidden ? (
-                <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-                  <Shield className="w-8 h-8 text-amber-400 mb-2" />
-                  <p className="text-theme-text-secondary font-medium">Access Restricted</p>
-                  <p className="text-sm mt-1">Insufficient permissions to list Helm releases</p>
+                <div className="min-h-full flex items-center justify-center">
+                  <RestrictedState
+                    kindLabel="Secret"
+                    resource="secrets"
+                    reason={
+                      helmReadIdentity === 'serviceAccount'
+                        ? 'unavailable'
+                        : helmReadIdentity === 'unknown'
+                          ? 'unknown'
+                          : 'rbac_denied'
+                    }
+                    title="Can't list Helm releases"
+                    context="Helm stores releases as Secrets, so listing them needs read access to Secrets."
+                    chartValue="rbac.secrets=true"
+                    docsHref={HELM_SECRETS_DOCS_URL}
+                  />
                 </div>
               ) : releasesError ? (
                 <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-3 px-6 text-center">

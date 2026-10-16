@@ -23,8 +23,20 @@ interface Props {
   /** Why the kind is hidden. "rbac_denied" (default): Radar can read it but the
    *  user's RBAC can't — show the grant request. "unavailable": Radar's
    *  ServiceAccount can't read it at all (not installed / SA RBAC / feature off)
-   *  — a user grant won't help, so show a different message and no snippet. */
-  reason?: 'rbac_denied' | 'unavailable' | string
+   *  — a user grant won't help, so show a different message and no snippet.
+   *  "unknown": the read was denied but the host can't tell which identity
+   *  made it, so name no remedy. */
+  reason?: 'rbac_denied' | 'unavailable' | 'unknown' | string
+  /** Heading and one sentence for a screen that needs this kind without being
+   *  its list, e.g. the Helm view, whose releases are stored as Secrets. */
+  title?: string
+  context?: string
+  /** For "unavailable": the Radar chart value that grants Radar's
+   *  ServiceAccount this read, for a kind that authentication also grants.
+   *  Replaces the generic explanation with those two routes and the trade-off. */
+  chartValue?: string
+  /** Docs for the chartValue route. */
+  docsHref?: string
   /** Tightens spacing for inline/embedded use (topology overlay, etc.). */
   compact?: boolean
   className?: string
@@ -60,7 +72,18 @@ function buildRbacRequest(group: string, resource: string): string {
   ].join('\n')
 }
 
-export function RestrictedState({ kindLabel, group = '', resource, reason, compact, className }: Props) {
+export function RestrictedState({
+  kindLabel,
+  group = '',
+  resource,
+  reason,
+  title,
+  context,
+  chartValue,
+  docsHref,
+  compact,
+  className,
+}: Props) {
   const [expanded, setExpanded] = useState(false)
   const accessDisclosure = useDisclosure(expanded)
   const [copied, setCopied] = useState(false)
@@ -93,20 +116,56 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
       )}
     >
       <Shield className="w-8 h-8 text-amber-400 mb-2" />
-      {isUnavailable ? (
+      {reason === 'unknown' ? (
+        <>
+          <p className="text-theme-text-secondary font-medium">{title ?? `Can't read ${kindLabel}`}</p>
+          {context && <p className="text-sm mt-1 max-w-md">{context}</p>}
+          <p className="text-sm mt-2 max-w-md">
+            Radar couldn't confirm which identity made this read, so it can't say what access to
+            grant.
+          </p>
+        </>
+      ) : isUnavailable ? (
         // Radar's ServiceAccount can't read this kind — a user grant won't help.
         <>
-          <p className="text-theme-text-secondary font-medium">{kindLabel} isn't available here</p>
-          <p className="text-sm mt-1 max-w-md">
-            Radar can't read {kindLabel} resources in this cluster — the type may not be installed,
-            or read access isn't granted to Radar's ServiceAccount (some kinds, like RBAC objects
-            and Secrets, are off unless enabled in the Radar chart). Granting your own identity
-            access won't surface it.
-          </p>
+          <p className="text-theme-text-secondary font-medium">{title ?? `${kindLabel} isn't available here`}</p>
+          {context && <p className="text-sm mt-1 max-w-md">{context}</p>}
+          {chartValue ? (
+            <>
+              <p className="text-sm mt-2 max-w-md">
+                Radar's ServiceAccount can't read {kindLabel} resources. Enable authentication so
+                each user reads with their own Kubernetes permissions, or set{' '}
+                <code className="font-mono text-theme-text-secondary">{chartValue}</code> in the
+                Radar chart.
+              </p>
+              <p className="text-sm mt-2 max-w-md">
+                That value lets Radar read every {kindLabel} in the cluster, and with
+                authentication off, anyone who can open Radar can see them.
+              </p>
+              {docsHref && (
+                <a
+                  href={docsHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 text-sm text-accent-text hover:underline"
+                >
+                  Setup options and trade-offs
+                </a>
+              )}
+            </>
+          ) : (
+            <p className="text-sm mt-1 max-w-md">
+              Radar can't read {kindLabel} resources in this cluster — the type may not be installed,
+              or read access isn't granted to Radar's ServiceAccount (some kinds, like RBAC objects
+              and Secrets, are off unless enabled in the Radar chart). Granting your own identity
+              access won't surface it.
+            </p>
+          )}
         </>
       ) : (
         <>
-          <p className="text-theme-text-secondary font-medium">You don't have access to {kindLabel}</p>
+          <p className="text-theme-text-secondary font-medium">{title ?? `You don't have access to ${kindLabel}`}</p>
+          {context && <p className="text-sm mt-1 max-w-md">{context}</p>}
           <p className="text-sm mt-1 max-w-md">
             Your Kubernetes RBAC doesn't allow listing {kindLabel} resources in this cluster. This
             isn't an empty cluster — Radar is hiding what your identity can't read.
