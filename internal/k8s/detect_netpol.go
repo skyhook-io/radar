@@ -84,7 +84,7 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 	otherPolicies := newOtherPolicyView()
 	var out []Detection
 	for _, ns := range namespaces {
-		if otherPolicies.mayApply(ns, podsByNamespace[ns], namespaceLabels(cache, ns)) {
+		if otherPolicies.mayApply(ns, podsByNamespace[ns], namespaceObject(cache, ns)) {
 			continue
 		}
 		out = append(out, denyAllIngressDetections(policiesByNamespace[ns], servicesByNamespace[ns], podsByNamespace[ns], now)...)
@@ -93,18 +93,16 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 }
 
 // otherPolicyAPIs can allow traffic that the core NetworkPolicies alone would
-// deny: Cilium, Antrea and AWS VPC CNI policies add allow rules to the same
-// pods, and admin-tier cluster policies are evaluated ahead of them. Radar
-// doesn't evaluate their rules, so a namespace where any of them may apply
-// gets no deny-all verdict. Calico policies are matched per pod instead, in
-// otherPolicyView.calicoMaySelect, because a cluster-wide Calico policy
+// deny: Antrea and AWS VPC CNI policies add allow rules to the same pods, and
+// admin-tier cluster policies are evaluated ahead of them. Radar doesn't
+// evaluate their rules or selectors, so a namespace where any of them may
+// apply gets no deny-all verdict. Cilium and Calico policies are matched per
+// pod instead (ciliumMaySelect, calicoMaySelect), because a cluster-wide one
 // usually targets only some workloads.
 var otherPolicyAPIs = []struct {
 	kind, group string
 	namespaced  bool
 }{
-	{"CiliumNetworkPolicy", "cilium.io", true},
-	{"CiliumClusterwideNetworkPolicy", "cilium.io", false},
 	{"NetworkPolicy", "crd.antrea.io", true},
 	{"ClusterNetworkPolicy", "crd.antrea.io", false},
 	{"ApplicationNetworkPolicy", "networking.k8s.aws", true},
@@ -133,6 +131,7 @@ type otherPolicyView struct {
 	clusterChecked bool
 	clusterApplies bool
 	globalCalico   []*unstructured.Unstructured
+	globalCilium   []*unstructured.Unstructured
 }
 
 func newOtherPolicyView() *otherPolicyView {
@@ -165,12 +164,13 @@ func (v *otherPolicyView) list(kind, group, namespace string) (items []*unstruct
 }
 
 // mayApply reports whether a policy outside core NetworkPolicy may select any
-// of pods, which all live in namespace. namespaceLabels is nil when the
-// Namespace object couldn't be read.
-func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, namespaceLabels map[string]string) bool {
+// of pods, which all live in namespace. ns is nil when the Namespace object
+// couldn't be read.
+func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, ns *corev1.Namespace) bool {
 	if v == nil {
 		return true
 	}
+	namespaceLabels := calicoNamespaceLabels(ns)
 	if !v.clusterChecked {
 		v.clusterChecked = true
 		v.clusterApplies = v.clusterWidePolicyApplies()
@@ -208,6 +208,15 @@ func (v *otherPolicyView) mayApply(namespace string, pods []*corev1.Pod, namespa
 			return true
 		}
 	}
+	items, known := v.list("CiliumNetworkPolicy", "cilium.io", namespace)
+	if !known {
+		return true
+	}
+	for _, policy := range append(append([]*unstructured.Unstructured(nil), items...), v.globalCilium...) {
+		if ciliumMaySelect(policy, pods, ns) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -242,6 +251,25 @@ func (v *otherPolicyView) clusterWidePolicyApplies() bool {
 				return true
 			}
 			v.globalCalico = append(v.globalCalico, items...)
+		}
+	}
+	items, known := v.list("CiliumClusterwideNetworkPolicy", "cilium.io", "")
+	if !known {
+		return true
+	}
+	v.globalCilium = items
+	return false
+}
+
+// ciliumMaySelect reports whether a Cilium policy governs inbound traffic for
+// any of the pods, or can't be ruled out (a selector on a label Radar can't
+// reproduce). Cilium adds its allow rules to those of core policies, so such
+// a policy may allow what they deny.
+func ciliumMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, ns *corev1.Namespace) bool {
+	for _, pod := range pods {
+		selects, decided, _ := netpol.CiliumGoverns(policy, netpol.CiliumIdentityFor(pod, ns), netpol.DirectionIngress)
+		if selects || !decided {
+			return true
 		}
 	}
 	return false
@@ -553,7 +581,7 @@ func networkPolicyEvidenceReads(namespace string) []issuesapi.EvidenceRead {
 	}
 }
 
-func namespaceLabels(cache *ResourceCache, namespace string) map[string]string {
+func namespaceObject(cache *ResourceCache, namespace string) *corev1.Namespace {
 	lister := cache.Namespaces()
 	if lister == nil {
 		return nil
@@ -562,7 +590,15 @@ func namespaceLabels(cache *ResourceCache, namespace string) map[string]string {
 	if err != nil {
 		return nil
 	}
-	// Calico adds these to every namespace's selectable labels.
+	return ns
+}
+
+// calicoNamespaceLabels returns the labels a Calico namespaceSelector matches,
+// or nil when the Namespace couldn't be read.
+func calicoNamespaceLabels(ns *corev1.Namespace) map[string]string {
+	if ns == nil {
+		return nil
+	}
 	out := make(map[string]string, len(ns.Labels)+2)
 	for k, v := range ns.Labels {
 		out[k] = v
