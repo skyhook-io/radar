@@ -39,9 +39,20 @@ func unpauseSpecPatch(ro *unstructured.Unstructured) []byte {
 
 // Abort reverts traffic to the stable ReplicaSet without touching spec. The
 // fastest way out of a bad rollout; Retry resumes it afterwards.
+//
+// It is refused during a full promotion, because the controller clears status.abort on
+// every reconcile until promoteFull is cleared, and only a template change or the new
+// revision becoming stable clears it. kubectl-argo-rollouts sends the patch anyway and
+// nothing happens.
 func Abort(ctx context.Context, client dynamic.Interface, namespace, name string) (OperationResult, error) {
-	if _, err := get(ctx, client, namespace, name); err != nil {
+	ro, err := get(ctx, client, namespace, name)
+	if err != nil {
 		return OperationResult{}, err
+	}
+	if promoteFullPending(ro) && !currentIsStable(ro) {
+		return OperationResult{}, fmt.Errorf(
+			"Rollout %s/%s: %w, and the Argo Rollouts controller clears any abort until it finishes. To go back, roll back to the stable revision",
+			namespace, name, ErrPromoteFullInProgress)
 	}
 	if _, err := patchStatusThenSpec(ctx, client, namespace, name, []byte(abortPatch), nil); err != nil {
 		return OperationResult{}, err
@@ -139,17 +150,22 @@ func PromoteFull(ctx context.Context, client dynamic.Interface, namespace, name 
 		return res, nil
 	}
 
+	var res OperationResult
 	switch repatchUntilPromoted(ctx, client, namespace, name, afterStatus, deadline) {
 	case promoteFullLanded:
-		return result("promote-full", namespace, name,
-			fmt.Sprintf("Rollout %s/%s promoted to full — remaining steps, pauses, and analysis skipped", namespace, name)), nil
+		res = result("promote-full", namespace, name,
+			fmt.Sprintf("Rollout %s/%s promoted to full — remaining steps, pauses, and analysis skipped", namespace, name))
+		res.Outcome = OutcomeLanded
 	case promoteFullAccepted:
-		return result("promote-full", namespace, name,
-			fmt.Sprintf("Rollout %s/%s: promote full is under way. The new revision takes over as its pods become ready; check the Rollout if they don't", namespace, name)), nil
+		res = result("promote-full", namespace, name,
+			fmt.Sprintf("Rollout %s/%s: promote full is under way. The new revision takes over as its pods become ready; check the Rollout if they don't", namespace, name))
+		res.Outcome = OutcomeUnderway
 	default:
-		return result("promote-full", namespace, name,
-			fmt.Sprintf("Rollout %s/%s: promotion sent, but the controller has not confirmed it — check the Rollout before relying on it", namespace, name)), nil
+		res = result("promote-full", namespace, name,
+			fmt.Sprintf("Rollout %s/%s: promotion sent, but the controller has not confirmed it — check the Rollout before relying on it", namespace, name))
+		res.Outcome = OutcomeUnconfirmed
 	}
+	return res, nil
 }
 
 var (
@@ -206,13 +222,17 @@ func repatchUntilPromoted(ctx context.Context, client dynamic.Interface, namespa
 	return promoteFullUnconfirmed
 }
 
-// promoteFullTaken reports that the controller has acted on the flag since our status
-// write and kept it. The evidence is a canary with steps moved to its last step, or a
-// pause the controller held (pauseConditions) released, which shows as the Paused
-// condition going from True to False. A Rollout paused only through spec.paused does
-// not count on the Paused condition, because the controller flips that as soon as our
-// unpause lands. A Rollout with neither, such as a blue-green that has not reached its
-// pause yet, keeps the old wait.
+// promoteFullTaken reports that the controller has reconciled the Rollout since our
+// status write and kept the flag. The evidence is a canary with steps moved to its last
+// step, or a pause the controller held (pauseConditions) released, which shows as the
+// Paused condition going from True to False. That does not prove the flag released it:
+// the controller recomputes the condition from pauseConditions at the start of every
+// reconcile, so a timed pause running out or another user's promote looks the same. It
+// is enough because the flag is still set, and the controller honours it on any
+// reconcile that reads it. A Rollout paused only through spec.paused does not count on
+// the Paused condition, because the controller flips that as soon as our unpause lands.
+// A Rollout with neither, such as a blue-green that has not reached its pause yet, keeps
+// the old wait.
 //
 // The Rollout must not be aborted, paused again or InvalidSpec, and its spec must be the
 // one we promoted. Past that, only reaching the final revision clears the flag: the

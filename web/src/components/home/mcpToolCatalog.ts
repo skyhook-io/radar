@@ -313,7 +313,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'manage_rollout',
     write: true,
-    desc: 'Control an Argo Rollout progressive delivery: abort reverts traffic to the last stable version immediately, retry clears an abort, promote advances one step, promote-full skips all remaining steps/pauses/analysis, skip-step advances exactly one canary step. A Rollout paused on an inconclusive analysis names its AnalysisRun in status — read that first.',
+    desc: 'Control an Argo Rollout progressive delivery: abort reverts traffic to the last stable version immediately (refused while a promote-full is in progress), retry clears an abort, promote advances one step, promote-full skips all remaining steps/pauses/analysis and says whether it landed or is still under way, skip-step advances exactly one canary step. A Rollout paused on an inconclusive analysis names its AnalysisRun in status — read that first.',
     params: [
       { arg: 'action', required: true, desc: 'abort, retry, promote, promote-full, or skip-step' },
       { arg: 'namespace', required: true, desc: 'rollout namespace' },

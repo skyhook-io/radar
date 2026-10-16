@@ -58,6 +58,22 @@ var (
 	// ErrControllerNotCaughtUp means the Argo Rollouts controller has not reconciled the
 	// change yet: a lagging dependency, not a bad request.
 	ErrControllerNotCaughtUp = errors.New("Argo Rollouts controller has not reconciled the latest change")
+
+	// ErrPromoteFullInProgress means an abort would be discarded: while status.promoteFull
+	// is set, the controller clears status.abort on every reconcile.
+	ErrPromoteFullInProgress = errors.New("a full promotion is in progress")
+)
+
+// Outcome says how far a promote-full got before the call returned.
+type Outcome string
+
+const (
+	// The new revision is stable.
+	OutcomeLanded Outcome = "landed"
+	// The controller took the request and is moving to the new revision.
+	OutcomeUnderway Outcome = "underway"
+	// The request was sent, but the controller was never seen acting on it.
+	OutcomeUnconfirmed Outcome = "unconfirmed"
 )
 
 type OperationResult struct {
@@ -71,6 +87,9 @@ type OperationResult struct {
 	// what happened rather than what was asked for. Set by Promote and PromoteFull,
 	// which are the verbs that can legitimately be a no-op.
 	NoChange bool `json:"noChange,omitempty"`
+	// Outcome is set by PromoteFull when it sent a promotion. Until it reads landed, the
+	// rollout is done once status.stableRS equals status.currentPodHash.
+	Outcome Outcome `json:"outcome,omitempty"`
 }
 
 type Strategy string

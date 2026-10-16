@@ -233,7 +233,8 @@ func (s *Server) writeRolloutError(w http.ResponseWriter, err error, action, nam
 		status = http.StatusForbidden
 	case errors.Is(err, rollouts.ErrResourceTerminating),
 		errors.Is(err, rollouts.ErrTemplateUnchanged),
-		errors.Is(err, rollouts.ErrAlreadyAtLastStep):
+		errors.Is(err, rollouts.ErrAlreadyAtLastStep),
+		errors.Is(err, rollouts.ErrPromoteFullInProgress):
 		status = http.StatusConflict
 	case errors.Is(err, rollouts.ErrNoSteps), errors.Is(err, rollouts.ErrWorkloadRefUnsupported):
 		status = http.StatusBadRequest

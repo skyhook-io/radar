@@ -104,7 +104,7 @@ describe('completePromoteAfterRollback', () => {
       ),
     ).resolves.toEqual({
       promoted: false,
-      error: { message: '403 forbidden', controllerLagging: false },
+      error: { message: '403 forbidden', reason: 'failed' },
     })
     expect(pending).toEqual([true, false])
   })
@@ -121,7 +121,7 @@ describe('completePromoteAfterRollback', () => {
       completePromoteAfterRollback(() => Promise.reject(lagging), () => {}),
     ).resolves.toEqual({
       promoted: false,
-      error: { message: 'controller has not reconciled', controllerLagging: true },
+      error: { message: 'controller has not reconciled', reason: 'lagging' },
     })
 
     const disconnected = Object.assign(new Error('cluster client not available'), { status: 503 })
@@ -129,8 +129,25 @@ describe('completePromoteAfterRollback', () => {
       completePromoteAfterRollback(() => Promise.reject(disconnected), () => {}),
     ).resolves.toEqual({
       promoted: false,
-      error: { message: 'cluster client not available', controllerLagging: false },
+      error: { message: 'cluster client not available', reason: 'failed' },
     })
+  })
+
+  // The server answers 200 when it sent the promotion but never saw the controller act on
+  // it. Closing the dialog then would read as "promoted" when the steps may still run.
+  it('treats an unconfirmed promote-full as not promoted', async () => {
+    const message = 'promotion sent, but the controller has not confirmed it'
+    await expect(
+      completePromoteAfterRollback(() => Promise.resolve({ outcome: 'unconfirmed', message }), () => {}),
+    ).resolves.toEqual({ promoted: false, error: { message, reason: 'unconfirmed' } })
+  })
+
+  it('closes on a promote-full that landed or is under way', async () => {
+    for (const outcome of ['landed', 'underway']) {
+      await expect(
+        completePromoteAfterRollback(() => Promise.resolve({ outcome, message: 'x' }), () => {}),
+      ).resolves.toEqual({ promoted: true })
+    }
   })
 
   it('supports a void-returning callback', async () => {
@@ -151,20 +168,27 @@ describe('promoteFailureGuidance', () => {
   // The status alone cannot carry this: a lost cluster connection answers 503 on the
   // same route, and telling the operator to retry that would be a fabricated cause.
   it('offers a retry only when the controller was lagging', () => {
-    const lagging = promoteFailureGuidance({ message: 'x', controllerLagging: true })
+    const lagging = promoteFailureGuidance({ message: 'x', reason: 'lagging' })
     expect(lagging.canRetry).toBe(true)
     expect(lagging.body).toContain('had not caught up')
 
-    const other = promoteFailureGuidance({ message: 'forbidden', controllerLagging: false })
+    const other = promoteFailureGuidance({ message: 'forbidden', reason: 'failed' })
     expect(other.canRetry).toBe(false)
     expect(other.body).not.toContain('had not caught up')
+  })
+
+  it('offers a retry when the controller never confirmed the promotion', () => {
+    const unconfirmed = promoteFailureGuidance({ message: 'x', reason: 'unconfirmed' })
+    expect(unconfirmed.canRetry).toBe(true)
+    expect(unconfirmed.title).toContain('not confirmed')
+    expect(unconfirmed.body).toContain('did not confirm')
   })
 
   // A canary pause is the usual reason to want promote-full, and it will not clear on
   // its own — "it is still running" would read as "wait" when the answer is "act".
   it('warns that a manual pause will not resolve itself', () => {
-    for (const controllerLagging of [true, false]) {
-      const { body } = promoteFailureGuidance({ message: 'x', controllerLagging })
+    for (const reason of ['lagging', 'unconfirmed', 'failed'] as const) {
+      const { body } = promoteFailureGuidance({ message: 'x', reason })
       expect(body).toContain('manual pause')
       expect(body).not.toContain('progressing normally')
     }

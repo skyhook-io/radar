@@ -1006,30 +1006,53 @@ export function revisionRoleBadges(rev: WorkloadRevision, isRollout: boolean): R
 // half of the pair still needs them.
 export interface PromoteFailure {
   message: string
-  // Only a lagging controller clears on its own. The status cannot say that — a lost
-  // cluster connection also answers 503 — so this reads the error code the server sends.
-  controllerLagging: boolean
+  // lagging: the controller had not caught up with the rollback, which clears on its own.
+  // The status cannot say that (a lost cluster connection also answers 503), so it comes
+  // from the error code the server sends.
+  // unconfirmed: the server sent the promotion but never saw the controller act on it.
+  reason: 'lagging' | 'unconfirmed' | 'failed'
 }
 
 // What the operator is told when the rollback landed and the promotion did not. Kept
 // apart from the markup so the wording and the retry decision can be tested.
 export function promoteFailureGuidance(failure: PromoteFailure): {
+  title: string
   body: string
   canRetry: boolean
 } {
-  const shared =
-    'The rollback is live and is re-running the canary steps you asked to skip. ' +
-    'If any of them is a manual pause it will stop there until someone promotes it.'
-  if (failure.controllerLagging) {
-    return {
-      body: `${shared} The Argo Rollouts controller had not caught up yet, which usually clears within a few seconds.`,
-      canRetry: true,
-    }
+  const pause = 'If any of them is a manual pause it will stop there until someone promotes it.'
+  const shared = `The rollback is live and is re-running the canary steps you asked to skip. ${pause}`
+  switch (failure.reason) {
+    case 'lagging':
+      return {
+        title: 'Rolled back, but not promoted',
+        body: `${shared} The Argo Rollouts controller had not caught up yet, which usually clears within a few seconds.`,
+        canRetry: true,
+      }
+    case 'unconfirmed':
+      return {
+        title: 'Rolled back, promotion not confirmed',
+        body:
+          'The rollback was applied. The promotion was sent, but the Argo Rollouts controller did not confirm it, ' +
+          `so the canary steps you asked to skip may still run. ${pause} Check the rollout's progress before sending it again.`,
+        canRetry: true,
+      }
+    case 'failed':
+      return {
+        title: 'Rolled back, but not promoted',
+        body: `${shared} Promote full is also available from the rollout page once this is resolved.`,
+        canRetry: false,
+      }
   }
-  return {
-    body: `${shared} Promote full is also available from the rollout page once this is resolved.`,
-    canRetry: false,
-  }
+}
+
+// A 200 from promote-full can still mean the controller never acted on it.
+function unconfirmedPromotion(result: unknown): string | null {
+  if (typeof result !== 'object' || result === null) return null
+  if (!('outcome' in result) || result.outcome !== 'unconfirmed') return null
+  return 'message' in result && typeof result.message === 'string'
+    ? result.message
+    : 'The controller did not confirm the promotion.'
 }
 
 export async function completePromoteAfterRollback(
@@ -1038,7 +1061,10 @@ export async function completePromoteAfterRollback(
 ): Promise<{ promoted: boolean; error?: PromoteFailure }> {
   setPending(true)
   try {
-    await promote()
+    const unconfirmed = unconfirmedPromotion(await promote())
+    if (unconfirmed !== null) {
+      return { promoted: false, error: { message: unconfirmed, reason: 'unconfirmed' } }
+    }
     return { promoted: true }
   } catch (err) {
     const code = (err as { data?: { error_code?: string } })?.data?.error_code
@@ -1046,7 +1072,7 @@ export async function completePromoteAfterRollback(
       promoted: false,
       error: {
         message: err instanceof Error ? err.message : String(err),
-        controllerLagging: code === 'controller_not_caught_up',
+        reason: code === 'controller_not_caught_up' ? 'lagging' : 'failed',
       },
     }
   } finally {
@@ -1108,7 +1134,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
             if (!outcome.promoted) {
               // Closing here would leave the operator with a green "rollback initiated"
               // toast and a canary still running every step they asked to skip.
-              setPromoteError(outcome.error ?? { message: 'The promotion did not go through.', controllerLagging: false })
+              setPromoteError(outcome.error ?? { message: 'The promotion did not go through.', reason: 'failed' })
               setConfirmRevision(null)
               return
             }
@@ -1133,7 +1159,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
       onClose()
       return
     }
-    setPromoteError(outcome.error ?? { message: 'The promotion did not go through.', controllerLagging: false })
+    setPromoteError(outcome.error ?? { message: 'The promotion did not go through.', reason: 'failed' })
   }
 
   function getImageTag(image: string): string {
@@ -1308,7 +1334,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
         <div className="mx-4 shrink-0" role="alert">
           <AlertBanner
             variant="warning"
-            title="Rolled back, but not promoted"
+            title={promoteFailureGuidance(promoteError).title}
             message={
               <>
                 {promoteFailureGuidance(promoteError).body}
