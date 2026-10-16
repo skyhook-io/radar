@@ -235,7 +235,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 		t.Fatalf("got %d detections, want one per contributing policy", len(pair))
 	}
 	for i, other := range []string{"deny-in", "default-deny"} {
-		if !strings.Contains(pair[i].Cause, "NetworkPolicy "+other+" isolates them the same way") {
+		if !strings.Contains(pair[i].Cause, "NetworkPolicy "+other+" also isolates some of these pods") {
 			t.Errorf("%s cause doesn't name %s: %q", pair[i].Name, other, pair[i].Cause)
 		}
 	}
@@ -244,8 +244,13 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 	if !strings.Contains(pair[0].Action, "namespace-wide default-deny") || strings.Contains(pair[0].Action, "delete the policy") {
 		t.Errorf("default-deny action = %q", pair[0].Action)
 	}
-	if !strings.Contains(pair[1].Action, "delete the policy") {
-		t.Errorf("targeted deny action = %q", pair[1].Action)
+	if !strings.Contains(pair[1].Action, "removing this one alone may not restore traffic") {
+		t.Errorf("targeted deny next to a default-deny action = %q", pair[1].Action)
+	}
+	if solo := denyAllIngressDetections([]*networkingv1.NetworkPolicy{
+		netpolTestPolicy("deny-in", map[string]string{"app": "rec"}, ingressOnly),
+	}, services[:1], pods, time.Now()); !strings.Contains(solo[0].Action, "delete the policy") {
+		t.Errorf("lone targeted deny action = %q", solo[0].Action)
 	}
 
 	brokenEgress := netpolTestPolicy("broken-egress", nil, egressOnly)
@@ -353,6 +358,10 @@ func TestOtherPolicyViewMayApply(t *testing.T) {
 		{"Calico global policy for another namespace", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"namespaceSelector": "team == 'other'"}))}, shopLabels, false},
 		{"Calico namespace selector with unknown namespace labels", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"namespaceSelector": "team == 'other'"}))}, nil, true},
 		{"Calico service-account selector can't be judged", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"serviceAccountSelector": "role == 'x'"}))}, shopLabels, true},
+		{"Calico egress-only policy can't allow inbound", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app == 'rec'", "types": []any{"Egress"}}))}, shopLabels, false},
+		{"Calico policy with only egress rules defaults to Egress", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app == 'rec'", "egress": []any{map[string]any{"action": "Allow"}}}))}, shopLabels, false},
+		{"Calico selector on the endpoint service-account label", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "projectcalico.org/serviceaccount == 'default'"}))}, shopLabels, true},
+		{"Calico service-account selector plus an excluding namespace selector", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"namespaceSelector": "team == 'other'", "serviceAccountSelector": "role == 'x'"}))}, shopLabels, false},
 		{"Calico selector Radar can't parse", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app ==="}))}, shopLabels, true},
 		{"unsynced is unknown", served, fakePolicyLister{unsynced: true}, shopLabels, true},
 		{"list error is unknown", served, fakePolicyLister{err: errors.New("forbidden")}, shopLabels, true},

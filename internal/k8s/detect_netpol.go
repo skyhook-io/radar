@@ -244,25 +244,67 @@ func (v *otherPolicyView) clusterWidePolicyApplies() bool {
 	return false
 }
 
-// calicoMaySelect reports whether a Calico policy selects any of the pods, or
-// can't be ruled out: an unusable selector, a namespace selector with unknown
-// namespace labels, or a service-account selector (Radar doesn't read
-// ServiceAccount labels here).
+// calicoMaySelect reports whether a Calico policy that can allow inbound
+// traffic selects any of the pods, or can't be ruled out. Radar doesn't read
+// ServiceAccount labels here, and namespace labels may be unknown, so those
+// selectors are dropped before matching: what remains can still exclude the
+// pods, but a match only means the policy may apply.
 func calicoMaySelect(policy *unstructured.Unstructured, pods []*corev1.Pod, namespaceLabels map[string]string) bool {
+	if !calicoGovernsIngress(policy) {
+		return false
+	}
 	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "serviceAccountSelector"); !calicoSelectsAll(sel) {
-		return true
+		policy = policy.DeepCopy()
+		unstructured.RemoveNestedField(policy.Object, "spec", "serviceAccountSelector")
 	}
 	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "namespaceSelector"); namespaceLabels == nil && !calicoSelectsAll(sel) {
-		return true
+		policy = policy.DeepCopy()
+		unstructured.RemoveNestedField(policy.Object, "spec", "namespaceSelector")
 	}
 	matcher := topology.CompileCalicoPolicyMatcher(policy)
 	for _, pod := range pods {
-		matched, valid := matcher.Matches(topology.CalicoEndpointLabels(pod.Namespace, pod.Labels), namespaceLabels, pod.Spec.ServiceAccountName, nil)
+		matched, valid := matcher.Matches(calicoPodLabels(pod), namespaceLabels, pod.Spec.ServiceAccountName, nil)
 		if matched || !valid {
 			return true
 		}
 	}
 	return false
+}
+
+// calicoGovernsIngress applies Calico's types defaulting: without explicit
+// types a policy covers Ingress unless it has egress rules and no ingress
+// rules.
+func calicoGovernsIngress(policy *unstructured.Unstructured) bool {
+	types, found, err := unstructured.NestedStringSlice(policy.Object, "spec", "types")
+	if err != nil {
+		return true
+	}
+	if found && len(types) > 0 {
+		for _, t := range types {
+			if strings.EqualFold(t, "Ingress") {
+				return true
+			}
+		}
+		return false
+	}
+	ingress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "ingress")
+	egress, _, _ := unstructured.NestedSlice(policy.Object, "spec", "egress")
+	return len(ingress) > 0 || len(egress) == 0
+}
+
+// calicoPodLabels adds the service-account label Calico sets on a pod's
+// endpoint (for names short enough to be a label value) to the shared
+// endpoint labels.
+func calicoPodLabels(pod *corev1.Pod) map[string]string {
+	out := topology.CalicoEndpointLabels(pod.Namespace, pod.Labels)
+	sa := pod.Spec.ServiceAccountName
+	if sa == "" {
+		sa = "default"
+	}
+	if len(sa) < 63 {
+		out["projectcalico.org/serviceaccount"] = sa
+	}
+	return out
 }
 
 func calicoSelectsAll(selector string) bool {
@@ -458,9 +500,9 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		others = fmt.Sprintf(" NetworkPolicies %s isolate them the same way.", strings.Join(names, ", "))
+		others = fmt.Sprintf(" NetworkPolicies %s also isolate some of these pods.", strings.Join(names, ", "))
 		if len(names) == 1 {
-			others = fmt.Sprintf(" NetworkPolicy %s isolates them the same way.", names[0])
+			others = fmt.Sprintf(" NetworkPolicy %s also isolates some of these pods.", names[0])
 		}
 	}
 	cause := fmt.Sprintf("NetworkPolicy %s isolates these pods for ingress and has no ingress rules, and no NetworkPolicy selecting them allows ingress, so new connections to them would be dropped.%s "+
@@ -469,8 +511,11 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	// A namespace-wide default-deny is usually intended; what's missing is an
 	// allow policy for these pods, so deleting it is the wrong first advice.
 	action := fmt.Sprintf("If this isolation is not intended, delete the policy or add an ingress rule for the expected clients. Inspect it with: kubectl describe networkpolicy %s -n %s", np.Name, np.Namespace)
-	if podSelectorDisplay(&np.Spec.PodSelector) == "all pods" {
+	switch {
+	case podSelectorDisplay(&np.Spec.PodSelector) == "all pods":
 		action = fmt.Sprintf("This is a namespace-wide default-deny, so these pods need a NetworkPolicy that allows their expected clients. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
+	case len(impact.alsoDenying) > 0:
+		action = fmt.Sprintf("Other policies isolate these pods too, so removing this one alone may not restore traffic; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
 	}
 
 	age := now.Sub(np.CreationTimestamp.Time)
