@@ -220,17 +220,26 @@ func hpaMetricTargets(metrics []autoscalingv2.MetricSpec) map[string]string {
 		case m.ContainerResource != nil:
 			key, target = m.ContainerResource.Container+"/"+string(m.ContainerResource.Name), m.ContainerResource.Target
 		case m.Pods != nil:
-			key, target = "pods/"+m.Pods.Metric.Name, m.Pods.Target
+			key, target = "pods/"+metricIdentifierString(m.Pods.Metric), m.Pods.Target
 		case m.Object != nil:
-			key, target = "object/"+m.Object.DescribedObject.Kind+"/"+m.Object.DescribedObject.Name+"/"+m.Object.Metric.Name, m.Object.Target
+			key, target = "object/"+m.Object.DescribedObject.Kind+"/"+m.Object.DescribedObject.Name+"/"+metricIdentifierString(m.Object.Metric), m.Object.Target
 		case m.External != nil:
-			key, target = "external/"+m.External.Metric.Name, m.External.Target
+			key, target = "external/"+metricIdentifierString(m.External.Metric), m.External.Target
 		default:
 			key = string(m.Type)
 		}
 		out[key] = metricTargetString(target)
 	}
 	return out
+}
+
+// The selector is part of a metric's identity: changing it changes which
+// series drive scaling.
+func metricIdentifierString(id autoscalingv2.MetricIdentifier) string {
+	if id.Selector == nil {
+		return id.Name
+	}
+	return id.Name + "{" + metav1.FormatLabelSelector(id.Selector) + "}"
 }
 
 func metricTargetString(t autoscalingv2.MetricTarget) string {

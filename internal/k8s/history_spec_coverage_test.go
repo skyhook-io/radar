@@ -681,3 +681,28 @@ func TestComputeDiff_HTTPRouteHeaderValuesNeverShown(t *testing.T) {
 		}
 	}
 }
+
+func TestComputeDiff_HPAExternalMetricSelectorChange(t *testing.T) {
+	qty := resource.MustParse("100")
+	metric := func(queue string) []autoscalingv2.MetricSpec {
+		return []autoscalingv2.MetricSpec{{
+			Type: autoscalingv2.ExternalMetricSourceType,
+			External: &autoscalingv2.ExternalMetricSource{
+				Metric: autoscalingv2.MetricIdentifier{Name: "queue_depth", Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"queue": queue}}},
+				Target: autoscalingv2.MetricTarget{Type: autoscalingv2.ValueMetricType, Value: &qty},
+			},
+		}}
+	}
+	base := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", UID: "hpa", Generation: 1},
+		Spec:       autoscalingv2.HorizontalPodAutoscalerSpec{MaxReplicas: 5, Metrics: metric("orders")},
+	}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.Metrics = metric("payments")
+
+	diff := ComputeDiff("HorizontalPodAutoscaler", base, updated)
+	if diff == nil || diff.Summary != "metric external/queue_depth{queue=orders} removed, metric external/queue_depth{queue=payments} added (target 100)" {
+		t.Fatalf("summary = %+v", diff)
+	}
+}
