@@ -219,19 +219,27 @@ func reconcilePolicyFindings(t *Trace) {
 	visit(t.Upstreams)
 }
 
-// downgradeDenyAllIngress turns a Service hop's NetworkPolicy deny-all issue
-// into an info note once live traffic reached its pods.
+// downgradeDenyAllIngress replaces a Service hop's NetworkPolicy deny-all
+// issues (one per policy) with a single info note once live traffic reached
+// its pods.
 func downgradeDenyAllIngress(h *Hop) {
 	idx := findingIndexByCode(h.Findings, k8s.NetworkPolicyDenyAllIngressFingerprint)
 	if idx < 0 {
 		return
 	}
-	h.Findings[idx] = Finding{
+	note := Finding{
 		Code:     k8s.NetworkPolicyDenyAllIngressFingerprint,
 		Severity: SeverityInfo,
 		Message:  "Traffic got through. A NetworkPolicy here would block all inbound traffic to these pods - but either this cluster's network plugin doesn't enforce NetworkPolicy, or the static read missed an allow rule.",
 		Command:  h.Findings[idx].Command,
 	}
+	kept := h.Findings[:0]
+	for _, f := range h.Findings {
+		if f.Code != k8s.NetworkPolicyDenyAllIngressFingerprint {
+			kept = append(kept, f)
+		}
+	}
+	h.Findings = append(kept, note)
 	sortFindingsBySeverity(h.Findings)
 }
 

@@ -93,13 +93,15 @@ func TestServiceTraceShowsNetworkPolicyIssueOnce(t *testing.T) {
 	}
 }
 
-// Traffic that got through to the pods settles the Service hop's policy issue
-// as well as the Pods hop's per-port prediction; a dropped data path keeps it.
+// Traffic that got through to the pods settles the Service hop's policy issues
+// (one per policy) into a single note, as it does the Pods hop's per-port
+// prediction; a dropped data path keeps them.
 func TestReconcilePolicyDowngradesServiceDenyAll(t *testing.T) {
 	trace := func(dataOK bool) *Trace {
-		svc := Hop{Resource: ResourceRef{Kind: "Service", Namespace: "ns", Name: "rec"}, Edge: "entry:Service", Findings: []Finding{{
-			Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress - Would block all inbound traffic",
-		}}}
+		svc := Hop{Resource: ResourceRef{Kind: "Service", Namespace: "ns", Name: "rec"}, Edge: "entry:Service", Findings: []Finding{
+			{Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress - Would block all inbound traffic (default-deny)"},
+			{Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress - Would block all inbound traffic (deny-rec)"},
+		}}
 		pods := wouldDenyHop([]probe.Result{
 			{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Port: 80, Path: probe.PathData, OK: dataOK},
 		}, false)
@@ -109,14 +111,15 @@ func TestReconcilePolicyDowngradesServiceDenyAll(t *testing.T) {
 
 	tr := trace(true)
 	reconcilePolicyFindings(tr)
-	f := tr.Downstream[0].Findings[0]
-	if f.Severity != SeverityInfo || !strings.Contains(f.Message, "Traffic got through") {
-		t.Errorf("Service hop finding = %+v, want the info note after traffic got through", f)
+	if got := tr.Downstream[0].Findings; len(got) != 1 || got[0].Severity != SeverityInfo || !strings.Contains(got[0].Message, "Traffic got through") {
+		t.Errorf("Service hop findings = %+v, want one info note after traffic got through", got)
 	}
 
 	tr = trace(false)
 	reconcilePolicyFindings(tr)
-	if f := tr.Downstream[0].Findings[0]; f.Severity != SeverityWarning {
-		t.Errorf("Service hop severity = %q, want warning kept when the data path was dropped", f.Severity)
+	for _, f := range tr.Downstream[0].Findings {
+		if f.Severity != SeverityWarning {
+			t.Errorf("Service hop finding %+v, want both warnings kept when the data path was dropped", f)
+		}
 	}
 }
