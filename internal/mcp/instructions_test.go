@@ -47,7 +47,7 @@ func TestServerInstructionsFitClientLimits(t *testing.T) {
 // name fields of an issues row, and instructionTimingValues the issue_timing
 // values they name; neither is a tool.
 var (
-	instructionIssueFields  = []string{"incident_parent", "issue_timing", "timing_summary"}
+	instructionIssueFields  = []string{"incident_parent", "issue_timing", "resource_created_at", "timing_summary"}
 	instructionTimingValues = []string{"started_after_resource_was_healthy", "started_at_resource_creation"}
 )
 

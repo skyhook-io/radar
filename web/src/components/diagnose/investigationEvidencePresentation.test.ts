@@ -177,6 +177,24 @@ describe("evidence display significance (not record identity)", () => {
       evidenceDisplaySnapshot(different),
     );
   });
+  it("keeps a since-creation condition warning stable and distinct from a regression", () => {
+    const snapshot = (warning: string) =>
+      evidenceDisplaySnapshot(
+        observation({ type: "resource", resource, warnings: [warning] }),
+      );
+    const sinceCreation = (elapsed: string) =>
+      snapshot(
+        "Condition `Ready=False` for ~" +
+          elapsed +
+          " — since about when this resource was created (resource age: " +
+          elapsed +
+          ").",
+      );
+    expect(sinceCreation("20s")).toBe(sinceCreation("1m5s"));
+    expect(sinceCreation("20s")).not.toBe(
+      snapshot("Condition `Ready=False` for ~20s (resource age: 1h)."),
+    );
+  });
   it("tolerates unstructured conditions without deleting their contents", () => {
     const value = {
       ...resource,

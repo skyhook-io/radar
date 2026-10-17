@@ -36,7 +36,7 @@ const writeRoutingLine = "- Fixes, if your tool list includes write tools: patch
 const signalInstructions = `READING RADAR'S SIGNALS
 - An issues row that names a mechanism and an action is the leading hypothesis; if it has an incident_parent, start from that root. Confirm it with a targeted read (a log line, a field) instead of re-deriving it. If it points at another resource, follow that dependency. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
 - Read the changes attached to issues first; call get_changes when they are absent or you need another window or scope. Reuse the logs diagnose returned; fetch more only for a specific gap.
-- issue_timing started_after_resource_was_healthy means a healthy window preceded the failure: look for what changed. started_at_resource_creation on a recently created resource can mean the creation itself is the fault. Prefer timing_summary when present.
+- issue_timing started_after_resource_was_healthy means a healthy window preceded the failure: look for what changed. started_at_resource_creation means the failure has been present since the resource was created. Compare resource_created_at with the incident window. Timing alone does not establish cause or relevance. Prefer timing_summary when present.
 - issues is live state; get_cluster_audit is configuration posture.
 - After a fix, wait on a condition with a time limit, never a fixed sleep: the rollout completes, new pods are Ready, the issue clears in issues. Check the reported symptom directly only when those signals do not cover it.
 `

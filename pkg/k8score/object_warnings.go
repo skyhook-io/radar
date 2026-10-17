@@ -86,11 +86,12 @@ func namespaceTerminatingWarning(obj *unstructured.Unstructured) string {
 }
 
 // workloadHealthWarning surfaces (1) how long the workload's primary health
-// condition has been False and (2) whether that failure has been continuous
-// since the workload was created — a strong "this state is baseline, not new"
-// signal. We don't recommend an interpretation: agents reading current state
-// will treat "broken since deploy" as the problem to fix; agents debugging an
-// incident will treat it as a baseline distractor.
+// condition has been False and (2) whether it went False at about the time the
+// resource was created, always with the resource's age. Both forms are facts,
+// not an interpretation: a failure present since creation is not evidence that
+// it is old or unrelated to an incident, because a resource created seconds ago
+// carries the same marker as one that has been broken for weeks. Only the age
+// tells them apart.
 func workloadHealthWarning(obj *unstructured.Unstructured) string {
 	kind := obj.GetKind()
 	var conditionType string
@@ -141,11 +142,11 @@ func workloadHealthWarning(obj *unstructured.Unstructured) string {
 	}
 	age := time.Since(createdAt)
 
-	// "never healthy" = condition has been False for essentially the entire
-	// resource lifetime. The 30s slop accommodates the brief moment after
-	// creation when conditions haven't been written yet.
+	// The condition went False within 30s of creation. The slop accommodates the
+	// brief moment after creation when conditions haven't been written yet; it
+	// also absorbs a healthy window shorter than that, hence "about".
 	if age-failingFor < 30*time.Second {
-		return fmt.Sprintf("Condition `%s=False` for ~%s — continuously since this resource was created. The failure has been present from the moment it was first applied; check whether this matches what you were asked to investigate (a recently-introduced fault vs. a long-standing misconfiguration).", conditionType, durationShort(failingFor))
+		return fmt.Sprintf("Condition `%s=False` for ~%s — since about when this resource was created (resource age: %s).", conditionType, durationShort(failingFor), durationShort(age))
 	}
 	return fmt.Sprintf("Condition `%s=False` for ~%s (resource age: %s).", conditionType, durationShort(failingFor), durationShort(age))
 }
