@@ -301,6 +301,38 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 	}
 }
 
+// A gap without a kind is about the search, not about a kind it read, so it
+// never excuses leaving out a listed object of a kind Radar reads.
+func TestRecheckDoesNotLetAKindlessGapExcuseAnOmission(t *testing.T) {
+	owner := ownershiptest.Object{Ref: resourceid.Ref{Group: "example.io", Kind: "ClusterWidget", Name: "parent"}, APIVersion: "example.io/v1", UID: "uid-parent", ResourceVersion: "1"}
+	a := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Node", Name: "a"}, APIVersion: "v1", UID: "uid-a", ResourceVersion: "10", Owners: []metav1.OwnerReference{owner.OwnerRef(false)}}
+	sibling := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Node", Name: "sibling"}, APIVersion: "v1", UID: "uid-sibling", ResourceVersion: "20", Owners: []metav1.OwnerReference{owner.OwnerRef(false)}}
+	updated := a
+	updated.ResourceVersion = "11"
+	for _, tc := range []struct {
+		name    string
+		partial bool
+		domain  ownership.Domain
+	}{
+		{"an empty namespace entry", false, ownership.Domain{Namespaces: []string{""}, ClusterScoped: true}},
+		{"partial discovery", true, ownership.Domain{ClusterScoped: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			listedWorld, now := world(owner, a, sibling), world(owner, updated, sibling)
+			listedWorld.Partial, now.Partial = tc.partial, tc.partial
+			cache := dropsLater{begin(t, now), sibling.Ref, new(int)}
+			q := ownershiptest.Queries{UIDs: []types.UID{"uid-parent"}, Domains: []ownership.Domain{tc.domain}, Limits: []int{0}}
+			diffs := ownershiptest.Differences(begin(t, listedWorld), cache, q)
+			if len(diffs) != 1 || diffs[0].Coverage || len(diffs[0].WantGaps) == 0 || diffs[0].WantGaps[0].Kind != (resourceid.GroupKind{}) {
+				t.Fatalf("scenario: want one object difference beside a kindless gap, got %v", diffs)
+			}
+			if got := quick.recheck(diffs[0], listedOf(listedWorld), cache, apiOf(now)); got != unresolved {
+				t.Fatalf("%v, want unresolved", got)
+			}
+		})
+	}
+}
+
 func TestRecheckResolutionNeedsOnlyTheOwnerToChange(t *testing.T) {
 	rs := ownershiptest.Object{Ref: resourceid.Ref{Group: "apps", Kind: "ReplicaSet", Namespace: "alpha", Name: "rs"}, APIVersion: "apps/v1", UID: "uid-rs", ResourceVersion: "1"}
 	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "p"}, APIVersion: "v1", UID: "uid-p", ResourceVersion: "10", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
