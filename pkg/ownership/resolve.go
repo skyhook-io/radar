@@ -61,6 +61,10 @@ func ResolveOwner(s Session, dependent Observation, ref metav1.OwnerReference) O
 		return OwnerResolution{State: OwnerUnresolvable}
 	}
 	gk := resourceid.GroupKind{Group: gv.Group, Kind: ref.Kind}
+	if IsEvent(gk) {
+		// Events are outside ownership, whatever discovery lists.
+		return OwnerResolution{State: OwnerExcluded, Ref: resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: dependent.Ref.Namespace, Name: ref.Name}}
+	}
 	catalog := s.Catalog()
 	unknown := func(namespace string) OwnerResolution {
 		return OwnerResolution{Gap: Gap{Kind: gk, Namespace: namespace, Reason: readreason.ReadError}}

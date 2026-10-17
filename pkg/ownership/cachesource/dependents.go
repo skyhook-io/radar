@@ -170,55 +170,77 @@ func (s *session) dynamicCandidates(q *search, kind ownership.Kind) {
 		return
 	}
 	// read searches the informers serving namespace at every watched version
-	// that can answer. Versions that disagree leave the namespace unread: one
-	// of their watches hasn't caught up.
-	read := func(namespace string) (readreason.Code, bool) {
-		var found []*unstructured.Unstructured
-		var at schema.GroupVersionResource
-		answered := false
+	// that can answer, and says which versions answered. Versions that
+	// disagree leave the namespace unread: one of their watches hasn't caught
+	// up.
+	read := func(namespace string) (found []*unstructured.Unstructured, at schema.GroupVersionResource, answered []schema.GroupVersionResource, reason readreason.Code) {
 		for _, gvr := range versions {
 			objs, server, ok := s.caches.Dynamic.ReadableDependents(gvr, namespace, q.uid)
 			if !ok {
 				continue
 			}
 			s.record(gvr, namespace, server)
-			if !answered {
-				found, at, answered = objs, gvr, true
+			if len(answered) == 0 {
+				found, at = objs, gvr
 			} else if !sameIncarnations(found, objs) {
-				return readreason.KindSyncPending, false
+				return nil, at, nil, readreason.KindSyncPending
+			}
+			answered = append(answered, gvr)
+		}
+		if len(answered) == 0 {
+			return nil, at, nil, dynamicReason(s.caches.Dynamic.NamespaceObservation(versions[0], namespace))
+		}
+		return found, at, answered, ""
+	}
+	add := func(objs []*unstructured.Unstructured, at schema.GroupVersionResource, skip map[string]bool) {
+		for _, u := range objs {
+			if !skip[u.GetNamespace()] {
+				q.add(gk, at.GroupVersion().String(), u, u.GetNamespace(), u.GetName())
 			}
 		}
-		if !answered {
-			return dynamicReason(s.caches.Dynamic.NamespaceObservation(versions[0], namespace)), false
+	}
+	readNamespaces := func(namespaces []string) {
+		for _, ns := range namespaces {
+			if objs, at, _, reason := read(ns); reason != "" {
+				q.gap(gk, ns, reason)
+			} else {
+				add(objs, at, nil)
+			}
 		}
-		for _, u := range found {
-			q.add(gk, at.GroupVersion().String(), u, u.GetNamespace(), u.GetName())
-		}
-		return "", true
 	}
 	if kind.Namespaced && !q.domain.AllNamespaces {
-		for _, ns := range q.namespaces {
-			if reason, ok := read(ns); !ok {
+		readNamespaces(q.namespaces)
+		return
+	}
+	found, at, answered, reason := read("")
+	// A version watched only namespace by namespace holds evidence of its
+	// own about those namespaces.
+	var namespaces []string
+	for _, gvr := range versions {
+		if watched, byNamespace := s.namespaceWatches(gvr); byNamespace && !slices.Contains(answered, gvr) {
+			namespaces = append(namespaces, watched...)
+		}
+	}
+	slices.Sort(namespaces)
+	namespaces = slices.Compact(namespaces)
+	if reason == "" {
+		// Its namespaces must agree with the cluster-wide answer.
+		pending := map[string]bool{}
+		for _, ns := range namespaces {
+			if _, _, _, reason := read(ns); reason != "" {
+				pending[ns] = true
 				q.gap(gk, ns, reason)
 			}
 		}
+		add(found, at, pending)
 		return
 	}
-	reason, ok := read("")
-	if ok {
-		return
-	}
-	namespaces, byNamespace := s.namespaceWatches(versions[0])
-	if !kind.Namespaced || !byNamespace {
+	if !kind.Namespaced || len(namespaces) == 0 {
 		q.gap(gk, "", reason)
 		return
 	}
 	// Watched only namespace by namespace: read those, and the rest are unread.
-	for _, ns := range namespaces {
-		if reason, ok := read(ns); !ok {
-			q.gap(gk, ns, reason)
-		}
-	}
+	readNamespaces(namespaces)
 	q.gap(gk, "", readreason.CollectorScopeLimited)
 }
 

@@ -117,3 +117,24 @@ func TestResolveOwnerIsUnknownWithoutTheEvidence(t *testing.T) {
 		t.Fatalf("unlisted owner kind with partial discovery = %v, want unknown", got.State)
 	}
 }
+
+// An Event owner is excluded, as an Event read is, even when partial
+// discovery didn't list Events.
+func TestResolveOwnerExcludesEventOwnersWhateverDiscoveryLists(t *testing.T) {
+	w := ownershiptest.Fixture()
+	w.Partial = true
+	var resources []ownership.ServedResource
+	for _, r := range w.Resources {
+		if r.Kind != "Event" {
+			resources = append(resources, r)
+		}
+	}
+	w.Resources = resources
+	s, _ := ownershiptest.Scan(w).Begin()
+	pod := s.Object(resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "web-1-a"}).Object
+	for _, apiVersion := range []string{"v1", "events.k8s.io/v1"} {
+		if got := ownership.ResolveOwner(s, pod, metav1.OwnerReference{APIVersion: apiVersion, Kind: "Event", Name: "e1", UID: "uid-alpha-e1"}); got.State != ownership.OwnerExcluded {
+			t.Errorf("an Event owner at %s, Events unlisted = %v %+v, want excluded", apiVersion, got.State, got.Gap)
+		}
+	}
+}

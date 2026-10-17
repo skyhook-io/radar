@@ -12,8 +12,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clientfeatures "k8s.io/client-go/features"
 	clientfeaturestesting "k8s.io/client-go/features/testing"
 	"k8s.io/client-go/kubernetes/fake"
@@ -62,6 +64,90 @@ func TestOwnerCandidatesNeedEveryWatchedVersionToAgree(t *testing.T) {
 				if found := slices.Contains(candidateRefs(got), w1); found != tc.wantFound || pending != tc.wantPending {
 					t.Fatalf("%+v: found w1 %v, pending gap %v; want %v, %v (%+v)", domain, found, pending, tc.wantFound, tc.wantPending, got)
 				}
+			}
+		})
+	}
+}
+
+// scopedVersionsFixture serves Widgets at v1 and v1beta1 from separate
+// stores, each watched cluster-wide (nil) or only in the given namespaces.
+func scopedVersionsFixture(t *testing.T, v1, v1beta1 []runtime.Object, v1Scope, betaScope []string) *fixture {
+	t.Helper()
+	beta := schema.GroupVersionResource{Group: "example.io", Version: "v1beta1", Resource: "widgets"}
+	scopes := map[schema.GroupVersionResource][]string{widgets: v1Scope, beta: betaScope}
+	f := newFixture(t, k8score.CacheConfig{}, func(f *fixture) {
+		f.dynamic = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{widgets: "WidgetList", beta: "WidgetList", gadgets: "GadgetList", summaries: "SummaryList"},
+			append(v1, v1beta1...)...)
+		// A version limited to some namespaces may not be listed
+		// cluster-wide, so Radar watches it namespace by namespace.
+		f.dynamic.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if scopes[a.GetResource()] != nil && a.GetNamespace() == "" {
+				return true, nil, apierrors.NewForbidden(a.GetResource().GroupResource(), "", errors.New("namespaces only"))
+			}
+			return false, nil, nil
+		})
+	})
+	for gvr, scope := range scopes {
+		if scope == nil {
+			f.watch(t, gvr)
+			continue
+		}
+		for _, ns := range scope {
+			if _, err := f.caches.Dynamic.List(gvr, ns); err != nil {
+				t.Fatal(err)
+			}
+			waitUntil(t, fmt.Sprintf("%v in %s", gvr, ns), func() bool { return f.caches.Dynamic.IsNamespaceSynced(gvr, ns) })
+		}
+	}
+	return f
+}
+
+// A search of every namespace compares a version watched cluster-wide with
+// one watched only in some namespaces, there; and with no cluster-wide watch
+// it reads every version's namespaces.
+func TestOwnerCandidatesCompareVersionsWatchedInDifferentScopes(t *testing.T) {
+	w1, w9 := ref("example.io", "Widget", "alpha", "w1"), ref("example.io", "Widget", "beta", "w9")
+	for _, tc := range []struct {
+		name               string
+		v1, v1beta1        []runtime.Object
+		v1Scope, betaScope []string
+		wantFound          []resourceid.Ref
+		wantGaps           []ownership.Gap
+	}{
+		{name: "they agree", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
+			betaScope: []string{"alpha"}, wantFound: []resourceid.Ref{w1}},
+		{name: "only the namespace watch holds it", v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
+			betaScope: []string{"alpha"}, wantGaps: []ownership.Gap{{Kind: widgetKind, Namespace: "alpha", Reason: readreason.KindSyncPending}}},
+		{name: "two incarnations", v1: []runtime.Object{widget("alpha", "w1", "uid-new")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-old"))},
+			betaScope: []string{"alpha"}, wantGaps: []ownership.Gap{{Kind: widgetKind, Namespace: "alpha", Reason: readreason.KindSyncPending}}},
+		{name: "a disagreement keeps to its namespace", v1: []runtime.Object{widget("beta", "w9", "uid-w9")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
+			betaScope: []string{"alpha"}, wantFound: []resourceid.Ref{w9}, wantGaps: []ownership.Gap{{Kind: widgetKind, Namespace: "alpha", Reason: readreason.KindSyncPending}}},
+		{name: "no cluster-wide watch", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("beta", "w9", "uid-w9"))},
+			v1Scope: []string{"alpha"}, betaScope: []string{"beta"}, wantFound: []resourceid.Ref{w1, w9},
+			wantGaps: []ownership.Gap{{Kind: widgetKind, Reason: readreason.CollectorScopeLimited}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := scopedVersionsFixture(t, tc.v1, tc.v1beta1, tc.v1Scope, tc.betaScope)
+			s := begin(t, f.source())
+			got := s.OwnerCandidates("uid-deploy", ownership.Everywhere(), 0)
+			var widgetGaps []ownership.Gap
+			for _, g := range got.Gaps {
+				if g.Kind == widgetKind {
+					widgetGaps = append(widgetGaps, g)
+				}
+			}
+			var found []resourceid.Ref
+			for _, r := range candidateRefs(got) {
+				if r.GroupKind() == widgetKind {
+					found = append(found, r)
+				}
+			}
+			if !slices.Equal(found, tc.wantFound) || !slices.Equal(widgetGaps, tc.wantGaps) {
+				t.Fatalf("Widgets %v, gaps %+v; want %v, %+v", found, widgetGaps, tc.wantFound, tc.wantGaps)
+			}
+			if err := s.Validate(); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
