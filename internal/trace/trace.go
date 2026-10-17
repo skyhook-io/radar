@@ -73,6 +73,10 @@ type Deps struct {
 	// every issue surface does. A zero value fails closed for findings that
 	// rest on evidence (such as a missing TLS Secret).
 	IssueAccess IssueAccess
+	// CanReadWorkload authorizes naming the workloads behind a Service's
+	// Pods: Pod access doesn't extend to the Deployment or Rollout found
+	// through their ReplicaSets. Nil withholds the breakdown.
+	CanReadWorkload func(group, kind, namespace string) bool
 }
 
 // IssueAccess carries the caller's issue authorizers into the trace walk.

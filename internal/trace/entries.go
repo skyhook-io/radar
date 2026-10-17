@@ -451,7 +451,7 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 	// Several workloads behind one Service is often deliberate (canary,
 	// blue/green), so the grouping is context only. When the workloads are
 	// different applications, the issues engine raises a warning on the Service.
-	if backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods); backends.MultipleWorkloads() {
+	if backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods); backends.MultipleWorkloads() && canNameWorkloads(deps, backends.Workloads, svc.Namespace) {
 		meta["workloads"] = traceBackendWorkloads(backends.Workloads)
 		hop.Findings = append(hop.Findings, Finding{
 			Code:     "pods:multiple-workloads",
@@ -2329,6 +2329,19 @@ func podsWorkload(deps Deps, pods []*corev1.Pod) *ResourceRef {
 		}
 	}
 	return found
+}
+
+func canNameWorkloads(deps Deps, workloads []k8s.ServiceBackendWorkload, namespace string) bool {
+	if deps.CanReadWorkload == nil {
+		return false
+	}
+	for _, w := range workloads {
+		ns, ok := k8s.WorkloadAccessNamespace(w, namespace)
+		if !ok || !deps.CanReadWorkload(w.Group, w.Kind, ns) {
+			return false
+		}
+	}
+	return true
 }
 
 // maxTraceBackendWorkloads caps the breakdown like the per-pod roster; the

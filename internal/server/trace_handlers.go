@@ -85,6 +85,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 			CanReadSubject:       s.issueSubjectAccess(r),
 			CanReadEvidence:      s.issueEvidenceAccess(r),
 		},
+		CanReadWorkload: s.workloadReadAccess(r),
 		// Probes call services/proxy + pods/proxy on this client. Use the
 		// per-request impersonated identity (or the SA when auth is disabled)
 		// so the apiserver enforces the caller's RBAC on the proxy verbs -

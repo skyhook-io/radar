@@ -1535,6 +1535,7 @@ func TestBuildTrace_ServiceWithMixedBackends(t *testing.T) {
 	cases := []struct {
 		name        string
 		second      *corev1.Pod
+		denyKind    string
 		wantVerdict string
 		wantSummary string
 	}{
@@ -1543,6 +1544,12 @@ func TestBuildTrace_ServiceWithMixedBackends(t *testing.T) {
 			second:      mixedBackendPod("search-0", "search", "hotel/app:v1", 8082),
 			wantVerdict: VerdictDegraded,
 			wantSummary: "Selects 2 pods from 2 workloads: frontend (1), search (1)",
+		},
+		{
+			name:        "caller who can't read the workloads gets the warning without the breakdown",
+			second:      mixedBackendPod("search-0", "search", "hotel/app:v1", 8082),
+			denyKind:    "StatefulSet",
+			wantVerdict: VerdictDegraded,
 		},
 		{
 			name:        "same-image canary",
@@ -1571,6 +1578,9 @@ func TestBuildTrace_ServiceWithMixedBackends(t *testing.T) {
 				Dynamic:   k8s.GetDynamicResourceCache(),
 				Discovery: k8s.GetResourceDiscovery(),
 				Issues:    issues.NewCacheProvider(),
+				CanReadWorkload: func(_, kind, _ string) bool {
+					return kind != tc.denyKind
+				},
 			}
 			var trace *Trace
 			waitFor(t, func() bool {
@@ -1594,7 +1604,7 @@ func TestBuildTrace_ServiceWithMixedBackends(t *testing.T) {
 			if summary != tc.wantSummary {
 				t.Errorf("breakdown = %q, want %q", summary, tc.wantSummary)
 			}
-			if rows, ok := pods.Meta["workloads"].([]map[string]any); !ok || len(rows) != 2 {
+			if rows, ok := pods.Meta["workloads"].([]map[string]any); (tc.wantSummary != "") != (ok && len(rows) == 2) {
 				t.Errorf("pods hop workloads = %#v", pods.Meta["workloads"])
 			}
 			mixed := false

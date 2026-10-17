@@ -264,9 +264,6 @@ type backendWorkload struct {
 	ServiceBackendWorkload
 	receiving  []*corev1.Pod
 	containers map[string]backendContainer
-	// repos are the image repositories of the receiving Pods' containers,
-	// mesh proxies aside.
-	repos map[string]bool
 }
 
 // AnalyzeServiceBackends groups the Pods a Service selects by workload and
@@ -360,7 +357,6 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 	for _, w := range order {
 		if len(w.receiving) > 0 {
 			w.containers = workloadContainers(w.receiving)
-			w.repos = containerRepos(w.receiving)
 			receiving = append(receiving, w)
 		}
 	}
@@ -373,28 +369,36 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 	return out
 }
 
-// distinctApplicationsPerPort compares the workloads behind each Service port
+// distinctApplicationsPerPort compares the Pods behind each Service port
 // separately: Kubernetes builds endpoints per port, so two applications that
 // each serve a different named port never share traffic.
 func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorkload) [][]string {
-	if len(svc.Spec.Ports) == 0 {
-		return distinctApplications(workloads)
-	}
-	var worst [][]string
-	for _, sp := range svc.Spec.Ports {
-		behind := workloads
-		if sp.TargetPort.Type == intstr.String && sp.TargetPort.StrVal != "" {
-			behind = nil
-			for _, w := range workloads {
+	behindPort := func(sp *corev1.ServicePort) ([]string, []map[string]bool) {
+		var labels []string
+		var repos []map[string]bool
+		for _, w := range workloads {
+			pods := w.receiving
+			if sp != nil && sp.TargetPort.Type == intstr.String && sp.TargetPort.StrVal != "" {
+				pods = nil
 				for _, pod := range w.receiving {
 					if declaresNamedPort(pod, sp.TargetPort.StrVal, portProtocol(sp.Protocol)) {
-						behind = append(behind, w)
-						break
+						pods = append(pods, pod)
 					}
 				}
 			}
+			if len(pods) > 0 {
+				labels = append(labels, w.Label)
+				repos = append(repos, containerRepos(pods))
+			}
 		}
-		if apps := distinctApplications(behind); len(apps) > len(worst) {
+		return labels, repos
+	}
+	if len(svc.Spec.Ports) == 0 {
+		return distinctApplications(behindPort(nil))
+	}
+	var worst [][]string
+	for i := range svc.Spec.Ports {
+		if apps := distinctApplications(behindPort(&svc.Spec.Ports[i])); len(apps) > len(worst) {
 			worst = apps
 		}
 	}
@@ -560,8 +564,8 @@ func declaresPort(containers map[string]backendContainer, port int32, proto core
 // common; more than one group means different applications. Sharing anything
 // counts, so a sidecar injected into every Pod hides this signal: a missed
 // warning costs less than a false one, and the port signal still applies.
-func distinctApplications(workloads []*backendWorkload) [][]string {
-	parent := make([]int, len(workloads))
+func distinctApplications(labels []string, repos []map[string]bool) [][]string {
+	parent := make([]int, len(labels))
 	for i := range parent {
 		parent[i] = i
 	}
@@ -573,9 +577,9 @@ func distinctApplications(workloads []*backendWorkload) [][]string {
 		return parent[i]
 	}
 	repoOwner := map[string]int{}
-	hasRepo := make([]bool, len(workloads))
-	for i, w := range workloads {
-		for repo := range w.repos {
+	hasRepo := make([]bool, len(labels))
+	for i := range labels {
+		for repo := range repos[i] {
 			hasRepo[i] = true
 			if j, ok := repoOwner[repo]; ok {
 				parent[find(i)] = find(j)
@@ -586,7 +590,7 @@ func distinctApplications(workloads []*backendWorkload) [][]string {
 	}
 	groups := map[int][]string{}
 	var roots []int
-	for i, w := range workloads {
+	for i, label := range labels {
 		if !hasRepo[i] {
 			continue
 		}
@@ -594,7 +598,7 @@ func distinctApplications(workloads []*backendWorkload) [][]string {
 		if _, ok := groups[r]; !ok {
 			roots = append(roots, r)
 		}
-		groups[r] = append(groups[r], w.Label)
+		groups[r] = append(groups[r], label)
 	}
 	if len(roots) < 2 {
 		return nil
@@ -624,6 +628,23 @@ func portProtocol(p corev1.Protocol) corev1.Protocol {
 	return p
 }
 
+// WorkloadAccessNamespace is the namespace to check a caller's access to a
+// backend workload in: the Service's, or "" for a cluster-scoped kind (a
+// mirror Pod's Node). ok is false when the kind can't be resolved; access
+// checks pass such kinds through, so the workload must not be named.
+func WorkloadAccessNamespace(w ServiceBackendWorkload, serviceNamespace string) (string, bool) {
+	if w.Kind == "Pod" {
+		return serviceNamespace, true
+	}
+	if _, resource := LookupResourceGVR(w.Kind, w.Group); resource == "" {
+		return "", false
+	}
+	if clusterScoped, _, _ := ClassifyKindScope(w.Kind, w.Group); clusterScoped {
+		return "", true
+	}
+	return serviceNamespace, true
+}
+
 // ServiceBackendLookup serves resource context's Service backend lookups from
 // the cache.
 type ServiceBackendLookup struct {
@@ -641,16 +662,9 @@ func (l ServiceBackendLookup) GroupServiceBackends(svc *corev1.Service, pods []*
 	backends := AnalyzeServiceBackends(l.Cache, svc, pods)
 	out := resourcecontext.ServiceBackendGrouping{}
 	for _, w := range backends.Workloads {
-		namespace := svc.Namespace
-		if w.Kind != "Pod" {
-			// The access check passes kinds it can't resolve, so a workload
-			// of an unknown kind would be named without one.
-			if _, resource := LookupResourceGVR(w.Kind, w.Group); resource == "" {
-				return resourcecontext.ServiceBackendGrouping{}
-			}
-			if clusterScoped, _, _ := ClassifyKindScope(w.Kind, w.Group); clusterScoped {
-				namespace = ""
-			}
+		namespace, ok := WorkloadAccessNamespace(w, svc.Namespace)
+		if !ok {
+			return resourcecontext.ServiceBackendGrouping{}
 		}
 		out.Workloads = append(out.Workloads, resourcecontext.ServiceBackendWorkload{
 			ContextRef: resourcecontext.ContextRef{Kind: w.Kind, Group: w.Group, Namespace: namespace, Name: w.Name},

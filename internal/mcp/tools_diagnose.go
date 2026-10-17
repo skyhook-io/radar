@@ -1141,6 +1141,7 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 		// (every cross-namespace dependency would redact even ones the
 		// caller can read), so pass the full allowed set.
 		AllowedNamespaces: filterNamespacesForUser(ctx, nil),
+		CanReadWorkload:   workloadReadAccess(ctx),
 	}
 	// in_cluster only has routes to test when probing ran (static known-break routes
 	// carry no InClusterRequest). Force the probe path when the caller asked to

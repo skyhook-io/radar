@@ -439,6 +439,22 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 		},
 		{
+			name: "only the pods behind a port say which applications share it",
+			svc: func() *corev1.Service {
+				svc := backendService()
+				svc.Spec.Ports = []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromString("http")}, {Name: "metrics", Port: 9090, TargetPort: intstr.FromString("metrics")}}
+				return svc
+			}(),
+			pods: []*corev1.Pod{
+				backendPod("api-1", "StatefulSet", "api", []corev1.Container{{Name: "api", Image: "acme/api:1", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}}}),
+				backendPod("api-2", "StatefulSet", "api", []corev1.Container{{Name: "exporter", Image: "acme/exporter:1", Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: 9100}}}}),
+				backendPod("web-1", "StatefulSet", "web", []corev1.Container{{Name: "web", Image: "acme/exporter:1", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}}}),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantApps:      [][]string{{"api"}, {"web"}},
+		},
+		{
 			name: "stable and canary of one app plus an unrelated app",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{
