@@ -168,25 +168,24 @@ func (b ServiceBackends) portGapClauses(sep string) string {
 }
 
 // gapWorkloadNames lists every workload on either side of a port gap: the
-// ones that declare the port first.
+// ones that declare the port first. Gaps carry the names judged, which for
+// unread revisions is their merged name rather than a single ReplicaSet's.
 func (b ServiceBackends) gapWorkloadNames() []string {
+	seen := map[string]bool{}
 	var serving, missing []string
-	for _, w := range b.Workloads {
-		for _, g := range b.PortGaps {
-			if containsString(g.Serving, w.Label) {
-				serving = append(serving, w.Label)
-				break
+	for _, g := range b.PortGaps {
+		for _, n := range g.Serving {
+			if !seen[n] {
+				seen[n] = true
+				serving = append(serving, n)
 			}
 		}
 	}
-	for _, w := range b.Workloads {
-		if containsString(serving, w.Label) {
-			continue
-		}
-		for _, g := range b.PortGaps {
-			if containsString(g.Missing, w.Label) {
-				missing = append(missing, w.Label)
-				break
+	for _, g := range b.PortGaps {
+		for _, n := range g.Missing {
+			if !seen[n] {
+				seen[n] = true
+				missing = append(missing, n)
 			}
 		}
 	}

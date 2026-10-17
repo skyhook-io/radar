@@ -468,6 +468,19 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantGapPorts:  []int32{5000},
 		},
 		{
+			name: "unread revisions named by their merged name in a port-only message",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("frontend-6d4cf56db6-a", "ReplicaSet", "frontend-6d4cf56db6", []corev1.Container{container("frontend", "hotel/app:v1", 5000)}),
+				backendPod("frontend-7f9b8c5d44-b", "ReplicaSet", "frontend-7f9b8c5d44", []corev1.Container{container("frontend", "hotel/app:v1", 5000)}),
+				backendPod("search-0", "StatefulSet", "search", []corev1.Container{container("search", "hotel/app:v1", 8082)}),
+			},
+			wantWorkloads: 3,
+			wantDifferent: true,
+			wantGapPorts:  []int32{5000},
+			wantProblem:   "Service frontend routes to 2 workloads; search's pods don't declare port 5000",
+		},
+		{
 			name: "unread revisions of one workload are judged as one, never against each other",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{
