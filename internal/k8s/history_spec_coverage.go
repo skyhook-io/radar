@@ -309,7 +309,7 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 
 	trackedSegments := make([][]string, 0, len(tracked)+len(ignored))
 	for _, change := range tracked {
-		trackedSegments = append(trackedSegments, trackedCoverage(change.Path)...)
+		trackedSegments = append(trackedSegments, trackedCoverage(change)...)
 	}
 	for _, path := range ignored {
 		trackedSegments = append(trackedSegments, splitSpecPath(path))
@@ -769,28 +769,89 @@ func isSummaryRow(path string) bool {
 // exactCoverage marks a tracked path that covers only itself.
 const exactCoverage = "="
 
-func trackedCoverage(path string) [][]string {
+// trackedCoverage returns the subtrees a reported row actually compared. A
+// row covers only its own path unless it is known to compare more: a whole
+// item added or removed, a row whose value is the complete subtree, or a row
+// that compares a known set of child fields. Anything a row does not compare
+// stays visible to the backstop, so one reported field never hides another.
+func trackedCoverage(change FieldChange) [][]string {
+	path := change.Path
 	segments := splitSpecPath(path)
+	within := func(children ...string) [][]string {
+		out := make([][]string, 0, len(children))
+		for _, child := range children {
+			out = append(out, append(slices.Clone(segments), splitSpecPath(child)...))
+		}
+		return out
+	}
 	switch {
 	case isSummaryRow(path):
 		return [][]string{append(slices.Clone(segments), exactCoverage)}
 	case path == "spec.template.spec.containers[*].resources":
-		return [][]string{append(slices.Clone(segments), "limits"), append(slices.Clone(segments), "requests")}
+		return within("limits", "requests")
 	case len(segments) == 2 && segments[0] == "webhooks":
-		// A webhook row compares a summary of these fields only; anything else
-		// on the webhook (matchConditions, admissionReviewVersions) is left
-		// to the backstop. An added or removed webhook is still covered whole,
-		// since its path is a prefix of every entry here.
-		out := make([][]string, 0, len(webhookSummaryFields))
-		for _, field := range webhookSummaryFields {
-			out = append(out, append(slices.Clone(segments), field))
-		}
-		return out
+		// An added or removed webhook is still covered whole, since its path
+		// is a prefix of every entry here.
+		return within(webhookSummaryFields...)
 	case strings.HasPrefix(path, "spec.hard."):
 		// Quota names contain dots (requests.cpu); the backstop brackets them.
 		return [][]string{splitSpecPath(specPathKey("spec.hard", strings.TrimPrefix(path, "spec.hard.")))}
+	case change.OldValue == nil || change.NewValue == nil:
+		return [][]string{segments}
+	case isProbeRow(path):
+		return within(probeComparedFields...)
+	case isEnvRow(path):
+		return within(envComparedFields...)
+	case isCompleteRow(path):
+		return [][]string{segments}
 	}
-	return [][]string{segments}
+	return [][]string{append(slices.Clone(segments), exactCoverage)}
+}
+
+// probeComparedFields are the probe fields normalizedProbe compares.
+var probeComparedFields = []string{
+	"initialDelaySeconds", "timeoutSeconds", "periodSeconds", "successThreshold", "failureThreshold",
+	"httpGet.scheme", "httpGet.port", "httpGet.path", "tcpSocket.port", "grpc.port", "grpc.service", "exec.command",
+}
+
+// envComparedFields are the env var fields envVarDisplayValue shows.
+var envComparedFields = []string{
+	"value", "valueFrom.configMapKeyRef.name", "valueFrom.configMapKeyRef.key",
+	"valueFrom.secretKeyRef.name", "valueFrom.secretKeyRef.key",
+	"valueFrom.fieldRef.fieldPath", "valueFrom.resourceFieldRef.resource",
+}
+
+func isProbeRow(path string) bool {
+	for _, probe := range []string{"].readinessProbe", "].livenessProbe", "].startupProbe"} {
+		if strings.HasSuffix(path, probe) {
+			return true
+		}
+	}
+	return false
+}
+
+func isEnvRow(path string) bool {
+	segments := splitSpecPath(path)
+	return len(segments) >= 2 && segments[len(segments)-2] == "env" && strings.HasPrefix(segments[len(segments)-1], "[")
+}
+
+// completeRowSuffixes are rows whose value is the whole subtree at their
+// path: whole-structure equality markers, full maps and lists, and summaries
+// built from every field of the type they describe.
+var completeRowSuffixes = []string{
+	".securityContext", "spec.affinity", "spec.nodeSelector", "spec.dnsConfig.nameservers",
+	"spec.dnsConfig.searches", "spec.dnsConfig.options", "].command", "].args", "].image",
+	"spec.hostnames", "spec.externalIPs", "spec.loadBalancerSourceRanges", "spec.selector",
+	"spec.limits", "spec.metrics", "spec.scaleTargetRef", "spec.behavior.scaleUp", "spec.behavior.scaleDown",
+}
+
+func isCompleteRow(path string) bool {
+	for _, suffix := range completeRowSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // specPathCovered reports whether a tracked row explains a changed path: one
@@ -884,10 +945,49 @@ func untrackedValueHidden(path string, v any) bool {
 	case nil, bool, int64, float64:
 		return false
 	case string:
-		return untrackedPathSensitive(path)
+		return untrackedPathSensitive(path) || !safeStringField(path)
 	default:
 		return true
 	}
+}
+
+// safeStringFields name string fields whose values are identifiers, enums or
+// routing coordinates rather than free-form text, so the backstop shows them.
+// Every other string (a CEL expression, a header or query value, a command
+// line, an annotation) is hidden: a credential literal can sit in any
+// free-form field, and pattern redaction cannot recognize all of them.
+var safeStringFields = map[string]bool{
+	"name": true, "kind": true, "apiVersion": true, "group": true, "namespace": true,
+	"hostname": true, "hostnames": true, "host": true, "hosts": true, "path": true, "pathType": true,
+	"protocol": true, "scheme": true, "port": true, "type": true, "mode": true, "operator": true,
+	"effect": true, "key": true, "resource": true, "resources": true, "verbs": true, "operations": true,
+	"apiGroups": true, "apiVersions": true, "scope": true, "description": true, "schedule": true,
+	"timeZone": true, "image": true, "matchPolicy": true, "sideEffects": true, "failurePolicy": true,
+}
+
+// safeStringSuffixes cover enum and reference fields by naming convention
+// (restartPolicy, serviceAccountName, ingressClassName, pathType...).
+var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode"}
+
+func safeStringField(path string) bool {
+	segments := splitSpecPath(path)
+	// A string list item takes its list's field name (hostnames[0]).
+	for i := len(segments) - 1; i >= 0; i-- {
+		key := segments[i]
+		if strings.HasPrefix(key, "[") {
+			continue
+		}
+		if safeStringFields[key] {
+			return true
+		}
+		for _, suffix := range safeStringSuffixes {
+			if strings.HasSuffix(key, suffix) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func untrackedScalar(v any) any {

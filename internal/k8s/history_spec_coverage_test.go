@@ -1192,3 +1192,75 @@ func TestComputeDiff_NamedRouteRuleReorderReported(t *testing.T) {
 		t.Fatalf("rule reorder not reported: %+v", diff)
 	}
 }
+
+// A row covers only what it compared: fields a row leaves out stay visible
+// when they change beside fields it reports.
+func TestComputeDiff_RowsCoverOnlyWhatTheyCompare(t *testing.T) {
+	t.Run("env reference and optional flag", func(t *testing.T) {
+		optional := true
+		oldDep := specTestDeployment(3)
+		oldDep.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "DSN", ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "db-v1"}, Key: "dsn"}}}}
+		newDep := bumped(oldDep)
+		ref := newDep.Spec.Template.Spec.Containers[0].Env[0].ValueFrom.SecretKeyRef
+		ref.Name = "db-v2"
+		ref.Optional = &optional
+		diff := ComputeDiff("Deployment", oldDep, newDep)
+		if findChange(diff, "spec.template.spec.containers[web].env[DSN]") == nil ||
+			findChange(diff, "spec.template.spec.containers[web].env[DSN].valueFrom.secretKeyRef.optional") == nil {
+			t.Fatalf("optional flag hidden behind the env row: %+v", diff)
+		}
+		if findChange(diff, "spec.template.spec.containers[web].env[DSN].valueFrom.secretKeyRef.name") != nil {
+			t.Fatalf("env row's own field repeated: %+v", diff)
+		}
+	})
+	t.Run("probe threshold and host", func(t *testing.T) {
+		oldDep := specTestDeployment(3)
+		oldDep.Spec.Template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{
+			ProbeHandler:     corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/ready", Port: intstr.FromInt(80)}},
+			FailureThreshold: 3,
+		}
+		newDep := bumped(oldDep)
+		probe := newDep.Spec.Template.Spec.Containers[0].ReadinessProbe
+		probe.FailureThreshold = 1
+		probe.HTTPGet.Host = "10.0.0.1"
+		diff := ComputeDiff("Deployment", oldDep, newDep)
+		if findChange(diff, "spec.template.spec.containers[web].readinessProbe.httpGet.host") == nil {
+			t.Fatalf("probe host hidden behind the probe row: %+v", diff)
+		}
+		if findChange(diff, "spec.template.spec.containers[web].readinessProbe.failureThreshold") != nil {
+			t.Fatalf("probe row's own field repeated: %+v", diff)
+		}
+	})
+	t.Run("HPA target API version", func(t *testing.T) {
+		base := &autoscalingv2.HorizontalPodAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", UID: "hpa", Generation: 1},
+			Spec: autoscalingv2.HorizontalPodAutoscalerSpec{MaxReplicas: 5,
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "web"}},
+		}
+		updated := base.DeepCopy()
+		updated.Generation = 2
+		updated.Spec.ScaleTargetRef = autoscalingv2.CrossVersionObjectReference{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "web"}
+		diff := ComputeDiff("HorizontalPodAutoscaler", base, updated)
+		want := "scaleTargetRef: Deployment/web (apps/v1)→Rollout/web (argoproj.io/v1alpha1)"
+		if diff == nil || diff.Summary != want {
+			t.Fatalf("summary = %+v, want %q", diff, want)
+		}
+	})
+}
+
+func TestComputeDiff_FreeFormStringsHidden(t *testing.T) {
+	// A CEL expression is free-form: a credential literal can sit in it.
+	diff := ComputeDiff("ValidatingWebhookConfiguration",
+		specTestWebhookConfig(1, "Fail", "Q0EtMQ==", "object.metadata.annotations['token'] == 'hunter2'"),
+		specTestWebhookConfig(2, "Fail", "Q0EtMQ==", "object.metadata.annotations['token'] == 'swordfish'"))
+	change := findChange(diff, "webhooks[pods.policy.example.com].matchConditions[c0].expression")
+	if change == nil || change.OldValue != hiddenValueMarker || change.NewValue != hiddenValueMarker {
+		t.Fatalf("expression row = %+v in %+v", change, diff)
+	}
+	// Identifiers and enums stay visible.
+	if !safeStringField("spec.listeners[http].hostname") || !safeStringField("spec.hostnames[0]") ||
+		!safeStringField("spec.template.spec.priorityClassName") || safeStringField("spec.description.text") {
+		t.Fatal("safeStringField classification changed")
+	}
+}

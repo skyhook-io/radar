@@ -271,7 +271,7 @@ func diffHPAScalingConfig(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 	var s specChangeSet
 	o, n := oldHPA.Spec, newHPA.Spec
-	s.add("spec.scaleTargetRef", "scaleTargetRef", o.ScaleTargetRef.Kind+"/"+o.ScaleTargetRef.Name, n.ScaleTargetRef.Kind+"/"+n.ScaleTargetRef.Name)
+	s.add("spec.scaleTargetRef", "scaleTargetRef", scaleTargetString(o.ScaleTargetRef), scaleTargetString(n.ScaleTargetRef))
 
 	oldMetrics, newMetrics := hpaMetricTargets(o.Metrics), hpaMetricTargets(n.Metrics)
 	if !reflect.DeepEqual(oldMetrics, newMetrics) {
@@ -329,7 +329,8 @@ func hpaMetricTargets(metrics []autoscalingv2.MetricSpec) map[string]string {
 		case m.Pods != nil:
 			key, target = "pods/"+metricIdentifierString(m.Pods.Metric), m.Pods.Target
 		case m.Object != nil:
-			key, target = "object/"+m.Object.DescribedObject.Kind+"/"+m.Object.DescribedObject.Name+"/"+metricIdentifierString(m.Object.Metric), m.Object.Target
+			ref := m.Object.DescribedObject
+			key, target = "object/"+ref.APIVersion+"/"+ref.Kind+"/"+ref.Name+"/"+metricIdentifierString(m.Object.Metric), m.Object.Target
 		case m.External != nil:
 			key, target = "external/"+metricIdentifierString(m.External.Metric), m.External.Target
 		default:
@@ -349,17 +350,31 @@ func metricIdentifierString(id autoscalingv2.MetricIdentifier) string {
 	return id.Name + "{" + metav1.FormatLabelSelector(id.Selector) + "}"
 }
 
+// metricTargetString renders every target field, so the metrics row covers
+// the whole metric.
 func metricTargetString(t autoscalingv2.MetricTarget) string {
-	switch {
-	case t.AverageUtilization != nil:
-		return fmt.Sprintf("%d%%", *t.AverageUtilization)
-	case t.AverageValue != nil:
-		return "avg " + t.AverageValue.String()
-	case t.Value != nil:
-		return t.Value.String()
-	default:
-		return string(t.Type)
+	var parts []string
+	if t.AverageUtilization != nil {
+		parts = append(parts, fmt.Sprintf("%d%%", *t.AverageUtilization))
 	}
+	if t.AverageValue != nil {
+		parts = append(parts, "avg "+t.AverageValue.String())
+	}
+	if t.Value != nil {
+		parts = append(parts, t.Value.String())
+	}
+	if len(parts) == 0 || (t.Type != autoscalingv2.UtilizationMetricType && t.Type != autoscalingv2.AverageValueMetricType && t.Type != autoscalingv2.ValueMetricType) {
+		parts = append(parts, "type="+string(t.Type))
+	}
+	return strings.Join(parts, " ")
+}
+
+func scaleTargetString(ref autoscalingv2.CrossVersionObjectReference) string {
+	out := ref.Kind + "/" + ref.Name
+	if ref.APIVersion != "" {
+		out += " (" + ref.APIVersion + ")"
+	}
+	return out
 }
 
 func hpaMetricList(targets map[string]string) []string {
