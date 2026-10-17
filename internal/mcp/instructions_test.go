@@ -21,10 +21,13 @@ import (
 
 // Claude Code before v2.1.296 keeps only the first 2,048 characters of server
 // instructions, and newer versions 4,096. The routing has to survive the
-// shorter cut, and the whole text stays under the longer one.
+// shorter cut, and the whole text stays under the longer one. Codex describes
+// a deferred server by the first line alone, cut at 250 characters
+// (MAX_NAMESPACE_DESCRIPTION_CHARS in codex-rs/core/src/context/world_state/tools.rs).
 const (
 	maxInstructionChars = 3800
 	routingCutoffChars  = 2048
+	firstLineChars      = 250
 )
 
 func TestServerInstructionsFitClientLimits(t *testing.T) {
@@ -36,6 +39,15 @@ func TestServerInstructionsFitClientLimits(t *testing.T) {
 		end := strings.Index(text, "READING RADAR'S SIGNALS")
 		if end < 0 || len([]rune(text[:end])) >= routingCutoffChars {
 			t.Errorf("includeWrites=%v: routing ends at char %d, must end before %d", includeWrites, end, routingCutoffChars)
+		}
+		firstLine, _, _ := strings.Cut(text, "\n")
+		if n := len([]rune(firstLine)); n > firstLineChars {
+			t.Errorf("includeWrites=%v: first line is %d chars, limit %d", includeWrites, n, firstLineChars)
+		}
+		for _, tool := range []string{"issues", "diagnose", "get_changes", "get_resource", "list_resources", "search", "get_workload_logs", "get_pod_logs", "get_events"} {
+			if !strings.Contains(firstLine, tool) {
+				t.Errorf("includeWrites=%v: first line does not name core tool %s", includeWrites, tool)
+			}
 		}
 		if !strings.HasSuffix(text, investigation.ResultDiscipline+" "+investigation.UntrustedClusterData) {
 			t.Errorf("includeWrites=%v: text does not end with ResultDiscipline and UntrustedClusterData", includeWrites)
@@ -100,11 +112,8 @@ var instructionClaims = []struct{ tool, says, backedBy, param string }{
 	{tool: "issues", says: "Symptom known, faulty resource not: issues", backedBy: "live state"},
 	{tool: "issues", says: "references to missing ConfigMaps", backedBy: "references"},
 	{tool: "diagnose", says: "a Pod, Deployment, StatefulSet, DaemonSet or Rollout", backedBy: "Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout"},
-	{tool: "diagnose", says: "current and previous logs, warning events, startup blockers", backedBy: "current and previous logs, Warning events, startup blockers"},
 	{tool: "diagnose", says: "a Service, Ingress or route that traffic doesn't reach", backedBy: "traffic not reaching a service, route or ingress"},
-	{tool: "diagnose", says: "(per-route reachability)", backedBy: "per-route reachability"},
 	{tool: "diagnose", says: "an Argo CD Application or Flux Kustomization or HelmRelease (sync and health)", backedBy: "GitOps sync/health"},
-	{tool: "get_changes", says: "field diffs", backedBy: "field-level diffs"},
 	{tool: "get_pod_logs", says: "get_pod_logs for one container or its previous instance", param: "previous"},
 	{tool: "get_pod_logs", says: "the grep argument of get_pod_logs", param: "grep"},
 	{tool: "get_workload_logs", says: "or get_workload_logs", param: "grep"},
