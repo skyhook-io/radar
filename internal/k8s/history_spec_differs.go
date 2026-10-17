@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,7 +90,8 @@ func diffPDB(oldObj, newObj any) ([]FieldChange, []string) {
 	var s specChangeSet
 	s.add("spec.minAvailable", "minAvailable", intOrStringValue(oldPDB.Spec.MinAvailable), intOrStringValue(newPDB.Spec.MinAvailable))
 	s.add("spec.maxUnavailable", "maxUnavailable", intOrStringValue(oldPDB.Spec.MaxUnavailable), intOrStringValue(newPDB.Spec.MaxUnavailable))
-	s.add("spec.selector", "selector", labelSelectorString(oldPDB.Spec.Selector), labelSelectorString(newPDB.Spec.Selector))
+	oldSelector, newSelector := labelSelectorStrings(oldPDB.Spec.Selector, newPDB.Spec.Selector)
+	s.add("spec.selector", "selector", oldSelector, newSelector)
 	s.add("spec.unhealthyPodEvictionPolicy", "unhealthyPodEvictionPolicy", stringPtrValue((*string)(oldPDB.Spec.UnhealthyPodEvictionPolicy)), stringPtrValue((*string)(newPDB.Spec.UnhealthyPodEvictionPolicy)))
 
 	return s.changes, s.summary
@@ -175,11 +177,19 @@ func gatewayListenerString(listener map[string]any) any {
 	return out
 }
 
-// hpaBehaviorCovered is ignored by the HPA backstop: diffHPAScalingConfig
-// compares every scaling-rule field against the API defaults, which the API
-// server writes into a direction left unset; the backstop would report those
-// defaults as an edit.
-var hpaBehaviorCovered = []string{"spec.behavior"}
+// hpaBehaviorCovered are the scaling-rule fields diffHPAScalingConfig compares
+// against the API defaults, which the API server writes into a direction left
+// unset; the backstop would report those defaults as an edit. Any other
+// behavior field, including ones newer than the compiled types, stays visible.
+var hpaBehaviorCovered = func() []string {
+	var out []string
+	for _, dir := range []string{"scaleUp", "scaleDown"} {
+		for _, field := range []string{"stabilizationWindowSeconds", "selectPolicy", "policies", "tolerance"} {
+			out = append(out, "spec.behavior."+dir+"."+field)
+		}
+	}
+	return out
+}()
 
 // webhookSummaryFields are the webhook fields webhookSummary compares; the
 // backstop reports changes to any other webhook field.
@@ -543,28 +553,80 @@ func boolPtrTrue(p *bool) bool {
 	return p != nil && *p
 }
 
-func labelSelectorString(sel *metav1.LabelSelector) any {
-	if sel == nil {
-		return nil
+// labelSelectorStrings renders a pair of selectors with values under
+// secret-looking keys masked. A masked value that differs between the two
+// reads "REDACTED-changed" on the new side, so the change stays visible.
+func labelSelectorStrings(oldSel, newSel *metav1.LabelSelector) (any, any) {
+	render := func(sel, other *metav1.LabelSelector) any {
+		if sel == nil {
+			return nil
+		}
+		return metav1.FormatLabelSelector(redactedSelectorAgainst(sel, other))
 	}
-	return metav1.FormatLabelSelector(redactedSelector(sel))
+	return render(oldSel, nil), render(newSel, oldSel)
 }
 
 // redactedSelector masks label values under secret-looking keys, the policy
 // pod-template label rows use, before a selector is rendered into a row.
 func redactedSelector(sel *metav1.LabelSelector) *metav1.LabelSelector {
+	return redactedSelectorAgainst(sel, nil)
+}
+
+// redactedSelectorAgainst masks like redactedSelector, marking a masked value
+// that differs from the one in previous.
+func redactedSelectorAgainst(sel, previous *metav1.LabelSelector) *metav1.LabelSelector {
 	out := sel.DeepCopy()
-	for key := range out.MatchLabels {
+	mask := func(changed bool) string {
+		if changed {
+			return "REDACTED-changed"
+		}
+		return "REDACTED"
+	}
+	for key, value := range out.MatchLabels {
 		if envNameLooksSecret(key) {
-			out.MatchLabels[key] = "REDACTED"
+			changed := previous != nil && previous.MatchLabels[key] != value
+			out.MatchLabels[key] = mask(changed)
 		}
 	}
 	for i := range out.MatchExpressions {
-		if envNameLooksSecret(out.MatchExpressions[i].Key) && len(out.MatchExpressions[i].Values) > 0 {
-			out.MatchExpressions[i].Values = []string{"REDACTED"}
+		expr := &out.MatchExpressions[i]
+		if !envNameLooksSecret(expr.Key) || len(expr.Values) == 0 {
+			continue
 		}
+		changed := previous != nil
+		if previous != nil {
+			for _, prev := range previous.MatchExpressions {
+				if prev.Key == expr.Key && prev.Operator == expr.Operator && slices.Equal(prev.Values, expr.Values) {
+					changed = false
+				}
+			}
+		}
+		expr.Values = []string{mask(changed)}
 	}
 	return out
+}
+
+// redactedLabelMaps masks values under secret-looking keys in a pair of
+// label maps (nodeSelector), marking a masked value that changed.
+func redactedLabelMaps(oldMap, newMap map[string]string) (any, any) {
+	render := func(m, previous map[string]string, comparing bool) any {
+		if m == nil {
+			return nil
+		}
+		out := make(map[string]string, len(m))
+		for key, value := range m {
+			switch {
+			case !envNameLooksSecret(key):
+				out[key] = value
+			case comparing && previous[key] != value:
+				out[key] = "[REDACTED-changed]"
+			default:
+				out[key] = "[REDACTED]"
+			}
+		}
+		return out
+	}
+	return render(oldMap, nil, false), render(newMap, oldMap, true)
 }
 
 // humanDuration renders a gap the way a person says it: "30h", "3d4h", "45m".

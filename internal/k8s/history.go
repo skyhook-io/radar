@@ -3389,7 +3389,8 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 		summary = append(summary, fmt.Sprintf("serviceAccountName: %s→%s", emptyAsNone(oldSpec.ServiceAccountName), emptyAsNone(newSpec.ServiceAccountName)))
 	}
 	if !reflect.DeepEqual(oldSpec.NodeSelector, newSpec.NodeSelector) {
-		changes = append(changes, FieldChange{Path: "spec.template.spec.nodeSelector", OldValue: oldSpec.NodeSelector, NewValue: newSpec.NodeSelector})
+		oldSel, newSel := redactedLabelMaps(oldSpec.NodeSelector, newSpec.NodeSelector)
+		changes = append(changes, FieldChange{Path: "spec.template.spec.nodeSelector", OldValue: oldSel, NewValue: newSel})
 		summary = append(summary, "nodeSelector changed")
 	}
 	if oldTol, newTol := tolerationRefs(oldSpec.Tolerations), tolerationRefs(newSpec.Tolerations); !equalStringSlices(oldTol, newTol) {

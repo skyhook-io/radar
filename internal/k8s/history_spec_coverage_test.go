@@ -1347,3 +1347,47 @@ func TestComputeDiff_BackstopSeesFieldsUnknownToTypedProjection(t *testing.T) {
 		t.Fatalf("field unknown to the typed projection was dropped: %+v", diff)
 	}
 }
+
+func TestComputeDiff_SecretKeyedSelectorChangeStaysVisible(t *testing.T) {
+	one := intstr.FromInt(1)
+	pdb := func(gen int64, app, token string) *policyv1.PodDisruptionBudget {
+		return &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: "web", UID: "p", Generation: gen},
+			Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: &one,
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": app, "token": token}}}}
+	}
+	diff := ComputeDiff("PodDisruptionBudget", pdb(1, "web", "t-one"), pdb(2, "web-v2", "t-two"))
+	change := findChange(diff, "spec.selector")
+	if change == nil || !strings.Contains(fmt.Sprint(change.NewValue), "token=REDACTED-changed") {
+		t.Fatalf("selector row = %+v", change)
+	}
+	if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "t-one") || strings.Contains(rendered, "t-two") {
+		t.Fatalf("selector value leaked: %s", rendered)
+	}
+}
+
+func TestComputeDiff_NodeSelectorSecretKeyMasked(t *testing.T) {
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Template.Spec.NodeSelector = map[string]string{"pool": "a", "api-key": "k-one"}
+	newDep := bumped(oldDep)
+	newDep.Spec.Template.Spec.NodeSelector = map[string]string{"pool": "b", "api-key": "k-two"}
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	if rendered := fmt.Sprintf("%+v", diff); diff == nil || strings.Contains(rendered, "k-one") || strings.Contains(rendered, "k-two") || !strings.Contains(rendered, "REDACTED-changed") {
+		t.Fatalf("nodeSelector row: %s", rendered)
+	}
+}
+
+// A behavior field the explicit HPA row does not compare stays visible.
+func TestComputeDiff_HPAUnknownBehaviorFieldVisible(t *testing.T) {
+	hpa := func(gen int64, knob string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "autoscaling/v2", "kind": "HorizontalPodAutoscaler",
+			"metadata": map[string]any{"name": "web", "uid": "h", "generation": gen},
+			"spec": map[string]any{"maxReplicas": int64(5), "scaleTargetRef": map[string]any{"kind": "Deployment", "name": "web"},
+				"behavior": map[string]any{"scaleDown": map[string]any{"stabilizationWindowSeconds": int64(300), "futureKnob": knob}}},
+		}}
+	}
+	diff := ComputeDiff("HorizontalPodAutoscaler", hpa(1, "off"), hpa(2, "on"))
+	if findChange(diff, "spec.behavior.scaleDown.futureKnob") == nil {
+		t.Fatalf("unknown behavior field dropped: %+v", diff)
+	}
+}
