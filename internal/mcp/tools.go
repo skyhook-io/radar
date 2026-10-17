@@ -635,6 +635,14 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}, logToolCall("patch_resource", handlePatchResource))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "delete_resource",
+		Description: "Delete one Kubernetes object as the caller. Mandatory preview: dry_run=true (default) validates a server-side delete and returns a confirm token bound to UID, generation/finalizers (resourceVersion when generation is absent), and propagation; review it before dry_run=false with confirm. " +
+			"Dependent counts are observed, not exhaustive; namespace contents, CRD instances, and finalizer cleanup are not enumerated when applicable. Namespace deletion removes all contents; CRD deletion removes all instances. " +
+			"Propagation defaults to background; foreground and orphan are supported. Finalizers are never removed; accepted deletion may still be pending. Use patch_resource only as a separate, explicit finalizer intervention after inspecting cleanup.",
+		Annotations: writeTool,
+	}, logToolCall("delete_resource", handleDeleteResource))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",
 		Description: "Perform operations on a Kubernetes node. " +
 			"Supported actions: 'cordon' marks the node as unschedulable (no new pods will be scheduled), " +

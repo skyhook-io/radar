@@ -42,6 +42,12 @@ describe("describeToolCall", () => {
       describeToolCall("search", JSON.stringify({ query: "metrics-server" })),
     ).toBe("Searching for “metrics-server”");
   });
+  it("distinguishes deletion previews from confirmed deletes", () => {
+    const target = { kind: "Deployment", namespace: "shop", name: "api" };
+    expect(describeToolCall("delete_resource", JSON.stringify(target))).toBe("Previewing deletion of Deployment shop/api");
+    expect(describeToolCall("delete_resource", JSON.stringify({ ...target, dry_run: true }))).toBe("Previewing deletion of Deployment shop/api");
+    expect(describeToolCall("delete_resource", JSON.stringify({ ...target, dry_run: false }))).toBe("Deleting Deployment shop/api");
+  });
   it("falls back to the tool name when arguments are missing or malformed", () => {
     expect(describeToolCall("get_changes", "not json")).toBe(
       "Reading recent changes",

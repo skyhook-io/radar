@@ -26,7 +26,7 @@ var ReadOnlyTools = []string{
 // WriteTools are the mutating Radar MCP tools — enabled only on an apply turn
 // the user explicitly confirmed. Never on the read-only investigation path.
 var WriteTools = []string{
-	"apply_resource", "patch_resource", "manage_workload",
+	"apply_resource", "patch_resource", "delete_resource", "manage_workload",
 	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops",
 }
 
