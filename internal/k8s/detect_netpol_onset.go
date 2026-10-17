@@ -29,7 +29,9 @@ type isolationWindow struct {
 // networkPolicyIsolationOnset dates the isolation from the policy's creation,
 // and only when it's established that creating it started the isolation:
 //   - its spec was never changed (generation 1), so creation set the rules;
-//   - every affected Service and pod already existed then;
+//   - every affected Service and pod already existed then, and every pod
+//     those Services select is isolated, so no unrecorded readiness change
+//     could have started it;
 //   - the window covers it, and no other policy in the namespace or cluster
 //     scope (core or another engine's), affected Service, pod those Services
 //     select, or the Namespace itself was created, changed or deleted at or
@@ -42,7 +44,7 @@ type isolationWindow struct {
 // would mislead.
 func networkPolicyIsolationOnset(window isolationWindow, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
 	created := np.CreationTimestamp.Time
-	if created.IsZero() || np.Generation > 1 || impact.lastCreated.After(created) ||
+	if created.IsZero() || np.Generation > 1 || impact.lastCreated.After(created) || impact.readinessDependent ||
 		window.since.IsZero() || window.since.After(created.Add(-onsetObservationMargin)) {
 		return time.Time{}, false
 	}

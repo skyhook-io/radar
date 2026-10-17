@@ -402,6 +402,10 @@ type denyAllIngressImpact struct {
 	// egressDenied is true only while every affected Service's evaluated pods
 	// are also denied all outbound traffic.
 	egressDenied bool
+	// readinessDependent is set when an affected Service selects a pod no
+	// policy isolates: a readiness or publishNotReadyAddresses change, which
+	// leaves no recorded event, could then have started the isolation.
+	readinessDependent bool
 }
 
 // denyAllEnv carries what denyAllIngressDetections reads beyond the
@@ -434,9 +438,12 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 			continue
 		}
 		var backends []*corev1.Pod
+		readinessDependent := false
 		for _, pod := range podsMatchingService(svc, pods) {
 			if isPodReadyForProblem(pod) || (svc.Spec.PublishNotReadyAddresses && publishableNotReady(pod)) {
 				backends = append(backends, pod)
+			} else if pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed && len(isolation.of(pod).ingressDenying) == 0 {
+				readinessDependent = true
 			}
 		}
 		if len(backends) == 0 {
@@ -470,6 +477,7 @@ func denyAllIngressDetections(policies []*networkingv1.NetworkPolicy, services [
 					if created := svc.CreationTimestamp.Time; created.After(impact.lastCreated) {
 						impact.lastCreated = created
 					}
+					impact.readinessDependent = impact.readinessDependent || readinessDependent
 				}
 				impact.egressDenied = impact.egressDenied && egressDenied
 				impact.pods[pod.Name] = true
@@ -650,7 +658,7 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	case len(impact.alsoDenying) > 0:
 		action = fmt.Sprintf("Other policies isolate these pods too, so removing this one alone may not restore traffic; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
 	case partial:
-		action = fmt.Sprintf("Other policies isolate the rest of these Services' pods, so removing this one alone restores only some backends; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
+		action = fmt.Sprintf("Other policies isolate the remaining backend pods, so removing this one alone restores only some backends; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
 	}
 
 	age := now.Sub(np.CreationTimestamp.Time)

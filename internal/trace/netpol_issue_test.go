@@ -2,6 +2,7 @@ package trace
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/probe"
 )
 
 // A deny-all NetworkPolicy issue shows on the Service hop it isolates. The
@@ -88,5 +90,33 @@ func TestServiceTraceShowsNetworkPolicyIssueOnce(t *testing.T) {
 	}
 	if codes(tr.Downstream[0])[k8s.NetworkPolicyDenyAllIngressFingerprint] != 0 {
 		t.Fatal("the policy issue reached the Service hop without a related-resource authorizer")
+	}
+}
+
+// Traffic that got through to the pods settles the Service hop's policy issue
+// as well as the Pods hop's per-port prediction; a dropped data path keeps it.
+func TestReconcilePolicyDowngradesServiceDenyAll(t *testing.T) {
+	trace := func(dataOK bool) *Trace {
+		svc := Hop{Resource: ResourceRef{Kind: "Service", Namespace: "ns", Name: "rec"}, Edge: "entry:Service", Findings: []Finding{{
+			Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress - Would block all inbound traffic",
+		}}}
+		pods := wouldDenyHop([]probe.Result{
+			{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Port: 80, Path: probe.PathData, OK: dataOK},
+		}, false)
+		pods.Edge = "Service->Pods"
+		return &Trace{Downstream: []Hop{svc, pods}}
+	}
+
+	tr := trace(true)
+	reconcilePolicyFindings(tr)
+	f := tr.Downstream[0].Findings[0]
+	if f.Severity != SeverityInfo || !strings.Contains(f.Message, "Traffic got through") {
+		t.Errorf("Service hop finding = %+v, want the info note after traffic got through", f)
+	}
+
+	tr = trace(false)
+	reconcilePolicyFindings(tr)
+	if f := tr.Downstream[0].Findings[0]; f.Severity != SeverityWarning {
+		t.Errorf("Service hop severity = %q, want warning kept when the data path was dropped", f.Severity)
 	}
 }

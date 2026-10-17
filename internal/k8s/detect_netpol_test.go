@@ -635,6 +635,8 @@ func TestNetworkPolicyIsolationOnset(t *testing.T) {
 			event: &timeline.TimelineEvent{ID: "ns-relabel", Timestamp: created.Add(10 * time.Minute), Kind: "Namespace", APIVersion: "v1", Name: "shop", EventType: timeline.EventTypeUpdate}},
 		{name: "a backend pod went away afterwards", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "pod-gone", Timestamp: created.Add(5 * time.Minute), Kind: "Pod", APIVersion: "v1", Name: "rec-old", EventType: timeline.EventTypeDelete, Labels: map[string]string{"app": "rec"}}},
+		{name: "a selected pod no policy isolates (readiness could have started it)", window: window, generation: 1,
+			impact: &denyAllIngressImpact{services: []string{"recommendation"}, selectors: []labels.Selector{recSelector}, lastCreated: created.Add(-time.Hour), readinessDependent: true}},
 		{name: "affected Service changed afterwards", window: window, generation: 1, impact: olderObjects,
 			event: &timeline.TimelineEvent{ID: "svc-edit", Timestamp: created.Add(5 * time.Minute), Kind: "Service", APIVersion: "v1", Name: "recommendation", EventType: timeline.EventTypeUpdate}},
 	} {
@@ -733,6 +735,35 @@ func TestDenyAllIngressPublishNotReadyBackends(t *testing.T) {
 	}
 }
 
+// A not-ready pod that no policy isolates makes the isolation depend on
+// readiness, which leaves no recorded event, so the onset can't be dated.
+func TestDenyAllIngressReadinessDependent(t *testing.T) {
+	svc := netpolTestService("rec", map[string]string{"app": "rec"})
+	ready := netpolTestPod("rec-a", map[string]string{"app": "rec", "tier": "a"}, true)
+	notReady := netpolTestPod("rec-b", map[string]string{"app": "rec", "tier": "b"}, false)
+	for _, tt := range []struct {
+		name     string
+		selector map[string]string
+		want     bool
+	}{
+		{name: "the not-ready pod is allowed", selector: map[string]string{"tier": "a"}, want: true},
+		{name: "every selected pod is isolated", selector: map[string]string{"app": "rec"}, want: false},
+	} {
+		var got []bool
+		env := denyAllEnv{isolationOnset: func(_ *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
+			got = append(got, impact.readinessDependent)
+			return time.Time{}, false
+		}}
+		policies := []*networkingv1.NetworkPolicy{netpolTestPolicy("deny", tt.selector, ingressOnly)}
+		if d := denyAllIngressDetections(policies, []*corev1.Service{svc}, []*corev1.Pod{ready, notReady}, env, time.Now()); len(d) != 1 {
+			t.Fatalf("%s: got %d detections, want 1", tt.name, len(d))
+		}
+		if len(got) != 1 || got[0] != tt.want {
+			t.Errorf("%s: readinessDependent = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 // Two deny-all policies that split a Service's pods each say they cover only
 // part of them, and removing one alone frees only some backends.
 func TestDenyAllIngressSplitSelectors(t *testing.T) {
@@ -748,7 +779,7 @@ func TestDenyAllIngressSplitSelectors(t *testing.T) {
 		t.Fatalf("got %d detections, want one per policy", len(got))
 	}
 	for _, d := range got {
-		if !strings.Contains(d.Message, "1 of the 2 pods behind Service rec") || !strings.Contains(d.Action, "restores only some backends") {
+		if !strings.Contains(d.Message, "1 of the 2 pods behind Service rec") || !strings.Contains(d.Action, "Other policies isolate the remaining backend pods, so removing this one alone restores only some backends") {
 			t.Errorf("%s: message %q / action %q", d.Name, d.Message, d.Action)
 		}
 	}

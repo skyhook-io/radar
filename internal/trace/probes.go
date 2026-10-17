@@ -12,6 +12,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/probe"
 )
 
@@ -188,6 +189,11 @@ func reconcilePolicyFindings(t *Trace) {
 					Message:  "Traffic got through. A network rule here would block it - but either this cluster's network plugin doesn't enforce NetworkPolicy, or the static read missed an allow rule for this port.",
 					Command:  h.Findings[idx].Command,
 				}
+				// The Service hop in front carries the same prediction as a
+				// policy issue; traffic getting through settles it too.
+				if i > 0 && h.Edge == "Service->Pods" && hops[i-1].Resource.Kind == "Service" {
+					downgradeDenyAllIngress(&hops[i-1])
+				}
 			case o.dataFail && !o.dataOK && o.apiOK && !o.apiFail:
 				// CLEAN divergence on the SAME port: the in-cluster data path
 				// dropped unanimously while the apiserver proxy (which bypasses the
@@ -211,6 +217,22 @@ func reconcilePolicyFindings(t *Trace) {
 	}
 	visit(t.Downstream)
 	visit(t.Upstreams)
+}
+
+// downgradeDenyAllIngress turns a Service hop's NetworkPolicy deny-all issue
+// into an info note once live traffic reached its pods.
+func downgradeDenyAllIngress(h *Hop) {
+	idx := findingIndexByCode(h.Findings, k8s.NetworkPolicyDenyAllIngressFingerprint)
+	if idx < 0 {
+		return
+	}
+	h.Findings[idx] = Finding{
+		Code:     k8s.NetworkPolicyDenyAllIngressFingerprint,
+		Severity: SeverityInfo,
+		Message:  "Traffic got through. A NetworkPolicy here would block all inbound traffic to these pods - but either this cluster's network plugin doesn't enforce NetworkPolicy, or the static read missed an allow rule.",
+		Command:  h.Findings[idx].Command,
+	}
+	sortFindingsBySeverity(h.Findings)
 }
 
 type probeOutcome struct {
