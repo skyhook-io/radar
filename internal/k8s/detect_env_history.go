@@ -1165,19 +1165,16 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 
 // newManagedFieldsStaleSecretEnvCheck names the writer as recorded in the
 // Secret's managedFields, unmapped. A manager's timestamp moves on a write to
-// any field it owns, so the note says when a manager that owns the data last
-// wrote, and that the write may not have touched data. The names are Secret
+// any field it owns, so the note reports only the latest write among the
+// managers that own the data (a manager that owns none may have written
+// since) and says that write may not have touched data. The names are Secret
 // metadata: they reach only callers the resource context lets read the
 // Secret, which drops the whole row for anyone else.
 func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt time.Time, write secretDataManagerWrite) StaleSecretEnvCheck {
 	changedAt := write.at
-	writer := "a field manager that owns its data"
-	switch names := slices.DeleteFunc(slices.Clone(write.managers), func(m string) bool { return m == "" }); len(names) {
-	case 0:
-	case 1:
-		writer = names[0] + ", a field manager that owns its data"
-	default:
-		writer = strings.Join(names, " and ") + ", field managers that own its data"
+	writer := ""
+	if names := slices.DeleteFunc(slices.Clone(write.managers), func(m string) bool { return m == "" }); len(names) > 0 {
+		writer = " by " + strings.Join(names, " and ")
 	}
 	return StaleSecretEnvCheck{
 		Namespace:          pod.Namespace,
@@ -1189,7 +1186,7 @@ func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKi
 		SecretName:         secretName,
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
-		Message:            fmt.Sprintf("Secret/%s was last written at %s by %s, after container %s started at %s; managedFields cannot identify which field changed, so the write may not have touched data at all, and if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), writer, container, startedAt.UTC().Format(time.RFC3339)),
+		Message:            fmt.Sprintf("Secret/%s: the latest write by any field manager that owns its data was%s at %s, after container %s started at %s; managedFields cannot identify which field changed, so the write may not have touched data at all, and if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, writer, changedAt.UTC().Format(time.RFC3339), container, startedAt.UTC().Format(time.RFC3339)),
 	}
 }
 
