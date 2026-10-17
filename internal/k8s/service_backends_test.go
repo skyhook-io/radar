@@ -495,7 +495,7 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantApps:      [][]string{{"frontend"}, {"search"}},
 		},
 		{
-			name: "a workload whose pods disagree on the version label is no version of the app",
+			name: "a pod without a version label is no version of the app",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{
 				backendPod("reviews-v1-a", "StatefulSet", "reviews-v1", []corev1.Container{container("reviews", "acme/reviews-v1:1")}, withLabels("app", "reviews", "version", "v1")),
@@ -505,6 +505,26 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 			wantDifferent: true,
 			wantApps:      [][]string{{"search"}, {"reviews-v1"}},
+		},
+		{
+			name: "a stable and a canary of one version beside another version",
+			svc:  backendService(intstr.FromInt32(9080)),
+			pods: []*corev1.Pod{
+				backendPod("reviews-v1-a", "StatefulSet", "reviews-v1", []corev1.Container{container("reviews", "acme/reviews-v1:1", 9080)}, withLabels("app", "reviews", "version", "v1")),
+				backendPod("reviews-v2-stable-a", "StatefulSet", "reviews-v2-stable", []corev1.Container{container("reviews", "acme/reviews-v2:1", 9080)}, withLabels("app", "reviews", "version", "v2")),
+				backendPod("reviews-v2-canary-a", "StatefulSet", "reviews-v2-canary", []corev1.Container{container("reviews", "acme/reviews-v2:2", 9080)}, withLabels("app", "reviews", "version", "v2")),
+			},
+			wantWorkloads: 3,
+		},
+		{
+			name: "versions mixed within one workload mid-rollout",
+			svc:  backendService(intstr.FromInt32(9080)),
+			pods: []*corev1.Pod{
+				backendPod("reviews-v1-a", "StatefulSet", "reviews-v1", []corev1.Container{container("reviews", "acme/reviews-v1:1", 9080)}, withLabels("app", "reviews", "version", "v1")),
+				backendPod("reviews-v3-a", "StatefulSet", "reviews-v3", []corev1.Container{container("reviews", "acme/reviews-v2:1", 9080)}, withLabels("app", "reviews", "version", "v2")),
+				backendPod("reviews-v3-b", "StatefulSet", "reviews-v3", []corev1.Container{container("reviews", "acme/reviews-v3:1", 9080)}, withLabels("app", "reviews", "version", "v3")),
+			},
+			wantWorkloads: 2,
 		},
 		{
 			name: "versions of one app still get the port signal",

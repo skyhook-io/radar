@@ -410,8 +410,8 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 	return worst
 }
 
-// Pods labelled with one application name and a different version per
-// workload are versions of one application, however their images are named:
+// Pods labelled with one application name and a version are versions of one
+// application, however their images are named:
 // Istio's convention (app, version) and the recommended labels
 // (app.kubernetes.io/name, app.kubernetes.io/version) both say so, and the
 // Istio sample gives each version its own image repository.
@@ -439,14 +439,25 @@ func versionsOfOneApplication(podGroups [][]*corev1.Pod) bool {
 	if !sharedName {
 		return false
 	}
+	// Versions may repeat (a stable and a canary of v2) or mix within one
+	// workload mid-rollout; what marks a version is that every Pod has one.
 	for _, key := range appVersionLabels {
-		if values, ok := groupLabelValues(podGroups, key); ok && len(values) == len(podGroups) {
-			if _, empty := values[""]; !empty {
-				return true
-			}
+		if everyPodHasLabel(podGroups, key) {
+			return true
 		}
 	}
 	return false
+}
+
+func everyPodHasLabel(podGroups [][]*corev1.Pod, key string) bool {
+	for _, pods := range podGroups {
+		for _, pod := range pods {
+			if pod.Labels[key] == "" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // groupLabelValues collects the label's value per workload, keyed by value.
