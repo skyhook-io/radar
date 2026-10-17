@@ -1432,3 +1432,84 @@ func TestComputeDiff_RolloutPluginConfigStringsHidden(t *testing.T) {
 		t.Fatalf("plugin config leaked or missing: %s", rendered)
 	}
 }
+
+func TestComputeDiff_ProbeExecCredentialsRedacted(t *testing.T) {
+	probe := func(pw string) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"check", "--password", pw}}}}
+	}
+	oldCJ := specTestCronJob()
+	oldCJ.Spec.JobTemplate.Spec.Template.Spec.Containers[0].LivenessProbe = probe("hunter2")
+	newCJ := oldCJ.DeepCopy()
+	newCJ.Generation++
+	newCJ.Spec.JobTemplate.Spec.Template.Spec.Containers[0].LivenessProbe = probe("swordfish")
+	diff := ComputeDiff("CronJob", oldCJ, newCJ)
+	if diff == nil || !strings.Contains(diff.Summary, "livenessProbe(job) changed") {
+		t.Fatalf("probe change not reported: %+v", diff)
+	}
+	if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "hunter2") || strings.Contains(rendered, "swordfish") {
+		t.Fatalf("probe credential leaked: %s", rendered)
+	}
+}
+
+func TestComputeDiff_ShellScriptCredentialsRedacted(t *testing.T) {
+	probe := func(pw string) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"/bin/sh", "-c", "check --password " + pw + " && echo status=ok"}}}}
+	}
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Template.Spec.Containers[0].ReadinessProbe = probe("hunter2")
+	oldDep.Spec.Template.Spec.Containers[0].Args = []string{"sh", "-c", "run --token=t-one"}
+	newDep := bumped(oldDep)
+	newDep.Spec.Template.Spec.Containers[0].ReadinessProbe = probe("swordfish")
+	newDep.Spec.Template.Spec.Containers[0].Args = []string{"sh", "-c", "run --token=t-two"}
+	newDep.Spec.Template.Spec.Containers[0].Command = []string{"app", "--password=correct horse battery staple"}
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	rendered := fmt.Sprintf("%+v", diff)
+	for _, secret := range []string{"hunter2", "swordfish", "t-one", "t-two", "horse"} {
+		if strings.Contains(rendered, secret) {
+			t.Fatalf("shell script credential %q leaked: %s", secret, rendered)
+		}
+	}
+}
+
+func TestComputeDiff_ProbeQueryValuesRedacted(t *testing.T) {
+	probe := func(q string) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/health?" + q, Port: intstr.FromInt(80)}}}
+	}
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Template.Spec.Containers[0].ReadinessProbe = probe("token=t-one&api_key=k-one&password=p1")
+	newDep := bumped(oldDep)
+	newDep.Spec.Template.Spec.Containers[0].ReadinessProbe = probe("token=t-two&api_key=k-two&password=p2")
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	if diff == nil || !strings.Contains(diff.Summary, "readinessProbe(web) changed") {
+		t.Fatalf("probe change not reported: %+v", diff)
+	}
+	rendered := fmt.Sprintf("%+v", diff)
+	for _, secret := range []string{"t-one", "t-two", "k-one", "k-two", "=p1", "=p2"} {
+		if strings.Contains(rendered, secret) {
+			t.Fatalf("query value %q leaked: %s", secret, rendered)
+		}
+	}
+}
+
+func TestComputeDiff_CurlUserCredentialsRedacted(t *testing.T) {
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Template.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"curl", "-u", "hc:hunter2", "http://localhost/health"}}}}
+	oldDep.Spec.Template.Spec.Containers[0].Args = []string{"sh", "-c", "curl -u hc:pw-one http://localhost"}
+	newDep := bumped(oldDep)
+	newDep.Spec.Template.Spec.Containers[0].ReadinessProbe.Exec.Command = []string{"curl", "-u", "hc:swordfish", "http://localhost/health"}
+	newDep.Spec.Template.Spec.Containers[0].Args = []string{"curl", "--user", "hc:pw-two", "-uhc:pw-three", "--user=hc:pw-four", "http://localhost"}
+	newDep.Spec.Template.Spec.Containers[0].Command = []string{"sh", "-c", "curl -uhc:pw-five http://localhost"}
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	if diff == nil || !strings.Contains(diff.Summary, "readinessProbe(web) changed") {
+		t.Fatalf("probe change not reported: %+v", diff)
+	}
+	rendered := fmt.Sprintf("%+v", diff)
+	for _, secret := range []string{"hunter2", "swordfish", "pw-one", "pw-two", "pw-three", "pw-four", "pw-five"} {
+		if strings.Contains(rendered, secret) {
+			t.Fatalf("credential %q leaked: %s", secret, rendered)
+		}
+	}
+}

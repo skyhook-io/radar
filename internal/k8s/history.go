@@ -3330,7 +3330,7 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 			oldProbe := normalizedProbe(probeForName(oldC.Container, probeName))
 			newProbe := normalizedProbe(probeForName(newC.Container, probeName))
 			if !reflect.DeepEqual(oldProbe, newProbe) {
-				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: oldProbe, NewValue: newProbe})
+				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: probeDisplay(oldProbe), NewValue: probeDisplay(newProbe)})
 				summary = append(summary, fmt.Sprintf("%s(%s) changed", probeName, name))
 			}
 		}
@@ -3650,6 +3650,48 @@ func probeForName(c corev1.Container, name string) *corev1.Probe {
 	}
 }
 
+// probeDisplay redacts a normalized probe for output: exec commands are
+// hidden, HTTP query values are hidden, and the rest goes through
+// secret-pattern redaction. Comparison uses the raw normalized probe.
+func probeDisplay(normalized any) any {
+	m, ok := normalized.(map[string]any)
+	if !ok {
+		return normalized
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	switch handler := out["handler"].(type) {
+	case string:
+		out["handler"] = aicontext.RedactSecrets(withoutQueryValues(handler))
+	case map[string]any:
+		// Exec probes routinely embed credentials in forms no argument
+		// classifier can bound (curl -u, quoted scripts), so the command is
+		// never shown; the row still says the probe changed.
+		if _, ok := handler["exec"]; ok {
+			out["handler"] = map[string]any{"exec": hiddenValueMarker}
+		}
+	}
+	return out
+}
+
+// withoutQueryValues keeps an HTTP probe path's query keys and hides every
+// value: tokens and API keys in probe URLs have no recognizable format.
+func withoutQueryValues(handler string) string {
+	path, query, ok := strings.Cut(handler, "?")
+	if !ok {
+		return handler
+	}
+	params := strings.Split(query, "&")
+	for i, param := range params {
+		if key, _, hasValue := strings.Cut(param, "="); hasValue {
+			params[i] = key + "=[REDACTED]"
+		}
+	}
+	return path + "?" + strings.Join(params, "&")
+}
+
 func normalizedProbe(p *corev1.Probe) any {
 	if p == nil {
 		return nil
@@ -3724,6 +3766,19 @@ func commandArgDisplayValue(value string) (string, bool) {
 	if trimmed == "" {
 		return value, false
 	}
+	// A shell script passed as one argument (sh -c "...") carries its own
+	// flags and values, and quoting makes their extent unknowable: if any
+	// word looks like a credential flag, hide the whole argument.
+	if words := strings.Fields(trimmed); len(words) > 1 {
+		for _, word := range words {
+			if _, inline := splitInlineSecretArg(word); inline || commandArgNameLooksSecret(word) || attachedUserCredential(word) {
+				return "[REDACTED script]", false
+			}
+		}
+	}
+	if attachedUserCredential(trimmed) {
+		return "[REDACTED]", false
+	}
 	if prefix, ok := splitInlineSecretArg(trimmed); ok {
 		return prefix + "[REDACTED]", false
 	}
@@ -3742,8 +3797,23 @@ func splitInlineSecretArg(value string) (string, bool) {
 	return "", false
 }
 
+// attachedUserCredential matches curl-style credentials attached to their
+// flag: -uuser:password, --user=user:password, --proxy-user=user:password.
+func attachedUserCredential(value string) bool {
+	v := strings.Trim(value, "\"'")
+	if strings.HasPrefix(v, "--user=") || strings.HasPrefix(v, "--proxy-user=") {
+		return true
+	}
+	return strings.HasPrefix(v, "-u") && !strings.HasPrefix(v, "--") && len(v) > 2
+}
+
 func commandArgNameLooksSecret(value string) bool {
 	name := strings.Trim(strings.TrimSpace(value), "\"'")
+	// curl and most HTTP clients take user:password after -u / --user.
+	switch name {
+	case "-u", "--user", "--proxy-user":
+		return true
+	}
 	name = strings.TrimLeft(name, "-")
 	if name == "key" {
 		return true
