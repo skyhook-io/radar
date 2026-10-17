@@ -26,8 +26,11 @@ import (
 // (MAX_NAMESPACE_DESCRIPTION_CHARS in codex-rs/core/src/context/world_state/tools.rs).
 const (
 	maxInstructionChars = 3800
-	routingCutoffChars  = 2048
-	firstLineChars      = 250
+	// Radar Hub prepends a fleet preamble of about 550 characters to the full
+	// server's text and keeps the total under 4,000.
+	maxFullServerChars = 3440
+	routingCutoffChars = 2048
+	firstLineChars     = 250
 )
 
 func TestServerInstructionsFitClientLimits(t *testing.T) {
@@ -39,6 +42,9 @@ func TestServerInstructionsFitClientLimits(t *testing.T) {
 		end := strings.Index(text, "READING RADAR'S SIGNALS")
 		if end < 0 || len([]rune(text[:end])) >= routingCutoffChars {
 			t.Errorf("includeWrites=%v: routing ends at char %d, must end before %d", includeWrites, end, routingCutoffChars)
+		}
+		if n := len([]rune(text)); includeWrites && n > maxFullServerChars {
+			t.Errorf("full server text is %d chars, limit %d so Radar Hub's preamble fits", n, maxFullServerChars)
 		}
 		firstLine, _, _ := strings.Cut(text, "\n")
 		if n := len([]rune(firstLine)); n > firstLineChars {
@@ -110,7 +116,7 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 // either side changes, the test fails and the pairing gets rechecked by hand.
 var instructionClaims = []struct{ tool, says, backedBy, param string }{
 	{tool: "issues", says: "Symptom known, faulty resource not: issues", backedBy: "live state"},
-	{tool: "issues", says: "references to missing ConfigMaps", backedBy: "references"},
+	{tool: "issues", says: "references to missing objects", backedBy: "references"},
 	{tool: "diagnose", says: "a Pod, Deployment, StatefulSet, DaemonSet or Rollout", backedBy: "Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout"},
 	{tool: "diagnose", says: "a Service, Ingress or route that traffic doesn't reach", backedBy: "traffic not reaching a service, route or ingress"},
 	{tool: "diagnose", says: "an Argo CD Application or Flux Kustomization or HelmRelease (sync and health)", backedBy: "GitOps sync/health"},
@@ -119,8 +125,8 @@ var instructionClaims = []struct{ tool, says, backedBy, param string }{
 	{tool: "get_workload_logs", says: "or get_workload_logs", param: "grep"},
 	{tool: "search", says: "status message): search", backedBy: "status message"},
 	{tool: "top_resources", says: "OOMKills: top_resources", backedBy: "OOMKills"},
-	{tool: "get_neighborhood", says: "get_neighborhood for the graph around it", backedBy: "service routing"},
-	{tool: "get_neighborhood", says: "(owners, selectors, config references)", backedBy: "targetPort/selector/endpoints problems, dependency timeouts, config/secret refs, owner chains"},
+	{tool: "get_neighborhood", says: "service routing): get_neighborhood", backedBy: "service routing"},
+	{tool: "get_neighborhood", says: "The graph around one object (owners, selectors, config references", backedBy: "targetPort/selector/endpoints problems, dependency timeouts, config/secret refs, owner chains"},
 	{tool: "get_cluster_audit", says: "get_cluster_audit is configuration posture", backedBy: "STATIC CONFIG POSTURE"},
 	{tool: "manage_workload", says: "manage_workload to restart, scale or roll back", backedBy: "'rollback'"},
 }
@@ -240,5 +246,14 @@ func TestServerInstructionsScopeCreationTimingToResourceOrOwner(t *testing.T) {
 	}
 	if strings.Contains(text, "the failure has been present since") {
 		t.Error("instructions date the specific failure from creation; owner-derived timing does not support that")
+	}
+}
+
+// Radar Hub can hide the Kubernetes write tools from a read-only organization
+// while still listing other vendors' write tools, so the fixes line is
+// conditioned on the Kubernetes write tools by name.
+func TestServerInstructionsConditionFixesOnKubernetesWriteTools(t *testing.T) {
+	if !strings.Contains(serverInstructions(true), "- Fixes, if patch_resource, apply_resource or manage_workload are listed:") {
+		t.Error("the fixes line no longer names the Kubernetes write tools it depends on")
 	}
 }
