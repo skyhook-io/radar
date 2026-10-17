@@ -52,6 +52,47 @@ func (f falseAbsence) Object(ref resourceid.Ref) ownership.ObjectRead {
 	return f.Session.Object(ref)
 }
 
+// extraCandidate adds an object to every search's candidates, as an index
+// that ignores the domain would.
+type extraCandidate struct {
+	ownership.Session
+	extra ownership.Observation
+}
+
+func (e extraCandidate) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := e.Session.OwnerCandidates(uid, d, limit)
+	r.Candidates = append(r.Candidates, e.extra)
+	return r
+}
+
+// earlyGap adds a gap to the first search only.
+type earlyGap struct {
+	ownership.Session
+	calls *int
+}
+
+func (e earlyGap) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := e.Session.OwnerCandidates(uid, d, limit)
+	if *e.calls++; *e.calls == 1 {
+		r.Gaps = append(r.Gaps, ownership.Gap{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "beta", Reason: "kind_sync_pending"})
+	}
+	return r
+}
+
+// laterGap adds a gap to every search after the first.
+type laterGap struct {
+	ownership.Session
+	calls *int
+}
+
+func (l laterGap) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := l.Session.OwnerCandidates(uid, d, limit)
+	if *l.calls++; *l.calls > 1 {
+		r.Gaps = append(r.Gaps, ownership.Gap{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "beta", Reason: "kind_sync_pending"})
+	}
+	return r
+}
+
 // lagging answers from an older view of the cluster until it has been asked
 // twice, as a cache does while its watch catches up.
 type lagging struct {
@@ -118,6 +159,9 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 	updated.ResourceVersion = "11"
 	orphaned := updated
 	orphaned.Owners = nil
+	elsewhere := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "beta", Name: "q"}, APIVersion: "v1", UID: "uid-q", ResourceVersion: "20", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
+	partial := world(rs, updated)
+	partial.Partial = true
 
 	listed := world(rs, pod)
 	q := ownershiptest.Queries{Refs: []resourceid.Ref{pod.Ref}, UIDs: []types.UID{"uid-rs"}, Domains: []ownership.Domain{ownership.InNamespace("alpha")}, Limits: []int{0}}
@@ -162,6 +206,25 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 		// Membership right, copy wrong.
 		{"a candidate under a UID it doesn't have", world(rs, updated),
 			func(now ownership.Session) ownership.Session { return inventedUID{now} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
+		// A Pod outside the searched namespace, named in a search for alpha.
+		{"a candidate outside the domain", world(rs, updated, elsewhere),
+			func(now ownership.Session) ownership.Session {
+				return extraCandidate{now, ownershiptest.Observe(elsewhere)}
+			},
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
+		// Asked again, the search covers less than the expected answer.
+		{"the fresh answer leaves more unread", world(rs, updated),
+			func(now ownership.Session) ownership.Session { return laterGap{now, new(int)} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
+		// A coverage difference fails even when it's gone by the time the
+		// question is asked again: the caches are loaded before comparing.
+		{"a coverage difference that passes", world(rs, updated),
+			func(now ownership.Session) ownership.Session { return earlyGap{now, new(int)} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
+		// Discovery went partial while the Pod changed: a coverage difference
+		// beside an object one, never explained by the object.
+		{"coverage and an object differ together", partial, nil,
 			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

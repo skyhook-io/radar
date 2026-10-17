@@ -281,7 +281,7 @@ func TestLiveParity(t *testing.T) {
 		if err := got.Validate(); err != nil {
 			t.Errorf("pass %d: Validate: %v", pass, err)
 		}
-		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d still wrong",
+		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d wrong or not settled",
 			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions,
 			len(diffs)+resolutionDiffs, counts[confirmed], counts[caughtUp], counts[unresolved])
 		for i, question := range caughtUpQuestions {
@@ -292,5 +292,5 @@ func TestLiveParity(t *testing.T) {
 			t.Logf("  caught up: %s", question)
 		}
 	}
-	t.Logf("%d answers still wrong after catching up", failures)
+	t.Logf("%d answers wrong, or not settled, after catching up", failures)
 }

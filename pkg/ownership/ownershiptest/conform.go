@@ -117,6 +117,8 @@ type Difference struct {
 	UID        types.UID
 	Domain     ownership.Domain
 	Limit      int
+	// WantGaps are the gaps the first session reported for a search.
+	WantGaps []ownership.Gap
 }
 
 func (d Difference) String() string {
@@ -146,7 +148,7 @@ func Differences(want, got ownership.Session, q Queries) []Difference {
 						Want:     describeCandidates(w), Got: describeCandidates(g),
 						Objects:    differingCandidates(w, g),
 						Coverage:   w.Truncated != g.Truncated || !slices.Equal(w.Gaps, g.Gaps),
-						Candidates: true, UID: uid, Domain: d, Limit: limit,
+						Candidates: true, UID: uid, Domain: d, Limit: limit, WantGaps: w.Gaps,
 					})
 				}
 			}

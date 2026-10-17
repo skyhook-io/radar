@@ -35,7 +35,7 @@ const (
 	// difference is about coverage. The live check fails on it.
 	unresolved outcome = iota
 	// confirmed: the cache now answers right, and the API server shows the
-	// disputed objects changed since the list, which explains the difference.
+	// disputed objects changed since the list.
 	confirmed
 	// caughtUp: the cache now answers right, but the API server shows no
 	// change since the list. The cache was behind, or answered wrong for a
@@ -78,9 +78,10 @@ func changedSince(listed map[resourceid.Ref]ownershiptest.Object, ref resourceid
 
 // recheck asks a difference's question of the cache again once the objects
 // it disputes have caught up, and checks the whole fresh answer against the
-// API server: for a search, every candidate must name the UID in its current
-// copy and match that copy exactly, and every disputed object left out must
-// not name it.
+// API server: for a search, every candidate must be in the domain, name the
+// UID in its current copy and match that copy exactly; every disputed object
+// in the domain left out must not name it; and the gaps must be the expected
+// ones.
 func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]ownershiptest.Object, cache ownership.Session, api apiRead) outcome {
 	if d.Coverage || len(d.Objects) == 0 {
 		return unresolved
@@ -103,10 +104,13 @@ func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]o
 	}
 	if d.Candidates {
 		fresh := cache.OwnerCandidates(d.UID, d.Domain, d.Limit)
-		if fresh.Truncated {
+		if fresh.Truncated || !slices.Equal(fresh.Gaps, d.WantGaps) {
 			return unresolved
 		}
 		for _, c := range fresh.Candidates {
+			if !inDomain(c.Ref, d.Domain) {
+				return unresolved
+			}
 			if _, seen := current[c.Ref]; !seen && !settleRef(c.Ref) {
 				return unresolved
 			}
@@ -116,7 +120,7 @@ func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]o
 		}
 		for _, ref := range d.Objects {
 			in := slices.ContainsFunc(fresh.Candidates, func(c ownership.Observation) bool { return c.Ref == ref })
-			if !in && exists[ref] && names(current[ref].Owners, d.UID) {
+			if !in && inDomain(ref, d.Domain) && exists[ref] && names(current[ref].Owners, d.UID) {
 				return unresolved
 			}
 		}
@@ -152,6 +156,15 @@ func (st settle) recheckResolution(want, got ownership.OwnerResolution, dependen
 		return confirmed
 	}
 	return caughtUp
+}
+
+// inDomain reports whether a search of d covers ref, an object of a
+// cluster-scoped kind when it has no namespace.
+func inDomain(ref resourceid.Ref, d ownership.Domain) bool {
+	if ref.Namespace == "" {
+		return d.ClusterScoped
+	}
+	return d.AllNamespaces || slices.Contains(d.Namespaces, ref.Namespace)
 }
 
 func names(owners []metav1.OwnerReference, uid types.UID) bool {
