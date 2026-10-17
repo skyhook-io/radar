@@ -598,16 +598,16 @@ context adds the `mixed_backends` warning with the same sentence in
 `serviceSummary.mixedBackends`, only when the workloads that receive traffic don't
 all serve the Service:
 
-- **Different applications**: they share no image repository. "Service X routes
-  to N different applications (…)".
+- **Different applications**: they share no image, compared by name without
+  registry, tag or digest. "Service X routes to N different applications (…)".
 - **A port some don't declare**: some declare the numeric targetPort while others
   declare other ports but not it. "Service X routes to N workloads; Y's pods don't
   declare port P".
 
 Deliberate setups stay quiet: stable and canary Deployments, blue/green cutovers,
 Argo Rollouts, versions of one app (a shared `app` label and a `version` label on
-every Pod), mesh sidecars and headless Services. A tag change is the same image,
-and a workload that declares no ports is not evidence. In the MCP `issues` tool
+every Pod), mesh sidecars and headless Services. A new tag or registry is the
+same image, and a workload that declares no ports is not evidence. In the MCP `issues` tool
 the warning's `correlated_changes` show recent edits to the Service, such as a
 selector change.
 

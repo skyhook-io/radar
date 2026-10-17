@@ -639,6 +639,45 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantGapPorts:  []int32{5000},
 		},
 		{
+			name: "the same image from two registries is one application",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("web-a-1", "StatefulSet", "web-a", []corev1.Container{container("web", "ghcr.io/acme/web:1.4", 5000)}),
+				backendPod("web-b-1", "StatefulSet", "web-b", []corev1.Container{container("web", "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/web:1.5", 5000)}),
+			},
+			wantWorkloads: 2,
+		},
+		{
+			name: "a pull-through mirror prefix is the same application",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("web-a-1", "StatefulSet", "web-a", []corev1.Container{container("web", "acme/web:1.4", 5000)}),
+				backendPod("web-b-1", "StatefulSet", "web-b", []corev1.Container{container("web", "mirror.example.com/dockerhub/acme/web:1.4", 5000)}),
+			},
+			wantWorkloads: 2,
+		},
+		{
+			name: "a GCR to Artifact Registry move is the same application",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("web-a-1", "StatefulSet", "web-a", []corev1.Container{container("web", "gcr.io/acme-prod/web@sha256:abc", 5000)}),
+				backendPod("web-b-1", "StatefulSet", "web-b", []corev1.Container{container("web", "us-docker.pkg.dev/acme-prod/containers/web:2", 5000)}),
+			},
+			wantWorkloads: 2,
+		},
+		{
+			name: "different image names across registries are still different applications",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("web-1", "StatefulSet", "web", []corev1.Container{container("web", "ghcr.io/acme/web:1", 5000)}),
+				backendPod("search-1", "StatefulSet", "search", []corev1.Container{container("search", "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/search:1", 5000)}),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantApps:      [][]string{{"search"}, {"web"}},
+			wantProblem:   "Service frontend routes to 2 different applications (search, web)",
+		},
+		{
 			name: "stable and canary of one app plus an unrelated app",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{

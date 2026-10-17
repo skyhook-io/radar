@@ -62,8 +62,8 @@ type ServicePortGap struct {
 // Service's ports.
 type ServiceBackends struct {
 	Workloads []ServiceBackendWorkload
-	// Applications lists, when the receiving workloads run no image
-	// repository in common, the workload names of each application.
+	// Applications lists, when the receiving workloads run no image name in
+	// common, the workload names of each application.
 	Applications [][]string
 	PortGaps     []ServicePortGap
 	// ResolvedThroughReplicaSets is set when a workload name came from a
@@ -104,7 +104,7 @@ func capNames(names []string) []string {
 }
 
 // Problem is the issue message for a Service with mismatched backends. It says
-// "different applications" only when the image repositories show it, e.g.
+// "different applications" only when the image names show it, e.g.
 // "Service frontend routes to 2 different applications (frontend, search)";
 // a port gap alone reads "Service frontend routes to 2 workloads; search's
 // pods don't declare port 5000".
@@ -117,7 +117,7 @@ func (b ServiceBackends) Problem(service string) string {
 }
 
 // Noun is what the backends are, for wording that can't name them:
-// "application" when the image repositories differ, else "workload".
+// "application" when the image names differ, else "workload".
 func (b ServiceBackends) Noun() string {
 	if b.differentImages() {
 		return "application"
@@ -263,7 +263,7 @@ type backendContainer struct {
 }
 
 // signature identifies a container across workloads: the same name, image
-// repository and declared ports. A container with the same signature in every
+// name and declared ports. A container with the same signature in every
 // receiving workload (a namespace-wide injected sidecar, a shared auth proxy,
 // the application container of a same-image canary) says nothing about how
 // the workloads differ.
@@ -445,7 +445,7 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 }
 
 // sameServerForPort reports whether one identical container (same name and
-// image repository), such as a mesh proxy, serves the port in every workload:
+// image name), such as a mesh proxy, serves the port in every workload:
 // then traffic to that port reaches the same software whatever else the Pods
 // run.
 func sameServerForPort(sp *corev1.ServicePort, podGroups [][]*corev1.Pod) bool {
@@ -458,7 +458,7 @@ func sameServerForPort(sp *corev1.ServicePort, podGroups [][]*corev1.Pod) bool {
 		for _, pod := range pods {
 			for _, c := range podPortContainers(pod) {
 				if containerServesPort(c, sp) {
-					servers[c.Name+"\x00"+comparableImageRepository(c.Image)] = true
+					servers[c.Name+"\x00"+comparableImageName(c.Image)] = true
 				}
 			}
 		}
@@ -576,12 +576,12 @@ func workloadContainers(pods []*corev1.Pod) map[string]backendContainer {
 	out := map[string]backendContainer{}
 	for _, pod := range pods {
 		for _, c := range pod.Spec.Containers {
-			bc := backendContainer{name: c.Name, repo: comparableImageRepository(c.Image), ports: c.Ports}
+			bc := backendContainer{name: c.Name, repo: comparableImageName(c.Image), ports: c.Ports}
 			out[bc.signature()] = bc
 		}
 		for _, c := range pod.Spec.InitContainers {
 			if isNativeSidecar(&c) {
-				bc := backendContainer{name: c.Name, repo: comparableImageRepository(c.Image), ports: c.Ports, nativeSidecar: true}
+				bc := backendContainer{name: c.Name, repo: comparableImageName(c.Image), ports: c.Ports, nativeSidecar: true}
 				out[bc.signature()] = bc
 			}
 		}
@@ -589,9 +589,9 @@ func workloadContainers(pods []*corev1.Pod) map[string]backendContainer {
 	return out
 }
 
-// containerRepos collects the image repositories the Pods run, mesh proxies
-// aside. Container order and sidecars don't matter: two workloads that run any
-// repository in common count as one application.
+// containerRepos collects the image names the Pods run, mesh proxies aside.
+// Container order and sidecars don't matter: two workloads that run any image
+// in common count as one application.
 func containerRepos(pods []*corev1.Pod) map[string]bool {
 	out := map[string]bool{}
 	for _, pod := range pods {
@@ -599,7 +599,7 @@ func containerRepos(pods []*corev1.Pod) map[string]bool {
 			if MeshProxyContainers[c.Name] != "" {
 				continue
 			}
-			if repo := comparableImageRepository(c.Image); repo != "" {
+			if repo := comparableImageName(c.Image); repo != "" {
 				out[repo] = true
 			}
 		}
@@ -697,7 +697,7 @@ func servicePortGaps(svc *corev1.Service, workloads []*backendWorkload, common m
 		}
 		proto := portProtocol(sp.Protocol)
 		gap := ServicePortGap{Port: port, Protocol: proto}
-		// The containers that declare the port, by name and repository, so a
+		// The containers that declare the port, by name and image, so a
 		// workload missing it is judged by its counterpart of that container
 		// when it has one, not by an unrelated sidecar's ports.
 		servingNames, servingRepos := map[string]bool{}, map[string]bool{}
@@ -758,8 +758,7 @@ func containerDeclaresPort(c backendContainer, port int32, proto corev1.Protocol
 	return false
 }
 
-// distinctApplications joins workloads that run an image repository in
-// common; more than one group means different applications. Sharing anything
+// distinctApplications joins workloads that run an image name in common; more than one group means different applications. Sharing anything
 // counts, so a sidecar injected into every Pod hides this signal: a missed
 // warning costs less than a false one, and the port signal still applies.
 func distinctApplications(labels []string, repos []map[string]bool) [][]string {
@@ -808,15 +807,15 @@ func distinctApplications(labels []string, repos []map[string]bool) [][]string {
 	return out
 }
 
-// comparableImageRepository drops the tag and digest and Docker Hub's implicit
-// registry and library prefixes, so "nginx:1.27" and "docker.io/library/nginx"
-// compare equal.
-func comparableImageRepository(image string) string {
+// comparableImageName is the image's name, its last path segment without tag
+// or digest, lowercased. The registry and the path before the name are left
+// out so that the same software pulled through another registry, a mirror, or
+// a GCR to Artifact Registry move ("gcr.io/p/web" and
+// "us-docker.pkg.dev/p/repo/web") compares equal; two different applications
+// both named "web" do too, a rare miss.
+func comparableImageName(image string) string {
 	repo := strings.ToLower(imageutil.Repository(strings.TrimSpace(image)))
-	for _, prefix := range []string{"docker.io/", "index.docker.io/", "registry-1.docker.io/"} {
-		repo = strings.TrimPrefix(repo, prefix)
-	}
-	return strings.TrimPrefix(repo, "library/")
+	return repo[strings.LastIndex(repo, "/")+1:]
 }
 
 func portProtocol(p corev1.Protocol) corev1.Protocol {
