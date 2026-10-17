@@ -276,7 +276,7 @@ func chainDiffs(fns ...kindDiffFunc) kindDiffFunc {
 // ignored becomes its own row, so a field the explicit differs don't know
 // about is never hidden behind the fields they do report. Values are shown
 // only for scalars.
-func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tracked []FieldChange) ([]FieldChange, []string) {
+func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root string, ignored []string, tracked []FieldChange) ([]FieldChange, []string) {
 	oldMeta, err := meta.Accessor(oldObj)
 	if err != nil {
 		return nil, nil
@@ -314,9 +314,26 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 	for _, path := range ignored {
 		trackedSegments = append(trackedSegments, splitSpecPath(path))
 	}
+	// The explicit differs read typed projections when the informer delivers
+	// unstructured objects. A field the compiled types do not know never
+	// reached them, so no row can cover it.
+	known := func(string) bool { return true }
+	if oldProjected != nil && newProjected != nil {
+		oldP, oldOK := backstopRootOf(oldProjected, root)
+		newP, newOK := backstopRootOf(newProjected, root)
+		if oldOK && newOK {
+			known = func(path string) bool {
+				_, inOldRaw := lookupSpecPath(oldU, root, path)
+				_, inNewRaw := lookupSpecPath(newU, root, path)
+				_, inOldP := lookupSpecPath(oldP, root, path)
+				_, inNewP := lookupSpecPath(newP, root, path)
+				return (!inOldRaw || inOldP) && (!inNewRaw || inNewP)
+			}
+		}
+	}
 	var untracked, covered []changedSpecPath
 	for _, c := range found {
-		if specPathCovered(trackedSegments, splitSpecPath(c.path), c.order) {
+		if known(c.path) && specPathCovered(trackedSegments, splitSpecPath(c.path), c.order) {
 			covered = append(covered, c)
 		} else {
 			untracked = append(untracked, c)
@@ -833,10 +850,11 @@ func isEnvRow(path string) bool {
 }
 
 // completeRowSuffixes are rows whose value is the whole subtree at their
-// path: whole-structure equality markers, full maps and lists, and summaries
-// built from every field of the type they describe.
+// path: full maps and lists, and summaries built from every field of the type
+// they describe. The securityContext and affinity "changed" markers are not:
+// the fields under them are reported too, so a reader sees which changed.
 var completeRowSuffixes = []string{
-	".securityContext", "spec.affinity", "spec.nodeSelector", "spec.dnsConfig.nameservers",
+	"spec.nodeSelector", "spec.dnsConfig.nameservers",
 	"spec.dnsConfig.searches", "spec.dnsConfig.options", "].command", "].args", "].image",
 	"spec.hostnames", "spec.externalIPs", "spec.loadBalancerSourceRanges", "spec.selector",
 	"spec.limits", "spec.metrics", "spec.scaleTargetRef", "spec.behavior.scaleUp", "spec.behavior.scaleDown",
@@ -971,6 +989,7 @@ var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode"}
 var freeFormMaps = map[string]bool{
 	"labels": true, "annotations": true, "matchLabels": true, "nodeSelector": true,
 	"parameters": true, "data": true, "stringData": true, "options": true, "config": true,
+	"plugins": true, "args": true,
 }
 
 func safeStringField(path string) bool {

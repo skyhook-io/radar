@@ -1391,3 +1391,44 @@ func TestComputeDiff_HPAUnknownBehaviorFieldVisible(t *testing.T) {
 		t.Fatalf("unknown behavior field dropped: %+v", diff)
 	}
 }
+
+// A field newer than the compiled types sits beside a known field a row
+// reports; the row cannot have compared it.
+func TestComputeDiff_UnknownFieldBesideKnownEditUnderReportedRow(t *testing.T) {
+	dep := func(gen int64, nonRoot bool, future string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apps/v1", "kind": "Deployment",
+			"metadata": map[string]any{"name": "web", "uid": "d", "generation": gen},
+			"spec": map[string]any{
+				"selector": map[string]any{"matchLabels": map[string]any{"app": "web"}},
+				"template": map[string]any{"spec": map[string]any{
+					"containers":      []any{map[string]any{"name": "web", "image": "web:1"}},
+					"securityContext": map[string]any{"runAsNonRoot": nonRoot, "futureIsolation": future},
+				}},
+			},
+		}}
+	}
+	diff := ComputeDiff("Deployment", dep(1, false, "off"), dep(2, true, "on"))
+	if findChange(diff, "spec.template.spec.securityContext.futureIsolation") == nil {
+		t.Fatalf("unknown field hidden behind the securityContext row: %+v", diff)
+	}
+	if change := findChange(diff, "spec.template.spec.securityContext.runAsNonRoot"); change == nil || change.NewValue != true {
+		t.Fatalf("securityContext leaf missing: %+v", diff)
+	}
+}
+
+func TestComputeDiff_RolloutPluginConfigStringsHidden(t *testing.T) {
+	ro := func(gen int64, conn string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+			"metadata": map[string]any{"name": "web", "uid": "ro", "generation": gen},
+			"spec": map[string]any{"strategy": map[string]any{"canary": map[string]any{"trafficRouting": map[string]any{
+				"plugins": map[string]any{"example/router": map[string]any{"connectionName": conn}},
+			}}}},
+		}}
+	}
+	diff := ComputeDiff("Rollout", ro(1, "user:pw-one@db"), ro(2, "user:pw-two@db"))
+	if rendered := fmt.Sprintf("%+v", diff); diff == nil || strings.Contains(rendered, "pw-one") || strings.Contains(rendered, "pw-two") {
+		t.Fatalf("plugin config leaked or missing: %s", rendered)
+	}
+}
