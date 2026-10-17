@@ -251,6 +251,16 @@ func (index *secretDataManagerWriteIndex) capture(obj any) {
 		pending.write = &secretDataManagerWrite{uid: string(secret.UID), at: latest}
 	}
 	index.mu.Lock()
+	// Watch-list informers transform each object present at startup twice,
+	// and the second pass sees the managedFields the first one stripped (the
+	// same reason DropManagedFields checks for Helm digests). One object
+	// version always carries the same managedFields, so an empty set on a
+	// version already captured is that second pass, not new evidence: keep
+	// the first capture.
+	if _, captured := index.pending[version]; captured && len(secret.ManagedFields) == 0 {
+		index.mu.Unlock()
+		return
+	}
 	if _, exists := index.pending[version]; !exists && len(index.pending) >= index.pendingLimit {
 		// Transform observations are advisory. Under callback starvation,
 		// discard unmatched candidates rather than grow without bound; a

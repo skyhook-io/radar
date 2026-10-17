@@ -910,6 +910,73 @@ func TestSecretDataManagerWriteIndex(t *testing.T) {
 	})
 }
 
+// TestSecretDataManagerWriteIndexSurvivesRepeatedTransform pins the
+// startup path of a watch-list informer: client-go transforms each object
+// present at startup twice (once into its temporary store, again on Replace),
+// and the second pass sees the managedFields the first pass stripped. The
+// write the first pass captured must survive it.
+func TestSecretDataManagerWriteIndexSurvivesRepeatedTransform(t *testing.T) {
+	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
+	managed := func(raw string) []metav1.ManagedFieldsEntry {
+		return []metav1.ManagedFieldsEntry{{
+			Manager: "secret-controller", Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: dataWrite}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(raw)},
+		}}
+	}
+	newSecret := func(secretType corev1.SecretType, raw string) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "credentials", Namespace: "shop", UID: types.UID("secret-uid"),
+				ResourceVersion: "7", ManagedFields: managed(raw),
+			},
+			Type: secretType,
+			Data: map[string][]byte{"password": []byte("value")},
+		}
+	}
+	// The informer transform as the cache wires it: capture, then strip.
+	transformTwice := func(index *secretDataManagerWriteIndex, secret *corev1.Secret) {
+		for range 2 {
+			index.capture(secret)
+			if _, err := k8score.DropManagedFields(secret); err != nil {
+				t.Fatalf("DropManagedFields: %v", err)
+			}
+		}
+	}
+	add := k8score.ResourceChange{Kind: "Secret", Namespace: "shop", Name: "credentials", UID: "secret-uid", Operation: k8score.OpAdd}
+
+	t.Run("data write made before startup is indexed", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		secret := newSecret(corev1.SecretTypeOpaque, `{"f:data":{"f:password":{}}}`)
+		transformTwice(index, secret)
+		index.reconcile(add, secret)
+		write, ok := index.load("shop", "credentials")
+		if !ok || !write.at.Equal(dataWrite) {
+			t.Fatalf("indexed write = (%+v, %v), want the data write at %v", write, ok, dataWrite)
+		}
+	})
+
+	t.Run("Secret never written by a data manager stays unindexed", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		secret := newSecret(corev1.SecretTypeOpaque, `{"f:metadata":{"f:labels":{"f:team":{}}}}`)
+		transformTwice(index, secret)
+		index.reconcile(add, secret)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("metadata-only Secret indexed a data write: %+v", write)
+		}
+	})
+
+	t.Run("Helm release Secret stays unindexed", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		secret := newSecret(corev1.SecretType("helm.sh/release.v1"), `{"f:data":{"f:release":{}}}`)
+		transformTwice(index, secret)
+		index.reconcile(add, secret)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("Helm release Secret indexed a data write: %+v", write)
+		}
+	})
+}
+
 func TestSecretDataManagerWriteIndexInformerLifecycle(t *testing.T) {
 	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
 	metadataWrite := dataWrite.Add(time.Hour)
