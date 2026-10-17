@@ -12,12 +12,12 @@ import "github.com/skyhook-io/radar/pkg/investigation"
 // routingInstructions says when to use Radar and which tool answers which
 // question. It names read tools only; writeRoutingLine adds the write tools on
 // servers that register them.
-const routingInstructions = `Radar keeps a live model of the Kubernetes cluster it is connected to: resource state, what manages, exposes and selects what, recent changes, logs, events, and ranked detected issues. Prefer its tools over kubectl for reading cluster state. If your client loads tools on demand, load the core read tools together: issues, diagnose, get_changes, get_resource, list_resources, search, get_workload_logs, get_pod_logs, get_events.
+const routingInstructions = `Radar keeps a live model of the connected Kubernetes cluster: resource state, what manages, exposes and selects what, recent changes, logs, events and ranked issues. Prefer its tools over kubectl for reading cluster state. If your client loads tools on demand, load the core read tools together: issues, diagnose, get_changes, get_resource, list_resources, search, get_workload_logs, get_pod_logs, get_events.
 
 WHICH TOOL
-- Symptom known, faulty resource not: issues. Ranked live failures for a namespace or the cluster, including references to missing ConfigMaps, Secrets, PVCs or Service backends, and unschedulable pods.
-- One workload: diagnose. Spec, status, owners and Services, current and previous logs, warning events and startup blockers in one call.
-- What changed: get_changes, a feed of creates, updates and deletes with field diffs.
+- Symptom known, faulty resource not: issues. Ranked live failures, including references to missing ConfigMaps, Secrets, PVCs or Service backends, and unschedulable pods.
+- One Pod, Deployment, StatefulSet, DaemonSet or Rollout: diagnose. Spec, status, owners, Services, current and previous logs, warning events and startup blockers in one call.
+- What changed: get_changes (creates, updates, deletes, field diffs).
 - More logs: get_workload_logs for all pods of a workload, get_pod_logs for one container or its previous instance.
 - A string in objects (config value, env reference, image, status message): search. In logs: the grep argument of get_pod_logs or get_workload_logs.
 - One object, or every object of a kind: get_resource, list_resources.
@@ -32,9 +32,9 @@ const writeRoutingLine = "- Fixes: patch_resource or apply_resource for spec cha
 
 // signalInstructions says how to read what Radar returns.
 const signalInstructions = `READING RADAR'S SIGNALS
-- An issues row that names a mechanism and an action, beyond a symptom such as CrashLoopBackOff, is the leading hypothesis. Confirm it with one targeted read (a log line, a field) instead of re-deriving it. If it points at another resource, follow that dependency. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
+- An issues row that names a mechanism and an action, and that diagnostic_context does not mark as a symptom, is the leading hypothesis. Confirm it with a targeted read (a log line, a field) instead of re-deriving it. If it points at another resource, follow that dependency. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
 - Read the changes attached to issues first; call get_changes when they are absent or you need another window or scope. Reuse the logs diagnose returned; fetch more only for a specific gap.
-- issue_timing started_after_resource_was_healthy means the resource worked, then broke: a strong lead. started_at_resource_creation on a recently created resource can mean the creation itself is the fault; compare its creation time with when the problem began.
+- issue_timing started_after_resource_was_healthy means a healthy window preceded the failure: look for what changed. started_at_resource_creation on a recently created resource can mean the creation itself is the fault. Prefer timing_summary when present.
 - issues is live state; get_cluster_audit is configuration posture. A healthy workload can carry many audit findings.
 - After a fix, wait on a condition with a time limit, never a fixed sleep: the rollout completes, new pods are Ready, the issue clears in issues. Check the reported symptom directly only when those signals do not cover it.
 `

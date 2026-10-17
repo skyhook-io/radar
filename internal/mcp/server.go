@@ -38,13 +38,17 @@ func newServer(includeWrites bool, instructions string) *mcpsdk.Server {
 	return server
 }
 
+// newFullServer is the public server with read and write tools, served over
+// stdio and on /mcp.
+func newFullServer() *mcpsdk.Server { return newServer(true, serverInstructions(true)) }
+
 // RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
-	return newServer(true, serverInstructions(true)).Run(ctx, &mcpsdk.StdioTransport{})
+	return newFullServer().Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true, serverInstructions(true))) }
+func NewHandler() http.Handler { return handlerForServer(newFullServer()) }
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler {
