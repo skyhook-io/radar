@@ -1308,3 +1308,42 @@ func TestComputeDiff_HPAMetricsDistinctUnderRedaction(t *testing.T) {
 		t.Fatalf("selector value leaked: %s", rendered)
 	}
 }
+
+func TestComputeDiff_FreeFormDescriptionAndMapKeysHidden(t *testing.T) {
+	gc := func(gen int64, desc string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass",
+			"metadata": map[string]any{"name": "c", "uid": "gc", "generation": gen},
+			"spec":     map[string]any{"controllerName": "example.com/gw", "description": desc},
+		}}
+	}
+	diff := ComputeDiff("GatewayClass", gc(1, "pw correct-horse"), gc(2, "pw staple-battery"))
+	if rendered := fmt.Sprintf("%+v", diff); diff == nil || strings.Contains(rendered, "horse") || strings.Contains(rendered, "battery") {
+		t.Fatalf("description leaked or missing: %s", rendered)
+	}
+	if safeStringField("spec.infrastructure.labels.name") {
+		t.Fatal("a map key named name inside labels was treated as a schema field")
+	}
+}
+
+// Fields the compiled Kubernetes types do not know must still be compared
+// when the informer delivers unstructured objects.
+func TestComputeDiff_BackstopSeesFieldsUnknownToTypedProjection(t *testing.T) {
+	dep := func(gen int64, image, future string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apps/v1", "kind": "Deployment",
+			"metadata": map[string]any{"name": "web", "uid": "d", "generation": gen},
+			"spec": map[string]any{
+				"selector": map[string]any{"matchLabels": map[string]any{"app": "web"}},
+				"template": map[string]any{"spec": map[string]any{
+					"containers":           []any{map[string]any{"name": "web", "image": image}},
+					"futureSchedulingKnob": future,
+				}},
+			},
+		}}
+	}
+	diff := ComputeDiff("Deployment", dep(1, "web:1", "off"), dep(2, "web:2", "on"))
+	if findChange(diff, "spec.template.spec.futureSchedulingKnob") == nil {
+		t.Fatalf("field unknown to the typed projection was dropped: %+v", diff)
+	}
+}

@@ -958,7 +958,7 @@ var safeStringFields = map[string]bool{
 	"hostname": true, "hostnames": true, "host": true, "hosts": true, "path": true, "pathType": true,
 	"protocol": true, "scheme": true, "port": true, "type": true, "mode": true, "operator": true,
 	"effect": true, "key": true, "resource": true, "resources": true, "verbs": true, "operations": true,
-	"apiGroups": true, "apiVersions": true, "scope": true, "description": true, "schedule": true,
+	"apiGroups": true, "apiVersions": true, "scope": true, "schedule": true,
 	"timeZone": true, "image": true, "matchPolicy": true, "sideEffects": true, "failurePolicy": true,
 }
 
@@ -966,8 +966,20 @@ var safeStringFields = map[string]bool{
 // (restartPolicy, serviceAccountName, ingressClassName, pathType...).
 var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode"}
 
+// freeFormMaps hold arbitrary user keys, so a key that happens to be called
+// "name" or "type" inside them says nothing about its value.
+var freeFormMaps = map[string]bool{
+	"labels": true, "annotations": true, "matchLabels": true, "nodeSelector": true,
+	"parameters": true, "data": true, "stringData": true, "options": true, "config": true,
+}
+
 func safeStringField(path string) bool {
 	segments := splitSpecPath(path)
+	for _, seg := range segments {
+		if freeFormMaps[seg] {
+			return false
+		}
+	}
 	// A string list item takes its list's field name (hostnames[0]).
 	for i := len(segments) - 1; i >= 0; i-- {
 		key := segments[i]

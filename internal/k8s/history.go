@@ -126,13 +126,16 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		}
 		return buildDiff(changes, summaryParts)
 	}
+	// The backstop compares the objects as received: the typed projection the
+	// explicit differs read drops fields the compiled types do not know.
+	backstopOld, backstopNew := oldObj, newObj
 	if oldU, newU, unstructured := unstructuredPair(oldObj, newObj); unstructured {
 		oldObj = diffInputForUnstructured(kind, oldU)
 		newObj = diffInputForUnstructured(kind, newU)
 	}
 	changes, summaryParts := registration.diff(oldObj, newObj)
 	if registration.backstopRoot != "" {
-		untracked, untrackedSummary := untrackedSpecChanges(oldObj, newObj, registration.backstopRoot, registration.backstopIgnored, changes)
+		untracked, untrackedSummary := untrackedSpecChanges(backstopOld, backstopNew, registration.backstopRoot, registration.backstopIgnored, changes)
 		changes = append(changes, untracked...)
 		summaryParts = append(summaryParts, untrackedSummary...)
 	}
