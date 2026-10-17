@@ -247,7 +247,7 @@ func TestDenyAllIngressDetectionMessage(t *testing.T) {
 		}
 	}
 	for i, other := range []string{"deny-in", "default-deny"} {
-		if !strings.Contains(pair[i].Cause, "NetworkPolicy "+other+" also isolates some of these pods") {
+		if !strings.Contains(pair[i].Cause, "NetworkPolicy "+other+" also isolates this pod") {
 			t.Errorf("%s cause doesn't name %s: %q", pair[i].Name, other, pair[i].Cause)
 		}
 	}
@@ -760,6 +760,43 @@ func TestDenyAllIngressReadinessDependent(t *testing.T) {
 		}
 		if len(got) != 1 || got[0] != tt.want {
 			t.Errorf("%s: readinessDependent = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// The copy agrees in number with the isolated pods.
+func TestDenyAllIngressCopyAgreesInNumber(t *testing.T) {
+	policies := []*networkingv1.NetworkPolicy{netpolTestPolicy("default-deny", nil, ingressAndEgress)}
+	services := []*corev1.Service{netpolTestService("rec", map[string]string{"app": "rec"})}
+	for _, tt := range []struct {
+		pods  int
+		want  []string
+		avoid []string
+	}{
+		{pods: 1,
+			want:  []string{"the 1 pod behind Service rec: no NetworkPolicy selecting it allows any ingress; its outbound traffic", "it isolates it for ingress", "New connections to it would be dropped", "so this pod needs a NetworkPolicy that allows its expected clients"},
+			avoid: []string{"them", "their", "these pods"}},
+		{pods: 2,
+			want: []string{"the 2 pods behind Service rec: no NetworkPolicy selecting them allows any ingress; their outbound traffic", "it isolates them for ingress", "so these pods need a NetworkPolicy that allows their expected clients"}},
+	} {
+		var pods []*corev1.Pod
+		for i := 0; i < tt.pods; i++ {
+			pods = append(pods, netpolTestPod(fmt.Sprintf("rec-%d", i), map[string]string{"app": "rec"}, true))
+		}
+		got := denyAllIngressDetections(policies, services, pods, denyAllEnv{}, time.Now())
+		if len(got) != 1 {
+			t.Fatalf("%d pods: got %d detections, want 1", tt.pods, len(got))
+		}
+		text := got[0].Message + " | " + got[0].Cause + " | " + got[0].Action
+		for _, w := range tt.want {
+			if !strings.Contains(text, w) {
+				t.Errorf("%d pods: missing %q in %q", tt.pods, w, text)
+			}
+		}
+		for _, w := range tt.avoid {
+			if strings.Contains(text, " "+w+" ") {
+				t.Errorf("%d pods: %q should not appear in %q", tt.pods, w, text)
+			}
 		}
 	}
 }

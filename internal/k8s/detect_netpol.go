@@ -616,18 +616,19 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 	if more > 0 {
 		target += fmt.Sprintf(" and %d more", more)
 	}
-	podWord := "pods"
+	// Pronouns follow the number of isolated pods.
+	podWord, them, their, these, some, need := "pods", "them", "their", "these pods", "some of these pods", "need"
 	if len(impact.pods) == 1 {
-		podWord = "pod"
+		podWord, them, their, these, some, need = "pod", "it", "its", "this pod", "this pod", "needs"
 	}
 	partial := len(impact.pods) < len(impact.backends)
 	podsBehind := fmt.Sprintf("the %d %s behind %s", len(impact.pods), podWord, target)
 	if partial {
 		podsBehind = fmt.Sprintf("%d of the %d pods behind %s", len(impact.pods), len(impact.backends), target)
 	}
-	message := fmt.Sprintf("Would block all inbound traffic to %s: no NetworkPolicy selecting them allows any ingress", podsBehind)
+	message := fmt.Sprintf("Would block all inbound traffic to %s: no NetworkPolicy selecting %s allows any ingress", podsBehind, them)
 	if impact.egressDenied {
-		message += "; their outbound traffic, including DNS, would be blocked too"
+		message += fmt.Sprintf("; %s outbound traffic, including DNS, would be blocked too", their)
 	}
 
 	others := ""
@@ -637,26 +638,26 @@ func denyAllIngressDetection(np *networkingv1.NetworkPolicy, impact *denyAllIngr
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		others = fmt.Sprintf(" NetworkPolicies %s also isolate some of these pods.", strings.Join(names, ", "))
+		others = fmt.Sprintf(" NetworkPolicies %s also isolate %s.", strings.Join(names, ", "), some)
 		if len(names) == 1 {
-			others = fmt.Sprintf(" NetworkPolicy %s also isolates some of these pods.", names[0])
+			others = fmt.Sprintf(" NetworkPolicy %s also isolates %s.", names[0], some)
 		}
 	}
 	outbound := ""
 	if impact.egressDenied {
-		outbound = " Their outbound traffic, including DNS, would be blocked too."
+		outbound = fmt.Sprintf(" %s outbound traffic, including DNS, would be blocked too.", strings.ToUpper(their[:1])+their[1:])
 	}
-	cause := fmt.Sprintf("NetworkPolicy %s leaves %s with no allowed inbound traffic: it isolates them for ingress and has no ingress rules, and no NetworkPolicy selecting them allows ingress.%s%s "+
-		"New connections to them would be dropped, while connections opened before the isolation existed can keep working until they close, so traffic can look healthy for a while. "+
-		"Whether the policy is enforced depends on the cluster's network plugin.", np.Name, podsBehind, outbound, others)
+	cause := fmt.Sprintf("NetworkPolicy %s leaves %s with no allowed inbound traffic: it isolates %s for ingress and has no ingress rules, and no NetworkPolicy selecting %s allows ingress.%s%s "+
+		"New connections to %s would be dropped, while connections opened before the isolation existed can keep working until they close, so traffic can look healthy for a while. "+
+		"Whether the policy is enforced depends on the cluster's network plugin.", np.Name, podsBehind, them, them, outbound, others, them)
 	// A namespace-wide default-deny is usually intended; what's missing is an
 	// allow policy for these pods, so deleting it is the wrong first advice.
 	action := fmt.Sprintf("If this isolation is not intended, delete the policy or add an ingress rule for the expected clients. Inspect it with: kubectl describe networkpolicy %s -n %s", np.Name, np.Namespace)
 	switch {
 	case len(np.Spec.PodSelector.MatchLabels)+len(np.Spec.PodSelector.MatchExpressions) == 0:
-		action = fmt.Sprintf("This is a namespace-wide default-deny, so these pods need a NetworkPolicy that allows their expected clients. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
+		action = fmt.Sprintf("This is a namespace-wide default-deny, so %s %s a NetworkPolicy that allows %s expected clients. Inspect the policies with: kubectl get networkpolicy -n %s", these, need, their, np.Namespace)
 	case len(impact.alsoDenying) > 0:
-		action = fmt.Sprintf("Other policies isolate these pods too, so removing this one alone may not restore traffic; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
+		action = fmt.Sprintf("Other policies isolate %s too, so removing this one alone may not restore traffic; give %s a NetworkPolicy that allows %s expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", these, these, their, np.Namespace)
 	case partial:
 		action = fmt.Sprintf("Other policies isolate the remaining backend pods, so removing this one alone restores only some backends; give the pods a NetworkPolicy that allows their expected clients, or remove every isolating policy that isn't intended. Inspect the policies with: kubectl get networkpolicy -n %s", np.Namespace)
 	}
