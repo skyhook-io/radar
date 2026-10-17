@@ -120,6 +120,7 @@ var instructionClaims = []struct{ tool, says, backedBy, param string }{
 	{tool: "search", says: "status message): search", backedBy: "status message"},
 	{tool: "top_resources", says: "OOMKills: top_resources", backedBy: "OOMKills"},
 	{tool: "get_neighborhood", says: "get_neighborhood for the graph around it", backedBy: "service routing"},
+	{tool: "get_neighborhood", says: "(owners, selectors, config references)", backedBy: "targetPort/selector/endpoints problems, dependency timeouts, config/secret refs, owner chains"},
 	{tool: "get_cluster_audit", says: "get_cluster_audit is configuration posture", backedBy: "STATIC CONFIG POSTURE"},
 	{tool: "manage_workload", says: "manage_workload to restart, scale or roll back", backedBy: "'rollback'"},
 }

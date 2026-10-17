@@ -28,7 +28,7 @@ WHICH TOOL
 - Events only: get_events.
 - RBAC errors, forbidden, 403: get_subject_permissions.
 - CPU, memory, OOMKills: top_resources; history through query_prometheus when Prometheus is present.
-- Service routing: diagnose on the entry; get_neighborhood for the graph around it; get_topology for a namespace.
+- Service routing: diagnose on the entry; get_neighborhood for the graph around it (owners, selectors, config references); get_topology for a namespace.
 - Helm: list_helm_releases, get_helm_release.
 `
 
