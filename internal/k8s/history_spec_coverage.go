@@ -1003,6 +1003,7 @@ var safeStringFields = map[string]bool{
 	"effect": true, "key": true, "resource": true, "resources": true, "verbs": true, "operations": true,
 	"apiGroups": true, "apiVersions": true, "scope": true, "schedule": true,
 	"timeZone": true, "image": true, "matchPolicy": true, "sideEffects": true, "failurePolicy": true,
+	"sizeLimit": true,
 }
 
 // safeStringSuffixes cover enum and reference fields by naming convention

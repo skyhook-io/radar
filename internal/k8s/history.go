@@ -3345,7 +3345,12 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 			oldProbe := normalizedProbe(probeForName(oldC.Container, probeName))
 			newProbe := normalizedProbe(probeForName(newC.Container, probeName))
 			if !reflect.DeepEqual(oldProbe, newProbe) {
-				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: probeDisplay(oldProbe), NewValue: probeDisplay(newProbe)})
+				oldShown, newShown := probeDisplay(oldProbe), probeDisplay(newProbe)
+				// Only hidden parts changed: say so, or the row reads as no change.
+				if m, ok := newShown.(map[string]any); ok && reflect.DeepEqual(oldShown, newShown) {
+					m["hiddenFieldsChanged"] = true
+				}
+				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: oldShown, NewValue: newShown})
 				summary = append(summary, fmt.Sprintf("%s(%s) changed", probeName, name))
 			}
 		}

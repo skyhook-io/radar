@@ -1592,3 +1592,17 @@ func TestComputeDiff_HPAMetricIdentitiesDoNotCollide(t *testing.T) {
 		t.Fatalf("summary = %+v", diff)
 	}
 }
+
+func TestComputeDiff_HiddenOnlyProbeChangeIsMarked(t *testing.T) {
+	probe := func(pw string) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"check", pw}}}}
+	}
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Template.Spec.Containers[0].LivenessProbe = probe("a")
+	newDep := bumped(oldDep)
+	newDep.Spec.Template.Spec.Containers[0].LivenessProbe = probe("b")
+	change := findChange(ComputeDiff("Deployment", oldDep, newDep), "spec.template.spec.containers[web].livenessProbe")
+	if change == nil || change.NewValue.(map[string]any)["hiddenFieldsChanged"] != true {
+		t.Fatalf("hidden-only probe change not marked: %+v", change)
+	}
+}
