@@ -120,7 +120,8 @@ type rechecking struct {
 	changed bool
 }
 
-// settleRef settles ref, once.
+// settleRef settles ref the first time it is asked, so every check in one
+// recheck judges the same current copy.
 func (r *rechecking) settleRef(ref resourceid.Ref) bool {
 	if _, done := r.exists[ref]; done {
 		return true
