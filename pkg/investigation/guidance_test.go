@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// The goldens are the MCP server instructions as Radar served them before the
-// guidance moved into this package. The move must not change a byte of what
-// clients receive.
+// The goldens are the exact text MCP clients receive as server instructions.
+// A change to the guidance must update them deliberately.
 func TestGeneralGuidanceMatchesGoldens(t *testing.T) {
 	cases := []struct {
 		name   string
