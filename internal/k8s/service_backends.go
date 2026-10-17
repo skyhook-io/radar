@@ -376,6 +376,7 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 	behindPort := func(sp *corev1.ServicePort) ([]string, []map[string]bool) {
 		var labels []string
 		var repos []map[string]bool
+		var podGroups [][]*corev1.Pod
 		for _, w := range workloads {
 			pods := w.receiving
 			if sp != nil && sp.TargetPort.Type == intstr.String && sp.TargetPort.StrVal != "" {
@@ -389,7 +390,11 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 			if len(pods) > 0 {
 				labels = append(labels, w.Label)
 				repos = append(repos, containerRepos(pods))
+				podGroups = append(podGroups, pods)
 			}
+		}
+		if versionsOfOneApplication(podGroups) {
+			return nil, nil
 		}
 		return labels, repos
 	}
@@ -403,6 +408,45 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 		}
 	}
 	return worst
+}
+
+// Pods labelled with one application name and a different version per
+// workload are versions of one application, however their images are named:
+// Istio's convention (app, version) and the recommended labels
+// (app.kubernetes.io/name, app.kubernetes.io/version) both say so, and the
+// Istio sample gives each version its own image repository.
+var (
+	appNameLabels    = []string{"app.kubernetes.io/name", "app"}
+	appVersionLabels = []string{"app.kubernetes.io/version", "version"}
+)
+
+func versionsOfOneApplication(podGroups [][]*corev1.Pod) bool {
+	if len(podGroups) < 2 {
+		return false
+	}
+	for _, nameKey := range appNameLabels {
+		for _, versionKey := range appVersionLabels {
+			if sameNameDistinctVersions(podGroups, nameKey, versionKey) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sameNameDistinctVersions(podGroups [][]*corev1.Pod, nameKey, versionKey string) bool {
+	name := ""
+	versions := map[string]bool{}
+	for _, pods := range podGroups {
+		labels := pods[0].Labels
+		n, v := labels[nameKey], labels[versionKey]
+		if n == "" || v == "" || (name != "" && n != name) || versions[v] {
+			return false
+		}
+		name = n
+		versions[v] = true
+	}
+	return true
 }
 
 func workloadContainers(pods []*corev1.Pod) map[string]backendContainer {

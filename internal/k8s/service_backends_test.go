@@ -41,6 +41,14 @@ func backendPod(name, ownerKind, ownerName string, containers []corev1.Container
 	return pod
 }
 
+func withLabels(kv ...string) backendPodOpt {
+	return func(p *corev1.Pod) {
+		for i := 0; i+1 < len(kv); i += 2 {
+			p.Labels[kv[i]] = kv[i+1]
+		}
+	}
+}
+
 func notReady(p *corev1.Pod) {
 	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
 }
@@ -453,6 +461,38 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 			wantDifferent: true,
 			wantApps:      [][]string{{"api"}, {"web"}},
+		},
+		{
+			name: "versions of one app labelled app+version, each with its own image repository",
+			svc:  backendService(intstr.FromInt32(9080)),
+			pods: []*corev1.Pod{
+				backendPod("reviews-v1-a", "StatefulSet", "reviews-v1", []corev1.Container{container("reviews", "registry.istio.io/release/examples-bookinfo-reviews-v1:1.20.3", 9080)}, withLabels("app", "reviews", "version", "v1")),
+				backendPod("reviews-v2-a", "StatefulSet", "reviews-v2", []corev1.Container{container("reviews", "registry.istio.io/release/examples-bookinfo-reviews-v2:1.20.3", 9080)}, withLabels("app", "reviews", "version", "v2")),
+				backendPod("reviews-v3-a", "StatefulSet", "reviews-v3", []corev1.Container{container("reviews", "registry.istio.io/release/examples-bookinfo-reviews-v3:1.20.3", 9080)}, withLabels("app", "reviews", "version", "v3")),
+			},
+			wantWorkloads: 3,
+		},
+		{
+			name: "a shared version label does not make different apps one",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("frontend-1", "StatefulSet", "frontend", []corev1.Container{container("frontend", "acme/frontend:1.0")}, withLabels("app", "frontend", "version", "v1")),
+				backendPod("search-1", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:2.0")}, withLabels("app", "search", "version", "v2")),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantApps:      [][]string{{"frontend"}, {"search"}},
+		},
+		{
+			name: "versions of one app still get the port signal",
+			svc:  backendService(intstr.FromInt32(9080)),
+			pods: []*corev1.Pod{
+				backendPod("reviews-v1-a", "StatefulSet", "reviews-v1", []corev1.Container{container("reviews", "acme/reviews-v1:1", 9080)}, withLabels("app.kubernetes.io/name", "reviews", "app.kubernetes.io/version", "1")),
+				backendPod("reviews-v2-a", "StatefulSet", "reviews-v2", []corev1.Container{container("reviews", "acme/reviews-v2:1", 9090)}, withLabels("app.kubernetes.io/name", "reviews", "app.kubernetes.io/version", "2")),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantGapPorts:  []int32{9080},
 		},
 		{
 			name: "stable and canary of one app plus an unrelated app",

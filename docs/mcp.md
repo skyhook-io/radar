@@ -602,7 +602,9 @@ workloads that receive the traffic (ready, non-terminating Pods, or every live
 Pod for a Service that publishes not-ready addresses) look like different
 applications: the workloads behind one Service port run no image repository in
 common, mesh proxies aside (a tag or digest change is the same repository, and
-sharing any container, a sidecar included, counts as the same application), or
+sharing any container, a sidecar included, counts as the same application, and
+so do workloads whose Pods share an `app` or `app.kubernetes.io/name` label with a
+different `version` or `app.kubernetes.io/version` label each), or
 some declare the Service's
 numeric targetPort while others declare other ports but not it. Containers that
 every workload shares identically, native sidecars and known mesh proxies are
