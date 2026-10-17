@@ -67,12 +67,10 @@ func observedChangeHandler(source kubernetes.Interface, cacheObservers ...Resour
 	}
 }
 
-// observeChange is the secret write-time index's ResourceObserver.
 func (index *secretDataManagerWriteIndex) observeChange(_ kubernetes.Interface, change ResourceChange, obj, _ any) {
 	index.reconcile(change, obj)
 }
 
-// observeChange is the CronJob schedule tracker's ResourceObserver.
 func (t *cronJobScheduleObservationTracker) observeChange(_ kubernetes.Interface, change ResourceChange, obj, _ any) {
 	if cj, ok := obj.(*batchv1.CronJob); ok {
 		t.observe(change.Operation, cj)
