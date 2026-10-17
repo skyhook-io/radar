@@ -1552,3 +1552,43 @@ func TestComputeDiff_MixedNamedRuleValuesComeFromComparison(t *testing.T) {
 		t.Fatalf("weight row = %+v in %+v", change, diff)
 	}
 }
+
+func TestComputeDiff_NumericValuesInPluginConfigHidden(t *testing.T) {
+	ro := func(gen, pin int64) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+			"metadata": map[string]any{"name": "web", "uid": "ro", "generation": gen},
+			"spec": map[string]any{"strategy": map[string]any{"canary": map[string]any{"trafficRouting": map[string]any{
+				"plugins": map[string]any{"example/router": map[string]any{"password": pin}},
+			}}}},
+		}}
+	}
+	diff := ComputeDiff("Rollout", ro(1, 123456), ro(2, 654321))
+	if rendered := fmt.Sprintf("%+v", diff); diff == nil || strings.Contains(rendered, "123456") || strings.Contains(rendered, "654321") {
+		t.Fatalf("numeric credential leaked or change missing: %s", rendered)
+	}
+}
+
+// A ContainerResource metric for a container named "pods" and a Pods metric
+// named "cpu" must not collapse into one identity.
+func TestComputeDiff_HPAMetricIdentitiesDoNotCollide(t *testing.T) {
+	util := func(v int32) *int32 { return &v }
+	qty := func(v string) *resource.Quantity { q := resource.MustParse(v); return &q }
+	metrics := func(containerTarget int32, podsTarget string) []autoscalingv2.MetricSpec {
+		return []autoscalingv2.MetricSpec{
+			{Type: autoscalingv2.ContainerResourceMetricSourceType, ContainerResource: &autoscalingv2.ContainerResourceMetricSource{
+				Name: corev1.ResourceCPU, Container: "pods", Target: autoscalingv2.MetricTarget{Type: autoscalingv2.UtilizationMetricType, AverageUtilization: util(containerTarget)}}},
+			{Type: autoscalingv2.PodsMetricSourceType, Pods: &autoscalingv2.PodsMetricSource{
+				Metric: autoscalingv2.MetricIdentifier{Name: "cpu"}, Target: autoscalingv2.MetricTarget{Type: autoscalingv2.AverageValueMetricType, AverageValue: qty(podsTarget)}}},
+		}
+	}
+	base := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "w", UID: "h", Generation: 1},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{MaxReplicas: 5, Metrics: metrics(50, "10")}}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.Metrics = metrics(70, "20")
+	diff := ComputeDiff("HorizontalPodAutoscaler", base, updated)
+	if diff == nil || !strings.Contains(diff.Summary, "50%→70%") || !strings.Contains(diff.Summary, "avg 10→avg 20") {
+		t.Fatalf("summary = %+v", diff)
+	}
+}

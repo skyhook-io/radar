@@ -352,11 +352,11 @@ func hpaMetricTargets(metrics []autoscalingv2.MetricSpec) map[string]hpaMetric {
 		var target autoscalingv2.MetricTarget
 		switch {
 		case m.Resource != nil:
-			key, target = string(m.Resource.Name), m.Resource.Target
-			display = key
+			display, target = string(m.Resource.Name), m.Resource.Target
+			key = "resource/" + display
 		case m.ContainerResource != nil:
-			key, target = m.ContainerResource.Container+"/"+string(m.ContainerResource.Name), m.ContainerResource.Target
-			display = key
+			display, target = m.ContainerResource.Container+"/"+string(m.ContainerResource.Name), m.ContainerResource.Target
+			key = "containerResource/" + display
 		case m.Pods != nil:
 			key, display, target = "pods/"+metricIdentifierString(m.Pods.Metric, false), "pods/"+metricIdentifierString(m.Pods.Metric, true), m.Pods.Target
 		case m.Object != nil:
@@ -366,16 +366,22 @@ func hpaMetricTargets(metrics []autoscalingv2.MetricSpec) map[string]hpaMetric {
 		case m.External != nil:
 			key, display, target = "external/"+metricIdentifierString(m.External.Metric, false), "external/"+metricIdentifierString(m.External.Metric, true), m.External.Target
 		default:
-			key = string(m.Type)
-			display = key
+			key = "type/" + string(m.Type)
+			display = string(m.Type)
+		}
+		// Duplicate identities stay distinct so no metric is overwritten.
+		base := key
+		for n := 2; ; n++ {
+			if _, taken := out[key]; !taken {
+				break
+			}
+			key = fmt.Sprintf("%s#%d", base, n)
 		}
 		out[key] = hpaMetric{display: display, target: metricTargetString(target)}
 	}
 	return out
 }
 
-// The selector is part of a metric's identity: changing it changes which
-// series drive scaling.
 func metricIdentifierString(id autoscalingv2.MetricIdentifier, redact bool) string {
 	if id.Selector == nil {
 		return id.Name

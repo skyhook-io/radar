@@ -978,8 +978,12 @@ func untrackedDisplayValues(path string, oldV, newV any) (any, any) {
 
 func untrackedValueHidden(path string, v any) bool {
 	switch v.(type) {
-	case nil, bool, int64, float64:
+	case nil:
 		return false
+	case bool, int64, float64:
+		// Numbers can be credentials too (a PIN, a numeric password); a
+		// sensitive path or a free-form map hides every scalar.
+		return untrackedPathSensitive(path) || inFreeFormMap(path)
 	case string:
 		return untrackedPathSensitive(path) || !safeStringField(path)
 	default:
@@ -1013,13 +1017,20 @@ var freeFormMaps = map[string]bool{
 	"plugins": true, "args": true,
 }
 
-func safeStringField(path string) bool {
-	segments := splitSpecPath(path)
-	for _, seg := range segments {
+func inFreeFormMap(path string) bool {
+	for _, seg := range splitSpecPath(path) {
 		if freeFormMaps[seg] {
-			return false
+			return true
 		}
 	}
+	return false
+}
+
+func safeStringField(path string) bool {
+	if inFreeFormMap(path) {
+		return false
+	}
+	segments := splitSpecPath(path)
 	// A string list item takes its list's field name (hostnames[0]).
 	for i := len(segments) - 1; i >= 0; i-- {
 		key := segments[i]
