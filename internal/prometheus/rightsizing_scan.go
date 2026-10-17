@@ -1059,7 +1059,7 @@ func markScanHPAAvailable(cache *k8s.ResourceCache, workloads map[string]*scanWo
 		if namespace != "" && workload.namespace != namespace {
 			continue
 		}
-		if !cache.KindCoversNamespace(string(k8score.HorizontalPodAutoscalers), workload.namespace) {
+		if !cache.KindAbsenceVerifiable(string(k8score.HorizontalPodAutoscalers), workload.namespace) {
 			continue
 		}
 		workload.workload.hpaAvailable = true
@@ -1135,12 +1135,12 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 	// is not "no OOM-killed pods" — it is no answer, and it has to be reported
 	// per workload because the scan can span both kinds of namespace at once.
 	for _, workload := range workloads {
-		if !cache.KindCoversNamespace("pods", workload.namespace) {
+		if !cache.KindAbsenceVerifiable("pods", workload.namespace) {
 			workload.workload.liveInventoryUnavailable = true
 			continue
 		}
 		if strings.EqualFold(workload.kind, "Deployment") &&
-			(!ownersReadable || !cache.KindCoversNamespace("replicasets", workload.namespace)) {
+			(!ownersReadable || !cache.KindAbsenceVerifiable("replicasets", workload.namespace)) {
 			workload.workload.liveInventoryUnavailable = true
 		}
 	}

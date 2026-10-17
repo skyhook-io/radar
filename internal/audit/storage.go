@@ -19,7 +19,7 @@ var typedPVCConsumers = []string{k8score.Pods, k8score.Deployments, k8score.Repl
 
 func collectStorageInput(cache *k8s.ResourceCache, namespaces []string, scope *ReadScope) *bp.CheckInput {
 	input := &bp.CheckInput{}
-	if cache.KindReadinessFor(k8score.PersistentVolumeClaims) == k8score.KindReady {
+	if cache.KindReadinessFor(k8score.PersistentVolumeClaims) == k8score.KindReady && !kindStaleIn(cache, k8score.PersistentVolumeClaims, namespaces) {
 		input.PersistentVolumeClaims = ListNamespaced(cache.PersistentVolumeClaims(), namespaces)
 	}
 	seen := map[string]bool{}

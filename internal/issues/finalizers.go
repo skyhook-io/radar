@@ -127,7 +127,7 @@ func (inv *controllerInventory) eachWorkload(visit func(obj metav1.Object, selec
 			complete = false
 			return false
 		}
-		if !inv.cache.IsKindClusterWide(resource) || !inv.allowed("apps", resource, "") {
+		if !inv.cache.KindAbsenceVerifiable(resource, "") || !inv.allowed("apps", resource, "") {
 			complete = false
 		}
 		return true
@@ -173,11 +173,14 @@ func (inv *controllerInventory) observe(controller, namespace string, selector l
 	if !inv.allowed("", "pods", namespace) {
 		return unreadable("controller pod inventory is unreadable")
 	}
+	if namespace == "" && !inv.cache.IsKindClusterWide("pods") {
+		return unreadable("Pod cache does not cover the whole cluster")
+	}
 	if !inv.cache.KindCoversNamespace("pods", namespace) {
 		return unreadable("Pod cache does not cover the controller namespace")
 	}
-	if namespace == "" && !inv.cache.IsKindClusterWide("pods") {
-		return unreadable("Pod cache does not cover the whole cluster")
+	if !inv.cache.KindAbsenceVerifiable("pods", namespace) {
+		return unreadable("Pod cache is refreshed by periodic list, not a watch")
 	}
 	var pods []*corev1.Pod
 	var err error

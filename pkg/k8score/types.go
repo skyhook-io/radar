@@ -267,6 +267,12 @@ type CacheConfig struct {
 	// buildInformerSetups (currently Pods, ReplicaSets) paginate.
 	ListPageSize int64
 
+	// ListOnlyStaleAfter is how long a list-only kind (watch denied, so the
+	// reflector re-LISTs on a backoff loop) may go without a completed LIST
+	// before KindStale reports it. 0 means the default of 3 minutes, three
+	// times the reflector's longest jittered backoff.
+	ListOnlyStaleAfter time.Duration
+
 	// DebugEvents enables verbose event debug logging.
 	DebugEvents bool
 

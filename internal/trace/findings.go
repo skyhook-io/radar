@@ -120,7 +120,9 @@ func policyFinding(deps Deps, svc *corev1.Service, pods []*corev1.Pod, backendPo
 		return none, Finding{}, false
 	}
 	npLister := deps.Cache.NetworkPolicies()
-	if npLister == nil {
+	// "No rule allows it" needs every policy in the namespace; a list-only
+	// NetworkPolicy cache can lack one created since its last LIST.
+	if npLister == nil || !deps.Cache.KindAbsenceVerifiable("networkpolicies", svc.Namespace) {
 		return none, Finding{}, false
 	}
 	policies, err := npLister.NetworkPolicies(svc.Namespace).List(labels.Everything())

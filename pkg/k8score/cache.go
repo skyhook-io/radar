@@ -68,6 +68,11 @@ type ResourceCache struct {
 	// as failed off the deferred-timeout flag — a late Events LIST on a big
 	// cluster is normal, not terminal.
 	backgroundKeys map[string]bool
+
+	// listOnlyTrackers holds one tracker per informer, keyed by informer key;
+	// a kind watched in several namespaces has one per namespace.
+	listOnlyTrackers map[string][]*listOnlyTracker
+	listOnlyMu       sync.Mutex
 }
 
 // InformerSyncStatus tracks the sync state of a single informer.
@@ -81,6 +86,9 @@ type InformerSyncStatus struct {
 	LastError     string `json:"lastError,omitempty"`     // most recent watch error (truncated to keep diagnostics small)
 	LastErrorAt   string `json:"lastErrorAt,omitempty"`   // RFC3339 timestamp of last watch error
 	ForbiddenSeen bool   `json:"forbiddenSeen,omitempty"` // reflector hit 403/401 — probe and reality disagree
+	ListOnly      bool   `json:"listOnly,omitempty"`      // watch denied; the informer re-lists periodically
+	LastListAt    string `json:"lastListAt,omitempty"`    // RFC3339 time of the last completed LIST (list-only informers)
+	Stale         bool   `json:"stale,omitempty"`         // list-only and no completed LIST within ListOnlyStaleAfter
 }
 
 // SyncPhase describes the current phase of cache initialization.
@@ -489,6 +497,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		indexerByKind:    map[string]cache.Indexer{},
 		pagedInformers:   map[string]cache.SharedIndexInformer{},
 		kindStores:       map[string]map[string]kindStore{},
+		listOnlyTrackers: map[string][]*listOnlyTracker{},
 		changes:          changes,
 		stopCh:           stopCh,
 		enabledResources: enabled,
@@ -518,7 +527,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		return s.setup(factory)
 	}
 
-	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int) error {
+	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int, namespace string) error {
 		var err error
 		if s.isEvent {
 			err = rc.addEventHandlers(inf, changes)
@@ -537,8 +546,15 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		// the failure observable instead of silent.
 		key := s.key
 		kind := s.kind
+		tracker := &listOnlyTracker{kind: kind, namespace: namespace}
+		rc.listOnlyTrackers[key] = append(rc.listOnlyTrackers[key], tracker)
 		if hErr := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 			rc.recordWatchError(idx, key, kind, err)
+			if err != nil {
+				rc.listOnlyMu.Lock()
+				rc.observeListOnlyCycle(tracker, err, time.Now())
+				rc.listOnlyMu.Unlock()
+			}
 		}); hErr != nil {
 			// SetWatchErrorHandler only errors after the informer has
 			// started, which can't happen here — log and continue.
@@ -564,7 +580,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			for _, namespace := range scopeNamespaces {
 				factory := nsFactories[namespace]
 				inf := buildInformer(s, factory, namespace)
-				if err := wireInformer(inf, s, idx); err != nil {
+				if err := wireInformer(inf, s, idx, namespace); err != nil {
 					close(stopCh)
 					return nil, err
 				}
@@ -599,7 +615,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				// (the factory's informer for this kind is never started).
 				rc.pagedInformers[s.key] = inf
 			}
-			if err := wireInformer(inf, s, idx); err != nil {
+			if err := wireInformer(inf, s, idx, namespace); err != nil {
 				close(stopCh)
 				return nil, err
 			}
@@ -671,6 +687,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			go e.run(stopCh)
 		}
 	}
+	go rc.runStaleLogger(stopCh)
 
 	if len(backgroundKeys) > 0 {
 		stdlog.Printf("Starting resource cache: %d critical + %d deferred + %d background informers (%d total)",
@@ -1715,6 +1732,12 @@ func (rc *ResourceCache) GetSyncStatus() CacheSyncStatus {
 	for i := range statuses {
 		if n, ok := counts[statuses[i].Kind]; ok {
 			statuses[i].Items = n
+		}
+		key := statuses[i].Key
+		if rc.KindListOnly(key, "") {
+			statuses[i].ListOnly = true
+			statuses[i].LastListAt = rc.KindLastListAt(key, "").Format(time.RFC3339)
+			statuses[i].Stale = rc.KindStale(key, "")
 		}
 	}
 

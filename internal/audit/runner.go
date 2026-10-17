@@ -89,7 +89,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// absence is authoritative for every namespace — same coverage gate the
 	// dynamic Traefik kinds use. Namespace-scoped fallback → leave nil → skip.
 	// Middleware subjects (errors.service refs) need it too, not just routes.
-	if (len(input.IngressRoutes) > 0 || len(input.MiddlewareSubjects) > 0) && cache.IsKindClusterWide("services") {
+	if (len(input.IngressRoutes) > 0 || len(input.MiddlewareSubjects) > 0) && cache.KindAbsenceVerifiable("services", "") {
 		input.AllServices = ListNamespaced(cache.Services(), nil)
 	}
 
@@ -137,7 +137,74 @@ func CollectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckI
 	input.ServiceAccounts = ListNamespaced(cache.ServiceAccounts(), namespaces)
 	input.ServiceAccountsNamespace = serviceAccountScopeNamespace()
 	input.LimitRanges = ListNamespaced(cache.LimitRanges(), namespaces)
+	dropStaleInputs(cache, namespaces, input)
 	return input
+}
+
+// kindStaleIn reports whether key's list-only cache stopped refreshing in any
+// of namespaces (nil = anywhere).
+func kindStaleIn(cache *k8s.ResourceCache, key string, namespaces []string) bool {
+	if len(namespaces) == 0 {
+		return cache.KindStale(key, "")
+	}
+	for _, ns := range namespaces {
+		if cache.KindStale(key, ns) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropStaleInputs clears each input whose list-only cache stopped refreshing
+// (KindStale), so the checks that need it report it as a missing input instead
+// of judging a snapshot that may be hours old.
+func dropStaleInputs(cache *k8s.ResourceCache, namespaces []string, input *bp.CheckInput) {
+	stale := func(key string) bool { return kindStaleIn(cache, key, namespaces) }
+	if stale(k8score.Pods) {
+		input.Pods = nil
+	}
+	if stale(k8score.Deployments) {
+		input.Deployments = nil
+	}
+	if stale(k8score.ReplicaSets) {
+		input.ReplicaSets = nil
+	}
+	if stale(k8score.StatefulSets) {
+		input.StatefulSets = nil
+	}
+	if stale(k8score.DaemonSets) {
+		input.DaemonSets = nil
+	}
+	if stale(k8score.Jobs) {
+		input.Jobs = nil
+	}
+	if stale(k8score.CronJobs) {
+		input.CronJobs = nil
+	}
+	if stale(k8score.Services) {
+		input.Services = nil
+	}
+	if stale(k8score.Ingresses) {
+		input.Ingresses = nil
+	}
+	if stale(k8score.HorizontalPodAutoscalers) {
+		input.HorizontalPodAutoscalers = nil
+	}
+	if stale(k8score.PodDisruptionBudgets) {
+		input.PodDisruptionBudgets = nil
+	}
+	if stale(k8score.ConfigMaps) {
+		input.ConfigMaps = nil
+	}
+	if stale(k8score.Secrets) {
+		input.Secrets = nil
+	}
+	if stale(k8score.ServiceAccounts) {
+		input.ServiceAccounts = nil
+	}
+	if stale(k8score.LimitRanges) {
+		input.LimitRanges = nil
+	}
 }
 
 func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {

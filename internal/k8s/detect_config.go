@@ -569,7 +569,19 @@ func findEnvServiceRefChecks(cache *ResourceCache, workloads []envServiceWorkloa
 					continue
 				}
 				svc, err := cache.Services().Services(ref.namespace).Get(ref.name)
+				// A list-only or stale Services cache is a snapshot: neither a
+				// miss nor a missing port in it is evidence.
+				unverified := func() {
+					check.Status = "lookup_error"
+					check.Message = fmt.Sprintf("Env %s in container %s points to %s, but Radar could not verify Service/%s in namespace %s: its Service cache there is not live.", env.Name, c.Name, ref.display, ref.name, ref.namespace)
+					out = append(out, check)
+				}
+				verifiable := cache.KindAbsenceVerifiable("services", ref.namespace)
 				if err != nil {
+					if apierrors.IsNotFound(err) && !verifiable {
+						unverified()
+						continue
+					}
 					if !apierrors.IsNotFound(err) {
 						check.Status = "lookup_error"
 						check.Message = fmt.Sprintf("Env %s in container %s points to %s, but Radar could not verify Service/%s in namespace %s: %v.", env.Name, c.Name, ref.display, ref.name, ref.namespace, err)
@@ -588,6 +600,10 @@ func findEnvServiceRefChecks(cache *ResourceCache, workloads []envServiceWorkloa
 					continue
 				}
 				if serviceExposesNumericPort(svc, ref.port) {
+					continue
+				}
+				if !verifiable {
+					unverified()
 					continue
 				}
 				check.Status = "port_mismatch"

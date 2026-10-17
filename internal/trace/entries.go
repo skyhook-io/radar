@@ -1043,7 +1043,7 @@ func selectedPods(deps Deps, svc *corev1.Service) (pods []*corev1.Pod, unreadabl
 	// "0 pods" - reporting a confident "no backends / 0 ready" for a Service whose
 	// namespace falls outside pod scope would false-condemn it. Trust an empty list
 	// only when the informer actually covers this namespace.
-	if len(got) == 0 && !deps.Cache.KindCoversNamespace("pods", svc.Namespace) {
+	if len(got) == 0 && !deps.Cache.KindAbsenceVerifiable("pods", svc.Namespace) {
 		return nil, true
 	}
 	return got, false
@@ -1154,7 +1154,7 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 	// cache that reliably covers this Service's namespace is authoritative for
 	// "these are ALL the Ingresses"; anything less keeps the matches found but
 	// flags the enumeration as possibly incomplete.
-	authoritative := deps.Cache.IsSyncComplete() && deps.Cache.KindCoversNamespace("ingresses", svc.Namespace)
+	authoritative := deps.Cache.IsSyncComplete() && deps.Cache.KindAbsenceVerifiable("ingresses", svc.Namespace)
 	return out, authoritative
 }
 
@@ -1377,12 +1377,13 @@ func traceIngressEntry(ctx context.Context, deps Deps, t *Trace) {
 		svc, svcErr := deps.Cache.Services().Services(ing.Namespace).Get(name)
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
-		} else if !apierrors.IsNotFound(svcErr) {
+		} else if !apierrors.IsNotFound(svcErr) || !deps.Cache.KindAbsenceVerifiable("services", ing.Namespace) {
 			// RBAC denial / transient API failure - we can't read the backend, so
 			// don't let the path read healthy. Mark endpointSource=unknown (mirrors
 			// buildPodsHop's lister-error handling) so the verdict degrades to
 			// unknown rather than hiding an unreadable backend. A confirmed
-			// NotFound stays a real break handled by the verdict layer.
+			// NotFound stays a real break handled by the verdict layer; a
+			// NotFound from a list-only Services cache is not confirmed.
 			if svcHop.Meta == nil {
 				svcHop.Meta = map[string]any{}
 			}
@@ -1633,10 +1634,11 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 		svc, svcErr := deps.Cache.Services().Services(b.Namespace).Get(b.Name)
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
-		} else if !apierrors.IsNotFound(svcErr) {
+		} else if !apierrors.IsNotFound(svcErr) || !deps.Cache.KindAbsenceVerifiable("services", b.Namespace) {
 			// RBAC denial / transient API failure - mark the backend unreadable so
 			// the verdict degrades to unknown instead of reading healthy. A
-			// confirmed NotFound stays a real break for the verdict layer.
+			// confirmed NotFound stays a real break for the verdict layer; a
+			// NotFound from a list-only Services cache is not confirmed.
 			if svcHop.Meta == nil {
 				svcHop.Meta = map[string]any{}
 			}

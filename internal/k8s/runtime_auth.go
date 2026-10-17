@@ -16,6 +16,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 type sharedKubernetesClients struct {
@@ -69,6 +71,9 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 	if clientConfig.UserAgent == "" {
 		clientConfig.UserAgent = rest.DefaultKubernetesUserAgent()
 	}
+	// Informer LISTs share this transport; without a per-request deadline a
+	// LIST that stalls without a TCP reset freezes that kind's cache.
+	clientConfig.Wrap(k8score.WrapRequestDeadlines)
 	httpClient, err := rest.HTTPClientFor(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes HTTP client: %w", err)

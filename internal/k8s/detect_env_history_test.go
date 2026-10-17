@@ -349,6 +349,13 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		if issueChecks := omitMissingRequiredSecretKeyChecks(cache, optionalPod, checks, changes); len(issueChecks) != 1 {
 			t.Fatalf("optional key removal remains behavioral drift, got %+v", issueChecks)
 		}
+
+		// A list-only Secrets cache never reports the missing key, so the
+		// stale-value check is the only finding left and must stay.
+		listOnly := newListOnlySecretsCache(t, true, pod, secretAfterRemoval)
+		if issueChecks := omitMissingRequiredSecretKeyChecks(listOnly, pod, checks, changes); len(issueChecks) != 1 {
+			t.Fatalf("list-only Secrets: want the stale-value check kept, got %+v", issueChecks)
+		}
 	})
 
 	t.Run("different key is ignored", func(t *testing.T) {

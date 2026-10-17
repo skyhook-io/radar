@@ -150,9 +150,9 @@ func (s *Server) handleEvaluateNetworkPolicies(w http.ResponseWriter, r *http.Re
 	// could hide the policy that admits the traffic.
 	for _, kind := range []k8score.ResourceType{k8score.NetworkPolicies, k8score.Pods} {
 		synced, known := cache.InformerSynced(string(kind))
-		if !known || !synced || !cache.KindCoversNamespace(string(kind), selNs) {
+		if !known || !synced || !cache.KindAbsenceVerifiable(string(kind), selNs) {
 			s.writeJSON(w, PolicyEvaluation{Verdict: verdictUndecidable, Evaluated: evaluated,
-				Reason: fmt.Sprintf("Radar can't see %s in namespace %s (not synced yet, or outside the namespaces it watches)", kind, selNs)})
+				Reason: fmt.Sprintf("Radar can't see %s in namespace %s (not synced yet, outside the namespaces it watches, or refreshed only by periodic list)", kind, selNs)})
 			return
 		}
 	}

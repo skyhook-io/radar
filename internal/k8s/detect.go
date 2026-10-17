@@ -1230,6 +1230,12 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 	ageDur := now.Sub(svc.CreationTimestamp.Time)
 	selected := podsMatchingService(svc, pods)
 	if len(selected) == 0 {
+		// An empty selection is only evidence when the Pod cache could have
+		// held the pods: it covers the namespace and is not a list-only
+		// snapshot that may predate them.
+		if !cache.KindAbsenceVerifiable("pods", svc.Namespace) {
+			return nil
+		}
 		reason := SelectorMatchesNoPodsReason
 		message := selectorMessage(svc.Spec.Selector)
 		fingerprint := ""
@@ -2203,8 +2209,8 @@ func scaledToZeroBackingWorkload(cache *ResourceCache, svc *corev1.Service) (sca
 	// positive (a match we actually found) is always trustworthy. nonMatch
 	// downgrades every "found nothing" verdict to scope-unverifiable when either
 	// typed workload informer can't observe the namespace.
-	typedCovered := cache.KindCoversNamespace("deployments", svc.Namespace) &&
-		cache.KindCoversNamespace("statefulsets", svc.Namespace)
+	typedCovered := cache.KindAbsenceVerifiable("deployments", svc.Namespace) &&
+		cache.KindAbsenceVerifiable("statefulsets", svc.Namespace)
 	nonMatch := func(outcome rolloutLookupOutcome) rolloutLookupOutcome {
 		if !typedCovered {
 			return rolloutLookupScopeUnverifiable

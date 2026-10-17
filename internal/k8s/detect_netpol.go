@@ -86,6 +86,11 @@ func detectNetworkPolicyDenyAllIngress(cache *ResourceCache, namespace string, p
 	window := sync.OnceValue(func() isolationWindow { return networkPolicyWatchWindow(cache) })
 	var out []Detection
 	for _, ns := range namespaces {
+		// "No policy allows it" needs every policy in the namespace; a
+		// list-only snapshot can lack an allow policy created since.
+		if !cache.KindAbsenceVerifiable("networkpolicies", ns) {
+			continue
+		}
 		nsObj := namespaceObject(cache, ns)
 		env := denyAllEnv{
 			otherMayApply: func(pods []*corev1.Pod, dir netpol.Direction) bool {

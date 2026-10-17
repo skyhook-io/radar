@@ -395,7 +395,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
 			"`unchecked_sources` lists sources Radar couldn't check, so their issues may be " +
-			"missing; don't call them healthy. `helm` means failed or stuck Helm releases. " +
+			"missing; don't call them healthy. `helm` means failed or stuck Helm releases; " +
+			"`absence` + `resource`: Radar can't confirm that kind is missing. " +
 			"`diagnostic_context.role` marks roots, rollups, symptoms, or context; " +
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
@@ -1074,6 +1075,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	// Service would silently leak the wrong object.
 	var resourceData any
 	var rawObj runtime.Object
+	var cacheNote string
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 		if dynErr != nil {
@@ -1082,7 +1084,12 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 		rawObj = u
 	} else {
-		obj, err := k8s.FetchResource(cache, kind, namespace, name)
+		obj, note, err := k8s.FetchResourceConfirmed(ctx, cache, kind, namespace, name)
+		cacheNote = note
+		var unconfirmed *k8s.CacheUnconfirmedError
+		if errors.As(err, &unconfirmed) {
+			return nil, nil, err
+		}
 		if err == k8s.ErrUnknownKind {
 			u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 			if dynErr != nil {
@@ -1141,6 +1148,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 	if truncationNote != "" {
 		warnings = append(warnings, truncationNote)
+	}
+	if cacheNote != "" {
+		warnings = append(warnings, cacheNote)
 	}
 
 	defaultConfigMapChanges := meaningfulchanges.ConfigMapKind(kind)
@@ -3123,6 +3133,8 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	if helmUnchecked {
 		resp.UncheckedSources = []issuesapi.UncheckedSource{{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonReadFailed}}
 	}
+	issueCache, _, _ := provider.CacheIdentity()
+	resp.UncheckedSources = append(resp.UncheckedSources, issues.AbsenceUncheckedSources(issueCache, allowedNamespaces)...)
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})

@@ -127,6 +127,8 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if helmUnchecked {
 		resp.UncheckedSources = []issuesapi.UncheckedSource{{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonReadFailed}}
 	}
+	cache, _, _ := provider.CacheIdentity()
+	resp.UncheckedSources = append(resp.UncheckedSources, issues.AbsenceUncheckedSources(cache, namespaces)...)
 	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func(group, resource string) bool {
 		return s.canRead(r, group, resource, "kube-system", "list")
 	})

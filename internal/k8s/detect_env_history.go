@@ -466,6 +466,11 @@ func omitMissingRequiredSecretKeyChecks(cache *ResourceCache, pod *corev1.Pod, c
 	if cache == nil || cache.Secrets() == nil || pod == nil || len(checks) == 0 {
 		return checks
 	}
+	// The missing-key finding these checks defer to is only reported from a
+	// live Secrets cache; without it, keep the stale-value check.
+	if !cache.KindAbsenceVerifiable("secrets", pod.Namespace) {
+		return checks
+	}
 	missing := make(map[string]bool)
 	for _, container := range staleSecretEnvContainers(pod) {
 		for _, env := range container.Env {

@@ -19,10 +19,7 @@ func typedConfigCoverage(cache *k8s.ResourceCache, resource, namespace string) b
 	if cache.KindReadinessFor(resource) != k8score.KindReady {
 		return false
 	}
-	if namespace == "" {
-		return cache.IsKindClusterWide(resource)
-	}
-	return cache.KindCoversNamespace(resource, namespace)
+	return cache.KindAbsenceVerifiable(resource, namespace)
 }
 
 type configDependencies struct {

@@ -120,7 +120,7 @@ func (c *Client) attributeNetworkPolicyBlock(ctx context.Context, cache *k8s.Res
 func cacheAuthoritativeFor(cache *k8s.ResourceCache, ns string) bool {
 	for _, kind := range []k8score.ResourceType{k8score.Pods, k8score.Services, k8score.NetworkPolicies} {
 		synced, known := cache.InformerSynced(string(kind))
-		if !known || !synced || !cache.IsKindReady(string(kind)) || !cache.KindCoversNamespace(string(kind), ns) {
+		if !known || !synced || !cache.IsKindReady(string(kind)) || !cache.KindAbsenceVerifiable(string(kind), ns) {
 			return false
 		}
 	}

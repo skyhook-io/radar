@@ -434,7 +434,7 @@ func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind
 	// does not watch, with no error. Treating that as "no autoscaler here" is
 	// what the availability flag exists to prevent: it gates whether a
 	// reduction may be suggested at all.
-	if !cache.KindCoversNamespace(string(k8score.HorizontalPodAutoscalers), namespace) {
+	if !cache.KindAbsenceVerifiable(string(k8score.HorizontalPodAutoscalers), namespace) {
 		return managed, false
 	}
 	hpas, err := cache.HorizontalPodAutoscalers().HorizontalPodAutoscalers(namespace).List(labels.Everything())

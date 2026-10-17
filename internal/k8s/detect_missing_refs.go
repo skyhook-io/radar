@@ -132,18 +132,18 @@ func WebhookBackendFingerprint(namespace, name string) string {
 
 // refLookupResult classifies a lister Get result into the honest tri-state
 // "exists / known missing / couldn't verify". A lister miss is only
-// authoritative when the informer for the target's kind actually covers the
-// target namespace (KindCoversNamespace): a namespace-scoped informer answers
-// NotFound for every namespace it doesn't watch — indistinguishable from true
-// absence — so a miss outside its coverage is "couldn't verify", never
-// "missing". Non-NotFound errors are likewise unverifiable. resource is the
-// plural lowercase informer key ("services", "configmaps"); ns is "" for
-// cluster-scoped kinds.
+// authoritative when KindAbsenceVerifiable holds: the informer for the
+// target's kind covers the target namespace (a namespace-scoped informer
+// answers NotFound for every namespace it doesn't watch) and holds a live
+// watch (a list-only informer is a periodic, possibly stalled snapshot). A
+// miss without that is "couldn't verify", never "missing". Non-NotFound errors
+// are likewise unverifiable. resource is the plural lowercase informer key
+// ("services", "configmaps"); ns is "" for cluster-scoped kinds.
 func refLookupResult(cache *ResourceCache, resource, ns string, err error) (verifiable, exists bool) {
 	if err == nil {
 		return true, true
 	}
-	if apierrors.IsNotFound(err) && cache.KindCoversNamespace(resource, ns) {
+	if apierrors.IsNotFound(err) && cache.KindAbsenceVerifiable(resource, ns) {
 		return true, false
 	}
 	return false, false
@@ -393,7 +393,7 @@ func detectPodMissingRefs(cache *ResourceCache, namespace string, now time.Time)
 						}
 						continue
 					}
-					if _, exists := cm.Data[r.Key]; !exists {
+					if _, exists := cm.Data[r.Key]; !exists && cache.KindAbsenceVerifiable("configmaps", p.Namespace) {
 						emitMissingEnv(c.Name, e.Name, "env var", "ConfigMap", name, r.Key)
 					}
 				}
@@ -413,7 +413,7 @@ func detectPodMissingRefs(cache *ResourceCache, namespace string, now time.Time)
 						}
 						continue
 					}
-					if _, exists := secret.Data[r.Key]; !exists {
+					if _, exists := secret.Data[r.Key]; !exists && cache.KindAbsenceVerifiable("secrets", p.Namespace) {
 						emitMissingEnv(c.Name, e.Name, "env var", "Secret", name, r.Key)
 					}
 				}
@@ -618,7 +618,7 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 					break
 				}
 			}
-			if !matched {
+			if !matched && cache.KindAbsenceVerifiable("services", ing.Namespace) {
 				portDesc := portName
 				if portDesc == "" {
 					portDesc = fmt.Sprintf("%d", portNumber)
@@ -1195,7 +1195,7 @@ func detectGatewayRouteMissingBackends(cache *ResourceCache, svcLister corev1lis
 					"Set the backendRef port to one the Service exposes."))
 				continue
 			}
-			if !serviceHasPort(svc, port) {
+			if !serviceHasPort(svc, port) && cache.KindAbsenceVerifiable("services", svcNS) {
 				out = append(out, withFix(missingRefProblem(now, kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(),
 					"Missing Gateway backend Service port",
 					fmt.Sprintf("%s targets Service %q in namespace %q port %q which the Service does not expose", source, name, svcNS, port),

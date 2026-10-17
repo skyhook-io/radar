@@ -547,6 +547,14 @@ func claimCacheInit() (*sync.Once, uint64) {
 	return cacheOnce, cacheGeneration
 }
 
+// cacheGenerationCurrent reports whether gen is still the live cache
+// generation, i.e. no context switch or rescope happened since.
+func cacheGenerationCurrent(gen uint64) bool {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	return cacheGeneration == gen
+}
+
 // publishSyncingCache installs wrapped as the mid-sync handle unless the
 // cache generation moved (a context switch invalidated this construction).
 func publishSyncingCache(wrapped *ResourceCache, gen uint64) {

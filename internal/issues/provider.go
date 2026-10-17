@@ -843,7 +843,7 @@ func (p *CacheProvider) karpenterResources(group, kind string) karpenterResource
 
 func (p *CacheProvider) cnpgInstancePods(cluster *unstructured.Unstructured) ([]*corev1.Pod, bool) {
 	ns := cluster.GetNamespace()
-	if p == nil || p.cache == nil || p.cache.Pods() == nil || !p.cache.IsKindReady("pods") || !p.cache.KindCoversNamespace("pods", ns) {
+	if p == nil || p.cache == nil || p.cache.Pods() == nil || !p.cache.IsKindReady("pods") || !p.cache.KindAbsenceVerifiable("pods", ns) {
 		return nil, false
 	}
 	candidates, err := p.cache.Pods().Pods(ns).List(labels.SelectorFromSet(labels.Set{"cnpg.io/cluster": cluster.GetName()}))

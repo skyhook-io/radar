@@ -11,13 +11,16 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/watch"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -976,5 +979,45 @@ func TestDenyAllIngressNoPolicies(t *testing.T) {
 	pod, svc, _ := netpolTestObjects()
 	if got := denyAllIngressDetections(nil, []*corev1.Service{svc}, []*corev1.Pod{pod}, denyAllEnv{}, time.Now()); len(got) != 0 {
 		t.Fatalf("detections without policies: %+v", got)
+	}
+}
+
+// A list-only NetworkPolicy snapshot can lack an allow policy created since
+// its last LIST, so a deny-all with no visible allow is not reported.
+func TestDetectProblemsSkipsDenyAllFromListOnlyPolicies(t *testing.T) {
+	defer ResetTestState()
+	client := fake.NewClientset(
+		netpolTestPod("rec-1", map[string]string{"app": "rec"}, true),
+		netpolTestService("recommendation", map[string]string{"app": "rec"}),
+		netpolTestPolicy("deny-all-rec", map[string]string{"app": "rec"}, ingressAndEgress),
+	)
+	client.PrependWatchReactor("networkpolicies", func(k8stesting.Action) (bool, watch.Interface, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "networking.k8s.io", Resource: "networkpolicies"}, "", errors.New("watch is not allowed"))
+	})
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	fakeDisc := client.Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDisc.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "networking.k8s.io/v1",
+		APIResources: []metav1.APIResource{{Name: "networkpolicies", Kind: "NetworkPolicy", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}}},
+	}}
+	restore, err := SetTestResourceDiscovery(fakeDisc)
+	if err != nil {
+		t.Fatalf("SetTestResourceDiscovery: %v", err)
+	}
+	defer restore()
+	cache := GetResourceCache()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cache.KindListOnly("networkpolicies", "shop") {
+		if time.Now().After(deadline) {
+			t.Fatal("NetworkPolicy informer never reported list-only")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for _, d := range DetectProblems(cache, "shop") {
+		if d.Reason == NetworkPolicyDenyAllIngressReason {
+			t.Fatalf("deny-all reported from a list-only policy snapshot: %+v", d)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -12,13 +13,16 @@ import (
 	"github.com/skyhook-io/radar/pkg/probe"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/watch"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func waitFor(t *testing.T, check func() bool) {
@@ -1621,5 +1625,52 @@ func TestBuildTrace_ServiceWithMixedBackends(t *testing.T) {
 				t.Errorf("Service hop findings = %+v", trace.Downstream[0].Findings)
 			}
 		})
+	}
+}
+
+// A backend Service missing from a list-only Services cache may simply have
+// been created since the last LIST: the hop must read unknown, not as a
+// confirmed broken route.
+func TestBuildTrace_IngressBackendMissFromListOnlyServicesIsUnknown(t *testing.T) {
+	defer k8s.ResetTestState()
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+		Spec: networkingv1.IngressSpec{DefaultBackend: &networkingv1.IngressBackend{
+			Service: &networkingv1.IngressServiceBackend{Name: "created-later", Port: networkingv1.ServiceBackendPort{Number: 80}},
+		}},
+	}
+	for _, listOnly := range []bool{false, true} {
+		client := fake.NewClientset(ing)
+		if listOnly {
+			client.PrependWatchReactor("services", func(k8stesting.Action) (bool, watch.Interface, error) {
+				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "", errors.New("watch is not allowed"))
+			})
+		}
+		k8s.ResetTestState()
+		if err := k8s.InitTestResourceCache(client); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		cache := k8s.GetResourceCache()
+		if listOnly {
+			waitFor(t, func() bool { return cache.KindListOnly("services", "prod") })
+		}
+		deps := Deps{Cache: cache, Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), Issues: issues.NewCacheProvider()}
+		tr, err := BuildTraceWithOptions(context.Background(), deps, "Ingress", "prod", "web", Options{})
+		if err != nil {
+			t.Fatalf("trace: %v", err)
+		}
+		var hop *Hop
+		for i := range tr.Downstream {
+			if tr.Downstream[i].Resource.Kind == "Service" && tr.Downstream[i].Resource.Name == "created-later" {
+				hop = &tr.Downstream[i]
+			}
+		}
+		if hop == nil {
+			t.Fatalf("listOnly=%v: no Service hop in %+v", listOnly, tr.Downstream)
+		}
+		unknown := hop.Meta["endpointSource"] == "unknown"
+		if unknown != listOnly {
+			t.Fatalf("listOnly=%v: endpointSource unknown=%v, want %v", listOnly, unknown, listOnly)
+		}
 	}
 }
