@@ -16,7 +16,7 @@ import "github.com/skyhook-io/radar/pkg/investigation"
 // routingInstructions says when to use Radar and which tool answers which
 // question. It names read tools only; writeRoutingLine adds the write tools on
 // servers that register them.
-const routingInstructions = `Radar keeps a live model of this Kubernetes cluster. Prefer its tools over kubectl to read cluster state; load these tools together: issues, diagnose, get_changes, get_resource, list_resources, search, get_workload_logs, get_pod_logs, get_events.
+const routingInstructions = `Radar keeps a live model of this Kubernetes cluster, so prefer its tools over kubectl to read cluster state and load these together: issues, diagnose, get_changes, get_resource, list_resources, search, get_workload_logs, get_pod_logs, get_events.
 
 WHICH TOOL
 - Symptom known, faulty resource not: issues. Ranked live failures, including references to missing ConfigMaps, Secrets, PVCs or Service backends, and unschedulable pods.
@@ -38,7 +38,7 @@ const writeRoutingLine = "- Fixes, if your tool list includes write tools: patch
 
 // signalInstructions says how to read what Radar returns.
 const signalInstructions = `READING RADAR'S SIGNALS
-- An issues row that names a mechanism and an action is the leading hypothesis; if it has an incident_parent, start from that root. Confirm it with a targeted read (a log line, a field) instead of re-deriving it. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
+- An issues row that names a mechanism and an action is the leading hypothesis; if it has an incident_parent, start from that root. Confirm it with a targeted read (a log line, a field) instead of re-deriving it. If it points at another resource, follow that dependency. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
 - Read the changes attached to issues first; call get_changes when they are absent or you need another window or scope. Reuse the logs diagnose returned; fetch more only for a specific gap.
 - issue_timing started_after_resource_was_healthy means a healthy window preceded the failure: look for what changed. started_at_resource_creation means the failure has been present since the resource was created. Compare resource_created_at with the incident window. Timing alone does not establish cause or relevance. Prefer timing_summary when present.
 - issues is live state; get_cluster_audit is configuration posture.
