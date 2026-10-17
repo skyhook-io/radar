@@ -80,8 +80,9 @@ func changedSince(listed map[resourceid.Ref]ownershiptest.Object, ref resourceid
 // it disputes have caught up, and checks the whole fresh answer against the
 // API server: for a search, every candidate must be in the domain, once,
 // name the UID in its current copy and match that copy exactly; every
-// disputed object in the domain left out must not name it; and the gaps must
-// be the expected ones.
+// disputed or listed object in the domain it leaves out must not name it now;
+// and the gaps must be the expected ones. Objects created after the list and
+// never disputed aren't checked.
 func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]ownershiptest.Object, cache ownership.Session, api apiRead) outcome {
 	if d.Coverage || len(d.Objects) == 0 {
 		return unresolved
@@ -121,8 +122,17 @@ func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]o
 			}
 		}
 		for _, ref := range d.Objects {
-			in := slices.ContainsFunc(fresh.Candidates, func(c ownership.Observation) bool { return c.Ref == ref })
-			if !in && inDomain(ref, d.Domain) && exists[ref] && names(current[ref].Owners, d.UID) {
+			if !seen[ref] && inDomain(ref, d.Domain) && exists[ref] && names(current[ref].Owners, d.UID) {
+				return unresolved
+			}
+		}
+		// A listed object that named the UID and still does must be in the
+		// fresh answer too, unless the answer says its kind went unread.
+		for ref, o := range listed {
+			if seen[ref] || !inDomain(ref, d.Domain) || !names(o.Owners, d.UID) || unread(fresh.Gaps, ref) {
+				continue
+			}
+			if !settleRef(ref) || exists[ref] && names(current[ref].Owners, d.UID) {
 				return unresolved
 			}
 		}
@@ -158,6 +168,13 @@ func (st settle) recheckResolution(want, got ownership.OwnerResolution, dependen
 		return confirmed
 	}
 	return caughtUp
+}
+
+// unread reports whether gaps say ref's kind went unread where ref is.
+func unread(gaps []ownership.Gap, ref resourceid.Ref) bool {
+	return slices.ContainsFunc(gaps, func(g ownership.Gap) bool {
+		return g.Kind == (resourceid.GroupKind{}) || g.Kind == ref.GroupKind() && (g.Namespace == "" || g.Namespace == ref.Namespace)
+	})
 }
 
 // inDomain reports whether a search of d covers ref, an object of a

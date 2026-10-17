@@ -1,6 +1,7 @@
 package ownershiplive
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -71,6 +72,22 @@ type twice struct{ ownership.Session }
 func (c twice) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
 	r := c.Session.OwnerCandidates(uid, d, limit)
 	r.Candidates = append(r.Candidates, r.Candidates...)
+	return r
+}
+
+// dropsLater answers the first search right, and leaves one object out of
+// every later one.
+type dropsLater struct {
+	ownership.Session
+	drop  resourceid.Ref
+	calls *int
+}
+
+func (l dropsLater) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := l.Session.OwnerCandidates(uid, d, limit)
+	if *l.calls++; *l.calls > 1 {
+		r.Candidates = slices.DeleteFunc(r.Candidates, func(c ownership.Observation) bool { return c.Ref == l.drop })
+	}
 	return r
 }
 
@@ -169,10 +186,12 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 	orphaned := updated
 	orphaned.Owners = nil
 	elsewhere := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "beta", Name: "q"}, APIVersion: "v1", UID: "uid-q", ResourceVersion: "20", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
+	sibling := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "sibling"}, APIVersion: "v1", UID: "uid-sibling", ResourceVersion: "30", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
 	partial := world(rs, updated)
 	partial.Partial = true
 
 	listed := world(rs, pod)
+	behindList, listedWithSibling := world(rs, orphaned), world(rs, pod, sibling)
 	q := ownershiptest.Queries{Refs: []resourceid.Ref{pod.Ref}, UIDs: []types.UID{"uid-rs"}, Domains: []ownership.Domain{ownership.InNamespace("alpha")}, Limits: []int{0}}
 	for _, tc := range []struct {
 		name  string
@@ -180,8 +199,8 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 		cache func(now ownership.Session) ownership.Session
 		// want is each question's outcome.
 		want map[string]outcome
-		// listed, when set, is what the list saw instead of the Pod before
-		// any change.
+		// listed, when set, is what the list saw instead of the ReplicaSet
+		// and the Pod before any change.
 		listed *ownershiptest.World
 	}{
 		{"the Pod was updated, and the cache has the update", world(rs, updated), nil,
@@ -197,7 +216,7 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 		// behind.
 		{"the cache was behind the list", world(rs, orphaned),
 			func(now ownership.Session) ownership.Session { return lagging{now, begin(t, listed), new(int)} },
-			map[string]outcome{"Object": caughtUp, "OwnerCandidates": caughtUp}, &ownershiptest.World{}},
+			map[string]outcome{"Object": caughtUp, "OwnerCandidates": caughtUp}, &behindList},
 		// The cache's own absence is not evidence: the API server still has it.
 		{"the cache keeps reporting the Pod absent", world(rs, pod),
 			func(now ownership.Session) ownership.Session { return falseAbsence{now, pod.Ref, false, new(int)} },
@@ -230,6 +249,11 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 		{"a candidate returned twice after a write", world(rs, updated),
 			func(now ownership.Session) ownership.Session { return twice{now} },
 			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
+		// The sibling agreed at first and was never disputed; asked again,
+		// the search drops it.
+		{"a candidate that agreed, dropped when asked again", world(rs, updated, sibling),
+			func(now ownership.Session) ownership.Session { return dropsLater{now, sibling.Ref, new(int)} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, &listedWithSibling},
 		// Asked again, the search covers less than the expected answer.
 		{"the fresh answer leaves more unread", world(rs, updated),
 			func(now ownership.Session) ownership.Session { return laterGap{now, new(int)} },
@@ -251,7 +275,7 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 			}
 			from := listed
 			if tc.listed != nil {
-				from = tc.now
+				from = *tc.listed
 			}
 			seen := map[string]bool{}
 			for _, d := range ownershiptest.Differences(begin(t, from), cache, q) {
