@@ -547,9 +547,17 @@ describe('IssueRow diagnosis raw messages', () => {
       message: 'Would block all inbound traffic to the 2 pods behind Service recommendation',
       cause: 'NetworkPolicy deny-all leaves the 2 pods behind Service recommendation with no allowed inbound traffic.',
     }
-    const radar = renderToString(createElement(IssueRow, { issue: mk({ ...base, message_source: 'radar' }), open: true, onToggle: () => undefined, as: 'div' }))
+    const radar = renderToString(createElement(IssueRow, {
+      issue: mk({
+        ...base,
+        message_source: 'radar',
+        diagnostic_context: { role: 'candidate', facts: [{ type: 'network_policy_isolates', confidence: 'high', refs: [{ kind: 'Service', namespace: 'shop', name: 'recommendation' }] }] },
+      }),
+      open: true, onToggle: () => undefined, as: 'div',
+    }))
     expect(radar).not.toContain('Raw error')
     expect(radar).toContain('leaves the 2 pods behind Service recommendation')
+    expect(radar).toContain('Affected resources')
 
     // Without the marker the message is still treated as detector output.
     const unmarked = renderToString(createElement(IssueRow, { issue: mk(base), open: true, onToggle: () => undefined, as: 'div' }))

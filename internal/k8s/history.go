@@ -503,6 +503,16 @@ func diffPod(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
+	// A label edit changes which Services and NetworkPolicies select the pod.
+	if !equalStringMaps(oldPod.Labels, newPod.Labels) {
+		changes = append(changes, FieldChange{
+			Path:     "metadata.labels",
+			OldValue: oldPod.Labels,
+			NewValue: newPod.Labels,
+		})
+		summary = append(summary, "labels changed")
+	}
+
 	// Check phase
 	if oldPod.Status.Phase != newPod.Status.Phase {
 		changes = append(changes, FieldChange{

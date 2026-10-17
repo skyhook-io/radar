@@ -37,9 +37,9 @@ type isolationWindow struct {
 //     namespace's labels another engine selects on, or losing a backend the
 //     policy didn't isolate would start the isolation later).
 //
-// A backend the policy didn't isolate that is relabeled out of a Service's
-// selector afterwards isn't caught: its event carries only its new labels.
-// Anything less leaves the onset unknown: a backdated onset would mislead.
+// A pod relabeled into or out of a Service's selector counts through its old
+// and new labels. Anything less leaves the onset unknown: a backdated onset
+// would mislead.
 func networkPolicyIsolationOnset(window isolationWindow, np *networkingv1.NetworkPolicy, impact *denyAllIngressImpact) (time.Time, bool) {
 	created := np.CreationTimestamp.Time
 	if created.IsZero() || np.Generation > 1 || impact.lastCreated.After(created) ||
@@ -57,7 +57,7 @@ func networkPolicyIsolationOnset(window isolationWindow, np *networkingv1.Networ
 		if e.Namespace != "" && e.Namespace != np.Namespace {
 			continue
 		}
-		if e.Kind == "Pod" && !matchesAny(impact.selectors, e.Labels) {
+		if e.Kind == "Pod" && !matchesAny(impact.selectors, e.Labels) && !matchesAny(impact.selectors, previousLabels(e)) {
 			continue
 		}
 		// An equal timestamp can't establish order, so it counts as after.
@@ -182,6 +182,32 @@ func isolationInputEventsSince(policyKinds []string, namespace string, services 
 		return nil, false
 	}
 	return append(append(append(policies, svcs...), pods...), ns...), true
+}
+
+// previousLabels returns a pod's labels before a label edit, from the event's
+// diff. A persisted event decodes the map as map[string]any.
+func previousLabels(e timeline.TimelineEvent) map[string]string {
+	if e.Diff == nil {
+		return nil
+	}
+	for _, f := range e.Diff.Fields {
+		if f.Path != "metadata.labels" {
+			continue
+		}
+		switch old := f.OldValue.(type) {
+		case map[string]string:
+			return old
+		case map[string]any:
+			out := make(map[string]string, len(old))
+			for k, v := range old {
+				if s, ok := v.(string); ok {
+					out[k] = s
+				}
+			}
+			return out
+		}
+	}
+	return nil
 }
 
 func matchesAny(selectors []labels.Selector, podLabels map[string]string) bool {

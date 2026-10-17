@@ -126,3 +126,18 @@ func TestComputeDiffNetworkPolicy(t *testing.T) {
 		t.Fatalf("unstructured diff = %+v", diff)
 	}
 }
+
+// Pod label edits are recorded: they change which Services and policies
+// select the pod.
+func TestDiffPodRecordsLabelChanges(t *testing.T) {
+	oldPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "rec"}}}
+	newPod := oldPod.DeepCopy()
+	newPod.Labels = map[string]string{"app": "other"}
+	diff := ComputeDiff("Pod", oldPod, newPod)
+	if diff == nil || len(diff.Fields) != 1 || diff.Fields[0].Path != "metadata.labels" {
+		t.Fatalf("diff = %+v, want one metadata.labels change", diff)
+	}
+	if ComputeDiff("Pod", oldPod, oldPod.DeepCopy()) != nil {
+		t.Fatal("unchanged labels produced a diff")
+	}
+}

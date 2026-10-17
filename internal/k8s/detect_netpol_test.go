@@ -21,6 +21,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/netpol"
 )
 
@@ -400,6 +401,7 @@ func TestOtherPolicyViewMayApply(t *testing.T) {
 		{"Calico service-account selector can't be judged", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"serviceAccountSelector": "role == 'x'"}))}, shopNS, true},
 		{"Calico egress-only policy can't allow inbound", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app == 'rec'", "types": []any{"Egress"}}))}, shopNS, false},
 		{"Calico policy with only egress rules defaults to Egress", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app == 'rec'", "egress": []any{map[string]any{"action": "Allow"}}}))}, shopNS, false},
+		{"Calico selector on another service account's endpoint label", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "projectcalico.org/serviceaccount == 'payments-api'"}))}, shopNS, false},
 		{"Calico selector on the endpoint service-account label", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "projectcalico.org/serviceaccount == 'default'"}))}, shopNS, true},
 		{"Calico service-account selector plus an excluding namespace selector", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"namespaceSelector": "team == 'other'", "serviceAccountSelector": "role == 'x'"}))}, shopNS, false},
 		{"Calico selector Radar can't parse", served, fakePolicyLister{objects: objects(gnp, "", policyObject(map[string]any{"selector": "app ==="}))}, shopNS, true},
@@ -773,5 +775,138 @@ func TestNetworkPolicyIsolationOnsetQueryCap(t *testing.T) {
 	window := isolationWindow{since: created.Add(-time.Hour), policyKinds: []string{"NetworkPolicy"}}
 	if _, ok := networkPolicyIsolationOnset(window, np, &denyAllIngressImpact{lastCreated: created.Add(-time.Hour)}); ok {
 		t.Fatal("claimed an onset although the event query hit its cap")
+	}
+}
+
+// A pod relabeled into or out of a Service's selector after the policy was
+// created moves the isolation's start, so the onset is withheld. Driven
+// through the real recording path: label-only Pod edits must be recorded.
+func TestNetworkPolicyIsolationOnsetSeesPodRelabels(t *testing.T) {
+	created := time.Now().Add(-time.Hour)
+	np := netpolTestPolicy("deny-all", map[string]string{"app": "rec"}, ingressOnly)
+	np.CreationTimestamp, np.Generation = metav1.NewTime(created), 1
+	window := isolationWindow{since: created.Add(-time.Hour), policyKinds: []string{"NetworkPolicy"}}
+	impact := &denyAllIngressImpact{services: []string{"recommendation"}, selectors: []labels.Selector{labels.SelectorFromSet(map[string]string{"app": "rec"})}, lastCreated: created.Add(-time.Hour)}
+
+	relabel := func(t *testing.T, from, to map[string]string) {
+		t.Helper()
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+			t.Fatalf("InitStore: %v", err)
+		}
+		oldPod := netpolTestPod("pod-1", from, true)
+		newPod := oldPod.DeepCopy()
+		newPod.Labels = to
+		recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "pod-1", "uid-1", "update", oldPod, newPod, nil, false)
+	}
+	t.Cleanup(timeline.ResetStore)
+
+	t.Run("relabeled into the selector", func(t *testing.T) {
+		relabel(t, map[string]string{"app": "other"}, map[string]string{"app": "rec"})
+		if _, ok := networkPolicyIsolationOnset(window, np, impact); ok {
+			t.Fatal("claimed an onset although a pod joined the Service afterwards")
+		}
+	})
+	t.Run("relabeled out of the selector", func(t *testing.T) {
+		relabel(t, map[string]string{"app": "rec"}, map[string]string{"app": "other"})
+		if _, ok := networkPolicyIsolationOnset(window, np, impact); ok {
+			t.Fatal("claimed an onset although a backend left the Service afterwards")
+		}
+	})
+	t.Run("unrelated pod relabeled", func(t *testing.T) {
+		relabel(t, map[string]string{"app": "web"}, map[string]string{"app": "web", "tier": "front"})
+		if got, ok := networkPolicyIsolationOnset(window, np, impact); !ok || !got.Equal(created) {
+			t.Fatalf("got %v %v, want creation: the relabeled pod never matched", got, ok)
+		}
+	})
+}
+
+func netpolTestObjects() (*corev1.Pod, *corev1.Service, *networkingv1.NetworkPolicy) {
+	return netpolTestPod("rec-1", map[string]string{"app": "rec"}, true),
+		netpolTestService("recommendation", map[string]string{"app": "rec"}),
+		netpolTestPolicy("deny-all-rec", map[string]string{"app": "rec"}, ingressAndEgress)
+}
+
+func netpolDetections(cache *ResourceCache) []Detection {
+	var out []Detection
+	for _, d := range DetectProblems(cache, "shop") {
+		if d.Reason == NetworkPolicyDenyAllIngressReason {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func installCoreOnlyDiscovery(t *testing.T, client *fake.Clientset) {
+	t.Helper()
+	fakeDisc := client.Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDisc.Resources = []*metav1.APIResourceList{{GroupVersion: "networking.k8s.io/v1", APIResources: []metav1.APIResource{
+		{Name: "networkpolicies", Kind: "NetworkPolicy", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}},
+	}}}
+	restore, err := SetTestResourceDiscovery(fakeDisc)
+	if err != nil {
+		t.Fatalf("SetTestResourceDiscovery: %v", err)
+	}
+	t.Cleanup(restore)
+}
+
+// Without permission to list NetworkPolicies there is no informer, and the
+// detector says nothing rather than guessing.
+func TestDetectNetworkPolicyDenyAllWithoutPolicyAccess(t *testing.T) {
+	defer ResetTestState()
+	pod, svc, np := netpolTestObjects()
+	client := fake.NewClientset(pod, svc, np)
+	scopes := map[string]k8score.ResourceScope{}
+	for kind := range allTestResourceTypes() {
+		if kind != "networkpolicies" {
+			scopes[kind] = k8score.ResourceScope{Enabled: true}
+		}
+	}
+	if err := InitScopedTestResourceCache(client, scopes); err != nil {
+		t.Fatalf("InitScopedTestResourceCache: %v", err)
+	}
+	installCoreOnlyDiscovery(t, client)
+	cache := GetResourceCache()
+	if cache.NetworkPolicies() != nil {
+		t.Fatal("NetworkPolicy informer exists although access was denied")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := netpolDetections(cache); len(got) != 0 {
+		t.Fatalf("detections without NetworkPolicy access: %+v", got)
+	}
+}
+
+// While the NetworkPolicy informer hasn't synced, a partial policy list could
+// hold a deny-all without its allow, so the detector waits.
+func TestDetectNetworkPolicyDenyAllWaitsForSync(t *testing.T) {
+	defer ResetTestState()
+	pod, svc, np := netpolTestObjects()
+	client := fake.NewClientset(pod, svc, np)
+	if err := InitTestPromotedSyncingCache(client, 5*time.Second, 5*time.Second, map[string]time.Duration{"networkpolicies": 2 * time.Second}); err != nil {
+		t.Fatalf("InitTestPromotedSyncingCache: %v", err)
+	}
+	installCoreOnlyDiscovery(t, client)
+	cache := GetResourceCache()
+	if cache.IsKindReady("networkpolicies") {
+		t.Skip("NetworkPolicy informer synced before the check; the delay didn't hold")
+	}
+	if got := netpolDetections(cache); len(got) != 0 {
+		t.Fatalf("detections before the NetworkPolicy informer synced: %+v", got)
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(netpolDetections(cache)) == 1 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("no detection after the NetworkPolicy informer synced")
+}
+
+// A namespace with Services but no policies yields nothing.
+func TestDenyAllIngressNoPolicies(t *testing.T) {
+	pod, svc, _ := netpolTestObjects()
+	if got := denyAllIngressDetections(nil, []*corev1.Service{svc}, []*corev1.Pod{pod}, denyAllEnv{}, time.Now()); len(got) != 0 {
+		t.Fatalf("detections without policies: %+v", got)
 	}
 }
