@@ -228,3 +228,17 @@ func TestInitializeReturnsServerInstructions(t *testing.T) {
 		t.Fatal("read-only instructions must leave out the write tools")
 	}
 }
+
+// started_at_resource_creation can come from the owner workload's condition
+// (issue_timing_basis owner_condition), so a Pod row may carry its
+// Deployment's timing. The instructions must not read it as the onset of the
+// specific failure.
+func TestServerInstructionsScopeCreationTimingToResourceOrOwner(t *testing.T) {
+	text := serverInstructions(true)
+	if !strings.Contains(text, "started_at_resource_creation means the resource, or its owner workload, has been failing since it was created.") {
+		t.Error("instructions no longer scope started_at_resource_creation to the resource or its owner workload")
+	}
+	if strings.Contains(text, "the failure has been present since") {
+		t.Error("instructions date the specific failure from creation; owner-derived timing does not support that")
+	}
+}
