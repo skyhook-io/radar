@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,15 +36,14 @@ var typedKinds = func() map[resourceid.GroupKind]resourceid.Builtin {
 	return out
 }()
 
-// passes is how many times the comparison runs on a fresh list. Objects
-// changing between the cache's view and a list make a question differ in one
-// pass; a defect makes it differ in every pass.
-const passes = 3
+// passes is how many times the comparison runs, each on a fresh list.
+const passes = 2
 
 // TestLiveParity checks the cache source over a live cluster against Scan of
-// a World listed straight from the same cluster, and fails on any question
-// the two answer differently in every one of several passes. It only lists
-// and watches.
+// a World listed straight from the same cluster. A difference about objects
+// written between the list and the cache read is reported, not judged;
+// writtenBetween says which those are. Any other difference fails. It only
+// lists and watches.
 //
 //	RADAR_LIVE_KUBECONFIG=... RADAR_LIVE_CONTEXT=... go test -tags liveparity,withoutebpf -run TestLiveParity -timeout 20m ./internal/ownershiplive/
 func TestLiveParity(t *testing.T) {
@@ -159,22 +159,16 @@ func TestLiveParity(t *testing.T) {
 		return w
 	}
 
-	// questions asks about every object and a missing one per kind, every
-	// UID an object has or names plus one nothing has, and domains around a
-	// sample of namespaces.
+	// questions asks about every object and one certainly missing per
+	// collected kind, every UID an object has or names plus one nothing has,
+	// and domains around a sample of namespaces. Each question is asked once.
 	questions := func(w ownershiptest.World) ownershiptest.Queries {
 		q := ownershiptest.Queries{Domains: []ownership.Domain{ownership.Everywhere(), {Namespaces: []string{""}, ClusterScoped: true}}, Limits: []int{0}}
+		refs := map[resourceid.Ref]bool{}
 		uids := map[types.UID]bool{"uid-nothing-has": true}
-		missing := map[resourceid.GroupKind]bool{}
 		var namespaces []string
 		for _, o := range w.Objects {
-			q.Refs = append(q.Refs, o.Ref)
-			if !missing[o.Ref.GroupKind()] {
-				missing[o.Ref.GroupKind()] = true
-				absent := o.Ref
-				absent.Name += "-not-there"
-				q.Refs = append(q.Refs, absent)
-			}
+			refs[o.Ref] = true
 			uids[o.UID] = true
 			for _, ref := range o.Owners {
 				uids[ref.UID] = true
@@ -183,9 +177,20 @@ func TestLiveParity(t *testing.T) {
 				namespaces = append(namespaces, o.Ref.Namespace)
 			}
 		}
+		for _, k := range kinds {
+			absent := resourceid.Ref{Group: k.gk.Group, Kind: k.gk.Kind, Name: "radar-parity-certainly-absent"}
+			if served[k.gvr.GroupResource()].Namespaced {
+				absent.Namespace = "default"
+			}
+			refs[absent] = true
+		}
+		for ref := range refs {
+			q.Refs = append(q.Refs, ref)
+		}
 		for uid := range uids {
 			q.UIDs = append(q.UIDs, uid)
 		}
+		slices.SortFunc(q.Refs, func(a, b resourceid.Ref) int { return strings.Compare(a.String(), b.String()) })
 		slices.Sort(q.UIDs)
 		slices.Sort(namespaces)
 		for i, ns := range namespaces {
@@ -196,10 +201,13 @@ func TestLiveParity(t *testing.T) {
 		return q
 	}
 
-	persistent := map[string]int{}
-	var last []ownershiptest.Difference
+	failures := 0
 	for pass := range passes {
 		w := world()
+		listed := map[resourceid.Ref]ownershiptest.Object{}
+		for _, o := range w.Objects {
+			listed[o.Ref] = o
+		}
 		want, _ := ownershiptest.Scan(w).Begin()
 		got, err := cachesource.New(func() cachesource.Caches {
 			return cachesource.Caches{Typed: typedCache, Dynamic: dynamicCache, Discovery: discovery}
@@ -209,17 +217,24 @@ func TestLiveParity(t *testing.T) {
 		}
 		q := questions(w)
 		diffs := ownershiptest.Differences(want, got, q)
+		resolutions := 0
 		for _, o := range w.Objects {
 			dependent := want.Object(o.Ref)
 			if dependent.State != ownership.Present {
 				continue
 			}
 			for i, ref := range dependent.Object.OwnerReferences {
+				resolutions++
 				a, b := ownership.ResolveOwner(want, dependent.Object, ref), ownership.ResolveOwner(got, dependent.Object, ref)
 				if a.State != b.State || a.Ref != b.Ref || a.Gap != b.Gap {
+					objects := []resourceid.Ref{o.Ref}
+					if a.Ref != (resourceid.Ref{}) {
+						objects = append(objects, a.Ref)
+					}
 					diffs = append(diffs, ownershiptest.Difference{
 						Question: fmt.Sprintf("ResolveOwner(%v, %d)", o.Ref, i),
 						Want:     fmt.Sprintf("%v %v %+v", a.State, a.Ref, a.Gap), Got: fmt.Sprintf("%v %v %+v", b.State, b.Ref, b.Gap),
+						Objects: objects, Coverage: a.Gap != b.Gap,
 					})
 				}
 			}
@@ -227,28 +242,19 @@ func TestLiveParity(t *testing.T) {
 		if err := got.Validate(); err != nil {
 			t.Errorf("pass %d: Validate: %v", pass, err)
 		}
-		coverage := 0
+		written := 0
 		for _, d := range diffs {
-			persistent[d.Question]++
-			if d.Coverage {
-				coverage++
+			if writtenBetween(d, listed, got) {
+				written++
+				continue
 			}
-		}
-		t.Logf("pass %d: %d objects, %d questions (%d objects, %d UIDs × %d domains): %d differ (%d about coverage)",
-			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), len(diffs), coverage)
-		last = diffs
-		if pass < passes-1 {
-			time.Sleep(5 * time.Second)
-		}
-	}
-	failures := 0
-	for _, d := range last {
-		if persistent[d.Question] == passes {
 			failures++
 			if failures <= 20 {
-				t.Errorf("differs in every pass: %v", d)
+				t.Errorf("pass %d: %v", pass, d)
 			}
 		}
+		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains), %d owner references resolved; %d differ: %d about objects written between the list and the cache read, %d otherwise",
+			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions, len(diffs), written, len(diffs)-written)
 	}
-	t.Logf("%d questions differed in every pass", failures)
+	t.Logf("%d differences not accounted for by writes", failures)
 }
