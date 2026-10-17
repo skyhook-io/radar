@@ -767,11 +767,11 @@ func TestComputeDiff_HTTPRouteNamedRulesAddAndEdit(t *testing.T) {
 	}
 }
 
-// Unnamed rules are compared by position: an appended rule reads as added and
-// an edit to an existing rule is still reported beside the count.
+// Unnamed rules are compared by position: the count row explains an appended
+// rule, and an edit to an existing rule is still reported beside it.
 func TestComputeDiff_HTTPRouteUnnamedRulesComparedByPosition(t *testing.T) {
 	diff := ComputeDiff("HTTPRoute", namedRoute(1, routeRule("main", 90)), namedRoute(2, routeRule("main", 10), routeRule("", 50)))
-	want := "rules: 1→2, other spec changes: rules[0].backendRefs[web].weight, rules[0].backendRefs[web-canary].weight, rules[1] (added)"
+	want := "rules: 1→2, other spec changes: rules[0].backendRefs[web].weight, rules[0].backendRefs[web-canary].weight"
 	if diff == nil || diff.Summary != want {
 		t.Fatalf("summary = %+v, want %q", diff, want)
 	}
@@ -1101,5 +1101,94 @@ func TestComputeDiff_EmptyBlockAddedOrRemoved(t *testing.T) {
 		if findChange(diff, "spec.template.spec.topologySpreadConstraints[0].labelSelector") == nil {
 			t.Errorf("%s: empty selector change lost: %+v", name, diff)
 		}
+	}
+}
+
+// The volumes row compares source references only; a sizeLimit edit on one
+// volume must survive a reference change on another in the same update.
+func TestComputeDiff_VolumeDetailBesideReferenceChange(t *testing.T) {
+	limit := func(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
+	oldDep := specTestDeployment(3)
+	oldDep.Spec.Template.Spec.Volumes = []corev1.Volume{
+		{Name: "cfg", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg-v1"}}}},
+		{Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: limit("1Gi")}}},
+	}
+	newDep := bumped(oldDep)
+	newDep.Spec.Template.Spec.Volumes[0].ConfigMap.Name = "cfg-v2"
+	newDep.Spec.Template.Spec.Volumes[1].EmptyDir.SizeLimit = limit("10Gi")
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	if findChange(diff, "spec.template.spec.volumes") == nil || findChange(diff, "spec.template.spec.volumes[scratch].emptyDir.sizeLimit") == nil {
+		t.Fatalf("sizeLimit edit hidden behind the volumes row: %+v", diff)
+	}
+}
+
+func TestComputeDiff_CanaryStepEditWithSameCount(t *testing.T) {
+	ro := func(gen, weight int64) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+			"metadata": map[string]any{"name": "web", "uid": "ro", "generation": gen},
+			"spec": map[string]any{"strategy": map[string]any{"canary": map[string]any{"steps": []any{
+				map[string]any{"setWeight": weight}, map[string]any{"pause": map[string]any{}},
+			}}}},
+		}}
+	}
+	diff := ComputeDiff("Rollout", ro(1, 10), ro(2, 100))
+	change := findChange(diff, "spec.strategy.canary.steps[0].setWeight")
+	if change == nil || change.OldValue != int64(10) || change.NewValue != int64(100) {
+		t.Fatalf("setWeight row = %+v in %+v", change, diff)
+	}
+}
+
+func TestComputeDiff_RouteQueryParamValuesHidden(t *testing.T) {
+	route := func(gen int64, key string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+			"metadata": map[string]any{"name": "web", "uid": "r", "generation": gen},
+			"spec": map[string]any{"rules": []any{map[string]any{"matches": []any{map[string]any{
+				"queryParams": []any{map[string]any{"name": "key", "value": key}},
+			}}}}},
+		}}
+	}
+	diff := ComputeDiff("HTTPRoute", route(1, "hunter2"), route(2, "swordfish"))
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "hunter2") || strings.Contains(rendered, "swordfish") {
+		t.Fatalf("query parameter value leaked: %s", rendered)
+	}
+}
+
+// Listener order carries no meaning; a reorder alone is not a change.
+func TestComputeDiff_OrderOnlyOutsidePodTemplateIgnored(t *testing.T) {
+	gw := func(gen int64, names ...string) *unstructured.Unstructured {
+		listeners := make([]any, 0, len(names))
+		for i, n := range names {
+			listeners = append(listeners, map[string]any{"name": n, "protocol": "HTTP", "port": int64(80 + i)})
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+			"metadata": map[string]any{"name": "edge", "uid": "g", "generation": gen},
+			"spec":     map[string]any{"listeners": listeners},
+		}}
+	}
+	a := gw(1, "http", "admin")
+	b := gw(2, "admin", "http")
+	b.Object["spec"].(map[string]any)["listeners"] = []any{
+		a.Object["spec"].(map[string]any)["listeners"].([]any)[1],
+		a.Object["spec"].(map[string]any)["listeners"].([]any)[0],
+	}
+	if diff := ComputeDiff("Gateway", a, b); diff != nil && strings.Contains(diff.Summary, "order") {
+		t.Fatalf("listener reorder reported: %+v", diff)
+	}
+}
+
+// Two named rules with identical matches: the first one wins, so swapping
+// them switches traffic.
+func TestComputeDiff_NamedRouteRuleReorderReported(t *testing.T) {
+	a, b := routeRule("blue", 100), routeRule("green", 100)
+	b["backendRefs"] = []any{map[string]any{"name": "web-green", "port": int64(80)}}
+	diff := ComputeDiff("HTTPRoute", namedRoute(1, a, b), namedRoute(2, b, a))
+	if diff == nil || !strings.Contains(diff.Summary, "rules order") {
+		t.Fatalf("rule reorder not reported: %+v", diff)
 	}
 }

@@ -322,7 +322,11 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 			untracked = append(untracked, c)
 		}
 	}
-	untracked = collapseUntracked(untracked, covered)
+	reported := make(map[string]bool, len(tracked))
+	for _, change := range tracked {
+		reported[change.Path] = true
+	}
+	untracked = collapseUntracked(untracked, covered, reported)
 	if len(untracked) == 0 {
 		return nil, nil
 	}
@@ -492,7 +496,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 		if field := listKeyField(o, n); field != "" {
 			oldByKey, _ := listByKey(o, field)
 			newByKey, _ := listByKey(n, field)
-			if oldOrder, newOrder := sharedKeyOrder(o, newByKey, field), sharedKeyOrder(n, oldByKey, field); !equalStringSlices(oldOrder, newOrder) {
+			if oldOrder, newOrder := sharedKeyOrder(o, newByKey, field), sharedKeyOrder(n, oldByKey, field); orderMatters(path) && !equalStringSlices(oldOrder, newOrder) {
 				*out = append(*out, changedSpecPath{path: path, order: true, oldOrder: oldOrder, newOrder: newOrder})
 			}
 			for _, k := range unionKeys(oldByKey, newByKey) {
@@ -521,7 +525,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 // only one side at the shallowest enclosing block that holds no covered leaf:
 // "rules[1]" rather than each of its fields, while a block that also holds a
 // field a differ reported is split down to the uncovered part.
-func collapseUntracked(untracked, covered []changedSpecPath) []changedSpecPath {
+func collapseUntracked(untracked, covered []changedSpecPath, reported map[string]bool) []changedSpecPath {
 	coveredSegs := make([][]string, 0, len(covered))
 	for _, c := range covered {
 		coveredSegs = append(coveredSegs, splitSpecPath(c.path))
@@ -547,6 +551,15 @@ func collapseUntracked(untracked, covered []changedSpecPath) []changedSpecPath {
 			if !holdsCovered(segs[:n]) {
 				path = joinSpecPath(segs[:n])
 				break
+			}
+		}
+		// A whole item added or removed under a summary row (a rule, a
+		// volume, a canary step) is what that row's count or references
+		// already say.
+		if chosen := splitSpecPath(path); len(chosen) > 1 {
+			parent := joinSpecPath(chosen[:len(chosen)-1])
+			if (reported[path] && isSummaryRow(path)) || (reported[parent] && isSummaryRow(parent)) {
+				continue
 			}
 		}
 		if !seen[path] {
@@ -600,6 +613,15 @@ func emptyLike(v, other any) any {
 		return []any{}
 	}
 	return nil
+}
+
+// orderMatters limits order-only rows to lists whose sequence has an effect:
+// anything in a pod template (a reorder there is a new template revision,
+// and init containers and env vars are order-sensitive), admission webhooks
+// (mutating webhooks run in order), and route rules (the first of two
+// equally specific matches wins).
+func orderMatters(path string) bool {
+	return strings.Contains(path, "template.") || strings.HasPrefix(path, "webhooks") || path == "spec.rules"
 }
 
 func sharedKeyOrder(items []any, other map[string]any, field string) []string {
@@ -714,12 +736,34 @@ func splitSpecPath(path string) []string {
 
 // trackedCoverage returns the subtrees a tracked row actually compares. The
 // Deployment resources row compares only limits and requests, not claims.
-// countOnlyRowPaths are rows that report a count or a kind for a whole list
-// or block (rule, TLS, grant and listener counts; a Rollout's strategy kind).
-// They cover only their own path, so edits beneath them are still reported.
-var countOnlyRowPaths = map[string]bool{
+// summaryRowPaths are rows whose values summarize a whole list or block
+// rather than compare it: counts (rules, TLS, grants, listeners, canary
+// steps), a Rollout's strategy kind, and reference lists for Service ports.
+// Like summaryRowSuffixes, they cover only their own path, so edits beneath
+// them that the summary does not capture are still reported.
+var summaryRowPaths = map[string]bool{
 	"spec.rules": true, "spec.tls": true, "spec.from": true, "spec.to": true,
-	"spec.listeners": true, "spec.strategy": true,
+	"spec.listeners": true, "spec.strategy": true, "spec.strategy.canary.steps": true,
+	"spec.ports": true,
+}
+
+// summaryRowSuffixes are pod-template rows that compare references only:
+// volume sources by name, mounts by path, ports by number, tolerations by
+// key and effect, envFrom by source. Fields they leave out (defaultMode,
+// sizeLimit, mountPropagation, hostPort, tolerationSeconds, optional) would
+// otherwise be hidden whenever a reference changed in the same update.
+var summaryRowSuffixes = []string{"spec.volumes", "spec.tolerations", "].volumeMounts", "].ports", "].envFrom"}
+
+func isSummaryRow(path string) bool {
+	if summaryRowPaths[path] {
+		return true
+	}
+	for _, suffix := range summaryRowSuffixes {
+		if strings.HasSuffix(path, suffix) && strings.Contains(path, "template.spec") {
+			return true
+		}
+	}
+	return false
 }
 
 // exactCoverage marks a tracked path that covers only itself.
@@ -728,7 +772,7 @@ const exactCoverage = "="
 func trackedCoverage(path string) [][]string {
 	segments := splitSpecPath(path)
 	switch {
-	case countOnlyRowPaths[path]:
+	case isSummaryRow(path):
 		return [][]string{append(slices.Clone(segments), exactCoverage)}
 	case path == "spec.template.spec.containers[*].resources":
 		return [][]string{append(slices.Clone(segments), "limits"), append(slices.Clone(segments), "requests")}
@@ -860,10 +904,11 @@ func untrackedPathSensitive(path string) bool {
 		case "containers", "initContainers", "ephemeralContainers":
 			return true
 		}
-		// Header modifiers and header matches (Gateway API routes) carry
-		// Authorization and cookie values keyed by header name; annotations
+		// Header and query-parameter matches and modifiers (Gateway API
+		// routes) carry Authorization, cookie and API-key values; annotations
 		// at any depth carry free-form config.
-		if strings.Contains(strings.ToLower(key), "header") || key == "annotations" {
+		lower := strings.ToLower(key)
+		if strings.Contains(lower, "header") || strings.Contains(lower, "queryparam") || key == "annotations" {
 			return true
 		}
 		if envNameLooksSecret(key) {
