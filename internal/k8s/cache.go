@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -153,9 +154,12 @@ func (c *ResourceCache) Generation() uint64 {
 type secretDataManagerWrite struct {
 	uid string
 	at  time.Time
-	// manager is the field manager whose entry supplied at: the latest
-	// write by any manager that owns Secret data.
-	manager string
+	// managers are the field managers whose entries carry at, the latest
+	// timestamp among managers that own Secret data (more than one on a tie),
+	// sorted. A manager's timestamp moves on a write to any field it owns,
+	// so at is the time of that manager's last write, not necessarily of a
+	// data change.
+	managers []string
 }
 
 type secretDataManagerWriteVersion struct {
@@ -219,7 +223,7 @@ func (index *secretDataManagerWriteIndex) capture(obj any) {
 		return
 	}
 	var latest time.Time
-	var latestManager string
+	var latestManagers []string
 	for _, entry := range secret.ManagedFields {
 		if entry.Time == nil || entry.FieldsV1 == nil ||
 			(entry.Operation != metav1.ManagedFieldsOperationApply && entry.Operation != metav1.ManagedFieldsOperationUpdate) {
@@ -238,13 +242,15 @@ func (index *secretDataManagerWriteIndex) capture(obj any) {
 				continue
 			}
 		}
-		// Equal timestamps keep the lexically first manager, so the named
-		// writer doesn't depend on entry order.
-		if entry.Time.Time.After(latest) || (entry.Time.Time.Equal(latest) && entry.Manager < latestManager) {
+		switch {
+		case entry.Time.Time.After(latest):
 			latest = entry.Time.Time
-			latestManager = entry.Manager
+			latestManagers = []string{entry.Manager}
+		case entry.Time.Time.Equal(latest) && !slices.Contains(latestManagers, entry.Manager):
+			latestManagers = append(latestManagers, entry.Manager)
 		}
 	}
+	slices.Sort(latestManagers)
 	version := secretDataManagerWriteVersion{
 		namespace:       secret.Namespace,
 		name:            secret.Name,
@@ -255,7 +261,7 @@ func (index *secretDataManagerWriteIndex) capture(obj any) {
 		helm: secret.Type == corev1.SecretType("helm.sh/release.v1"),
 	}
 	if !latest.IsZero() {
-		pending.write = &secretDataManagerWrite{uid: string(secret.UID), at: latest, manager: latestManager}
+		pending.write = &secretDataManagerWrite{uid: string(secret.UID), at: latest, managers: latestManagers}
 	}
 	index.mu.Lock()
 	// Watch-list informers transform each object present at startup twice,

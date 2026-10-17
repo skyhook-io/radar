@@ -396,7 +396,7 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	if strings.Contains(body, "diagnose-secret-sentinel") || strings.Contains(body, `"key":"password"`) {
 		t.Errorf("managedFields fallback leaked Secret data or claimed a specific stale key: %s", body)
 	}
-	if !strings.Contains(body, "last data write by secret-controller at") {
+	if !strings.Contains(body, "by secret-controller, a field manager that owns its data") {
 		t.Errorf("expected the fallback to name the last data writer for a caller who can read the Secret: %s", body)
 	}
 }
