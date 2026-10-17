@@ -544,6 +544,15 @@ func TestPodWorkloadResolvesReplicaSetOwner(t *testing.T) {
 		t.Fatal("a ReplicaSet that stays itself was not read")
 	}
 
+	svc := backendService(intstr.FromInt32(8080))
+	dets := detectServiceBackendProblems(cache, svc, []*corev1.Pod{
+		backendPod("web-6d4cf56db6-a", "ReplicaSet", "web-6d4cf56db6", web),
+		backendPod("search-0", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:1", 9200)}),
+	}, time.Now())
+	if len(dets) != 1 || len(dets[0].RequiredReads) != 2 || dets[0].RequiredReads[1].Resource != "replicasets" || dets[0].RequiredReads[1].Group != "apps" {
+		t.Fatalf("a name read through a ReplicaSet must require that read: %+v", dets)
+	}
+
 	owner, ok := PodWorkload(cache, backendPod("api-5c6b7d8e9f-c", "ReplicaSet", "api-5c6b7d8e9f", web))
 	if !ok || owner.Kind != "ReplicaSet" || owner.Name != "api-5c6b7d8e9f" {
 		t.Fatalf("uncached ReplicaSet = %+v, want the ReplicaSet itself", owner)
