@@ -1589,3 +1589,41 @@ func TestRecentNamesTheUnreachableDatabase(t *testing.T) {
 		t.Fatalf("err = %v, want the database named with the driver's error", err)
 	}
 }
+
+// An unfiltered query must reach the kinds whose spec changes the timeline
+// records, not only the ones it fetched before they gained differs.
+func TestRecentSurfacesNewlyDiffedKindsWithoutKindFilter(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 50}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	kinds := []string{"CronJob", "PodDisruptionBudget", "HTTPRoute", "Gateway", "ReferenceGrant"}
+	for i, kind := range kinds {
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID: fmt.Sprintf("u%d", i), Timestamp: time.Now(), Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: kind, Namespace: "shop", Name: "web",
+			EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{
+				Fields:  []timeline.FieldChange{{Path: "spec.x", OldValue: 1, NewValue: 2}},
+				Summary: "other spec changes: x",
+			},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	result, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Limit: 20})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, c := range result.Changes {
+		seen[c.Kind] = true
+	}
+	for _, kind := range kinds {
+		if !seen[kind] {
+			t.Errorf("%s spec change missing from an unfiltered query: %+v", kind, result.Changes)
+		}
+	}
+}

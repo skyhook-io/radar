@@ -167,10 +167,12 @@ var (
 		"HorizontalPodAutoscaler", "Application", "Kustomization", "HelmRelease",
 		"GitRepository", "OCIRepository", "HelmRepository",
 		"ResourceQuota", "LimitRange",
+		"CronJob", "PodDisruptionBudget",
+		"Gateway", "HTTPRoute", "GRPCRoute", "TCPRoute", "UDPRoute", "TLSRoute", "ReferenceGrant",
 		// Cluster-scoped (namespace==""), so they surface in a cluster-wide
 		// get_changes, not in a single-namespace query — correct, since one
 		// webhook config gates admission across all namespaces.
-		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration",
+		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration", "GatewayClass",
 	}
 	// lifecycleOnlyKinds surface ONLY their delete events (name-only — never
 	// data). A deleted Secret breaks every consumer with zero K8s symptom on
@@ -788,6 +790,16 @@ var trackedKindGroups = map[string]string{
 	"HelmRepository":                 "source.toolkit.fluxcd.io",
 	"MutatingWebhookConfiguration":   "admissionregistration.k8s.io",
 	"ValidatingWebhookConfiguration": "admissionregistration.k8s.io",
+	"CronJob":                        "batch",
+	"PodDisruptionBudget":            "policy",
+	"Gateway":                        "gateway.networking.k8s.io",
+	"GatewayClass":                   "gateway.networking.k8s.io",
+	"HTTPRoute":                      "gateway.networking.k8s.io",
+	"GRPCRoute":                      "gateway.networking.k8s.io",
+	"TCPRoute":                       "gateway.networking.k8s.io",
+	"UDPRoute":                       "gateway.networking.k8s.io",
+	"TLSRoute":                       "gateway.networking.k8s.io",
+	"ReferenceGrant":                 "gateway.networking.k8s.io",
 }
 
 // TrackedKindForGroup is TrackedKind with kind-collision protection: when
@@ -1261,6 +1273,16 @@ func canonicalKind(kind string) string {
 		return "GitRepository"
 	case "ocirepository", "ocirepositories":
 		return "OCIRepository"
+	case "tcproute", "tcproutes":
+		return "TCPRoute"
+	case "udproute", "udproutes":
+		return "UDPRoute"
+	case "tlsroute", "tlsroutes":
+		return "TLSRoute"
+	case "referencegrant", "referencegrants":
+		return "ReferenceGrant"
+	case "gatewayclass", "gatewayclasses":
+		return "GatewayClass"
 	case "helmrepository", "helmrepositories":
 		return "HelmRepository"
 	case "cronjob", "cronjobs":
