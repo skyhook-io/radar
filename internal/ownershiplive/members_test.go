@@ -10,6 +10,34 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
+// A built-in kind keeps its own scope unless discovery disputes it; a kind
+// two resources serve has none; any other kind has discovery's.
+func TestDiscoveredScope(t *testing.T) {
+	gc := []string{"get", "list", "watch"}
+	scope := discoveredScope([]ownership.ServedResource{
+		{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole", Resource: "clusterroles", Namespaced: true, Verbs: gc},
+		{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "widgets", Namespaced: true, Verbs: gc},
+		{Group: "example.io", Version: "v1", Kind: "Gadget", Resource: "gadgets", Namespaced: true, Verbs: gc},
+		{Group: "example.io", Version: "v1beta1", Kind: "Gadget", Resource: "gizmos", Verbs: gc},
+		{Version: "v1", Kind: "ConfigMap", Resource: "configmaps", Namespaced: true, Verbs: gc},
+	})
+	for _, tc := range []struct {
+		gk                resourceid.GroupKind
+		namespaced, known bool
+	}{
+		{resourceid.GroupKind{Kind: "ConfigMap"}, true, true},
+		{resourceid.GroupKind{Kind: "Node"}, false, true},
+		{resourceid.GroupKind{Group: "rbac.authorization.k8s.io", Kind: "ClusterRole"}, false, false},
+		{resourceid.GroupKind{Group: "example.io", Kind: "Widget"}, true, true},
+		{resourceid.GroupKind{Group: "example.io", Kind: "Gadget"}, false, false},
+		{resourceid.GroupKind{Group: "example.io", Kind: "Sprocket"}, false, false},
+	} {
+		if namespaced, known := scope(tc.gk); namespaced != tc.namespaced || known != tc.known {
+			t.Errorf("%v: namespaced %v known %v, want %v %v", tc.gk, namespaced, known, tc.namespaced, tc.known)
+		}
+	}
+}
+
 // Every form Argo CD accepts for the in-cluster destination is local.
 func TestLiveMembershipKnowsTheInClusterDestination(t *testing.T) {
 	scope := func(resourceid.GroupKind) (bool, bool) { return true, true }

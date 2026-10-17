@@ -134,22 +134,11 @@ func TestLiveParity(t *testing.T) {
 	for _, k := range kinds {
 		gvrOf[k.gk] = k.gvr
 	}
-	// scope is the scope discovery states for each kind; a kind two
-	// resources serve has none.
-	scopes := map[resourceid.GroupKind]bool{}
-	resourceOf := map[resourceid.GroupKind]string{}
-	ambiguous := map[resourceid.GroupKind]bool{}
+	var servedResources []ownership.ServedResource
 	for _, r := range catalog.Resources {
-		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
-		if seen, ok := resourceOf[gk]; ok && seen != r.Name {
-			ambiguous[gk] = true
-		}
-		resourceOf[gk], scopes[gk] = r.Name, r.Namespaced
+		servedResources = append(servedResources, ownership.ServedResource{Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs})
 	}
-	scope := func(gk resourceid.GroupKind) (bool, bool) {
-		namespaced, known := scopes[gk]
-		return namespaced, known && !ambiguous[gk]
-	}
+	scope := discoveredScope(servedResources)
 	object := func(gk resourceid.GroupKind, gvr schema.GroupVersionResource, u *unstructured.Unstructured) ownershiptest.Object {
 		o := ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
@@ -179,9 +168,8 @@ func TestLiveParity(t *testing.T) {
 	// world lists the cluster afresh: discovery as served, every object of
 	// every collected kind, each kind collected as the caches collect it.
 	world := func() ownershiptest.World {
-		w := ownershiptest.World{Partial: !catalog.Complete, Collection: map[resourceid.GroupKind]ownershiptest.Collection{}}
+		w := ownershiptest.World{Partial: !catalog.Complete, Resources: servedResources, Collection: map[resourceid.GroupKind]ownershiptest.Collection{}}
 		for _, r := range catalog.Resources {
-			w.Resources = append(w.Resources, ownership.ServedResource{Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs})
 			gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
 			_, isTyped := typedKinds[gk]
 			c := ownershiptest.Collection{State: ownershiptest.NotCollected, OnDemand: !isTyped}

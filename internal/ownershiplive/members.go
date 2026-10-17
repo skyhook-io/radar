@@ -10,9 +10,34 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// scopeOf says whether discovery serves a kind as namespaced, and whether it
-// states the kind's scope at all.
+// scopeOf says whether a kind is namespaced, and whether the check can tell.
 type scopeOf func(resourceid.GroupKind) (namespaced, known bool)
+
+// discoveredScope is the scope of each kind as served: a built-in kind's
+// own, unless discovery serves it with the other scope; a kind two resources
+// serve has none.
+func discoveredScope(served []ownership.ServedResource) scopeOf {
+	scopes := map[resourceid.GroupKind]bool{}
+	resource := map[resourceid.GroupKind]string{}
+	ambiguous := map[resourceid.GroupKind]bool{}
+	for _, r := range served {
+		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
+		if seen, ok := resource[gk]; ok && seen != r.Resource {
+			ambiguous[gk] = true
+		}
+		resource[gk], scopes[gk] = r.Resource, r.Namespaced
+	}
+	return func(gk resourceid.GroupKind) (bool, bool) {
+		if ambiguous[gk] {
+			return false, false
+		}
+		namespaced, known := scopes[gk]
+		if b, ok := resourceid.BuiltinForKind(gk.Kind); ok && b.Group == gk.Group {
+			return b.Namespaced, !known || namespaced == b.Namespaced
+		}
+		return namespaced, known
+	}
+}
 
 // liveMembership is this check's own reading of what a GitOps manager's status
 // says of its members, written apart from the source's so the two can't share

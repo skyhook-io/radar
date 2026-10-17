@@ -91,6 +91,26 @@ func (l dropsLater) OwnerCandidates(uid types.UID, d ownership.Domain, limit int
 	return r
 }
 
+// alwaysDrops leaves one object out of every search: an index that lost it.
+type alwaysDrops struct {
+	ownership.Session
+	drop resourceid.Ref
+}
+
+func (a alwaysDrops) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := a.Session.OwnerCandidates(uid, d, limit)
+	r.Candidates = slices.DeleteFunc(r.Candidates, func(c ownership.Observation) bool { return c.Ref == a.drop })
+	return r
+}
+
+func (a alwaysDrops) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := a.Session.Recorders(ref)
+	r.Recorders = slices.DeleteFunc(r.Recorders, func(o ownership.Observation) bool { return o.Ref == a.drop })
+	r.Elsewhere = slices.DeleteFunc(r.Elsewhere, func(m resourceid.Ref) bool { return m == a.drop })
+	r.Unreadable = slices.DeleteFunc(r.Unreadable, func(m resourceid.Ref) bool { return m == a.drop })
+	return r
+}
+
 // earlyGap adds a gap to the first search only.
 type earlyGap struct {
 	ownership.Session
@@ -187,11 +207,14 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 	orphaned.Owners = nil
 	elsewhere := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "beta", Name: "q"}, APIVersion: "v1", UID: "uid-q", ResourceVersion: "20", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
 	sibling := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "sibling"}, APIVersion: "v1", UID: "uid-sibling", ResourceVersion: "30", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
+	stranger := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "stranger"}, APIVersion: "v1", UID: "uid-stranger", ResourceVersion: "40"}
+	adopted := stranger
+	adopted.ResourceVersion, adopted.Owners = "41", []metav1.OwnerReference{rs.OwnerRef(true)}
 	partial := world(rs, updated)
 	partial.Partial = true
 
 	listed := world(rs, pod)
-	behindList, listedWithSibling := world(rs, orphaned), world(rs, pod, sibling)
+	behindList, listedWithSibling, listedWithStranger := world(rs, orphaned), world(rs, pod, sibling), world(rs, pod, stranger)
 	q := ownershiptest.Queries{Refs: []resourceid.Ref{pod.Ref}, UIDs: []types.UID{"uid-rs"}, Domains: []ownership.Domain{ownership.InNamespace("alpha")}, Limits: []int{0}}
 	for _, tc := range []struct {
 		name  string
@@ -254,6 +277,11 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 		{"a candidate that agreed, dropped when asked again", world(rs, updated, sibling),
 			func(now ownership.Session) ownership.Session { return dropsLater{now, sibling.Ref, new(int)} },
 			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, &listedWithSibling},
+		// The stranger named nothing when listed; it names the owner now,
+		// and the search never finds it.
+		{"a listed object that came to name the owner, never found", world(rs, updated, adopted),
+			func(now ownership.Session) ownership.Session { return alwaysDrops{now, adopted.Ref} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, &listedWithStranger},
 		// Asked again, the search covers less than the expected answer.
 		{"the fresh answer leaves more unread", world(rs, updated),
 			func(now ownership.Session) ownership.Session { return laterGap{now, new(int)} },
@@ -530,7 +558,15 @@ func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
 	remote := app
 	remote.Ref.Name, remote.UID, remote.Membership = "shop-prod", "uid-shop-prod", ownership.MembersRemote
 
-	q := ownershiptest.Queries{Refs: []resourceid.Ref{cm.Ref}, Managers: []resourceid.Ref{app.Ref}}
+	listsNothing := sibling
+	listsNothing.ResourceVersion, listsNothing.Members = "9", []resourceid.Ref{}
+	remoteResynced := remote
+	remoteResynced.ResourceVersion = "14"
+	siblingRemote, siblingUnreadable := sibling, sibling
+	siblingRemote.ResourceVersion, siblingRemote.Membership = "15", ownership.MembersRemote
+	siblingUnreadable.ResourceVersion, siblingUnreadable.Membership, siblingUnreadable.Members = "16", ownership.MembersUnreadable, nil
+
+	q := ownershiptest.Queries{Refs: []resourceid.Ref{cm.Ref}, Managers: []resourceid.Ref{app.Ref, sibling.Ref, remote.Ref}}
 	for _, tc := range []struct {
 		name   string
 		listed ownershiptest.World
@@ -581,6 +617,20 @@ func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
 			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
 		{"a remote manager dropped when asked again", world(cm, app, remote), world(cm, resynced, remote),
 			func(now ownership.Session) ownership.Session { return recorderDropsLater{now, remote.Ref, new(int)} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"a remote inventory missing its member", world(cm, remote), world(cm, remoteResynced),
+			func(now ownership.Session) ownership.Session { return memberDrop{now} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedInventory: unresolved}},
+		// The sibling listed nothing when listed; it lists the ConfigMap now,
+		// in each way, and the search never finds it.
+		{"a listed manager that came to record the object, never found", world(cm, app, listsNothing), world(cm, resynced, sibling),
+			func(now ownership.Session) ownership.Session { return alwaysDrops{now, sibling.Ref} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"a listed manager that came to list it remotely, never found", world(cm, app, listsNothing), world(cm, resynced, siblingRemote),
+			func(now ownership.Session) ownership.Session { return alwaysDrops{now, sibling.Ref} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"a listed manager whose list became unreadable, never found", world(cm, app, listsNothing), world(cm, resynced, siblingUnreadable),
+			func(now ownership.Session) ownership.Session { return alwaysDrops{now, sibling.Ref} },
 			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
 		{"an inventory missing its member", world(cm, app), world(cm, resynced),
 			func(now ownership.Session) ownership.Session { return memberDrop{now} },
