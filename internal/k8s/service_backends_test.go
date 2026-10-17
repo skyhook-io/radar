@@ -455,7 +455,20 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantProblem:   "Service frontend routes to 2 different applications (DaemonSet/api, StatefulSet/api); DaemonSet/api's pods don't declare port 5000",
 		},
 		{
-			name: "revisions whose ReplicaSets can't be read are not judged",
+			name: "unread revisions are judged together against an unrelated workload",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("frontend-6d4cf56db6-a", "ReplicaSet", "frontend-6d4cf56db6", []corev1.Container{container("frontend", "acme/frontend:1", 5000)}),
+				backendPod("frontend-7f9b8c5d44-b", "ReplicaSet", "frontend-7f9b8c5d44", []corev1.Container{container("frontend", "acme/frontend:2", 5000)}, notReady),
+				backendPod("search-0", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:1", 8082)}),
+			},
+			wantWorkloads: 3,
+			wantDifferent: true,
+			wantApps:      [][]string{{"frontend"}, {"search"}},
+			wantGapPorts:  []int32{5000},
+		},
+		{
+			name: "unread revisions of one workload are judged as one, never against each other",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{
 				backendPod("web-6d4cf56db6-a", "ReplicaSet", "web-6d4cf56db6", []corev1.Container{container("web", "old-registry/web:1", 5000)}),

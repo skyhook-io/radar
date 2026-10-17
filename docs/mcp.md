@@ -621,8 +621,9 @@ and resolve a Service port. Two signals count:
   only when the first signal also holds.
 
 Named targetPorts are left to Kubernetes, which keeps Pods without that port name
-out of the endpoints. Headless Services are never judged, nor are revisions whose
-ReplicaSets Radar can't read, since they would look like separate workloads. The
+out of the endpoints. Headless Services are never judged. Revisions whose
+ReplicaSets Radar can't read look like separate workloads, so ReplicaSets that
+share a name prefix are judged as one workload, never against each other. The
 issue is never critical. In the MCP `issues` tool its `correlated_changes` show
 recent edits to the Service, such as a selector change.
 

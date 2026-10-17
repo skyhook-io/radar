@@ -296,8 +296,8 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 	byKey := map[string]*backendWorkload{}
 	var order []*backendWorkload
 	// Revisions of one workload whose ReplicaSets couldn't be read show up as
-	// separate ReplicaSets; judging them as different applications would be
-	// a guess, so their name prefixes are counted to hold the judgment back.
+	// separate ReplicaSets. Those that share a name prefix are judged as one
+	// workload, never against each other.
 	unsettledRevisions := map[string]map[string]bool{}
 	for _, pod := range pods {
 		if pod == nil || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
@@ -364,18 +364,36 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 	if len(order) < 2 || svc.Spec.ClusterIP == corev1.ClusterIPNone {
 		return out
 	}
-	for _, revisions := range unsettledRevisions {
+	revisionOf := map[string]string{}
+	for prefix, revisions := range unsettledRevisions {
 		if len(revisions) > 1 {
-			return out
+			for name := range revisions {
+				revisionOf[name] = prefix
+			}
 		}
 	}
 
 	var receiving []*backendWorkload
+	merged := map[string]*backendWorkload{}
 	for _, w := range order {
-		if len(w.receiving) > 0 {
-			w.containers = workloadContainers(w.receiving)
-			receiving = append(receiving, w)
+		if len(w.receiving) == 0 {
+			continue
 		}
+		prefix, isRevision := revisionOf[w.Name]
+		if !isRevision || w.Kind != "ReplicaSet" {
+			receiving = append(receiving, w)
+			continue
+		}
+		if m := merged[prefix]; m != nil {
+			m.receiving = append(m.receiving, w.receiving...)
+			continue
+		}
+		m := &backendWorkload{ServiceBackendWorkload: ServiceBackendWorkload{Group: w.Group, Kind: w.Kind, Name: prefix, Label: prefix}, receiving: append([]*corev1.Pod(nil), w.receiving...)}
+		merged[prefix] = m
+		receiving = append(receiving, m)
+	}
+	for _, w := range receiving {
+		w.containers = workloadContainers(w.receiving)
 	}
 	if len(receiving) < 2 {
 		return out
