@@ -83,7 +83,7 @@ func TestLiveParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer typedCache.Stop()
-	dynamicCache, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: dyn, Discovery: discovery})
+	dynamicCache, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: dyn, Discovery: discovery, Indexers: cachesource.MembershipIndexers()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,12 +134,32 @@ func TestLiveParity(t *testing.T) {
 	for _, k := range kinds {
 		gvrOf[k.gk] = k.gvr
 	}
+	// scope is the scope discovery states for each kind; a kind two
+	// resources serve has none.
+	scopes := map[resourceid.GroupKind]bool{}
+	resourceOf := map[resourceid.GroupKind]string{}
+	ambiguous := map[resourceid.GroupKind]bool{}
+	for _, r := range catalog.Resources {
+		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
+		if seen, ok := resourceOf[gk]; ok && seen != r.Name {
+			ambiguous[gk] = true
+		}
+		resourceOf[gk], scopes[gk] = r.Name, r.Namespaced
+	}
+	scope := func(gk resourceid.GroupKind) (bool, bool) {
+		namespaced, known := scopes[gk]
+		return namespaced, known && !ambiguous[gk]
+	}
 	object := func(gk resourceid.GroupKind, gvr schema.GroupVersionResource, u *unstructured.Unstructured) ownershiptest.Object {
-		return ownershiptest.Object{
+		o := ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
 			APIVersion: gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
 			Owners: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
 		}
+		if ownership.IsRecordingManager(gk) {
+			o.Membership, o.Members, o.Destination = liveMembership(gk, u, scope)
+		}
+		return o
 	}
 	api := func(ref resourceid.Ref) (ownershiptest.Object, bool, error) {
 		gvr, ok := gvrOf[ref.GroupKind()]
@@ -209,6 +229,17 @@ func TestLiveParity(t *testing.T) {
 				absent.Namespace = "default"
 			}
 			refs[absent] = true
+			if ownership.IsRecordingManager(k.gk) {
+				q.Managers = append(q.Managers, absent)
+			}
+		}
+		for _, o := range w.Objects {
+			if ownership.IsRecordingManager(o.Ref.GroupKind()) {
+				q.Managers = append(q.Managers, o.Ref)
+				for _, m := range o.Members {
+					refs[m] = true
+				}
+			}
 		}
 		for ref := range refs {
 			q.Refs = append(q.Refs, ref)
@@ -281,8 +312,8 @@ func TestLiveParity(t *testing.T) {
 		if err := got.Validate(); err != nil {
 			t.Errorf("pass %d: Validate: %v", pass, err)
 		}
-		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d wrong or not settled",
-			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions,
+		t.Logf("pass %d: %d objects; %d questions (%d objects and their recorders, %d UIDs × %d domains, %d inventories) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d wrong or not settled",
+			pass, len(w.Objects), 2*len(q.Refs)+len(q.UIDs)*len(q.Domains)+len(q.Managers), len(q.Refs), len(q.UIDs), len(q.Domains), len(q.Managers), resolutions,
 			len(diffs)+resolutionDiffs, counts[confirmed], counts[caughtUp], counts[unresolved])
 		for i, question := range caughtUpQuestions {
 			if i == 10 {

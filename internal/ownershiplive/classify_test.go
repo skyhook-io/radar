@@ -369,3 +369,196 @@ func TestRecheckResolutionNeedsOnlyTheOwnerToChange(t *testing.T) {
 		})
 	}
 }
+
+// recorderDrop drops every recorder: a broken membership index.
+type recorderDrop struct{ ownership.Session }
+
+func (c recorderDrop) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := c.Session.Recorders(ref)
+	r.Recorders = nil
+	return r
+}
+
+// recorderTwice returns every recorder twice.
+type recorderTwice struct{ ownership.Session }
+
+func (c recorderTwice) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := c.Session.Recorders(ref)
+	r.Recorders = append(r.Recorders, r.Recorders...)
+	return r
+}
+
+// recorderUnreadable reports every recorder as a manager whose list can't be
+// read instead.
+type recorderUnreadable struct{ ownership.Session }
+
+func (c recorderUnreadable) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := c.Session.Recorders(ref)
+	for _, o := range r.Recorders {
+		r.Unreadable = append(r.Unreadable, o.Ref)
+	}
+	r.Recorders = nil
+	return r
+}
+
+// extraRecorder adds a manager to every search's recorders, as an index
+// that kept a stale entry would.
+type extraRecorder struct {
+	ownership.Session
+	extra ownership.Observation
+}
+
+func (e extraRecorder) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := e.Session.Recorders(ref)
+	r.Recorders = append(r.Recorders, e.extra)
+	return r
+}
+
+// laterRecorderGap adds a gap to every search for recorders after the first.
+type laterRecorderGap struct {
+	ownership.Session
+	calls *int
+}
+
+func (l laterRecorderGap) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := l.Session.Recorders(ref)
+	if *l.calls++; *l.calls > 1 {
+		r.Gaps = append(r.Gaps, ownership.Gap{Kind: ownership.ArgoApplication, Namespace: "argocd", Reason: "kind_sync_pending"})
+	}
+	return r
+}
+
+// claimsRecorded reports a manager whose list can't be read as listing
+// nothing.
+type claimsRecorded struct{ ownership.Session }
+
+func (c claimsRecorded) Inventory(m resourceid.Ref) ownership.InventoryRead {
+	r := c.Session.Inventory(m)
+	if r.Manager.State == ownership.Present && r.Membership == ownership.MembersUnreadable {
+		r.Membership, r.Members = ownership.MembersRecorded, []resourceid.Ref{}
+	}
+	return r
+}
+
+// memberDrop leaves every manager's members out of its inventory.
+type memberDrop struct{ ownership.Session }
+
+func (c memberDrop) Inventory(m resourceid.Ref) ownership.InventoryRead {
+	r := c.Session.Inventory(m)
+	if r.Members != nil {
+		r.Members = []resourceid.Ref{}
+	}
+	return r
+}
+
+// laggingMembership answers each kind of question from an older view the
+// first time it is asked.
+type laggingMembership struct {
+	ownership.Session
+	old   ownership.Session
+	calls map[string]int
+}
+
+func (l laggingMembership) view(question string) ownership.Session {
+	l.calls[question]++
+	if l.calls[question] == 1 {
+		return l.old
+	}
+	return l.Session
+}
+
+func (l laggingMembership) Object(ref resourceid.Ref) ownership.ObjectRead {
+	return l.view("Object").Object(ref)
+}
+
+func (l laggingMembership) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	return l.view("Recorders").Recorders(ref)
+}
+
+func (l laggingMembership) Inventory(m resourceid.Ref) ownership.InventoryRead {
+	return l.view("Inventory").Inventory(m)
+}
+
+func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
+	cm := ownershiptest.Object{Ref: resourceid.Ref{Kind: "ConfigMap", Namespace: "shop", Name: "cfg"}, APIVersion: "v1", UID: "uid-cfg", ResourceVersion: "5"}
+	app := ownershiptest.Object{Ref: resourceid.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "shop"}, APIVersion: "argoproj.io/v1alpha1", UID: "uid-app", ResourceVersion: "10",
+		Membership: ownership.MembersRecorded, Members: []resourceid.Ref{cm.Ref}, Destination: "shop"}
+	dropped := app
+	dropped.ResourceVersion, dropped.Members = "11", []resourceid.Ref{}
+	resynced := app
+	resynced.ResourceVersion = "12"
+	unreadable := app
+	unreadable.ResourceVersion, unreadable.Membership, unreadable.Members = "13", ownership.MembersUnreadable, nil
+
+	other := ownershiptest.Object{Ref: resourceid.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "other"}, APIVersion: "argoproj.io/v1alpha1", UID: "uid-other", ResourceVersion: "20",
+		Membership: ownership.MembersRecorded, Members: []resourceid.Ref{}, Destination: "shop"}
+
+	q := ownershiptest.Queries{Refs: []resourceid.Ref{cm.Ref}, Managers: []resourceid.Ref{app.Ref}}
+	for _, tc := range []struct {
+		name   string
+		listed ownershiptest.World
+		now    ownershiptest.World
+		cache  func(now ownership.Session) ownership.Session
+		want   map[ownershiptest.Asked]outcome
+	}{
+		{"the Application stopped listing the ConfigMap", world(cm, app), world(cm, dropped), nil,
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: confirmed, ownershiptest.AskedInventory: confirmed}},
+		{"the Application's list went unreadable", world(cm, app), world(cm, unreadable), nil,
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: confirmed, ownershiptest.AskedInventory: confirmed}},
+		{"the cache was behind the list", world(cm, dropped), world(cm, dropped),
+			func(now ownership.Session) ownership.Session {
+				return laggingMembership{now, begin(t, world(cm, app)), map[string]int{}}
+			},
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: caughtUp, ownershiptest.AskedInventory: caughtUp}},
+		// A status write that kept the member doesn't excuse a missing
+		// recorder.
+		{"a status write, and the index drops the recorder", world(cm, app), world(cm, resynced),
+			func(now ownership.Session) ownership.Session { return recorderDrop{now} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"a recorder returned twice", world(cm, app), world(cm, app),
+			func(now ownership.Session) ownership.Session { return recorderTwice{now} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved}},
+		{"a recording manager reported unreadable", world(cm, app), world(cm, resynced),
+			func(now ownership.Session) ownership.Session { return recorderUnreadable{now} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"a recorder that doesn't list the object", world(cm, app, other), world(cm, app, other),
+			func(now ownership.Session) ownership.Session { return extraRecorder{now, ownershiptest.Observe(other)} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved}},
+		{"the fresh search for recorders leaves more unread", world(cm, app), world(cm, resynced),
+			func(now ownership.Session) ownership.Session { return laterRecorderGap{now, new(int)} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"an unreadable list reported as recorded", world(cm, app), world(cm, unreadable),
+			func(now ownership.Session) ownership.Session { return claimsRecorded{now} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: confirmed, ownershiptest.AskedInventory: unresolved}},
+		{"an inventory missing its member", world(cm, app), world(cm, resynced),
+			func(now ownership.Session) ownership.Session { return memberDrop{now} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: confirmed, ownershiptest.AskedInventory: unresolved}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := begin(t, tc.now)
+			if tc.cache != nil {
+				cache = tc.cache(cache)
+			}
+			seen := map[ownershiptest.Asked]bool{}
+			for _, d := range ownershiptest.Differences(begin(t, tc.listed), cache, q) {
+				if d.Asked == ownershiptest.AskedObject {
+					continue
+				}
+				seen[d.Asked] = true
+				want, expected := tc.want[d.Asked]
+				if !expected {
+					t.Errorf("unexpected difference %s", d)
+					continue
+				}
+				if got := quick.recheck(d, listedOf(tc.listed), cache, apiOf(tc.now)); got != want {
+					t.Errorf("%s: %v, want %v", d.Question, got, want)
+				}
+			}
+			for asked := range tc.want {
+				if !seen[asked] {
+					t.Errorf("scenario: no difference for question %d", asked)
+				}
+			}
+		})
+	}
+}

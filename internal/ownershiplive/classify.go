@@ -78,69 +78,148 @@ func changedSince(listed map[resourceid.Ref]ownershiptest.Object, ref resourceid
 
 // recheck asks a difference's question of the cache again once the objects
 // it disputes have caught up, and checks the whole fresh answer against the
-// API server: for a search, every candidate must be in the domain, once,
-// name the UID in its current copy and match that copy exactly; every
-// disputed or listed object in the domain it leaves out must not name it now;
-// and the gaps must be the expected ones. Objects created after the list and
-// never disputed aren't checked.
+// API server's current copies (see the holds methods). Coverage differences
+// are unresolved.
 func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]ownershiptest.Object, cache ownership.Session, api apiRead) outcome {
 	if d.Coverage || len(d.Objects) == 0 {
 		return unresolved
 	}
-	changed := false
-	current := map[resourceid.Ref]ownershiptest.Object{}
-	exists := map[resourceid.Ref]bool{}
-	settleRef := func(ref resourceid.Ref) bool {
-		o, present, ok := st.settled(ref, cache, api)
-		if ok {
-			current[ref], exists[ref] = o, present
-			changed = changed || changedSince(listed, ref, o, present)
-		}
-		return ok
-	}
+	r := &rechecking{settle: st, listed: listed, cache: cache, api: api, current: map[resourceid.Ref]ownershiptest.Object{}, exists: map[resourceid.Ref]bool{}}
 	for _, ref := range d.Objects {
-		if !settleRef(ref) {
+		if !r.settleRef(ref) {
 			return unresolved
 		}
 	}
-	if d.Asked == ownershiptest.AskedCandidates {
-		fresh := cache.OwnerCandidates(d.UID, d.Domain, d.Limit)
-		if fresh.Truncated || !slices.Equal(fresh.Gaps, d.WantGaps) {
-			return unresolved
-		}
-		seen := map[resourceid.Ref]bool{}
-		for _, c := range fresh.Candidates {
-			if seen[c.Ref] || !inDomain(c.Ref, d.Domain) {
-				return unresolved
-			}
-			seen[c.Ref] = true
-			if _, seen := current[c.Ref]; !seen && !settleRef(c.Ref) {
-				return unresolved
-			}
-			if !exists[c.Ref] || !names(current[c.Ref].Owners, d.UID) || !ownershiptest.SameObservation(c, ownershiptest.Observe(current[c.Ref])) {
-				return unresolved
-			}
-		}
-		for _, ref := range d.Objects {
-			if !seen[ref] && inDomain(ref, d.Domain) && exists[ref] && names(current[ref].Owners, d.UID) {
-				return unresolved
-			}
-		}
-		// A listed object that named the UID and still does must be in the
-		// fresh answer too, unless the answer says its kind went unread.
-		for ref, o := range listed {
-			if seen[ref] || !inDomain(ref, d.Domain) || !names(o.Owners, d.UID) || unread(fresh.Gaps, ref) {
-				continue
-			}
-			if !settleRef(ref) || exists[ref] && names(current[ref].Owners, d.UID) {
-				return unresolved
-			}
-		}
+	holds := true
+	switch d.Asked {
+	case ownershiptest.AskedCandidates:
+		holds = r.candidatesHold(d)
+	case ownershiptest.AskedRecorders:
+		holds = r.recordersHold(d)
+	case ownershiptest.AskedInventory:
+		holds = r.inventoryHolds(d)
 	}
-	if changed {
+	switch {
+	case !holds:
+		return unresolved
+	case r.changed:
 		return confirmed
 	}
 	return caughtUp
+}
+
+// rechecking is one recheck's settled objects: each object's current copy,
+// and whether any changed since the list.
+type rechecking struct {
+	settle
+	listed  map[resourceid.Ref]ownershiptest.Object
+	cache   ownership.Session
+	api     apiRead
+	current map[resourceid.Ref]ownershiptest.Object
+	exists  map[resourceid.Ref]bool
+	changed bool
+}
+
+// settleRef settles ref, once.
+func (r *rechecking) settleRef(ref resourceid.Ref) bool {
+	if _, done := r.exists[ref]; done {
+		return true
+	}
+	o, present, ok := r.settled(ref, r.cache, r.api)
+	if ok {
+		r.current[ref], r.exists[ref] = o, present
+		r.changed = r.changed || changedSince(r.listed, ref, o, present)
+	}
+	return ok
+}
+
+// candidatesHold: the fresh search is complete, with the expected gaps; every
+// candidate is in the domain, once, names the UID in its current copy and
+// matches that copy exactly; and every disputed or listed object in the
+// domain it leaves out doesn't name the UID now, unless the answer says its
+// kind went unread. Objects created after the list and never disputed aren't
+// checked.
+func (r *rechecking) candidatesHold(d ownershiptest.Difference) bool {
+	fresh := r.cache.OwnerCandidates(d.UID, d.Domain, d.Limit)
+	if fresh.Truncated || !slices.Equal(fresh.Gaps, d.WantGaps) {
+		return false
+	}
+	seen := map[resourceid.Ref]bool{}
+	for _, c := range fresh.Candidates {
+		if seen[c.Ref] || !inDomain(c.Ref, d.Domain) || !r.settleRef(c.Ref) {
+			return false
+		}
+		seen[c.Ref] = true
+		if !r.exists[c.Ref] || !names(r.current[c.Ref].Owners, d.UID) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
+			return false
+		}
+	}
+	for _, ref := range d.Objects {
+		if !seen[ref] && inDomain(ref, d.Domain) && r.exists[ref] && names(r.current[ref].Owners, d.UID) {
+			return false
+		}
+	}
+	for ref, o := range r.listed {
+		if seen[ref] || !inDomain(ref, d.Domain) || !names(o.Owners, d.UID) || unread(fresh.Gaps, ref) {
+			continue
+		}
+		if !r.settleRef(ref) || r.exists[ref] && names(r.current[ref].Owners, d.UID) {
+			return false
+		}
+	}
+	return true
+}
+
+// recordersHold: the fresh search has the expected gaps; every recorder
+// appears once, lists the object in its current copy and matches that copy;
+// every unreadable manager's current list is unreadable; and every disputed
+// manager left out neither lists the object nor has an unreadable list.
+func (r *rechecking) recordersHold(d ownershiptest.Difference) bool {
+	fresh := r.cache.Recorders(d.Ref)
+	if !slices.Equal(fresh.Gaps, d.WantGaps) {
+		return false
+	}
+	seen := map[resourceid.Ref]bool{}
+	for _, c := range fresh.Recorders {
+		if seen[c.Ref] || !r.settleRef(c.Ref) {
+			return false
+		}
+		seen[c.Ref] = true
+		o := r.current[c.Ref]
+		if !r.exists[c.Ref] || o.Membership != ownership.MembersRecorded || !slices.Contains(o.Members, d.Ref) || !ownershiptest.SameObservation(c, ownershiptest.Observe(o)) {
+			return false
+		}
+	}
+	for _, m := range fresh.Unreadable {
+		if seen[m] || !r.settleRef(m) {
+			return false
+		}
+		seen[m] = true
+		if !r.exists[m] || r.current[m].Membership != ownership.MembersUnreadable {
+			return false
+		}
+	}
+	for _, ref := range d.Objects {
+		o := r.current[ref]
+		if !seen[ref] && r.exists[ref] && (o.Membership == ownership.MembersUnreadable || o.Membership == ownership.MembersRecorded && slices.Contains(o.Members, d.Ref)) {
+			return false
+		}
+	}
+	return true
+}
+
+// inventoryHolds: the fresh read of the manager matches its current copy, and
+// so does what it says of its members.
+func (r *rechecking) inventoryHolds(d ownershiptest.Difference) bool {
+	fresh := r.cache.Inventory(d.Ref)
+	if !r.exists[d.Ref] {
+		return fresh.Manager.State == ownership.Absent
+	}
+	o := r.current[d.Ref]
+	if fresh.Manager.State != ownership.Present || !ownershiptest.SameObservation(fresh.Manager.Object, ownershiptest.Observe(o)) || fresh.Membership != o.Membership {
+		return false
+	}
+	return o.Membership != ownership.MembersRecorded || slices.Equal(fresh.Members, o.Members)
 }
 
 // recheckResolution is recheck for a ResolveOwner difference: once the owner
