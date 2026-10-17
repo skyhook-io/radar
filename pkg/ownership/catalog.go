@@ -37,6 +37,8 @@ type Kind struct {
 // Catalog is the served API a session reads against. It is immutable.
 type Catalog struct {
 	kinds map[resourceid.GroupKind]Kind
+	// dependents are DependentKinds, worked out once.
+	dependents []Kind
 	// ambiguous are the kinds two resources of one group serve: a reference
 	// names a kind, not a resource, so it can't say which it means.
 	ambiguous []resourceid.GroupKind
@@ -70,6 +72,12 @@ func NewCatalog(resources []ServedResource, complete bool) *Catalog {
 		c.kinds[gk] = kind
 	}
 	slices.SortFunc(c.ambiguous, compareGroupKinds)
+	for gk, k := range c.kinds {
+		if k.GarbageCollected && !IsEvent(gk) {
+			c.dependents = append(c.dependents, k)
+		}
+	}
+	slices.SortFunc(c.dependents, func(a, b Kind) int { return compareGroupKinds(a.GroupKind, b.GroupKind) })
 	return c
 }
 
@@ -100,9 +108,10 @@ func (c *Catalog) Ambiguous(gk resourceid.GroupKind) bool {
 }
 
 // AmbiguousKinds returns the kinds two resources of one group serve, sorted
-// by group and kind. They are in no other answer of the catalog.
+// by group and kind. They are in no other answer of the catalog. The slice is
+// the catalog's own and must not be modified.
 func (c *Catalog) AmbiguousKinds() []resourceid.GroupKind {
-	return slices.Clone(c.ambiguous)
+	return c.ambiguous
 }
 
 // Serves reports whether version is a version serving gk.
@@ -119,16 +128,10 @@ func (c *Catalog) Complete() bool {
 // DependentKinds returns the kinds whose objects can be dependents the
 // garbage collector acts on, sorted by group and kind. Events are left out:
 // Radar keeps none of their owner references, so an answer about an object's
-// dependents covers every kind but Events.
+// dependents covers every kind but Events. The slice is the catalog's own and
+// must not be modified.
 func (c *Catalog) DependentKinds() []Kind {
-	var out []Kind
-	for gk, k := range c.kinds {
-		if k.GarbageCollected && !IsEvent(gk) {
-			out = append(out, k)
-		}
-	}
-	slices.SortFunc(out, func(a, b Kind) int { return compareGroupKinds(a.GroupKind, b.GroupKind) })
-	return out
+	return c.dependents
 }
 
 // IsEvent reports whether gk is either API group's Event.

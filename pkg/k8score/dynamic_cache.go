@@ -471,6 +471,14 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, sc
 	if err := informer.SetTransform(DropUnstructuredManagedFields); err != nil {
 		log.Printf("Warning: SetTransform failed for %v: %v (cache will retain managedFields/CRD schemas)", gvr, err)
 	}
+	// A factory hands back the informer it made earlier for this GVR, which
+	// may already be indexed. Without the index, dependents reads of this GVR
+	// fail rather than miss.
+	if _, indexed := informer.GetIndexer().GetIndexers()[OwnerUIDIndex]; !indexed && !isEventResource(gvr) {
+		if err := informer.AddIndexers(ownerUIDIndexers); err != nil {
+			log.Printf("Warning: indexing %v by owner failed: %v", gvr, err)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
