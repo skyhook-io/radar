@@ -147,7 +147,7 @@ func TestServerInstructionsClaimsMatchToolContracts(t *testing.T) {
 			continue
 		}
 		if claim.backedBy != "" && !strings.Contains(tool.Description, claim.backedBy) {
-			t.Errorf("%s description no longer says %q; recheck %q in instructions.go", claim.tool, claim.backedBy, claim.says)
+			t.Errorf("%s description no longer says %q; recheck %q in pkg/investigation/guidance.go", claim.tool, claim.backedBy, claim.says)
 		}
 		if claim.param != "" {
 			raw, err := json.Marshal(tool.InputSchema)
@@ -161,7 +161,7 @@ func TestServerInstructionsClaimsMatchToolContracts(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, ok := schema.Properties[claim.param]; !ok {
-				t.Errorf("%s has no %q parameter; recheck %q in instructions.go", claim.tool, claim.param, claim.says)
+				t.Errorf("%s has no %q parameter; recheck %q in pkg/investigation/guidance.go", claim.tool, claim.param, claim.says)
 			}
 		}
 	}
