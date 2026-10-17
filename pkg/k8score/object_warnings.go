@@ -51,7 +51,7 @@ func EnrichObjectWarnings(obj *unstructured.Unstructured) []string {
 		out = append(out, w)
 	}
 
-	if w := workloadHealthWarning(obj); w != "" {
+	if w := workloadHealthWarning(obj, time.Now()); w != "" {
 		out = append(out, w)
 	}
 
@@ -92,7 +92,7 @@ func namespaceTerminatingWarning(obj *unstructured.Unstructured) string {
 // it is old or unrelated to an incident, because a resource created seconds ago
 // carries the same marker as one that has been broken for weeks. Only the age
 // tells them apart.
-func workloadHealthWarning(obj *unstructured.Unstructured) string {
+func workloadHealthWarning(obj *unstructured.Unstructured, now time.Time) string {
 	kind := obj.GetKind()
 	var conditionType string
 	switch kind {
@@ -127,7 +127,7 @@ func workloadHealthWarning(obj *unstructured.Unstructured) string {
 		foundFailing = true
 		if ltt, _ := cm["lastTransitionTime"].(string); ltt != "" {
 			if t, err := time.Parse(time.RFC3339, ltt); err == nil {
-				failingFor = time.Since(t)
+				failingFor = now.Sub(t)
 			}
 		}
 		break
@@ -140,7 +140,7 @@ func workloadHealthWarning(obj *unstructured.Unstructured) string {
 	if createdAt.IsZero() || failingFor <= 0 {
 		return ""
 	}
-	age := time.Since(createdAt)
+	age := now.Sub(createdAt)
 
 	// The condition went False within 30s of creation. The slop accommodates the
 	// brief moment after creation when conditions haven't been written yet; it
