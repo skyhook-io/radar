@@ -559,7 +559,7 @@ func TestDiagnoseContractMatchesServerMode(t *testing.T) {
 }
 
 func TestReadOnlyDiagnoseRejectsHandCraftedInClusterArgument(t *testing.T) {
-	session := connectTo(t, newServer(false))
+	session := connectTo(t, newServer(false, ""))
 	res, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{
 		Name: "diagnose",
 		Arguments: map[string]any{
@@ -587,7 +587,7 @@ func TestReadOnlyDiagnoseRejectsHandCraftedInClusterArgument(t *testing.T) {
 }
 
 func TestReadOnlyDiagnoseRepairsArgumentsWithServerLocalRegistry(t *testing.T) {
-	session := connectTo(t, newServer(false))
+	session := connectTo(t, newServer(false, ""))
 	res, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{
 		Name: "diagnose",
 		Arguments: map[string]any{

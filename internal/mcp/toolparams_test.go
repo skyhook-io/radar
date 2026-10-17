@@ -486,7 +486,7 @@ func renderContent(content []mcpsdk.Content) string {
 // transport, so tests exercise the real middleware chain.
 func connectTestServer(t *testing.T) *mcpsdk.ClientSession {
 	t.Helper()
-	return connectTo(t, newServer(true))
+	return connectTo(t, newServer(true, ""))
 }
 
 // connectTo wires a client to an already-built server over an in-memory
