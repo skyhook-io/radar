@@ -7,7 +7,6 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/policyreports"
-	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -44,12 +43,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
-			secretWriteTimes.reconcile(change, obj)
-			if cj, ok := obj.(*batchv1.CronJob); ok {
-				cronJobScheduleObservations.observe(change.Operation, cj)
-			}
-		},
+		OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
 	}
 
 	core, err := k8score.NewResourceCache(cfg)
@@ -162,13 +156,7 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnObservedChange: func(change k8score.ResourceChange, obj, oldObj any) {
-			secretWriteTimes.reconcile(change, obj)
-			if cj, ok := obj.(*batchv1.CronJob); ok {
-				cronJobScheduleObservations.observe(change.Operation, cj)
-			}
-			notifyResourceObservers(client, change, obj, oldObj)
-		},
+		OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
 	}
 
 	core, err := k8score.NewResourceCache(cfg)

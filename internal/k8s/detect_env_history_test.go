@@ -936,9 +936,7 @@ func TestSecretDataManagerWriteIndexInformerLifecycle(t *testing.T) {
 			OnTransform: func(obj any) {
 				index.capture(obj)
 			},
-			OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
-				index.reconcile(change, obj)
-			},
+			OnObservedChange: observedChangeHandler(client, index.observeChange),
 			IsNoisyResource: func(kind, _ string, _ string) bool {
 				return kind == "Secret"
 			},

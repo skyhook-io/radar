@@ -428,13 +428,7 @@ func InitResourceCache(ctx context.Context) error {
 				secretWriteTimes.capture(obj)
 			},
 
-			OnObservedChange: func(change k8score.ResourceChange, obj, oldObj any) {
-				secretWriteTimes.reconcile(change, obj)
-				if cj, ok := obj.(*batchv1.CronJob); ok {
-					cronJobScheduleObservations.observe(change.Operation, cj)
-				}
-				notifyResourceObservers(client, change, obj, oldObj)
-			},
+			OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
 
 			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
 				if DebugEvents && change.Operation == "add" &&
