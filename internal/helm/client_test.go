@@ -98,6 +98,16 @@ func TestFindBestUpgradeVersion(t *testing.T) {
 			wantRepo:    "official",
 		},
 		{
+			name: "cloudnative pg collision keeps official installed-version source",
+			candidates: []repoVersionInfo{
+				{repoName: "cnpg", latestVersion: "0.29.1", hasCurrentVersion: true, repoURL: "https://cloudnative-pg.github.io/charts"},
+				{repoName: "bitnami", latestVersion: "1.0.11", hasCurrentVersion: false, repoURL: "https://charts.bitnami.com/bitnami"},
+			},
+			sourceHosts: []string{"cloudnative-pg.io", "cloudnative-pg.github.io"},
+			wantVersion: "0.29.1",
+			wantRepo:    "cnpg",
+		},
+		{
 			name: "ambiguous chart-name collision without affinity - bail out",
 			candidates: []repoVersionInfo{
 				{repoName: "bitnami", latestVersion: "6.4.22", hasCurrentVersion: false, repoURL: "https://charts.bitnami.com/bitnami"},
@@ -141,6 +151,15 @@ func TestFindBestUpgradeVersion(t *testing.T) {
 				{repoName: "argo", latestVersion: "8.5.0", hasCurrentVersion: false, repoURL: "https://argoproj.github.io/argo-helm"},
 			},
 			sourceHosts: []string{"github.com"}, // chart-declared, but not the repo's host
+			wantVersion: "",
+			wantRepo:    "",
+		},
+		{
+			name: "single unrelated candidate with source affinity - reject",
+			candidates: []repoVersionInfo{
+				{repoName: "bitnami", latestVersion: "1.0.11", hasCurrentVersion: false, repoURL: "https://charts.bitnami.com/bitnami"},
+			},
+			sourceHosts: []string{"cloudnative-pg.io", "cloudnative-pg.github.io"},
 			wantVersion: "",
 			wantRepo:    "",
 		},
@@ -1854,6 +1873,66 @@ func TestResolveUpgradeChartPath_UsesSourceAffinity(t *testing.T) {
 	}
 	if !strings.Contains(chartPath, "argoproj.github.io") {
 		t.Fatalf("chart path = %q, want argo repo URL", chartPath)
+	}
+}
+
+func TestValidateUnrecordedUpgradeRepositoryRejectsSameNameChartFromUnrelatedSource(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(`apiVersion: v1
+generated: "2026-10-14T00:00:00Z"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "bitnami-index.yaml"), []byte(`apiVersion: v1
+entries:
+  cloudnative-pg:
+  - name: cloudnative-pg
+    version: 1.0.11
+    appVersion: 1.26.1
+    urls: [cloudnative-pg-1.0.11.tgz]
+generated: "2026-10-14T00:00:00Z"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{settings: &cli.EnvSettings{RepositoryConfig: repoFile, RepositoryCache: cacheDir}}
+
+	rel := &release.Release{
+		Name: "cloudnative-pg",
+		Chart: &chart.Chart{Metadata: &chart.Metadata{
+			Name:    "cloudnative-pg",
+			Version: "0.29.1",
+			Home:    "https://cloudnative-pg.io",
+			Sources: []string{"https://github.com/cloudnative-pg/charts"},
+		}},
+	}
+	_, err := client.loadTargetChart(nil, rel, "1.0.11", "bitnami", func(string, string, string) {})
+	if err == nil || !strings.Contains(err.Error(), "does not match the installed source") {
+		t.Fatalf("upgrade resolution error = %v, want unrelated-source refusal", err)
+	}
+}
+
+func TestValidateUnrecordedUpgradeRepositoryAcceptsInstalledVersion(t *testing.T) {
+	client := testHelmClientWithRepoVersions(t, map[string][]string{
+		"bitnami": {"1.0.11"},
+		"argo":    {"0.29.1"},
+	})
+
+	err := client.validateUnrecordedUpgradeRepository(
+		"argo",
+		"argo-cd",
+		"0.29.1",
+		[]string{"cloudnative-pg.io"},
+	)
+	if err != nil {
+		t.Fatalf("repository containing installed version rejected: %v", err)
 	}
 }
 

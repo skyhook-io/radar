@@ -2422,9 +2422,6 @@ func bestSourceAffinityVersion(candidates []repoVersionInfo, sourceHosts []strin
 			repoName = c.repoName
 		}
 	}
-	if latestVersion == "" && len(candidates) == 1 {
-		return candidates[0].latestVersion, candidates[0].repoName
-	}
 	return latestVersion, repoName
 }
 
@@ -3031,7 +3028,11 @@ func (c *Client) loadTargetChart(actionConfig *action.Configuration, rel *releas
 	if recorded, ok := chartSourceFromRelease(rel); ok {
 		chartPath, resolvedRepo, err = c.resolveRecordedChartPath(actionConfig, *recorded, chartName, targetVersion)
 	} else {
-		chartPath, resolvedRepo, err = c.resolveUpgradeChartPath(chartName, targetVersion, repositoryName, chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources))
+		sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
+		chartPath, resolvedRepo, err = c.resolveUpgradeChartPath(chartName, targetVersion, repositoryName, sourceHosts)
+		if err == nil && resolvedRepo != "oci" {
+			err = c.validateUnrecordedUpgradeRepository(resolvedRepo, chartName, rel.Chart.Metadata.Version, sourceHosts)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -3073,6 +3074,43 @@ func (c *Client) loadTargetChart(actionConfig *action.Configuration, rel *releas
 	}
 
 	return targetChart, nil
+}
+
+// validateUnrecordedUpgradeRepository prevents a client-supplied or inferred
+// repository name from turning a same-name chart collision into a chart swap.
+// For legacy releases without recorded provenance, accept a classic repository
+// only when it contains the installed chart version or matches the chart's
+// declared Home/Sources affinity. With no source metadata there is no stronger
+// signal available, so the existing single-candidate behavior remains.
+func (c *Client) validateUnrecordedUpgradeRepository(repositoryName, chartName, currentVersion string, sourceHosts []string) error {
+	if repositoryName == "" || len(sourceHosts) == 0 {
+		return nil
+	}
+
+	repositories, err := repo.LoadFile(c.settings.RepositoryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to load repo file: %w", err)
+	}
+	configured := repositories.Get(repositoryName)
+	if configured == nil {
+		return fmt.Errorf("repository %s not found", repositoryName)
+	}
+	if repoURLMatchesAny(configured.URL, sourceHosts) {
+		return nil
+	}
+
+	indexPath := filepath.Join(c.settings.RepositoryCache, repositoryName+"-index.yaml")
+	index, err := repo.LoadIndexFile(indexPath)
+	if err != nil {
+		return fmt.Errorf("failed to load Helm repository index for %s: %w", repositoryName, err)
+	}
+	for _, entry := range index.Entries[chartName] {
+		if entry.Version == currentVersion {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("repository %s does not match the installed source for chart %s", repositoryName, chartName)
 }
 
 type chartPathCandidate struct {
