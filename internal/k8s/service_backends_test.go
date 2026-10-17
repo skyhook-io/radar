@@ -570,6 +570,15 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 		},
 		{
+			name: "an app-name label only the newer version carries does not split the versions",
+			svc:  backendService(intstr.FromInt32(9080)),
+			pods: []*corev1.Pod{
+				backendPod("reviews-v1-a", "StatefulSet", "reviews-v1", []corev1.Container{container("reviews", "acme/reviews-v1:1", 9080)}, withLabels("app", "reviews", "version", "v1")),
+				backendPod("reviews-v2-a", "StatefulSet", "reviews-v2", []corev1.Container{container("reviews", "acme/reviews-v2:1", 9080)}, withLabels("app", "reviews", "version", "v2", "app.kubernetes.io/name", "reviews")),
+			},
+			wantWorkloads: 2,
+		},
+		{
 			name: "versions of one app still get the port signal",
 			svc:  backendService(intstr.FromInt32(9080)),
 			pods: []*corev1.Pod{
