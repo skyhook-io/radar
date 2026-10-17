@@ -72,7 +72,6 @@ it('closes bulk dialogs when the same kind switches to a custom view and keeps t
     renderKindView={() => custom ? <div data-testid="custom">Custom</div> : null}
   /></KeyboardShortcutProvider>))
   render(false)
-  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', bubbles: true })))
   act(() => host.querySelector<HTMLInputElement>('input[title="Select all"]')!.click())
   expect(host.textContent).toContain('1 selected')
   act(() => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Delete')!.click())
@@ -83,7 +82,7 @@ it('closes bulk dialogs when the same kind switches to a custom view and keeps t
   expect(document.querySelector('[role="dialog"]')).toBeNull()
   render(false)
   expect(host.textContent).not.toContain('1 selected')
-  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+  expect(host.querySelector<HTMLInputElement>('input[title="Select all"]')!.checked).toBe(false)
   expect(document.querySelector('[role="dialog"]')).toBeNull()
   act(() => host.querySelector<SVGElement>('button .lucide-git-compare')!.closest<HTMLButtonElement>('button')!.click())
   act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true })))
@@ -146,4 +145,47 @@ it('skips hidden-table sort and filter aggregation for a loaded list, then resum
   render(false)
   expect(getSortValue).toHaveBeenCalled()
   expect(getFilterValue).toHaveBeenCalled()
+})
+
+const renderBulkTable = (kind: APIResource, item: typeof pod, onResourceClick = vi.fn()) => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(<KeyboardShortcutProvider><ResourcesView
+    namespaces={['test']}
+    apiResources={[kind]}
+    resourceCounts={{ [kind.kind]: 1 }}
+    selectedKindQuery={{ isLoading: false, data: [item], resourceName: kind.name, group: kind.group }}
+    locationPathname={`/resources/${kind.name}`}
+    locationSearch=""
+    onNavigate={() => {}}
+    onResourceClick={onResourceClick}
+    onBulkDelete={vi.fn()}
+  /></KeyboardShortcutProvider>))
+  return onResourceClick
+}
+
+it('always shows row checkboxes for Pods and keeps row activation for inspection', () => {
+  const selected = renderBulkTable(pods, pod)
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  expect(host.querySelector('button .lucide-list-checks')).toBeNull()
+  expect(host.textContent).not.toContain('selected')
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true })))
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(selected).toHaveBeenCalledTimes(1)
+  expect(host.textContent).not.toContain('1 selected')
+  act(() => host.querySelector<HTMLInputElement>('input[title="Select all"]')!.click())
+  expect(host.textContent).toContain('1 selected')
+  act(() => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Clear selection')!.click())
+  expect(host.textContent).not.toContain('1 selected')
+  act(() => host.querySelector<SVGElement>('button .lucide-git-compare')!.closest<HTMLButtonElement>('button')!.click())
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+})
+
+it('keeps checkboxes behind the bulk-select toggle for kinds other than Pods', () => {
+  const deployments: APIResource = { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['get', 'list'] }
+  const deployment = { ...pod, apiVersion: 'apps/v1', kind: 'Deployment', metadata: { ...pod.metadata, uid: 'deploy-id' } }
+  renderBulkTable(deployments, deployment)
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+  act(() => host.querySelector<SVGElement>('button .lucide-list-checks')!.closest<HTMLButtonElement>('button')!.click())
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  expect(host.textContent).toContain('0 selected')
 })

@@ -3822,8 +3822,11 @@ export function ResourcesView({
 
   // Multi-select state for bulk operations. Checkboxes only render while
   // bulk mode is active — entered via the toolbar toggle — so mutating
-  // actions stay out of the way during normal browsing.
+  // actions stay out of the way during normal browsing. Core Pods are the
+  // exception: their controllers recreate them, so bulk delete is low-risk
+  // and the checkboxes are always shown.
   const [bulkMode, setBulkMode] = useState(false)
+  const alwaysShowCheckboxes = selectedKind.name.toLowerCase() === 'pods' && !selectedKind.group
   const [checkedResources, setCheckedResources] = useState<Set<string>>(new Set())
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
   const [showBulkRestartConfirm, setShowBulkRestartConfirm] = useState(false)
@@ -4556,6 +4559,7 @@ export function ResourcesView({
       category: 'Table',
       scope: 'resources',
       handler: () => {
+        if (alwaysShowCheckboxes) return
         if (bulkMode) { exitBulkMode(); return }
         if (!canBulkSelect) return
         exitCompareMode()
@@ -4574,7 +4578,7 @@ export function ResourcesView({
         if (showProblemsDropdown) { setShowProblemsDropdown(false); return }
         if (showLabelsDropdown) { setShowLabelsDropdown(false); return }
         if (compareMode) { exitCompareMode(); return }
-        if (bulkMode) { exitBulkMode(); return }
+        if (bulkMode || checkedResources.size > 0) { exitBulkMode(); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
@@ -5746,16 +5750,17 @@ export function ResourcesView({
     setCheckedResources(allVisibleChecked ? new Set() : new Set(filteredResources.map(getResourceKey)))
   }, [allVisibleChecked, filteredResources, getResourceKey])
 
-  const isCheckboxMode = canBulkSelect && bulkMode
+  const isCheckboxMode = canBulkSelect && !compareMode && (bulkMode || alwaysShowCheckboxes)
+  const showBulkBar = isCheckboxMode && (bulkMode || checkedItems.length > 0)
 
   // Stable row handlers so the memoized ResourceRowCells skips re-rendering
   // rows whose data didn't change on a refetch (React Query's structural
   // sharing keeps unchanged resources referentially identical).
   const handleRowClick = useCallback((resource: any, isSelected: boolean) => {
     if (compareMode) toggleComparePick(resource)
-    else if (isCheckboxMode) toggleChecked(resource)
+    else if (isCheckboxMode && bulkMode) toggleChecked(resource)
     else selectResource(resource, isSelected)
-  }, [compareMode, isCheckboxMode, toggleComparePick, toggleChecked, selectResource])
+  }, [compareMode, isCheckboxMode, bulkMode, toggleComparePick, toggleChecked, selectResource])
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
@@ -6435,7 +6440,7 @@ export function ResourcesView({
               </button>
             </Tooltip>
           )}
-          {canBulkSelect && (
+          {canBulkSelect && !alwaysShowCheckboxes && (
             <Tooltip content={bulkMode ? 'Exit bulk select mode' : 'Select multiple resources'}>
               <button
                 onClick={() => {
@@ -6466,7 +6471,7 @@ export function ResourcesView({
         </div>
 
         {/* Bulk actions bar */}
-        {isCheckboxMode && (
+        {showBulkBar && (
           <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0">
             <span className="text-sm font-medium text-theme-text-primary">
               {checkedItems.length} selected
@@ -6509,7 +6514,7 @@ export function ResourcesView({
               onClick={exitBulkMode}
               className="px-3 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
             >
-              Cancel
+              {alwaysShowCheckboxes ? 'Clear selection' : 'Cancel'}
             </button>
           </div>
         )}
