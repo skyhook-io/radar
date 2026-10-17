@@ -65,6 +65,69 @@ export function adaptChanges(
     changesSubjectFromArgs(source),
     nonEmptyString(args?.since) ? args.since : undefined,
   );
+  addClusterScopedChanges(builder, source, value.clusterScopedChanges);
+}
+
+const CLUSTER_SCOPED_LABEL = "Cluster-scoped admission changes";
+
+// Admission configuration changes that apply, or may apply, to the queried
+// namespace. Each row's summary carries why it is listed, because the
+// applicability is the point: the row itself is a cluster-scoped object.
+export function addClusterScopedChanges(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  if (payload === undefined) return;
+  const value = record(payload);
+  const rowsRaw = value?.changes === null ? [] : value?.changes;
+  if (!value || !Array.isArray(rowsRaw)) {
+    invalidPayload(builder, source, CLUSTER_SCOPED_LABEL);
+    return;
+  }
+  const changes: IssueRecentChange[] = [];
+  for (const raw of rowsRaw) {
+    const change = recentChange(raw);
+    const row = record(raw);
+    if (!change || !row || !nonEmptyString(row.applies_because)) {
+      invalidPayload(builder, source, CLUSTER_SCOPED_LABEL);
+      return;
+    }
+    const applicability =
+      row.applicability === "applies" ? "Applies" : "May apply";
+    changes.push({
+      ...change,
+      summary: [change.summary, `${applicability}: ${row.applies_because}`]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+  if (nonEmptyString(value.error)) {
+    builder.limit(source, CLUSTER_SCOPED_LABEL, value.error, "error");
+  }
+  if (nonEmptyString(value.incomplete)) {
+    builder.limit(source, CLUSTER_SCOPED_LABEL, value.incomplete, "unknown");
+  }
+  const notListed = stringArray(value.not_listed) ?? [];
+  if (notListed.length > 0 || value.truncated === true) {
+    builder.limit(
+      source,
+      CLUSTER_SCOPED_LABEL,
+      notListed.length > 0
+        ? `Also changed in this window: ${notListed.join(", ")}.`
+        : "More cluster-scoped admission changes occurred than were read.",
+      "truncated",
+    );
+  }
+  if (changes.length === 0) return;
+  addChanges(
+    builder,
+    source,
+    changes,
+    `changes:cluster-scoped:${scopeFromArgs(source)}`,
+    undefined,
+    value.truncated !== true,
+  );
 }
 
 // The constant fields of a plain create row, which the producer leaves out of

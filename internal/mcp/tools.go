@@ -272,8 +272,9 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"are empty or dominated by baseline failures. Bound the window with since; narrow by " +
 			"namespace, kind or name. Runs of 5+ plain creates are listed " +
 			"in `created` as `+<seconds after first>s Kind/name` lines, counted in limit. " +
-			"Omit namespace when " +
-			"the relevant change may be outside the app namespace. Also includes native Helm " +
+			"A namespace query (no kind/name) adds clusterScopedChanges: webhook config " +
+			"changes that may affect it. Omit namespace for other changes outside it. " +
+			"Also includes native Helm " +
 			"history as `source: helm` changes (failed upgrades, rollbacks, current revisions). " +
 			"If `sourcesErrored` includes helm, treat the result as partial rather than proof " +
 			"that no Helm deployment happened. Use get_helm_release include=history,operations " +
@@ -674,7 +675,7 @@ type getResourceInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues, drain-plan. Comma-separated. drain-plan is Node-only: a read-only current pod/PDB estimate with explicit options, up to 100 pods and total/truncated indicators; not controller eviction history. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource; warnings may note Pod/template divergence). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
 type topologyInput struct {
@@ -1133,11 +1134,14 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		// State-derived advisory warnings (deletionTimestamp, external manager,
 		// terminating namespace, workload health-condition history, PVC stuck
 		// Pending). Cheap — operates on the object we already fetched. Skipped
-		// for context=none so that mode stays a bare object for raw jq work;
-		// the ConfigMap truncation note appended below is the one warning that
-		// survives context=none, because silent truncation would read as a
-		// complete value.
+		// for context=none so that mode stays a bare object for raw jq work.
+		// Two warnings survive context=none: the ConfigMap truncation note
+		// below, because silent truncation would read as a complete value, and
+		// a Pod/template divergence note, because a bare Pod whose spec
+		// admission rewrote reads as the template's intent.
 		warnings = k8score.EnrichRuntimeObjectWarnings(rawObj)
+	} else if note := issues.TemplateDivergenceNote(mcpTemplateDivergence(ctx, rawObj)); note != "" {
+		warnings = append(warnings, note)
 	}
 	if truncationNote != "" {
 		warnings = append(warnings, truncationNote)
@@ -1174,7 +1178,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 
 	// Three shapes:
 	//   - bare resource: no includes, context=none, no warnings (a truncation
-	//     warning upgrades this to {resource, warnings})
+	//     or template-divergence warning upgrades this to {resource, warnings})
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
 	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && !defaultConfigMapChanges {
@@ -1284,7 +1288,8 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
 			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
 		),
-		ServiceBackends: k8s.ServiceBackendLookup{Cache: cache},
+		ServiceBackends:    k8s.ServiceBackendLookup{Cache: cache},
+		TemplateDivergence: mcpTemplateDivergence(ctx, obj),
 	}
 
 	// Wired unconditionally: a nil index is exactly the case that needs to
@@ -1552,6 +1557,9 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		Changes:        changes,
 		SourcesErrored: sourcesErrored,
 	}
+	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
+		resp.ClusterScopedChanges = mcpClusterScopedChanges(ctx, input.Namespace, since)
+	}
 	narrowAdvice := " Narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)."
 	if recentResult.FetchSaturated {
 		resp.NarrowHint = meaningfulchanges.FetchSaturatedGuidance + narrowAdvice
@@ -1573,6 +1581,10 @@ type getChangesResponseMCP struct {
 	Created        []issuesapi.CreatedObjects `json:"created,omitempty"`
 	NarrowHint     string                     `json:"narrowHint,omitempty"`
 	SourcesErrored []string                   `json:"sourcesErrored,omitempty"`
+	// ClusterScopedChanges is set for a namespace query: changes to
+	// cluster-scoped admission configuration that applies, or may apply, to
+	// the namespace. Changes above never include cluster-scoped objects.
+	ClusterScopedChanges *issuesapi.ClusterScopedChanges `json:"clusterScopedChanges,omitempty"`
 }
 
 func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topologyInput) (*mcp.CallToolResult, any, error) {
@@ -3149,6 +3161,11 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 				resp.RecentChangesGuidance = guidance
 				resp.RecentChangesTruncated = recentResult.OutputCapped || recentResult.FetchSaturated || recapped
 			}
+		}
+	}
+	if len(allowedNamespaces) == 1 {
+		if clusterScoped := mcpClusterScopedChanges(ctx, allowedNamespaces[0], meaningfulchanges.DefaultSince); clusterScoped.Informative() {
+			resp.ClusterScopedChanges = clusterScoped
 		}
 	}
 	// Per-issue change correlation (single-namespace responses): each

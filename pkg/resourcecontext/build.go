@@ -74,6 +74,9 @@ type Options struct {
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
 	ContainerCompletionSplit *ContainerCompletionSplit
+	// TemplateDivergence passes through unchanged; the caller authorizes the
+	// Pods and templates it compared.
+	TemplateDivergence *TemplateDivergence
 
 	// Optional kind-specific lookups. ServiceBackends is used only for
 	// Service resources to attach realized pod-selection state. The raw
@@ -365,6 +368,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
 	rc.AppReferences = filterAppReferences(ctx, opts.AppReferences, opts.AccessChecker, omitted)
+	rc.TemplateDivergence = opts.TemplateDivergence
 
 	// 5. PolicyReports — Kyverno findings rolled up. Basic tier emits
 	// counts only (fail/warn/pass); diagnostic tier adds the top[]

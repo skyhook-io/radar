@@ -19,6 +19,7 @@ import {
   stringArray,
 } from "../parse";
 import { type InvestigationEvidenceSource } from "../types";
+import { addClusterScopedChanges } from "./changes";
 
 export function adaptIssues(
   builder: ProjectionBuilder,
@@ -122,6 +123,7 @@ export function adaptIssues(
   } else if (issueChangesRaw !== undefined) {
     invalidPayload(builder, source, "Issue-related changes");
   }
+  addClusterScopedChanges(builder, source, value.cluster_scoped_changes);
   const clusterDNS = record(record(value.cluster_context)?.dns);
   if (clusterDNS) {
     const signals = stringArray(clusterDNS.signals) ?? [];
