@@ -95,6 +95,7 @@ describe("resource cards with Pod/template differences", () => {
             summary: "1 of 3 current Pods differ.",
             podsCompared: 3,
             podsDiffering: 1,
+            podsNotCompared: 1,
             examplePod: "api-2",
             baseline: "ReplicaSet api-1",
             differences: [
@@ -109,7 +110,7 @@ describe("resource cards with Pod/template differences", () => {
     expect(card.tone).toBe("neutral");
     if (card.data.type === "resource") {
       expect(card.data.warnings).toEqual([
-        "1 of 3 Pods differ from their template: containers[api].resources.limits.memory is 16Mi; template specifies 256Mi (and more)",
+        "1 of 3 compared Pods differ from their template, 1 more not compared: containers[api].resources.limits.memory is 16Mi; template specifies 256Mi (and more)",
       ]);
     }
     expect(groupsOf(result.groups, "issue")).toHaveLength(0);

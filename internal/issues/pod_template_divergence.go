@@ -353,8 +353,9 @@ func contextResourceDifferences(container string, live, template corev1.Resource
 
 // templateTolerationMissing reports a template toleration absent or changed
 // in the live spec. With seconds, a template-set tolerationSeconds must match
-// too: it decides how long a Pod survives a NoExecute taint, and admission's
-// DefaultTolerationSeconds only adds tolerations, never rewrites one.
+// too, including whether it is set: it decides how long a Pod survives a
+// NoExecute taint, and admission's DefaultTolerationSeconds only adds
+// tolerations, never rewrites one.
 func templateTolerationMissing(live, template []corev1.Toleration, seconds bool) bool {
 	for _, original := range template {
 		if !slices.ContainsFunc(live, func(candidate corev1.Toleration) bool {
@@ -365,8 +366,10 @@ func templateTolerationMissing(live, template []corev1.Toleration, seconds bool)
 				candidate.Operator = corev1.TolerationOpEqual
 			}
 			same := original.Key == candidate.Key && original.Operator == candidate.Operator && original.Value == candidate.Value && original.Effect == candidate.Effect
-			if same && seconds && original.TolerationSeconds != nil {
-				same = candidate.TolerationSeconds != nil && *candidate.TolerationSeconds == *original.TolerationSeconds
+			if same && seconds {
+				// nil is "tolerate forever", so presence matters as much as value.
+				left, right := original.TolerationSeconds, candidate.TolerationSeconds
+				same = (left == nil) == (right == nil) && (left == nil || *left == *right)
 			}
 			return same
 		}) {

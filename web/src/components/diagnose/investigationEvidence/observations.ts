@@ -738,7 +738,7 @@ function templateDivergenceWarning(
   const first = divergence?.differences?.[0];
   if (!divergence || !nonEmptyString(first)) return undefined;
   const scope = divergence.examplePod
-    ? `${divergence.podsDiffering} of ${divergence.podsCompared} ${divergence.podsCapped ? "most recent Pods" : "Pods"} differ from their template`
+    ? `${divergence.podsDiffering} of ${divergence.podsCompared} compared Pods${divergence.podsCapped ? " (the most recent)" : ""} differ from their template${divergence.podsNotCompared ? `, ${divergence.podsNotCompared} more not compared` : ""}`
     : "Live Pod spec differs from its template";
   const more = divergence.differences.length > 1 ? " (and more)" : "";
   return `${scope}: ${first}${more}`;

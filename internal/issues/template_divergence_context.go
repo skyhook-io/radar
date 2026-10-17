@@ -206,11 +206,15 @@ func TemplateDivergenceNote(d *resourcecontext.TemplateDivergence) string {
 	}
 	scope := fmt.Sprintf("Live Pod spec differs from %s's template", d.Baseline)
 	if d.ExamplePod != "" {
-		pods := "Pods"
+		pods := "compared Pods"
 		if d.PodsCapped {
-			pods = "most recent Pods"
+			pods = "compared Pods (the most recent)"
 		}
-		scope = fmt.Sprintf("%d of %d %s differ from their owner template; Pod %s vs %s", d.PodsDiffering, d.PodsCompared, pods, d.ExamplePod, d.Baseline)
+		scope = fmt.Sprintf("%d of %d %s differ from their owner template", d.PodsDiffering, d.PodsCompared, pods)
+		if d.PodsNotCompared > 0 {
+			scope += fmt.Sprintf(", %d more not compared", d.PodsNotCompared)
+		}
+		scope += fmt.Sprintf("; Pod %s vs %s", d.ExamplePod, d.Baseline)
 	}
 	return strings.TrimSpace(fmt.Sprintf("%s: %s. Read without context=none for the full comparison and the objects that could have changed it.", scope, first))
 }

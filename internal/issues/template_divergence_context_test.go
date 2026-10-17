@@ -60,6 +60,9 @@ func TestPodTemplateContextComparisonStaysQuietOnAdmissionDefaults(t *testing.T)
 			p.Spec.Tolerations[0].TolerationSeconds = &zero
 		}, false, []string{"a template toleration is missing or changed in the live pod spec"}},
 		{"toleration seconds dropped", func(p *corev1.Pod) { p.Spec.Tolerations[0].TolerationSeconds = nil }, false, []string{"a template toleration is missing or changed in the live pod spec"}},
+		{"added toleration with seconds stays quiet", func(p *corev1.Pod) {
+			p.Spec.Tolerations = append(p.Spec.Tolerations, corev1.Toleration{Key: "node.kubernetes.io/unreachable", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute, TolerationSeconds: &evictAfter})
+		}, false, nil},
 		{"default tolerations added", func(p *corev1.Pod) {
 			p.Spec.Tolerations = append(p.Spec.Tolerations, corev1.Toleration{Key: "node.kubernetes.io/not-ready", Operator: corev1.TolerationOpExists})
 		}, false, nil},
@@ -100,6 +103,19 @@ func TestPodTemplateContextComparisonStaysQuietOnAdmissionDefaults(t *testing.T)
 				t.Fatalf("differences=%q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPodTemplateContextReportsFiniteSecondsOnAForeverToleration(t *testing.T) {
+	template := corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "nginx"}}, Tolerations: []corev1.Toleration{{Key: "gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute}}}
+	pod := &corev1.Pod{Spec: *template.DeepCopy()}
+	if got := comparePodTemplateContext(pod, &template, false); len(got) != 0 {
+		t.Fatalf("identical tolerations reported: %+v", got)
+	}
+	seconds := int64(0)
+	pod.Spec.Tolerations[0].TolerationSeconds = &seconds
+	if got := comparePodTemplateContext(pod, &template, false); len(got) != 1 || got[0].path != "tolerations" {
+		t.Fatalf("forever-to-0s toleration not reported: %+v", got)
 	}
 }
 
@@ -269,7 +285,7 @@ func TestTemplateDivergenceForPodsAndWorkloads(t *testing.T) {
 	if len(got.Differences) != 1 || got.Differences[0] != "containers[app].resources.limits.memory is 16Mi; template specifies 256Mi" || !strings.Contains(got.Summary, "1 of 3 current Pods") || !strings.Contains(got.Summary, "context, not proof") {
 		t.Fatalf("deployment divergence=%+v", got)
 	}
-	if note := TemplateDivergenceNote(got); note != "1 of 3 Pods differ from their owner template; Pod web-new-2 vs ReplicaSet web-new: containers[app].resources.limits.memory is 16Mi; template specifies 256Mi. Read without context=none for the full comparison and the objects that could have changed it." {
+	if note := TemplateDivergenceNote(got); note != "1 of 3 compared Pods differ from their owner template; Pod web-new-2 vs ReplicaSet web-new: containers[app].resources.limits.memory is 16Mi; template specifies 256Mi. Read without context=none for the full comparison and the objects that could have changed it." {
 		t.Fatalf("note=%q", note)
 	}
 	if got := p.TemplateDivergence(mutated, nil, nil, nil); got == nil || got.PodsCompared != 1 || got.ExamplePod != "" || !strings.HasPrefix(got.Summary, "Live Pod spec differs from owning ReplicaSet web-new's current template.") {
@@ -288,8 +304,8 @@ func TestTemplateDivergenceForPodsAndWorkloads(t *testing.T) {
 	if got := p.TemplateDivergence(dep, nil, func(ref Ref) bool { return ref.Name != "web-new-2" }, nil); got != nil {
 		t.Fatalf("the only differing Pod is unreadable, yet: %+v", got)
 	}
-	if got := p.TemplateDivergence(dep, nil, func(ref Ref) bool { return ref.Name != "web-old" }, nil); got == nil || got.PodsCompared != 2 || got.PodsNotCompared != 1 || !strings.Contains(got.Summary, "1 further current Pods were not compared") {
-		t.Fatalf("partial workload=%+v", got)
+	if got := p.TemplateDivergence(dep, nil, func(ref Ref) bool { return ref.Name != "web-old" }, nil); got == nil || got.PodsCompared != 2 || got.PodsNotCompared != 1 || !strings.Contains(got.Summary, "1 further current Pods were not compared") || !strings.HasPrefix(TemplateDivergenceNote(got), "1 of 2 compared Pods differ from their owner template, 1 more not compared;") {
+		t.Fatalf("partial workload=%+v note=%q", got, TemplateDivergenceNote(got))
 	}
 	if got := p.TemplateDivergence(dep, nil, func(ref Ref) bool { return ref.Name != "web-old-1" }, nil); got == nil || got.PodsCompared != 2 || got.PodsNotCompared != 0 {
 		t.Fatalf("an unreadable Pod must leave no trace in the counts: %+v", got)
@@ -302,7 +318,7 @@ func TestTemplateDivergenceForPodsAndWorkloads(t *testing.T) {
 	if got := p.TemplateDivergence(job, nil, nil, func(_, _, r, _ string) bool { return r != "pods" }); got != nil {
 		t.Fatalf("listed Job Pods without list permission: %+v", got)
 	}
-	if note := TemplateDivergenceNote(&resourcecontext.TemplateDivergence{PodsCompared: 200, PodsDiffering: 3, PodsCapped: true, ExamplePod: "a", Baseline: "ReplicaSet r", Differences: []string{"x"}}); !strings.HasPrefix(note, "3 of 200 most recent Pods differ") {
+	if note := TemplateDivergenceNote(&resourcecontext.TemplateDivergence{PodsCompared: 200, PodsDiffering: 3, PodsCapped: true, ExamplePod: "a", Baseline: "ReplicaSet r", Differences: []string{"x"}}); !strings.HasPrefix(note, "3 of 200 compared Pods (the most recent) differ") {
 		t.Fatalf("capped note=%q", note)
 	}
 	for _, denied := range []string{"Pod", "ReplicaSet"} {
