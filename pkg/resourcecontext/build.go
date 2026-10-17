@@ -138,9 +138,9 @@ type ServiceBackendGrouper interface {
 
 type ServiceBackendGrouping struct {
 	Workloads []ServiceBackendWorkload
-	// DifferentApplications is set when the workloads are different
-	// applications, and explains why.
-	DifferentApplications string
+	// MixedBackends is set when the workloads don't all serve the Service,
+	// and explains why.
+	MixedBackends string
 }
 
 // RefAccessChecker abstracts the RBAC check so this package doesn't import
@@ -929,9 +929,9 @@ func addServiceBackendWorkloads(ctx context.Context, out *ServiceSummary, g Serv
 		out.Workloads = out.Workloads[:maxServicePodRefs]
 		out.WorkloadsTruncated = true
 	}
-	if g.DifferentApplications != "" {
-		out.DifferentApplications = g.DifferentApplications
-		out.Warnings = append(out.Warnings, ServiceWarningDifferentApplications)
+	if g.MixedBackends != "" {
+		out.MixedBackends = g.MixedBackends
+		out.Warnings = append(out.Warnings, ServiceWarningMixedBackends)
 	}
 }
 

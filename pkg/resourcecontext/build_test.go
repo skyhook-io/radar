@@ -2361,21 +2361,21 @@ func TestBuild_Service_WorkloadBreakdown(t *testing.T) {
 		return rc, grouped
 	}
 
-	rc, grouped := build(allowAllChecker{}, ServiceBackendGrouping{Workloads: workloads, DifferentApplications: message})
+	rc, grouped := build(allowAllChecker{}, ServiceBackendGrouping{Workloads: workloads, MixedBackends: message})
 	if len(grouped) != 2 {
 		t.Fatalf("grouped pods = %v, want both visible pods", grouped)
 	}
 	s := rc.ServiceSummary
-	if len(s.Workloads) != 2 || s.Workloads[1].Name != "search" || s.DifferentApplications != message {
+	if len(s.Workloads) != 2 || s.Workloads[1].Name != "search" || s.MixedBackends != message {
 		t.Fatalf("ServiceSummary = %+v", s)
 	}
-	if len(s.Warnings) != 1 || s.Warnings[0] != ServiceWarningDifferentApplications {
-		t.Fatalf("Warnings = %+v, want [%s]", s.Warnings, ServiceWarningDifferentApplications)
+	if len(s.Warnings) != 1 || s.Warnings[0] != ServiceWarningMixedBackends {
+		t.Fatalf("Warnings = %+v, want [%s]", s.Warnings, ServiceWarningMixedBackends)
 	}
 
 	// A canary: two workloads, no warning.
 	rc, _ = build(allowAllChecker{}, ServiceBackendGrouping{Workloads: workloads})
-	if len(rc.ServiceSummary.Workloads) != 2 || len(rc.ServiceSummary.Warnings) != 0 || rc.ServiceSummary.DifferentApplications != "" {
+	if len(rc.ServiceSummary.Workloads) != 2 || len(rc.ServiceSummary.Warnings) != 0 || rc.ServiceSummary.MixedBackends != "" {
 		t.Fatalf("canary ServiceSummary = %+v", rc.ServiceSummary)
 	}
 
@@ -2386,8 +2386,8 @@ func TestBuild_Service_WorkloadBreakdown(t *testing.T) {
 	}
 
 	// Pod access doesn't extend to the Deployments behind them.
-	rc, _ = build(denyChecker{group: "apps", kind: "Deployment", namespace: "prod"}, ServiceBackendGrouping{Workloads: workloads, DifferentApplications: message})
-	if rc.ServiceSummary.Workloads != nil || len(rc.ServiceSummary.Warnings) != 0 || rc.ServiceSummary.DifferentApplications != "" {
+	rc, _ = build(denyChecker{group: "apps", kind: "Deployment", namespace: "prod"}, ServiceBackendGrouping{Workloads: workloads, MixedBackends: message})
+	if rc.ServiceSummary.Workloads != nil || len(rc.ServiceSummary.Warnings) != 0 || rc.ServiceSummary.MixedBackends != "" {
 		t.Fatalf("denied ServiceSummary = %+v", rc.ServiceSummary)
 	}
 	denied := false

@@ -446,7 +446,7 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 	}
 	// What runs these Pods: one workload is named on the hop; several are a
 	// breakdown, often deliberate (canary, blue/green), so context only. When
-	// they are different applications, the issues engine warns on the Service.
+	// they don't all serve the Service, the issues engine warns on it.
 	backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods)
 	if canNameWorkloads(deps, backends.Workloads, svc.Namespace) {
 		switch {

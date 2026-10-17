@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	ServiceMixedBackendsReason      = "Routes to different applications"
+	ServiceMixedBackendsReason      = "Routes to mismatched backends"
 	ServiceMixedBackendsFingerprint = "svc:mixed-backends"
 )
 
@@ -75,10 +75,11 @@ type ServiceBackends struct {
 // workload.
 func (b ServiceBackends) MultipleWorkloads() bool { return len(b.Workloads) > 1 }
 
-// DifferentApplications reports whether the evidence says the receiving
-// workloads are different applications.
-func (b ServiceBackends) DifferentApplications() bool {
-	return len(b.Applications) > 1 || len(b.PortGaps) > 0
+// Mismatched reports whether the evidence says the receiving workloads don't
+// all serve this Service: different applications, or a port some don't
+// declare.
+func (b ServiceBackends) Mismatched() bool {
+	return b.differentImages() || len(b.PortGaps) > 0
 }
 
 const maxBackendWorkloadsListed = 5
@@ -102,13 +103,29 @@ func capNames(names []string) []string {
 	return append(names[:maxBackendWorkloadsListed:maxBackendWorkloadsListed], fmt.Sprintf("%d more", len(names)-maxBackendWorkloadsListed))
 }
 
-// Problem is the issue message for a Service whose backends are different
-// applications, e.g. "Service frontend routes to 2 different applications
-// (frontend, search); search's pods don't declare port 5000".
+// Problem is the issue message for a Service with mismatched backends. It says
+// "different applications" only when the image repositories show it, e.g.
+// "Service frontend routes to 2 different applications (frontend, search)";
+// a port gap alone reads "Service frontend routes to 2 workloads; search's
+// pods don't declare port 5000".
 func (b ServiceBackends) Problem(service string) string {
 	names := b.applicationNames()
-	return fmt.Sprintf("Service %s routes to %d different applications (%s)", service, len(names), strings.Join(capNames(names), ", ")) + b.portGapClauses("; ")
+	if b.differentImages() {
+		return fmt.Sprintf("Service %s routes to %d different applications (%s)", service, len(names), strings.Join(capNames(names), ", ")) + b.portGapClauses("; ")
+	}
+	return fmt.Sprintf("Service %s routes to %d workloads", service, len(names)) + b.portGapClauses("; ")
 }
+
+// Noun is what the backends are, for wording that can't name them:
+// "application" when the image repositories differ, else "workload".
+func (b ServiceBackends) Noun() string {
+	if b.differentImages() {
+		return "application"
+	}
+	return "workload"
+}
+
+func (b ServiceBackends) differentImages() bool { return len(b.Applications) > 1 }
 
 // Cause explains the Problem in plain terms, e.g. "The selector matches pods
 // of frontend and search, so requests are spread across all of them; search's
@@ -774,8 +791,8 @@ func (l ServiceBackendLookup) GroupServiceBackends(svc *corev1.Service, pods []*
 			Ready:      w.Ready,
 		})
 	}
-	if backends.DifferentApplications() {
-		out.DifferentApplications = backends.Problem(svc.Name)
+	if backends.Mismatched() {
+		out.MixedBackends = backends.Problem(svc.Name)
 	}
 	return out
 }

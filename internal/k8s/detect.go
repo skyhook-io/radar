@@ -1325,7 +1325,7 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 			"svc:unresolved-targetport",
 		))
 	}
-	if backends := AnalyzeServiceBackends(cache, svc, selected); backends.DifferentApplications() {
+	if backends := AnalyzeServiceBackends(cache, svc, selected); backends.Mismatched() {
 		det := serviceBackendDetection(svc, ageDur, "warning", ServiceMixedBackendsReason, backends.Problem(svc.Name), ServiceMixedBackendsFingerprint)
 		det.Cause = backends.Cause()
 		det.Action = "If only one of these workloads should receive this traffic, narrow the Service selector to labels only its pods carry, or remove the matching label from the other workload's pod template."
@@ -1336,8 +1336,8 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 			det.RequiredReads = append(det.RequiredReads, issuesapi.EvidenceRead{Group: "apps", Resource: "replicasets", Namespace: svc.Namespace, Verb: "list"})
 		}
 		det.Degraded = &issuesapi.DegradedFinding{
-			Message: fmt.Sprintf("Service %s routes to pods of more than one application", svc.Name),
-			Cause:   "The Service selector matches pods of more than one application, so part of its traffic reaches pods that may not serve it.",
+			Message: fmt.Sprintf("Service %s routes to pods of more than one %s", svc.Name, backends.Noun()),
+			Cause:   fmt.Sprintf("The Service selector matches pods of more than one %s, so part of its traffic reaches pods that may not serve it.", backends.Noun()),
 			Action:  det.Action,
 		}
 		problems = append(problems, det)

@@ -591,28 +591,40 @@ When a Service's selected Pods come from more than one workload, resource
 context's `serviceSummary.workloads` lists each workload with its Pod and ready
 counts, and `diagnose` adds the same breakdown to the Pods hop (`meta.workloads`
 and an info finding, for example "Selects 2 pods from 2 workloads: frontend (1),
-search (1)"). This alone is context: stable and canary Deployments, blue/green
-cutovers and Argo Rollouts canaries without a traffic router share a Service on
-purpose. The breakdown is withheld, and `omitted` says so, when the caller can't
-read every workload it would name; it is left out when a workload's kind can't be
-resolved for that check. Radar raises a `service_mixed_backends`
-warning issue, and resource context adds the `different_applications` warning
-with its explanation in `serviceSummary.differentApplications`, only when the
-workloads that receive the traffic (ready, non-terminating Pods, or every live
-Pod for a Service that publishes not-ready addresses) look like different
-applications: the workloads behind one Service port run no image repository in
-common, mesh proxies aside (a tag or digest change is the same repository, and
-sharing any container, a sidecar included, counts as the same application, and
-so do workloads whose Pods share an `app` or `app.kubernetes.io/name` label and
-all carry a `version` or `app.kubernetes.io/version` label), or
-some declare the Service's
-numeric targetPort while others declare other ports but not it. Containers that
-every workload shares identically, native sidecars and known mesh proxies are
-not counted as those other ports; a workload that declares no ports is not evidence; named targetPorts are left to Kubernetes,
-which keeps Pods without that port name out of the endpoints; headless Services
-are never judged, nor are revisions whose ReplicaSets Radar can't read, since
-they would look like separate workloads. The issue is never critical. In the MCP `issues` tool its
-`correlated_changes` show recent edits to the Service, such as a selector change.
+search (1)"); a single workload is named in the hop's `config.workload`. This
+alone is context: stable and canary Deployments, blue/green cutovers and Argo
+Rollouts share a Service on purpose. Both are withheld, and resource context's
+`omitted` says so, when the caller can't read every workload they would name, or
+when a workload's kind can't be resolved for that check.
+
+Radar raises a `service_mixed_backends` warning issue, and resource context adds
+the `mixed_backends` warning with its explanation in
+`serviceSummary.mixedBackends`, only when the workloads that receive the traffic
+don't all serve the Service. Receiving means ready, non-terminating Pods (every
+live Pod for a Service that publishes not-ready addresses) that resolve a Service
+port. Two signals count:
+
+- **Different applications**: the workloads behind one Service port run no image
+  repository in common, mesh proxies aside. A tag or digest change is the same
+  repository; sharing any container, a sidecar included, makes them one
+  application; so do workloads whose Pods share an `app` or
+  `app.kubernetes.io/name` label and all carry a `version` or
+  `app.kubernetes.io/version` label. The message reads "Service X routes to N
+  different applications (…)".
+- **A port some don't declare**: some workloads declare the Service's numeric
+  targetPort while others declare other ports but not it. A workload that has the
+  counterpart (same name or image repository) of the container declaring the port
+  is judged by that counterpart; otherwise containers every workload shares
+  identically, native sidecars and mesh proxies don't count, and a workload that
+  declares no ports is not evidence. The message reads "Service X routes to N
+  workloads; Y's pods don't declare port P", and "different applications" is used
+  only when the first signal also holds.
+
+Named targetPorts are left to Kubernetes, which keeps Pods without that port name
+out of the endpoints. Headless Services are never judged, nor are revisions whose
+ReplicaSets Radar can't read, since they would look like separate workloads. The
+issue is never critical. In the MCP `issues` tool its `correlated_changes` show
+recent edits to the Service, such as a selector change.
 
 ### Write Tools
 

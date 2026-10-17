@@ -1609,7 +1609,7 @@ func TestBuildTrace_ServiceWithMixedBackends(t *testing.T) {
 			}
 			mixed := false
 			for _, f := range trace.Downstream[0].Findings {
-				if strings.Contains(f.Message, "different applications") {
+				if f.Code == k8s.ServiceMixedBackendsFingerprint {
 					mixed = true
 					if f.Severity != SeverityWarning {
 						t.Errorf("mixed-backends severity = %q, want warning", f.Severity)

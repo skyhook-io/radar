@@ -113,7 +113,7 @@ var categoryDescription = map[Category]string{
 	CategorySecretSyncFailed:     "An external secret sync (e.g. External Secrets Operator) failed to materialize a Secret.",
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
-	CategoryServiceMixedBackends:  "A Service's selector matches pods of different applications, so part of its traffic reaches pods that may not serve it.",
+	CategoryServiceMixedBackends:  "A Service's selector matches pods of workloads that don't all serve it (different applications, or a port some don't declare), so part of its traffic reaches pods that may not serve it.",
 	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s.",
 	CategoryIngressClassMissing:   "An Ingress names an IngressClass that doesn't exist, so no matching controller can serve it.",
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",

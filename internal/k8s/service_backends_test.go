@@ -95,7 +95,7 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 			wantDifferent: true,
 			wantGapPorts:  []int32{5000},
-			wantProblem:   "Service frontend routes to 2 different applications (frontend, search); search's pods don't declare port 5000",
+			wantProblem:   "Service frontend routes to 2 workloads; search's pods don't declare port 5000",
 		},
 		{
 			name: "different repositories and a port gap",
@@ -196,7 +196,7 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 			wantDifferent: true,
 			wantGapPorts:  []int32{8080},
-			wantProblem:   "Service frontend routes to 2 different applications (web, worker); worker's pods don't declare port 8080",
+			wantProblem:   "Service frontend routes to 2 workloads; worker's pods don't declare port 8080",
 		},
 		{
 			name: "named targetPort is resolved by Kubernetes, not judged",
@@ -230,7 +230,7 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 			wantDifferent: true,
 			wantGapPorts:  []int32{8080},
-			wantProblem:   "Service frontend routes to 2 different applications (web, admin); admin's pods don't declare port 8080",
+			wantProblem:   "Service frontend routes to 2 workloads; admin's pods don't declare port 8080",
 		},
 		{
 			name: "port declared over another protocol does not count",
@@ -246,7 +246,7 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantWorkloads: 2,
 			wantDifferent: true,
 			wantGapPorts:  []int32{53},
-			wantProblem:   "Service frontend routes to 2 different applications (dns, dns-tcp); dns-tcp's pods don't declare port 53/UDP",
+			wantProblem:   "Service frontend routes to 2 workloads; dns-tcp's pods don't declare port 53/UDP",
 		},
 		{
 			name: "headless Service is grouped but not judged",
@@ -578,8 +578,8 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			if len(got.Workloads) != tc.wantWorkloads {
 				t.Fatalf("workloads = %+v, want %d", got.Workloads, tc.wantWorkloads)
 			}
-			if got.DifferentApplications() != tc.wantDifferent {
-				t.Fatalf("DifferentApplications = %v, want %v (apps %v, gaps %+v)", got.DifferentApplications(), tc.wantDifferent, got.Applications, got.PortGaps)
+			if got.Mismatched() != tc.wantDifferent {
+				t.Fatalf("Mismatched = %v, want %v (apps %v, gaps %+v)", got.Mismatched(), tc.wantDifferent, got.Applications, got.PortGaps)
 			}
 			if tc.wantApps != nil && !reflect.DeepEqual(got.Applications, tc.wantApps) {
 				t.Errorf("applications = %v, want %v", got.Applications, tc.wantApps)
@@ -696,13 +696,13 @@ func TestDetectServiceBackendProblemsMixedBackends(t *testing.T) {
 	if d.Severity != "warning" || d.Reason != ServiceMixedBackendsReason || d.Fingerprint != ServiceMixedBackendsFingerprint {
 		t.Fatalf("detection = %+v", d)
 	}
-	if want := "Service frontend routes to 2 different applications (frontend, search); search's pods don't declare port 5000"; d.Message != want {
+	if want := "Service frontend routes to 2 workloads; search's pods don't declare port 5000"; d.Message != want {
 		t.Fatalf("message = %q, want %q", d.Message, want)
 	}
 	if want := "The selector matches pods of frontend and search, so requests are spread across all of them; search's pods don't declare port 5000, so requests that reach them may fail."; d.Cause != want {
 		t.Fatalf("cause = %q, want %q", d.Cause, want)
 	}
-	if d.Degraded == nil || strings.Contains(d.Degraded.Message, "search") || strings.Contains(d.Degraded.Cause, "search") {
+	if d.Degraded == nil || d.Degraded.Message != "Service frontend routes to pods of more than one workload" || strings.Contains(d.Degraded.Cause, "search") {
 		t.Fatalf("degraded finding must not name the workloads: %+v", d.Degraded)
 	}
 	if len(d.RequiredReads) != 1 || d.RequiredReads[0].Resource != "pods" || d.RequiredReads[0].Namespace != "shop" {
@@ -743,7 +743,7 @@ func TestServiceBackendLookupGroupsOnlyCheckableWorkloads(t *testing.T) {
 	}
 
 	custom := backendPod("widget-0", "Widget", "widget", web, func(p *corev1.Pod) { p.OwnerReferences[0].APIVersion = "example.com/v1" })
-	if got := (ServiceBackendLookup{}).GroupServiceBackends(svc, []*corev1.Pod{backendPod("web-0", "StatefulSet", "web", web), custom}); len(got.Workloads) != 0 || got.DifferentApplications != "" {
+	if got := (ServiceBackendLookup{}).GroupServiceBackends(svc, []*corev1.Pod{backendPod("web-0", "StatefulSet", "web", web), custom}); len(got.Workloads) != 0 || got.MixedBackends != "" {
 		t.Fatalf("a workload kind the access check can't resolve must withhold the breakdown: %+v", got)
 	}
 }
