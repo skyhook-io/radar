@@ -1488,6 +1488,16 @@ func (rc *ResourceCache) Stop() {
 	})
 }
 
+// Client returns the clientset the cache's informers were built from, so a
+// caller holding its own clientset can tell whether the cache describes the
+// same cluster connection before reading from it.
+func (rc *ResourceCache) Client() kubernetes.Interface {
+	if rc == nil {
+		return nil
+	}
+	return rc.config.Client
+}
+
 // Changes returns a read-only channel for resource change notifications.
 func (rc *ResourceCache) Changes() <-chan ResourceChange {
 	if rc == nil {

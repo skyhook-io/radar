@@ -293,6 +293,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
 	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
 		if err := validateStartupPrometheusURL(cfg.PrometheusURL); err != nil {

@@ -422,11 +422,12 @@ func InitResourceCache(ctx context.Context) error {
 				secretWriteTimes.capture(obj)
 			},
 
-			OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
+			OnObservedChange: func(change k8score.ResourceChange, obj, oldObj any) {
 				secretWriteTimes.reconcile(change, obj)
 				if cj, ok := obj.(*batchv1.CronJob); ok {
 					cronJobScheduleObservations.observe(change.Operation, cj)
 				}
+				notifyResourceObservers(client, change, obj, oldObj)
 			},
 
 			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
@@ -866,6 +867,11 @@ func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 	// The Deployment API increments generation for top-level annotation
 	// changes because those annotations are copied to ReplicaSets.
 	return !apiequality.Semantic.DeepEqual(oldDeployment.Spec, newDeployment.Spec)
+}
+
+// IsSyncAdd is isSyncAdd for observers outside this package.
+func IsSyncAdd(obj any) bool {
+	return isSyncAdd(obj)
 }
 
 // isSyncAdd reports whether an add is an object that already existed rather
