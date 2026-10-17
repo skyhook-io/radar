@@ -65,6 +65,15 @@ func (e extraCandidate) OwnerCandidates(uid types.UID, d ownership.Domain, limit
 	return r
 }
 
+// twice returns every candidate twice.
+type twice struct{ ownership.Session }
+
+func (c twice) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := c.Session.OwnerCandidates(uid, d, limit)
+	r.Candidates = append(r.Candidates, r.Candidates...)
+	return r
+}
+
 // earlyGap adds a gap to the first search only.
 type earlyGap struct {
 	ownership.Session
@@ -212,6 +221,14 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 			func(now ownership.Session) ownership.Session {
 				return extraCandidate{now, ownershiptest.Observe(elsewhere)}
 			},
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
+		// Every copy right, but one object named twice, with or without a
+		// write since the list.
+		{"a candidate returned twice", world(rs, pod),
+			func(now ownership.Session) ownership.Session { return twice{now} },
+			map[string]outcome{"OwnerCandidates": unresolved}, nil},
+		{"a candidate returned twice after a write", world(rs, updated),
+			func(now ownership.Session) ownership.Session { return twice{now} },
 			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
 		// Asked again, the search covers less than the expected answer.
 		{"the fresh answer leaves more unread", world(rs, updated),

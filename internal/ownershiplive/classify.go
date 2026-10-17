@@ -78,10 +78,10 @@ func changedSince(listed map[resourceid.Ref]ownershiptest.Object, ref resourceid
 
 // recheck asks a difference's question of the cache again once the objects
 // it disputes have caught up, and checks the whole fresh answer against the
-// API server: for a search, every candidate must be in the domain, name the
-// UID in its current copy and match that copy exactly; every disputed object
-// in the domain left out must not name it; and the gaps must be the expected
-// ones.
+// API server: for a search, every candidate must be in the domain, once,
+// name the UID in its current copy and match that copy exactly; every
+// disputed object in the domain left out must not name it; and the gaps must
+// be the expected ones.
 func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]ownershiptest.Object, cache ownership.Session, api apiRead) outcome {
 	if d.Coverage || len(d.Objects) == 0 {
 		return unresolved
@@ -107,10 +107,12 @@ func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]o
 		if fresh.Truncated || !slices.Equal(fresh.Gaps, d.WantGaps) {
 			return unresolved
 		}
+		seen := map[resourceid.Ref]bool{}
 		for _, c := range fresh.Candidates {
-			if !inDomain(c.Ref, d.Domain) {
+			if seen[c.Ref] || !inDomain(c.Ref, d.Domain) {
 				return unresolved
 			}
+			seen[c.Ref] = true
 			if _, seen := current[c.Ref]; !seen && !settleRef(c.Ref) {
 				return unresolved
 			}
