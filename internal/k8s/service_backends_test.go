@@ -518,6 +518,26 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantGapPorts:  []int32{9080},
 		},
 		{
+			name: "a canary that omits the port declaration is not judged by its sidecar's port",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("web-stable-1", "StatefulSet", "web-stable", []corev1.Container{container("web", "acme/web:1.0", 5000)}),
+				backendPod("web-canary-1", "StatefulSet", "web-canary", []corev1.Container{container("web", "acme/web:1.1"), container("logs", "fluent/fluent-bit:3.0", 2020)}),
+			},
+			wantWorkloads: 2,
+		},
+		{
+			name: "the counterpart container declaring other ports is evidence",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("web-1", "StatefulSet", "web", []corev1.Container{container("app", "acme/app:1", 5000)}),
+				backendPod("worker-1", "StatefulSet", "worker", []corev1.Container{container("app", "acme/app:1", 9090), container("logs", "fluent/fluent-bit:3.0", 2020)}),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantGapPorts:  []int32{5000},
+		},
+		{
 			name: "stable and canary of one app plus an unrelated app",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{

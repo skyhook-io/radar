@@ -590,12 +590,36 @@ func servicePortGaps(svc *corev1.Service, workloads []*backendWorkload, common m
 		}
 		proto := portProtocol(sp.Protocol)
 		gap := ServicePortGap{Port: port, Protocol: proto}
+		// The containers that declare the port, by name and repository, so a
+		// workload missing it is judged by its counterpart of that container
+		// when it has one, not by an unrelated sidecar's ports.
+		servingNames, servingRepos := map[string]bool{}, map[string]bool{}
+		var missing []*backendWorkload
 		for _, w := range workloads {
-			if declaresPort(w.containers, port, proto) {
-				gap.Serving = append(gap.Serving, w.Label)
+			if !declaresPort(w.containers, port, proto) {
+				missing = append(missing, w)
 				continue
 			}
-			for _, c := range appContainers(w, common) {
+			gap.Serving = append(gap.Serving, w.Label)
+			for _, c := range w.containers {
+				if containerDeclaresPort(c, port, proto) {
+					servingNames[c.name] = true
+					servingRepos[c.repo] = true
+				}
+			}
+		}
+		for _, w := range missing {
+			candidates := appContainers(w, common)
+			var counterparts []backendContainer
+			for _, c := range w.containers {
+				if servingNames[c.name] || (c.repo != "" && servingRepos[c.repo]) {
+					counterparts = append(counterparts, c)
+				}
+			}
+			if len(counterparts) > 0 {
+				candidates = counterparts
+			}
+			for _, c := range candidates {
 				if len(c.ports) > 0 {
 					gap.Missing = append(gap.Missing, w.Label)
 					break
@@ -611,10 +635,17 @@ func servicePortGaps(svc *corev1.Service, workloads []*backendWorkload, common m
 
 func declaresPort(containers map[string]backendContainer, port int32, proto corev1.Protocol) bool {
 	for _, c := range containers {
-		for _, cp := range c.ports {
-			if cp.ContainerPort == port && portProtocol(cp.Protocol) == proto {
-				return true
-			}
+		if containerDeclaresPort(c, port, proto) {
+			return true
+		}
+	}
+	return false
+}
+
+func containerDeclaresPort(c backendContainer, port int32, proto corev1.Protocol) bool {
+	for _, cp := range c.ports {
+		if cp.ContainerPort == port && portProtocol(cp.Protocol) == proto {
+			return true
 		}
 	}
 	return false
