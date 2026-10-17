@@ -391,6 +391,19 @@ func GetConnectionInfo(owner Owner) *ConnectionInfo {
 	}
 }
 
+// IsActiveAddress reports whether any owner's published forward currently
+// serves address.
+func IsActiveAddress(address string) bool {
+	reg.mu.RLock()
+	defer reg.mu.RUnlock()
+	for _, f := range reg.forwards {
+		if f.active && f.info().Address == address {
+			return true
+		}
+	}
+	return false
+}
+
 // IsConnectedForContext reports whether any owner has an active forward for the context.
 func IsConnectedForContext(contextName string) bool {
 	reg.mu.RLock()

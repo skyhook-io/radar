@@ -558,7 +558,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 			if manual {
 				probe = p.ProbeQueryAPI
 			}
-			ok, reason := probe(ctx)
+			ok, reason := probe(withoutFailureReport(ctx))
 			// The probe ran unlocked; a configuration change meanwhile makes
 			// its answer describe a superseded endpoint. Neither return it nor
 			// tear down whatever the new configuration has since connected.

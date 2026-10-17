@@ -353,6 +353,9 @@ func TestFailureReportingTransport(t *testing.T) {
 		{name: "no response", addr: deadURL(t), ctx: context.Background, wantReport: true},
 		{name: "HTTP client timeout", addr: hung.URL, httpClient: &http.Client{Timeout: 50 * time.Millisecond}, ctx: context.Background, wantReport: true},
 		{name: "HTTP error status", addr: failing.URL, ctx: context.Background},
+		{name: "caller handles failure itself", addr: deadURL(t), ctx: func() context.Context {
+			return withoutFailureReport(context.Background())
+		}},
 		{name: "caller gave up", addr: deadURL(t), ctx: func() context.Context {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
@@ -500,4 +503,64 @@ func TestCachedServicesDeclinesPartialView(t *testing.T) {
 	if _, ok := (&Client{k8sClient: fake.NewClientset()}).cachedServices(); ok {
 		t.Fatal("a cache built from another cluster connection must not be used")
 	}
+}
+
+// TestRediscovery_ConfigurationChangeCancelsFollowUps pins that a Reset,
+// manual URL or header change (each moves the discovery generation) ends a
+// pending follow-up budget instead of letting it rediscover under the new
+// configuration.
+func TestRediscovery_ConfigurationChangeCancelsFollowUps(t *testing.T) {
+	for _, change := range []struct {
+		name  string
+		apply func(c *Client)
+	}{
+		{"reset", func(c *Client) { c.discoveryGen++ }},
+		{"manual URL", func(c *Client) { c.configureLocked("http://prom.example", nil) }},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			var c *Client
+			runs := stubRediscovery(t, func(string) error {
+				c.mu.Lock()
+				change.apply(c)
+				c.mu.Unlock()
+				return errPrometheusUnreachable
+			})
+			c, _ = newRediscoveryClient(t)
+			c.requestRediscovery("", "service created")
+			got := collectRuns(runs, 300*time.Millisecond)
+			waitIdle(t, c)
+			if len(got) != 1 {
+				t.Fatalf("follow-ups ran after the configuration changed: %v", got)
+			}
+		})
+	}
+}
+
+// TestRediscovery_NewSignalInterruptsFollowUpWait pins that a signal arriving
+// while the worker waits out a follow-up delay runs after its own debounce,
+// with a fresh budget, instead of waiting for the older signal's delay.
+func TestRediscovery_NewSignalInterruptsFollowUpWait(t *testing.T) {
+	runs := stubRediscovery(t, func(label string) error {
+		if strings.Contains(label, "service created") {
+			return errPrometheusUnreachable
+		}
+		return nil
+	})
+	rediscoveryFollowUps = []time.Duration{5 * time.Second}
+	c, _ := newRediscoveryClient(t)
+
+	c.requestRediscovery("", "service created")
+	if got := collectRuns(runs, 200*time.Millisecond); len(got) != 1 {
+		t.Fatalf("want the signal's run, got %v", got)
+	}
+	c.requestRediscovery("", "pod became ready")
+	select {
+	case got := <-runs:
+		if !strings.Contains(got, "pod became ready") {
+			t.Fatalf("the new signal should name the run, got %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new signal waited behind the follow-up delay")
+	}
+	waitIdle(t, c)
 }

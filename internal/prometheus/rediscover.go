@@ -65,6 +65,9 @@ type rediscoveryState struct {
 	mu      sync.Mutex
 	running bool // a worker goroutine owns the queue
 	pending bool
+	// wake interrupts the worker's wait when a signal arrives, so a new event
+	// never sits behind a follow-up delay meant for an older one.
+	wake chan struct{}
 	// verifyAddr is the connected address a signal called into question;
 	// empty when every pending signal only matters without a connection.
 	verifyAddr string
@@ -77,41 +80,63 @@ type rediscoveryState struct {
 // backend); leave it empty for signals that only matter while Radar has no
 // connection.
 func (c *Client) requestRediscovery(verifyAddr, reason string) {
+	r := &c.rediscovery
+	r.mu.Lock()
+	// Read the generation under the queue lock, so a request that raced a
+	// Reset can never stamp an older generation over a newer queued signal.
 	c.mu.RLock()
 	retired := c.retired
 	gen := c.discoveryGen
 	c.mu.RUnlock()
 	if retired {
+		r.mu.Unlock()
 		return
 	}
-	r := &c.rediscovery
-	r.mu.Lock()
 	if !r.pending || r.gen != gen {
 		r.verifyAddr = ""
+	}
+	// A signal questioning the connection outranks one that only matters
+	// without it; otherwise the latest signal names the run.
+	if verifyAddr != "" || r.verifyAddr == "" {
 		r.reason = reason
 	}
 	if verifyAddr != "" {
 		r.verifyAddr = verifyAddr
-		r.reason = reason
 	}
 	r.pending = true
 	r.gen = gen
+	if r.wake == nil {
+		r.wake = make(chan struct{}, 1)
+	}
 	start := !r.running
 	r.running = true
+	wake := r.wake
 	r.mu.Unlock()
 	if start {
-		go c.rediscoveryLoop()
+		go c.rediscoveryLoop(wake)
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
 	}
 }
 
 // rediscoveryLoop drains the queue and exits when it is empty. Only one runs
 // per Client at a time.
-func (c *Client) rediscoveryLoop() {
+func (c *Client) rediscoveryLoop(wake chan struct{}) {
 	delay := rediscoveryDebounce
 	followUp := 0
 	signal := "" // the reason that started the current follow-up budget
 	for {
-		time.Sleep(delay)
+		select {
+		case <-time.After(delay):
+		case <-wake:
+			// A new signal: it gets its own debounce and a fresh budget
+			// rather than the remainder of an older signal's follow-up wait.
+			followUp = 0
+			time.Sleep(rediscoveryDebounce)
+		}
 		c.waitForDiscoveryIdle()
 
 		r := &c.rediscovery
@@ -239,6 +264,12 @@ func (c *Client) noteQueryFailure(addr string, err error) {
 // the connection, the connection is gone with it: drop it so no caller probes
 // a dead local port, and rediscover in the background.
 func (c *Client) onForwardLost(owner, address string) {
+	// The callback runs after the forward registry unlocked; if a replacement
+	// forward was published on the same local port meanwhile, the address is
+	// live again and the loss describes the old tunnel only.
+	if portforward.IsActiveAddress(address) {
+		return
+	}
 	c.mu.Lock()
 	if c.retired || c.baseURL != address {
 		c.mu.Unlock()
@@ -444,9 +475,19 @@ type failureReportingTransport struct {
 	report func(addr string, err error)
 }
 
+type skipFailureReportKey struct{}
+
+// withoutFailureReport marks a request whose caller handles an unanswered
+// endpoint itself — EnsureConnected's probe rediscovers on failure — so the
+// transport does not also queue a background run for it.
+func withoutFailureReport(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipFailureReportKey{}, true)
+}
+
 func (t failureReportingTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
 	body, err := t.Transport.Do(ctx, method, path, params)
-	if err != nil && ctx.Err() == nil && isNoResponseError(err) {
+	skip, _ := ctx.Value(skipFailureReportKey{}).(bool)
+	if err != nil && !skip && ctx.Err() == nil && isNoResponseError(err) {
 		t.report(t.addr, err)
 	}
 	return body, err

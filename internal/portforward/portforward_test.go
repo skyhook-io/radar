@@ -208,3 +208,18 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 		t.Fatal("lost forward still reported as connected")
 	}
 }
+
+func TestIsActiveAddress(t *testing.T) {
+	saved := reg
+	t.Cleanup(func() { reg = saved })
+	reg = &registry{forwards: map[Owner]*metricsForward{}}
+	reg.forwards[OwnerTraffic] = &metricsForward{active: true, localPort: 4321}
+	reg.forwards[OwnerPrometheus] = &metricsForward{active: false, localPort: 1234}
+
+	if !IsActiveAddress("http://localhost:4321") {
+		t.Fatal("another owner's live forward should count")
+	}
+	if IsActiveAddress("http://localhost:1234") {
+		t.Fatal("an inactive forward should not count")
+	}
+}
