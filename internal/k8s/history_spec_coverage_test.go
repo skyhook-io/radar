@@ -767,11 +767,13 @@ func TestComputeDiff_HTTPRouteNamedRulesAddAndEdit(t *testing.T) {
 	}
 }
 
-// One unnamed rule on either side means positions are all there is.
-func TestComputeDiff_HTTPRouteUnnamedRulesFallBackToCount(t *testing.T) {
+// Unnamed rules are compared by position: an appended rule reads as added and
+// an edit to an existing rule is still reported beside the count.
+func TestComputeDiff_HTTPRouteUnnamedRulesComparedByPosition(t *testing.T) {
 	diff := ComputeDiff("HTTPRoute", namedRoute(1, routeRule("main", 90)), namedRoute(2, routeRule("main", 10), routeRule("", 50)))
-	if diff == nil || diff.Summary != "rules: 1→2" {
-		t.Fatalf("summary = %+v", diff)
+	want := "rules: 1→2, other spec changes: rules[0].backendRefs[web].weight, rules[0].backendRefs[web-canary].weight, rules[1] (added)"
+	if diff == nil || diff.Summary != want {
+		t.Fatalf("summary = %+v, want %q", diff, want)
 	}
 }
 
@@ -1020,6 +1022,84 @@ func TestHumanDuration(t *testing.T) {
 	} {
 		if got := humanDuration(d); got != want {
 			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestComputeDiff_NestedAnnotationValuesHidden(t *testing.T) {
+	oldCJ := specTestCronJob()
+	oldCJ.Spec.JobTemplate.Annotations = map[string]string{"example.com/config": "correct-horse-battery"}
+	newCJ := oldCJ.DeepCopy()
+	newCJ.Generation++
+	newCJ.Spec.JobTemplate.Annotations = map[string]string{"example.com/config": "staple-horse-battery"}
+	diff := ComputeDiff("CronJob", oldCJ, newCJ)
+	change := findChange(diff, "spec.jobTemplate.metadata.annotations[example.com/config]")
+	if change == nil || change.OldValue != hiddenValueMarker || change.NewValue != hiddenValueMarker {
+		t.Fatalf("annotation row = %+v in %+v", change, diff)
+	}
+	if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "horse") {
+		t.Fatalf("annotation value leaked: %s", rendered)
+	}
+}
+
+func TestComputeDiff_BackstopCapKeepsEveryFieldName(t *testing.T) {
+	oldDep := specTestDeployment(3)
+	newDep := bumped(oldDep)
+	oldLabels, newLabels := map[string]string{}, map[string]string{}
+	for i := 0; i < 30; i++ {
+		oldLabels[fmt.Sprintf("k%02d", i)] = "a"
+		newLabels[fmt.Sprintf("k%02d", i)] = "b"
+	}
+	oldDep.Spec.Selector = &metav1.LabelSelector{MatchLabels: oldLabels}
+	newDep.Spec.Selector = &metav1.LabelSelector{MatchLabels: newLabels}
+	diff := ComputeDiff("Deployment", oldDep, newDep)
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	more := findChange(diff, "spec (more fields)")
+	if more == nil {
+		t.Fatalf("no truncation row in %d fields", len(diff.Fields))
+	}
+	if omitted, _ := more.NewValue.([]string); len(omitted)+maxUntrackedSpecRows != 30 {
+		t.Fatalf("truncation row lists %v", more.NewValue)
+	}
+}
+
+func TestComputeDiff_RolloutStrategySwitchKeepsDetails(t *testing.T) {
+	ro := func(gen int64, strategy map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+			"metadata": map[string]any{"name": "web", "uid": "ro", "generation": gen},
+			"spec":     map[string]any{"strategy": strategy},
+		}}
+	}
+	diff := ComputeDiff("Rollout",
+		ro(1, map[string]any{"canary": map[string]any{"maxSurge": "25%"}}),
+		ro(2, map[string]any{"blueGreen": map[string]any{"activeService": "web", "scaleDownDelaySeconds": int64(60)}}))
+	if diff == nil || !strings.Contains(diff.Summary, "strategy: canary→blueGreen") || !strings.Contains(diff.Summary, "strategy.blueGreen.scaleDownDelaySeconds") {
+		t.Fatalf("summary = %+v", diff)
+	}
+}
+
+// An empty selector matches every pod; absent matches none. Neither direction
+// has leaves to compare.
+func TestComputeDiff_EmptyBlockAddedOrRemoved(t *testing.T) {
+	withSpread := func(sel *metav1.LabelSelector) *appsv1.Deployment {
+		d := specTestDeployment(3)
+		d.Spec.Template.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{{
+			MaxSkew: 1, TopologyKey: "topology.kubernetes.io/zone", WhenUnsatisfiable: corev1.DoNotSchedule, LabelSelector: sel,
+		}}
+		return d
+	}
+	absent, empty := withSpread(nil), withSpread(&metav1.LabelSelector{})
+	added := empty.DeepCopy()
+	added.Generation = 2
+	removed := absent.DeepCopy()
+	removed.Generation = 3
+	for name, pair := range map[string][2]*appsv1.Deployment{"added": {absent, added}, "removed": {empty, removed}} {
+		diff := ComputeDiff("Deployment", pair[0], pair[1])
+		if findChange(diff, "spec.template.spec.topologySpreadConstraints[0].labelSelector") == nil {
+			t.Errorf("%s: empty selector change lost: %+v", name, diff)
 		}
 	}
 }

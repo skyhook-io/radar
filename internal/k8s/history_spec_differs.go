@@ -175,6 +175,12 @@ func gatewayListenerString(listener map[string]any) any {
 	return out
 }
 
+// hpaBehaviorCovered is ignored by the HPA backstop: diffHPAScalingConfig
+// compares every scaling-rule field against the API defaults, which the API
+// server writes into a direction left unset; the backstop would report those
+// defaults as an edit.
+var hpaBehaviorCovered = []string{"spec.behavior"}
+
 // webhookSummaryFields are the webhook fields webhookSummary compares; the
 // backstop reports changes to any other webhook field.
 var webhookSummaryFields = []string{
@@ -385,6 +391,9 @@ func hpaScalingRulesString(r *autoscalingv2.HPAScalingRules, defaults string) st
 	}
 	for _, p := range r.Policies {
 		parts = append(parts, fmt.Sprintf("%s %d/%ds", p.Type, p.Value, p.PeriodSeconds))
+	}
+	if r.Tolerance != nil {
+		parts = append(parts, "tolerance="+r.Tolerance.String())
 	}
 	if len(parts) == 0 {
 		return defaults

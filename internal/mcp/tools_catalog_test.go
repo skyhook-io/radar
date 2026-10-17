@@ -320,6 +320,11 @@ func TestToolsEmittingApplicationConfigurationMarkerDocumentRankingBoundary(t *t
 	if !strings.Contains(descriptions["get_changes"], "Helm operation entries rank by category and recency") {
 		t.Error("get_changes tool description does not document Helm ranking")
 	}
+	for _, phrase := range []string{"other spec changes", "(value hidden)", "(set)"} {
+		if !strings.Contains(descriptions["get_changes"], phrase) {
+			t.Errorf("get_changes tool description does not explain %q rows", phrase)
+		}
+	}
 }
 
 func TestClusterAuditToolAndSetupCatalogUseCanonicalSeverity(t *testing.T) {

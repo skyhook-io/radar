@@ -276,7 +276,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"rollbacks, and successful current revisions appear in the same recent-change feed. " +
 			"If `sourcesErrored` includes helm, treat the result as partial rather than proof " +
 			"that no Helm deployment happened. Use get_helm_release include=history,operations " +
-			"for the full Helm revision trail.",
+			"for the full Helm revision trail. Other edited fields list under `other spec " +
+			"changes`; hidden values: `(value hidden)`/`(set)`.",
 		Annotations: readOnly,
 	}, logToolCall("get_changes", handleGetChanges))
 

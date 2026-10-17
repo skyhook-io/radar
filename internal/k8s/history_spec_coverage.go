@@ -21,7 +21,7 @@ import (
 
 const (
 	restartedAtAnnotation = "kubectl.kubernetes.io/restartedAt"
-	maxUntrackedSpecRows  = 10
+	maxUntrackedSpecRows  = 25
 	maxUntrackedSummary   = 3
 )
 
@@ -305,7 +305,7 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 	}
 
 	var found []changedSpecPath
-	collectChangedSpecPaths(root, oldU, newU, &found)
+	collectChangedSpecPaths(root, oldU, newU, "", &found)
 
 	trackedSegments := make([][]string, 0, len(tracked)+len(ignored))
 	for _, change := range tracked {
@@ -314,17 +314,21 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 	for _, path := range ignored {
 		trackedSegments = append(trackedSegments, splitSpecPath(path))
 	}
-	var untracked []changedSpecPath
+	var untracked, covered []changedSpecPath
 	for _, c := range found {
-		if !specPathCovered(trackedSegments, splitSpecPath(c.path), c.order) {
+		if specPathCovered(trackedSegments, splitSpecPath(c.path), c.order) {
+			covered = append(covered, c)
+		} else {
 			untracked = append(untracked, c)
 		}
 	}
+	untracked = collapseUntracked(untracked, covered)
 	if len(untracked) == 0 {
 		return nil, nil
 	}
 
 	var changes []FieldChange
+	var omitted []string
 	labels := make([]string, 0, len(untracked))
 	for _, c := range untracked {
 		oldVal, oldFound := lookupSpecPath(oldU, root, c.path)
@@ -340,6 +344,7 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 		}
 		labels = append(labels, label)
 		if len(changes) == maxUntrackedSpecRows {
+			omitted = append(omitted, c.path)
 			continue
 		}
 		if c.order {
@@ -348,6 +353,11 @@ func untrackedSpecChanges(oldObj, newObj any, root string, ignored []string, tra
 		}
 		oldShown, newShown := untrackedDisplayValues(c.path, oldVal, newVal)
 		changes = append(changes, FieldChange{Path: c.path, OldValue: oldShown, NewValue: newShown})
+	}
+	// Past the row cap, one row still names every changed field, so no field
+	// identity is lost even when its values are.
+	if len(omitted) > 0 {
+		changes = append(changes, FieldChange{Path: root + " (more fields)", OldValue: nil, NewValue: omitted})
 	}
 	shown := labels
 	if len(shown) > maxUntrackedSummary {
@@ -391,6 +401,9 @@ type changedSpecPath struct {
 	path               string
 	order              bool
 	oldOrder, newOrder []string
+	// absentRoot is the outermost enclosing block that exists on only one
+	// side, or "" when the path's parent exists on both.
+	absentRoot string
 }
 
 // backstopRootOf returns the object's root field (a map for spec, a list for
@@ -443,26 +456,37 @@ func rootFieldsEqual(oldObj, newObj any, root string) bool {
 
 // collectChangedSpecPaths records the shallowest path at which old and new
 // differ. Lists of named objects are keyed by name to match the explicit
-// differs' `containers[app]` notation; other lists are keyed by index, and a
-// length change on them is reported at the list itself.
-func collectChangedSpecPaths(path string, oldV, newV any, out *[]changedSpecPath) {
+// differs' `containers[app]` notation; other lists are keyed by index.
+func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out *[]changedSpecPath) {
 	if reflect.DeepEqual(oldV, newV) {
 		return
 	}
+	// A block that appears or disappears is walked to its leaves, so a row a
+	// differ reports for one leaf inside it does not hide its siblings;
+	// collapseUntracked folds the leaves back into the block for display.
+	// An empty block has no leaves to walk; its appearance is the change.
+	if (oldV == nil && isEmptyBlock(newV)) || (newV == nil && isEmptyBlock(oldV)) {
+		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
+		return
+	}
+	if absentRoot == "" && ((oldV == nil && isBlock(newV)) || (newV == nil && isBlock(oldV))) {
+		absentRoot = path
+	}
+	oldV, newV = emptyLike(oldV, newV), emptyLike(newV, oldV)
 	switch o := oldV.(type) {
 	case map[string]any:
 		n, ok := newV.(map[string]any)
 		if !ok {
-			*out = append(*out, changedSpecPath{path: path})
+			*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
 			return
 		}
 		for _, k := range unionKeys(o, n) {
-			collectChangedSpecPaths(specPathKey(path, k), o[k], n[k], out)
+			collectChangedSpecPaths(specPathKey(path, k), o[k], n[k], absentRoot, out)
 		}
 	case []any:
 		n, ok := newV.([]any)
 		if !ok {
-			*out = append(*out, changedSpecPath{path: path})
+			*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
 			return
 		}
 		if field := listKeyField(o, n); field != "" {
@@ -472,20 +496,110 @@ func collectChangedSpecPaths(path string, oldV, newV any, out *[]changedSpecPath
 				*out = append(*out, changedSpecPath{path: path, order: true, oldOrder: oldOrder, newOrder: newOrder})
 			}
 			for _, k := range unionKeys(oldByKey, newByKey) {
-				collectChangedSpecPaths(path+"["+k+"]", oldByKey[k], newByKey[k], out)
+				collectChangedSpecPaths(path+"["+k+"]", oldByKey[k], newByKey[k], absentRoot, out)
 			}
 			return
 		}
-		if len(o) != len(n) {
-			*out = append(*out, changedSpecPath{path: path})
-			return
-		}
-		for i := range o {
-			collectChangedSpecPaths(fmt.Sprintf("%s[%d]", path, i), o[i], n[i], out)
+		// Unkeyed items are compared by position; items past the shorter
+		// list are reported as added or removed.
+		for i := 0; i < max(len(o), len(n)); i++ {
+			var oldItem, newItem any
+			if i < len(o) {
+				oldItem = o[i]
+			}
+			if i < len(n) {
+				newItem = n[i]
+			}
+			collectChangedSpecPaths(fmt.Sprintf("%s[%d]", path, i), oldItem, newItem, absentRoot, out)
 		}
 	default:
-		*out = append(*out, changedSpecPath{path: path})
+		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
 	}
+}
+
+// collapseUntracked reports an uncovered leaf inside a block that exists on
+// only one side at the shallowest enclosing block that holds no covered leaf:
+// "rules[1]" rather than each of its fields, while a block that also holds a
+// field a differ reported is split down to the uncovered part.
+func collapseUntracked(untracked, covered []changedSpecPath) []changedSpecPath {
+	coveredSegs := make([][]string, 0, len(covered))
+	for _, c := range covered {
+		coveredSegs = append(coveredSegs, splitSpecPath(c.path))
+	}
+	holdsCovered := func(prefix []string) bool {
+		for _, segs := range coveredSegs {
+			if len(segs) >= len(prefix) && slices.Equal(segs[:len(prefix)], prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	var out []changedSpecPath
+	seen := map[string]bool{}
+	for _, c := range untracked {
+		if c.order || c.absentRoot == "" {
+			out = append(out, c)
+			continue
+		}
+		segs := splitSpecPath(c.path)
+		path := c.path
+		for n := len(splitSpecPath(c.absentRoot)); n <= len(segs); n++ {
+			if !holdsCovered(segs[:n]) {
+				path = joinSpecPath(segs[:n])
+				break
+			}
+		}
+		if !seen[path] {
+			seen[path] = true
+			out = append(out, changedSpecPath{path: path})
+		}
+	}
+	return out
+}
+
+// joinSpecPath is the inverse of splitSpecPath.
+func joinSpecPath(segments []string) string {
+	var b strings.Builder
+	for i, seg := range segments {
+		if i > 0 && !strings.HasPrefix(seg, "[") {
+			b.WriteByte('.')
+		}
+		b.WriteString(seg)
+	}
+	return b.String()
+}
+
+func isEmptyBlock(v any) bool {
+	switch typed := v.(type) {
+	case map[string]any:
+		return len(typed) == 0
+	case []any:
+		return len(typed) == 0
+	}
+	return false
+}
+
+func isBlock(v any) bool {
+	switch v.(type) {
+	case map[string]any, []any:
+		return true
+	}
+	return false
+}
+
+// emptyLike returns an empty map or list in place of nil when other is one,
+// and v unchanged otherwise.
+func emptyLike(v, other any) any {
+	if v != nil {
+		return v
+	}
+	switch other.(type) {
+	case map[string]any:
+		return map[string]any{}
+	case []any:
+		return []any{}
+	}
+	return nil
 }
 
 func sharedKeyOrder(items []any, other map[string]any, field string) []string {
@@ -600,9 +714,22 @@ func splitSpecPath(path string) []string {
 
 // trackedCoverage returns the subtrees a tracked row actually compares. The
 // Deployment resources row compares only limits and requests, not claims.
+// countOnlyRowPaths are rows that report a count or a kind for a whole list
+// or block (rule, TLS, grant and listener counts; a Rollout's strategy kind).
+// They cover only their own path, so edits beneath them are still reported.
+var countOnlyRowPaths = map[string]bool{
+	"spec.rules": true, "spec.tls": true, "spec.from": true, "spec.to": true,
+	"spec.listeners": true, "spec.strategy": true,
+}
+
+// exactCoverage marks a tracked path that covers only itself.
+const exactCoverage = "="
+
 func trackedCoverage(path string) [][]string {
 	segments := splitSpecPath(path)
 	switch {
+	case countOnlyRowPaths[path]:
+		return [][]string{append(slices.Clone(segments), exactCoverage)}
 	case path == "spec.template.spec.containers[*].resources":
 		return [][]string{append(slices.Clone(segments), "limits"), append(slices.Clone(segments), "requests")}
 	case len(segments) == 2 && segments[0] == "webhooks":
@@ -628,6 +755,12 @@ func trackedCoverage(path string) [][]string {
 // rows for individual items don't describe their sequence.
 func specPathCovered(tracked [][]string, path []string, order bool) bool {
 	for _, t := range tracked {
+		if n := len(t); n > 0 && t[n-1] == exactCoverage {
+			if slices.Equal(t[:n-1], path) {
+				return true
+			}
+			continue
+		}
 		if order && len(t) > len(path) {
 			continue
 		}
@@ -728,8 +861,9 @@ func untrackedPathSensitive(path string) bool {
 			return true
 		}
 		// Header modifiers and header matches (Gateway API routes) carry
-		// Authorization and cookie values keyed by header name.
-		if strings.Contains(strings.ToLower(key), "header") {
+		// Authorization and cookie values keyed by header name; annotations
+		// at any depth carry free-form config.
+		if strings.Contains(strings.ToLower(key), "header") || key == "annotations" {
 			return true
 		}
 		if envNameLooksSecret(key) {

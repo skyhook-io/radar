@@ -71,7 +71,7 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"ReplicaSet":                     {group: "apps", diff: diffReplicaSet},
 	"DaemonSet":                      {group: "apps", diff: diffDaemonSet, backstopRoot: "spec"},
 	"StatefulSet":                    {group: "apps", diff: diffStatefulSet, backstopRoot: "spec"},
-	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: chainDiffs(diffHPA, diffHPAScalingConfig), backstopRoot: "spec"},
+	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: chainDiffs(diffHPA, diffHPAScalingConfig), backstopRoot: "spec", backstopIgnored: hpaBehaviorCovered},
 	"Job":                            {group: "batch", diff: diffJob, backstopRoot: "spec"},
 	"CronJob":                        {group: "batch", diff: diffCronJob, backstopRoot: "spec"},
 	"PodDisruptionBudget":            {group: "policy", diff: diffPDB, backstopRoot: "spec"},
