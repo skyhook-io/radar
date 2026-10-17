@@ -594,7 +594,8 @@ and an info finding, for example "Selects 2 pods from 2 workloads: frontend (1),
 search (1)"). This alone is context: stable and canary Deployments, blue/green
 cutovers and Argo Rollouts canaries without a traffic router share a Service on
 purpose. The breakdown is withheld, and `omitted` says so, when the caller can't
-read every workload it would name. Radar raises a `service_mixed_backends`
+read every workload it would name; it is left out when a workload's kind can't be
+resolved for that check. Radar raises a `service_mixed_backends`
 warning issue, and resource context adds the `different_applications` warning
 with its explanation in `serviceSummary.differentApplications`, only when the
 workloads that receive the traffic (ready, non-terminating Pods, or every live
@@ -607,7 +608,8 @@ numeric targetPort while others declare other ports but not it. Containers that
 every workload shares identically, native sidecars and known mesh proxies are
 not counted as those other ports; a workload that declares no ports is not evidence; named targetPorts are left to Kubernetes,
 which keeps Pods without that port name out of the endpoints; headless Services
-are never judged. The issue is never critical. In the MCP `issues` tool its
+are never judged, nor are revisions whose ReplicaSets Radar can't read, since
+they would look like separate workloads. The issue is never critical. In the MCP `issues` tool its
 `correlated_changes` show recent edits to the Service, such as a selector change.
 
 ### Write Tools
