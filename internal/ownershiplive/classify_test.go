@@ -280,7 +280,7 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 			seen := map[string]bool{}
 			for _, d := range ownershiptest.Differences(begin(t, from), cache, q) {
 				question := "Object"
-				if d.Candidates {
+				if d.Asked == ownershiptest.AskedCandidates {
 					question = "OwnerCandidates"
 				}
 				seen[question] = true

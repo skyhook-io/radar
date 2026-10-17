@@ -2,6 +2,7 @@ package cachesource
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,9 +18,12 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // rendered is a World served by fake API clients, with Radar's caches over
@@ -104,12 +108,124 @@ func apiObject(t *testing.T, o ownershiptest.Object) (runtime.Object, bool) {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(gvk)
 	setMeta(t, u, o)
+	switch o.Ref.GroupKind() {
+	case ownership.ArgoApplication:
+		renderApplication(u, o)
+	case ownership.FluxHelmRelease, ownership.FluxKustomization:
+		renderFluxManager(u, o)
+	}
 	return u, false
+}
+
+// namespacedKind reports whether the World serves gk as namespaced, and
+// whether it serves gk at all.
+func namespacedKind(gk resourceid.GroupKind) (namespaced, known bool) {
+	k, known := ownershiptest.KindOf(gk)
+	return k.Namespaced, known
+}
+
+// renderApplication writes the spec and status by which an Argo CD
+// Application says what o means, in the form o.Form picks. A member in the
+// destination namespace is written without its namespace every other entry,
+// as Argo CD may.
+func renderApplication(u *unstructured.Unstructured, o ownershiptest.Object) {
+	entries := []any{}
+	for i, m := range o.Members {
+		e := map[string]any{"kind": m.Kind, "name": m.Name, "version": "v1", "status": "Synced"}
+		if m.Group != "" {
+			e["group"] = m.Group
+		}
+		namespaced, known := namespacedKind(m.GroupKind())
+		inDestination := known && namespaced && o.Destination != "" && m.Namespace == o.Destination && i%2 == 1
+		if m.Namespace != "" && !inDestination {
+			e["namespace"] = m.Namespace
+		}
+		entries = append(entries, e)
+	}
+	destination := map[string]any{"server": "https://kubernetes.default.svc"}
+	if o.Form == 1 {
+		destination = map[string]any{"name": "in-cluster"}
+	}
+	status := map[string]any{"reconciledAt": "2026-10-17T10:00:00Z", "sync": map[string]any{"status": "Synced"}, "resources": entries}
+	switch o.Membership {
+	case ownership.MembersRecorded:
+		if len(entries) == 0 && o.Form != 0 {
+			// Argo CD leaves an empty list out.
+			delete(status, "resources")
+		}
+	case ownership.MembersRemote:
+		destination = map[string]any{"server": "https://prod.example.com:6443"}
+		if o.Form == 1 {
+			destination = map[string]any{"name": "prod"}
+		}
+	case ownership.MembersUnreadable:
+		switch o.Form {
+		case 0: // never reconciled
+			status = nil
+		case 1: // an entry naming no object
+			status["resources"] = append(entries, map[string]any{"kind": "ConfigMap", "namespace": "alpha"})
+		default: // no destination
+			destination = map[string]any{}
+		}
+	}
+	if o.Destination != "" && len(destination) > 0 {
+		destination["namespace"] = o.Destination
+	}
+	u.Object["spec"] = map[string]any{"project": "default", "destination": destination}
+	if status != nil {
+		u.Object["status"] = status
+	}
+}
+
+// renderFluxManager writes the spec and status by which a Flux Kustomization
+// or HelmRelease says what o means, in the form o.Form picks. A
+// cluster-scoped member is written with the manager's namespace every other
+// entry, as Flux may record a namespace the kind ignores.
+func renderFluxManager(u *unstructured.Unstructured, o ownershiptest.Object) {
+	entries := []any{}
+	for i, m := range o.Members {
+		namespace := m.Namespace
+		if namespaced, known := namespacedKind(m.GroupKind()); known && !namespaced && i%2 == 1 {
+			namespace = o.Ref.Namespace
+		}
+		entries = append(entries, map[string]any{"id": strings.Join([]string{namespace, m.Name, m.Group, m.Kind}, "_"), "v": "v1"})
+	}
+	spec := map[string]any{"interval": "10m"}
+	inventory := map[string]any{"entries": entries}
+	switch o.Membership {
+	case ownership.MembersRecorded:
+		if len(entries) == 0 && o.Form != 0 {
+			inventory = map[string]any{}
+		}
+	case ownership.MembersRemote:
+		spec["kubeConfig"] = map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}}
+	case ownership.MembersUnreadable:
+		switch o.Form {
+		case 0: // not applied yet, or a controller that records no inventory
+			inventory = nil
+		case 1: // an entry whose ID doesn't parse
+			inventory["entries"] = append(entries, map[string]any{"id": "not-an-id", "v": "v1"})
+		default: // an entry without an ID
+			inventory["entries"] = append(entries, map[string]any{"v": "v1"})
+		}
+	}
+	u.Object["spec"] = spec
+	status := map[string]any{"observedGeneration": int64(1)}
+	if inventory != nil {
+		status["inventory"] = inventory
+	}
+	u.Object["status"] = status
 }
 
 // render starts Radar's caches over fake clients holding w, collected as
 // w.Collection says, and returns once every collected store has loaded.
 func render(t *testing.T, w ownershiptest.World) *rendered {
+	t.Helper()
+	return renderWith(t, w, MembershipIndexers())
+}
+
+// renderWith is render with the dynamic cache given indexers.
+func renderWith(t *testing.T, w ownershiptest.World, indexers map[schema.GroupResource]cache.Indexers) *rendered {
 	t.Helper()
 	var typedObjects, dynamicObjects []runtime.Object
 	for _, o := range w.Objects {
@@ -174,7 +290,7 @@ func render(t *testing.T, w ownershiptest.World) *rendered {
 		t.Fatal(err)
 	}
 	t.Cleanup(typedCache.Stop)
-	dynamicCache, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: r.dynamic, Discovery: discoveryCache})
+	dynamicCache, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: r.dynamic, Discovery: discoveryCache, Indexers: indexers})
 	if err != nil {
 		t.Fatal(err)
 	}

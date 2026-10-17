@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -172,10 +173,59 @@ func (d *driver) staleKind() string {
 }
 
 // step makes one random change: reparent, orphan, delete, recreate under the
-// same name with a new UID, start deleting, or create a dependent.
+// same name with a new UID, start deleting, create a dependent, add or drop a
+// manager's member, or change what a manager's status says.
 func (d *driver) step(r *rand.Rand, n int) string {
 	pick := func() ownershiptest.Object { return d.w.Objects[r.IntN(len(d.w.Objects))] }
-	switch r.IntN(6) {
+	pickManager := func() (ownershiptest.Object, bool) {
+		var managers []ownershiptest.Object
+		for _, o := range d.w.Objects {
+			if ownership.IsRecordingManager(o.Ref.GroupKind()) {
+				managers = append(managers, o)
+			}
+		}
+		if len(managers) == 0 {
+			return ownershiptest.Object{}, false
+		}
+		return managers[r.IntN(len(managers))], true
+	}
+	newManager := func() string {
+		kind := []resourceid.GroupKind{ownership.ArgoApplication, ownership.FluxKustomization, ownership.FluxHelmRelease}[r.IntN(3)]
+		k, _ := ownershiptest.KindOf(kind)
+		member := pick().Ref
+		o := ownershiptest.Object{
+			Ref:        resourceid.Ref{Group: kind.Group, Kind: kind.Kind, Namespace: "alpha", Name: fmt.Sprintf("manager-%d", n)},
+			APIVersion: k.APIVersion(), UID: types.UID(fmt.Sprintf("uid-manager-%d", n)),
+			Membership: ownership.MembersRecorded, Members: []resourceid.Ref{member}, Destination: "alpha",
+		}
+		d.create(o)
+		return fmt.Sprintf("%v created listing %v", o.Ref, member)
+	}
+	switch r.IntN(8) {
+	case 6:
+		m, ok := pickManager()
+		if !ok {
+			return newManager()
+		}
+		if len(m.Members) > 0 && r.IntN(2) == 0 {
+			gone := m.Members[r.IntN(len(m.Members))]
+			d.update(m.Ref, func(o *ownershiptest.Object) {
+				o.Members = slices.DeleteFunc(slices.Clone(o.Members), func(ref resourceid.Ref) bool { return ref == gone })
+			})
+			return fmt.Sprintf("%v drops member %v", m.Ref, gone)
+		}
+		added := pick().Ref
+		d.update(m.Ref, func(o *ownershiptest.Object) { o.Members = append(slices.Clone(o.Members), added) })
+		return fmt.Sprintf("%v adds member %v", m.Ref, added)
+	case 7:
+		m, ok := pickManager()
+		if !ok {
+			return newManager()
+		}
+		state := ownership.MembershipState(r.IntN(3))
+		form := uint8(r.IntN(3))
+		d.update(m.Ref, func(o *ownershiptest.Object) { o.Membership, o.Form = state, form })
+		return fmt.Sprintf("%v says %v in form %d", m.Ref, state, form)
 	case 0:
 		o, owner := pick(), pick()
 		d.update(o.Ref, func(o *ownershiptest.Object) { o.Owners = append(o.Owners, owner.OwnerRef(r.IntN(2) == 0)) })

@@ -14,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 )
 
 // DynamicResourceCache wraps the shared k8score implementation.
@@ -91,6 +92,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
 			SyncStallAfter:              dynamicSyncStallAfter,
+			Indexers:                    cachesource.MembershipIndexers(),
 			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)

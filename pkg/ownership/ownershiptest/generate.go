@@ -32,8 +32,8 @@ func (k Kind) APIVersion() string {
 }
 
 // Kinds are the kinds generated Worlds use: built-ins the typed cache holds,
-// custom kinds Radar watches on demand, one kind that can't be watched, and
-// Events.
+// custom kinds Radar watches on demand, one kind that can't be watched,
+// Events, and the GitOps managers whose status lists their members.
 var Kinds = []Kind{
 	{GroupKind: resourceid.GroupKind{Kind: "Pod"}, Version: "v1", Resource: "pods", Namespaced: true, Typed: true, Watchable: true},
 	{GroupKind: resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}, Version: "v1", Resource: "replicasets", Namespaced: true, Typed: true, Watchable: true},
@@ -47,6 +47,9 @@ var Kinds = []Kind{
 	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Gadget"}, Version: "v1", Resource: "gadgets", Namespaced: true, Watchable: true},
 	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "ClusterWidget"}, Version: "v1", Resource: "clusterwidgets", Watchable: true},
 	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Summary"}, Version: "v1", Resource: "summaries", Namespaced: true},
+	{GroupKind: ownership.ArgoApplication, Version: "v1alpha1", Resource: "applications", Namespaced: true, Watchable: true},
+	{GroupKind: ownership.FluxHelmRelease, Version: "v2", Resource: "helmreleases", Namespaced: true, Watchable: true},
+	{GroupKind: ownership.FluxKustomization, Version: "v1", Resource: "kustomizations", Namespaced: true, Watchable: true},
 }
 
 // KindOf returns the generated kind gk.
@@ -78,7 +81,8 @@ func Resources() []ownership.ServedResource {
 // dependent of a namespaced owner, a reference across namespaces, references
 // with the right UID and the wrong kind or name, a replaced owner, a dangling
 // owner, owner versions served and unserved, deletion in progress and an Event
-// naming an owner.
+// naming an owner. Its GitOps managers hold every membership state, in every
+// form their status takes.
 func Fixture() World {
 	b := newBuilder()
 	web := b.add("apps", "Deployment", "alpha", "web")
@@ -108,8 +112,38 @@ func Fixture() World {
 	otherVersion.APIVersion = "example.io/v1beta1"
 	b.add("", "ConfigMap", "alpha", "versioned", otherVersion)
 	b.add("", "Event", "alpha", "e1", podA.OwnerRef(false))
-	b.add("", "PersistentVolume", "", "pv1")
+	pv1 := b.add("", "PersistentVolume", "", "pv1")
 	b.add("example.io", "Summary", "alpha", "s1", w1.OwnerRef(false))
+
+	// Argo CD lists a namespaced member in its destination, one elsewhere,
+	// cluster-scoped ones, one already gone, one of a kind discovery doesn't
+	// serve, and one twice, with and without its namespace.
+	gone := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "alpha", Name: "gone"}
+	unknownKind := resourceid.Ref{Group: "example.io", Kind: "Unserved", Namespace: "alpha", Name: "x"}
+	shared := resourceid.Ref{Kind: "ConfigMap", Namespace: "alpha", Name: "shared"}
+	g1 := resourceid.Ref{Group: "example.io", Kind: "Gadget", Namespace: "beta", Name: "g1"}
+	cw1 := resourceid.Ref{Group: "example.io", Kind: "ClusterWidget", Name: "cw1"}
+	app := ownership.ArgoApplication
+	b.manager(app, "argocd", "web", ownership.MembersRecorded, 0, "alpha", web.Ref, cfg.Ref, n1.Ref, w1.Ref, gone, unknownKind, g1, n1.Ref, cfg.Ref)
+	b.manager(app, "argocd", "by-name", ownership.MembersRecorded, 1, "beta", g1, pv1.Ref, web.Ref)
+	b.manager(app, "argocd", "no-destination-namespace", ownership.MembersRecorded, 0, "", n1.Ref, cfg.Ref)
+	b.manager(app, "argocd", "empty-list", ownership.MembersRecorded, 0, "alpha")
+	b.manager(app, "argocd", "empty", ownership.MembersRecorded, 1, "alpha")
+	b.manager(app, "argocd", "elsewhere", ownership.MembersRemote, 0, "alpha", web.Ref)
+	b.manager(app, "argocd", "elsewhere-by-name", ownership.MembersRemote, 1, "alpha", cfg.Ref)
+	b.manager(app, "argocd", "new", ownership.MembersUnreadable, 0, "alpha")
+	b.manager(app, "argocd", "malformed", ownership.MembersUnreadable, 1, "alpha", web.Ref)
+	b.manager(app, "argocd", "nowhere", ownership.MembersUnreadable, 2, "alpha", cfg.Ref)
+	// Flux lists cluster-scoped members with and without a namespace the
+	// kind ignores, and shares members with Argo CD.
+	ks, hr := ownership.FluxKustomization, ownership.FluxHelmRelease
+	b.manager(ks, "flux-system", "apps", ownership.MembersRecorded, 0, "", w1.Ref, web.Ref, shared, n1.Ref, pv1.Ref, cw1, unknownKind)
+	b.manager(ks, "flux-system", "empty", ownership.MembersRecorded, 1, "")
+	b.manager(ks, "flux-system", "remote", ownership.MembersRemote, 0, "", cfg.Ref)
+	b.manager(ks, "flux-system", "bad-id", ownership.MembersUnreadable, 1, "", web.Ref)
+	b.manager(hr, "flux-system", "chart", ownership.MembersRecorded, 0, "", cfg.Ref, web.Ref)
+	b.manager(hr, "flux-system", "legacy", ownership.MembersUnreadable, 0, "")
+	b.manager(hr, "flux-system", "no-id", ownership.MembersUnreadable, 2, "", cfg.Ref)
 	return b.world()
 }
 
@@ -129,9 +163,29 @@ func Generate(seed uint64) World {
 	node, pv := resourceid.GroupKind{Kind: "Node"}, resourceid.GroupKind{Kind: "PersistentVolume"}
 	event, summary := resourceid.GroupKind{Kind: "Event"}, resourceid.GroupKind{Group: "example.io", Kind: "Summary"}
 	var owners []Object
+	membership := func() ownership.MembershipState {
+		return []ownership.MembershipState{ownership.MembersRecorded, ownership.MembersRecorded, ownership.MembersRecorded, ownership.MembersRemote, ownership.MembersUnreadable}[r.IntN(5)]
+	}
+	// members picks up to three objects so far for a manager to list, and
+	// sometimes one that is gone or of a kind discovery doesn't serve.
+	members := func(name string) []resourceid.Ref {
+		var out []resourceid.Ref
+		for range r.IntN(4) {
+			if len(b.objects) > 0 {
+				out = append(out, b.objects[r.IntN(len(b.objects))].Ref)
+			}
+		}
+		switch r.IntN(6) {
+		case 0:
+			out = append(out, resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: ns(), Name: name + "-gone"})
+		case 1:
+			out = append(out, resourceid.Ref{Group: "example.io", Kind: "Unserved", Namespace: ns(), Name: name + "-x"})
+		}
+		return out
+	}
 	for i := range 4 + r.IntN(6) {
 		name := fmt.Sprintf("m%d", i)
-		switch r.IntN(8) {
+		switch r.IntN(10) {
 		case 0: // a controller chain
 			space := ns()
 			d := b.add("apps", "Deployment", space, name)
@@ -191,6 +245,15 @@ func Generate(seed uint64) World {
 				space = ns()
 			}
 			addKind(pickKind(event, summary), space, name+"-other", o.OwnerRef(false))
+		case 8: // an Argo CD Application
+			destination := ns()
+			if r.IntN(4) == 0 {
+				destination = ""
+			}
+			b.manager(ownership.ArgoApplication, ns(), name+"-app", membership(), uint8(r.IntN(3)), destination, members(name)...)
+		case 9: // a Flux Kustomization or HelmRelease
+			kind := pickKind(ownership.FluxKustomization, ownership.FluxHelmRelease)
+			b.manager(kind, ns(), name+"-flux", membership(), uint8(r.IntN(3)), "", members(name)...)
 		}
 	}
 	w := b.world()
@@ -247,6 +310,14 @@ func (b *builder) add(group, kind, namespace, name string, owners ...metav1.Owne
 	}
 	b.objects = append(b.objects, o)
 	return o
+}
+
+// manager adds a GitOps manager whose status says state of members.
+func (b *builder) manager(gk resourceid.GroupKind, namespace, name string, state ownership.MembershipState, form uint8, destination string, members ...resourceid.Ref) Object {
+	b.add(gk.Group, gk.Kind, namespace, name)
+	o := &b.objects[len(b.objects)-1]
+	o.Membership, o.Form, o.Destination, o.Members = state, form, destination, members
+	return *o
 }
 
 func (b *builder) deleting(o Object, finalizers ...string) {

@@ -107,6 +107,15 @@ func TestSourceConformsOnTheFixture(t *testing.T) {
 			widgetKind:     {State: ownershiptest.NotCollected, OnDemand: true},
 			clusterWidgets: {State: ownershiptest.Refused, OnDemand: true},
 		},
+		"managers partly collected": {
+			ownership.ArgoApplication:   {State: ownershiptest.Loading, OnDemand: true},
+			ownership.FluxKustomization: {Namespaces: []string{"alpha"}, OnDemand: true},
+			ownership.FluxHelmRelease:   {State: ownershiptest.Refused, OnDemand: true},
+		},
+		"managers not collected": {
+			ownership.ArgoApplication:   {State: ownershiptest.NotCollected, OnDemand: true},
+			ownership.FluxKustomization: {Namespaces: []string{"alpha", "flux-system"}, OnDemand: true},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := ownershiptest.Fixture()
@@ -121,6 +130,18 @@ func TestSourceConformsOnTheFixture(t *testing.T) {
 		w.Partial = true
 		conform(t, w)
 	})
+	// A manager kind discovery doesn't serve is not installed, unless
+	// discovery missed some groups.
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprintf("HelmReleases not served, partial discovery %v", partial), func(t *testing.T) {
+			w := ownershiptest.Fixture()
+			w.Partial = partial
+			w.Resources = slices.DeleteFunc(w.Resources, func(r ownership.ServedResource) bool { return r.Kind == ownership.FluxHelmRelease.Kind })
+			w.Objects = slices.DeleteFunc(w.Objects, func(o ownershiptest.Object) bool { return o.Ref.GroupKind() == ownership.FluxHelmRelease })
+			w.Collection[ownership.FluxHelmRelease] = ownershiptest.Collection{State: ownershiptest.NotCollected, OnDemand: true}
+			conform(t, w)
+		})
+	}
 }
 
 func TestSourceConformsOnGeneratedWorlds(t *testing.T) {

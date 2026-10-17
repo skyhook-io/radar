@@ -33,6 +33,12 @@ type Session interface {
 	// domain whose owner references name uid, at most limit of them (0 for
 	// no limit). It does no I/O and waits for nothing.
 	OwnerCandidates(uid types.UID, domain Domain, limit int) CandidateRead
+	// Inventory reads the member list in a manager's status; a manager must
+	// be of a RecordingManagers kind. It does no I/O and waits for nothing.
+	Inventory(manager resourceid.Ref) InventoryRead
+	// Recorders finds the local managers, in every namespace, whose member
+	// lists name ref. It does no I/O and waits for nothing.
+	Recorders(ref resourceid.Ref) RecorderRead
 	// Validate returns nil if every store the session read is still the one
 	// serving what it served then; otherwise ErrCachesReplaced or
 	// ErrStoreReplaced. It says the reads came from live stores, not that

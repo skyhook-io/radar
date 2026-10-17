@@ -13,17 +13,20 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// Queries are the questions Conform asks both sessions.
+// Queries are the questions Conform asks both sessions: Object and Recorders
+// of every ref, OwnerCandidates of every UID in every domain at every limit,
+// and Inventory of every manager.
 type Queries struct {
-	Refs    []resourceid.Ref
-	UIDs    []types.UID
-	Domains []ownership.Domain
-	Limits  []int
+	Refs     []resourceid.Ref
+	UIDs     []types.UID
+	Domains  []ownership.Domain
+	Limits   []int
+	Managers []resourceid.Ref
 }
 
 // QueriesFor derives questions from w: every object, refs that miss in each
-// way a ref can, every UID an object has or names, and domains around every
-// namespace.
+// way a ref can, every UID an object has or names, domains around every
+// namespace, every manager and every member a manager lists.
 func QueriesFor(w World) Queries {
 	var q Queries
 	seenRef := map[resourceid.Ref]bool{}
@@ -67,6 +70,19 @@ func QueriesFor(w World) Queries {
 			addRef(resourceid.Ref{Group: group, Kind: owner.Kind, Name: owner.Name})
 		}
 	}
+	for _, o := range w.Objects {
+		if ownership.IsRecordingManager(o.Ref.GroupKind()) {
+			q.Managers = append(q.Managers, o.Ref)
+			for _, m := range o.Members {
+				addRef(m)
+			}
+		}
+	}
+	q.Managers = append(q.Managers,
+		resourceid.Ref{Group: ownership.ArgoApplication.Group, Kind: ownership.ArgoApplication.Kind, Namespace: "argocd", Name: "no-such-app"},
+		resourceid.Ref{Group: ownership.FluxKustomization.Group, Kind: ownership.FluxKustomization.Kind, Name: "no-namespace"},
+		resourceid.Ref{Kind: "ConfigMap", Namespace: "alpha", Name: "cfg"},
+	)
 	addRef(resourceid.Ref{Group: "example.io", Kind: "Unserved", Namespace: "default", Name: "x"})
 	addRef(resourceid.Ref{Kind: "Pod", Namespace: "default"})
 	addRef(resourceid.Ref{Namespace: "default", Name: "no-kind"})
@@ -101,6 +117,16 @@ func QueriesFor(w World) Queries {
 	return q
 }
 
+// Asked names a Session question.
+type Asked uint8
+
+const (
+	AskedObject Asked = iota
+	AskedCandidates
+	AskedRecorders
+	AskedInventory
+)
+
 // Difference is one question two sessions answered differently.
 type Difference struct {
 	Question  string
@@ -110,13 +136,13 @@ type Difference struct {
 	// Coverage: the answers disagree about what was read (gaps or
 	// truncation), not only about objects.
 	Coverage bool
-	// The question itself: Object(Ref), or, when Candidates is set,
-	// OwnerCandidates(UID, Domain, Limit).
-	Ref        resourceid.Ref
-	Candidates bool
-	UID        types.UID
-	Domain     ownership.Domain
-	Limit      int
+	// The question itself: Object(Ref), OwnerCandidates(UID, Domain,
+	// Limit), Recorders(Ref) or Inventory(Ref).
+	Asked  Asked
+	Ref    resourceid.Ref
+	UID    types.UID
+	Domain ownership.Domain
+	Limit  int
 	// WantGaps are the gaps the first session reported for a search.
 	WantGaps []ownership.Gap
 }
@@ -135,7 +161,20 @@ func Differences(want, got ownership.Session, q Queries) []Difference {
 				return r.State == ownership.Unavailable || r.State == ownership.Excluded
 			}
 			diffs = append(diffs, Difference{Question: fmt.Sprintf("Object(%v)", ref), Want: describeRead(w), Got: describeRead(g), Objects: []resourceid.Ref{ref},
-				Coverage: unread(w) || unread(g), Ref: ref})
+				Coverage: unread(w) || unread(g), Asked: AskedObject, Ref: ref})
+		}
+	}
+	for _, ref := range q.Refs {
+		if w, g := want.Recorders(ref), got.Recorders(ref); !sameRecorders(w, g) {
+			diffs = append(diffs, Difference{Question: fmt.Sprintf("Recorders(%v)", ref), Want: describeRecorders(w), Got: describeRecorders(g),
+				Objects: differingRecorders(w, g), Coverage: !slices.Equal(w.Gaps, g.Gaps), Asked: AskedRecorders, Ref: ref, WantGaps: w.Gaps})
+		}
+	}
+	for _, m := range q.Managers {
+		if w, g := want.Inventory(m), got.Inventory(m); !sameInventory(w, g) {
+			unread := func(r ownership.InventoryRead) bool { return r.Manager.State == ownership.Unavailable }
+			diffs = append(diffs, Difference{Question: fmt.Sprintf("Inventory(%v)", m), Want: describeInventory(w), Got: describeInventory(g), Objects: []resourceid.Ref{m},
+				Coverage: unread(w) || unread(g), Asked: AskedInventory, Ref: m})
 		}
 	}
 	for _, uid := range q.UIDs {
@@ -146,9 +185,9 @@ func Differences(want, got ownership.Session, q Queries) []Difference {
 					diffs = append(diffs, Difference{
 						Question: fmt.Sprintf("OwnerCandidates(%q, %+v, %d)", uid, d, limit),
 						Want:     describeCandidates(w), Got: describeCandidates(g),
-						Objects:    differingCandidates(w, g),
-						Coverage:   w.Truncated != g.Truncated || !slices.Equal(w.Gaps, g.Gaps),
-						Candidates: true, UID: uid, Domain: d, Limit: limit, WantGaps: w.Gaps,
+						Objects:  differingCandidates(w, g),
+						Coverage: w.Truncated != g.Truncated || !slices.Equal(w.Gaps, g.Gaps),
+						Asked:    AskedCandidates, UID: uid, Domain: d, Limit: limit, WantGaps: w.Gaps,
 					})
 				}
 			}
@@ -192,6 +231,58 @@ func differingCandidates(a, b ownership.CandidateRead) []resourceid.Ref {
 	}
 	slices.SortFunc(out, compareRefs)
 	return out
+}
+
+// differingRecorders returns the managers one answer lists as recording, or
+// as unreadable, and the other doesn't, or lists differently.
+func differingRecorders(a, b ownership.RecorderRead) []resourceid.Ref {
+	out := differingCandidates(ownership.CandidateRead{Candidates: a.Recorders}, ownership.CandidateRead{Candidates: b.Recorders})
+	for _, ref := range a.Unreadable {
+		if !slices.Contains(b.Unreadable, ref) {
+			out = append(out, ref)
+		}
+	}
+	for _, ref := range b.Unreadable {
+		if !slices.Contains(a.Unreadable, ref) {
+			out = append(out, ref)
+		}
+	}
+	slices.SortFunc(out, compareRefs)
+	return slices.Compact(out)
+}
+
+func sameRecorders(a, b ownership.RecorderRead) bool {
+	if !slices.Equal(a.Gaps, b.Gaps) || !slices.Equal(a.Unreadable, b.Unreadable) || len(a.Recorders) != len(b.Recorders) {
+		return false
+	}
+	for i := range a.Recorders {
+		if !sameObservation(a.Recorders[i], b.Recorders[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameInventory(a, b ownership.InventoryRead) bool {
+	return sameRead(a.Manager, b.Manager) && a.Membership == b.Membership && slices.Equal(a.Members, b.Members) && (a.Members == nil) == (b.Members == nil)
+}
+
+func describeRecorders(r ownership.RecorderRead) string {
+	var refs []string
+	for _, m := range r.Recorders {
+		refs = append(refs, describeObservation(m))
+	}
+	return fmt.Sprintf("recorders [%s] unreadable %v gaps %+v", strings.Join(refs, ", "), r.Unreadable, r.Gaps)
+}
+
+func describeInventory(r ownership.InventoryRead) string {
+	if r.Manager.State != ownership.Present {
+		return "manager " + describeRead(r.Manager)
+	}
+	if r.Membership != ownership.MembersRecorded {
+		return r.Membership.String()
+	}
+	return fmt.Sprintf("recorded %v", r.Members)
 }
 
 func sameRead(a, b ownership.ObjectRead) bool {
