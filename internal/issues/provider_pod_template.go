@@ -2,10 +2,13 @@ package issues
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	admissionv1 "k8s.io/api/admissionregistration/v1"
@@ -18,140 +21,246 @@ import (
 )
 
 type podTemplateSources struct {
-	webhooksOnce sync.Once
-	webhooks     []templateWebhook
-	priorityOnce sync.Once
-	priorities   []schedulingv1.PriorityClass
-	mu           sync.Mutex
-	limitRanges  map[string][]*corev1.LimitRange
+	webhooksOnce     sync.Once
+	webhooks         []templateWebhook
+	webhooksLoaded   bool
+	priorityOnce     sync.Once
+	priorities       []schedulingv1.PriorityClass
+	prioritiesLoaded bool
+	mu               sync.Mutex
+	limitRanges      map[string][]*corev1.LimitRange
 }
 
 type templateWebhook struct {
-	configuration Ref
-	created       metav1.Time
-	name          string
-	create        bool
-	update        bool
-	namespace     labels.Selector
-	object        labels.Selector
+	configuration   Ref
+	created         metav1.Time
+	name            string
+	create          bool
+	update          bool
+	namespace       labels.Selector
+	object          labels.Selector
+	loopback        bool
+	matchConditions bool
 }
 
 func (p *CacheProvider) podTemplateFact(issue Issue, access podTemplateAccess) *issuesapi.DiagnosticFact {
-	if p == nil || p.cache == nil || p.cache.Pods() == nil || !access.canRead(Ref{Kind: "Pod", Namespace: issue.Namespace, Name: issue.Name}) {
+	pod, template, ref := p.podTemplateBaseline(issue.Namespace, issue.Name, access)
+	if pod == nil {
 		return nil
 	}
-	pod, err := p.cache.Pods().Pods(issue.Namespace).Get(issue.Name)
-	if err != nil {
-		return nil
-	}
-	owner := metav1.GetControllerOf(pod)
-	if owner == nil || owner.UID == "" {
-		return nil
-	}
-	gv, err := schema.ParseGroupVersion(owner.APIVersion)
-	if err != nil {
-		return nil
-	}
-	ref := Ref{Kind: owner.Kind, Group: gv.Group, Namespace: pod.Namespace, Name: owner.Name}
-	if !access.canRead(ref) {
-		return nil
-	}
-	var template *corev1.PodSpec
-	switch {
-	case ref.Group == "apps" && ref.Kind == "ReplicaSet" && p.cache.ReplicaSets() != nil:
-		rs, err := p.cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(ref.Name)
-		if err == nil && rs.UID == owner.UID {
-			template = &rs.Spec.Template.Spec
-		}
-	case ref.Group == "batch" && ref.Kind == "Job" && p.cache.Jobs() != nil:
-		job, err := p.cache.Jobs().Jobs(pod.Namespace).Get(ref.Name)
-		if err == nil && job.UID == owner.UID {
-			template = &job.Spec.Template.Spec
-		}
-	}
-	if template == nil {
-		return nil
-	}
-	differences := comparePodTemplate(pod, template, templateSymptom(issue))
+	differences := comparePodTemplate(pod, &template.Spec, templateSymptom(issue))
 	if len(differences) == 0 {
 		return nil
 	}
-	total := len(differences)
-	if len(differences) > maxTemplateDifferences {
-		differences = differences[:maxTemplateDifferences]
+	shown := differences
+	if len(shown) > maxTemplateDifferences {
+		shown = shown[:maxTemplateDifferences]
 	}
-	parts := make([]string, 0, len(differences))
-	for _, difference := range differences {
+	parts := make([]string, 0, len(shown))
+	for _, difference := range shown {
 		parts = append(parts, difference.message)
 	}
 	message := fmt.Sprintf("Live Pod %s/%s spec compared with owning %s %s's current template: %s.", pod.Namespace, pod.Name, ref.Kind, ref.Name, strings.Join(parts, "; "))
-	if total > len(differences) {
-		message += fmt.Sprintf(" Showing %d of %d relevant differences.", len(differences), total)
+	if len(differences) > len(shown) {
+		message += fmt.Sprintf(" Showing %d of %d relevant differences.", len(shown), len(differences))
 	}
 	if templateSymptom(issue) == "oom" {
 		message += " The template values do not describe the OOMing containers' current Pod memory limits. Investigate this discrepancy before choosing a memory-limit change. Pod resizing or later template edits can also explain the difference."
 	}
-	refs := []Ref{{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, ref}
-	candidates := p.templateCandidates(pod, differences, access)
-	candidateCount := len(candidates)
-	if len(candidates) > 3 {
-		candidates = candidates[:3]
+	sources := p.templateSources(pod, template, differences, access)
+	for _, sentence := range sources.sentences {
+		message += " " + sentence
 	}
-	for _, candidate := range candidates {
-		message += " " + candidate.message + "."
-		refs = append(refs, candidate.ref)
-	}
-	if slices.ContainsFunc(candidates, func(candidate templateCandidate) bool {
-		return candidate.ref.Kind == "MutatingWebhookConfiguration"
-	}) {
-		message += " Inspect these webhooks' backing controller or policy configuration for mutations to the differing fields. Matching scope does not establish what they changed."
-	}
-	if candidateCount > len(candidates) {
-		message += fmt.Sprintf(" %d further matching candidate objects not listed; display order does not indicate likelihood.", candidateCount-len(candidates))
-	}
-	message += " Writer and timing are unknown. Candidate inspection is incomplete: current readable configuration only; CEL conditions are not evaluated."
+	refs := append([]Ref{{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, ref}, sources.refs...)
 	return &issuesapi.DiagnosticFact{Type: factPodTemplateDivergence, Message: message, Refs: refs}
 }
+
+// podTemplateBaseline returns a readable Pod with the current template of its
+// immediate ReplicaSet or Job controller, matched by group and UID.
+func (p *CacheProvider) podTemplateBaseline(namespace, name string, access podTemplateAccess) (*corev1.Pod, *corev1.PodTemplateSpec, Ref) {
+	if p == nil || p.cache == nil || p.cache.Pods() == nil || !access.canRead(Ref{Kind: "Pod", Namespace: namespace, Name: name}) {
+		return nil, nil, Ref{}
+	}
+	pod, err := p.cache.Pods().Pods(namespace).Get(name)
+	if err != nil {
+		return nil, nil, Ref{}
+	}
+	template, ref := p.ownerTemplate(pod, access)
+	if template == nil {
+		return nil, nil, Ref{}
+	}
+	return pod, template, ref
+}
+
+func (p *CacheProvider) ownerTemplate(pod *corev1.Pod, access podTemplateAccess) (*corev1.PodTemplateSpec, Ref) {
+	owner := metav1.GetControllerOf(pod)
+	if owner == nil || owner.UID == "" {
+		return nil, Ref{}
+	}
+	gv, err := schema.ParseGroupVersion(owner.APIVersion)
+	if err != nil {
+		return nil, Ref{}
+	}
+	ref := Ref{Kind: owner.Kind, Group: gv.Group, Namespace: pod.Namespace, Name: owner.Name}
+	if !access.canRead(ref) {
+		return nil, Ref{}
+	}
+	switch {
+	case ref.Group == "apps" && ref.Kind == "ReplicaSet" && p.cache.ReplicaSets() != nil:
+		rs, err := p.cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(ref.Name)
+		if err == nil && rs.UID == owner.UID {
+			return &rs.Spec.Template, ref
+		}
+	case ref.Group == "batch" && ref.Kind == "Job" && p.cache.Jobs() != nil:
+		job, err := p.cache.Jobs().Jobs(pod.Namespace).Get(ref.Name)
+		if err == nil && job.UID == owner.UID {
+			return &job.Spec.Template, ref
+		}
+	}
+	return nil, Ref{}
+}
+
+const (
+	maxTemplateCandidateLines = 5
+	maxTemplateNamedSources   = 10
+)
 
 type templateCandidate struct {
 	ref     Ref
 	message string
+	// loopback marks webhooks served from a loopback URL — on managed
+	// Kubernetes, a control-plane-hosted endpoint. It orders the list only; it
+	// says where admission calls go, not who installed the webhook or what it
+	// can change.
+	loopback bool
 }
 
-func (p *CacheProvider) templateCandidates(pod *corev1.Pod, differences []templateDifference, access podTemplateAccess) []templateCandidate {
+type templateSourceReport struct {
+	sentences []string
+	refs      []Ref
+}
+
+// templateSources describes what could have produced the differences: the
+// matching candidates (every one named, within a budget), mutator identities
+// the Pod itself records, and what could not be inspected. Candidates are
+// found from all differences, not only the displayed ones.
+func (p *CacheProvider) templateSources(pod *corev1.Pod, template *corev1.PodTemplateSpec, differences []templateDifference, access podTemplateAccess) templateSourceReport {
+	candidates, coverage := p.templateCandidates(pod, differences, access)
+	var report templateSourceReport
+	hasWebhook := false
+	for idx, candidate := range candidates {
+		if idx == maxTemplateNamedSources {
+			break
+		}
+		report.refs = append(report.refs, candidate.ref)
+		hasWebhook = hasWebhook || candidate.ref.Kind == "MutatingWebhookConfiguration"
+		if idx < maxTemplateCandidateLines {
+			report.sentences = append(report.sentences, candidate.message+".")
+		}
+	}
+	if len(candidates) > maxTemplateCandidateLines {
+		end := min(len(candidates), maxTemplateNamedSources)
+		names := make([]string, 0, end-maxTemplateCandidateLines)
+		for _, candidate := range candidates[maxTemplateCandidateLines:end] {
+			names = append(names, candidate.ref.Kind+" "+candidate.ref.Name)
+		}
+		sentence := "Also matching: " + strings.Join(names, ", ") + "."
+		if len(candidates) > end {
+			sentence += fmt.Sprintf(" %d more matching candidate objects are not named.", len(candidates)-end)
+		}
+		report.sentences = append(report.sentences, sentence)
+	}
+	if hasWebhook {
+		report.sentences = append(report.sentences, fmt.Sprintf("The Pod was created %s. Inspect these webhooks' backing controller or policy configuration for mutations to the differing fields. Matching scope does not establish what they changed; list order does not indicate likelihood, and webhooks served from a loopback endpoint are listed last.", pod.CreationTimestamp.UTC().Format(time.RFC3339)))
+	}
+	report.sentences = append(report.sentences, selfReportedMutations(pod, template, differences)...)
+	report.sentences = append(report.sentences, coverage...)
+	report.sentences = append(report.sentences, "Writer and timing are unknown. Candidate inspection is incomplete: current readable configuration only; CEL conditions are not evaluated.")
+	return report
+}
+
+// selfReportedAnnotations are written by the mutator onto the Pod it changed.
+// They name the mutator; they do not prove which field it set. Sidecar
+// injector annotations are left out: they describe added containers, which
+// the comparison ignores.
+var selfReportedAnnotations = []struct {
+	key       string
+	resources bool
+}{
+	{key: "gatekeeper.sh/mutations"},
+	{key: "vpaUpdates", resources: true},
+}
+
+func selfReportedMutations(pod *corev1.Pod, template *corev1.PodTemplateSpec, differences []templateDifference) []string {
+	resourceDifference := slices.ContainsFunc(differences, func(d templateDifference) bool { return d.resource != "" })
+	var out []string
+	for _, annotation := range selfReportedAnnotations {
+		value, ok := pod.Annotations[annotation.key]
+		if !ok || value == "" || (annotation.resources && !resourceDifference) {
+			continue
+		}
+		if _, copied := template.Annotations[annotation.key]; copied {
+			continue
+		}
+		if len(value) > 200 {
+			value = value[:200] + "…"
+		}
+		out = append(out, fmt.Sprintf("The Pod's %s annotation, absent from the template, reads %q.", annotation.key, value))
+	}
+	return out
+}
+
+func (p *CacheProvider) templateCandidates(pod *corev1.Pod, differences []templateDifference, access podTemplateAccess) ([]templateCandidate, []string) {
 	var candidates []templateCandidate
 	needsDefaults, needsPriority := false, false
 	for _, d := range differences {
 		needsDefaults = needsDefaults || (d.templateMissing && d.resource != "")
 		needsPriority = needsPriority || (d.templateMissing && d.path == "priorityClassName")
 	}
+	var coverage []string
 	if needsDefaults {
+		if p.cache.LimitRanges() == nil {
+			coverage = append(coverage, "LimitRange defaults were not inspected: Radar has not cached LimitRanges.")
+		}
+		unreadable := false
 		for _, lr := range p.templateLimitRanges(pod.Namespace) {
 			ref := Ref{Kind: "LimitRange", Namespace: pod.Namespace, Name: lr.Name}
 			if !access.canRead(ref) {
+				unreadable = true
 				continue
 			}
 			if matchingTemplateDefaults(lr, differences) {
-				candidates = append(candidates, templateCandidate{ref, fmt.Sprintf("Candidate LimitRange %s has a default matching an omitted template resource", lr.Name)})
+				candidates = append(candidates, templateCandidate{ref: ref, message: fmt.Sprintf("Candidate LimitRange %s has a default matching an omitted template resource", lr.Name)})
 			}
+		}
+		if unreadable {
+			coverage = append(coverage, "Some LimitRanges in the namespace are not readable by the caller and were not inspected.")
 		}
 	}
 	priorityRef := Ref{Group: "scheduling.k8s.io", Kind: "PriorityClass", Name: pod.Spec.PriorityClassName}
-	if needsPriority && access.canRead(priorityRef) {
+	if needsPriority && !access.canRead(priorityRef) {
+		coverage = append(coverage, "PriorityClasses were not inspected: the caller cannot read them.")
+	} else if needsPriority {
 		p.podTemplateSources.priorityOnce.Do(func() {
 			p.loadTemplatePriorities()
 		})
+		if !p.podTemplateSources.prioritiesLoaded {
+			coverage = append(coverage, "PriorityClasses were not inspected: Radar has not cached them.")
+		}
 		for _, pc := range p.podTemplateSources.priorities {
 			if pc.Name == pod.Spec.PriorityClassName && pc.GlobalDefault {
-				candidates = append(candidates, templateCandidate{priorityRef, fmt.Sprintf("Candidate PriorityClass %s is currently the global default", pc.Name)})
+				candidates = append(candidates, templateCandidate{ref: priorityRef, message: fmt.Sprintf("Candidate PriorityClass %s is currently the global default", pc.Name)})
 			}
 		}
 	}
 	webhookRef := Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration"}
 	if access.cluster != nil && !access.cluster(webhookRef.Kind, webhookRef.Group) {
-		return candidates
+		return candidates, append(coverage, "Mutating webhook configurations were not inspected: the caller cannot list them.")
 	}
 	p.podTemplateSources.webhooksOnce.Do(func() { p.loadTemplateWebhooks() })
+	if !p.podTemplateSources.webhooksLoaded {
+		coverage = append(coverage, "Mutating webhook configurations were not inspected: Radar has not cached them.")
+	}
 	var namespaceLabels labels.Set
 	if access.canRead(Ref{Kind: "Namespace", Name: pod.Namespace}) && p.cache.Namespaces() != nil {
 		if ns, err := p.cache.Namespaces().Get(pod.Namespace); err == nil {
@@ -163,20 +272,83 @@ func (p *CacheProvider) templateCandidates(pod *corev1.Pod, differences []templa
 	}
 	// Resource resizing uses pods/resize, which this parent-Pod matcher does not inspect.
 	allowUpdate := slices.ContainsFunc(differences, func(d templateDifference) bool { return strings.HasSuffix(d.path, ".image") })
-	seen := make(map[string]bool)
+	type configurationMatch struct {
+		ref             Ref
+		created         metav1.Time
+		webhooks        []string
+		loopbackHooks   []bool
+		operations      []string
+		loopback        bool
+		matchConditions bool
+	}
+	var matches []*configurationMatch
+	byName := make(map[string]*configurationMatch)
+	unreadable, unknownNamespace := false, false
 	for _, webhook := range p.podTemplateSources.webhooks {
-		if seen[webhook.configuration.Name] || !access.canRead(webhook.configuration) {
+		if !access.canRead(webhook.configuration) {
+			unreadable = true
+			continue
+		}
+		if !webhook.namespace.Empty() && namespaceLabels == nil {
+			unknownNamespace = true
 			continue
 		}
 		operations := webhook.matchingOperations(pod, namespaceLabels, allowUpdate)
 		if len(operations) == 0 {
 			continue
 		}
-		seen[webhook.configuration.Name] = true
-		candidates = append(candidates, templateCandidate{webhook.configuration,
-			fmt.Sprintf("Mutating webhook %s / %s currently matches this Pod's %s rules and selectors", webhook.configuration.Name, webhook.name, strings.Join(operations, "/"))})
+		match := byName[webhook.configuration.Name]
+		if match == nil {
+			match = &configurationMatch{ref: webhook.configuration, created: webhook.created, loopback: true}
+			byName[webhook.configuration.Name] = match
+			matches = append(matches, match)
+		}
+		match.webhooks = append(match.webhooks, webhook.name)
+		match.loopbackHooks = append(match.loopbackHooks, webhook.loopback)
+		for _, operation := range operations {
+			if !slices.Contains(match.operations, operation) {
+				match.operations = append(match.operations, operation)
+			}
+		}
+		// A configuration is listed last only when every matching webhook in
+		// it is served from a loopback endpoint.
+		match.loopback = match.loopback && webhook.loopback
+		match.matchConditions = match.matchConditions || webhook.matchConditions
 	}
-	return candidates
+	sort.SliceStable(matches, func(a, b int) bool {
+		if matches[a].loopback != matches[b].loopback {
+			return !matches[a].loopback
+		}
+		return matches[a].ref.Name < matches[b].ref.Name
+	})
+	for _, match := range matches {
+		names := slices.Clone(match.webhooks)
+		if !match.loopback {
+			for idx, loopback := range match.loopbackHooks {
+				if loopback {
+					names[idx] += " (loopback endpoint)"
+				}
+			}
+		}
+		message := fmt.Sprintf("Mutating webhook %s / %s currently matches this Pod's %s rules and selectors", match.ref.Name, strings.Join(names, ", "), strings.Join(match.operations, "/"))
+		if match.matchConditions {
+			message += " (matchConditions present, not evaluated)"
+		}
+		if match.loopback {
+			message += " (served from a control-plane loopback endpoint)"
+		}
+		if !match.created.IsZero() {
+			message += "; configuration created " + match.created.UTC().Format(time.RFC3339)
+		}
+		candidates = append(candidates, templateCandidate{ref: match.ref, message: message, loopback: match.loopback})
+	}
+	if unreadable {
+		coverage = append(coverage, "Some mutating webhook configurations are not readable by the caller and were not inspected.")
+	}
+	if unknownNamespace {
+		coverage = append(coverage, "Webhooks with namespace selectors were not evaluated: the Pod's namespace labels are not readable.")
+	}
+	return candidates, coverage
 }
 
 func matchingTemplateDefaults(lr *corev1.LimitRange, differences []templateDifference) bool {
@@ -230,6 +402,7 @@ func (p *CacheProvider) loadTemplatePriorities() {
 	if err != nil {
 		return
 	}
+	p.podTemplateSources.prioritiesLoaded = true
 	for _, item := range items {
 		var pc schedulingv1.PriorityClass
 		if runtime.DefaultUnstructuredConverter.FromUnstructured(item.Object, &pc) == nil {
@@ -250,6 +423,7 @@ func (p *CacheProvider) loadTemplateWebhooks() {
 	if err != nil {
 		return
 	}
+	p.podTemplateSources.webhooksLoaded = true
 	for _, item := range items {
 		var config admissionv1.MutatingWebhookConfiguration
 		if runtime.DefaultUnstructuredConverter.FromUnstructured(item.Object, &config) != nil {
@@ -269,9 +443,6 @@ func (p *CacheProvider) loadTemplateWebhooks() {
 func compileTemplateWebhooks(config *admissionv1.MutatingWebhookConfiguration) []templateWebhook {
 	var out []templateWebhook
 	for _, webhook := range config.Webhooks {
-		if len(webhook.MatchConditions) > 0 {
-			continue
-		}
 		ns, err := metav1.LabelSelectorAsSelector(webhook.NamespaceSelector)
 		if webhook.NamespaceSelector == nil {
 			ns = labels.Everything()
@@ -287,7 +458,8 @@ func compileTemplateWebhooks(config *admissionv1.MutatingWebhookConfiguration) [
 			continue
 		}
 		candidate := templateWebhook{configuration: Ref{Kind: "MutatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: config.Name},
-			created: config.CreationTimestamp, name: webhook.Name, namespace: ns, object: obj}
+			created: config.CreationTimestamp, name: webhook.Name, namespace: ns, object: obj,
+			loopback: loopbackWebhookURL(webhook.ClientConfig.URL), matchConditions: len(webhook.MatchConditions) > 0}
 		for _, rule := range webhook.Rules {
 			if rule.Scope != nil && *rule.Scope == admissionv1.ClusterScope {
 				continue
@@ -325,6 +497,21 @@ func (w templateWebhook) matchingOperations(pod *corev1.Pod, namespaceLabels lab
 		operations = append(operations, "UPDATE")
 	}
 	return operations
+}
+
+func loopbackWebhookURL(raw *string) bool {
+	if raw == nil {
+		return false
+	}
+	u, err := url.Parse(*raw)
+	if err != nil {
+		return false
+	}
+	if u.Hostname() == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && ip.IsLoopback()
 }
 
 func ruleIncludes(values []string, value string) bool {

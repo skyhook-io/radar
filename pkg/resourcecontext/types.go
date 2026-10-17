@@ -70,7 +70,37 @@ type ResourceContext struct {
 	AuditSummary    *AuditSummary      `json:"auditSummary,omitempty"`
 	PolicySummary   *PolicySummary     `json:"policySummary,omitempty"`
 	AppReferences   *AppReferences     `json:"appReferences,omitempty"`
-	Omitted         []OmittedField     `json:"omitted,omitempty"`
+	// TemplateDivergence compares live Pods with their owner's current
+	// template. It is context, not proof: it says what differs and what could
+	// have changed it, never who did.
+	TemplateDivergence *TemplateDivergence `json:"templateDivergence,omitempty"`
+	Omitted            []OmittedField      `json:"omitted,omitempty"`
+}
+
+// TemplateDivergence reports differences between live Pods and the current
+// template of their immediate ReplicaSet or Job. For a Pod, PodsCompared is 1
+// and ExamplePod is empty. For a workload, the counts cover the current Pods
+// compared (each against its own ReplicaSet or Job) and Differences describe
+// ExamplePod. Differences that
+// admission defaulting routinely produces (injected containers, added
+// tolerations, limit-to-request copies) are not reported. Pre-computed by
+// callers; access to every Pod and template behind it was checked there.
+type TemplateDivergence struct {
+	Summary       string `json:"summary"`
+	PodsCompared  int    `json:"podsCompared"`
+	PodsDiffering int    `json:"podsDiffering"`
+	// PodsCapped: only the most recent Pods were compared.
+	PodsCapped bool `json:"podsCapped,omitempty"`
+	// PodsNotCompared counts current Pods left out because their own
+	// template is unreadable or no longer exists.
+	PodsNotCompared int      `json:"podsNotCompared,omitempty"`
+	ExamplePod      string   `json:"examplePod,omitempty"`
+	Baseline        string   `json:"baseline,omitempty"`
+	Differences     []string `json:"differences"`
+	// Sources lists objects that currently could have produced the
+	// differences, every one named within a budget, plus what could not be
+	// inspected. List order does not indicate likelihood.
+	Sources []string `json:"sources,omitempty"`
 }
 
 // ContextTier signals how much enrichment is included. "basic" is the

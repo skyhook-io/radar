@@ -652,6 +652,56 @@ type Response struct {
 	// the caller left, is not listed. Consumers must treat an unknown source
 	// value as unchecked too.
 	UncheckedSources []UncheckedSource `json:"unchecked_sources,omitempty"`
+	// ClusterScopedChanges lists changes to cluster-scoped objects that can
+	// change how this namespace's workloads are admitted. Set by the MCP
+	// issues tool for a single-namespace answer, and only when it has rows or
+	// is incomplete.
+	ClusterScopedChanges *ClusterScopedChanges `json:"cluster_scoped_changes,omitempty"`
+}
+
+// ClusterScopedApplicability says how a cluster-scoped change relates to the
+// namespace it is listed under.
+type ClusterScopedApplicability string
+
+const (
+	// ClusterScopedApplies: the object's current scope selects the namespace.
+	ClusterScopedApplies ClusterScopedApplicability = "applies"
+	// ClusterScopedMayApply: whether it reaches the namespace's objects is not
+	// established (object selectors and CEL conditions are not evaluated, the
+	// namespace labels are unreadable, or the change removed or re-scoped it
+	// and its earlier scope is not recorded).
+	ClusterScopedMayApply ClusterScopedApplicability = "may_apply"
+)
+
+type ClusterScopedChange struct {
+	RecentChange
+	Applicability  ClusterScopedApplicability `json:"applicability"`
+	AppliesBecause string                     `json:"applies_because"`
+}
+
+// ClusterScopedChanges is a namespace's view of cluster-scoped changes in the
+// lookback window. It covers MutatingWebhookConfiguration and
+// ValidatingWebhookConfiguration only. Objects that existed unchanged
+// throughout the window never appear, however much they affect the
+// namespace. An empty Changes list is a complete negative only when
+// Truncated, Error and Incomplete are all unset.
+type ClusterScopedChanges struct {
+	Kinds         []string              `json:"kinds"`
+	WindowSeconds int                   `json:"window_seconds"`
+	Changes       []ClusterScopedChange `json:"changes"`
+	// NotListed names further applicable changes beyond the row budget.
+	NotListed []string `json:"not_listed,omitempty"`
+	// Truncated is set when the window held more changes than were read or
+	// named.
+	Truncated  bool   `json:"truncated,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Incomplete string `json:"incomplete,omitempty"`
+}
+
+// Informative reports whether the section says anything beyond "checked, none":
+// rows, or a reason the check was incomplete.
+func (c *ClusterScopedChanges) Informative() bool {
+	return c != nil && (len(c.Changes) > 0 || len(c.NotListed) > 0 || c.Truncated || c.Error != "" || c.Incomplete != "")
 }
 
 // UncheckedSource is one issue source Radar couldn't check.

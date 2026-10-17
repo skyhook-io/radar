@@ -465,11 +465,11 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 | `top_resources` | Live metrics ranked like `kubectl top | sort`, joined with K8s context (status, restarts, owner, requests/limits). Use for CPU/memory/OOM/load symptoms. | `kind` (optional: `pods` default, `workloads`, `nodes`), `namespace` (optional), `sort` (optional: `cpu` default, `memory`), `limit` (optional, default 20, max 100) |
 | `list_resources` | List resources of a kind with minified summaries + per-row `summaryContext` (managedBy / health / issueCount). | `kind` (required), `group` (optional), `namespace` (optional), `context` (optional: default / `none`) |
 | `search` | Find resources by content/term match (config keys, env refs, images, label values, CRD fields, status messages). Tokens AND'd; secret values never indexed. Supports `kind:`/`ns:`/`label:`/`image:` modifiers and CEL `filter`. | `query` (required), `filter` (optional CEL), `limit` (optional) |
-| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are not evidence of an active outage. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, detailed issue context, or a Node drain estimate. `include=drain-plan` reuses the read-only REST drain estimator with the caller’s credentials and the removal drawer’s explicit options; it returns up to 100 current pods, full summary counts, `drainPlanTotalPods` and `drainPlanPodsTruncated`. It evaluates Eviction API/PDB eligibility, not controller-specific policy or eviction history. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues,drain-plan`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`) |
+| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are not evidence of an active outage. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, detailed issue context, or a Node drain estimate. `include=drain-plan` reuses the read-only REST drain estimator with the caller’s credentials and the removal drawer’s explicit options; it returns up to 100 current pods, full summary counts, `drainPlanTotalPods` and `drainPlanPodsTruncated`. It evaluates Eviction API/PDB eligibility, not controller-specific policy or eviction history. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues,drain-plan`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`; a Pod/template divergence note can still appear in `warnings`) |
 | `get_topology` | Whole-namespace/cluster topology graph (nodes + edges). Use `summary` format for LLM-friendly text chains. Once you have a suspect root, prefer `get_neighborhood`. | `namespace` (optional), `view` (optional: `traffic` or `resources`), `format` (optional: `graph` or `summary`) |
 | `get_neighborhood` | BFS-expanded topology neighborhood around one known root — cheaper and clearer than `get_topology` for cross-resource failures (routing, selector/endpoint, refs, owner chains). RBAC-filtered. | `kind` (required), `namespace` (optional), `name` (required), `profile` (optional: `auto` default / `all`), `hops` (optional, default 1, max 2) |
 | `get_events` | Recent Kubernetes events, deduplicated and sorted **Warning-groups-first then by recency** — all types by default, so warnings lead and lifecycle events follow as timeline evidence. Filter by resource kind/name to scope; `type=Warning` for warnings only, `type=Normal` for lifecycle only. A namespace the caller cannot read returns an empty list with `accessDenied: true`, so an empty result without the marker means nothing is recorded for that scope. A request with no `namespace` means cluster-wide; when the caller may read only some namespaces the answer covers those alone and says so with `partialScope: true` and `scopeNamespaces`, so a narrowed empty result is never read as a clean cluster. | `namespace` (optional), `limit` (optional, default 20, max 100), `kind` (optional), `name` (optional), `type` (optional: `all` default, `Warning`, `Normal`) |
-| `get_changes` | Recent meaningful changes from the Kubernetes cluster timeline plus native Helm release deployment/operation history (`source: helm`). Use to investigate what changed before an incident, including failed upgrades, rollbacks, and current Helm revisions. If the response includes `sourcesErrored`, treat it as partial data for those sources. Use `get_helm_release include=history,operations` for the full Helm revision trail. For Deployments, StatefulSets, DaemonSets, CronJobs, Jobs, PodDisruptionBudgets, HPAs, Services, Ingresses, Gateway API objects, Argo Rollouts, admission webhook configurations, ResourceQuotas and LimitRanges, a changed desired-state field without its own row appears in the summary as `other spec changes: <fields>` (webhook configurations: `other changes`), with full paths in `fields`; a block added or removed as a whole is named once, and past 25 such fields one `spec (more fields)` row lists the rest by path. In those `other spec changes` rows, values Radar keeps out of the feed (free-form strings such as annotations, expressions and header values, anything under a container spec, and large structures) read `(value hidden)`, or `(set)` beside `null` when the field was added or removed. Dedicated rows show their own values with key-aware redaction: env values, command arguments, labels and selector values under secret-looking keys read `[REDACTED]`, and exec probe commands are hidden. A run of 5 or more plain creates in one namespace (rows with no diff or message, each within 60 s of the previous one, such as an install) is listed under `created` instead of one row each: `first` (timestamp of the earliest create), `count`, `apiVersions` (kind → apiVersion) and `objects`, one `+<seconds after first>s Kind/name` line per object, with ` (used by Kind/name, …)` for a consumed ConfigMap. Each line carries everything the row it replaces did. Lone creates, creates of NetworkPolicies, ResourceQuotas, LimitRanges, HPAs, PodDisruptionBudgets, ReferenceGrants, webhook configurations and GitOps Applications, Kustomizations and HelmReleases, and every update or delete stay full rows; a `name=` query returns only full rows. `created` objects count toward `limit`. | `namespace` (optional), `kind` (optional), `name` (optional), `since` (optional, e.g. `1h`, `30m`; default `1h`), `limit` (optional, default 20, max 50) |
+| `get_changes` | Recent meaningful changes from the Kubernetes cluster timeline plus native Helm release deployment/operation history (`source: helm`). Use to investigate what changed before an incident, including failed upgrades, rollbacks, and current Helm revisions. If the response includes `sourcesErrored`, treat it as partial data for those sources. A namespace query without `kind` or `name` adds `clusterScopedChanges` (see [below](#cluster-scoped-admission-changes-in-a-namespace-view)). Use `get_helm_release include=history,operations` for the full Helm revision trail. For Deployments, StatefulSets, DaemonSets, CronJobs, Jobs, PodDisruptionBudgets, HPAs, Services, Ingresses, Gateway API objects, Argo Rollouts, admission webhook configurations, ResourceQuotas and LimitRanges, a changed desired-state field without its own row appears in the summary as `other spec changes: <fields>` (webhook configurations: `other changes`), with full paths in `fields`; a block added or removed as a whole is named once, and past 25 such fields one `spec (more fields)` row lists the rest by path. In those `other spec changes` rows, values Radar keeps out of the feed (free-form strings such as annotations, expressions and header values, anything under a container spec, and large structures) read `(value hidden)`, or `(set)` beside `null` when the field was added or removed. Dedicated rows show their own values with key-aware redaction: env values, command arguments, labels and selector values under secret-looking keys read `[REDACTED]`, and exec probe commands are hidden. A run of 5 or more plain creates in one namespace (rows with no diff or message, each within 60 s of the previous one, such as an install) is listed under `created` instead of one row each: `first` (timestamp of the earliest create), `count`, `apiVersions` (kind → apiVersion) and `objects`, one `+<seconds after first>s Kind/name` line per object, with ` (used by Kind/name, …)` for a consumed ConfigMap. Each line carries everything the row it replaces did. Lone creates, creates of NetworkPolicies, ResourceQuotas, LimitRanges, HPAs, PodDisruptionBudgets, ReferenceGrants, webhook configurations and GitOps Applications, Kustomizations and HelmReleases, and every update or delete stay full rows; a `name=` query returns only full rows. `created` objects count toward `limit`. | `namespace` (optional), `kind` (optional), `name` (optional), `since` (optional, e.g. `1h`, `30m`; default `1h`), `limit` (optional, default 20, max 50) |
 | `get_pod_logs` | Pod logs with secret redaction. Without `grep`, prioritizes errors/warnings and falls back to recent tail lines; with `grep`, returns only regex-matching lines instead of applying the diagnostic filter. Returns `container` when explicitly requested or resolved from a readable single-container Pod. If Pod metadata is unavailable, the log read still proceeds, but an unspecified container remains unknown. | `namespace` (required), `name` (required), `container` (optional; specify for multi-container Pods), `tail_lines` (optional, default 200), `grep` (optional), `previous` (optional), `since` (optional) |
 | `get_workload_logs` | Aggregated logs from all pods of a workload (Deployment, StatefulSet, DaemonSet, Job, Argo Workflow). Without `grep`, auto-filters for diagnostic relevance; with `grep`, returns only matching timestamp-prefixed lines. | `kind` (required), `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional, default 100 per pod), `grep` (optional) |
 | `get_cluster_audit` | `missingInputs`, when present, names unavailable inputs in the scan; zero findings do not establish that all checks passed. Static config posture — best-practice findings (Security / Reliability / Efficiency) with remediation. INDEPENDENT of operational health. Finding severity and the explicit `summary.critical`/`high`/`medium`/`low` counts are posture remediation priority; current built-in checks emit `high` or `medium`. For "what's broken right now?" use `issues`. | `namespace` (optional), `category` (optional), `severity` (optional: `critical`, `high`, `medium`, or `low`) |
@@ -689,28 +689,98 @@ Injected containers, equivalent quantities/image spellings, ordinary
 limit-to-request defaulting, added tolerations, and preferred affinity stay quiet.
 Environment values, commands, and arbitrary spec diffs are excluded.
 
-One fact shows at most three fields and three candidate objects, with truncation
-disclosed; candidate display order does not imply likelihood. A grouped issue
-compares at most ten distinct affected Pods in representative order and labels
-its first matching witness as an example. A specific Pod lookup compares only
-that Pod, including members beyond the group's inline evidence cap. Existing
-diagnostic facts take precedence when the four-fact budget is full.
+One fact shows at most three fields, with truncation disclosed; candidates are
+found from every difference, not only the displayed ones. Up to five candidates
+get a full line and up to ten are named; any beyond that are counted. A grouped
+issue compares at most ten distinct affected Pods in representative order and
+labels its first matching witness as an example. A specific Pod lookup compares
+only that Pod, including members beyond the group's inline evidence cap.
+Existing diagnostic facts take precedence when the four-fact budget is full.
 
 Candidates are current configuration to inspect, **not attribution**: matching
 LimitRange defaults for omitted resource keys, the observed global-default
-PriorityClass when the template omitted it, and mutating webhooks whose current
-core/v1 Pod CREATE rules and selectors match (UPDATE candidates apply only to
-image differences). Pod resize subresource rules are not inspected. Namespace selectors use
-namespace labels. CEL match conditions are not evaluated, so those webhooks are
-omitted. CREATE-only configurations newer than the Pod are excluded. Validating
-webhooks and Pod Security Admission are not mutation candidates. All named
-evidence is permission-filtered before producing prose; unreadable or unsynced
-candidate configuration does not suppress an observable Pod/template difference.
-The existing OOM diagnosis also records its template source internally so an
-unreadable ReplicaSet limit cannot reappear through the issue cause text.
+PriorityClass when the template omitted it, and mutating webhook configurations
+with a webhook whose current core/v1 Pod CREATE rules and selectors match (UPDATE
+candidates apply only to image differences). Each configuration is listed once
+with its matching webhooks and its creation time, beside the Pod's own. Pod
+resize subresource rules are not inspected. Namespace selectors use namespace
+labels; when those cannot be read, selector-scoped webhooks are not evaluated
+and the fact says so. Webhooks with CEL match conditions are listed with
+"matchConditions present, not evaluated". CREATE-only configurations newer than
+the Pod are excluded. List order does not indicate likelihood: LimitRange and
+PriorityClass candidates come first, then webhook configurations by name, and a
+configuration whose matching webhooks are all served from a loopback URL (on
+managed clusters, a control-plane-hosted endpoint such as EKS's
+`pod-identity-webhook`) is listed last and labelled so. The loopback label
+describes where admission calls go, not who installed the webhook or what it
+changes. When the Pod carries a mutator's own record that its template does not
+(`gatekeeper.sh/mutations`; `vpaUpdates` for resource differences), the fact
+quotes it; that names a mutator, not the field it set. Validating webhooks and
+Pod Security Admission are not mutation candidates. All named evidence is
+permission-filtered before producing prose; unreadable or unsynced candidate
+configuration does not suppress an observable Pod/template difference, and the
+fact states which candidate sources it could not inspect. The existing OOM
+diagnosis also records its template source internally so an unreadable
+ReplicaSet limit cannot reappear through the issue cause text.
 
 Comparisons use cached current objects, not an admission-time snapshot. Resizing,
 other writers, and later template/configuration edits can explain differences.
 Candidate inspection is non-exhaustive and does not perform live admission calls
 or start watches. Verify provenance with configuration history or
 [Kubernetes admission audit records](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#monitoring-admission-webhooks).
+
+### Pod/template differences without an issue
+
+`get_resource` (default context) and `diagnose` add
+`resourceContext.templateDivergence` for a Pod, ReplicaSet, Deployment, or Job
+whose live Pods differ from the current template of their immediate ReplicaSet
+or Job. A workload compares each current Pod (the 200 most recent at most)
+against its own ReplicaSet, so a rolling update is not a difference; it reports
+`podsCompared`, `podsDiffering`, and the most recent differing Pod's
+differences (`examplePod`, `baseline`). StatefulSet and DaemonSet Pods are not
+compared. With no difference, the field is absent.
+
+The comparison is symptom-independent but keeps admission's routine changes
+quiet: injected containers and volumes, added environment and mounts on
+existing containers, added tolerations, preferred affinity, limit-to-request
+defaulting, equivalent quantities and image spellings, extended resources the
+template does not name, and a priority class filled in where the template
+leaves it unset. It reports CPU, memory, and ephemeral-storage requests and
+limits (and any resource the template names), images, node selectors, required
+affinity, lost or changed tolerations, a template-set priority class, and the
+runtime class. Resource values are not compared while the Pod reports a resize.
+`sources` carries the same candidate list and coverage statements as the issue
+fact. It is context, not proof.
+
+With `context=none`, `get_resource` still returns `{resource, warnings}` with a
+one-line divergence note when the comparison finds a difference, outside the
+returned object. This and the ConfigMap truncation note are the only warnings
+`context=none` keeps.
+
+### Cluster-scoped admission changes in a namespace view
+
+A namespace-scoped `get_changes` (namespace set, no `kind` or `name`) returns
+`clusterScopedChanges` beside `changes`, and a single-namespace `issues`
+response returns `cluster_scoped_changes` when it has rows or is incomplete.
+`changes` itself never includes cluster-scoped objects. The section covers
+MutatingWebhookConfiguration and ValidatingWebhookConfiguration changes in the
+window, each with `applicability` and `applies_because`:
+
+- `applies`: a changed webhook's current namespace selector matches the
+  namespace's labels (or it has none), its rules cover namespaced resources,
+  and it has no object selector or match conditions.
+- `may_apply`: it selects the namespace but its object selector or CEL match
+  conditions are not evaluated; the namespace labels are not readable; the
+  configuration was deleted or no longer exists; or the change removed or
+  re-scoped a webhook whose earlier scope the timeline does not record.
+
+Changes that do not concern the namespace are left out. Five rows are listed,
+up to five more are named in `not_listed`, and `truncated` marks anything
+beyond that or a saturated read. Rows pass per-kind RBAC before applicability
+and the row budget. `error` and `incomplete` say when the check could not be
+completed; an empty `changes` list is a complete negative only without them.
+Only changes appear: a webhook that existed unchanged throughout the window is
+not listed however much it affects the namespace, so long-standing admission
+configuration is covered by the Pod/template candidates above, not by this
+section. A recorded change to a webhook's selectors, rules or match conditions
+counts as a re-scope.

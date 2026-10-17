@@ -700,6 +700,11 @@ export function addResourceObservation(
       : warnings.length > 0
         ? "warning"
         : "neutral";
+  // A Pod/template difference is listed with the warnings but does not set
+  // the tone: admission defaults (LimitRange, injected sidecars) produce it on
+  // healthy Pods.
+  const divergence = templateDivergenceWarning(context);
+  if (divergence) warnings = [...warnings, divergence];
   const namespace = resource.metadata.namespace;
   const identity = `${resource.apiVersion}:${resource.kind}:${namespace ?? ""}:${resource.metadata.name}`;
   builder.observe(identity, "resource", source, {
@@ -723,6 +728,20 @@ export function addResourceObservation(
     },
   });
   addResourceContextLimitations(builder, source, context);
+}
+// The live Pod spec differing from its template is context, not a fault, so
+// it reads as a line on the resource card rather than a finding of its own.
+function templateDivergenceWarning(
+  context: InvestigationResourceContext | undefined,
+): string | undefined {
+  const divergence = context?.templateDivergence;
+  const first = divergence?.differences?.[0];
+  if (!divergence || !nonEmptyString(first)) return undefined;
+  const scope = divergence.examplePod
+    ? `${divergence.podsDiffering} of ${divergence.podsCompared} ${divergence.podsCapped ? "most recent Pods" : "Pods"} differ from their template`
+    : "Live Pod spec differs from its template";
+  const more = divergence.differences.length > 1 ? " (and more)" : "";
+  return `${scope}: ${first}${more}`;
 }
 export function addIssueObservation(
   builder: ProjectionBuilder,

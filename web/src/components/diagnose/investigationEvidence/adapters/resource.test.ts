@@ -79,3 +79,39 @@ describe("resource cards scaled by an HPA", () => {
     expect(card.summary).toBe("5/5 replicas ready");
   });
 });
+
+describe("resource cards with Pod/template differences", () => {
+  it("shows the first difference as a card warning, not a finding", () => {
+    const result = project([
+      tool("workload", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        resourceContext: {
+          tier: "diagnostic",
+          templateDivergence: {
+            summary: "1 of 3 current Pods differ.",
+            podsCompared: 3,
+            podsDiffering: 1,
+            examplePod: "api-2",
+            baseline: "ReplicaSet api-1",
+            differences: [
+              "containers[api].resources.limits.memory is 16Mi; template specifies 256Mi",
+              "containers[api].resources.requests.memory is 16Mi; template specifies 128Mi",
+            ],
+          },
+        },
+      }),
+    ]);
+    const card = groupsOf(result.groups, "resource")[0].latest;
+    expect(card.tone).toBe("neutral");
+    if (card.data.type === "resource") {
+      expect(card.data.warnings).toEqual([
+        "1 of 3 Pods differ from their template: containers[api].resources.limits.memory is 16Mi; template specifies 256Mi (and more)",
+      ]);
+    }
+    expect(groupsOf(result.groups, "issue")).toHaveLength(0);
+  });
+});
