@@ -839,3 +839,25 @@ func waitUntil(t *testing.T, what string, done func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// A connection without discovery still reads its typed kinds; only kinds that
+// need discovery's catalog are unknown.
+func TestBeginWithoutDiscoveryReadsTypedKinds(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{}, nil)
+	s, err := New(func() Caches { return Caches{Typed: f.caches.Typed} }).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Object(ref("apps", "ReplicaSet", "alpha", "web-1")); got.State != ownership.Present {
+		t.Fatalf("ReplicaSet without discovery = %v %+v", got.State, got.Gap)
+	}
+	if got := s.Object(ref("example.io", "Widget", "alpha", "w1")); got.State != ownership.Unavailable || got.Gap.Reason != readreason.KindUnknown {
+		t.Fatalf("Widget without discovery = %v %+v; want kind_unknown", got.State, got.Gap)
+	}
+	if s.Catalog().Complete() {
+		t.Fatal("no discovery can't be a complete catalog")
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
