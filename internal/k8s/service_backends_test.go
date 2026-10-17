@@ -393,6 +393,31 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantApps:      [][]string{{"frontend"}, {"search"}},
 		},
 		{
+			name: "applications behind different named ports never share traffic",
+			svc: func() *corev1.Service {
+				svc := backendService()
+				svc.Spec.Ports = []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromString("http")}, {Name: "metrics", Port: 9090, TargetPort: intstr.FromString("metrics")}}
+				return svc
+			}(),
+			pods: []*corev1.Pod{
+				backendPod("web-1", "StatefulSet", "web", []corev1.Container{{Name: "web", Image: "acme/web:1", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}}}),
+				backendPod("exporter-1", "StatefulSet", "exporter", []corev1.Container{{Name: "exporter", Image: "acme/exporter:1", Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: 9100}}}}),
+			},
+			wantWorkloads: 2,
+		},
+		{
+			name: "a pod that resolves no port is no evidence even when its workload's other pods do",
+			svc:  backendService(intstr.FromString("http")),
+			pods: []*corev1.Pod{
+				backendPod("frontend-1", "StatefulSet", "frontend", []corev1.Container{{Name: "frontend", Image: "acme/frontend:1", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}}}),
+				backendPod("search-1", "StatefulSet", "search", []corev1.Container{{Name: "search", Image: "acme/search:1", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}}}),
+				backendPod("search-2", "StatefulSet", "search", []corev1.Container{{Name: "frontend", Image: "acme/frontend:1"}}),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantApps:      [][]string{{"frontend"}, {"search"}},
+		},
+		{
 			name: "stable and canary of one app plus an unrelated app",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{
@@ -489,6 +514,12 @@ func TestPodWorkloadResolvesReplicaSetOwner(t *testing.T) {
 	})
 	if len(got.Workloads) != 1 || got.Workloads[0].Kind != "Deployment" || got.Workloads[0].Name != "web" || got.Workloads[0].Group != "apps" || got.Workloads[0].Pods != 2 {
 		t.Fatalf("workloads = %+v, want one Deployment web with 2 pods", got.Workloads)
+	}
+	if !got.ResolvedThroughReplicaSets {
+		t.Fatal("a Deployment name read from a ReplicaSet must be flagged")
+	}
+	if b := AnalyzeServiceBackends(nil, backendService(intstr.FromInt32(8080)), []*corev1.Pod{backendPod("web-6d4cf56db6-a", "ReplicaSet", "web-6d4cf56db6", web)}); b.ResolvedThroughReplicaSets {
+		t.Fatal("a ReplicaSet that stays itself was not read")
 	}
 
 	owner, ok := PodWorkload(cache, backendPod("api-5c6b7d8e9f-c", "ReplicaSet", "api-5c6b7d8e9f", web))

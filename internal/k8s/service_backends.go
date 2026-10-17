@@ -64,6 +64,9 @@ type ServiceBackends struct {
 	// repository in common, the workload names of each application.
 	Applications [][]string
 	PortGaps     []ServicePortGap
+	// ResolvedThroughReplicaSets is set when a workload name came from a
+	// cached ReplicaSet's owner rather than from the Pod itself.
+	ResolvedThroughReplicaSets bool
 }
 
 // MultipleWorkloads reports whether the selected Pods come from more than one
@@ -274,6 +277,9 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 		if !ok {
 			ref = TopOwnerInfo{Kind: "Pod", Name: pod.Name}
 		}
+		if owner := controllerOwnerRef(pod.OwnerReferences); owner != nil && owner.Kind == "ReplicaSet" && ref.Kind != "ReplicaSet" {
+			out.ResolvedThroughReplicaSets = true
+		}
 		key := ref.Group + "/" + ref.Kind + "/" + ref.Name
 		w := byKey[key]
 		if w == nil {
@@ -287,8 +293,9 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 			w.Ready++
 		}
 		// EndpointSlice readiness: publishNotReadyAddresses publishes every
-		// live Pod, terminating or not.
-		if svc.Spec.PublishNotReadyAddresses || (ready && pod.DeletionTimestamp == nil) {
+		// live Pod, terminating or not. A Pod that resolves none of the
+		// Service's ports is in no endpoint.
+		if (svc.Spec.PublishNotReadyAddresses || (ready && pod.DeletionTimestamp == nil)) && resolvesAnyServicePort(svc, []*corev1.Pod{pod}) {
 			w.receiving = append(w.receiving, pod)
 		}
 	}
@@ -315,7 +322,7 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 
 	var receiving []*backendWorkload
 	for _, w := range order {
-		if len(w.receiving) > 0 && resolvesAnyServicePort(svc, w.receiving) {
+		if len(w.receiving) > 0 {
 			w.containers = workloadContainers(w.receiving)
 			w.repos = containerRepos(w.receiving)
 			receiving = append(receiving, w)
@@ -326,8 +333,36 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 	}
 	common := commonContainerSignatures(receiving)
 	out.PortGaps = servicePortGaps(svc, receiving, common)
-	out.Applications = distinctApplications(receiving)
+	out.Applications = distinctApplicationsPerPort(svc, receiving)
 	return out
+}
+
+// distinctApplicationsPerPort compares the workloads behind each Service port
+// separately: Kubernetes builds endpoints per port, so two applications that
+// each serve a different named port never share traffic.
+func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorkload) [][]string {
+	if len(svc.Spec.Ports) == 0 {
+		return distinctApplications(workloads)
+	}
+	var worst [][]string
+	for _, sp := range svc.Spec.Ports {
+		behind := workloads
+		if sp.TargetPort.Type == intstr.String && sp.TargetPort.StrVal != "" {
+			behind = nil
+			for _, w := range workloads {
+				for _, pod := range w.receiving {
+					if declaresNamedPort(pod, sp.TargetPort.StrVal, portProtocol(sp.Protocol)) {
+						behind = append(behind, w)
+						break
+					}
+				}
+			}
+		}
+		if apps := distinctApplications(behind); len(apps) > len(worst) {
+			worst = apps
+		}
+	}
+	return worst
 }
 
 func workloadContainers(pods []*corev1.Pod) map[string]backendContainer {

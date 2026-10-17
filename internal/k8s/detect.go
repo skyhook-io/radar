@@ -1329,8 +1329,12 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 		det := serviceBackendDetection(svc, ageDur, "warning", ServiceMixedBackendsReason, backends.Problem(svc.Name), ServiceMixedBackendsFingerprint)
 		det.Cause = backends.Cause()
 		det.Action = "If only one of these workloads should receive this traffic, narrow the Service selector to labels only its pods carry, or remove the matching label from the other workload's pod template."
-		// The workload names and their ports come from the Pods.
+		// The workload names and their ports come from the Pods, and from the
+		// ReplicaSets behind them for a Deployment or Rollout.
 		det.RequiredReads = []issuesapi.EvidenceRead{{Resource: "pods", Namespace: svc.Namespace, Verb: "list"}}
+		if backends.ResolvedThroughReplicaSets {
+			det.RequiredReads = append(det.RequiredReads, issuesapi.EvidenceRead{Group: "apps", Resource: "replicasets", Namespace: svc.Namespace, Verb: "list"})
+		}
 		det.Degraded = &issuesapi.DegradedFinding{
 			Message: fmt.Sprintf("Service %s routes to pods of more than one application", svc.Name),
 			Cause:   "The Service selector matches pods of more than one application, so part of its traffic reaches pods that may not serve it.",
