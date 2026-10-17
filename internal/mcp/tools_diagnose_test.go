@@ -396,6 +396,33 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	if strings.Contains(body, "diagnose-secret-sentinel") || strings.Contains(body, `"key":"password"`) {
 		t.Errorf("managedFields fallback leaked Secret data or claimed a specific stale key: %s", body)
 	}
+	if !strings.Contains(body, "last data write by secret-controller at") {
+		t.Errorf("expected the fallback to name the last data writer for a caller who can read the Secret: %s", body)
+	}
+}
+
+// TestHandleDiagnose_StaleSecretWriterNeedsSecretAccess pins that the
+// managedFields writer, which is Secret metadata, reaches only callers who
+// can read the Secret: without that grant the whole stale-Secret row is
+// omitted with an RBAC marker, and the writer's name appears nowhere.
+func TestHandleDiagnose_StaleSecretWriterNeedsSecretAccess(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	ctx := withClusterAdmin(t, "admin")
+	perms := getPermCache().Get("admin", nil)
+	perms.SetCanI("get", "", "configmaps", "alpha", true)
+	perms.SetCanI("get", "", "secrets", "alpha", false)
+
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "cart"))
+	if err != nil {
+		t.Fatalf("handleDiagnose: %v", err)
+	}
+	body := extractText(t, result)
+	if strings.Contains(body, "secret-controller") || strings.Contains(body, "managed_fields_mtime") {
+		t.Fatalf("stale-Secret fallback reached a caller who cannot read the Secret: %s", body)
+	}
+	if !strings.Contains(body, `"appReferences.staleSecretEnv"`) {
+		t.Fatalf("expected an RBAC omission marker for the stale-Secret row: %s", body)
+	}
 }
 
 func TestHandleDiagnose_DeploymentGroupIsCanonicalAndExact(t *testing.T) {

@@ -153,6 +153,9 @@ func (c *ResourceCache) Generation() uint64 {
 type secretDataManagerWrite struct {
 	uid string
 	at  time.Time
+	// manager is the field manager whose entry supplied at: the latest
+	// write by any manager that owns Secret data.
+	manager string
 }
 
 type secretDataManagerWriteVersion struct {
@@ -216,6 +219,7 @@ func (index *secretDataManagerWriteIndex) capture(obj any) {
 		return
 	}
 	var latest time.Time
+	var latestManager string
 	for _, entry := range secret.ManagedFields {
 		if entry.Time == nil || entry.FieldsV1 == nil ||
 			(entry.Operation != metav1.ManagedFieldsOperationApply && entry.Operation != metav1.ManagedFieldsOperationUpdate) {
@@ -234,8 +238,11 @@ func (index *secretDataManagerWriteIndex) capture(obj any) {
 				continue
 			}
 		}
-		if entry.Time.Time.After(latest) {
+		// Equal timestamps keep the lexically first manager, so the named
+		// writer doesn't depend on entry order.
+		if entry.Time.Time.After(latest) || (entry.Time.Time.Equal(latest) && entry.Manager < latestManager) {
 			latest = entry.Time.Time
+			latestManager = entry.Manager
 		}
 	}
 	version := secretDataManagerWriteVersion{
@@ -248,7 +255,7 @@ func (index *secretDataManagerWriteIndex) capture(obj any) {
 		helm: secret.Type == corev1.SecretType("helm.sh/release.v1"),
 	}
 	if !latest.IsZero() {
-		pending.write = &secretDataManagerWrite{uid: string(secret.UID), at: latest}
+		pending.write = &secretDataManagerWrite{uid: string(secret.UID), at: latest, manager: latestManager}
 	}
 	index.mu.Lock()
 	// Watch-list informers transform each object present at startup twice,

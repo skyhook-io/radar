@@ -977,6 +977,79 @@ func TestSecretDataManagerWriteIndexSurvivesRepeatedTransform(t *testing.T) {
 	})
 }
 
+// TestStaleSecretEnvManagedFieldsNamesLastDataWriter pins the writer the
+// fallback names: the manager whose entry supplied the timestamp, shown as
+// the API server recorded it, with the hedge that managedFields can't tell
+// which key changed.
+func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	startedAt := now.Add(-time.Hour)
+	entry := func(manager string, at time.Time, raw string) metav1.ManagedFieldsEntry {
+		return metav1.ManagedFieldsEntry{
+			Manager: manager, Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: at}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(raw)},
+		}
+	}
+	const dataOnly = `{"f:data":{"f:password":{}}}`
+	checkFor := func(t *testing.T, fields ...metav1.ManagedFieldsEntry) StaleSecretEnvCheck {
+		t.Helper()
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "db-conn", Namespace: "shop", ManagedFields: fields},
+			Data:       map[string][]byte{"password": []byte("value")},
+		}
+		pod := staleSecretEnvPod("catalog", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, secret)
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil)
+		if len(checks) != 1 {
+			t.Fatalf("got %d checks, want 1: %+v", len(checks), checks)
+		}
+		if !strings.Contains(checks[0].Message, "managedFields cannot identify which field changed") {
+			t.Fatalf("named writer dropped the hedge: %q", checks[0].Message)
+		}
+		return checks[0]
+	}
+
+	t.Run("raw manager name, no mapping", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		check := checkFor(t, entry("kubectl-client-side-apply", at, dataOnly))
+		want := "last data write by kubectl-client-side-apply at " + at.Format(time.RFC3339)
+		if !strings.Contains(check.Message, want) {
+			t.Fatalf("message %q does not contain %q", check.Message, want)
+		}
+	})
+
+	t.Run("several data owners name the one whose timestamp is used", func(t *testing.T) {
+		older, newer := now.Add(-30*time.Minute), now.Add(-time.Minute)
+		for _, order := range [][]metav1.ManagedFieldsEntry{
+			{entry("helm", older, dataOnly), entry("Go-http-client", newer, dataOnly)},
+			{entry("Go-http-client", newer, dataOnly), entry("helm", older, dataOnly)},
+		} {
+			check := checkFor(t, order...)
+			if !check.SecretChangedAt.Equal(newer) || !strings.Contains(check.Message, "last data write by Go-http-client at "+newer.Format(time.RFC3339)) || strings.Contains(check.Message, "helm") {
+				t.Fatalf("want the newest data writer Go-http-client at %v, got %v %q", newer, check.SecretChangedAt, check.Message)
+			}
+		}
+	})
+
+	t.Run("a later metadata-only manager is not the data writer", func(t *testing.T) {
+		dataAt, labelAt := now.Add(-30*time.Minute), now.Add(-time.Minute)
+		check := checkFor(t, entry("helm", dataAt, dataOnly), entry("kubectl-label", labelAt, `{"f:metadata":{"f:labels":{"f:team":{}}}}`))
+		if !check.SecretChangedAt.Equal(dataAt) || !strings.Contains(check.Message, "last data write by helm at") || strings.Contains(check.Message, "kubectl-label") {
+			t.Fatalf("want helm's data write, got %v %q", check.SecretChangedAt, check.Message)
+		}
+	})
+
+	t.Run("equal timestamps name the same manager whatever the entry order", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		a := checkFor(t, entry("operator-b", at, dataOnly), entry("operator-a", at, dataOnly))
+		b := checkFor(t, entry("operator-a", at, dataOnly), entry("operator-b", at, dataOnly))
+		if !strings.Contains(a.Message, "by operator-a at") || a.Message != b.Message {
+			t.Fatalf("tie should name operator-a in both orders: %q / %q", a.Message, b.Message)
+		}
+	})
+}
+
 func TestSecretDataManagerWriteIndexInformerLifecycle(t *testing.T) {
 	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
 	metadataWrite := dataWrite.Add(time.Hour)

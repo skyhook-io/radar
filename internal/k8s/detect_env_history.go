@@ -1084,11 +1084,11 @@ func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*cor
 				if observedSecrets[secretIdentity] || !secretExists(cache, pod.Namespace, secretName, exists, checked) {
 					return
 				}
-				changedAt, ok := secretDataManagerWriteTime(cache, pod.Namespace, secretName)
-				if !ok || !startedAt.Before(changedAt) {
+				write, ok := secretDataManagerLastWrite(cache, pod.Namespace, secretName)
+				if !ok || !startedAt.Before(write.at) {
 					return
 				}
-				out = append(out, newManagedFieldsStaleSecretEnvCheck(pod, container.Name, referenceKind, prefix, secretName, startedAt, changedAt))
+				out = append(out, newManagedFieldsStaleSecretEnvCheck(pod, container.Name, referenceKind, prefix, secretName, startedAt, write))
 				checksPerContainer[containerIdentity]++
 			}
 			for _, env := range container.Env {
@@ -1162,7 +1162,16 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 	}
 }
 
-func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt, changedAt time.Time) StaleSecretEnvCheck {
+// newManagedFieldsStaleSecretEnvCheck names the writer as recorded in the
+// Secret's managedFields, unmapped. The name is Secret metadata: it reaches
+// only callers the resource context lets read the Secret, which drops the
+// whole row for anyone else.
+func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt time.Time, write secretDataManagerWrite) StaleSecretEnvCheck {
+	changedAt := write.at
+	writer := ""
+	if write.manager != "" {
+		writer = " by " + write.manager
+	}
 	return StaleSecretEnvCheck{
 		Namespace:          pod.Namespace,
 		PodName:            pod.Name,
@@ -1173,7 +1182,7 @@ func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKi
 		SecretName:         secretName,
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
-		Message:            fmt.Sprintf("Secret/%s was modified at %s by a field manager that owns Secret data, after container %s started at %s; managedFields cannot identify which field changed, so if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), container, startedAt.UTC().Format(time.RFC3339)),
+		Message:            fmt.Sprintf("Secret/%s: last data write%s at %s, after container %s started at %s; managedFields cannot identify which field changed, so if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, writer, changedAt.UTC().Format(time.RFC3339), container, startedAt.UTC().Format(time.RFC3339)),
 	}
 }
 
@@ -1188,19 +1197,19 @@ func secretExists(cache *ResourceCache, namespace, name string, exists, checked 
 	return exists[identity]
 }
 
-func secretDataManagerWriteTime(cache *ResourceCache, namespace, name string) (time.Time, bool) {
+func secretDataManagerLastWrite(cache *ResourceCache, namespace, name string) (secretDataManagerWrite, bool) {
 	if cache == nil || cache.secretWriteTimes == nil || cache.Secrets() == nil {
-		return time.Time{}, false
+		return secretDataManagerWrite{}, false
 	}
 	write, ok := cache.secretWriteTimes.load(namespace, name)
 	if !ok || write.at.IsZero() {
-		return time.Time{}, false
+		return secretDataManagerWrite{}, false
 	}
 	secret, err := cache.Secrets().Secrets(namespace).Get(name)
 	if err != nil || secret == nil || secret.Type == corev1.SecretType("helm.sh/release.v1") || string(secret.UID) != write.uid {
-		return time.Time{}, false
+		return secretDataManagerWrite{}, false
 	}
-	return write.at, true
+	return write, true
 }
 
 func secretsWithObservedDataWrites(events []timeline.TimelineEvent) map[string]bool {
