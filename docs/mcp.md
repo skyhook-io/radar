@@ -35,6 +35,52 @@ http://localhost:9280/mcp
 
 The port matches your `--port` flag (default 9280). The MCP server uses HTTP transport with JSON-RPC.
 
+## Remote authentication with OIDC
+
+For a shared Radar deployment that uses built-in OIDC login, enable `--mcp-oauth` (Helm: `mcp.oauth.enabled: true`). A compatible remote MCP client can then discover authorization, open a browser for login and consent, and obtain its own access and refresh tokens. Copying the browser's session cookie into the client is unnecessary.
+
+```yaml
+replicaCount: 1
+mcp:
+  enabled: true
+  oauth:
+    enabled: true
+auth:
+  mode: oidc
+  oidc:
+    issuerURL: https://identity.example.com
+    scopes: [openid, profile, email]
+    clientID: your-client-id
+    existingSecret: radar-oidc-credentials
+    clientSecretKey: client-secret
+    redirectURL: https://radar.example.com/auth/callback
+```
+
+Configure the OIDC client and Kubernetes permissions as described in [Authentication & Authorization](authentication.md). The callback must be an HTTPS URL at exactly `{basePath}/auth/callback`; Radar uses this configured URL to derive its public origin rather than trusting request headers. With `basePath: /radar`, for example, use `https://example.com/radar/auth/callback` and connect the MCP client to `https://example.com/radar/mcp`.
+
+Connect the client to `https://radar.example.com/mcp`, or `https://radar.example.com/mcp-readonly` for the read-only tool catalog. Use the client's native MCP sign-in flow. Radar shows a consent screen identifying the client and requested endpoint after browser login. Tokens are restricted to the exact endpoint authorized: a token for `/mcp-readonly` cannot access `/mcp`, and MCP tokens do not grant access to the web API. Both endpoints retain per-user Kubernetes RBAC enforcement.
+
+The client must support MCP OAuth discovery, dynamic registration of public clients, authorization code flow with S256 PKCE, and resource indicators. Request the advertised `mcp` scope in the client’s scope settings. Client support varies by version; a client that only supports static headers cannot complete this browser flow. Browser-session authentication remains available for existing integrations.
+
+### Discovery and ingress
+
+Unauthenticated MCP requests return `401` with a `WWW-Authenticate` challenge pointing to protected resource metadata. The metadata identifies Radar's authorization server, whose discovery document advertises the registration, authorization, token and revocation endpoints. To inspect the challenge:
+
+```bash
+curl -i https://radar.example.com/mcp
+curl -sS https://radar.example.com/.well-known/oauth-protected-resource/mcp
+curl -sS https://radar.example.com/.well-known/oauth-authorization-server
+```
+
+Ensure your ingress routes the advertised `/.well-known/*` paths and `/auth/*` paths to Radar as well as the MCP endpoints. Keep the browser-facing HTTPS host and path consistent with `auth.oidc.redirectURL`. Use the URLs advertised in the challenge and metadata when deploying below a base path.
+
+### Token lifecycle and deployment limits
+
+- MCP OAuth is opt-in and requires standalone `auth.mode: oidc` with MCP enabled. Proxy auth, unauthenticated mode and Radar Cloud do not support this option.
+- Access tokens expire after 10 minutes. Refreshing replaces both tokens and invalidates the previous access token. Refresh tokens expire at an absolute 24-hour session limit; reusing any old refresh token during that lifetime revokes its token family. Each grant occupies one access-token and one refresh-token slot, regardless of rotation count. The client must authorize again when its grant expires or is revoked.
+- Dynamic registration accepts at most 20 valid registrations per minute per Radar process; malformed requests do not consume this shared capacity limit. Complete initial authorization within 10 minutes; approved client registrations last 30 days and are renewed on consent.
+- Client registrations, authorization requests and tokens are bounded, in-memory state. Run exactly one replica. The chart uses `Recreate` rollouts to avoid routing requests across independent stores. Pod restarts invalidate this state even when browser session signing keys or timeline storage persist: reconnect the MCP client, re-register it and authorize again. If the client caches a stale client ID, remove and re-add its Radar server configuration.
+
 ## Catalog Introspection
 
 MCP registries and inspectors can start Radar without a Kubernetes cluster when they only need the tool and resource catalog:
