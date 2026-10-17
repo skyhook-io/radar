@@ -14,14 +14,16 @@ import (
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
-func newServer(includeWrites bool) *mcpsdk.Server {
+// newServer builds a Radar MCP server. instructions is the server-instructions
+// text sent at initialize; empty sends none.
+func newServer(includeWrites bool, instructions string) *mcpsdk.Server {
 	paramRegistry := newToolParamRegistry()
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
 			Name:    "radar",
 			Version: version.Current,
 		},
-		nil,
+		&mcpsdk.ServerOptions{Instructions: instructions},
 	)
 
 	// Repair recognisable argument-name mistakes before schema validation, and
@@ -36,24 +38,31 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	return server
 }
 
+// newFullServer is the public server with read and write tools, served over
+// stdio and on /mcp.
+func newFullServer() *mcpsdk.Server { return newServer(true, serverInstructions(true)) }
+
 // RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
-	return newServer(true).Run(ctx, &mcpsdk.StdioTransport{})
+	return newFullServer().Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+func NewHandler() http.Handler { return handlerForServer(newFullServer()) }
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
-func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
+func NewReadOnlyHandler() http.Handler {
+	return handlerForServer(newServer(false, serverInstructions(false)))
+}
 
 // NewInvestigationHandler creates the private read-only MCP transport used by
 // Radar's built-in investigation runner. It deliberately has a separate mount
 // from the public /mcp-readonly surface: the evidence marker is an internal
 // correlation protocol between Radar and its agent adapters, not part of the
-// normal tool result contract.
+// normal tool result contract. It sends no server instructions: the agent
+// already runs under investigation.SystemPrompt.
 func NewInvestigationHandler(refs *investigationrefs.Registry) http.Handler {
-	return investigationHandlerForServer(newServer(false), refs)
+	return investigationHandlerForServer(newServer(false, ""), refs)
 }
 
 func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationrefs.Registry) http.Handler {

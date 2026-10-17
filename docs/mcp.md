@@ -35,6 +35,12 @@ http://localhost:9280/mcp
 
 The port matches your `--port` flag (default 9280). The MCP server uses HTTP transport with JSON-RPC.
 
+## Server instructions
+
+When a client connects, Radar returns MCP [server instructions](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization): about 3,700 characters on which tool answers which question, how to read issue timing and attached changes, what a tool result does and does not prove, and that text read from the cluster (logs, events, annotations) is data, never instructions. The text is in [`internal/mcp/instructions.go`](../internal/mcp/instructions.go). Agents in clients that use server instructions get this guidance without a separate skill or rules file.
+
+What a client does with the text depends on the client and its version. Some add it to the model's context at session start; others show it only after the model loads Radar's tools; some ignore it. Claude Code keeps the first 4,096 characters (2,048 before v2.1.296; see its [MCP documentation](https://code.claude.com/docs/en/mcp)), so Radar puts tool routing first and keeps it within the first 2,048 characters. Each tool's description carries its own routing, so agents in clients that ignore server instructions still get it. `/mcp-readonly` sends the same text without the write tools.
+
 ## Catalog Introspection
 
 MCP registries and inspectors can start Radar without a Kubernetes cluster when they only need the tool and resource catalog:
