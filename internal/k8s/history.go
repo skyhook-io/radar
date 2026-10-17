@@ -854,8 +854,12 @@ func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []str
 		return nil, nil
 	}
 
-	oldHooks := indexWebhooksByName(oldU)
-	newHooks := indexWebhooksByName(newU)
+	// Compare raw summaries; show summaries with selector values under
+	// secret-looking keys masked.
+	oldHooks := indexWebhooksByName(oldU, false)
+	newHooks := indexWebhooksByName(newU, false)
+	oldShown := indexWebhooksByName(oldU, true)
+	newShown := indexWebhooksByName(newU, true)
 
 	names := map[string]struct{}{}
 	for n := range oldHooks {
@@ -878,10 +882,14 @@ func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []str
 		if oldOK && newOK && oldS == newS {
 			continue
 		}
+		shownNew := newShown[name]
+		if oldOK && newOK && oldShown[name] == shownNew {
+			shownNew += " (masked values changed)"
+		}
 		changes = append(changes, FieldChange{
 			Path:     "webhooks[" + name + "]",
-			OldValue: valueOrNil(oldS, oldOK),
-			NewValue: valueOrNil(newS, newOK),
+			OldValue: valueOrNil(oldShown[name], oldOK),
+			NewValue: valueOrNil(shownNew, newOK),
 		})
 		switch {
 		case !oldOK:
@@ -899,7 +907,7 @@ func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []str
 
 // indexWebhooksByName maps each webhook's name to a compact, comparable summary
 // of the fields that matter for diagnosis. Unnamed entries are skipped.
-func indexWebhooksByName(u *unstructured.Unstructured) map[string]string {
+func indexWebhooksByName(u *unstructured.Unstructured, redact bool) map[string]string {
 	out := map[string]string{}
 	hooks, _, _ := unstructured.NestedSlice(u.Object, "webhooks")
 	for _, h := range hooks {
@@ -911,12 +919,12 @@ func indexWebhooksByName(u *unstructured.Unstructured) map[string]string {
 		if name == "" {
 			continue
 		}
-		out[name] = webhookSummary(hm)
+		out[name] = webhookSummary(hm, redact)
 	}
 	return out
 }
 
-func webhookSummary(hm map[string]any) string {
+func webhookSummary(hm map[string]any, redact bool) string {
 	var parts []string
 	if fp, ok, _ := unstructured.NestedString(hm, "failurePolicy"); ok {
 		parts = append(parts, "failurePolicy="+fp)
@@ -962,10 +970,10 @@ func webhookSummary(hm map[string]any) string {
 	// Selectors are the webhook's blast radius — a re-scoping change (e.g. now
 	// matching the prod namespace) must register. Without these, a selector-only
 	// update would diff empty and recordToTimelineStore would silently drop it.
-	if ns := webhookSelectorSummary(hm, "namespaceSelector"); ns != "" {
+	if ns := webhookSelectorSummary(hm, "namespaceSelector", redact); ns != "" {
 		parts = append(parts, "namespaceSelector={"+ns+"}")
 	}
-	if objSel := webhookSelectorSummary(hm, "objectSelector"); objSel != "" {
+	if objSel := webhookSelectorSummary(hm, "objectSelector", redact); objSel != "" {
 		parts = append(parts, "objectSelector={"+objSel+"}")
 	}
 	parts = append(parts, "rules="+webhookRulesSummary(hm))
@@ -974,7 +982,7 @@ func webhookSummary(hm map[string]any) string {
 
 // webhookSelectorSummary renders a namespaceSelector/objectSelector compactly as
 // sorted matchLabels + matchExpressions. Empty (match-everything) selector → "".
-func webhookSelectorSummary(hm map[string]any, field string) string {
+func webhookSelectorSummary(hm map[string]any, field string, redact bool) string {
 	matchLabels, _, _ := unstructured.NestedStringMap(hm, field, "matchLabels")
 	exprs, _, _ := unstructured.NestedSlice(hm, field, "matchExpressions")
 	if len(matchLabels) == 0 && len(exprs) == 0 {
@@ -987,7 +995,11 @@ func webhookSelectorSummary(hm map[string]any, field string) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys)+len(exprs))
 	for _, k := range keys {
-		parts = append(parts, k+"="+matchLabels[k])
+		value := matchLabels[k]
+		if redact && envNameLooksSecret(k) {
+			value = "[REDACTED]"
+		}
+		parts = append(parts, k+"="+value)
 	}
 	exprStrs := make([]string, 0, len(exprs))
 	for _, e := range exprs {
@@ -998,6 +1010,9 @@ func webhookSelectorSummary(hm map[string]any, field string) string {
 		key, _, _ := unstructured.NestedString(em, "key")
 		op, _, _ := unstructured.NestedString(em, "operator")
 		vals, _, _ := unstructured.NestedStringSlice(em, "values")
+		if redact && envNameLooksSecret(key) && len(vals) > 0 {
+			vals = []string{"[REDACTED]"}
+		}
 		exprStrs = append(exprStrs, key+" "+op+" ["+strings.Join(vals, ",")+"]")
 	}
 	sort.Strings(exprStrs)

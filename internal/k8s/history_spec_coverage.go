@@ -352,8 +352,8 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 	var omitted []string
 	labels := make([]string, 0, len(untracked))
 	for _, c := range untracked {
-		oldVal, oldFound := lookupSpecPath(oldU, root, c.path)
-		newVal, newFound := lookupSpecPath(newU, root, c.path)
+		oldVal, newVal := c.oldV, c.newV
+		oldFound, newFound := oldVal != nil, newVal != nil
 		label := shortSpecPath(c.path)
 		switch {
 		case c.order:
@@ -425,6 +425,9 @@ type changedSpecPath struct {
 	// absentRoot is the outermost enclosing block that exists on only one
 	// side, or "" when the path's parent exists on both.
 	absentRoot string
+	// oldV and newV are the values compared at path, captured during the
+	// walk so the row shows exactly what was compared; nil means absent.
+	oldV, newV any
 }
 
 // backstopRootOf returns the object's root field (a map for spec, a list for
@@ -487,7 +490,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 	// collapseUntracked folds the leaves back into the block for display.
 	// An empty block has no leaves to walk; its appearance is the change.
 	if (oldV == nil && isEmptyBlock(newV)) || (newV == nil && isEmptyBlock(oldV)) {
-		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
+		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot, oldV: oldV, newV: newV})
 		return
 	}
 	if absentRoot == "" && ((oldV == nil && isBlock(newV)) || (newV == nil && isBlock(oldV))) {
@@ -498,7 +501,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 	case map[string]any:
 		n, ok := newV.(map[string]any)
 		if !ok {
-			*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
+			*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot, oldV: oldV, newV: newV})
 			return
 		}
 		for _, k := range unionKeys(o, n) {
@@ -507,7 +510,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 	case []any:
 		n, ok := newV.([]any)
 		if !ok {
-			*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
+			*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot, oldV: oldV, newV: newV})
 			return
 		}
 		if field := listKeyField(o, n); field != "" {
@@ -534,7 +537,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 			collectChangedSpecPaths(fmt.Sprintf("%s[%d]", path, i), oldItem, newItem, absentRoot, out)
 		}
 	default:
-		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot})
+		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot, oldV: oldV, newV: newV})
 	}
 }
 
@@ -556,7 +559,7 @@ func collapseUntracked(untracked, covered []changedSpecPath, reported map[string
 		return false
 	}
 	var out []changedSpecPath
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for _, c := range untracked {
 		if c.order || c.absentRoot == "" {
 			out = append(out, c)
@@ -576,10 +579,28 @@ func collapseUntracked(untracked, covered []changedSpecPath, reported map[string
 		if reported[path] && isSummaryRow(path) {
 			continue
 		}
-		if !seen[path] {
-			seen[path] = true
-			out = append(out, changedSpecPath{path: path})
+		if path == c.path {
+			out = append(out, c)
+			continue
 		}
+		// A collapsed block shows only whether it exists on each side.
+		present := func(v any) any {
+			if v != nil {
+				return map[string]any{}
+			}
+			return nil
+		}
+		if i, ok := seen[path]; ok {
+			if out[i].oldV == nil {
+				out[i].oldV = present(c.oldV)
+			}
+			if out[i].newV == nil {
+				out[i].newV = present(c.newV)
+			}
+			continue
+		}
+		seen[path] = len(out)
+		out = append(out, changedSpecPath{path: path, oldV: present(c.oldV), newV: present(c.newV)})
 	}
 	return out
 }

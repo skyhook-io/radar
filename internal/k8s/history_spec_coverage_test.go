@@ -1513,3 +1513,42 @@ func TestComputeDiff_CurlUserCredentialsRedacted(t *testing.T) {
 		}
 	}
 }
+
+func TestComputeDiff_WebhookSelectorValuesMasked(t *testing.T) {
+	hook := func(gen int64, timeout int64, token string) *unstructured.Unstructured {
+		u := specTestWebhookConfig(gen, "Fail", "Q0EtMQ==")
+		h := u.Object["webhooks"].([]any)[0].(map[string]any)
+		h["timeoutSeconds"] = timeout
+		h["objectSelector"] = map[string]any{"matchLabels": map[string]any{"token": token}}
+		return u
+	}
+	diff := ComputeDiff("ValidatingWebhookConfiguration", hook(1, 5, "tok-one"), hook(2, 10, "tok-one"))
+	if rendered := fmt.Sprintf("%+v", diff); diff == nil || strings.Contains(rendered, "tok-one") {
+		t.Fatalf("selector value leaked or change missing: %s", rendered)
+	}
+	diff = ComputeDiff("ValidatingWebhookConfiguration", hook(1, 5, "tok-one"), hook(2, 5, "tok-two"))
+	change := findChange(diff, "webhooks[pods.policy.example.com]")
+	if change == nil || !strings.Contains(fmt.Sprint(change.NewValue), "masked values changed") {
+		t.Fatalf("masked-only change not marked: %+v", diff)
+	}
+	if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "tok-") {
+		t.Fatalf("selector value leaked: %s", rendered)
+	}
+}
+
+// Values come from the comparison itself, so a list that switches from named
+// to positional matching still shows the right old and new values.
+func TestComputeDiff_MixedNamedRuleValuesComeFromComparison(t *testing.T) {
+	r := func(name string, weight int64) map[string]any {
+		rule := map[string]any{"backendRefs": []any{map[string]any{"name": "web", "port": int64(80), "weight": weight}}}
+		if name != "" {
+			rule["name"] = name
+		}
+		return rule
+	}
+	diff := ComputeDiff("HTTPRoute", namedRoute(1, r("1", 10), r("0", 20)), namedRoute(2, r("1", 30), r("0", 20), r("", 5)))
+	change := findChange(diff, "spec.rules[0].backendRefs[web].weight")
+	if change == nil || change.OldValue != int64(10) || change.NewValue != int64(30) {
+		t.Fatalf("weight row = %+v in %+v", change, diff)
+	}
+}
