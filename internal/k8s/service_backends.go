@@ -330,9 +330,9 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 			w.Ready++
 		}
 		// EndpointSlice readiness: publishNotReadyAddresses publishes every
-		// live Pod, terminating or not. A Pod that resolves none of the
-		// Service's ports is in no endpoint.
-		if (svc.Spec.PublishNotReadyAddresses || (ready && pod.DeletionTimestamp == nil)) && resolvesAnyServicePort(svc, []*corev1.Pod{pod}) {
+		// live Pod with an IP, terminating or not. A Pod without an IP, or
+		// that resolves none of the Service's ports, is in no endpoint.
+		if pod.Status.PodIP != "" && (svc.Spec.PublishNotReadyAddresses || (ready && pod.DeletionTimestamp == nil)) && resolvesAnyServicePort(svc, []*corev1.Pod{pod}) {
 			w.receiving = append(w.receiving, pod)
 		}
 	}

@@ -24,6 +24,7 @@ func backendPod(name, ownerKind, ownerName string, containers []corev1.Container
 		Spec:       corev1.PodSpec{Containers: containers},
 		Status: corev1.PodStatus{
 			Phase:      corev1.PodRunning,
+			PodIP:      "10.0.0.1",
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
 		},
 	}
@@ -285,6 +286,22 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantDifferent: true,
 			wantApps:      [][]string{{"frontend"}, {"search"}},
 			wantGapPorts:  []int32{5000},
+		},
+		{
+			name: "a pending pod without an IP is no endpoint, even when not-ready addresses publish",
+			svc: func() *corev1.Service {
+				svc := backendService(p5000)
+				svc.Spec.PublishNotReadyAddresses = true
+				return svc
+			}(),
+			pods: []*corev1.Pod{
+				backendPod("frontend-1", "StatefulSet", "frontend", []corev1.Container{container("frontend", "acme/frontend:1.0", 5000)}),
+				backendPod("search-1", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:2.0", 8082)}, notReady, func(p *corev1.Pod) {
+					p.Status.Phase = corev1.PodPending
+					p.Status.PodIP = ""
+				}),
+			},
+			wantWorkloads: 2,
 		},
 		{
 			name: "terminating pods receive no traffic",

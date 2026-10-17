@@ -600,9 +600,9 @@ when a workload's kind can't be resolved for that check.
 Radar raises a `service_mixed_backends` warning issue, and resource context adds
 the `mixed_backends` warning with its explanation in
 `serviceSummary.mixedBackends`, only when the workloads that receive the traffic
-don't all serve the Service. Receiving means ready, non-terminating Pods (every
-live Pod for a Service that publishes not-ready addresses) that resolve a Service
-port. Two signals count:
+don't all serve the Service. Receiving means Pods with an IP that are ready and
+not terminating (any live Pod for a Service that publishes not-ready addresses)
+and resolve a Service port. Two signals count:
 
 - **Different applications**: the workloads behind one Service port run no image
   repository in common, mesh proxies aside. A tag or digest change is the same

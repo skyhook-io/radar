@@ -1523,6 +1523,7 @@ func mixedBackendPod(name, owner, image string, port int32) *corev1.Pod {
 		}}},
 		Status: corev1.PodStatus{
 			Phase:      corev1.PodRunning,
+			PodIP:      "10.0.0.1",
 			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now())}},
 		},
 	}
