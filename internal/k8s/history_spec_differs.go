@@ -276,16 +276,28 @@ func diffHPAScalingConfig(oldObj, newObj any) ([]FieldChange, []string) {
 	oldMetrics, newMetrics := hpaMetricTargets(o.Metrics), hpaMetricTargets(n.Metrics)
 	if !reflect.DeepEqual(oldMetrics, newMetrics) {
 		s.changes = append(s.changes, FieldChange{Path: "spec.metrics", OldValue: hpaMetricList(oldMetrics), NewValue: hpaMetricList(newMetrics)})
-		for _, key := range unionStringKeys(oldMetrics, newMetrics) {
-			oldTarget, oldOK := oldMetrics[key]
-			newTarget, newOK := newMetrics[key]
+		keys := make(map[string]bool, len(oldMetrics)+len(newMetrics))
+		for key := range oldMetrics {
+			keys[key] = true
+		}
+		for key := range newMetrics {
+			keys[key] = true
+		}
+		sorted := make([]string, 0, len(keys))
+		for key := range keys {
+			sorted = append(sorted, key)
+		}
+		sort.Strings(sorted)
+		for _, key := range sorted {
+			oldMetric, oldOK := oldMetrics[key]
+			newMetric, newOK := newMetrics[key]
 			switch {
 			case !oldOK:
-				s.summary = append(s.summary, fmt.Sprintf("metric %s added (target %s)", key, newTarget))
+				s.summary = append(s.summary, fmt.Sprintf("metric %s added (target %s)", newMetric.display, newMetric.target))
 			case !newOK:
-				s.summary = append(s.summary, fmt.Sprintf("metric %s removed", key))
-			case oldTarget != newTarget:
-				s.summary = append(s.summary, fmt.Sprintf("%s target: %s→%s", key, oldTarget, newTarget))
+				s.summary = append(s.summary, fmt.Sprintf("metric %s removed", oldMetric.display))
+			case oldMetric.target != newMetric.target:
+				s.summary = append(s.summary, fmt.Sprintf("%s target: %s→%s", newMetric.display, oldMetric.target, newMetric.target))
 			}
 		}
 	}
@@ -316,38 +328,53 @@ func diffHPAScalingConfig(oldObj, newObj any) ([]FieldChange, []string) {
 
 // hpaMetricTargets keys each metric by what it measures, so a change of
 // target reads as one edit rather than a remove plus an add.
-func hpaMetricTargets(metrics []autoscalingv2.MetricSpec) map[string]string {
-	out := make(map[string]string, len(metrics))
+type hpaMetric struct {
+	display, target string
+}
+
+// hpaMetricTargets maps each metric's identity to its display name and
+// target. The identity keeps selector values verbatim so two metrics that
+// differ only in a redacted value stay distinct; only display is redacted.
+func hpaMetricTargets(metrics []autoscalingv2.MetricSpec) map[string]hpaMetric {
+	out := make(map[string]hpaMetric, len(metrics))
 	for _, m := range metrics {
-		var key string
+		var key, display string
 		var target autoscalingv2.MetricTarget
 		switch {
 		case m.Resource != nil:
 			key, target = string(m.Resource.Name), m.Resource.Target
+			display = key
 		case m.ContainerResource != nil:
 			key, target = m.ContainerResource.Container+"/"+string(m.ContainerResource.Name), m.ContainerResource.Target
+			display = key
 		case m.Pods != nil:
-			key, target = "pods/"+metricIdentifierString(m.Pods.Metric), m.Pods.Target
+			key, display, target = "pods/"+metricIdentifierString(m.Pods.Metric, false), "pods/"+metricIdentifierString(m.Pods.Metric, true), m.Pods.Target
 		case m.Object != nil:
 			ref := m.Object.DescribedObject
-			key, target = "object/"+ref.APIVersion+"/"+ref.Kind+"/"+ref.Name+"/"+metricIdentifierString(m.Object.Metric), m.Object.Target
+			prefix := "object/" + ref.APIVersion + "/" + ref.Kind + "/" + ref.Name + "/"
+			key, display, target = prefix+metricIdentifierString(m.Object.Metric, false), prefix+metricIdentifierString(m.Object.Metric, true), m.Object.Target
 		case m.External != nil:
-			key, target = "external/"+metricIdentifierString(m.External.Metric), m.External.Target
+			key, display, target = "external/"+metricIdentifierString(m.External.Metric, false), "external/"+metricIdentifierString(m.External.Metric, true), m.External.Target
 		default:
 			key = string(m.Type)
+			display = key
 		}
-		out[key] = metricTargetString(target)
+		out[key] = hpaMetric{display: display, target: metricTargetString(target)}
 	}
 	return out
 }
 
 // The selector is part of a metric's identity: changing it changes which
 // series drive scaling.
-func metricIdentifierString(id autoscalingv2.MetricIdentifier) string {
+func metricIdentifierString(id autoscalingv2.MetricIdentifier, redact bool) string {
 	if id.Selector == nil {
 		return id.Name
 	}
-	return id.Name + "{" + metav1.FormatLabelSelector(id.Selector) + "}"
+	sel := id.Selector
+	if redact {
+		sel = redactedSelector(sel)
+	}
+	return id.Name + "{" + metav1.FormatLabelSelector(sel) + "}"
 }
 
 // metricTargetString renders every target field, so the metrics row covers
@@ -377,10 +404,10 @@ func scaleTargetString(ref autoscalingv2.CrossVersionObjectReference) string {
 	return out
 }
 
-func hpaMetricList(targets map[string]string) []string {
-	out := make([]string, 0, len(targets))
-	for key, target := range targets {
-		out = append(out, key+"="+target)
+func hpaMetricList(metrics map[string]hpaMetric) []string {
+	out := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		out = append(out, metric.display+"="+metric.target)
 	}
 	sort.Strings(out)
 	return out
@@ -520,21 +547,24 @@ func labelSelectorString(sel *metav1.LabelSelector) any {
 	if sel == nil {
 		return nil
 	}
-	return metav1.FormatLabelSelector(sel)
+	return metav1.FormatLabelSelector(redactedSelector(sel))
 }
 
-func unionStringKeys(a, b map[string]string) []string {
-	keys := make([]string, 0, len(a)+len(b))
-	for k := range a {
-		keys = append(keys, k)
-	}
-	for k := range b {
-		if _, ok := a[k]; !ok {
-			keys = append(keys, k)
+// redactedSelector masks label values under secret-looking keys, the policy
+// pod-template label rows use, before a selector is rendered into a row.
+func redactedSelector(sel *metav1.LabelSelector) *metav1.LabelSelector {
+	out := sel.DeepCopy()
+	for key := range out.MatchLabels {
+		if envNameLooksSecret(key) {
+			out.MatchLabels[key] = "REDACTED"
 		}
 	}
-	sort.Strings(keys)
-	return keys
+	for i := range out.MatchExpressions {
+		if envNameLooksSecret(out.MatchExpressions[i].Key) && len(out.MatchExpressions[i].Values) > 0 {
+			out.MatchExpressions[i].Values = []string{"REDACTED"}
+		}
+	}
+	return out
 }
 
 // humanDuration renders a gap the way a person says it: "30h", "3d4h", "45m".

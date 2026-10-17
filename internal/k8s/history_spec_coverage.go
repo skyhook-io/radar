@@ -553,14 +553,11 @@ func collapseUntracked(untracked, covered []changedSpecPath, reported map[string
 				break
 			}
 		}
-		// A whole item added or removed under a summary row (a rule, a
-		// volume, a canary step) is what that row's count or references
-		// already say.
-		if chosen := splitSpecPath(path); len(chosen) > 1 {
-			parent := joinSpecPath(chosen[:len(chosen)-1])
-			if (reported[path] && isSummaryRow(path)) || (reported[parent] && isSummaryRow(parent)) {
-				continue
-			}
+		// A block collapsed onto a reported summary row's own path repeats
+		// it. Items beneath that row keep their own rows: a count says that
+		// something changed, not what.
+		if reported[path] && isSummaryRow(path) {
+			continue
 		}
 		if !seen[path] {
 			seen[path] = true

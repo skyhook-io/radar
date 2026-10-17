@@ -651,8 +651,9 @@ func TestComputeDiff_RolloutStrategyAndTemplate(t *testing.T) {
 	if findChange(diff, "spec.template.spec.containers[web].env[MODE]") == nil {
 		t.Errorf("env row missing: %+v", diff)
 	}
-	if strings.Contains(diff.Summary, "other spec changes") {
-		t.Errorf("tracked fields leaked into the backstop: %q", diff.Summary)
+	// The step count says that steps changed; the removed steps say which.
+	if !strings.HasSuffix(diff.Summary, "other spec changes: strategy.canary.steps[2] (removed), strategy.canary.steps[3] (removed)") {
+		t.Errorf("summary %q should name the removed steps and nothing tracked", diff.Summary)
 	}
 }
 
@@ -767,11 +768,11 @@ func TestComputeDiff_HTTPRouteNamedRulesAddAndEdit(t *testing.T) {
 	}
 }
 
-// Unnamed rules are compared by position: the count row explains an appended
-// rule, and an edit to an existing rule is still reported beside it.
+// Unnamed rules are compared by position: an appended rule gets its own row
+// beside the count, and an edit to an existing rule is still reported.
 func TestComputeDiff_HTTPRouteUnnamedRulesComparedByPosition(t *testing.T) {
 	diff := ComputeDiff("HTTPRoute", namedRoute(1, routeRule("main", 90)), namedRoute(2, routeRule("main", 10), routeRule("", 50)))
-	want := "rules: 1→2, other spec changes: rules[0].backendRefs[web].weight, rules[0].backendRefs[web-canary].weight"
+	want := "rules: 1→2, other spec changes: rules[0].backendRefs[web].weight, rules[0].backendRefs[web-canary].weight, rules[1] (added)"
 	if diff == nil || diff.Summary != want {
 		t.Fatalf("summary = %+v, want %q", diff, want)
 	}
@@ -1262,5 +1263,48 @@ func TestComputeDiff_FreeFormStringsHidden(t *testing.T) {
 	if !safeStringField("spec.listeners[http].hostname") || !safeStringField("spec.hostnames[0]") ||
 		!safeStringField("spec.template.spec.priorityClassName") || safeStringField("spec.description.text") {
 		t.Fatal("safeStringField classification changed")
+	}
+}
+
+func TestComputeDiff_SelectorValuesUnderSecretKeysRedacted(t *testing.T) {
+	sel := func(v string) *metav1.LabelSelector {
+		return &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web", "password": v}}
+	}
+	one := intstr.FromInt(1)
+	base := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Name: "web", UID: "p", Generation: 1},
+		Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: &one, Selector: sel("hunter2")}}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.Selector = sel("swordfish")
+	diff := ComputeDiff("PodDisruptionBudget", base, updated)
+	if diff == nil {
+		t.Fatal("expected diff")
+	}
+	if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "hunter2") || strings.Contains(rendered, "swordfish") {
+		t.Fatalf("selector value leaked: %s", rendered)
+	}
+}
+
+// Metrics that differ only in a redacted selector value stay distinct, so a
+// change to one is not lost under the other.
+func TestComputeDiff_HPAMetricsDistinctUnderRedaction(t *testing.T) {
+	qty := func(v string) *resource.Quantity { q := resource.MustParse(v); return &q }
+	metric := func(token, target string) autoscalingv2.MetricSpec {
+		return autoscalingv2.MetricSpec{Type: autoscalingv2.ExternalMetricSourceType, External: &autoscalingv2.ExternalMetricSource{
+			Metric: autoscalingv2.MetricIdentifier{Name: "queue", Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"token": token}}},
+			Target: autoscalingv2.MetricTarget{Type: autoscalingv2.ValueMetricType, Value: qty(target)},
+		}}
+	}
+	base := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "w", UID: "h", Generation: 1},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{MaxReplicas: 5, Metrics: []autoscalingv2.MetricSpec{metric("a1", "10"), metric("b2", "20")}}}
+	updated := base.DeepCopy()
+	updated.Generation = 2
+	updated.Spec.Metrics = []autoscalingv2.MetricSpec{metric("a1", "15"), metric("b2", "20")}
+	diff := ComputeDiff("HorizontalPodAutoscaler", base, updated)
+	if diff == nil || !strings.Contains(diff.Summary, "target: 10→15") {
+		t.Fatalf("summary = %+v", diff)
+	}
+	if rendered := fmt.Sprintf("%+v", diff); strings.Contains(rendered, "a1") || strings.Contains(rendered, "b2") {
+		t.Fatalf("selector value leaked: %s", rendered)
 	}
 }
