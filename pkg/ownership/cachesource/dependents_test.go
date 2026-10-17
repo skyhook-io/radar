@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	clientfeatures "k8s.io/client-go/features"
+	clientfeaturestesting "k8s.io/client-go/features/testing"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -214,5 +216,31 @@ func TestOwnerCandidatesCostDoesNotGrowWithUnrelatedObjects(t *testing.T) {
 	small, large := allocations(10), allocations(5000)
 	if large > small {
 		t.Fatalf("%v allocations per search with 5,000 unrelated Pods, %v with 10; the search must not scan the kind", large, small)
+	}
+}
+
+// An empty answer depends on the stores that gave it as much as a full one.
+func TestOwnerCandidatesNegativeFailsValidateOnceItsStoreIsReplaced(t *testing.T) {
+	f, p := newPromotionFixture(t)
+	s := begin(t, f.source())
+	got := s.OwnerCandidates("uid-nothing-names", ownership.InNamespace("alpha"), 0)
+	if slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind }) || len(got.Candidates) != 0 {
+		t.Fatalf("a search alpha's loaded watch answers = %+v", got)
+	}
+	p.run(t, f, true)
+	if err := s.Validate(); !errors.Is(err, ownership.ErrStoreReplaced) {
+		t.Fatalf("Validate after the store behind an empty answer was replaced = %v, want ErrStoreReplaced", err)
+	}
+}
+
+// Paged informers are indexed like any other.
+func TestOwnerCandidatesFromPagedInformers(t *testing.T) {
+	clientfeaturestesting.SetFeatureDuringTest(t, clientfeatures.WatchListClient, false)
+	f := newFixture(t, k8score.CacheConfig{ListPageSize: 2}, nil)
+	s := begin(t, f.source())
+	got := s.OwnerCandidates("uid-deploy", ownership.InNamespace("alpha"), 0)
+	if !slices.Contains(candidateRefs(got), ref("apps", "ReplicaSet", "alpha", "web-1")) ||
+		slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"} }) {
+		t.Fatalf("dependents through a paged ReplicaSet informer = %+v", got)
 	}
 }

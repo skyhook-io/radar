@@ -131,12 +131,27 @@ func (d *driver) staleKind() string {
 		got := map[string]string{}
 		var items []any
 		if k.Typed {
-			objs, _ := d.r.caches.Typed.ReadableObjects(k.Resource, nil)
+			objs, ok := d.r.caches.Typed.ReadableObjects(k.Resource, nil)
+			if !ok {
+				return k.GroupKind.String() + " (not loaded)"
+			}
 			for _, o := range objs {
 				items = append(items, o)
 			}
 		} else {
-			objs, _ := d.r.caches.Dynamic.ListWatchedReadOnly(schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Resource})
+			// Every watch the kind is collected through must have loaded,
+			// so an empty store isn't mistaken for a missing one.
+			gvr := schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Resource}
+			scopes := []string{""}
+			if k.Namespaced && c.Namespaces != nil {
+				scopes = c.Namespaces
+			}
+			for _, ns := range scopes {
+				if _, synced := d.r.caches.Dynamic.ReadServer(gvr, ns); !synced {
+					return k.GroupKind.String() + " (not loaded in " + ns + ")"
+				}
+			}
+			objs, _ := d.r.caches.Dynamic.ListWatchedReadOnly(gvr)
 			for _, o := range objs {
 				items = append(items, o)
 			}
@@ -228,6 +243,9 @@ func TestSourceConformsThroughChanges(t *testing.T) {
 				got := begin(t, d.r.source())
 				if diffs := ownershiptest.Conform(t, want, got, ownershiptest.QueriesFor(d.w)); diffs > 0 {
 					t.Fatalf("after step %d (%s): %d differences", n, change, diffs)
+				}
+				if err := got.Validate(); err != nil {
+					t.Fatalf("after step %d (%s): Validate: %v", n, change, err)
 				}
 				changed++
 			}

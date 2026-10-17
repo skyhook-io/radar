@@ -154,6 +154,16 @@ func (s scanSession) OwnerCandidates(uid types.UID, domain ownership.Domain, lim
 	if s.w.Partial && searches {
 		gap(resourceid.GroupKind{}, "", readreason.ReadError)
 	}
+	var namespaces []string
+	if !domain.AllNamespaces {
+		for _, ns := range domain.Namespaces {
+			if ns == "" {
+				gap(resourceid.GroupKind{}, "", readreason.NamespaceRequired)
+			} else {
+				namespaces = append(namespaces, ns)
+			}
+		}
+	}
 	var found []Object
 	for _, k := range s.dependentKinds() {
 		if k.namespaced && !domain.AllNamespaces && len(domain.Namespaces) == 0 || !k.namespaced && !domain.ClusterScoped {
@@ -180,7 +190,7 @@ func (s scanSession) OwnerCandidates(uid types.UID, domain ownership.Domain, lim
 				}
 			}
 		default:
-			for _, ns := range domain.Namespaces {
+			for _, ns := range namespaces {
 				if reason := heldReason(c, true, ns); reason != "" {
 					gap(k.gk, ns, reason)
 				} else {

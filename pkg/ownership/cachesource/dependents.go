@@ -33,7 +33,17 @@ type search struct {
 }
 
 func (s *session) OwnerCandidates(uid types.UID, domain ownership.Domain, limit int) ownership.CandidateRead {
-	q := &search{uid: string(uid), domain: domain, namespaces: slices.Compact(slices.Sorted(slices.Values(domain.Namespaces)))}
+	q := &search{uid: string(uid), domain: domain}
+	if !domain.AllNamespaces {
+		for _, ns := range slices.Compact(slices.Sorted(slices.Values(domain.Namespaces))) {
+			if ns == "" {
+				// A store read for "" would answer for every namespace.
+				q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.NamespaceRequired})
+				continue
+			}
+			q.namespaces = append(q.namespaces, ns)
+		}
+	}
 	searches := domain.Searches(true) || domain.Searches(false)
 	if !s.catalog.Complete() && searches {
 		q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.ReadError})
@@ -99,7 +109,7 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 	gk := b.GroupKind()
 	var target []string
 	if b.Namespaced && !q.domain.AllNamespaces {
-		target = q.namespaces
+		target = append([]string{}, q.namespaces...)
 	}
 	a := s.caches.Typed.AssessKindRead(b.Resource, target)
 	if a.Readiness == k8score.KindUnavailable {

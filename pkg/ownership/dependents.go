@@ -4,7 +4,8 @@ package ownership
 // Domain searches nothing.
 type Domain struct {
 	// AllNamespaces searches every namespace of the namespaced kinds;
-	// otherwise Namespaces lists the ones to search.
+	// otherwise Namespaces lists the ones to search. Only AllNamespaces means
+	// every namespace: an empty entry in Namespaces is not one.
 	AllNamespaces bool
 	Namespaces    []string
 	// ClusterScoped also searches the cluster-scoped kinds.
@@ -38,8 +39,10 @@ type CandidateRead struct {
 	// kind, namespace and name.
 	Candidates []Observation
 	// Gaps are the parts of the domain the search could not read. A Gap with
-	// no Kind stands for kinds discovery didn't list; one with no Namespace
-	// on a namespaced kind, for namespaces of that kind Radar doesn't collect.
+	// no Kind stands for kinds discovery didn't list (read_error), or for an
+	// empty namespace the domain named (namespace_required), which is never
+	// taken to mean all namespaces. One with no Namespace on a namespaced kind
+	// stands for namespaces of that kind Radar doesn't collect.
 	Gaps []Gap
 	// Truncated: the search stopped at its limit, so more may exist.
 	Truncated bool
