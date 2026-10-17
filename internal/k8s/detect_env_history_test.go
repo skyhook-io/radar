@@ -127,9 +127,19 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 			t.Fatalf("unexpected Ready-pod detection: %+v", detections)
 		}
 		detection := detections[0]
-		if !strings.Contains(detection.Message, "is Ready") || !strings.Contains(detection.Message, "may still hold the pre-change value") ||
+		wantMessage := "Pod/catalog-healthy is Ready, and a running container in it started before Radar observed a Secret key it references change: container app started at " +
+			startedAt.Format(time.RFC3339) + " and references Secret/db-conn key password as env DB_PASSWORD; Radar observed that key change at " +
+			changedAt.Format(time.RFC3339) + ". Kubernetes reads Secret-backed env values only when a container starts."
+		if detection.Message != wantMessage ||
 			!strings.Contains(detection.Cause, "does not refresh") || !strings.Contains(detection.Action, "Confirm no replacement") {
-			t.Fatalf("Ready-pod detection did not preserve evidence and uncertainty: %+v", detection)
+			t.Fatalf("Ready-pod detection did not state its observed evidence:\n got %q\nwant %q", detection.Message, wantMessage)
+		}
+		// The change time is when Radar observed the update, not when it was
+		// written, so the message must not claim which value the container read.
+		for _, overclaim := range []string{"stale", "pre-change", "old value", "still hold"} {
+			if strings.Contains(detection.Message, overclaim) {
+				t.Fatalf("Ready-pod message claims more than Radar observed (%q): %q", overclaim, detection.Message)
+			}
 		}
 	})
 
@@ -159,8 +169,10 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || detections[0].Severity != "warning" || detections[0].Kind != "Pod" || detections[0].Name != pod.Name || detections[0].Fingerprint != "stale-secret-env" {
 			t.Fatalf("unexpected promoted detection: %+v", detections)
 		}
-		if detections[0].Message != "Container app is not Ready and may be running a stale env value for Secret/db-conn key password; restart the pod to refresh it." ||
-			detections[0].Cause != "A running container loaded a Secret-backed environment value before Radar observed that Secret key change." ||
+		if detections[0].Message != "The pod is not Ready, and running containers in it started before Radar observed Secret keys they reference change: container app started at "+
+			startedAt.Format(time.RFC3339)+" and references Secret/db-conn key password as env DB_PASSWORD; Radar observed that key change at "+
+			changedAt.Format(time.RFC3339)+". Restart the pod to refresh them." ||
+			detections[0].Cause != "A running container that references a Secret key in its environment started before Radar observed that key change." ||
 			detections[0].Action != "Restart the pod so its containers re-read Secret-backed environment variables." {
 			t.Fatalf("not-Ready detection contract changed: %+v", detections[0])
 		}
@@ -186,7 +198,7 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		cache := envHistoryTestCache(t, pod, secret)
 		setEnvHistoryEvents(t, change)
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || !strings.Contains(detections[0].Message, "Container app") || strings.Contains(detections[0].Message, "2 stale") {
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "container app started") || strings.Contains(detections[0].Message, "sidecar") {
 			t.Fatalf("promotion should describe only the biting container checks: %+v", detections)
 		}
 	})
@@ -236,8 +248,8 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		cache := envHistoryTestCache(t, pod, secret)
 		setEnvHistoryEvents(t, change)
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || !strings.Contains(detections[0].Message, "a Secret-backed environment value") ||
-			strings.Contains(detections[0].Message, "2 Secret-backed") {
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "container app started at") ||
+			strings.Contains(detections[0].Message, "sidecar") {
 			t.Fatalf("Ready issue must include only pre-change container instances: %+v", detections)
 		}
 	})
@@ -372,15 +384,17 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 	// Known accepted limitation: the promotion gate corroborates on the same
 	// container being Running-and-not-Ready, but cannot distinguish "not Ready
 	// because of the stale value" from "not Ready for an unrelated reason while
-	// a consumed key happened to change in-window." The hedged message wording
-	// ("may be running a stale env value") is the mitigation.
+	// a referenced key happened to change in-window." The mitigation is that the
+	// message states only observed facts (start time, referenced key, observed
+	// change time) and never says the change caused the not-Ready state.
 	t.Run("unrelated not-Ready with coincidental change still promotes (documented limitation)", func(t *testing.T) {
 		pod := staleSecretEnvPod("coincidental", startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
 		cache := envHistoryTestCache(t, pod, secret)
 		setEnvHistoryEvents(t, change)
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || !strings.Contains(detections[0].Message, "may be running a stale env value") {
-			t.Fatalf("expected one hedged warning for the coincidental case: %+v", detections)
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "started before Radar observed") ||
+			strings.Contains(detections[0].Message, "because") {
+			t.Fatalf("expected one non-causal warning for the coincidental case: %+v", detections)
 		}
 	})
 
@@ -422,7 +436,7 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 			t.Fatalf("restartable init sidecar lost its stale env fact: %+v", checks)
 		}
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || !strings.Contains(detections[0].Message, "Container vault-agent") {
+		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || !strings.Contains(detections[0].Message, "container vault-agent started") {
 			t.Fatalf("not-Ready restartable init sidecar must promote: %+v", detections)
 		}
 	})
@@ -1075,7 +1089,8 @@ func assertStaleSecretEnvDegraded(t *testing.T, d Detection, action string) {
 		t.Fatalf("StaleSecretEnv has no degraded form: %+v", d)
 	}
 	if !strings.Contains(degraded.Message, "stale Secret-backed environment values") || !strings.HasPrefix(degraded.Action, action) ||
-		!strings.Contains(degraded.Cause, "shown only to callers who can read the Secret") {
+		!strings.Contains(degraded.Cause, "shown only to callers who can read the Secret") ||
+		!strings.HasPrefix(degraded.Cause, "Radar observed a change") {
 		t.Fatalf("degraded form isn't actionable: %+v", degraded)
 	}
 	text := degraded.Message + degraded.Cause + degraded.Action
@@ -1178,7 +1193,8 @@ func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.
 			detections[0].Name != "catalog" || detections[0].OwnerKind != "" {
 			t.Fatalf("Ready replicas did not aggregate under the workload: %+v", detections)
 		}
-		if !strings.Contains(detections[0].Message, "2 Ready pods") || !strings.Contains(detections[0].Message, "2 Secret-backed environment values") ||
+		if !strings.Contains(detections[0].Message, "2 Ready pods") || !strings.Contains(detections[0].Message, "2 app containers started at or before "+startedAt.Format(time.RFC3339)) ||
+			!strings.Contains(detections[0].Message, "Secret/db-conn key password as env DB_PASSWORD") ||
 			!strings.Contains(detections[0].Action, "Confirm no rollout") {
 			t.Fatalf("aggregated workload issue is not operationally clear: %+v", detections[0])
 		}
@@ -1454,4 +1470,57 @@ func staleSecretEnvPod(name string, startedAt time.Time, ready bool, env ...core
 			}},
 		},
 	}
+}
+
+func TestStaleSecretEnvMessagesStateObservedFacts(t *testing.T) {
+	changedAt := time.Date(2026, 10, 16, 15, 19, 41, 0, time.UTC)
+	check := func(pod, container, env, secret, key string, startedAt time.Time) StaleSecretEnvCheck {
+		return StaleSecretEnvCheck{PodName: pod, Container: container, EnvName: env, SecretName: secret, Key: key,
+			ContainerStartedAt: startedAt, SecretChangedAt: changedAt, EvidenceSource: staleSecretEvidenceObservedChange}
+	}
+	early := changedAt.Add(-20 * time.Minute)
+	late := changedAt.Add(-16 * time.Second)
+
+	t.Run("one Ready pod of a workload is named", func(t *testing.T) {
+		got := staleSecretEnvReadyDetectionMessage(staleSecretEnvSubject{kind: "Deployment", name: "product-catalog"},
+			[]StaleSecretEnvCheck{check("product-catalog-67666986b8-x2kq9", "product-catalog", "DB_CONNECTION_STRING", "product-catalog-db-conn", "DB_CONNECTION_STRING", late)})
+		want := "Deployment/product-catalog has a Ready pod (product-catalog-67666986b8-x2kq9) with a running container that started before Radar observed a Secret key it references change: " +
+			"container product-catalog started at 2026-10-16T15:19:25Z and references Secret/product-catalog-db-conn key DB_CONNECTION_STRING as env DB_CONNECTION_STRING; " +
+			"Radar observed that key change at 2026-10-16T15:19:41Z. Kubernetes reads Secret-backed env values only when a container starts."
+		if got != want {
+			t.Fatalf("message:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("per-check context names facts without claiming the env value", func(t *testing.T) {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "shop"}}
+		got := newStaleSecretEnvCheck(pod, "app", "DB_PASSWORD", "secretKeyRef", "", "db", "password", early, changedAt).Message
+		want := "Container app started at 2026-10-16T14:59:41Z, before Radar observed Secret/db key password change at 2026-10-16T15:19:41Z; Kubernetes does not refresh env DB_PASSWORD in a running container."
+		if got != want {
+			t.Fatalf("message:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("replicas fold to the latest start and keys are capped", func(t *testing.T) {
+		got := staleSecretEnvReadyDetectionMessage(staleSecretEnvSubject{kind: "Deployment", name: "api"}, []StaleSecretEnvCheck{
+			check("api-1", "app", "A", "s", "a", early),
+			check("api-2", "app", "A", "s", "a", late),
+			check("api-1", "app", "B", "s", "b", early),
+			check("api-1", "app", "C", "s", "c", early),
+			check("api-1", "app", "D", "s", "d", early),
+		})
+		for _, want := range []string{
+			"Deployment/api has 2 Ready pods with running containers that started before Radar observed Secret keys they reference change: ",
+			"2 app containers started at or before 2026-10-16T15:19:25Z and reference Secret/s key a as env A",
+			"container app started at 2026-10-16T14:59:41Z and references Secret/s key b as env B",
+			"; +1 more.",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("message %q does not contain %q", got, want)
+			}
+		}
+		if strings.Contains(got, "key d") {
+			t.Errorf("message lists more than %d keys: %q", maxStaleSecretEnvMessageFacts, got)
+		}
+	})
 }

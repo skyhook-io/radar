@@ -19,7 +19,7 @@ import (
 )
 
 func TestFindDuplicateEnvVarsForObject(t *testing.T) {
-	t.Run("motivating duplicate reports positions values and final declaration", func(t *testing.T) {
+	t.Run("motivating duplicate reports 0-based paths values and final declaration", func(t *testing.T) {
 		deployment := duplicateEnvTestDeployment([]corev1.Container{{
 			Name: "app",
 			Env: []corev1.EnvVar{
@@ -37,12 +37,36 @@ func TestFindDuplicateEnvVarsForObject(t *testing.T) {
 		if check.Container != "app" || check.EnvName != "APP_HOST" || check.LastDeclaredValue != "localhost" {
 			t.Fatalf("unexpected check: %+v", check)
 		}
-		if len(check.Occurrences) != 2 || check.Occurrences[0].Position != 1 || check.Occurrences[0].Value != "api" || check.Occurrences[1].Position != 3 || check.Occurrences[1].Value != "localhost" {
+		if len(check.Occurrences) != 2 ||
+			check.Occurrences[0].Path != "/spec/template/spec/containers/0/env/0" || check.Occurrences[0].Value != "api" ||
+			check.Occurrences[1].Path != "/spec/template/spec/containers/0/env/2" || check.Occurrences[1].Value != "localhost" {
 			t.Fatalf("unexpected occurrences: %+v", check.Occurrences)
 		}
-		for _, want := range []string{"app", "APP_HOST", "2 times", `1="api"`, `3="localhost"`, "typically takes effect"} {
-			if !strings.Contains(check.Message, want) {
-				t.Errorf("message %q does not contain %q", check.Message, want)
+		want := `Container app (spec.template.spec.containers[0]) defines env APP_HOST 2 times: env[0]="api", env[2]="localhost". The last definition, "localhost", typically takes effect.`
+		if check.Message != want {
+			t.Fatalf("message = %q, want %q", check.Message, want)
+		}
+	})
+
+	t.Run("pod and cronjob paths start at their pod spec", func(t *testing.T) {
+		env := []corev1.EnvVar{{Name: "MODE", Value: "a"}, {Name: "MODE", Value: "b"}}
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "prod"},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Env: env}}},
+		}
+		cronJob := &batchv1.CronJob{
+			ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "prod"},
+			Spec: batchv1.CronJobSpec{JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Env: env}}},
+			}}}},
+		}
+		for obj, want := range map[runtime.Object]string{
+			pod:     "/spec/containers/0/env/1",
+			cronJob: "/spec/jobTemplate/spec/template/spec/containers/0/env/1",
+		} {
+			got := FindDuplicateEnvVarsForObject(obj)
+			if len(got) != 1 || got[0].Occurrences[1].Path != want {
+				t.Fatalf("%T paths = %+v, want last %q", obj, got, want)
 			}
 		}
 	})
@@ -66,6 +90,9 @@ func TestFindDuplicateEnvVarsForObject(t *testing.T) {
 		if len(got) != 1 || got[0].Container != "migrate" || got[0].LastDeclaredValue != "new" {
 			t.Fatalf("unexpected init-container checks: %+v", got)
 		}
+		if got[0].Occurrences[1].Path != "/spec/template/spec/initContainers/0/env/1" || !strings.Contains(got[0].Message, "(spec.template.spec.initContainers[0])") {
+			t.Fatalf("init container locator = %+v / %q", got[0].Occurrences, got[0].Message)
+		}
 	})
 
 	t.Run("three declarations emit once", func(t *testing.T) {
@@ -88,6 +115,9 @@ func TestFindDuplicateEnvVarsForObject(t *testing.T) {
 		got := FindDuplicateEnvVarsForObject(deployment)
 		if len(got) != 2 || got[0].Container != "app" || got[1].Container != "sidecar" {
 			t.Fatalf("unexpected per-container checks: %+v", got)
+		}
+		if got[1].Occurrences[1].Path != "/spec/template/spec/containers/1/env/1" || !strings.Contains(got[1].Message, "(spec.template.spec.containers[1])") {
+			t.Fatalf("second container locator = %+v / %q", got[1].Occurrences, got[1].Message)
 		}
 
 		deployment = duplicateEnvTestDeployment([]corev1.Container{
@@ -146,12 +176,12 @@ func TestFindDuplicateEnvVarsForObject(t *testing.T) {
 		if len(got) != 1 || len(got[0].Occurrences) != 7 || got[0].LastDeclaredValue != "seven" {
 			t.Fatalf("unexpected bounded duplicate check: %+v", got)
 		}
-		for _, want := range []string{"7 times", `5="five"`, "... and 2 more", `last definition "seven"`} {
+		for _, want := range []string{"7 times", `env[4]="five"`, "... and 2 more", `last definition, "seven",`} {
 			if !strings.Contains(got[0].Message, want) {
 				t.Errorf("message %q does not contain %q", got[0].Message, want)
 			}
 		}
-		if strings.Contains(got[0].Message, `6="six"`) || strings.Contains(got[0].Message, `7="seven"`) {
+		if strings.Contains(got[0].Message, `env[5]="six"`) || strings.Contains(got[0].Message, `env[6]="seven"`) {
 			t.Fatalf("message contains unbounded occurrence detail: %q", got[0].Message)
 		}
 	})

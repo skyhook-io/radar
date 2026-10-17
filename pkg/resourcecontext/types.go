@@ -168,8 +168,10 @@ type DuplicateEnvVarReference struct {
 }
 
 type DuplicateEnvVarOccurrence struct {
-	Position int    `json:"position"`
-	Value    string `json:"value"`
+	// Path is a 0-based JSON pointer to the declaration in the object as
+	// Radar last saw it, e.g. /spec/template/spec/containers/0/env/23.
+	Path  string `json:"path"`
+	Value string `json:"value"`
 }
 
 type RemovedServiceEnvReference struct {

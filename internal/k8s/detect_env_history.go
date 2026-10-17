@@ -286,7 +286,7 @@ func secretReads(namespace string) []issuesapi.EvidenceRead {
 // A caller who can't read the Secret still needs to know its containers may
 // run stale values and how to fix that, which takes no Secret access. What it
 // doesn't get is which Secret, which keys, how many, or when they changed.
-const staleSecretEnvDegradedCause = "A Secret these containers read environment variables from changed after they started, and Kubernetes doesn't refresh Secret-backed environment variables in running containers. Which keys changed, and when, is shown only to callers who can read the Secret."
+const staleSecretEnvDegradedCause = "Radar observed a change to a Secret these containers reference for environment variables after they started, and Kubernetes doesn't refresh Secret-backed environment variables in running containers. Which keys changed, and when, is shown only to callers who can read the Secret."
 
 func staleSecretEnvDegraded(message, action string) *issuesapi.DegradedFinding {
 	return &issuesapi.DegradedFinding{Message: message, Cause: staleSecretEnvDegradedCause, Action: action}
@@ -378,7 +378,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			Age:               timeutil.FormatAgeShort(now.Sub(pod.CreationTimestamp.Time)),
 			AgeSeconds:        int64(now.Sub(pod.CreationTimestamp.Time).Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
-			Cause:             "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
+			Cause:             "A running container that references a Secret key in its environment started before Radar observed that key change.",
 			Action:            "Restart the pod so its containers re-read Secret-backed environment variables.",
 			RequiredReads:     secretReads(pod.Namespace),
 			Degraded: staleSecretEnvDegraded(
@@ -420,9 +420,9 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			Name:          group.subject.name,
 			Severity:      "warning",
 			Reason:        "StaleSecretEnv",
-			Message:       staleSecretEnvReadyDetectionMessage(group.subject, len(affectedPods), len(currentChecks)),
+			Message:       staleSecretEnvReadyDetectionMessage(group.subject, currentChecks),
 			Fingerprint:   "stale-secret-env",
-			Cause:         "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
+			Cause:         "Radar observed Secret keys referenced by these Ready containers' environment change after the containers started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
 			Action:        staleSecretEnvReadyAction(group.subject),
 			RequiredReads: secretReads(group.subject.namespace),
 			Degraded: staleSecretEnvDegraded(
@@ -754,20 +754,72 @@ func setStaleSecretEnvOnset(detection *Detection, checks []StaleSecretEnvCheck, 
 	setDetectionOnset(detection, now, changedAt)
 }
 
-func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, podCount, checkCount int) string {
-	if podCount == 1 {
-		if checkCount == 1 {
-			if subject.kind != "Pod" {
-				return fmt.Sprintf("%s/%s has a Ready pod whose running container loaded a Secret-backed environment value before Radar observed its consumed Secret key change; it may still hold the pre-change value.", subject.kind, subject.name)
-			}
-			return fmt.Sprintf("%s/%s is Ready, but a running container loaded a Secret-backed environment value before Radar observed its consumed Secret key change; it may still hold the pre-change value.", subject.kind, subject.name)
-		}
-		if subject.kind != "Pod" {
-			return fmt.Sprintf("%s/%s has a Ready pod whose running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, checkCount)
-		}
-		return fmt.Sprintf("%s/%s is Ready, but its running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, checkCount)
+func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, checks []StaleSecretEnvCheck) string {
+	pods := make(map[string]bool)
+	var podName string
+	for _, check := range checks {
+		pods[check.PodName] = true
+		podName = check.PodName
 	}
-	return fmt.Sprintf("%s/%s has %d Ready pods whose running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, podCount, checkCount)
+	facts := staleSecretEnvFacts(checks)
+	switch {
+	case subject.kind == "Pod":
+		return fmt.Sprintf("%s/%s is Ready, and a running container in it started before Radar observed a Secret key it references change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, facts)
+	case len(pods) == 1:
+		return fmt.Sprintf("%s/%s has a Ready pod (%s) with a running container that started before Radar observed a Secret key it references change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, podName, facts)
+	default:
+		return fmt.Sprintf("%s/%s has %d Ready pods with running containers that started before Radar observed Secret keys they reference change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, len(pods), facts)
+	}
+}
+
+const maxStaleSecretEnvMessageFacts = 3
+
+// staleSecretEnvFacts states what Radar observed for each referenced key: when
+// the container started, which Secret key it references as which env var, and
+// when Radar observed that key change. The change time is when Radar saw the
+// update, not when it was written, so the facts don't claim which value the
+// container read.
+func staleSecretEnvFacts(checks []StaleSecretEnvCheck) string {
+	type fact struct {
+		check     StaleSecretEnvCheck
+		pods      map[string]bool
+		startedAt time.Time
+		changedAt time.Time
+	}
+	byKey := make(map[string]*fact)
+	var keys []string
+	for _, check := range checks {
+		key := check.SecretName + "\x00" + check.Key + "\x00" + check.Container + "\x00" + check.EnvName
+		current := byKey[key]
+		if current == nil {
+			current = &fact{check: check, pods: make(map[string]bool)}
+			byKey[key] = current
+			keys = append(keys, key)
+		}
+		current.pods[check.PodName] = true
+		if check.ContainerStartedAt.After(current.startedAt) {
+			current.startedAt = check.ContainerStartedAt
+		}
+		if check.SecretChangedAt.After(current.changedAt) {
+			current.changedAt = check.SecretChangedAt
+		}
+	}
+	sort.Strings(keys)
+	clauses := make([]string, 0, maxStaleSecretEnvMessageFacts+1)
+	for i, key := range keys {
+		if i == maxStaleSecretEnvMessageFacts {
+			clauses = append(clauses, fmt.Sprintf("+%d more", len(keys)-i))
+			break
+		}
+		f := byKey[key]
+		started := fmt.Sprintf("container %s started at %s and references", f.check.Container, f.startedAt.UTC().Format(time.RFC3339))
+		if len(f.pods) > 1 {
+			started = fmt.Sprintf("%d %s containers started at or before %s and reference", len(f.pods), f.check.Container, f.startedAt.UTC().Format(time.RFC3339))
+		}
+		clauses = append(clauses, fmt.Sprintf("%s Secret/%s key %s as env %s; Radar observed that key change at %s",
+			started, f.check.SecretName, f.check.Key, f.check.EnvName, f.changedAt.UTC().Format(time.RFC3339)))
+	}
+	return strings.Join(clauses, "; ")
 }
 
 func staleSecretEnvReadyAction(subject staleSecretEnvSubject) string {
@@ -1106,7 +1158,7 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 		Key:                key,
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
-		Message:            fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; env %s may hold a stale value until the container restarts.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName),
+		Message:            fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; Kubernetes does not refresh env %s in a running container.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName),
 	}
 }
 
@@ -1271,9 +1323,5 @@ func staleSecretEnvIssueChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) ([
 }
 
 func staleSecretEnvDetectionMessage(checks []StaleSecretEnvCheck) string {
-	if len(checks) == 1 {
-		check := checks[0]
-		return fmt.Sprintf("Container %s is not Ready and may be running a stale env value for Secret/%s key %s; restart the pod to refresh it.", check.Container, check.SecretName, check.Key)
-	}
-	return fmt.Sprintf("A not-Ready container may be running %d stale Secret-backed env values; restart the pod to refresh them.", len(checks))
+	return fmt.Sprintf("The pod is not Ready, and running containers in it started before Radar observed Secret keys they reference change: %s. Restart the pod to refresh them.", staleSecretEnvFacts(checks))
 }

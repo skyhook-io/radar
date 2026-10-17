@@ -287,6 +287,9 @@ type envServiceWorkload struct {
 	spec      corev1.PodSpec
 	selector  *metav1.LabelSelector
 	degraded  bool
+	// podSpecPath is the JSON pointer to spec within the object, e.g.
+	// /spec/template/spec for a Deployment.
+	podSpecPath string
 }
 
 // EnvServiceRefCheck is a conservative validation result for an environment
@@ -309,9 +312,13 @@ type EnvServiceRefCheck struct {
 	ResourceCreatedAt time.Time
 }
 
+// DuplicateEnvVarOccurrence locates one declaration of a duplicated env var.
+// A duplicate is the one list element a strategic-merge patch can't address
+// by its merge key (name), so the locator is a 0-based JSON pointer into the
+// object as Radar last saw it, e.g. /spec/template/spec/containers/0/env/23.
 type DuplicateEnvVarOccurrence struct {
-	Position int
-	Value    string
+	Path  string
+	Value string
 }
 
 type DuplicateEnvVarCheck struct {
@@ -365,15 +372,24 @@ func FindDuplicateEnvVarsForObject(obj runtime.Object) []DuplicateEnvVarCheck {
 func findDuplicateEnvVarChecks(workloads []envServiceWorkload, now time.Time) []DuplicateEnvVarCheck {
 	var out []DuplicateEnvVarCheck
 	for _, wl := range workloads {
-		containers := make([]corev1.Container, 0, len(wl.spec.InitContainers)+len(wl.spec.Containers))
-		containers = append(containers, wl.spec.InitContainers...)
-		containers = append(containers, wl.spec.Containers...)
-		for _, container := range containers {
+		type locatedContainer struct {
+			container corev1.Container
+			pointer   string
+		}
+		containers := make([]locatedContainer, 0, len(wl.spec.InitContainers)+len(wl.spec.Containers))
+		for i, container := range wl.spec.InitContainers {
+			containers = append(containers, locatedContainer{container, fmt.Sprintf("%s/initContainers/%d", wl.podSpecPath, i)})
+		}
+		for i, container := range wl.spec.Containers {
+			containers = append(containers, locatedContainer{container, fmt.Sprintf("%s/containers/%d", wl.podSpecPath, i)})
+		}
+		for _, located := range containers {
+			container := located.container
 			byName := make(map[string][]DuplicateEnvVarOccurrence, len(container.Env))
 			for i, env := range container.Env {
 				byName[env.Name] = append(byName[env.Name], DuplicateEnvVarOccurrence{
-					Position: i + 1,
-					Value:    envVarDisplayValue(env),
+					Path:  fmt.Sprintf("%s/env/%d", located.pointer, i),
+					Value: envVarDisplayValue(env),
 				})
 			}
 			for envName, occurrences := range byName {
@@ -390,7 +406,7 @@ func findDuplicateEnvVarChecks(workloads []envServiceWorkload, now time.Time) []
 					EnvName:           envName,
 					Occurrences:       occurrences,
 					LastDeclaredValue: last.Value,
-					Message:           duplicateEnvVarMessage(container.Name, envName, occurrences),
+					Message:           duplicateEnvVarMessage(container.Name, located.pointer, envName, occurrences),
 					AgeSeconds:        ageSeconds(now, wl.created),
 					ResourceCreatedAt: wl.created,
 				})
@@ -415,20 +431,38 @@ func findDuplicateEnvVarChecks(workloads []envServiceWorkload, now time.Time) []
 	return out
 }
 
-func duplicateEnvVarMessage(container, envName string, occurrences []DuplicateEnvVarOccurrence) string {
+func duplicateEnvVarMessage(container, containerPointer, envName string, occurrences []DuplicateEnvVarOccurrence) string {
 	displayed := occurrences
 	if len(displayed) > maxDuplicateEnvVarMessageOccurrences {
 		displayed = displayed[:maxDuplicateEnvVarMessageOccurrences]
 	}
 	values := make([]string, 0, len(displayed)+1)
 	for _, occurrence := range displayed {
-		values = append(values, fmt.Sprintf("%d=%q", occurrence.Position, occurrence.Value))
+		values = append(values, fmt.Sprintf("%s=%q", jsonPointerToFieldPath(strings.TrimPrefix(occurrence.Path, containerPointer)), occurrence.Value))
 	}
 	if omitted := len(occurrences) - len(displayed); omitted > 0 {
 		values = append(values, fmt.Sprintf("... and %d more", omitted))
 	}
 	last := occurrences[len(occurrences)-1]
-	return fmt.Sprintf("Container %s defines env %s %d times at positions/values %s; the last definition %q typically takes effect.", container, envName, len(occurrences), strings.Join(values, ", "), last.Value)
+	return fmt.Sprintf("Container %s (%s) defines env %s %d times: %s. The last definition, %q, typically takes effect.", container, jsonPointerToFieldPath(containerPointer), envName, len(occurrences), strings.Join(values, ", "), last.Value)
+}
+
+// jsonPointerToFieldPath renders a JSON pointer whose segments are plain
+// field names and indexes (/spec/containers/0/env/23) in Kubernetes'
+// field-path notation (spec.containers[0].env[23]).
+func jsonPointerToFieldPath(pointer string) string {
+	var b strings.Builder
+	for _, segment := range strings.Split(strings.TrimPrefix(pointer, "/"), "/") {
+		if _, err := strconv.Atoi(segment); err == nil {
+			b.WriteString("[" + segment + "]")
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(segment)
+	}
+	return b.String()
 }
 
 func detectEnvServiceRefs(cache *ResourceCache, namespace string, now time.Time) []Detection {
@@ -656,7 +690,7 @@ func envServiceWorkloadByName(cache *ResourceCache, kind, namespace, name string
 func envServiceWorkloadForObject(obj runtime.Object) (envServiceWorkload, bool) {
 	switch v := obj.(type) {
 	case *corev1.Pod:
-		return envServiceWorkload{"", "Pod", v.Namespace, v.Name, v.CreationTimestamp.Time, v.Spec, nil, podEnvServiceRefsDegraded(v)}, true
+		return envServiceWorkload{"", "Pod", v.Namespace, v.Name, v.CreationTimestamp.Time, v.Spec, nil, podEnvServiceRefsDegraded(v), "/spec"}, true
 	case *appsv1.Deployment:
 		return envServiceWorkloadForDeployment(v), true
 	case *appsv1.StatefulSet:
@@ -673,23 +707,23 @@ func envServiceWorkloadForObject(obj runtime.Object) (envServiceWorkload, bool) 
 }
 
 func envServiceWorkloadForDeployment(d *appsv1.Deployment) envServiceWorkload {
-	return envServiceWorkload{"apps", "Deployment", d.Namespace, d.Name, d.CreationTimestamp.Time, d.Spec.Template.Spec, d.Spec.Selector, deploymentEnvServiceRefsDegraded(d)}
+	return envServiceWorkload{"apps", "Deployment", d.Namespace, d.Name, d.CreationTimestamp.Time, d.Spec.Template.Spec, d.Spec.Selector, deploymentEnvServiceRefsDegraded(d), "/spec/template/spec"}
 }
 
 func envServiceWorkloadForStatefulSet(ss *appsv1.StatefulSet) envServiceWorkload {
-	return envServiceWorkload{"apps", "StatefulSet", ss.Namespace, ss.Name, ss.CreationTimestamp.Time, ss.Spec.Template.Spec, ss.Spec.Selector, statefulSetEnvServiceRefsDegraded(ss)}
+	return envServiceWorkload{"apps", "StatefulSet", ss.Namespace, ss.Name, ss.CreationTimestamp.Time, ss.Spec.Template.Spec, ss.Spec.Selector, statefulSetEnvServiceRefsDegraded(ss), "/spec/template/spec"}
 }
 
 func envServiceWorkloadForDaemonSet(ds *appsv1.DaemonSet) envServiceWorkload {
-	return envServiceWorkload{"apps", "DaemonSet", ds.Namespace, ds.Name, ds.CreationTimestamp.Time, ds.Spec.Template.Spec, ds.Spec.Selector, daemonSetEnvServiceRefsDegraded(ds)}
+	return envServiceWorkload{"apps", "DaemonSet", ds.Namespace, ds.Name, ds.CreationTimestamp.Time, ds.Spec.Template.Spec, ds.Spec.Selector, daemonSetEnvServiceRefsDegraded(ds), "/spec/template/spec"}
 }
 
 func envServiceWorkloadForJob(j *batchv1.Job) envServiceWorkload {
-	return envServiceWorkload{"batch", "Job", j.Namespace, j.Name, j.CreationTimestamp.Time, j.Spec.Template.Spec, nil, jobEnvServiceRefsDegraded(j)}
+	return envServiceWorkload{"batch", "Job", j.Namespace, j.Name, j.CreationTimestamp.Time, j.Spec.Template.Spec, nil, jobEnvServiceRefsDegraded(j), "/spec/template/spec"}
 }
 
 func envServiceWorkloadForCronJob(cj *batchv1.CronJob) envServiceWorkload {
-	return envServiceWorkload{"batch", "CronJob", cj.Namespace, cj.Name, cj.CreationTimestamp.Time, cj.Spec.JobTemplate.Spec.Template.Spec, nil, false}
+	return envServiceWorkload{"batch", "CronJob", cj.Namespace, cj.Name, cj.CreationTimestamp.Time, cj.Spec.JobTemplate.Spec.Template.Spec, nil, false, "/spec/jobTemplate/spec/template/spec"}
 }
 
 func deploymentEnvServiceRefsDegraded(d *appsv1.Deployment) bool {
