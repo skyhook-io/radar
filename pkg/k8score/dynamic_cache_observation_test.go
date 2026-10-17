@@ -602,3 +602,60 @@ func TestReadServerChangesWhenAClusterWideInformerReplacesNamespaceOnes(t *testi
 		t.Fatalf("after the replacement: same=%v synced=%v; want a different, unsynced server", after.Same(before), synced)
 	}
 }
+
+func newWidgetDynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, objects...)
+}
+
+func TestDynamicReadableObjectAnswersOnlyFromSyncedServingInformers(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := newWidgetDynamicClient(&unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.io/v1", "kind": "Widget",
+		"metadata": map[string]any{"name": "present", "namespace": "alpha"},
+	}})
+	release := make(chan struct{})
+	defer close(release)
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			<-release
+		}
+		return false, nil, nil
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if _, _, found, ok := d.ReadableObject(gvr, "alpha", "present"); found || ok {
+		t.Fatal("with no informer, a read must prove nothing")
+	}
+	if err := d.startWatching(gvr, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !d.IsNamespaceSynced(gvr, "alpha") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	obj, server, found, ok := d.ReadableObject(gvr, "alpha", "present")
+	if !found || !ok || obj.GetName() != "present" {
+		t.Fatalf("synced read: found=%v ok=%v", found, ok)
+	}
+	if serving, _ := d.ReadServer(gvr, "alpha"); !server.Same(serving) {
+		t.Fatal("the read must name the informers that answered it")
+	}
+	if _, _, found, ok := d.ReadableObject(gvr, "alpha", "missing"); found || !ok {
+		t.Fatalf("a synced store's miss: found=%v ok=%v; want an established absence", found, ok)
+	}
+	if _, _, _, ok := d.ReadableObject(gvr, "beta", "present"); ok {
+		t.Fatal("no informer serves beta, so the read proves nothing")
+	}
+	// A cluster-wide informer replaces alpha's; its initial list is held.
+	if err := d.startWatching(gvr, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, replacement, found, ok := d.ReadableObject(gvr, "alpha", "present")
+	if found || ok || replacement.Same(server) {
+		t.Fatalf("after the replacement: found=%v ok=%v same=%v; want an unloaded new server that proves nothing", found, ok, replacement.Same(server))
+	}
+}
