@@ -34,7 +34,7 @@ const writeRoutingLine = "- Fixes, if your tool list includes write tools: patch
 
 // signalInstructions says how to read what Radar returns.
 const signalInstructions = `READING RADAR'S SIGNALS
-- An issues row that names a mechanism and an action, and that diagnostic_context does not mark as a symptom, is the leading hypothesis. Confirm it with a targeted read (a log line, a field) instead of re-deriving it. If it points at another resource, follow that dependency. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
+- An issues row that names a mechanism and an action is the leading hypothesis; if it has an incident_parent, start from that root. Confirm it with a targeted read (a log line, a field) instead of re-deriving it. If it points at another resource, follow that dependency. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
 - Read the changes attached to issues first; call get_changes when they are absent or you need another window or scope. Reuse the logs diagnose returned; fetch more only for a specific gap.
 - issue_timing started_after_resource_was_healthy means a healthy window preceded the failure: look for what changed. started_at_resource_creation on a recently created resource can mean the creation itself is the fault. Prefer timing_summary when present.
 - issues is live state; get_cluster_audit is configuration posture. A healthy workload can carry many audit findings.

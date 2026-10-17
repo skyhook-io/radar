@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/pkg/investigation"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // Claude Code before v2.1.296 keeps only the first 2,048 characters of server
@@ -40,11 +42,26 @@ func TestServerInstructionsFitClientLimits(t *testing.T) {
 	}
 }
 
-// instructionFieldNames are the snake_case words in the instructions that name
-// result fields and values rather than tools.
-var instructionFieldNames = []string{
-	"diagnostic_context", "issue_timing", "started_after_resource_was_healthy",
-	"started_at_resource_creation", "timing_summary",
+// instructionIssueFields are the snake_case words in the instructions that
+// name fields of an issues row, and instructionTimingValues the issue_timing
+// values they name; neither is a tool.
+var (
+	instructionIssueFields  = []string{"incident_parent", "issue_timing", "timing_summary"}
+	instructionTimingValues = []string{"started_after_resource_was_healthy", "started_at_resource_creation"}
+)
+
+func TestServerInstructionsNameRealIssueFields(t *testing.T) {
+	tags := map[string]bool{}
+	issue := reflect.TypeOf(issuesapi.Issue{})
+	for i := range issue.NumField() {
+		name, _, _ := strings.Cut(issue.Field(i).Tag.Get("json"), ",")
+		tags[name] = true
+	}
+	for _, field := range instructionIssueFields {
+		if !tags[field] {
+			t.Errorf("instructions name issue field %q, which issuesapi.Issue does not have", field)
+		}
+	}
 }
 
 func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
@@ -57,7 +74,7 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 		text := serverInstructions(includeWrites)
 		named := []string{"issues", "diagnose", "search"}
 		for _, word := range snake.FindAllString(text, -1) {
-			if !slices.Contains(instructionFieldNames, word) {
+			if !slices.Contains(instructionIssueFields, word) && !slices.Contains(instructionTimingValues, word) {
 				named = append(named, word)
 			}
 		}
@@ -66,9 +83,9 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 				t.Errorf("includeWrites=%v: instructions name %q, which is not a registered tool", includeWrites, name)
 			}
 		}
-		for _, field := range instructionFieldNames {
+		for _, field := range slices.Concat(instructionIssueFields, instructionTimingValues) {
 			if !strings.Contains(text, field) {
-				t.Errorf("instructionFieldNames lists %q, which the text no longer uses", field)
+				t.Errorf("%q is listed as a field name the text uses, but the text no longer uses it", field)
 			}
 		}
 	}
