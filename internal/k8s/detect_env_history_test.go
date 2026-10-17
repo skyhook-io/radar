@@ -1062,6 +1062,20 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 		}
 	})
 
+	t.Run("API server bookkeeping buckets are not named as writers", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		for _, bucket := range []string{"ancient-changes", "before-first-apply"} {
+			check := checkFor(t, entry(bucket, at, dataOnly))
+			if !strings.Contains(check.Message, written(at, "a field manager that owns its data")) || strings.Contains(check.Message, bucket) {
+				t.Fatalf("%s was named as a writer: %q", bucket, check.Message)
+			}
+		}
+		tied := checkFor(t, entry("ancient-changes", at, dataOnly), entry("helm", at, dataOnly))
+		if !strings.Contains(tied.Message, written(at, "helm, a field manager that owns its data")) {
+			t.Fatalf("a real writer tied with a bucket should be named alone: %q", tied.Message)
+		}
+	})
+
 	t.Run("tied timestamps name every tied manager", func(t *testing.T) {
 		at := now.Add(-time.Minute)
 		a := checkFor(t, entry("operator-b", at, dataOnly), entry("operator-a", at, dataOnly))

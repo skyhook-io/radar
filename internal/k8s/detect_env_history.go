@@ -1173,7 +1173,7 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt time.Time, write secretDataManagerWrite) StaleSecretEnvCheck {
 	changedAt := write.at
 	writer := "a field manager that owns its data"
-	switch names := slices.DeleteFunc(slices.Clone(write.managers), func(m string) bool { return m == "" }); len(names) {
+	switch names := slices.DeleteFunc(slices.Clone(write.managers), isUnnamedManagedFieldsManager); len(names) {
 	case 0:
 	case 1:
 		writer = names[0] + ", a field manager that owns its data"
@@ -1192,6 +1192,18 @@ func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKi
 		SecretChangedAt:    changedAt,
 		Message:            fmt.Sprintf("Secret/%s had a write at %s by %s, after container %s started at %s; managedFields cannot identify which field changed, so the write may not have touched data at all, and if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), writer, container, startedAt.UTC().Format(time.RFC3339)),
 	}
+}
+
+// isUnnamedManagedFieldsManager reports managedFields entries that name no
+// actual writer: an empty manager, and the buckets the API server creates
+// itself, ancient-changes (older update managers compacted together) and
+// before-first-apply (fields owned before the first server-side apply).
+func isUnnamedManagedFieldsManager(manager string) bool {
+	switch manager {
+	case "", "ancient-changes", "before-first-apply":
+		return true
+	}
+	return false
 }
 
 func secretExists(cache *ResourceCache, namespace, name string, exists, checked map[string]bool) bool {
