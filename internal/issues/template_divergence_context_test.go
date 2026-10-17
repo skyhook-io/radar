@@ -24,12 +24,13 @@ import (
 
 func TestPodTemplateContextComparisonStaysQuietOnAdmissionDefaults(t *testing.T) {
 	scalar := func(s string) resource.Quantity { return resource.MustParse(s) }
+	evictAfter := int64(300)
 	template := corev1.PodSpec{
 		Containers: []corev1.Container{{Name: "app", Image: "nginx:1.27", Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceMemory: scalar("128Mi")},
 			Limits:   corev1.ResourceList{corev1.ResourceMemory: scalar("256Mi"), corev1.ResourceCPU: scalar("500m")},
 		}}},
-		Tolerations: []corev1.Toleration{{Key: "dedicated", Value: "web", Effect: corev1.TaintEffectNoSchedule}},
+		Tolerations: []corev1.Toleration{{Key: "dedicated", Value: "web", Effect: corev1.TaintEffectNoExecute, TolerationSeconds: &evictAfter}},
 	}
 	runc := "runc"
 	cases := []struct {
@@ -54,6 +55,11 @@ func TestPodTemplateContextComparisonStaysQuietOnAdmissionDefaults(t *testing.T)
 		{"limit copied to request", func(p *corev1.Pod) {
 			p.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU] = scalar("500m")
 		}, false, nil},
+		{"toleration seconds changed", func(p *corev1.Pod) {
+			zero := int64(0)
+			p.Spec.Tolerations[0].TolerationSeconds = &zero
+		}, false, []string{"a template toleration is missing or changed in the live pod spec"}},
+		{"toleration seconds dropped", func(p *corev1.Pod) { p.Spec.Tolerations[0].TolerationSeconds = nil }, false, []string{"a template toleration is missing or changed in the live pod spec"}},
 		{"default tolerations added", func(p *corev1.Pod) {
 			p.Spec.Tolerations = append(p.Spec.Tolerations, corev1.Toleration{Key: "node.kubernetes.io/not-ready", Operator: corev1.TolerationOpExists})
 		}, false, nil},

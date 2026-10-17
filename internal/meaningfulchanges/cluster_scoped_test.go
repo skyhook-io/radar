@@ -3,6 +3,7 @@ package meaningfulchanges
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -338,5 +339,47 @@ func TestClusterScopedForNamespaceSeesMatchConditionEditThroughTheDiffer(t *test
 	got := ClusterScopedForNamespace(context.Background(), "shop", NamespaceLabels{Labels: labels.Set{"team": "shop"}, Known: true}, time.Hour, nil)
 	if len(got.Changes) != 1 || got.Changes[0].Applicability != issuesapi.ClusterScopedMayApply || !strings.Contains(got.Changes[0].AppliesBecause, "re-scoped webhook policy.example") {
 		t.Fatalf("CEL-only edit not surfaced as a possible re-scope: %+v", got)
+	}
+}
+
+// Past the differ's row cap, further changed paths arrive in one overflow row
+// without values. A CEL re-scope listed only there must still count.
+func TestChangedWebhooksReadsTheDifferOverflowRow(t *testing.T) {
+	config := func(expression string) *unstructured.Unstructured {
+		var hooks []any
+		for n := 0; n < 30; n++ {
+			versions := []any{"v1"}
+			if expression == "after" && n < 29 {
+				versions = []any{"v1", "v1beta1"}
+			}
+			hook := map[string]any{"name": fmt.Sprintf("hook-%02d.example", n), "admissionReviewVersions": versions}
+			if n == 29 {
+				hook["matchConditions"] = []any{map[string]any{"name": "scope", "expression": expression}}
+			}
+			hooks = append(hooks, hook)
+		}
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "admissionregistration.k8s.io/v1", "kind": "MutatingWebhookConfiguration", "webhooks": hooks}}
+	}
+	diff := k8s.ComputeDiff("MutatingWebhookConfiguration", config("before"), config("after"))
+	if diff == nil {
+		t.Fatal("no diff")
+	}
+	change := issuesapi.RecentChange{Kind: "MutatingWebhookConfiguration", Name: "many", ChangeType: "update"}
+	sawOverflow := false
+	for _, f := range diff.Fields {
+		sawOverflow = sawOverflow || f.Path == "webhooks (more fields)"
+		change.Fields = append(change.Fields, issuesapi.ChangeField{Path: f.Path, OldValue: f.OldValue, NewValue: f.NewValue})
+	}
+	if !sawOverflow {
+		t.Fatalf("fixture no longer reaches the differ's overflow row: %d rows", len(diff.Fields))
+	}
+	for _, f := range diff.Fields {
+		if strings.HasPrefix(f.Path, "webhooks[hook-29.example]") {
+			t.Fatalf("fixture's CEL edit got its own row, so it does not test the overflow row: %s", f.Path)
+		}
+	}
+	changed, rescoped := changedWebhooks(change)
+	if !changed["hook-29.example"] || !slices.Contains(rescoped, "hook-29.example") {
+		t.Fatalf("re-scope in the overflow row lost: changed=%d rescoped=%v", len(changed), rescoped)
 	}
 }

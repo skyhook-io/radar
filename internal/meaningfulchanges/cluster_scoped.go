@@ -320,20 +320,20 @@ func webhookChangeApplicability(change issuesapi.RecentChange, namespace string,
 func changedWebhooks(change issuesapi.RecentChange) (map[string]bool, []string) {
 	changed := make(map[string]bool)
 	var rescoped []string
-	for _, field := range change.Fields {
-		rest, ok := strings.CutPrefix(field.Path, "webhooks[")
+	note := func(path string, oldValue, newValue any) {
+		rest, ok := strings.CutPrefix(path, "webhooks[")
 		if !ok {
-			continue
+			return
 		}
 		name, subpath, ok := strings.Cut(rest, "]")
 		if !ok || name == "" {
-			continue
+			return
 		}
 		changed[name] = true
 		var scope bool
 		if subpath == "" {
-			oldSummary, hadOld := field.OldValue.(string)
-			newSummary, hasNew := field.NewValue.(string)
+			oldSummary, hadOld := oldValue.(string)
+			newSummary, hasNew := newValue.(string)
 			scope = hadOld && (!hasNew || webhookScopeSummary(oldSummary) != webhookScopeSummary(newSummary))
 		} else {
 			for _, prefix := range []string{".matchConditions", ".namespaceSelector", ".objectSelector", ".rules"} {
@@ -344,7 +344,34 @@ func changedWebhooks(change issuesapi.RecentChange) (map[string]bool, []string) 
 			rescoped = append(rescoped, name)
 		}
 	}
+	for _, field := range change.Fields {
+		// Past its row cap the differ lists the remaining changed paths, without
+		// values, in one overflow row.
+		if field.Path == "webhooks (more fields)" {
+			for _, path := range overflowPaths(field.NewValue) {
+				note(path, nil, nil)
+			}
+			continue
+		}
+		note(field.Path, field.OldValue, field.NewValue)
+	}
 	return changed, rescoped
+}
+
+func overflowPaths(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if path, ok := item.(string); ok {
+				out = append(out, path)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // webhookScopeSummary keeps the scope part of the timeline's webhook summary,

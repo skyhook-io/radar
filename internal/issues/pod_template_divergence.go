@@ -223,7 +223,7 @@ func comparePodTemplate(pod *corev1.Pod, template *corev1.PodSpec, symptom strin
 				differences = append(differences, templateDifference{path: path, message: path + " differs from the template"})
 			}
 		}
-		if templateTolerationMissing(pod.Spec.Tolerations, template.Tolerations) {
+		if templateTolerationMissing(pod.Spec.Tolerations, template.Tolerations, false) {
 			differences = append(differences, templateDifference{path: "tolerations", message: "a template toleration is missing or changed in the live pod spec"})
 		}
 	}
@@ -294,7 +294,7 @@ func comparePodTemplateContext(pod *corev1.Pod, template *corev1.PodSpec, resize
 			differences = append(differences, templateDifference{path: path, message: path + " differs from the template"})
 		}
 	}
-	if templateTolerationMissing(pod.Spec.Tolerations, template.Tolerations) {
+	if templateTolerationMissing(pod.Spec.Tolerations, template.Tolerations, true) {
 		differences = append(differences, templateDifference{path: "tolerations", message: "a template toleration is missing or changed in the live pod spec"})
 	}
 	sort.SliceStable(differences, func(a, b int) bool { return differences[a].path < differences[b].path })
@@ -351,7 +351,11 @@ func contextResourceDifferences(container string, live, template corev1.Resource
 	return differences
 }
 
-func templateTolerationMissing(live, template []corev1.Toleration) bool {
+// templateTolerationMissing reports a template toleration absent or changed
+// in the live spec. With seconds, a template-set tolerationSeconds must match
+// too: it decides how long a Pod survives a NoExecute taint, and admission's
+// DefaultTolerationSeconds only adds tolerations, never rewrites one.
+func templateTolerationMissing(live, template []corev1.Toleration, seconds bool) bool {
 	for _, original := range template {
 		if !slices.ContainsFunc(live, func(candidate corev1.Toleration) bool {
 			if original.Operator == "" {
@@ -360,7 +364,11 @@ func templateTolerationMissing(live, template []corev1.Toleration) bool {
 			if candidate.Operator == "" {
 				candidate.Operator = corev1.TolerationOpEqual
 			}
-			return original.Key == candidate.Key && original.Operator == candidate.Operator && original.Value == candidate.Value && original.Effect == candidate.Effect
+			same := original.Key == candidate.Key && original.Operator == candidate.Operator && original.Value == candidate.Value && original.Effect == candidate.Effect
+			if same && seconds && original.TolerationSeconds != nil {
+				same = candidate.TolerationSeconds != nil && *candidate.TolerationSeconds == *original.TolerationSeconds
+			}
+			return same
 		}) {
 			return true
 		}

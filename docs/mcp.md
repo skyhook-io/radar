@@ -747,7 +747,7 @@ defaulting, equivalent quantities and image spellings, extended resources the
 template does not name, and a priority class filled in where the template
 leaves it unset. It reports CPU, memory, and ephemeral-storage requests and
 limits (and any resource the template names), images, node selectors, required
-affinity, lost or changed tolerations, a template-set priority class, and the
+affinity, lost or changed tolerations (including a changed `tolerationSeconds`), a template-set priority class, and the
 runtime class. Resource values are not compared while the Pod reports a resize.
 `sources` carries the same candidate list and coverage statements as the issue
 fact. It is context, not proof.
