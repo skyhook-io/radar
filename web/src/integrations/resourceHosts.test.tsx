@@ -52,7 +52,7 @@ describe('application resource hosts', () => {
       'KueueWorkloadRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
       'NodeRenderer', 'ServiceRenderer', 'WorkloadRenderer', 'CompositeRenderer', 'ServiceAccountRenderer',
       'RoleRenderer', 'RoleBindingRenderer', 'NamespaceRenderer', 'HPARenderer', 'PVCRenderer',
-      'RolloutRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',
+      'RolloutRenderer', 'TaskRunRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',
       'VeleroBSLRenderer', 'VeleroBackupRenderer', 'VeleroRestoreRenderer', 'CNPGClusterRenderer',
       'CNPGDatabaseRenderer', 'CNPGPublicationRenderer', 'CNPGSubscriptionRenderer', 'CNPGImageCatalogRenderer',
     ].sort())

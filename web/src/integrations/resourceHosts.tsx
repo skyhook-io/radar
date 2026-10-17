@@ -30,6 +30,7 @@ import { CAPIClusterRenderer } from '../components/resources/renderers/CAPIClust
 import { HPARenderer } from '../components/resources/renderers/HPARenderer'
 import { PVCRenderer } from '../components/resources/renderers/PVCRenderer'
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
+import { TaskRunRenderer } from '../components/resources/renderers/TaskRunRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
 import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRenderer'
@@ -45,6 +46,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'capi', renderers: { CAPIClusterRenderer } },
   { id: 'crossplane', renderers: { CompositeRenderer } },
   { id: 'rollouts', renderers: { RolloutRenderer } },
+  { id: 'tekton', renderers: { TaskRunRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
   cnpgResourceHost,

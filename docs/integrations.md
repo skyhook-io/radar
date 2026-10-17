@@ -696,6 +696,34 @@ permits the reference or has produced an artifact.
 
 ---
 
+## Tekton Pipelines
+
+[Tekton Pipelines](https://tekton.dev/) is a Kubernetes-native CI/CD building block: Pipelines declare a DAG of Tasks, PipelineRuns execute them, and TaskRuns carry out each individual Task.
+
+### What Radar Shows
+
+**Pipeline / PipelineRun full view:** The task-dependency graph lives in the resource's fullscreen "full view" (the expand icon on the drawer), not the compact drawer. It is built from `spec.tasks[].runAfter` plus any implicit ordering inferred from `$(tasks.<name>.results.*)` references in params or `when` expressions. Layout uses the same ELK.js engine as the main Topology view, and task nodes mirror the Topology view's node cards (icon, kind label, status dot). For a PipelineRun, each node is colored live by its TaskRun's outcome (succeeded / failed / running / pending / skipped), read from `status.childReferences` (targets `tekton.dev/v1`; a task absent from `childReferences` hasn't been reached yet, not an error). Running tasks get a spinning icon and a highlighted card. The graph is deliberately the only progress indicator: a Pipeline's tasks form a real DAG with parallel branches, so a linear step list would misrepresent the concurrency the graph already shows. A task with a live TaskRun is clickable and opens that TaskRun's own page.
+
+**Pipeline drawer:** Task count, parameters (with defaults), workspaces, and the description. There is no graph in the drawer, since it has no room to render one legibly.
+
+**PipelineRun drawer:** The referenced Pipeline, start and completion time, duration, and the failure reason when the run failed. Once the run has resolved its Pipeline, a hint gives the task count and points to the full view for the task graph.
+
+**TaskRun Detail View:** Per-step status (running, completed or waiting, with exit codes), the TaskRun's pod, parameters and results. Each step has a **Logs** button that opens that step's container in the log dock (Tekton names each step's container `step-<name>`). The **Logs** tab shows every step's logs in one view, in step order, with each line labeled by its step's container name. A header chip links back to the PipelineRun that created the TaskRun.
+
+**Resource Browser:** Pipeline rows show task count; PipelineRun/TaskRun rows show status, the referenced Pipeline/Task (resolver-based refs included), and duration.
+
+Topology-graph integration (Pipeline/PipelineRun/TaskRun nodes in the main cluster Topology view) isn't wired up yet — the fullscreen task graph is self-contained and doesn't depend on it.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| Pipeline | `tekton.dev/v1` | — | Yes | — |
+| PipelineRun | `tekton.dev/v1` | — | Yes | — |
+| TaskRun | `tekton.dev/v1` | — | Yes | — |
+
+---
+
 ## Istio
 
 [Istio](https://istio.io/) is the most widely adopted service mesh, providing traffic management, security (mTLS), and observability for microservices.

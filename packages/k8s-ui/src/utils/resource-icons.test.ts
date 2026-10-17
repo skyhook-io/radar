@@ -74,6 +74,16 @@ describe('getResourceIcon', () => {
     expect(getResourceIcon('Pooler')).toBe(getResourceIcon('Pooler', 'postgresql.cnpg.io'))
   })
 
+  it('gives the Tekton icons only to tekton.dev when the group is known', () => {
+    // Numaflow ships its own Pipeline (numaflow.numaproj.io), and any CI tool
+    // can ship a PipelineRun or TaskRun.
+    expect(getResourceIcon('Pipeline', 'tekton.dev')).toBe(getResourceIcon('Pipeline'))
+    expect(getResourceIcon('Pipeline', 'numaflow.numaproj.io')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('PipelineRun', 'other.io')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('TaskRun', 'other.io')).toBe(DEFAULT_RESOURCE_ICON)
+    expect(getResourceIcon('TaskRun', 'tekton.dev')).not.toBe(DEFAULT_RESOURCE_ICON)
+  })
+
   it('returns the default for an entirely unknown kind', () => {
     expect(getResourceIcon('Widget')).toBe(DEFAULT_RESOURCE_ICON)
   })
