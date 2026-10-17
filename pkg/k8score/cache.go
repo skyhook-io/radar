@@ -1499,8 +1499,8 @@ func (rc *ResourceCache) Client() kubernetes.Interface {
 }
 
 // Changes returns a read-only channel for resource change notifications.
-// It is lossy and meant for one reader that refreshes views: noisy updates
-// (IsNoisyResource) are never sent, and a send to a full buffer is dropped
+// It is lossy and meant for one reader that refreshes views: changes that
+// IsNoisyResource marks are never sent, and a send to a full buffer is dropped
 // and reported through OnDrop. Code that must see every change uses
 // OnObservedChange instead.
 func (rc *ResourceCache) Changes() <-chan ResourceChange {

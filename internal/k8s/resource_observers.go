@@ -22,8 +22,9 @@ import (
 //     shutdown on a context switch is asynchronous, so a late callback can
 //     belong to a cache that has since been replaced; an observer holding its
 //     own clientset compares against source to ignore it.
-//   - It sees typed resources only. The dynamic (CRD) cache does not feed
-//     these observers.
+//   - It sees typed resources only, and not core Events, which take the
+//     cache's separate OnEventChange path. The dynamic (CRD) cache does not
+//     feed these observers.
 //
 // The cache's Changes() channel is not a substitute: it has a single reader
 // (the SSE broadcaster), it never carries noisy updates, and a send to a full
