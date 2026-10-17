@@ -33,8 +33,9 @@ const (
 	MembersUnreadable MembershipState = iota
 	// MembersRecorded: the status lists the members; the list may be empty.
 	MembersRecorded
-	// MembersRemote: the manager applies to another cluster, so the objects
-	// it lists aren't objects here.
+	// MembersRemote: the manager applies to a destination Radar can't tell
+	// is this cluster: another cluster, or this one under another name or
+	// address. Its list names objects there.
 	MembersRemote
 )
 
@@ -48,12 +49,12 @@ type InventoryRead struct {
 	// it is Present.
 	Manager    ObjectRead
 	Membership MembershipState
-	// Members, when Recorded, are the objects the manager lists, sorted, each
-	// aligned with its kind's scope as the catalog states it: an object of a
-	// cluster-scoped kind has no namespace, whatever the entry records, and
+	// Members, when Recorded or Remote, are the objects the manager lists,
+	// sorted, each read as an object of this cluster would be: an object of
+	// a cluster-scoped kind has no namespace, whatever the entry records, and
 	// an Argo CD entry for a namespaced kind that records none is in the
-	// Application's destination namespace. An entry of a kind the catalog
-	// doesn't know stays as recorded.
+	// Application's destination namespace. An entry of a kind whose scope
+	// Radar can't tell stays as recorded.
 	Members []resourceid.Ref
 }
 
@@ -62,8 +63,12 @@ type RecorderRead struct {
 	// Recorders are the local managers whose member lists name the object,
 	// sorted.
 	Recorders []Observation
-	// Unreadable are the local managers whose member list can't be read, any
-	// of which may name the object, sorted.
+	// Elsewhere are the remote managers whose member lists name an object at
+	// the same coordinates, sorted: any of them records this one if its
+	// destination is this cluster after all.
+	Elsewhere []resourceid.Ref
+	// Unreadable are the managers whose member list can't be read, any of
+	// which may name the object, sorted.
 	Unreadable []resourceid.Ref
 	// Gaps are the manager kinds and namespaces the search couldn't read. A
 	// gap on the object's own kind means the object can't be named: a
@@ -72,8 +77,7 @@ type RecorderRead struct {
 	Gaps []Gap
 }
 
-// Complete reports whether Recorders are every local manager recording the
-// object.
+// Complete reports whether Recorders are every manager recording the object.
 func (r RecorderRead) Complete() bool {
-	return len(r.Gaps) == 0 && len(r.Unreadable) == 0
+	return len(r.Gaps) == 0 && len(r.Elsewhere) == 0 && len(r.Unreadable) == 0
 }

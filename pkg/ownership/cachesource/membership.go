@@ -89,18 +89,29 @@ func membersOf(gk resourceid.GroupKind, u *unstructured.Unstructured) recordedMe
 	return recordedMembers{}
 }
 
-// argoMembers reads status.resources. An Application that doesn't deploy to
-// this cluster lists objects of another; one with no destination, or whose
-// list holds an entry that names no object, has a list Radar can't trust.
+// appliesHere reports whether a manager's spec says it applies to this
+// cluster: an Argo CD destination at the in-cluster address, or a Flux object
+// without spec.kubeConfig.
+func appliesHere(gk resourceid.GroupKind, u *unstructured.Unstructured) bool {
+	if gk == ownership.ArgoApplication {
+		return gitops.IsInClusterDestination(u)
+	}
+	return gitops.FluxTargetsLocalCluster(u)
+}
+
+// argoMembers reads status.resources. An Application with no destination, or
+// whose list holds an entry that names no object, has a list Radar can't
+// trust.
 func argoMembers(app *unstructured.Unstructured) recordedMembers {
 	if !gitops.HasArgoDestination(app) {
 		return recordedMembers{}
 	}
-	if !gitops.IsInClusterDestination(app) {
-		return recordedMembers{state: ownership.MembersRemote}
+	state := ownership.MembersRemote
+	if appliesHere(ownership.ArgoApplication, app) {
+		state = ownership.MembersRecorded
 	}
 	destination, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "namespace")
-	m := recordedMembers{state: ownership.MembersRecorded, destination: destination}
+	m := recordedMembers{state: state, destination: destination}
 	raw, _, err := unstructured.NestedFieldNoCopy(app.Object, "status", "resources")
 	if err != nil {
 		return recordedMembers{}
@@ -135,12 +146,12 @@ func argoMembers(app *unstructured.Unstructured) recordedMembers {
 }
 
 // fluxMembers reads a Kustomization's or HelmRelease's status.inventory. One
-// applying to another cluster lists that cluster's objects; one without an
-// inventory, or with an entry whose ID doesn't parse, has a list Radar can't
-// trust.
+// without an inventory, or with an entry whose ID doesn't parse, has a list
+// Radar can't trust.
 func fluxMembers(obj *unstructured.Unstructured) recordedMembers {
-	if !gitops.FluxTargetsLocalCluster(obj) {
-		return recordedMembers{state: ownership.MembersRemote}
+	state := ownership.MembersRemote
+	if appliesHere(ownership.FluxKustomization, obj) {
+		state = ownership.MembersRecorded
 	}
 	raw, _, err := unstructured.NestedFieldNoCopy(obj.Object, "status", "inventory")
 	inventory, isMap := raw.(map[string]any)
@@ -151,7 +162,7 @@ func fluxMembers(obj *unstructured.Unstructured) recordedMembers {
 	if !isList && inventory["entries"] != nil {
 		return recordedMembers{}
 	}
-	m := recordedMembers{state: ownership.MembersRecorded}
+	m := recordedMembers{state: state}
 	for _, item := range list {
 		e, ok := item.(map[string]any)
 		if !ok {
@@ -188,10 +199,7 @@ func managerKeys(gk resourceid.GroupKind) cache.IndexFunc {
 			return nil, nil
 		}
 		m := membersOf(gk, u)
-		switch m.state {
-		case ownership.MembersRemote:
-			return nil, nil
-		case ownership.MembersUnreadable:
+		if m.state == ownership.MembersUnreadable {
 			return []string{unreadableKey}, nil
 		}
 		keys := make([]string, 0, len(m.entries))
@@ -224,7 +232,7 @@ func (s *session) Inventory(manager resourceid.Ref) ownership.InventoryRead {
 		return r
 	}
 	r.Membership = members.state
-	if members.state != ownership.MembersRecorded {
+	if members.state == ownership.MembersUnreadable {
 		return r
 	}
 	r.Members = make([]resourceid.Ref, 0, len(members.entries))
@@ -255,14 +263,26 @@ func inScope(namespaced bool, namespace, destination string) string {
 	return namespace
 }
 
-// align reads an entry as its kind's scope says: a built-in kind's own, or
-// the catalog's for any other.
+// scopeOf says whether gk is namespaced, and whether Radar can tell: a
+// built-in kind's scope is its own unless discovery is ambiguous about the
+// kind or serves it with the other scope; any other kind's is the catalog's.
+func (s *session) scopeOf(gk resourceid.GroupKind) (namespaced, known bool) {
+	if s.catalog.Ambiguous(gk) {
+		return false, false
+	}
+	k, served := s.catalog.Kind(gk)
+	if b, builtin := builtinKind(gk.Group, gk.Kind); builtin {
+		return b.Namespaced, !served || k.Namespaced == b.Namespaced
+	}
+	return k.Namespaced, served
+}
+
+// align reads an entry as its kind's scope says, or as recorded when Radar
+// can't tell the scope.
 func (s *session) align(e memberEntry, destination string) resourceid.Ref {
 	ref := resourceid.Ref{Group: e.group, Kind: e.kind, Namespace: e.namespace, Name: e.name}
-	if b, builtin := builtinKind(e.group, e.kind); builtin {
-		ref.Namespace = inScope(b.Namespaced, e.namespace, destination)
-	} else if k, known := s.catalog.Kind(ref.GroupKind()); known {
-		ref.Namespace = inScope(k.Namespaced, e.namespace, destination)
+	if namespaced, known := s.scopeOf(ref.GroupKind()); known {
+		ref.Namespace = inScope(namespaced, e.namespace, destination)
 	}
 	return ref
 }
@@ -274,32 +294,25 @@ func (s *session) readings(ref resourceid.Ref) ([]string, readreason.Code) {
 		return nil, readreason.ReadError
 	}
 	gk := ref.GroupKind()
-	if b, builtin := builtinKind(ref.Group, ref.Kind); builtin {
-		switch {
-		case b.Namespaced && ref.Namespace == "":
-			return nil, readreason.NamespaceRequired
-		case !b.Namespaced && ref.Namespace != "":
-			return nil, readreason.ReadError
-		}
-		return []string{memberKey(meant, ref.Group, ref.Kind, ref.Namespace, ref.Name)}, ""
-	}
-	recorded := memberKey(asRecorded, ref.Group, ref.Kind, ref.Namespace, ref.Name)
-	k, known := s.catalog.Kind(gk)
+	namespaced, known := s.scopeOf(gk)
+	_, builtin := builtinKind(ref.Group, ref.Kind)
 	switch {
-	case !known && (s.catalog.Ambiguous(gk) || !s.catalog.Complete()):
+	case !known && (builtin || s.catalog.Ambiguous(gk) || !s.catalog.Complete()):
 		// Radar can't tell the kind's scope.
 		return nil, readreason.ReadError
 	case !known:
 		// No object of the kind can exist; entries name it as recorded.
-		return []string{recorded}, ""
-	case k.Namespaced && ref.Namespace == "":
+		return []string{memberKey(asRecorded, ref.Group, ref.Kind, ref.Namespace, ref.Name)}, ""
+	case namespaced && ref.Namespace == "":
 		return nil, readreason.NamespaceRequired
-	case k.Namespaced:
-		return []string{recorded, memberKey(inDestination, ref.Group, ref.Kind, ref.Namespace, ref.Name)}, ""
-	case ref.Namespace != "":
+	case !namespaced && ref.Namespace != "":
 		return nil, readreason.ReadError
+	case builtin:
+		return []string{memberKey(meant, ref.Group, ref.Kind, ref.Namespace, ref.Name)}, ""
+	case namespaced:
+		return []string{memberKey(asRecorded, ref.Group, ref.Kind, ref.Namespace, ref.Name), memberKey(inDestination, ref.Group, ref.Kind, ref.Namespace, ref.Name)}, ""
 	}
-	return []string{recorded, memberKey(clusterScoped, ref.Group, ref.Kind, "", ref.Name)}, ""
+	return []string{memberKey(asRecorded, ref.Group, ref.Kind, "", ref.Name), memberKey(clusterScoped, ref.Group, ref.Kind, "", ref.Name)}, ""
 }
 
 func (s *session) Recorders(ref resourceid.Ref) ownership.RecorderRead {
@@ -309,7 +322,7 @@ func (s *session) Recorders(ref resourceid.Ref) ownership.RecorderRead {
 	}
 	q := &search{domain: ownership.Everywhere()}
 	var recorders []candidate
-	var unreadable []resourceid.Ref
+	var elsewhere, unreadable []resourceid.Ref
 	for _, gk := range ownership.RecordingManagers() {
 		kind, served := s.catalog.Kind(gk)
 		if !served {
@@ -325,11 +338,12 @@ func (s *session) Recorders(ref resourceid.Ref) ownership.RecorderRead {
 		}
 		for _, key := range keys {
 			s.dynamicIndexed(q, kind, membersIndex, key, func(gvr schema.GroupVersionResource, u *unstructured.Unstructured) {
-				recorders = append(recorders, candidate{
-					ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
-					apiVersion: gvr.GroupVersion().String(),
-					obj:        u,
-				})
+				manager := resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()}
+				if !appliesHere(gk, u) {
+					elsewhere = append(elsewhere, manager)
+					return
+				}
+				recorders = append(recorders, candidate{ref: manager, apiVersion: gvr.GroupVersion().String(), obj: u})
 			})
 		}
 		s.dynamicIndexed(q, kind, membersIndex, unreadableKey, func(_ schema.GroupVersionResource, u *unstructured.Unstructured) {
@@ -346,6 +360,8 @@ func (s *session) Recorders(ref resourceid.Ref) ownership.RecorderRead {
 			q.gaps = append(q.gaps, read.Gap)
 		}
 	}
+	slices.SortFunc(elsewhere, compareRefs)
+	r.Elsewhere = slices.Compact(elsewhere)
 	slices.SortFunc(unreadable, compareRefs)
 	r.Unreadable = slices.Compact(unreadable)
 	slices.SortFunc(q.gaps, compareGaps)

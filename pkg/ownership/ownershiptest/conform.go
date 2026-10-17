@@ -237,14 +237,16 @@ func differingCandidates(a, b ownership.CandidateRead) []resourceid.Ref {
 // as unreadable, and the other doesn't, or lists differently.
 func differingRecorders(a, b ownership.RecorderRead) []resourceid.Ref {
 	out := differingCandidates(ownership.CandidateRead{Candidates: a.Recorders}, ownership.CandidateRead{Candidates: b.Recorders})
-	for _, ref := range a.Unreadable {
-		if !slices.Contains(b.Unreadable, ref) {
-			out = append(out, ref)
+	for _, lists := range [][2][]resourceid.Ref{{a.Elsewhere, b.Elsewhere}, {a.Unreadable, b.Unreadable}} {
+		for _, ref := range lists[0] {
+			if !slices.Contains(lists[1], ref) {
+				out = append(out, ref)
+			}
 		}
-	}
-	for _, ref := range b.Unreadable {
-		if !slices.Contains(a.Unreadable, ref) {
-			out = append(out, ref)
+		for _, ref := range lists[1] {
+			if !slices.Contains(lists[0], ref) {
+				out = append(out, ref)
+			}
 		}
 	}
 	slices.SortFunc(out, compareRefs)
@@ -252,7 +254,7 @@ func differingRecorders(a, b ownership.RecorderRead) []resourceid.Ref {
 }
 
 func sameRecorders(a, b ownership.RecorderRead) bool {
-	if !slices.Equal(a.Gaps, b.Gaps) || !slices.Equal(a.Unreadable, b.Unreadable) || len(a.Recorders) != len(b.Recorders) {
+	if !slices.Equal(a.Gaps, b.Gaps) || !slices.Equal(a.Elsewhere, b.Elsewhere) || !slices.Equal(a.Unreadable, b.Unreadable) || len(a.Recorders) != len(b.Recorders) {
 		return false
 	}
 	for i := range a.Recorders {
@@ -272,17 +274,17 @@ func describeRecorders(r ownership.RecorderRead) string {
 	for _, m := range r.Recorders {
 		refs = append(refs, describeObservation(m))
 	}
-	return fmt.Sprintf("recorders [%s] unreadable %v gaps %+v", strings.Join(refs, ", "), r.Unreadable, r.Gaps)
+	return fmt.Sprintf("recorders [%s] elsewhere %v unreadable %v gaps %+v", strings.Join(refs, ", "), r.Elsewhere, r.Unreadable, r.Gaps)
 }
 
 func describeInventory(r ownership.InventoryRead) string {
 	if r.Manager.State != ownership.Present {
 		return "manager " + describeRead(r.Manager)
 	}
-	if r.Membership != ownership.MembersRecorded {
+	if r.Membership == ownership.MembersUnreadable {
 		return r.Membership.String()
 	}
-	return fmt.Sprintf("recorded %v", r.Members)
+	return fmt.Sprintf("%v %v", r.Membership, r.Members)
 }
 
 func sameRead(a, b ownership.ObjectRead) bool {

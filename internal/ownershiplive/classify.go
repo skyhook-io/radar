@@ -170,38 +170,70 @@ func (r *rechecking) candidatesHold(d ownershiptest.Difference) bool {
 	return true
 }
 
-// recordersHold: the fresh search has the expected gaps; every recorder
-// appears once, lists the object in its current copy and matches that copy;
-// every unreadable manager's current list is unreadable; and every disputed
-// manager left out neither lists the object nor has an unreadable list.
+// lists says what a manager's copy says of ref: that it records ref, may
+// record it if its destination is this cluster, or may list anything.
+func lists(o ownershiptest.Object, ref resourceid.Ref) (recorded, elsewhere, unreadable bool) {
+	switch o.Membership {
+	case ownership.MembersUnreadable:
+		return false, false, true
+	case ownership.MembersRemote:
+		return false, slices.Contains(o.Members, ref), false
+	}
+	return slices.Contains(o.Members, ref), false, false
+}
+
+// recordersHold: the fresh search has the expected gaps; every manager it
+// names appears once and, in its current copy, says what the answer says of
+// it: it lists the object (as a recorder, matching that copy; elsewhere, as a
+// remote manager), or its list is unreadable. Every disputed or listed
+// manager the answer leaves out says none of that now, unless the answer says
+// its kind went unread. Managers created after the list and never disputed
+// aren't checked.
 func (r *rechecking) recordersHold(d ownershiptest.Difference) bool {
 	fresh := r.cache.Recorders(d.Ref)
 	if !slices.Equal(fresh.Gaps, d.WantGaps) {
 		return false
 	}
 	seen := map[resourceid.Ref]bool{}
-	for _, c := range fresh.Recorders {
-		if seen[c.Ref] || !r.settleRef(c.Ref) {
-			return false
-		}
-		seen[c.Ref] = true
-		o := r.current[c.Ref]
-		if !r.exists[c.Ref] || o.Membership != ownership.MembersRecorded || !slices.Contains(o.Members, d.Ref) || !ownershiptest.SameObservation(c, ownershiptest.Observe(o)) {
-			return false
-		}
-	}
-	for _, m := range fresh.Unreadable {
+	named := func(m resourceid.Ref, says func(recorded, elsewhere, unreadable bool) bool) bool {
 		if seen[m] || !r.settleRef(m) {
 			return false
 		}
 		seen[m] = true
-		if !r.exists[m] || r.current[m].Membership != ownership.MembersUnreadable {
+		return r.exists[m] && says(lists(r.current[m], d.Ref))
+	}
+	for _, c := range fresh.Recorders {
+		if !named(c.Ref, func(recorded, _, _ bool) bool { return recorded }) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
 			return false
 		}
 	}
-	for _, ref := range d.Objects {
-		o := r.current[ref]
-		if !seen[ref] && r.exists[ref] && (o.Membership == ownership.MembersUnreadable || o.Membership == ownership.MembersRecorded && slices.Contains(o.Members, d.Ref)) {
+	for _, m := range fresh.Elsewhere {
+		if !named(m, func(_, elsewhere, _ bool) bool { return elsewhere }) {
+			return false
+		}
+	}
+	for _, m := range fresh.Unreadable {
+		if !named(m, func(_, _, unreadable bool) bool { return unreadable }) {
+			return false
+		}
+	}
+	leftOut := func(m resourceid.Ref) bool {
+		if !r.settleRef(m) {
+			return false
+		}
+		recorded, elsewhere, unreadable := lists(r.current[m], d.Ref)
+		return !r.exists[m] || !recorded && !elsewhere && !unreadable
+	}
+	for _, m := range d.Objects {
+		if !seen[m] && !leftOut(m) {
+			return false
+		}
+	}
+	for m, o := range r.listed {
+		if seen[m] || !ownership.IsRecordingManager(m.GroupKind()) || unread(fresh.Gaps, m) {
+			continue
+		}
+		if recorded, elsewhere, unreadable := lists(o, d.Ref); (recorded || elsewhere || unreadable) && !leftOut(m) {
 			return false
 		}
 	}

@@ -292,7 +292,7 @@ func (s scanSession) Inventory(manager resourceid.Ref) ownership.InventoryRead {
 	}
 	o := s.byRef[manager]
 	r.Membership = o.Membership
-	if o.Membership == ownership.MembersRecorded {
+	if o.Membership != ownership.MembersUnreadable {
 		r.Members = append([]resourceid.Ref{}, o.Members...)
 		slices.SortFunc(r.Members, compareRefs)
 		r.Members = slices.Compact(r.Members)
@@ -301,13 +301,21 @@ func (s scanSession) Inventory(manager resourceid.Ref) ownership.InventoryRead {
 }
 
 // nameable says why no manager can list ref, or "" when one can: a reference
-// must name an object of a kind whose scope discovery states, in that scope.
+// must name an object of a kind whose scope Radar can tell, in that scope. A
+// built-in kind's scope is its own, unless discovery serves the kind with the
+// other scope.
 func (s scanSession) nameable(ref resourceid.Ref) readreason.Code {
 	if ref.Kind == "" || ref.Name == "" {
 		return readreason.ReadError
 	}
 	gk := ref.GroupKind()
 	namespaced, served := s.scope(gk)
+	if b, ok := resourceid.BuiltinForKind(gk.Kind); ok && b.Group == gk.Group && !s.ambiguous(gk) {
+		if served && namespaced != b.Namespaced {
+			return readreason.ReadError
+		}
+		namespaced, served = b.Namespaced, true
+	}
 	switch {
 	case s.ambiguous(gk), !served && s.w.Partial:
 		return readreason.ReadError
@@ -361,17 +369,19 @@ func (s scanSession) Recorders(ref resourceid.Ref) ownership.RecorderRead {
 			if !all && !readable[o.Ref.Namespace] {
 				continue
 			}
-			switch o.Membership {
-			case ownership.MembersUnreadable:
+			switch {
+			case o.Membership == ownership.MembersUnreadable:
 				r.Unreadable = append(r.Unreadable, o.Ref)
-			case ownership.MembersRecorded:
-				if slices.Contains(o.Members, ref) {
-					r.Recorders = append(r.Recorders, observation(o))
-				}
+			case !slices.Contains(o.Members, ref):
+			case o.Membership == ownership.MembersRecorded:
+				r.Recorders = append(r.Recorders, observation(o))
+			case o.Membership == ownership.MembersRemote:
+				r.Elsewhere = append(r.Elsewhere, o.Ref)
 			}
 		}
 	}
 	slices.SortFunc(r.Recorders, func(a, b ownership.Observation) int { return compareRefs(a.Ref, b.Ref) })
+	slices.SortFunc(r.Elsewhere, compareRefs)
 	slices.SortFunc(r.Unreadable, compareRefs)
 	slices.SortFunc(r.Gaps, compareGaps)
 	r.Gaps = slices.Compact(r.Gaps)

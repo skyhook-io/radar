@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
@@ -52,7 +53,8 @@ func TestMembersReadTheShapesControllersWrite(t *testing.T) {
 		{"Argo CD, an entry's namespace not a string", manager(app, localDestination, map[string]any{"reconciledAt": "x", "resources": []any{map[string]any{"kind": "Service", "name": "ui", "namespace": int64(3)}}}), ownership.MembersUnreadable, nil},
 		{"Argo CD, resources not a list", manager(app, localDestination, map[string]any{"reconciledAt": "x", "resources": "ui"}), ownership.MembersUnreadable, nil},
 		{"Argo CD, the in-cluster destination by name", manager(app, map[string]any{"destination": map[string]any{"name": "in-cluster", "namespace": "shop"}}, map[string]any{"resources": []any{}}), ownership.MembersRecorded, nil},
-		{"Argo CD, another cluster", manager(app, map[string]any{"destination": map[string]any{"server": "https://prod.example.com:6443"}}, map[string]any{"resources": []any{map[string]any{"kind": "Service", "name": "ui"}}}), ownership.MembersRemote, nil},
+		{"Argo CD, another cluster", manager(app, map[string]any{"destination": map[string]any{"server": "https://prod.example.com:6443"}}, map[string]any{"resources": []any{map[string]any{"kind": "Service", "name": "ui"}}}), ownership.MembersRemote, []memberEntry{{"", "Service", "", "ui"}}},
+		{"Argo CD, another cluster, never reconciled", manager(app, map[string]any{"destination": map[string]any{"name": "prod"}}, nil), ownership.MembersUnreadable, nil},
 		{"Argo CD, no destination", manager(app, map[string]any{"destination": map[string]any{}}, map[string]any{"resources": []any{}}), ownership.MembersUnreadable, nil},
 		{"a Kustomization's inventory", manager(ks, map[string]any{"prune": true, "targetNamespace": "shop"}, map[string]any{"inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "shop_podinfo__Service", "v": "v1"},
@@ -68,7 +70,10 @@ func TestMembersReadTheShapesControllersWrite(t *testing.T) {
 		{"an ID that doesn't parse", manager(ks, nil, map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "podinfo", "v": "v1"}}}}), ownership.MembersUnreadable, nil},
 		{"entries not a list", manager(ks, nil, map[string]any{"inventory": map[string]any{"entries": "podinfo"}}), ownership.MembersUnreadable, nil},
 		{"a Kustomization applying elsewhere", manager(ks, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, map[string]any{"inventory": map[string]any{"entries": []any{}}}), ownership.MembersRemote, nil},
-		{"a HelmRelease applying elsewhere", manager(hr, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, nil), ownership.MembersRemote, nil},
+		{"a HelmRelease applying elsewhere", manager(hr, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "shop_web-podinfo__Service", "v": "v1"},
+		}}}), ownership.MembersRemote, []memberEntry{{"", "Service", "shop", "web-podinfo"}}},
+		{"a HelmRelease applying elsewhere, without an inventory", manager(hr, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, nil), ownership.MembersUnreadable, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gk := ownership.ArgoApplication
@@ -109,8 +114,9 @@ func TestRecordersWithoutTheMembershipIndexAreUnread(t *testing.T) {
 }
 
 // Recorders is Inventory inverted: over a fully collected World, every member
-// a manager lists names it as a recorder, and every recorder lists the
-// member. This holds of the source whatever the oracle says.
+// a manager lists names it, as a recorder or, for a remote manager, as
+// elsewhere; and every manager so named lists the member. This holds of the
+// source whatever the oracle says.
 func TestRecordersInvertInventory(t *testing.T) {
 	worlds := map[string]ownershiptest.World{"fixture": ownershiptest.Fixture()}
 	for seed := range uint64(10) {
@@ -128,22 +134,116 @@ func TestRecordersInvertInventory(t *testing.T) {
 			s := begin(t, render(t, w).source())
 			q := ownershiptest.QueriesFor(w)
 			listed := map[resourceid.Ref][]resourceid.Ref{}
+			remote := map[resourceid.Ref]bool{}
 			for _, m := range q.Managers {
 				inv := s.Inventory(m)
+				remote[m] = inv.Membership == ownership.MembersRemote
 				for _, member := range inv.Members {
 					listed[m] = append(listed[m], member)
 					rec := s.Recorders(member)
-					if !slices.ContainsFunc(rec.Recorders, func(o ownership.Observation) bool { return o.Ref == m }) && len(rec.Gaps) == 0 {
-						t.Errorf("%v lists %v, but Recorders(%v) = %+v", m, member, member, rec)
+					named := slices.ContainsFunc(rec.Recorders, func(o ownership.Observation) bool { return o.Ref == m })
+					if remote[m] {
+						named = slices.Contains(rec.Elsewhere, m)
+					}
+					if !named && len(rec.Gaps) == 0 {
+						t.Errorf("%v (%v) lists %v, but Recorders(%v) = %+v", m, inv.Membership, member, member, rec)
 					}
 				}
 			}
 			for _, ref := range q.Refs {
-				for _, rec := range s.Recorders(ref).Recorders {
-					if !slices.Contains(listed[rec.Ref], ref) {
-						t.Errorf("Recorders(%v) names %v, whose Inventory lists %v", ref, rec.Ref, listed[rec.Ref])
+				rec := s.Recorders(ref)
+				var named []resourceid.Ref
+				for _, o := range rec.Recorders {
+					named = append(named, o.Ref)
+				}
+				for _, m := range named {
+					if remote[m] || !slices.Contains(listed[m], ref) {
+						t.Errorf("Recorders(%v) names %v as a recorder; its Inventory lists %v", ref, m, listed[m])
 					}
 				}
+				for _, m := range rec.Elsewhere {
+					if !remote[m] || !slices.Contains(listed[m], ref) {
+						t.Errorf("Recorders(%v) names %v as elsewhere; its Inventory lists %v", ref, m, listed[m])
+					}
+				}
+			}
+		})
+	}
+}
+
+// A built-in kind's scope is its own, unless discovery is ambiguous about the
+// kind or serves it with the other scope: then no entry names it for certain,
+// and its entries stay as recorded. The oracle says the same.
+func TestRecordersOfABuiltInDiscoveryDisputes(t *testing.T) {
+	reader := resourceid.Ref{Group: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "reader"}
+	clusterRole := reader.GroupKind()
+	gc := []string{"create", "delete", "get", "list", "patch", "update", "watch"}
+	for name, served := range map[string][]ownership.ServedResource{
+		"ambiguous": {
+			{Group: clusterRole.Group, Version: "v1", Kind: clusterRole.Kind, Resource: "clusterroles", Verbs: gc},
+			{Group: clusterRole.Group, Version: "v1", Kind: clusterRole.Kind, Resource: "tenantroles", Namespaced: true, Verbs: gc},
+		},
+		"served with the other scope": {
+			{Group: clusterRole.Group, Version: "v1", Kind: clusterRole.Kind, Resource: "clusterroles", Namespaced: true, Verbs: gc},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := ownershiptest.World{Resources: append(ownershiptest.Resources(), served...), Collection: map[resourceid.GroupKind]ownershiptest.Collection{
+				clusterRole: {State: ownershiptest.NotCollected},
+			}}
+			for _, k := range ownershiptest.Kinds {
+				w.Collection[k.GroupKind] = ownershiptest.Collection{OnDemand: !k.Typed}
+			}
+			app := ownershiptest.Object{
+				Ref:        resourceid.Ref{Group: ownership.ArgoApplication.Group, Kind: ownership.ArgoApplication.Kind, Namespace: "argocd", Name: "rbac"},
+				APIVersion: "argoproj.io/v1alpha1", UID: "uid-rbac", ResourceVersion: "1",
+				Membership: ownership.MembersRecorded, Members: []resourceid.Ref{reader}, Destination: "alpha",
+			}
+			w.Objects = []ownershiptest.Object{app}
+			scan, _ := ownershiptest.Scan(w).Begin()
+			cache := begin(t, render(t, w).source())
+			want := []ownership.Gap{{Kind: clusterRole, Reason: readreason.ReadError}}
+			for source, s := range map[string]ownership.Session{"scan": scan, "cache": cache} {
+				if got := s.Recorders(reader); len(got.Recorders) != 0 || !slices.Equal(got.Gaps, want) {
+					t.Errorf("%s: Recorders(%v) = %+v, want only %+v", source, reader, got, want)
+				}
+				if got := s.Inventory(app.Ref); got.Membership != ownership.MembersRecorded || !slices.Equal(got.Members, []resourceid.Ref{reader}) {
+					t.Errorf("%s: Inventory = %v %v, want the entry as recorded", source, got.Membership, got.Members)
+				}
+			}
+		})
+	}
+}
+
+// An answer is complete only when no remote manager may record the object
+// and no manager's list is unreadable.
+func TestRecordersAreCompleteOnlyWithoutDoubt(t *testing.T) {
+	cfg := resourceid.Ref{Kind: "ConfigMap", Namespace: "alpha", Name: "cfg"}
+	app := func(name string, state ownership.MembershipState, members ...resourceid.Ref) ownershiptest.Object {
+		return ownershiptest.Object{
+			Ref:        resourceid.Ref{Group: ownership.ArgoApplication.Group, Kind: ownership.ArgoApplication.Kind, Namespace: "argocd", Name: name},
+			APIVersion: "argoproj.io/v1alpha1", UID: types.UID("uid-" + name), ResourceVersion: "1",
+			Membership: state, Members: members, Destination: "alpha",
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		managers []ownershiptest.Object
+		complete bool
+	}{
+		{"a local recorder", []ownershiptest.Object{app("local", ownership.MembersRecorded, cfg)}, true},
+		{"a remote manager listing it too", []ownershiptest.Object{app("local", ownership.MembersRecorded, cfg), app("prod", ownership.MembersRemote, cfg)}, false},
+		{"a remote manager listing something else", []ownershiptest.Object{app("local", ownership.MembersRecorded, cfg), app("prod", ownership.MembersRemote)}, true},
+		{"an unreadable manager", []ownershiptest.Object{app("local", ownership.MembersRecorded, cfg), app("new", ownership.MembersUnreadable)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := ownershiptest.World{Resources: ownershiptest.Resources(), Collection: map[resourceid.GroupKind]ownershiptest.Collection{}, Objects: tc.managers}
+			for _, k := range ownershiptest.Kinds {
+				w.Collection[k.GroupKind] = ownershiptest.Collection{OnDemand: !k.Typed}
+			}
+			got := begin(t, render(t, w).source()).Recorders(cfg)
+			if got.Complete() != tc.complete || len(got.Recorders) != 1 {
+				t.Fatalf("Recorders = %+v: complete %v, want %v", got, got.Complete(), tc.complete)
 			}
 		})
 	}

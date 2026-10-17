@@ -30,21 +30,45 @@ func liveMembership(gk resourceid.GroupKind, u *unstructured.Unstructured, scope
 	return ownership.MembersUnreadable, nil, ""
 }
 
+// inClusterServer reports whether an Argo CD destination server is the
+// in-cluster API address, in any of the forms Argo CD accepts: with or
+// without a scheme, port or trailing dot, short or fully qualified.
+func inClusterServer(server string) bool {
+	host := strings.ToLower(strings.TrimSpace(server))
+	if _, rest, ok := strings.Cut(host, "://"); ok {
+		host = rest
+	}
+	host, _, _ = strings.Cut(host, "/")
+	host, _, _ = strings.Cut(host, "?")
+	host, _, _ = strings.Cut(host, "#")
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.TrimSuffix(host, ".")
+	switch host {
+	case "kubernetes", "kubernetes.default", "kubernetes.default.svc":
+		return true
+	}
+	return strings.HasPrefix(host, "kubernetes.default.svc.")
+}
+
 func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.MembershipState, []resourceid.Ref, string) {
 	destination, _ := spec["destination"].(map[string]any)
 	server, _ := destination["server"].(string)
 	name, _ := destination["name"].(string)
 	namespace, _ := destination["namespace"].(string)
-	switch {
-	case server == "" && name == "":
+	server, name = strings.TrimSpace(server), strings.TrimSpace(name)
+	if server == "" && name == "" {
 		return ownership.MembersUnreadable, nil, namespace
-	case name != "in-cluster" && server != "https://kubernetes.default.svc":
-		return ownership.MembersRemote, nil, namespace
+	}
+	state := ownership.MembersRemote
+	if strings.EqualFold(name, "in-cluster") || inClusterServer(server) {
+		state = ownership.MembersRecorded
 	}
 	raw := status["resources"]
 	if raw == nil {
 		if reconciled, _ := status["reconciledAt"].(string); reconciled != "" {
-			return ownership.MembersRecorded, []resourceid.Ref{}, namespace
+			return state, []resourceid.Ref{}, namespace
 		}
 		return ownership.MembersUnreadable, nil, namespace
 	}
@@ -70,12 +94,13 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 		}
 		members = append(members, aligned(ref, scope))
 	}
-	return ownership.MembersRecorded, sortedRefs(members), namespace
+	return state, sortedRefs(members), namespace
 }
 
 func fluxMembership(spec, status map[string]any, scope scopeOf) (ownership.MembershipState, []resourceid.Ref, string) {
+	state := ownership.MembersRecorded
 	if _, elsewhere := spec["kubeConfig"].(map[string]any); elsewhere {
-		return ownership.MembersRemote, nil, ""
+		state = ownership.MembersRemote
 	}
 	inventory, ok := status["inventory"].(map[string]any)
 	if !ok {
@@ -83,7 +108,7 @@ func fluxMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 	}
 	members := []resourceid.Ref{}
 	if inventory["entries"] == nil {
-		return ownership.MembersRecorded, members, ""
+		return state, members, ""
 	}
 	list, ok := inventory["entries"].([]any)
 	if !ok {
@@ -98,10 +123,14 @@ func fluxMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 		if n < 4 || parts[n-1] == "" || strings.Join(parts[1:n-2], "_") == "" {
 			return ownership.MembersUnreadable, nil, ""
 		}
-		ref := resourceid.Ref{Group: parts[n-2], Kind: parts[n-1], Namespace: parts[0], Name: strings.Join(parts[1:n-2], "_")}
+		group := parts[n-2]
+		if group == "core" {
+			group = ""
+		}
+		ref := resourceid.Ref{Group: group, Kind: parts[n-1], Namespace: parts[0], Name: strings.Join(parts[1:n-2], "_")}
 		members = append(members, aligned(ref, scope))
 	}
-	return ownership.MembersRecorded, sortedRefs(members), ""
+	return state, sortedRefs(members), ""
 }
 
 // aligned drops the namespace an entry records for a cluster-scoped kind.

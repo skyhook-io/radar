@@ -440,6 +440,38 @@ func (c claimsRecorded) Inventory(m resourceid.Ref) ownership.InventoryRead {
 	return r
 }
 
+// recorderDropsLater answers the first search for recorders right, and
+// leaves one manager out of every later one.
+type recorderDropsLater struct {
+	ownership.Session
+	drop  resourceid.Ref
+	calls *int
+}
+
+func (l recorderDropsLater) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := l.Session.Recorders(ref)
+	if *l.calls++; *l.calls > 1 {
+		r.Recorders = slices.DeleteFunc(r.Recorders, func(o ownership.Observation) bool { return o.Ref == l.drop })
+		r.Elsewhere = slices.DeleteFunc(r.Elsewhere, func(m resourceid.Ref) bool { return m == l.drop })
+	}
+	return r
+}
+
+// elsewhereAsRecorder reports a remote manager as recording the object.
+type elsewhereAsRecorder struct {
+	ownership.Session
+	remote ownership.Observation
+}
+
+func (e elsewhereAsRecorder) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := e.Session.Recorders(ref)
+	if slices.Contains(r.Elsewhere, e.remote.Ref) {
+		r.Elsewhere = slices.DeleteFunc(r.Elsewhere, func(m resourceid.Ref) bool { return m == e.remote.Ref })
+		r.Recorders = append(r.Recorders, e.remote)
+	}
+	return r
+}
+
 // memberDrop leaves every manager's members out of its inventory.
 type memberDrop struct{ ownership.Session }
 
@@ -493,6 +525,11 @@ func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
 	other := ownershiptest.Object{Ref: resourceid.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "other"}, APIVersion: "argoproj.io/v1alpha1", UID: "uid-other", ResourceVersion: "20",
 		Membership: ownership.MembersRecorded, Members: []resourceid.Ref{}, Destination: "shop"}
 
+	sibling := app
+	sibling.Ref.Name, sibling.UID = "shop-too", "uid-shop-too"
+	remote := app
+	remote.Ref.Name, remote.UID, remote.Membership = "shop-prod", "uid-shop-prod", ownership.MembersRemote
+
 	q := ownershiptest.Queries{Refs: []resourceid.Ref{cm.Ref}, Managers: []resourceid.Ref{app.Ref}}
 	for _, tc := range []struct {
 		name   string
@@ -530,6 +567,21 @@ func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
 		{"an unreadable list reported as recorded", world(cm, app), world(cm, unreadable),
 			func(now ownership.Session) ownership.Session { return claimsRecorded{now} },
 			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: confirmed, ownershiptest.AskedInventory: unresolved}},
+		// The sibling agreed at first and was never disputed; asked again,
+		// the search drops it.
+		{"a recorder that agreed, dropped when asked again", world(cm, app, sibling), world(cm, resynced, sibling),
+			func(now ownership.Session) ownership.Session { return recorderDropsLater{now, sibling.Ref, new(int)} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"a remote manager listing the object", world(cm, app, remote), world(cm, resynced, remote), nil,
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: confirmed, ownershiptest.AskedInventory: confirmed}},
+		{"a remote manager reported as a recorder", world(cm, app, remote), world(cm, resynced, remote),
+			func(now ownership.Session) ownership.Session {
+				return elsewhereAsRecorder{now, ownershiptest.Observe(remote)}
+			},
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"a remote manager dropped when asked again", world(cm, app, remote), world(cm, resynced, remote),
+			func(now ownership.Session) ownership.Session { return recorderDropsLater{now, remote.Ref, new(int)} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
 		{"an inventory missing its member", world(cm, app), world(cm, resynced),
 			func(now ownership.Session) ownership.Session { return memberDrop{now} },
 			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: confirmed, ownershiptest.AskedInventory: unresolved}},
