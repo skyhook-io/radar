@@ -390,8 +390,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "issues",
 		Description: "Use for 'what's broken right now?': live state, not posture. Returns " +
-			"grouped critical/warning failures across workloads, Jobs/CronJobs, HPAs, " +
-			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, and False controller conditions. " +
+			"grouped critical/warning failures in workloads, Jobs/CronJobs, HPAs, " +
+			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
 			"`unchecked_sources` lists sources Radar couldn't check, so their issues may be " +
 			"missing; don't call them healthy. `helm` means failed or stuck Helm releases. " +
@@ -403,7 +403,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"When present, `timing_summary` reconciles timing fields whose scopes differ; otherwise " +
 			"read `first_seen` as 'active at least since' and `issue_timing` as timing evidence, " +
 			"not a root-cause verdict. Never treat resource age as issue age. " +
-			"When `recent_changes` is present, inspect it before concluding the returned " +
+			"When `recent_changes` is present, inspect it before concluding the " +
 			"issues explain the symptom. Follow `recent_changes_guidance` when present. " +
 			"`recent_changes_reason=" + meaningfulchanges.ChangesReasonNoCriticalIssues +
 			"` means no critical row, not healthy. The `" +
