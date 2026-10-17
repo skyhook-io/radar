@@ -574,6 +574,11 @@ func TestStaleSecretEnvManagedFieldsFallback(t *testing.T) {
 		if len(checks) != 1 || !checks[0].SecretChangedAt.Equal(changedAt) {
 			t.Fatalf("metadata-only write replaced the real data timestamp in diagnosis: %+v", checks)
 		}
+		// The manager has written since (the metadata update), so the note
+		// must name the retained write without calling it the latest.
+		if want := "had a write at " + changedAt.Format(time.RFC3339) + " by secret-controller, a field manager that owns its data"; !strings.Contains(checks[0].Message, want) || strings.Contains(checks[0].Message, "latest") {
+			t.Fatalf("note after a metadata-only update = %q, want it to contain %q and no recency claim", checks[0].Message, want)
+		}
 	})
 
 	t.Run("precise timeline evidence wins for the whole Secret", func(t *testing.T) {
@@ -1009,19 +1014,19 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 		if !strings.Contains(msg, "managedFields cannot identify which field changed") || !strings.Contains(msg, "may not have touched data at all") {
 			t.Fatalf("named writer dropped the hedge: %q", msg)
 		}
-		if strings.Contains(msg, "data write") || strings.Contains(msg, "changed by") || strings.Contains(msg, "was last written") {
+		if strings.Contains(msg, "data write") || strings.Contains(msg, "changed by") || strings.Contains(msg, "last written") || strings.Contains(msg, "latest") {
 			t.Fatalf("note claims more than managedFields establishes: %q", msg)
 		}
 		return checks[0]
 	}
 	written := func(at time.Time, writers string) string {
-		return "the latest write by any field manager that owns its data was by " + writers + " at " + at.Format(time.RFC3339)
+		return "had a write at " + at.Format(time.RFC3339) + " by " + writers
 	}
 
 	t.Run("raw manager name, no mapping", func(t *testing.T) {
 		at := now.Add(-time.Minute)
 		check := checkFor(t, entry("kubectl-client-side-apply", at, dataOnly))
-		if want := written(at, "kubectl-client-side-apply"); !strings.Contains(check.Message, want) {
+		if want := written(at, "kubectl-client-side-apply, a field manager that owns its data"); !strings.Contains(check.Message, want) {
 			t.Fatalf("message %q does not contain %q", check.Message, want)
 		}
 	})
@@ -1033,7 +1038,7 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 			{entry("Go-http-client", newer, dataOnly), entry("helm", older, dataOnly)},
 		} {
 			check := checkFor(t, order...)
-			if !check.SecretChangedAt.Equal(newer) || !strings.Contains(check.Message, written(newer, "Go-http-client")) || strings.Contains(check.Message, "helm") {
+			if !check.SecretChangedAt.Equal(newer) || !strings.Contains(check.Message, written(newer, "Go-http-client,")) || strings.Contains(check.Message, "helm") {
 				t.Fatalf("want the newest data owner Go-http-client at %v, got %v %q", newer, check.SecretChangedAt, check.Message)
 			}
 		}
@@ -1042,7 +1047,7 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 	t.Run("a later metadata-only manager is outside the claim", func(t *testing.T) {
 		dataAt, labelAt := now.Add(-30*time.Minute), now.Add(-time.Minute)
 		check := checkFor(t, entry("helm", dataAt, dataOnly), entry("kubectl-label", labelAt, `{"f:metadata":{"f:labels":{"f:team":{}}}}`))
-		if !check.SecretChangedAt.Equal(dataAt) || !strings.Contains(check.Message, written(dataAt, "helm")) || strings.Contains(check.Message, "kubectl-label") {
+		if !check.SecretChangedAt.Equal(dataAt) || !strings.Contains(check.Message, written(dataAt, "helm,")) || strings.Contains(check.Message, "kubectl-label") {
 			t.Fatalf("want helm's write, got %v %q", check.SecretChangedAt, check.Message)
 		}
 	})
@@ -1052,7 +1057,7 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 		// write to either, here a label change.
 		labelAt := now.Add(-time.Minute)
 		check := checkFor(t, entry("external-secrets", labelAt, `{"f:data":{"f:password":{}},"f:metadata":{"f:labels":{"f:synced":{}}}}`))
-		if !strings.Contains(check.Message, written(labelAt, "external-secrets")) {
+		if !strings.Contains(check.Message, written(labelAt, "external-secrets,")) {
 			t.Fatalf("want the manager's last write, hedged: %q", check.Message)
 		}
 	})
@@ -1061,7 +1066,7 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 		at := now.Add(-time.Minute)
 		a := checkFor(t, entry("operator-b", at, dataOnly), entry("operator-a", at, dataOnly))
 		b := checkFor(t, entry("operator-a", at, dataOnly), entry("operator-b", at, dataOnly))
-		if want := written(at, "operator-a and operator-b"); !strings.Contains(a.Message, want) || a.Message != b.Message {
+		if want := written(at, "operator-a and operator-b, field managers that own its data"); !strings.Contains(a.Message, want) || a.Message != b.Message {
 			t.Fatalf("tie should name both managers in both orders: %q / %q", a.Message, b.Message)
 		}
 	})
