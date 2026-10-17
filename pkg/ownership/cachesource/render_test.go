@@ -181,19 +181,24 @@ func render(t *testing.T, w ownershiptest.World) *rendered {
 	t.Cleanup(dynamicCache.Stop)
 	r.caches = Caches{Typed: typedCache, Dynamic: dynamicCache, Discovery: discoveryCache}
 
+	// Reactors go in before any watch starts: the fake client's reactor
+	// chain isn't safe to change while informers list through it.
 	for _, k := range ownershiptest.Kinds {
-		if k.Typed || !k.Watchable {
-			continue
+		if !k.Typed && k.Watchable {
+			r.reactDynamic(k, w.Collection[k.GroupKind])
 		}
-		r.collectDynamic(t, k, w.Collection[k.GroupKind])
+	}
+	for _, k := range ownershiptest.Kinds {
+		if !k.Typed && k.Watchable {
+			r.watchDynamic(t, k, w.Collection[k.GroupKind])
+		}
 	}
 	return r
 }
 
-// collectDynamic has the dynamic cache watch k as c says, and waits for the
-// watches c says have loaded.
-func (r *rendered) collectDynamic(t *testing.T, k ownershiptest.Kind, c ownershiptest.Collection) {
-	t.Helper()
+// reactDynamic makes the fake API serve k as c says: refusing it, or failing
+// the informers' lists after each scope's access probe while it is loading.
+func (r *rendered) reactDynamic(k ownershiptest.Kind, c ownershiptest.Collection) {
 	gvr := schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Resource}
 	refuse := func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("Radar may not list this"))
@@ -204,13 +209,8 @@ func (r *rendered) collectDynamic(t *testing.T, k ownershiptest.Kind, c ownershi
 		return
 	case ownershiptest.Refused:
 		r.dynamic.PrependReactor("list", k.Resource, refuse)
-		if err := r.caches.Dynamic.EnsureWatching(gvr); err == nil {
-			t.Fatalf("render: %v's watch should have been refused", gvr)
-		}
 		return
 	}
-	// Each scope's first list is the watch's access probe; when the kind is
-	// loading, the informer's own lists after it fail.
 	var mu sync.Mutex
 	lists := map[string]int{}
 	r.dynamic.PrependReactor("list", k.Resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
@@ -226,8 +226,24 @@ func (r *rendered) collectDynamic(t *testing.T, k ownershiptest.Kind, c ownershi
 		}
 		return false, nil, nil
 	})
+}
+
+// watchDynamic has the dynamic cache watch k as c says, and waits for the
+// watches c says have loaded.
+func (r *rendered) watchDynamic(t *testing.T, k ownershiptest.Kind, c ownershiptest.Collection) {
+	t.Helper()
+	gvr := schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Resource}
+	switch c.State {
+	case ownershiptest.NotCollected:
+		return
+	case ownershiptest.Refused:
+		if err := r.caches.Dynamic.EnsureWatching(gvr); err == nil {
+			t.Fatalf("render: %v's watch should have been refused", gvr)
+		}
+		return
+	}
 	scopes := []string{""}
-	if limited {
+	if k.Namespaced && c.Namespaces != nil {
 		scopes = c.Namespaces
 	}
 	for _, ns := range scopes {
