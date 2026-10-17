@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -40,10 +42,10 @@ var typedKinds = func() map[resourceid.GroupKind]resourceid.Builtin {
 const passes = 2
 
 // TestLiveParity checks the cache source over a live cluster against Scan of
-// a World listed straight from the same cluster. A difference about objects
-// written between the list and the cache read is reported, not judged;
-// writtenBetween says which those are. Any other difference fails. It only
-// lists and watches.
+// a World listed straight from the same cluster. A difference the cluster
+// changing mid-comparison explains — checked against fresh reads from the API
+// server, see explained — is reported; any other difference fails. It only
+// lists, watches and gets.
 //
 //	RADAR_LIVE_KUBECONFIG=... RADAR_LIVE_CONTEXT=... go test -tags liveparity,withoutebpf -run TestLiveParity -timeout 20m ./internal/ownershiplive/
 func TestLiveParity(t *testing.T) {
@@ -126,6 +128,32 @@ func TestLiveParity(t *testing.T) {
 	}
 	t.Logf("caches loaded in %v: %d kinds", time.Since(start).Round(time.Millisecond), len(kinds))
 
+	gvrOf := map[resourceid.GroupKind]schema.GroupVersionResource{}
+	for _, k := range kinds {
+		gvrOf[k.gk] = k.gvr
+	}
+	object := func(gk resourceid.GroupKind, gvr schema.GroupVersionResource, u *unstructured.Unstructured) ownershiptest.Object {
+		return ownershiptest.Object{
+			Ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
+			APIVersion: gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
+			Owners: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
+		}
+	}
+	api := func(ref resourceid.Ref) (ownershiptest.Object, bool, error) {
+		gvr, ok := gvrOf[ref.GroupKind()]
+		if !ok {
+			return ownershiptest.Object{}, false, fmt.Errorf("%v isn't collected", ref.GroupKind())
+		}
+		u, err := dyn.Resource(gvr).Namespace(ref.Namespace).Get(context.Background(), ref.Name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return ownershiptest.Object{}, false, nil
+		}
+		if err != nil {
+			return ownershiptest.Object{}, false, err
+		}
+		return object(ref.GroupKind(), gvr, u), true, nil
+	}
+
 	// world lists the cluster afresh: discovery as served, every object of
 	// every collected kind, each kind collected as the caches collect it.
 	world := func() ownershiptest.World {
@@ -148,12 +176,8 @@ func TestLiveParity(t *testing.T) {
 				t.Fatalf("list %v: %v", k.gvr, err)
 			}
 			w.Collection[k.gk] = ownershiptest.Collection{OnDemand: k.onDemand}
-			for _, u := range items.Items {
-				w.Objects = append(w.Objects, ownershiptest.Object{
-					Ref:        resourceid.Ref{Group: k.gk.Group, Kind: k.gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
-					APIVersion: k.gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
-					Owners: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
-				})
+			for i := range items.Items {
+				w.Objects = append(w.Objects, object(k.gk, k.gvr, &items.Items[i]))
 			}
 		}
 		return w
@@ -204,10 +228,6 @@ func TestLiveParity(t *testing.T) {
 	failures := 0
 	for pass := range passes {
 		w := world()
-		listed := map[resourceid.Ref]ownershiptest.Object{}
-		for _, o := range w.Objects {
-			listed[o.Ref] = o
-		}
 		want, _ := ownershiptest.Scan(w).Begin()
 		got, err := cachesource.New(func() cachesource.Caches {
 			return cachesource.Caches{Typed: typedCache, Dynamic: dynamicCache, Discovery: discovery}
@@ -217,35 +237,10 @@ func TestLiveParity(t *testing.T) {
 		}
 		q := questions(w)
 		diffs := ownershiptest.Differences(want, got, q)
-		resolutions := 0
-		for _, o := range w.Objects {
-			dependent := want.Object(o.Ref)
-			if dependent.State != ownership.Present {
-				continue
-			}
-			for i, ref := range dependent.Object.OwnerReferences {
-				resolutions++
-				a, b := ownership.ResolveOwner(want, dependent.Object, ref), ownership.ResolveOwner(got, dependent.Object, ref)
-				if a.State != b.State || a.Ref != b.Ref || a.Gap != b.Gap {
-					objects := []resourceid.Ref{o.Ref}
-					if a.Ref != (resourceid.Ref{}) {
-						objects = append(objects, a.Ref)
-					}
-					diffs = append(diffs, ownershiptest.Difference{
-						Question: fmt.Sprintf("ResolveOwner(%v, %d)", o.Ref, i),
-						Want:     fmt.Sprintf("%v %v %+v", a.State, a.Ref, a.Gap), Got: fmt.Sprintf("%v %v %+v", b.State, b.Ref, b.Gap),
-						Objects: objects, Coverage: a.Gap != b.Gap,
-					})
-				}
-			}
-		}
-		if err := got.Validate(); err != nil {
-			t.Errorf("pass %d: Validate: %v", pass, err)
-		}
-		written := 0
+		changed := 0
 		for _, d := range diffs {
-			if writtenBetween(d, listed, got) {
-				written++
+			if explained(d, got, api) {
+				changed++
 				continue
 			}
 			failures++
@@ -253,8 +248,34 @@ func TestLiveParity(t *testing.T) {
 				t.Errorf("pass %d: %v", pass, d)
 			}
 		}
-		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains), %d owner references resolved; %d differ: %d about objects written between the list and the cache read, %d otherwise",
-			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions, len(diffs), written, len(diffs)-written)
+		resolutions, resolutionDiffs := 0, 0
+		for _, o := range w.Objects {
+			dependent := want.Object(o.Ref)
+			if dependent.State != ownership.Present {
+				continue
+			}
+			for _, ref := range dependent.Object.OwnerReferences {
+				resolutions++
+				a, b := ownership.ResolveOwner(want, dependent.Object, ref), ownership.ResolveOwner(got, dependent.Object, ref)
+				if a.State == b.State && a.Ref == b.Ref && a.Gap == b.Gap {
+					continue
+				}
+				resolutionDiffs++
+				if explainedResolution(a, b, dependent.Object, ref, got, api) {
+					changed++
+					continue
+				}
+				failures++
+				if failures <= 20 {
+					t.Errorf("pass %d: ResolveOwner(%v, %s %s/%s): listed %v %v %+v, cache %v %v %+v", pass, o.Ref, ref.APIVersion, ref.Kind, ref.Name, a.State, a.Ref, a.Gap, b.State, b.Ref, b.Gap)
+				}
+			}
+		}
+		if err := got.Validate(); err != nil {
+			t.Errorf("pass %d: Validate: %v", pass, err)
+		}
+		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains) and %d owner references resolved; %d differ, %d of them explained by the cluster changing as the API server confirms",
+			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions, len(diffs)+resolutionDiffs, changed)
 	}
-	t.Logf("%d differences not accounted for by writes", failures)
+	t.Logf("%d differences unexplained", failures)
 }

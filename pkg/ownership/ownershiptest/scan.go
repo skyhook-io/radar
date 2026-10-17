@@ -248,6 +248,11 @@ func namesOwner(owners []metav1.OwnerReference, uid types.UID) bool {
 	return false
 }
 
+// Observe returns what a source should observe of o.
+func Observe(o Object) ownership.Observation {
+	return observation(o)
+}
+
 func observation(o Object) ownership.Observation {
 	obs := ownership.Observation{
 		Ref:             o.Ref,

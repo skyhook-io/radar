@@ -110,6 +110,13 @@ type Difference struct {
 	// Coverage: the answers disagree about what was read (gaps or
 	// truncation), not only about objects.
 	Coverage bool
+	// The question itself: Object(Ref), or, when Candidates is set,
+	// OwnerCandidates(UID, Domain, Limit).
+	Ref        resourceid.Ref
+	Candidates bool
+	UID        types.UID
+	Domain     ownership.Domain
+	Limit      int
 }
 
 func (d Difference) String() string {
@@ -126,7 +133,7 @@ func Differences(want, got ownership.Session, q Queries) []Difference {
 				return r.State == ownership.Unavailable || r.State == ownership.Excluded
 			}
 			diffs = append(diffs, Difference{Question: fmt.Sprintf("Object(%v)", ref), Want: describeRead(w), Got: describeRead(g), Objects: []resourceid.Ref{ref},
-				Coverage: unread(w) || unread(g)})
+				Coverage: unread(w) || unread(g), Ref: ref})
 		}
 	}
 	for _, uid := range q.UIDs {
@@ -137,8 +144,9 @@ func Differences(want, got ownership.Session, q Queries) []Difference {
 					diffs = append(diffs, Difference{
 						Question: fmt.Sprintf("OwnerCandidates(%q, %+v, %d)", uid, d, limit),
 						Want:     describeCandidates(w), Got: describeCandidates(g),
-						Objects:  differingCandidates(w, g),
-						Coverage: w.Truncated != g.Truncated || !slices.Equal(w.Gaps, g.Gaps),
+						Objects:    differingCandidates(w, g),
+						Coverage:   w.Truncated != g.Truncated || !slices.Equal(w.Gaps, g.Gaps),
+						Candidates: true, UID: uid, Domain: d, Limit: limit,
 					})
 				}
 			}
@@ -200,7 +208,12 @@ func sameCandidates(a, b ownership.CandidateRead) bool {
 	return true
 }
 
-// sameObservation compares observations, timestamps by instant.
+// SameObservation reports whether two observations are of the same object
+// in the same state, comparing timestamps by instant.
+func SameObservation(a, b ownership.Observation) bool {
+	return sameObservation(a, b)
+}
+
 func sameObservation(a, b ownership.Observation) bool {
 	at, bt := a.DeletionTimestamp, b.DeletionTimestamp
 	if (at == nil) != (bt == nil) || at != nil && !at.Equal(bt) {
