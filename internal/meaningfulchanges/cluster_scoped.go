@@ -144,6 +144,9 @@ type webhookScope struct {
 	objectSelector  bool
 	matchConditions bool
 	namespaced      bool
+	// scopeUnknown: no rule is known to reach namespaced objects, but some
+	// rule names resources whose scope could not be established.
+	scopeUnknown bool
 }
 
 // currentWebhookConfigurations returns the cached webhook scopes of each kind
@@ -178,8 +181,11 @@ func webhookScopes(kind string, item *unstructured.Unstructured) []webhookScope 
 		scope := webhookScope{name: name, namespace: ns, matchConditions: conditions > 0,
 			objectSelector: obj != nil && (len(obj.MatchLabels) > 0 || len(obj.MatchExpressions) > 0)}
 		for _, rule := range rules {
-			scope.namespaced = scope.namespaced || ruleCoversNamespaced(rule)
+			namespaced, unknown := ruleScope(rule)
+			scope.namespaced = scope.namespaced || namespaced
+			scope.scopeUnknown = scope.scopeUnknown || unknown
 		}
+		scope.scopeUnknown = scope.scopeUnknown && !scope.namespaced
 		scopes = append(scopes, scope)
 	}
 	if kind == "MutatingWebhookConfiguration" {
@@ -202,31 +208,39 @@ func webhookScopes(kind string, item *unstructured.Unstructured) []webhookScope 
 	return scopes
 }
 
-// ruleCoversNamespaced reports whether a rule can match a namespaced object.
-// An omitted or "*" scope matches both scopes but only for the resources
-// listed, so a rule naming only cluster-scoped resources (nodes, say) does
-// not reach a namespace. Resources discovery cannot place count as namespaced.
-func ruleCoversNamespaced(rule admissionv1.RuleWithOperations) bool {
+// ruleScope reports whether a rule can match a namespaced object, and
+// whether that could not be established. An omitted or "*" scope matches both
+// scopes but only for the resources listed, so a rule naming only
+// cluster-scoped resources (nodes, say) does not reach a namespace. A wildcard
+// group, or a resource discovery cannot place, leaves the answer unknown.
+func ruleScope(rule admissionv1.RuleWithOperations) (namespaced, unknown bool) {
 	if rule.Scope != nil && *rule.Scope == admissionv1.NamespacedScope {
-		return true
+		return true, false
 	}
 	if rule.Scope != nil && *rule.Scope == admissionv1.ClusterScope {
-		return false
+		return false, false
 	}
 	discovery := k8s.GetResourceDiscovery()
 	for _, resource := range rule.Resources {
 		base, _, _ := strings.Cut(resource, "/")
-		if base == "*" || slices.Contains(rule.APIGroups, "*") || discovery == nil {
-			return true
+		if base == "*" {
+			return true, false
 		}
 		for _, group := range rule.APIGroups {
+			if group == "*" || discovery == nil {
+				unknown = true
+				continue
+			}
 			info, ok := discovery.GetResourceWithGroup(base, group)
-			if !ok || info.Namespaced {
-				return true
+			switch {
+			case !ok:
+				unknown = true
+			case info.Namespaced:
+				return true, false
 			}
 		}
 	}
-	return false
+	return false, unknown
 }
 
 // webhookChangeApplicability decides whether a webhook configuration change
@@ -258,7 +272,7 @@ func webhookChangeApplicability(change issuesapi.RecentChange, namespace string,
 		if len(changed) > 0 && !changed[scope.name] {
 			continue
 		}
-		if !scope.namespaced {
+		if !scope.namespaced && !scope.scopeUnknown {
 			continue
 		}
 		selectsNamespace, known := selectorMatches(scope.namespace, nsLabels)
@@ -273,6 +287,11 @@ func webhookChangeApplicability(change issuesapi.RecentChange, namespace string,
 		case !selectsNamespace:
 		case scope.objectSelector || scope.matchConditions:
 			bestMay = fmt.Sprintf("webhook %s selects namespace %s; its %s not evaluated", scope.name, namespace, unevaluated(scope))
+			if bestApplies == "" {
+				bestName = scope.name
+			}
+		case scope.scopeUnknown:
+			bestMay = fmt.Sprintf("webhook %s selects namespace %s; Radar could not confirm that its rules reach namespaced resources", scope.name, namespace)
 			if bestApplies == "" {
 				bestName = scope.name
 			}

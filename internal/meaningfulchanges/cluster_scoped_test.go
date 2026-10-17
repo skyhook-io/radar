@@ -31,6 +31,7 @@ func TestWebhookChangeApplicability(t *testing.T) {
 		"MutatingWebhookConfiguration/objects":   {{name: "objects.example", namespace: shop, objectSelector: true, namespaced: true}},
 		"MutatingWebhookConfiguration/cel":       {{name: "cel.example", matchConditions: true, namespaced: true}},
 		"MutatingWebhookConfiguration/cluster":   {{name: "cluster.example"}},
+		"MutatingWebhookConfiguration/unplaced":  {{name: "unplaced.example", scopeUnknown: true}},
 		"MutatingWebhookConfiguration/two":       {{name: "a.example", namespace: other, namespaced: true}, {name: "b.example", namespaced: true}},
 	}
 	update := func(name string, fields ...issuesapi.ChangeField) issuesapi.RecentChange {
@@ -50,6 +51,7 @@ func TestWebhookChangeApplicability(t *testing.T) {
 		{"labels unreadable", update("selected", issuesapi.ChangeField{Path: "webhooks[selected.example]", OldValue: "failurePolicy=Ignore rules=x", NewValue: "failurePolicy=Fail rules=x"}), NamespaceLabels{}, true, issuesapi.ClusterScopedMayApply, "labels are not readable"},
 		{"object selector unevaluated", update("objects", issuesapi.ChangeField{Path: "webhooks[objects.example]", OldValue: "failurePolicy=Ignore rules=x", NewValue: "failurePolicy=Fail rules=x"}), known, true, issuesapi.ClusterScopedMayApply, "objectSelector is not evaluated"},
 		{"match conditions unevaluated", update("cel", issuesapi.ChangeField{Path: "webhooks[cel.example]", OldValue: "failurePolicy=Ignore rules=x", NewValue: "failurePolicy=Fail rules=x"}), known, true, issuesapi.ClusterScopedMayApply, "matchConditions are not evaluated"},
+		{"rules of unknown scope only may apply", update("unplaced", issuesapi.ChangeField{Path: "webhooks[unplaced.example]", OldValue: "failurePolicy=Ignore rules=x", NewValue: "failurePolicy=Fail rules=x"}), known, true, issuesapi.ClusterScopedMayApply, "could not confirm that its rules reach namespaced resources"},
 		{"cluster-scoped rules only", update("cluster", issuesapi.ChangeField{Path: "webhooks[cluster.example]", OldValue: "failurePolicy=Ignore rules=x", NewValue: "failurePolicy=Fail rules=x"}), known, true, "", ""},
 		{"deleted", issuesapi.RecentChange{Kind: "MutatingWebhookConfiguration", Name: "gone", ChangeType: "delete"}, known, true, issuesapi.ClusterScopedMayApply, "deleted"},
 		{"no longer exists", update("gone"), known, true, issuesapi.ClusterScopedMayApply, "no longer exists"},
@@ -123,6 +125,7 @@ func TestClusterScopedForNamespaceBudgetsAndAuthorizesBeforeCapping(t *testing.T
 	appendEvent("ValidatingWebhookConfiguration", "elsewhere", now)
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{mwcGVR: "MutatingWebhookConfigurationList", vwcGVR: "ValidatingWebhookConfigurationList"}, objects...)
 	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{
+		{Group: "", Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"list"}},
 		{Group: mwcGVR.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: mwcGVR.Resource, Verbs: []string{"list", "watch"}},
 		{Group: vwcGVR.Group, Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: vwcGVR.Resource, Verbs: []string{"list", "watch"}},
 	}); err != nil {
@@ -204,6 +207,7 @@ func TestClusterScopedForNamespaceJudgesEveryCandidateBeforeTheBudget(t *testing
 	vgvr := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "MutatingWebhookConfigurationList", vgvr: "ValidatingWebhookConfigurationList"}, objects...)
 	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{
+		{Group: "", Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"list"}},
 		{Group: gvr.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: gvr.Resource, Verbs: []string{"list", "watch"}},
 		{Group: vgvr.Group, Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: vgvr.Resource, Verbs: []string{"list", "watch"}},
 	}); err != nil {
@@ -220,7 +224,7 @@ func TestClusterScopedForNamespaceJudgesEveryCandidateBeforeTheBudget(t *testing
 	}
 }
 
-func TestRuleCoversNamespaced(t *testing.T) {
+func TestRuleScope(t *testing.T) {
 	defer k8s.ResetTestDynamicState()
 	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{
 		{Group: "", Version: "v1", Kind: "Node", Name: "nodes", Namespaced: false, Verbs: []string{"list"}},
@@ -233,20 +237,22 @@ func TestRuleCoversNamespaced(t *testing.T) {
 		return admissionv1.RuleWithOperations{Rule: admissionv1.Rule{APIGroups: groups, Resources: resources, Scope: s}}
 	}
 	for _, tc := range []struct {
-		name string
-		rule admissionv1.RuleWithOperations
-		want bool
+		name                string
+		rule                admissionv1.RuleWithOperations
+		namespaced, unknown bool
 	}{
-		{"nodes with omitted scope", rule(nil, []string{""}, "nodes"), false},
-		{"node status subresource", rule(nil, []string{""}, "nodes/status"), false},
-		{"pods with omitted scope", rule(nil, []string{""}, "pods"), true},
-		{"explicit namespaced", rule(scope(admissionv1.NamespacedScope), []string{""}, "nodes"), true},
-		{"explicit cluster", rule(scope(admissionv1.ClusterScope), []string{""}, "pods"), false},
-		{"wildcard resources", rule(scope(admissionv1.AllScopes), []string{""}, "*"), true},
-		{"unknown resource", rule(nil, []string{"example.test"}, "widgets"), true},
+		{"nodes with omitted scope", rule(nil, []string{""}, "nodes"), false, false},
+		{"node status subresource", rule(nil, []string{""}, "nodes/status"), false, false},
+		{"pods with omitted scope", rule(nil, []string{""}, "pods"), true, false},
+		{"explicit namespaced", rule(scope(admissionv1.NamespacedScope), []string{""}, "nodes"), true, false},
+		{"explicit cluster", rule(scope(admissionv1.ClusterScope), []string{""}, "pods"), false, false},
+		{"wildcard resources", rule(scope(admissionv1.AllScopes), []string{""}, "*"), true, false},
+		{"unknown resource", rule(nil, []string{"example.test"}, "widgets"), false, true},
+		{"wildcard group naming nodes", rule(nil, []string{"*"}, "nodes"), false, true},
 	} {
-		if got := ruleCoversNamespaced(tc.rule); got != tc.want {
-			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		namespaced, unknown := ruleScope(tc.rule)
+		if namespaced != tc.namespaced || unknown != tc.unknown {
+			t.Errorf("%s: got namespaced=%v unknown=%v want %v %v", tc.name, namespaced, unknown, tc.namespaced, tc.unknown)
 		}
 	}
 }
@@ -269,7 +275,7 @@ func TestClusterScopedForNamespaceDisclosesEvictedHistoryAndUncachedKinds(t *tes
 	// Only MutatingWebhookConfigurations are cached.
 	gvr := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "MutatingWebhookConfigurationList"})
-	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: gvr.Resource, Verbs: []string{"list", "watch"}}}); err != nil {
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: "", Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"list"}}, {Group: gvr.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: gvr.Resource, Verbs: []string{"list", "watch"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 2*time.Second) {
@@ -324,6 +330,7 @@ func TestClusterScopedForNamespaceSeesMatchConditionEditThroughTheDiffer(t *test
 	vgvr := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
 	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "MutatingWebhookConfigurationList", vgvr: "ValidatingWebhookConfigurationList"}, after)
 	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{
+		{Group: "", Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"list"}},
 		{Group: gvr.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: gvr.Resource, Verbs: []string{"list", "watch"}},
 		{Group: vgvr.Group, Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: vgvr.Resource, Verbs: []string{"list", "watch"}},
 	}); err != nil {

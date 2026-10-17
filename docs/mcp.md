@@ -770,7 +770,9 @@ window, each with `applicability` and `applies_because`:
   namespace's labels (or it has none), its rules cover namespaced resources,
   and it has no object selector or match conditions.
 - `may_apply`: it selects the namespace but its object selector or CEL match
-  conditions are not evaluated; the namespace labels are not readable; the
+  conditions are not evaluated; its rules name resources whose scope Radar
+  cannot confirm (a wildcard group, or a resource discovery does not know);
+  the namespace labels are not readable; the
   configuration was deleted or no longer exists; or the change removed or
   re-scoped a webhook whose earlier scope the timeline does not record.
 
