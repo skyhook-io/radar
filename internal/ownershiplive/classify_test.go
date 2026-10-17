@@ -111,6 +111,44 @@ func (a alwaysDrops) Recorders(ref resourceid.Ref) ownership.RecorderRead {
 	return r
 }
 
+// misleadsLater leaves b out of the first two searches of each kind, and
+// then returns b under a UID it doesn't have, or returns b and leaves a out.
+type misleadsLater struct {
+	ownership.Session
+	a, b  resourceid.Ref
+	lose  bool
+	calls map[string]int
+}
+
+func (m misleadsLater) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := m.Session.OwnerCandidates(uid, d, limit)
+	r.Candidates = m.mislead("OwnerCandidates", r.Candidates)
+	return r
+}
+
+func (m misleadsLater) Recorders(ref resourceid.Ref) ownership.RecorderRead {
+	r := m.Session.Recorders(ref)
+	r.Recorders = m.mislead("Recorders", r.Recorders)
+	return r
+}
+
+func (m misleadsLater) mislead(question string, found []ownership.Observation) []ownership.Observation {
+	m.calls[question]++
+	out := slices.Clone(found)
+	switch {
+	case m.calls[question] <= 2:
+		return slices.DeleteFunc(out, func(o ownership.Observation) bool { return o.Ref == m.b })
+	case m.lose:
+		return slices.DeleteFunc(out, func(o ownership.Observation) bool { return o.Ref == m.a })
+	}
+	for i := range out {
+		if out[i].Ref == m.b {
+			out[i].UID = "never-existed"
+		}
+	}
+	return out
+}
+
 // earlyGap adds a gap to the first search only.
 type earlyGap struct {
 	ownership.Session
@@ -281,6 +319,18 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 		// and the search never finds it.
 		{"a listed object that came to name the owner, never found", world(rs, updated, adopted),
 			func(now ownership.Session) ownership.Session { return alwaysDrops{now, adopted.Ref} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, &listedWithStranger},
+		// Asked again for the stranger it owes, the search returns it wrong,
+		// or at another's expense.
+		{"an owed object returned under a UID it doesn't have", world(rs, updated, adopted),
+			func(now ownership.Session) ownership.Session {
+				return misleadsLater{now, pod.Ref, adopted.Ref, false, map[string]int{}}
+			},
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, &listedWithStranger},
+		{"an owed object returned at another's expense", world(rs, updated, adopted),
+			func(now ownership.Session) ownership.Session {
+				return misleadsLater{now, pod.Ref, adopted.Ref, true, map[string]int{}}
+			},
 			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, &listedWithStranger},
 		// Asked again, the search covers less than the expected answer.
 		{"the fresh answer leaves more unread", world(rs, updated),
@@ -631,6 +681,16 @@ func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
 			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
 		{"a listed manager whose list became unreadable, never found", world(cm, app, listsNothing), world(cm, resynced, siblingUnreadable),
 			func(now ownership.Session) ownership.Session { return alwaysDrops{now, sibling.Ref} },
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"an owed manager returned under a UID it doesn't have", world(cm, app, listsNothing), world(cm, resynced, sibling),
+			func(now ownership.Session) ownership.Session {
+				return misleadsLater{now, app.Ref, sibling.Ref, false, map[string]int{}}
+			},
+			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
+		{"an owed manager returned at another's expense", world(cm, app, listsNothing), world(cm, resynced, sibling),
+			func(now ownership.Session) ownership.Session {
+				return misleadsLater{now, app.Ref, sibling.Ref, true, map[string]int{}}
+			},
 			map[ownershiptest.Asked]outcome{ownershiptest.AskedRecorders: unresolved, ownershiptest.AskedInventory: confirmed}},
 		{"an inventory missing its member", world(cm, app), world(cm, resynced),
 			func(now ownership.Session) ownership.Session { return memberDrop{now} },

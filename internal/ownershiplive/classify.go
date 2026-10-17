@@ -134,68 +134,66 @@ func (r *rechecking) settleRef(ref resourceid.Ref) bool {
 	return ok
 }
 
-// candidatesHold: the fresh search is complete, with the expected gaps; every
+// answers is how many fresh answers a recheck asks for: a second only when
+// the first left out something it owes, which may have changed after it.
+const answers = 2
+
+// candidatesHold asks for a fresh answer until one holds, at most answers
+// times. It holds when it is complete, with the expected gaps; every
 // candidate is in the domain, once, names the UID in its current copy and
-// matches that copy exactly; and every disputed or listed object in the
-// domain it leaves out is owed nothing (see owed), unless the answer says its
-// kind went unread. Objects created after the list and never disputed aren't
-// checked.
+// matches that copy exactly; and it owes nothing (see owes).
 func (r *rechecking) candidatesHold(d ownershiptest.Difference) bool {
-	fresh := r.cache.OwnerCandidates(d.UID, d.Domain, d.Limit)
-	if fresh.Truncated || !slices.Equal(fresh.Gaps, d.WantGaps) {
-		return false
-	}
-	seen := map[resourceid.Ref]bool{}
-	for _, c := range fresh.Candidates {
-		if seen[c.Ref] || !inDomain(c.Ref, d.Domain) || !r.settleRef(c.Ref) {
+	for range answers {
+		fresh := r.cache.OwnerCandidates(d.UID, d.Domain, d.Limit)
+		if fresh.Truncated || !slices.Equal(fresh.Gaps, d.WantGaps) {
 			return false
 		}
-		seen[c.Ref] = true
-		if !r.exists[c.Ref] || !names(r.current[c.Ref].Owners, d.UID) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
+		seen := map[resourceid.Ref]bool{}
+		for _, c := range fresh.Candidates {
+			if seen[c.Ref] || !inDomain(c.Ref, d.Domain) || !r.settleRef(c.Ref) {
+				return false
+			}
+			seen[c.Ref] = true
+			if !r.exists[c.Ref] || !names(r.current[c.Ref].Owners, d.UID) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
+				return false
+			}
+		}
+		var suspects []resourceid.Ref
+		for _, ref := range d.Objects {
+			if !seen[ref] && inDomain(ref, d.Domain) {
+				suspects = append(suspects, ref)
+			}
+		}
+		for ref, o := range r.listed {
+			if seen[ref] || !inDomain(ref, d.Domain) || unread(fresh.Gaps, ref) {
+				continue
+			}
+			if read := r.cache.Object(ref); names(o.Owners, d.UID) || read.State == ownership.Present && names(read.Object.OwnerReferences, d.UID) {
+				suspects = append(suspects, ref)
+			}
+		}
+		owes, settled := r.owes(suspects, func(o ownershiptest.Object) bool { return names(o.Owners, d.UID) })
+		if !settled {
 			return false
 		}
-	}
-	var suspects []resourceid.Ref
-	for _, ref := range d.Objects {
-		if !seen[ref] && inDomain(ref, d.Domain) {
-			suspects = append(suspects, ref)
+		if !owes {
+			return true
 		}
 	}
-	for ref, o := range r.listed {
-		if seen[ref] || !inDomain(ref, d.Domain) || unread(fresh.Gaps, ref) {
-			continue
-		}
-		if read := r.cache.Object(ref); names(o.Owners, d.UID) || read.State == ownership.Present && names(read.Object.OwnerReferences, d.UID) {
-			suspects = append(suspects, ref)
-		}
-	}
-	return r.owed(suspects, func(o ownershiptest.Object) bool { return names(o.Owners, d.UID) }, func(ref resourceid.Ref) bool {
-		again := r.cache.OwnerCandidates(d.UID, d.Domain, d.Limit)
-		return slices.ContainsFunc(again.Candidates, func(c ownership.Observation) bool { return c.Ref == ref })
-	})
+	return false
 }
 
-// owed settles each suspect: an object the fresh answer left out though its
-// listed copy, or the cache's own copy, puts it in. One whose current copy
-// puts it in is owed a place in the answer; the question is asked once more,
-// since the object may have changed after the first answer, and owedIn must
-// find it there.
-func (r *rechecking) owed(suspects []resourceid.Ref, in func(ownershiptest.Object) bool, owedIn func(resourceid.Ref) bool) bool {
-	var owed []resourceid.Ref
+// owes settles each suspect: an object a fresh answer left out though its
+// listed copy, or the cache's own copy, puts it in. The answer owes a place
+// to any suspect whose current copy puts it in.
+func (r *rechecking) owes(suspects []resourceid.Ref, in func(ownershiptest.Object) bool) (owes, settled bool) {
 	for _, ref := range suspects {
 		if !r.settleRef(ref) {
-			return false
+			return false, false
 		}
-		if r.exists[ref] && in(r.current[ref]) && !slices.Contains(owed, ref) {
-			owed = append(owed, ref)
-		}
+		owes = owes || r.exists[ref] && in(r.current[ref])
 	}
-	for _, ref := range owed {
-		if !owedIn(ref) {
-			return false
-		}
-	}
-	return true
+	return owes, true
 }
 
 // lists says what a manager's copy says of ref: that it records ref, may
@@ -210,67 +208,70 @@ func lists(o ownershiptest.Object, ref resourceid.Ref) (recorded, elsewhere, unr
 	return slices.Contains(o.Members, ref), false, false
 }
 
-// recordersHold: the fresh search has the expected gaps; every manager it
-// names appears once and, in its current copy, says what the answer says of
-// it: it lists the object (as a recorder, matching that copy; elsewhere, as a
-// remote manager), or its list is unreadable. Every disputed or listed
-// manager the answer leaves out is owed nothing (see owed), unless the answer
-// says its kind went unread. Managers created after the list and never
-// disputed aren't checked.
+// recordersHold asks for a fresh answer until one holds, at most answers
+// times. It holds when it has the expected gaps; every manager it names
+// appears once and, in its current copy, says what the answer says of it: it
+// lists the object (as a recorder, matching that copy; elsewhere, as a remote
+// manager), or its list is unreadable; and it owes nothing (see owes).
+// Managers created after the list and never disputed aren't checked.
 func (r *rechecking) recordersHold(d ownershiptest.Difference) bool {
-	fresh := r.cache.Recorders(d.Ref)
-	if !slices.Equal(fresh.Gaps, d.WantGaps) {
-		return false
-	}
-	seen := map[resourceid.Ref]bool{}
-	named := func(m resourceid.Ref, says func(recorded, elsewhere, unreadable bool) bool) bool {
-		if seen[m] || !r.settleRef(m) {
-			return false
-		}
-		seen[m] = true
-		return r.exists[m] && says(lists(r.current[m], d.Ref))
-	}
-	for _, c := range fresh.Recorders {
-		if !named(c.Ref, func(recorded, _, _ bool) bool { return recorded }) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
-			return false
-		}
-	}
-	for _, m := range fresh.Elsewhere {
-		if !named(m, func(_, elsewhere, _ bool) bool { return elsewhere }) {
-			return false
-		}
-	}
-	for _, m := range fresh.Unreadable {
-		if !named(m, func(_, _, unreadable bool) bool { return unreadable }) {
-			return false
-		}
-	}
 	mentions := func(o ownershiptest.Object) bool {
 		recorded, elsewhere, unreadable := lists(o, d.Ref)
 		return recorded || elsewhere || unreadable
 	}
-	var suspects []resourceid.Ref
-	for _, m := range d.Objects {
-		if !seen[m] {
-			suspects = append(suspects, m)
+	for range answers {
+		fresh := r.cache.Recorders(d.Ref)
+		if !slices.Equal(fresh.Gaps, d.WantGaps) {
+			return false
+		}
+		seen := map[resourceid.Ref]bool{}
+		named := func(m resourceid.Ref, says func(recorded, elsewhere, unreadable bool) bool) bool {
+			if seen[m] || !r.settleRef(m) {
+				return false
+			}
+			seen[m] = true
+			return r.exists[m] && says(lists(r.current[m], d.Ref))
+		}
+		for _, c := range fresh.Recorders {
+			if !named(c.Ref, func(recorded, _, _ bool) bool { return recorded }) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
+				return false
+			}
+		}
+		for _, m := range fresh.Elsewhere {
+			if !named(m, func(_, elsewhere, _ bool) bool { return elsewhere }) {
+				return false
+			}
+		}
+		for _, m := range fresh.Unreadable {
+			if !named(m, func(_, _, unreadable bool) bool { return unreadable }) {
+				return false
+			}
+		}
+		var suspects []resourceid.Ref
+		for _, m := range d.Objects {
+			if !seen[m] {
+				suspects = append(suspects, m)
+			}
+		}
+		for m, o := range r.listed {
+			if seen[m] || !ownership.IsRecordingManager(m.GroupKind()) || unread(fresh.Gaps, m) {
+				continue
+			}
+			inv := r.cache.Inventory(m)
+			cached := inv.Manager.State == ownership.Present && (inv.Membership == ownership.MembersUnreadable || slices.Contains(inv.Members, d.Ref))
+			if mentions(o) || cached {
+				suspects = append(suspects, m)
+			}
+		}
+		owes, settled := r.owes(suspects, mentions)
+		if !settled {
+			return false
+		}
+		if !owes {
+			return true
 		}
 	}
-	for m, o := range r.listed {
-		if seen[m] || !ownership.IsRecordingManager(m.GroupKind()) || unread(fresh.Gaps, m) {
-			continue
-		}
-		inv := r.cache.Inventory(m)
-		cached := inv.Manager.State == ownership.Present && (inv.Membership == ownership.MembersUnreadable || slices.Contains(inv.Members, d.Ref))
-		if mentions(o) || cached {
-			suspects = append(suspects, m)
-		}
-	}
-	return r.owed(suspects, mentions, func(m resourceid.Ref) bool {
-		again := r.cache.Recorders(d.Ref)
-		recorded, elsewhere, unreadable := lists(r.current[m], d.Ref)
-		return recorded && slices.ContainsFunc(again.Recorders, func(o ownership.Observation) bool { return o.Ref == m }) ||
-			elsewhere && slices.Contains(again.Elsewhere, m) || unreadable && slices.Contains(again.Unreadable, m)
-	})
+	return false
 }
 
 // inventoryHolds: the fresh read of the manager matches its current copy, and
