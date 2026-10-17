@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"reflect"
 	"regexp"
@@ -20,9 +21,9 @@ import (
 
 // Claude Code before v2.1.296 keeps only the first 2,048 characters of server
 // instructions, and newer versions 4,096. The routing has to survive the
-// shorter cut, and the whole text stays well under the longer one.
+// shorter cut, and the whole text stays under the longer one.
 const (
-	maxInstructionChars = 3500
+	maxInstructionChars = 3800
 	routingCutoffChars  = 2048
 )
 
@@ -36,8 +37,8 @@ func TestServerInstructionsFitClientLimits(t *testing.T) {
 		if end < 0 || len([]rune(text[:end])) >= routingCutoffChars {
 			t.Errorf("includeWrites=%v: routing ends at char %d, must end before %d", includeWrites, end, routingCutoffChars)
 		}
-		if !strings.HasSuffix(text, investigation.ResultDiscipline) {
-			t.Errorf("includeWrites=%v: text does not end with investigation.ResultDiscipline", includeWrites)
+		if !strings.HasSuffix(text, investigation.ResultDiscipline+" "+investigation.UntrustedClusterData) {
+			t.Errorf("includeWrites=%v: text does not end with ResultDiscipline and UntrustedClusterData", includeWrites)
 		}
 	}
 }
@@ -87,6 +88,53 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 			if !strings.Contains(text, field) {
 				t.Errorf("%q is listed as a field name the text uses, but the text no longer uses it", field)
 			}
+		}
+	}
+}
+
+// instructionClaims pins what the instructions say about a tool to the phrase
+// in that tool's own description or input schema that backs it. When a tool's
+// contract changes, this fails and the instructions get rechecked.
+var instructionClaims = []struct{ tool, backedBy string }{
+	{"issues", "live state"},
+	{"issues", "references"},
+	{"diagnose", "Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout"},
+	{"diagnose", "current and previous logs"},
+	{"diagnose", "startup blockers"},
+	{"diagnose", "traffic not reaching a service, route or ingress"},
+	{"diagnose", "per-route reachability"},
+	{"diagnose", "Application, Kustomization and Flux HelmRelease"},
+	{"diagnose", "GitOps sync/health"},
+	{"get_changes", "field-level diffs"},
+	{"get_pod_logs", `"previous"`},
+	{"get_pod_logs", `"grep"`},
+	{"get_workload_logs", `"grep"`},
+	{"search", "status message"},
+	{"top_resources", "OOMKills"},
+	{"query_prometheus", "history"},
+	{"get_neighborhood", "service routing"},
+	{"get_cluster_audit", "STATIC CONFIG POSTURE"},
+	{"manage_workload", "'restart'"},
+	{"manage_workload", "'scale'"},
+	{"manage_workload", "'rollback'"},
+}
+
+func TestServerInstructionsClaimsMatchToolContracts(t *testing.T) {
+	contracts := map[string]string{}
+	for _, tool := range listRegisteredToolsWith(t, true) {
+		schema, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contracts[tool.Name] = tool.Description + "\n" + string(schema)
+	}
+	text := serverInstructions(true)
+	for _, claim := range instructionClaims {
+		if !strings.Contains(text, claim.tool) {
+			t.Errorf("claim about %q, which the instructions no longer name", claim.tool)
+		}
+		if !strings.Contains(contracts[claim.tool], claim.backedBy) {
+			t.Errorf("%s no longer says %q; recheck what instructions.go says about it", claim.tool, claim.backedBy)
 		}
 	}
 }

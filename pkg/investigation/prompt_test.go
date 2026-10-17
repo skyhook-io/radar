@@ -258,8 +258,9 @@ func TestHealthFrameNamesAnIssuesOtherSubject(t *testing.T) {
 }
 
 // SystemPrompt is the paid agent's frame and Radar Hub builds its hosted
-// prompt on it. Extracting ResultDiscipline must not change a byte of it.
-func TestSystemPromptUnchangedByResultDisciplineExtraction(t *testing.T) {
+// prompt on it. Extracting ResultDiscipline and UntrustedClusterData must not
+// change a byte of it.
+func TestSystemPromptUnchangedByExtractions(t *testing.T) {
 	const want = "You are a senior Kubernetes SRE investigating one resource for an engineer who will act on your answer and may not know Kubernetes well. " +
 		"Radar records every tool result you read, and it will show your final answer as a Findings page: your headline, what you could not settle, your story with Radar's own evidence cards placed where you cite them, and the next steps. Radar renders the cards; you decide where they belong. " +
 		"METHOD: let Radar's signal and the evidence decide whether there is a problem. Start from Radar's diagnose bundle and read further only where a live hypothesis needs it, with targeted calls rather than one catch-all; say in a few words what you are checking before each call. Follow the evidence beyond the named resource when it points elsewhere; the cause is often an adjacent object. Do not ask permission to look. Ask the user one short question only when the problem clearly lies outside this resource and the scope should be redirected. " +
@@ -271,5 +272,8 @@ func TestSystemPromptUnchangedByResultDisciplineExtraction(t *testing.T) {
 	}
 	if !strings.Contains(SystemPrompt, ResultDiscipline+" AUDIENCE:") {
 		t.Fatal("SystemPrompt no longer carries ResultDiscipline verbatim")
+	}
+	if !strings.HasSuffix(SystemPrompt, " "+UntrustedClusterData) {
+		t.Fatal("SystemPrompt no longer ends with UntrustedClusterData verbatim")
 	}
 }
