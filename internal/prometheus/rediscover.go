@@ -275,8 +275,10 @@ func observeResourceChange(source kubernetes.Interface, change k8s.ResourceChang
 	if change.Operation != "add" && change.Operation != "update" {
 		return
 	}
-	if change.Operation == "add" && k8s.IsSyncAdd(obj) {
-		// An object that already existed: Prewarm's discovery covers it.
+	if change.Operation == "add" && !k8s.InitialSyncComplete() {
+		// The initial listing: Prewarm's discovery covers what already exists.
+		// Adds after it are objects Radar had not seen, whatever their age —
+		// a relist after a watch outage included.
 		return
 	}
 	c := GetClient()

@@ -161,11 +161,12 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
+		OnObservedChange: func(change k8score.ResourceChange, obj, oldObj any) {
 			secretWriteTimes.reconcile(change, obj)
 			if cj, ok := obj.(*batchv1.CronJob); ok {
 				cronJobScheduleObservations.observe(change.Operation, cj)
 			}
+			notifyResourceObservers(client, change, obj, oldObj)
 		},
 	}
 

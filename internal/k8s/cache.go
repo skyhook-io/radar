@@ -59,6 +59,12 @@ func LogTiming(format string, args ...any) {
 
 var logTiming = LogTiming
 
+// InitialSyncComplete reports whether the current cache has finished its
+// initial sync, after which an add is an object Radar had not seen before.
+func InitialSyncComplete() bool {
+	return initialSyncComplete.Load()
+}
+
 // initialSyncComplete is set to true after the initial cache sync completes.
 // During initial sync, "add" events are skipped since they represent existing
 // resources, not new creations. Only adds after sync are recorded.
@@ -867,11 +873,6 @@ func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 	// The Deployment API increments generation for top-level annotation
 	// changes because those annotations are copied to ReplicaSets.
 	return !apiequality.Semantic.DeepEqual(oldDeployment.Spec, newDeployment.Spec)
-}
-
-// IsSyncAdd is isSyncAdd for observers outside this package.
-func IsSyncAdd(obj any) bool {
-	return isSyncAdd(obj)
 }
 
 // isSyncAdd reports whether an add is an object that already existed rather

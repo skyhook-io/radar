@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
 	toolscache "k8s.io/client-go/tools/cache"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -412,5 +415,89 @@ func TestOnForwardLost(t *testing.T) {
 	waitIdle(t, c)
 	if len(got) != 1 || !strings.Contains(got[0], "port-forward http://localhost:4000 lost") {
 		t.Fatalf("want one rediscovery naming the lost forward, got %v", got)
+	}
+}
+
+var registerSignalsOnce sync.Once
+
+// TestRediscoverySignalsThroughResourceCache drives the signals end to end:
+// objects written to the cluster reach the informer cache, its observer and
+// the worker, and discovery enumerates from that cache. The Service is older
+// than any age cutoff, as after a relist that follows a watch outage, and must
+// still count once the initial sync is over.
+func TestRediscoverySignalsThroughResourceCache(t *testing.T) {
+	runs := stubRediscovery(t, func(string) error { return nil })
+	cs := fake.NewClientset()
+	if err := k8s.InitScopedTestResourceCache(cs, map[string]k8score.ResourceScope{
+		string(k8score.Services): {Enabled: true},
+		string(k8score.Pods):     {Enabled: true},
+	}); err != nil {
+		t.Fatalf("InitScopedTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	registerSignalsOnce.Do(RegisterRediscoverySignals)
+	c := &Client{k8sClient: cs, httpClient: &http.Client{Timeout: 2 * time.Second}}
+	clientMu.Lock()
+	saved := globalClient
+	globalClient = c
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		globalClient = saved
+		clientMu.Unlock()
+	})
+
+	ctx := context.Background()
+	svc := promService("monitoring", "prometheus")
+	svc.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	if _, err := cs.CoreV1().Services("monitoring").Create(ctx, svc, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := collectRuns(runs, 500*time.Millisecond)
+	waitIdle(t, c)
+	if len(got) != 1 || !strings.Contains(got[0], "service monitoring/prometheus created") {
+		t.Fatalf("want one run for the new candidate Service, got %v", got)
+	}
+
+	cached, ok := c.cachedServices()
+	if !ok || len(cached) != 1 || cached[0].Name != "prometheus" {
+		t.Fatalf("discovery should enumerate from the cluster-wide cache, got ok=%v %v", ok, cached)
+	}
+
+	pod := readyPod("monitoring", "prometheus-0", map[string]string{"app": "prometheus"}, false)
+	if _, err := cs.CoreV1().Pods("monitoring").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := collectRuns(runs, 200*time.Millisecond); len(got) != 0 {
+		t.Fatalf("a Pod that is not Ready yet should not signal, got %v", got)
+	}
+	pod.Status.Conditions[0].Status = corev1.ConditionTrue
+	if _, err := cs.CoreV1().Pods("monitoring").UpdateStatus(ctx, pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got = collectRuns(runs, 500*time.Millisecond)
+	waitIdle(t, c)
+	if len(got) != 1 || !strings.Contains(got[0], "pod monitoring/prometheus-0 of service monitoring/prometheus became ready") {
+		t.Fatalf("want one run for the Pod turning Ready, got %v", got)
+	}
+}
+
+// TestCachedServicesDeclinesPartialView pins the API fallback: a cache that
+// watches Services in one namespace cannot vouch that a cluster has no
+// Prometheus elsewhere.
+func TestCachedServicesDeclinesPartialView(t *testing.T) {
+	cs := fake.NewClientset()
+	if err := k8s.InitScopedTestResourceCache(cs, map[string]k8score.ResourceScope{
+		string(k8score.Services): {Enabled: true, Namespace: "team-a"},
+	}); err != nil {
+		t.Fatalf("InitScopedTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	if _, ok := (&Client{k8sClient: cs}).cachedServices(); ok {
+		t.Fatal("namespace-scoped Service cache must not stand in for the cluster")
+	}
+	if _, ok := (&Client{k8sClient: fake.NewClientset()}).cachedServices(); ok {
+		t.Fatal("a cache built from another cluster connection must not be used")
 	}
 }
