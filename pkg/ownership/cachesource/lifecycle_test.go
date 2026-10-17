@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -253,5 +254,24 @@ func TestSourceConformsThroughChanges(t *testing.T) {
 				t.Fatalf("only %d of 10 steps changed the World", changed)
 			}
 		})
+	}
+}
+
+// The fence must not mistake a missing store for an empty one: a kind the
+// World collects, with no objects, is caught up only once a store serving it
+// has loaded.
+func TestFenceWaitsForAnEmptyStoreToLoad(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{}, nil)
+	w := ownershiptest.World{Collection: map[resourceid.GroupKind]ownershiptest.Collection{}}
+	for _, k := range ownershiptest.Kinds {
+		w.Collection[k.GroupKind] = ownershiptest.Collection{State: ownershiptest.NotCollected}
+	}
+	w.Collection[widgetKind] = ownershiptest.Collection{OnDemand: true}
+	d := &driver{t: t, r: &rendered{caches: f.caches}, w: w}
+	if _, ok := f.caches.Dynamic.ReadServer(widgets, ""); ok {
+		t.Fatal("scenario: no store may serve Widgets yet")
+	}
+	if stale := d.staleKind(); stale == "" {
+		t.Fatal("the fence passed with no store serving Widgets")
 	}
 }

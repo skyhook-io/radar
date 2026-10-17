@@ -107,6 +107,9 @@ type Difference struct {
 	Want, Got string
 	// Objects are the objects the answers disagree about.
 	Objects []resourceid.Ref
+	// Coverage: the answers disagree about what was read (gaps or
+	// truncation), not only about objects.
+	Coverage bool
 }
 
 func (d Difference) String() string {
@@ -119,7 +122,11 @@ func Differences(want, got ownership.Session, q Queries) []Difference {
 	var diffs []Difference
 	for _, ref := range q.Refs {
 		if w, g := want.Object(ref), got.Object(ref); !sameRead(w, g) {
-			diffs = append(diffs, Difference{Question: fmt.Sprintf("Object(%v)", ref), Want: describeRead(w), Got: describeRead(g), Objects: []resourceid.Ref{ref}})
+			unread := func(r ownership.ObjectRead) bool {
+				return r.State == ownership.Unavailable || r.State == ownership.Excluded
+			}
+			diffs = append(diffs, Difference{Question: fmt.Sprintf("Object(%v)", ref), Want: describeRead(w), Got: describeRead(g), Objects: []resourceid.Ref{ref},
+				Coverage: unread(w) || unread(g)})
 		}
 	}
 	for _, uid := range q.UIDs {
@@ -130,7 +137,8 @@ func Differences(want, got ownership.Session, q Queries) []Difference {
 					diffs = append(diffs, Difference{
 						Question: fmt.Sprintf("OwnerCandidates(%q, %+v, %d)", uid, d, limit),
 						Want:     describeCandidates(w), Got: describeCandidates(g),
-						Objects: differingCandidates(w, g),
+						Objects:  differingCandidates(w, g),
+						Coverage: w.Truncated != g.Truncated || !slices.Equal(w.Gaps, g.Gaps),
 					})
 				}
 			}

@@ -20,12 +20,27 @@ func Scan(w World) ownership.Source {
 type scanSource struct{ w World }
 
 func (s scanSource) Begin() (ownership.Session, error) {
-	return scanSession{w: s.w, catalog: ownership.NewCatalog(s.w.Resources, !s.w.Partial)}, nil
+	session := scanSession{w: s.w, catalog: ownership.NewCatalog(s.w.Resources, !s.w.Partial), byRef: map[resourceid.Ref]Object{}, byKind: map[resourceid.GroupKind][]Object{}}
+	for _, o := range s.w.Objects {
+		session.byRef[o.Ref] = o
+		session.byKind[o.Ref.GroupKind()] = append(session.byKind[o.Ref.GroupKind()], o)
+	}
+	session.ambiguousKinds = session.findAmbiguous()
+	session.dependents = session.dependentKinds()
+	return session, nil
 }
 
+// scanSession answers from the World. It groups the World's objects by
+// reference and kind only to keep a search to the objects of the kinds it
+// covers; every answer is still a scan.
 type scanSession struct {
-	w       World
-	catalog *ownership.Catalog
+	w          World
+	catalog    *ownership.Catalog
+	byRef      map[resourceid.Ref]Object
+	byKind     map[resourceid.GroupKind][]Object
+	dependents []dependentKind
+	// ambiguousKinds are the kinds two resources of one group serve.
+	ambiguousKinds map[resourceid.GroupKind]bool
 }
 
 func (s scanSession) Catalog() *ownership.Catalog { return s.catalog }
@@ -42,18 +57,22 @@ func (s scanSession) scope(gk resourceid.GroupKind) (namespaced, served bool) {
 	return false, false
 }
 
-// ambiguous reports a kind two resources of its group serve.
-func (s scanSession) ambiguous(gk resourceid.GroupKind) bool {
-	resource := ""
+// findAmbiguous returns the kinds two resources of their group serve.
+func (s scanSession) findAmbiguous() map[resourceid.GroupKind]bool {
+	resources := map[resourceid.GroupKind]string{}
+	out := map[resourceid.GroupKind]bool{}
 	for _, r := range s.w.Resources {
-		if r.Group == gk.Group && r.Kind == gk.Kind {
-			if resource != "" && r.Resource != resource {
-				return true
-			}
-			resource = r.Resource
+		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
+		if seen, ok := resources[gk]; ok && seen != r.Resource {
+			out[gk] = true
 		}
+		resources[gk] = r.Resource
 	}
-	return false
+	return out
+}
+
+func (s scanSession) ambiguous(gk resourceid.GroupKind) bool {
+	return s.ambiguousKinds[gk]
 }
 
 // heldReason says why Radar doesn't hold a kind's objects in namespace ("" for
@@ -111,10 +130,8 @@ func (s scanSession) Object(ref resourceid.Ref) ownership.ObjectRead {
 	if reason := heldReason(s.w.collection(gk), namespaced, ref.Namespace); reason != "" {
 		return unavailable(ref, reason)
 	}
-	for _, o := range s.w.Objects {
-		if o.Ref == ref {
-			return ownership.ObjectRead{State: ownership.Present, Object: observation(o)}
-		}
+	if o, ok := s.byRef[ref]; ok {
+		return ownership.ObjectRead{State: ownership.Present, Object: observation(o)}
 	}
 	return ownership.ObjectRead{State: ownership.Absent}
 }
@@ -165,7 +182,7 @@ func (s scanSession) OwnerCandidates(uid types.UID, domain ownership.Domain, lim
 		}
 	}
 	var found []Object
-	for _, k := range s.dependentKinds() {
+	for _, k := range s.dependents {
 		if k.namespaced && !domain.AllNamespaces && len(domain.Namespaces) == 0 || !k.namespaced && !domain.ClusterScoped {
 			continue
 		}
@@ -199,19 +216,15 @@ func (s scanSession) OwnerCandidates(uid types.UID, domain ownership.Domain, lim
 			}
 		}
 		read := func(o Object) bool { return all || readable[o.Ref.Namespace] }
-		for _, o := range s.w.Objects {
-			if o.Ref.GroupKind() == k.gk && read(o) && namesOwner(o.Owners, uid) {
+		for _, o := range s.byKind[k.gk] {
+			if read(o) && namesOwner(o.Owners, uid) {
 				found = append(found, o)
 			}
 		}
 	}
 	if searches {
-		reported := map[resourceid.GroupKind]bool{}
-		for _, r := range s.w.Resources {
-			if gk := (resourceid.GroupKind{Group: r.Group, Kind: r.Kind}); s.ambiguous(gk) && !reported[gk] {
-				reported[gk] = true
-				gap(gk, "", readreason.ReadError)
-			}
+		for gk := range s.ambiguousKinds {
+			gap(gk, "", readreason.ReadError)
 		}
 	}
 	slices.SortFunc(found, func(a, b Object) int { return compareRefs(a.Ref, b.Ref) })

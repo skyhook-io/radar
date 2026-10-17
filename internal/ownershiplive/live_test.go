@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -35,21 +35,25 @@ var typedKinds = func() map[resourceid.GroupKind]resourceid.Builtin {
 	return out
 }()
 
+// passes is how many times the comparison runs on a fresh list. Objects
+// changing between the cache's view and a list make a question differ in one
+// pass; a defect makes it differ in every pass.
+const passes = 3
+
 // TestLiveParity checks the cache source over a live cluster against Scan of
-// a World listed straight from the same cluster. It only lists and watches.
+// a World listed straight from the same cluster, and fails on any question
+// the two answer differently in every one of several passes. It only lists
+// and watches.
 //
-//	RADAR_LIVE_KUBECONFIG=... RADAR_LIVE_CONTEXT=... go test -tags liveparity,withoutebpf -run TestLiveParity ./internal/ownershiplive/
-//
-// Objects that changed between the cache's view and the list differ for that
-// reason alone; the test reports them apart and fails on any other difference.
+//	RADAR_LIVE_KUBECONFIG=... RADAR_LIVE_CONTEXT=... go test -tags liveparity,withoutebpf -run TestLiveParity -timeout 20m ./internal/ownershiplive/
 func TestLiveParity(t *testing.T) {
-	kubeconfig, context_ := os.Getenv("RADAR_LIVE_KUBECONFIG"), os.Getenv("RADAR_LIVE_CONTEXT")
-	if kubeconfig == "" || context_ == "" {
+	kubeconfig, kubeContext := os.Getenv("RADAR_LIVE_KUBECONFIG"), os.Getenv("RADAR_LIVE_CONTEXT")
+	if kubeconfig == "" || kubeContext == "" {
 		t.Skip("set RADAR_LIVE_KUBECONFIG and RADAR_LIVE_CONTEXT")
 	}
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig},
-		&clientcmd.ConfigOverrides{CurrentContext: context_},
+		&clientcmd.ConfigOverrides{CurrentContext: kubeContext},
 	).ClientConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -63,14 +67,11 @@ func TestLiveParity(t *testing.T) {
 	}
 	catalog := discovery.Catalog()
 
-	typed := map[string]resourceid.Builtin{}
 	enabled := map[string]bool{}
 	for gk, b := range typedKinds {
-		if gk.Kind == "Secret" || gk.Kind == "Event" {
-			continue
+		if gk.Kind != "Secret" && gk.Kind != "Event" {
+			enabled[b.Resource] = true
 		}
-		typed[b.Resource] = b
-		enabled[b.Resource] = true
 	}
 	start := time.Now()
 	typedCache, err := k8score.NewResourceCache(k8score.CacheConfig{Client: clients, ResourceTypes: enabled})
@@ -92,10 +93,23 @@ func TestLiveParity(t *testing.T) {
 			served[gr] = r
 		}
 	}
-	var watched []schema.GroupVersionResource
+	collectible := func(r k8score.APIResource) bool {
+		return slices.Contains(r.Verbs, "list") && slices.Contains(r.Verbs, "watch") && slices.Contains(r.Verbs, "delete")
+	}
+	type collected struct {
+		gvr      schema.GroupVersionResource
+		gk       resourceid.GroupKind
+		onDemand bool
+	}
+	var kinds []collected
+	for gk, b := range typedKinds {
+		if enabled[b.Resource] {
+			kinds = append(kinds, collected{gvr: schema.GroupVersionResource{Group: b.Group, Version: b.Version, Resource: b.Resource}, gk: gk})
+		}
+	}
 	for _, r := range served {
 		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
-		if _, isTyped := typedKinds[gk]; isTyped || ownership.IsEvent(gk) || !slices.Contains(r.Verbs, "watch") || !slices.Contains(r.Verbs, "list") || !slices.Contains(r.Verbs, "delete") {
+		if _, isTyped := typedKinds[gk]; isTyped || ownership.IsEvent(gk) || !collectible(r) {
 			continue
 		}
 		gvr := schema.GroupVersionResource{Group: r.Group, Version: r.Version, Resource: r.Name}
@@ -103,125 +117,138 @@ func TestLiveParity(t *testing.T) {
 			t.Logf("not watching %v: %v", gvr, err)
 			continue
 		}
-		watched = append(watched, gvr)
+		kinds = append(kinds, collected{gvr: gvr, gk: gk, onDemand: true})
 	}
-	for _, gvr := range watched {
-		if !dynamicCache.WaitForSync(gvr, 60*time.Second) {
-			t.Fatalf("%v did not sync", gvr)
+	for _, k := range kinds {
+		if k.onDemand && !dynamicCache.WaitForSync(k.gvr, 60*time.Second) {
+			t.Fatalf("%v did not sync", k.gvr)
 		}
 	}
-	t.Logf("caches loaded in %v: %d typed kinds, %d custom kinds", time.Since(start).Round(time.Millisecond), len(enabled), len(watched))
+	t.Logf("caches loaded in %v: %d kinds", time.Since(start).Round(time.Millisecond), len(kinds))
 
-	// The World: discovery as served, every object listed afresh, and each
-	// kind collected as the caches above collect it.
-	w := ownershiptest.World{Partial: !catalog.Complete, Collection: map[resourceid.GroupKind]ownershiptest.Collection{}}
-	for _, r := range catalog.Resources {
-		w.Resources = append(w.Resources, ownership.ServedResource{Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs})
-		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
-		_, isTyped := typedKinds[gk]
-		c := ownershiptest.Collection{State: ownershiptest.NotCollected, OnDemand: !isTyped}
-		if !slices.Contains(r.Verbs, "watch") || !slices.Contains(r.Verbs, "list") {
-			c.State = ownershiptest.Unwatchable
+	// world lists the cluster afresh: discovery as served, every object of
+	// every collected kind, each kind collected as the caches collect it.
+	world := func() ownershiptest.World {
+		w := ownershiptest.World{Partial: !catalog.Complete, Collection: map[resourceid.GroupKind]ownershiptest.Collection{}}
+		for _, r := range catalog.Resources {
+			w.Resources = append(w.Resources, ownership.ServedResource{Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs})
+			gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
+			_, isTyped := typedKinds[gk]
+			c := ownershiptest.Collection{State: ownershiptest.NotCollected, OnDemand: !isTyped}
+			if !slices.Contains(r.Verbs, "watch") || !slices.Contains(r.Verbs, "list") {
+				c.State = ownershiptest.Unwatchable
+			}
+			if prev, ok := w.Collection[gk]; !ok || prev.State == ownershiptest.Unwatchable {
+				w.Collection[gk] = c
+			}
 		}
-		if _, ok := w.Collection[gk]; !ok || c.State == ownershiptest.NotCollected {
-			w.Collection[gk] = c
+		for _, k := range kinds {
+			items, err := dyn.Resource(k.gvr).List(context.Background(), metav1.ListOptions{})
+			if err != nil {
+				t.Fatalf("list %v: %v", k.gvr, err)
+			}
+			w.Collection[k.gk] = ownershiptest.Collection{OnDemand: k.onDemand}
+			for _, u := range items.Items {
+				w.Objects = append(w.Objects, ownershiptest.Object{
+					Ref:        resourceid.Ref{Group: k.gk.Group, Kind: k.gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
+					APIVersion: k.gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
+					Owners: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
+				})
+			}
 		}
+		return w
 	}
-	list := func(gvr schema.GroupVersionResource, gk resourceid.GroupKind, onDemand bool) {
-		items, err := dyn.Resource(gvr).List(context.Background(), metav1.ListOptions{})
+
+	// questions asks about every object and a missing one per kind, every
+	// UID an object has or names plus one nothing has, and domains around a
+	// sample of namespaces.
+	questions := func(w ownershiptest.World) ownershiptest.Queries {
+		q := ownershiptest.Queries{Domains: []ownership.Domain{ownership.Everywhere(), {Namespaces: []string{""}, ClusterScoped: true}}, Limits: []int{0}}
+		uids := map[types.UID]bool{"uid-nothing-has": true}
+		missing := map[resourceid.GroupKind]bool{}
+		var namespaces []string
+		for _, o := range w.Objects {
+			q.Refs = append(q.Refs, o.Ref)
+			if !missing[o.Ref.GroupKind()] {
+				missing[o.Ref.GroupKind()] = true
+				absent := o.Ref
+				absent.Name += "-not-there"
+				q.Refs = append(q.Refs, absent)
+			}
+			uids[o.UID] = true
+			for _, ref := range o.Owners {
+				uids[ref.UID] = true
+			}
+			if o.Ref.Namespace != "" && !slices.Contains(namespaces, o.Ref.Namespace) {
+				namespaces = append(namespaces, o.Ref.Namespace)
+			}
+		}
+		for uid := range uids {
+			q.UIDs = append(q.UIDs, uid)
+		}
+		slices.Sort(q.UIDs)
+		slices.Sort(namespaces)
+		for i, ns := range namespaces {
+			if i%5 == 0 {
+				q.Domains = append(q.Domains, ownership.InNamespace(ns))
+			}
+		}
+		return q
+	}
+
+	persistent := map[string]int{}
+	var last []ownershiptest.Difference
+	for pass := range passes {
+		w := world()
+		want, _ := ownershiptest.Scan(w).Begin()
+		got, err := cachesource.New(func() cachesource.Caches {
+			return cachesource.Caches{Typed: typedCache, Dynamic: dynamicCache, Discovery: discovery}
+		}).Begin()
 		if err != nil {
-			t.Fatalf("list %v: %v", gvr, err)
+			t.Fatal(err)
 		}
-		w.Collection[gk] = ownershiptest.Collection{OnDemand: onDemand}
-		for _, u := range items.Items {
-			w.Objects = append(w.Objects, ownershiptest.Object{
-				Ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
-				APIVersion: gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
-				Owners: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
-			})
-		}
-	}
-	for resource, b := range typed {
-		list(schema.GroupVersionResource{Group: b.Group, Version: b.Version, Resource: resource}, b.GroupKind(), false)
-	}
-	for _, gvr := range watched {
-		list(gvr, resourceid.GroupKind{Group: gvr.Group, Kind: served[gvr.GroupResource()].Kind}, true)
-	}
-
-	q := ownershiptest.Queries{Domains: []ownership.Domain{ownership.Everywhere()}, Limits: []int{0}}
-	uids := map[string]bool{}
-	namespaces := map[string]bool{}
-	for _, o := range w.Objects {
-		q.Refs = append(q.Refs, o.Ref)
-		for _, ref := range o.Owners {
-			if !uids[string(ref.UID)] {
-				uids[string(ref.UID)] = true
-				q.UIDs = append(q.UIDs, ref.UID)
+		q := questions(w)
+		diffs := ownershiptest.Differences(want, got, q)
+		for _, o := range w.Objects {
+			dependent := want.Object(o.Ref)
+			if dependent.State != ownership.Present {
+				continue
+			}
+			for i, ref := range dependent.Object.OwnerReferences {
+				a, b := ownership.ResolveOwner(want, dependent.Object, ref), ownership.ResolveOwner(got, dependent.Object, ref)
+				if a.State != b.State || a.Ref != b.Ref || a.Gap != b.Gap {
+					diffs = append(diffs, ownershiptest.Difference{
+						Question: fmt.Sprintf("ResolveOwner(%v, %d)", o.Ref, i),
+						Want:     fmt.Sprintf("%v %v %+v", a.State, a.Ref, a.Gap), Got: fmt.Sprintf("%v %v %+v", b.State, b.Ref, b.Gap),
+					})
+				}
 			}
 		}
-		if o.Ref.Namespace != "" && !namespaces[o.Ref.Namespace] && len(namespaces) < 12 {
-			namespaces[o.Ref.Namespace] = true
-			q.Domains = append(q.Domains, ownership.InNamespace(o.Ref.Namespace))
+		if err := got.Validate(); err != nil {
+			t.Errorf("pass %d: Validate: %v", pass, err)
+		}
+		coverage := 0
+		for _, d := range diffs {
+			persistent[d.Question]++
+			if d.Coverage {
+				coverage++
+			}
+		}
+		t.Logf("pass %d: %d objects, %d questions (%d objects, %d UIDs × %d domains): %d differ (%d about coverage)",
+			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), len(diffs), coverage)
+		last = diffs
+		if pass < passes-1 {
+			time.Sleep(5 * time.Second)
 		}
 	}
-	want, _ := ownershiptest.Scan(w).Begin()
-	got, err := cachesource.New(func() cachesource.Caches {
-		return cachesource.Caches{Typed: typedCache, Dynamic: dynamicCache, Discovery: discovery}
-	}).Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	diffs := ownershiptest.Differences(want, got, q)
-
-	// An object whose UID or resource version the cache and the list
-	// disagree on changed between the two reads.
-	listed := map[resourceid.Ref]string{}
-	for _, o := range w.Objects {
-		listed[o.Ref] = string(o.UID) + "@" + o.ResourceVersion
-	}
-	changed := func(ref resourceid.Ref) bool {
-		read := got.Object(ref)
-		cached := ""
-		if read.State == ownership.Present {
-			cached = string(read.Object.UID) + "@" + read.Object.ResourceVersion
-		}
-		return cached != listed[ref]
-	}
-	var unexplained []ownershiptest.Difference
-	churn := 0
-	for _, d := range diffs {
-		if len(d.Objects) > 0 && !slices.ContainsFunc(d.Objects, func(r resourceid.Ref) bool { return !changed(r) }) {
-			churn++
-			continue
-		}
-		unexplained = append(unexplained, d)
-	}
-	resolutions, resolveDiffs := 0, 0
-	for _, o := range w.Objects {
-		dependent := want.Object(o.Ref)
-		if dependent.State != ownership.Present || changed(o.Ref) {
-			continue
-		}
-		for _, ref := range dependent.Object.OwnerReferences {
-			resolutions++
-			a, b := ownership.ResolveOwner(want, dependent.Object, ref), ownership.ResolveOwner(got, dependent.Object, ref)
-			if (a.State != b.State || a.Ref != b.Ref || a.Gap != b.Gap) && !changed(a.Ref) {
-				resolveDiffs++
-				t.Errorf("ResolveOwner(%v, %s %s/%s): scan %v %+v, cache %v %+v", o.Ref, ref.APIVersion, ref.Kind, ref.Name, a.State, a.Gap, b.State, b.Gap)
+	failures := 0
+	for _, d := range last {
+		if persistent[d.Question] == passes {
+			failures++
+			if failures <= 20 {
+				t.Errorf("differs in every pass: %v", d)
 			}
 		}
 	}
-	if err := got.Validate(); err != nil {
-		t.Errorf("Validate: %v", err)
-	}
-	questions := len(q.Refs) + len(q.UIDs)*len(q.Domains)
-	t.Logf("%d objects, %d questions (%d objects, %d owner UIDs × %d domains), %d owner references resolved", len(w.Objects), questions, len(q.Refs), len(q.UIDs), len(q.Domains), resolutions)
-	t.Logf("differences: %d explained by objects changing between the cache's view and the list, %d unexplained; owner resolutions differing: %d", churn, len(unexplained), resolveDiffs)
-	for i, d := range unexplained {
-		if i == 20 {
-			t.Errorf("... and %d more", len(unexplained)-20)
-			break
-		}
-		t.Errorf("%s", strings.TrimSpace(fmt.Sprint(d)))
-	}
+	t.Logf("%d questions differed in every pass", failures)
 }
