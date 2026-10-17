@@ -28,7 +28,9 @@ WHICH TOOL
 - Helm: list_helm_releases, get_helm_release.
 `
 
-const writeRoutingLine = "- Fixes: patch_resource or apply_resource for spec changes; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node.\n"
+// A proxy in front of a full server can hide its write tools (Radar Hub does
+// for read-only organizations), so the line holds only if they are listed.
+const writeRoutingLine = "- Fixes, if your tool list includes write tools: patch_resource or apply_resource for spec changes; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node.\n"
 
 // signalInstructions says how to read what Radar returns.
 const signalInstructions = `READING RADAR'S SIGNALS
