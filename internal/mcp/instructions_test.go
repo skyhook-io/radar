@@ -43,7 +43,8 @@ func TestServerInstructionsFitClientLimits(t *testing.T) {
 // instructionFieldNames are the snake_case words in the instructions that name
 // result fields and values rather than tools.
 var instructionFieldNames = []string{
-	"issue_timing", "started_after_resource_was_healthy", "started_at_resource_creation",
+	"diagnostic_context", "issue_timing", "started_after_resource_was_healthy",
+	"started_at_resource_creation", "timing_summary",
 }
 
 func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
@@ -70,6 +71,27 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 				t.Errorf("instructionFieldNames lists %q, which the text no longer uses", field)
 			}
 		}
+	}
+}
+
+// RunStdio serves newFullServer; check it over a transport, as the HTTP test
+// below does for the mounted handlers.
+func TestStdioServerSendsInstructions(t *testing.T) {
+	ctx := context.Background()
+	serverTransport, clientTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := newFullServer().Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "instructions-test", Version: "test"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if got := session.InitializeResult().Instructions; got != serverInstructions(true) {
+		t.Fatalf("stdio server instructions:\n got %q\nwant %q", got, serverInstructions(true))
 	}
 }
 
