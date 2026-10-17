@@ -589,43 +589,27 @@ visible TLS Secrets. Empty Secret names do not resolve controller defaults.
 
 When a Service's selected Pods come from more than one workload, resource
 context's `serviceSummary.workloads` lists each workload with its Pod and ready
-counts, and `diagnose` adds the same breakdown to the Pods hop (`meta.workloads`
-and an info finding, for example "Selects 2 pods from 2 workloads: frontend (1),
-search (1)"); a single workload is named in the hop's `config.workload`. This
-alone is context: stable and canary Deployments, blue/green cutovers and Argo
-Rollouts share a Service on purpose. Both are withheld, and resource context's
-`omitted` says so, when the caller can't read every workload they would name, or
-when a workload's kind can't be resolved for that check.
+counts, and `diagnose` adds the same breakdown to the Pods hop as an info finding,
+for example "Selects 2 pods from 2 workloads: frontend (1), search (1)". This is
+context only. Workloads the caller can't read are withheld, and `omitted` says so.
 
-Radar raises a `service_mixed_backends` warning issue, and resource context adds
-the `mixed_backends` warning with its explanation in
-`serviceSummary.mixedBackends`, only when the workloads that receive the traffic
-don't all serve the Service. Receiving means Pods with an IP that are ready and
-not terminating (any live Pod for a Service that publishes not-ready addresses)
-and resolve a Service port. Two signals count:
+Radar raises a `service_mixed_backends` warning, never critical, and resource
+context adds the `mixed_backends` warning with the same sentence in
+`serviceSummary.mixedBackends`, only when the workloads that receive traffic don't
+all serve the Service:
 
-- **Different applications**: the workloads behind one Service port run no image
-  repository in common, mesh proxies aside. A tag or digest change is the same
-  repository; sharing any container, a sidecar included, makes them one
-  application; so do workloads whose Pods share an `app` or
-  `app.kubernetes.io/name` label and all carry a `version` or
-  `app.kubernetes.io/version` label. The message reads "Service X routes to N
-  different applications (…)".
-- **A port some don't declare**: some workloads declare the Service's numeric
-  targetPort while others declare other ports but not it. A workload that has the
-  counterpart (same name or image repository) of the container declaring the port
-  is judged by that counterpart; otherwise containers every workload shares
-  identically, native sidecars and mesh proxies don't count, and a workload that
-  declares no ports is not evidence. The message reads "Service X routes to N
-  workloads; Y's pods don't declare port P", and "different applications" is used
-  only when the first signal also holds.
+- **Different applications**: they share no image repository. "Service X routes
+  to N different applications (…)".
+- **A port some don't declare**: some declare the numeric targetPort while others
+  declare other ports but not it. "Service X routes to N workloads; Y's pods don't
+  declare port P".
 
-Named targetPorts are left to Kubernetes, which keeps Pods without that port name
-out of the endpoints. Headless Services are never judged. Revisions whose
-ReplicaSets Radar can't read look like separate workloads, so ReplicaSets that
-share a name prefix are judged as one workload, never against each other. The
-issue is never critical. In the MCP `issues` tool its `correlated_changes` show
-recent edits to the Service, such as a selector change.
+Deliberate setups stay quiet: stable and canary Deployments, blue/green cutovers,
+Argo Rollouts, versions of one app (a shared `app` label and a `version` label on
+every Pod), mesh sidecars and headless Services. A tag change is the same image,
+and a workload that declares no ports is not evidence. In the MCP `issues` tool
+the warning's `correlated_changes` show recent edits to the Service, such as a
+selector change.
 
 ### Write Tools
 
