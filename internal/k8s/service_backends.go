@@ -424,9 +424,24 @@ func versionsOfOneApplication(podGroups [][]*corev1.Pod) bool {
 	if len(podGroups) < 2 {
 		return false
 	}
-	for _, nameKey := range appNameLabels {
-		for _, versionKey := range appVersionLabels {
-			if sameNameDistinctVersions(podGroups, nameKey, versionKey) {
+	// Any app-name label that tells the workloads apart, or that their own
+	// Pods disagree on, means they aren't versions of one app.
+	sharedName := false
+	for _, key := range appNameLabels {
+		values, ok := groupLabelValues(podGroups, key)
+		if !ok || len(values) > 1 {
+			return false
+		}
+		if _, empty := values[""]; !empty && len(values) == 1 {
+			sharedName = true
+		}
+	}
+	if !sharedName {
+		return false
+	}
+	for _, key := range appVersionLabels {
+		if values, ok := groupLabelValues(podGroups, key); ok && len(values) == len(podGroups) {
+			if _, empty := values[""]; !empty {
 				return true
 			}
 		}
@@ -434,19 +449,20 @@ func versionsOfOneApplication(podGroups [][]*corev1.Pod) bool {
 	return false
 }
 
-func sameNameDistinctVersions(podGroups [][]*corev1.Pod, nameKey, versionKey string) bool {
-	name := ""
-	versions := map[string]bool{}
+// groupLabelValues collects the label's value per workload, keyed by value.
+// ok is false when Pods of one workload disagree on it.
+func groupLabelValues(podGroups [][]*corev1.Pod, key string) (map[string]bool, bool) {
+	values := map[string]bool{}
 	for _, pods := range podGroups {
-		labels := pods[0].Labels
-		n, v := labels[nameKey], labels[versionKey]
-		if n == "" || v == "" || (name != "" && n != name) || versions[v] {
-			return false
+		v := pods[0].Labels[key]
+		for _, pod := range pods[1:] {
+			if pod.Labels[key] != v {
+				return nil, false
+			}
 		}
-		name = n
-		versions[v] = true
+		values[v] = true
 	}
-	return true
+	return values, true
 }
 
 func workloadContainers(pods []*corev1.Pod) map[string]backendContainer {

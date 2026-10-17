@@ -484,6 +484,29 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantApps:      [][]string{{"frontend"}, {"search"}},
 		},
 		{
+			name: "a shared app label does not hide app.kubernetes.io/name telling them apart",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("frontend-1", "StatefulSet", "frontend", []corev1.Container{container("frontend", "acme/frontend:1.0")}, withLabels("app", "shop", "version", "v1", "app.kubernetes.io/name", "frontend")),
+				backendPod("search-1", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:2.0")}, withLabels("app", "shop", "version", "v2", "app.kubernetes.io/name", "search")),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantApps:      [][]string{{"frontend"}, {"search"}},
+		},
+		{
+			name: "a workload whose pods disagree on the version label is no version of the app",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("reviews-v1-a", "StatefulSet", "reviews-v1", []corev1.Container{container("reviews", "acme/reviews-v1:1")}, withLabels("app", "reviews", "version", "v1")),
+				backendPod("search-a", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:1")}, withLabels("app", "reviews", "version", "v2")),
+				backendPod("search-b", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:1")}, withLabels("app", "reviews")),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantApps:      [][]string{{"search"}, {"reviews-v1"}},
+		},
+		{
 			name: "versions of one app still get the port signal",
 			svc:  backendService(intstr.FromInt32(9080)),
 			pods: []*corev1.Pod{
