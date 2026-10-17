@@ -552,7 +552,23 @@ type RolloutRiskSummary struct {
 // require looking at related resources.
 type ServiceSummary struct {
 	SelectedPods *PodSelectionSummary `json:"selectedPods,omitempty"`
-	Warnings     []ServiceWarning     `json:"warnings,omitempty"`
+	// Workloads groups the selected Pods by the workload that runs them. Set
+	// only when they come from more than one workload, which is often
+	// deliberate (canary, blue/green); the different_applications warning is
+	// what marks it as a likely mistake.
+	Workloads []ServiceBackendWorkload `json:"workloads,omitempty"`
+	// WorkloadsTruncated: more workloads were selected than Workloads lists.
+	WorkloadsTruncated bool `json:"workloadsTruncated,omitempty"`
+	// DifferentApplications explains the different_applications warning: the
+	// applications and any targetPort some of them don't declare.
+	DifferentApplications string           `json:"differentApplications,omitempty"`
+	Warnings              []ServiceWarning `json:"warnings,omitempty"`
+}
+
+type ServiceBackendWorkload struct {
+	ContextRef
+	Pods  int `json:"pods"`
+	Ready int `json:"ready"`
 }
 
 type PodSelectionSummary struct {
@@ -570,6 +586,10 @@ const (
 	ServiceWarningNoSelector     ServiceWarning = "no_selector"
 	ServiceWarningNoSelectedPods ServiceWarning = "no_selected_pods"
 	ServiceWarningNoReadyPods    ServiceWarning = "no_ready_pods"
+	// ServiceWarningDifferentApplications: the selected workloads run
+	// different image repositories, or some declare the numeric targetPort
+	// while others declare other ports but not it.
+	ServiceWarningDifferentApplications ServiceWarning = "different_applications"
 )
 
 type IngressSummary struct {

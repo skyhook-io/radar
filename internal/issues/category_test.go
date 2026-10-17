@@ -92,6 +92,7 @@ func TestClassify(t *testing.T) {
 		// problem / service
 		{"service no pods", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "Selector matches no pods"}, issuesapi.CategoryServiceNoEndpoints},
 		{"service 0 ready", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "0/3 selected pods ready"}, issuesapi.CategoryServiceNoEndpoints},
+		{"service mixed backends", classifyInput{Source: SourceProblem, Kind: "Service", Reason: k8s.ServiceMixedBackendsReason}, issuesapi.CategoryServiceMixedBackends},
 		{"service load balancer pending", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
 		{"ingress load balancer pending", classifyInput{Source: SourceProblem, Kind: "Ingress", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
 

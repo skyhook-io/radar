@@ -70,6 +70,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   pdb_blocks_evictions: 'Evictions blocked',
   secret_sync_failed: 'Secret sync failed',
   service_no_endpoints: 'No endpoints',
+  service_mixed_backends: 'Mixed Service backends',
   ingress_backend_missing: 'Ingress backend missing',
   ingress_class_missing: 'Ingress class missing',
   load_balancer_pending: 'Load balancer pending',

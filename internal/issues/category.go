@@ -257,6 +257,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		if in.Kind == "Ingress" {
 			return issuesapi.CategoryUnknown
 		}
+		if in.Reason == k8s.ServiceMixedBackendsReason {
+			return issuesapi.CategoryServiceMixedBackends
+		}
 		// "Selector matches no pods" / "0/N selected pods ready" /
 		// "Unresolved named targetPort" all mean: no healthy endpoints.
 		return issuesapi.CategoryServiceNoEndpoints

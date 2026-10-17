@@ -1778,7 +1778,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			if in.wl.Namespace != "" {
 				nss[in.wl.Namespace] = struct{}{}
 			}
-			if repo, tag := imageRepo(in.wl.Image), in.wl.Version; repo != "" && tag != "" {
+			if repo, tag := imageutil.Repository(in.wl.Image), in.wl.Version; repo != "" && tag != "" {
 				if tagsByRepo[repo] == nil {
 					tagsByRepo[repo] = map[string]struct{}{}
 				}
@@ -2669,23 +2669,6 @@ func cronWorkflowOwnerName(wf *unstructured.Unstructured) string {
 		return owner
 	}
 	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
-}
-
-// imageRepo is the image ref without its tag/digest — the unit version skew is
-// measured across: two workloads running the same repo at different tags.
-func imageRepo(image string) string {
-	if image == "" {
-		return ""
-	}
-	if at := strings.Index(image, "@"); at >= 0 {
-		image = image[:at]
-	}
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon > slash {
-		return image[:colon]
-	}
-	return image
 }
 
 // levelToPackagesHealth projects a canonical health.Level onto the package wire

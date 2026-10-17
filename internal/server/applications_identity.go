@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
 
+	"github.com/skyhook-io/radar/internal/imageutil"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/packages"
@@ -306,7 +307,7 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appS
 		wlName, wlNameAgree := "", true
 		wlApp, wlAppAgree, wlAppCount := "", true, 0
 		for _, w := range r.Workloads {
-			if repo := imageRepo(w.Image); repo != "" {
+			if repo := imageutil.Repository(w.Image); repo != "" {
 				info.repos[repo] = true
 			}
 			if w.envLabel != "" {

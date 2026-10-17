@@ -448,6 +448,17 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 	if hop.Config != nil {
 		hop.Config.Workload = podsWorkload(deps, pods)
 	}
+	// Several workloads behind one Service is often deliberate (canary,
+	// blue/green), so the grouping is context only. When the workloads are
+	// different applications, the issues engine raises a warning on the Service.
+	if backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods); backends.MultipleWorkloads() {
+		meta["workloads"] = traceBackendWorkloads(backends.Workloads)
+		hop.Findings = append(hop.Findings, Finding{
+			Code:     "pods:multiple-workloads",
+			Severity: SeverityInfo,
+			Message:  "Selects " + backends.Summary(),
+		})
+	}
 	if unreadable {
 		hop.Findings = append(hop.Findings, Finding{
 			Code:     "pods:lister-error",
@@ -531,13 +542,8 @@ func detectMesh(pods []*corev1.Pod) string {
 			continue
 		}
 		for _, c := range pod.Spec.Containers {
-			switch c.Name {
-			case "istio-proxy":
-				return "Istio"
-			case "linkerd-proxy":
-				return "Linkerd"
-			case "consul-dataplane":
-				return "Consul"
+			if mesh := k8s.MeshProxyContainers[c.Name]; mesh != "" {
+				return mesh
 			}
 		}
 		if pod.Annotations["sidecar.istio.io/status"] != "" ||
@@ -2325,32 +2331,30 @@ func podsWorkload(deps Deps, pods []*corev1.Pod) *ResourceRef {
 	return found
 }
 
-// ownerWorkload walks one Pod's owner chain to the workload a human would name.
-// A ReplicaSet is an implementation detail of a Deployment, so it resolves one
-// level further; every other controller IS the workload.
+// maxTraceBackendWorkloads caps the breakdown like the per-pod roster; the
+// info finding still counts every workload.
+const maxTraceBackendWorkloads = 10
+
+// traceBackendWorkloads is the per-workload breakdown on a Pods hop's meta.
+func traceBackendWorkloads(workloads []k8s.ServiceBackendWorkload) []map[string]any {
+	if len(workloads) > maxTraceBackendWorkloads {
+		workloads = workloads[:maxTraceBackendWorkloads]
+	}
+	out := make([]map[string]any, 0, len(workloads))
+	for _, w := range workloads {
+		out = append(out, map[string]any{"kind": w.Kind, "name": w.Name, "pods": w.Pods, "ready": w.Ready})
+	}
+	return out
+}
+
+// ownerWorkload names the workload that runs one Pod, or nil for a Pod with no
+// controller.
 func ownerWorkload(deps Deps, pod *corev1.Pod) *ResourceRef {
-	owner := controllerRef(pod.OwnerReferences)
-	if owner == nil {
+	owner, ok := k8s.PodWorkload(deps.Cache, pod)
+	if !ok {
 		return nil
 	}
-	if owner.Kind != "ReplicaSet" {
-		return &ResourceRef{Kind: owner.Kind, Namespace: pod.Namespace, Name: owner.Name}
-	}
-	// The ReplicaSet itself is a real answer whenever its parent can't be read -
-	// no cache and an unreadable ReplicaSet are the same situation, and returning
-	// nil for one of them would claim the Pod has no owner when we know it does.
-	rsRef := &ResourceRef{Kind: "ReplicaSet", Namespace: pod.Namespace, Name: owner.Name}
-	if deps.Cache == nil {
-		return rsRef
-	}
-	rs, err := deps.Cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
-	if err != nil || rs == nil {
-		return rsRef
-	}
-	if dep := controllerRef(rs.OwnerReferences); dep != nil {
-		return &ResourceRef{Kind: dep.Kind, Namespace: pod.Namespace, Name: dep.Name}
-	}
-	return rsRef
+	return &ResourceRef{Kind: owner.Kind, Namespace: pod.Namespace, Name: owner.Name}
 }
 
 func controllerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {

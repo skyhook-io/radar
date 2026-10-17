@@ -1284,7 +1284,7 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
 			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
 		),
-		ServiceBackends: mcpServiceBackendLookup{cache: cache},
+		ServiceBackends: k8s.ServiceBackendLookup{Cache: cache},
 	}
 
 	// Wired unconditionally: a nil index is exactly the case that needs to

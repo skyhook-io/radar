@@ -58,6 +58,7 @@ const (
 	CategoryPDBBlocksEvictions       Category = "pdb_blocks_evictions"
 	CategorySecretSyncFailed         Category = "secret_sync_failed"
 	CategoryServiceNoEndpoints       Category = "service_no_endpoints"
+	CategoryServiceMixedBackends     Category = "service_mixed_backends"
 	CategoryIngressBackendMissing    Category = "ingress_backend_missing"
 	CategoryIngressClassMissing      Category = "ingress_class_missing"
 	CategoryLoadBalancerPending      Category = "load_balancer_pending"
@@ -137,6 +138,7 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPDBBlocksEvictions:       GroupConfiguration,
 	CategorySecretSyncFailed:         GroupConfiguration,
 	CategoryServiceNoEndpoints:       GroupNetworking,
+	CategoryServiceMixedBackends:     GroupNetworking,
 	CategoryIngressBackendMissing:    GroupNetworking,
 	CategoryIngressClassMissing:      GroupNetworking,
 	CategoryLoadBalancerPending:      GroupNetworking,
