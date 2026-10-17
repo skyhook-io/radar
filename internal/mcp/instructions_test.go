@@ -237,23 +237,30 @@ func TestInitializeReturnsServerInstructions(t *testing.T) {
 
 // started_at_resource_creation can come from the owner workload's condition
 // (issue_timing_basis owner_condition), so a Pod row may carry its
-// Deployment's timing. The instructions must not read it as the onset of the
-// specific failure.
+// Deployment's timing, and the classifier accepts a short healthy window after
+// creation (internal/k8s/issue_timing.go). The instructions must not read it
+// as the onset of the specific failure or as continuous failure since creation.
 func TestServerInstructionsScopeCreationTimingToResourceOrOwner(t *testing.T) {
 	text := serverInstructions(true)
-	if !strings.Contains(text, "started_at_resource_creation means the resource, or its owner workload, has been failing since it was created.") {
+	if !strings.Contains(text, "started_at_resource_creation means the resource, or its owner workload, started failing during creation or first reconciliation.") {
 		t.Error("instructions no longer scope started_at_resource_creation to the resource or its owner workload")
 	}
-	if strings.Contains(text, "the failure has been present since") {
-		t.Error("instructions date the specific failure from creation; owner-derived timing does not support that")
+	for _, overclaim := range []string{"the failure has been present since", "failing since it was created"} {
+		if strings.Contains(text, overclaim) {
+			t.Errorf("instructions say %q; the timing classification supports neither the specific failure's onset nor continuity since creation", overclaim)
+		}
 	}
 }
 
 // Radar Hub can hide the Kubernetes write tools from a read-only organization
-// while still listing other vendors' write tools, so the fixes line is
-// conditioned on the Kubernetes write tools by name.
+// while still listing other vendors' write tools, so the fixes line conditions
+// each Kubernetes write tool on that tool being listed.
 func TestServerInstructionsConditionFixesOnKubernetesWriteTools(t *testing.T) {
-	if !strings.Contains(serverInstructions(true), "- Fixes, if patch_resource, apply_resource or manage_workload are listed:") {
-		t.Error("the fixes line no longer names the Kubernetes write tools it depends on")
+	text := serverInstructions(true)
+	if !strings.Contains(text, "- Fixes, each only if listed: patch_resource") {
+		t.Error("the fixes line no longer conditions each write tool on that tool being listed")
+	}
+	if strings.Contains(text, "write tools:") {
+		t.Error("the fixes line is conditioned on write tools in general, which other vendors' tools can satisfy")
 	}
 }
