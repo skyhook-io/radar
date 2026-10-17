@@ -92,49 +92,61 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 	}
 }
 
-// instructionClaims pins what the instructions say about a tool to the phrase
-// in that tool's own description or input schema that backs it. When a tool's
-// contract changes, this fails and the instructions get rechecked.
-var instructionClaims = []struct{ tool, backedBy string }{
-	{"issues", "live state"},
-	{"issues", "references"},
-	{"diagnose", "Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout"},
-	{"diagnose", "current and previous logs"},
-	{"diagnose", "startup blockers"},
-	{"diagnose", "traffic not reaching a service, route or ingress"},
-	{"diagnose", "per-route reachability"},
-	{"diagnose", "Application, Kustomization and Flux HelmRelease"},
-	{"diagnose", "GitOps sync/health"},
-	{"get_changes", "field-level diffs"},
-	{"get_pod_logs", `"previous"`},
-	{"get_pod_logs", `"grep"`},
-	{"get_workload_logs", `"grep"`},
-	{"search", "status message"},
-	{"top_resources", "OOMKills"},
-	{"query_prometheus", "history"},
-	{"get_neighborhood", "service routing"},
-	{"get_cluster_audit", "STATIC CONFIG POSTURE"},
-	{"manage_workload", "'restart'"},
-	{"manage_workload", "'scale'"},
-	{"manage_workload", "'rollback'"},
+// instructionClaims pairs what the instructions say about a tool (says) with
+// what backs it in that tool's contract: a phrase in its description
+// (backedBy) or a parameter in its input schema (param). It is a tripwire: when
+// either side changes, the test fails and the pairing gets rechecked by hand.
+var instructionClaims = []struct{ tool, says, backedBy, param string }{
+	{tool: "issues", says: "Symptom known, faulty resource not: issues", backedBy: "live state"},
+	{tool: "issues", says: "references to missing ConfigMaps", backedBy: "references"},
+	{tool: "diagnose", says: "a Pod, Deployment, StatefulSet, DaemonSet or Rollout", backedBy: "Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout"},
+	{tool: "diagnose", says: "current and previous logs, warning events, startup blockers", backedBy: "current and previous logs, Warning events, startup blockers"},
+	{tool: "diagnose", says: "a Service, Ingress or route that traffic doesn't reach", backedBy: "traffic not reaching a service, route or ingress"},
+	{tool: "diagnose", says: "(per-route reachability)", backedBy: "per-route reachability"},
+	{tool: "diagnose", says: "an Argo CD Application or Flux Kustomization or HelmRelease (sync and health)", backedBy: "GitOps sync/health"},
+	{tool: "get_changes", says: "field diffs", backedBy: "field-level diffs"},
+	{tool: "get_pod_logs", says: "get_pod_logs for one container or its previous instance", param: "previous"},
+	{tool: "get_pod_logs", says: "the grep argument of get_pod_logs", param: "grep"},
+	{tool: "get_workload_logs", says: "or get_workload_logs", param: "grep"},
+	{tool: "search", says: "status message): search", backedBy: "status message"},
+	{tool: "top_resources", says: "OOMKills: top_resources", backedBy: "OOMKills"},
+	{tool: "get_neighborhood", says: "get_neighborhood for the graph around it", backedBy: "service routing"},
+	{tool: "get_cluster_audit", says: "get_cluster_audit is configuration posture", backedBy: "STATIC CONFIG POSTURE"},
+	{tool: "manage_workload", says: "manage_workload to restart, scale or roll back", backedBy: "'rollback'"},
 }
 
 func TestServerInstructionsClaimsMatchToolContracts(t *testing.T) {
-	contracts := map[string]string{}
+	tools := map[string]*mcpsdk.Tool{}
 	for _, tool := range listRegisteredToolsWith(t, true) {
-		schema, err := json.Marshal(tool.InputSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		contracts[tool.Name] = tool.Description + "\n" + string(schema)
+		tools[tool.Name] = tool
 	}
 	text := serverInstructions(true)
 	for _, claim := range instructionClaims {
-		if !strings.Contains(text, claim.tool) {
-			t.Errorf("claim about %q, which the instructions no longer name", claim.tool)
+		if !strings.Contains(text, claim.says) {
+			t.Errorf("instructions no longer say %q about %s; update or drop this pairing", claim.says, claim.tool)
 		}
-		if !strings.Contains(contracts[claim.tool], claim.backedBy) {
-			t.Errorf("%s no longer says %q; recheck what instructions.go says about it", claim.tool, claim.backedBy)
+		tool := tools[claim.tool]
+		if tool == nil {
+			t.Errorf("%s is not registered", claim.tool)
+			continue
+		}
+		if claim.backedBy != "" && !strings.Contains(tool.Description, claim.backedBy) {
+			t.Errorf("%s description no longer says %q; recheck %q in instructions.go", claim.tool, claim.backedBy, claim.says)
+		}
+		if claim.param != "" {
+			raw, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var schema struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			}
+			if err := json.Unmarshal(raw, &schema); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := schema.Properties[claim.param]; !ok {
+				t.Errorf("%s has no %q parameter; recheck %q in instructions.go", claim.tool, claim.param, claim.says)
+			}
 		}
 	}
 }
