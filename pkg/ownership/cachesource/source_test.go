@@ -226,12 +226,17 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 	if cachedPod.Finalizers[0] != "foregroundDeletion" || !cachedPod.DeletionTimestamp.Equal(&deletedAt) {
 		t.Fatal("changing an observation changed the cached Pod")
 	}
+	// The other direction, checked by identity: writing to the cache would
+	// race the informers that own it.
 	again := s.Object(ref("", "Pod", "alpha", "web-1-a"))
-	cachedPod.Finalizers[0] = "changed in the cache"
-	if again.Object.Finalizers[0] != "foregroundDeletion" {
-		t.Fatal("an observation shares the cached Pod's finalizers")
+	if &again.Object.Finalizers[0] == &cachedPod.Finalizers[0] || again.Object.DeletionTimestamp == cachedPod.DeletionTimestamp {
+		t.Fatal("an observation shares the cached Pod's finalizers or deletion timestamp")
 	}
-	cachedPod.Finalizers[0] = "foregroundDeletion"
+	if rs := s.Object(ref("apps", "ReplicaSet", "alpha", "web-1")); &rs.Object.OwnerReferences[0] == &cached.OwnerReferences[0] ||
+		rs.Object.OwnerReferences[0].Controller == cached.OwnerReferences[0].Controller ||
+		rs.Object.OwnerReferences[0].BlockOwnerDeletion == cached.OwnerReferences[0].BlockOwnerDeletion {
+		t.Fatal("an observation shares the cached ReplicaSet's owner references")
+	}
 
 	w := s.Object(ref("example.io", "Widget", "alpha", "w1"))
 	wantOwners := []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "uid-deploy"}}
@@ -267,12 +272,6 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 		reread.Object.Finalizers[0] != "example.io/keep" || !reread.Object.DeletionTimestamp.Equal(&deletedAt) {
 		t.Fatal("changing an observation changed the cached Widget's owner flags, finalizers or deletion timestamp")
 	}
-	cachedW2, _, _, _ := f.caches.Dynamic.ReadableObject(widgets, "alpha", "w2")
-	unstructured.SetNestedStringSlice(cachedW2.Object, []string{"changed in the cache"}, "metadata", "finalizers")
-	if reread.Object.Finalizers[0] != "example.io/keep" {
-		t.Fatal("an observation shares the cached Widget's finalizers")
-	}
-	unstructured.SetNestedStringSlice(cachedW2.Object, []string{"example.io/keep"}, "metadata", "finalizers")
 
 	if node := s.Object(ref("", "Node", "", "n1")); node.State != ownership.Present || node.Object.UID != "uid-node" {
 		t.Fatalf("Node = %v %+v", node.State, node.Object)
