@@ -2,6 +2,7 @@ package issues
 
 import (
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -226,6 +227,9 @@ func foldGroup(members []Issue) Issue {
 		g.Cause = dg.Cause
 		g.Action = dg.Action
 		g.ConditionalCleanup = dg.ConditionalCleanup
+		g.ActionPrimary = dg.ActionPrimary
+		g.ActionSecondaryTitle = dg.ActionSecondaryTitle
+		g.ActionSecondary = dg.ActionSecondary
 		g.RemediationKind = dg.RemediationKind
 		g.RemediationTarget = dg.RemediationTarget
 		g.OperationRetryCount = dg.OperationRetryCount
@@ -353,6 +357,7 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 			continue
 		}
 		if m.Cause != picked.Cause || m.Action != picked.Action || !reflect.DeepEqual(m.ConditionalCleanup, picked.ConditionalCleanup) ||
+			m.ActionPrimary != picked.ActionPrimary || m.ActionSecondaryTitle != picked.ActionSecondaryTitle || !slices.Equal(m.ActionSecondary, picked.ActionSecondary) ||
 			m.RemediationKind != picked.RemediationKind || m.RemediationTarget != picked.RemediationTarget ||
 			m.OperationRetryCount != picked.OperationRetryCount || m.Stuck != picked.Stuck {
 			return Issue{}, false

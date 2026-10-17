@@ -595,3 +595,31 @@ func TestComposeCapacityRelevanceCorrelationRequiresNodePoolAccess(t *testing.T)
 		t.Fatalf("authorized caller lost capacity relevance through RelatedIssues: %+v", relatedAllowed)
 	}
 }
+
+func TestGroupIssues_ActionPresentationAgreement(t *testing.T) {
+	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
+	t0 := time.Unix(1000, 0)
+	a := flatPod("web-a", "CrashLoopBackOff", SeverityCritical, dep, t0, t0)
+	a.Action, a.ActionPrimary, a.ActionSecondaryTitle, a.ActionSecondary = "Check logs. More guidance.", "Check logs.", "More guidance", []string{"More guidance."}
+	b := a
+	b.Name = "web-b"
+	got := GroupIssues([]Issue{a, b})
+	if len(got) != 1 || got[0].ActionPrimary != a.ActionPrimary || got[0].ActionSecondaryTitle != a.ActionSecondaryTitle || len(got[0].ActionSecondary) != 1 || got[0].ActionSecondary[0] != a.ActionSecondary[0] {
+		t.Fatalf("agreed presentation must survive grouping: %+v", got)
+	}
+	for _, field := range []string{"primary", "title", "secondary"} {
+		changed := b
+		switch field {
+		case "primary":
+			changed.ActionPrimary = "Different primary"
+		case "title":
+			changed.ActionSecondaryTitle = "Different title"
+		case "secondary":
+			changed.ActionSecondary = []string{"Different detail"}
+		}
+		got := GroupIssues([]Issue{a, changed})
+		if len(got) != 1 || got[0].Action != "" || got[0].ActionPrimary != "" || got[0].ActionSecondaryTitle != "" || len(got[0].ActionSecondary) != 0 {
+			t.Fatalf("conflicting %s must omit the entire diagnosis: %+v", field, got)
+		}
+	}
+}

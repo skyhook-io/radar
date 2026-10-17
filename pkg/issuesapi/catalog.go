@@ -74,7 +74,7 @@ var catalogOrder = []Category{
 	// Control plane
 	CategoryTerminationStuck, CategoryNodeNotReady, CategoryAPIServiceUnavailable,
 	CategoryNodeProvisioningFail, CategoryCrossplaneReconcile, CategoryOperatorConditionFail,
-	CategoryGitOpsSyncFailed, CategoryGitOpsRenderFailed, CategoryGitOpsSpecInvalid,
+	CategoryGitOpsResourceWarning, CategoryGitOpsSyncFailed, CategoryGitOpsRenderFailed, CategoryGitOpsSpecInvalid,
 	CategoryGitOpsOperationFailed, CategoryGitOpsOutOfSync, CategoryGitOpsHealthDegraded,
 	CategoryGitOpsStale,
 	CategoryHelmReleaseFailed, CategoryWebhookBackendDown, CategoryControlPlaneNotReady, CategoryMachineNotReady,
@@ -145,6 +145,7 @@ var categoryDescription = map[Category]string{
 	CategoryNodeProvisioningFail:  "Node provisioning failed — the autoscaler or Karpenter couldn't bring up a node.",
 	CategoryCrossplaneReconcile:   "A Crossplane managed or composite resource can't reconcile — its Ready or Synced condition is False.",
 	CategoryOperatorConditionFail: "An operator-managed resource is reporting a failed status condition.",
+	CategoryGitOpsResourceWarning: "Argo CD reports resources tracked by multiple Applications, rendered more than once, or orphaned in the destination namespace.",
 	CategoryGitOpsSyncFailed:      "A GitOps app failed to sync (catch-all) — Argo CD or Flux couldn't reconcile it to the desired state.",
 	CategoryGitOpsRenderFailed:    "GitOps couldn't render manifests from Git — a kustomize/helm build or source fetch failed.",
 	CategoryGitOpsSpecInvalid:     "A GitOps app's spec is invalid — a bad destination, source, or project reference.",

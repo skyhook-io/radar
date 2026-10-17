@@ -206,6 +206,10 @@ export interface Issue {
    *  Server-emitted (omitempty); empty for issues without a parser. */
   cause?: string;
   action?: string;
+  /** Optional presentation split; action always retains the complete guidance. */
+  action_primary?: string;
+  action_secondary_title?: string;
+  action_secondary?: string[];
   remediation_kind?: string;
   remediation_target?: string;
   /** A cleanup that is right only when its condition holds — never part of

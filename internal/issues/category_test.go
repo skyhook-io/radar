@@ -56,6 +56,7 @@ func TestClassify(t *testing.T) {
 		{"init container stalled", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "InitContainerStalled"}, issuesapi.CategoryInitContainerFailed},
 
 		// problem / GitOps reconcilers (DetectGitOpsProblems → SourceProblem)
+		{"argo empty auto-sync guard", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "AutoSyncBlockedEmpty"}, issuesapi.CategoryGitOpsSyncFailed},
 		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, issuesapi.CategoryGitOpsHealthDegraded},
 		{"argo app missing", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthMissing"}, issuesapi.CategoryGitOpsHealthDegraded},
 		{"argo app outofsync", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OutOfSync"}, issuesapi.CategoryGitOpsOutOfSync},
@@ -174,5 +175,15 @@ func TestClassify(t *testing.T) {
 				t.Errorf("category %q has no categoryGroup rollup (→ issuesapi.GroupUnknown)", tc.want)
 			}
 		})
+	}
+}
+
+func TestArgoResourceWarningsCategory(t *testing.T) {
+	for _, source := range []Source{SourceCondition, SourceProblem} {
+		for _, reason := range []string{"SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning"} {
+			if got := Classify(classifyInput{Source: source, APIGroup: "argoproj.io", Kind: "Application", Reason: reason}); got != issuesapi.CategoryGitOpsResourceWarning {
+				t.Errorf("%s/%s: %s", source, reason, got)
+			}
+		}
 	}
 }

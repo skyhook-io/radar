@@ -48,3 +48,44 @@ func TestFluxTargetsLocalCluster(t *testing.T) {
 		t.Error("nil must fail closed")
 	}
 }
+
+// Shapes recorded from Argo CD 3.5.2: a live empty-render guard marks every
+// resource requiresPruning; the same leftover condition after the render
+// recovered and the Deployment drifted carries no requiresPruning at all.
+func TestArgoEmptyRenderPredicates(t *testing.T) {
+	app := func(sync string, resources ...any) *unstructured.Unstructured {
+		status := map[string]any{"sync": map[string]any{"status": sync}}
+		if resources != nil {
+			status["resources"] = resources
+		}
+		return &unstructured.Unstructured{Object: map[string]any{"status": status}}
+	}
+	res := func(kind string, prune any) map[string]any {
+		r := map[string]any{"kind": kind, "name": "guestbook-ui", "status": "OutOfSync"}
+		if prune != nil {
+			r["requiresPruning"] = prune
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		name               string
+		app                *unstructured.Unstructured
+		prunes, guardHolds bool
+	}{
+		{"real guard", app("OutOfSync", res("Service", true), res("Deployment", true)), true, true},
+		{"stale guard plus drift", app("OutOfSync", res("Service", nil), res("Deployment", nil)), false, false},
+		{"one resource still rendered", app("OutOfSync", res("Service", true), res("Deployment", false)), false, false},
+		{"no resources", app("OutOfSync"), false, false},
+		// IgnoreExtraneous keeps such an app Synced; auto-sync never runs, but
+		// a manual sync with pruning still deletes everything.
+		{"synced, everything extraneous", app("Synced", res("Service", true)), true, false},
+		{"nil", nil, false, false},
+	} {
+		if got := ArgoSyncPrunesEverything(tc.app); got != tc.prunes {
+			t.Errorf("%s: ArgoSyncPrunesEverything = %v, want %v", tc.name, got, tc.prunes)
+		}
+		if got := ArgoEmptyRenderGuardHolds(tc.app); got != tc.guardHolds {
+			t.Errorf("%s: ArgoEmptyRenderGuardHolds = %v, want %v", tc.name, got, tc.guardHolds)
+		}
+	}
+}

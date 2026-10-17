@@ -1,7 +1,8 @@
+import { IssueGuidance } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
-import { CardBody, CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
+import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
@@ -363,6 +364,13 @@ export function IssueRow({
         </div>
       </div>
 
+      {!open && issue.action_primary && (
+        <div className="px-4 pb-3 pl-6 text-xs">
+          {issue.cause && <p className="mb-1 text-theme-text-primary">{issue.cause}</p>}
+          <IssueGuidance action={issue.action} primary={issue.action_primary} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} className="text-theme-text-tertiary" />
+        </div>
+      )}
+
       {/* Details unmount after the close transition: a list can hold hundreds
           of rows and the body is the expensive part, so closed rows stay light. */}
       <Collapse open={open} unmountOnExit id={panelId}>
@@ -539,7 +547,7 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
           tone="fix"
           labelExtra={nextStepAttribution ?? undefined}
         >
-          {sourceNextStep ?? (issue.action ? <CardBody>{issue.action}</CardBody> : null)}
+          {sourceNextStep ?? <IssueGuidance action={issue.action} primary={issue.action_primary} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} className="text-sm leading-relaxed text-theme-text-secondary" />}
           {/* Survives an override: this is a structured one-click fix with an
               apply path, not advice competing with the host's. */}
           {issue.remediation_kind === 'create-namespace' && issue.remediation_target ? (

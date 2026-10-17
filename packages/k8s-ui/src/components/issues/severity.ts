@@ -99,6 +99,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   crossplane_reconcile_failed: 'Crossplane reconcile failed',
   termination_stuck: 'Stuck terminating',
   operator_condition_failed: 'Controller reports a problem',
+  gitops_resource_warning: 'GitOps resource warning',
   gitops_sync_failed: 'GitOps sync failed',
   gitops_render_failed: 'GitOps render failed',
   gitops_spec_invalid: 'GitOps spec invalid',

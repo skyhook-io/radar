@@ -166,6 +166,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 				gv, err := schema.ParseGroupVersion(ref.APIVersion)
 				if err != nil || !f.CanReadRelated(Ref{Group: gv.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}) {
 					pr.Cause, pr.Action = "", ""
+					pr.ActionPrimary, pr.ActionSecondaryTitle, pr.ActionSecondary = "", "", nil
 				}
 			}
 			if len(pr.TerminatingFinalizers) > 0 {
