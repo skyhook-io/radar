@@ -28,7 +28,7 @@ const (
 // label-and-controller-UID rule the workspace uses, sorted by name.
 func clusterInstancePods(cache *k8s.ResourceCache, cluster *unstructured.Unstructured) ([]*corev1.Pod, error) {
 	namespace, name := cluster.GetNamespace(), cluster.GetName()
-	assessment := AssessKindRead(cache, "pods", []string{namespace})
+	assessment := cache.AssessKindRead("pods", []string{namespace})
 	if !assessment.Complete {
 		return nil, errors.New(cnpgUncachedReason("Instance Pods", "Pods", namespace, assessment))
 	}

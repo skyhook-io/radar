@@ -20,6 +20,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -378,9 +379,14 @@ func InitResourceCache(ctx context.Context) error {
 		// runs under contextOpMu, so the operation that superseded the probe is
 		// already tearing this cache down, and the ctx.Err() check below drops
 		// out of the boot path that does not hold that lock.
-		permResult, _ := CheckResourcePermissions(rbacCtx)
+		permResult, probeErr := bootstrapResourcePermissions(rbacCtx, freshResourcePermissions)
 		cancel()
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
+
+		if probeErr != nil {
+			initErr = probeErr
+			return
+		}
 
 		if ctx.Err() != nil {
 			initErr = ctx.Err()
@@ -2229,4 +2235,111 @@ func (c *ResourceCache) GetPodsForWorkload(namespace string, selector *metav1.La
 	}
 
 	return matchingPods
+}
+
+func (rc *ResourceCache) AssessKindRead(resource string, requested []string) k8score.KindReadAssessment {
+	var core *k8score.ResourceCache
+	if rc != nil {
+		core = rc.ResourceCache
+	}
+	return core.AssessKindRead(resource, requested)
+}
+
+// ReadableObjects, ReadableObject and ReadableCount are the nil-safe forms of
+// k8score's readiness-gated reads: they serve a namespace whose own informer
+// has synced even while the kind as a whole is still loading.
+func (rc *ResourceCache) ReadableObjects(resource string, namespaces []string) ([]runtime.Object, bool) {
+	if rc == nil {
+		return nil, false
+	}
+	return rc.ResourceCache.ReadableObjects(resource, namespaces)
+}
+
+func (rc *ResourceCache) ReadableObject(resource, namespace, name string) (obj runtime.Object, found, ok bool) {
+	if rc == nil {
+		return nil, false, false
+	}
+	return rc.ResourceCache.ReadableObject(resource, namespace, name)
+}
+
+func (rc *ResourceCache) ReadableCount(resource string, namespaces []string) (int, bool) {
+	if rc == nil {
+		return 0, false
+	}
+	return rc.ResourceCache.ReadableCount(resource, namespaces)
+}
+
+// bootstrapResourcePermissions runs the startup access probes that choose the
+// cache's informer scope. A 401 rejects Radar's identity, not one scope, so a
+// 401 in only some probes is most likely a token refreshed mid-probe: probe
+// once more, within the same budget, rather than leave those kinds switched
+// off for the life of the connection.
+//
+//   - Credentials rejected by every probe fail initialization into the
+//     connection's auth owner.
+//   - A rejection limited to some probes keeps what the others granted, as a
+//     denial would: the identity works, and failing the connection would hide
+//     every kind it can read.
+//   - A retry the budget cut short is not used. Probes still in flight at the
+//     deadline count as allowed, so its result is a guess; the first result
+//     stands, under the same rules.
+//   - Budget expiry otherwise keeps the grants the probe established.
+//     Cancellation returns ctx.Err(), so a superseded initialization wires
+//     nothing.
+func bootstrapResourcePermissions(ctx context.Context, check func(context.Context, bool) (*PermissionCheckResult, bool)) (*PermissionCheckResult, error) {
+	first, _ := check(ctx, false)
+	rejected := permissionUnauthorized(first)
+	if rejected != nil && ctx.Err() == nil {
+		retry, _ := check(ctx, true)
+		if ctx.Err() == nil {
+			if err := permissionUnauthorized(retry); err != nil && credentialsRejectedEverywhere(retry) {
+				return nil, fmt.Errorf("resource access probe rejected credentials: %w", err)
+			}
+			return retry, nil
+		}
+	}
+	if err := ctx.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	if rejected != nil && credentialsRejectedEverywhere(first) {
+		return nil, fmt.Errorf("resource access probe rejected credentials: %w", rejected)
+	}
+	return first, nil
+}
+
+// freshResourcePermissions is the startup probe. A retry drops the cached
+// result first: it holds the very rejection being retried, and a retry that
+// read it back would never see refreshed credentials.
+func freshResourcePermissions(ctx context.Context, retry bool) (*PermissionCheckResult, bool) {
+	if retry {
+		InvalidateResourcePermissionsCache()
+	}
+	return CheckResourcePermissions(ctx)
+}
+
+// credentialsRejectedEverywhere reports a probe in which no kind
+// authenticated: every kind ended disabled by a credential rejection. A kind
+// that was granted, or denied (which needs an authenticated identity), has no
+// entry in ProbeErrors.
+func credentialsRejectedEverywhere(result *PermissionCheckResult) bool {
+	return result != nil && len(result.Scopes) > 0 && len(result.ProbeErrors) == len(result.Scopes)
+}
+
+func permissionUnauthorized(result *PermissionCheckResult) error {
+	if result == nil {
+		return nil
+	}
+	for _, err := range result.ProbeErrors {
+		if apierrors.IsUnauthorized(err) {
+			return err
+		}
+	}
+	for _, byNamespace := range result.NamespaceProbeErrors {
+		for _, err := range byNamespace {
+			if apierrors.IsUnauthorized(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }

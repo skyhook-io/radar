@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"sort"
 
-	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -24,7 +23,7 @@ func (s *Server) typedKindScopeWithCandidates(r *http.Request, cache *k8s.Resour
 	if !ok {
 		return integration.KindAccess{State: integration.KindCoverageDenied}, []string{}
 	}
-	assessment := cnpgsvc.AssessKindRead(cache, resource, allowed)
+	assessment := cache.AssessKindRead(resource, allowed)
 	var uncached []string
 	if namespaces != nil {
 		uncached = append(uncached, assessment.Uncovered...)
@@ -36,7 +35,7 @@ func (s *Server) typedKindScopeWithCandidates(r *http.Request, cache *k8s.Resour
 	if len(assessment.Uncovered) > 0 && len(assessment.Uncovered) == len(allowed) {
 		return integration.KindAccess{State: integration.KindCoverageUncached, Denied: denied, Uncached: uncached}, []string{}
 	}
-	switch assessment.Readiness {
+	switch assessment.TargetReadiness() {
 	case k8score.KindPending:
 		return integration.KindAccess{State: integration.KindCoverageSyncing, Denied: denied, Uncached: uncached}, []string{}
 	case k8score.KindFailed:

@@ -9,7 +9,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/imageutil"
@@ -369,36 +368,34 @@ func (s *Reader) operatorConfigMap(ctx context.Context, cache *k8s.ResourceCache
 		state.Reason = "no permission to get ConfigMaps in " + namespace
 		return ref
 	}
-	assessment := AssessKindRead(cache, "configmaps", []string{namespace})
+	assessment := cache.AssessKindRead("configmaps", []string{namespace})
 	if len(assessment.Uncovered) > 0 {
 		state.Reason = "Radar does not watch ConfigMaps in " + namespace
 		return ref
 	}
-	switch assessment.Readiness {
+	if assessment.Readiness == k8s.KindUnavailable {
+		state.Reason = "Radar is not collecting ConfigMaps"
+		return ref
+	}
+	switch assessment.TargetReadiness() {
 	case k8s.KindPending:
 		state.Reason = "ConfigMaps are still loading"
 		return ref
 	case k8s.KindFailed:
 		state.Reason = "ConfigMaps failed to load"
 		return ref
-	case k8s.KindUnavailable:
-		state.Reason = "Radar is not collecting ConfigMaps"
-		return ref
 	}
-	lister := cache.ConfigMaps()
-	if lister == nil {
-		state.Reason = "could not read the ConfigMap"
-		return ref
-	}
-	cm, err := lister.ConfigMaps(namespace).Get(name)
+	// The namespace's own store: the ConfigMap lister is nil until every
+	// namespace's ConfigMaps have loaded.
+	obj, found, ok := cache.ReadableObject("configmaps", namespace, name)
+	cm, isConfigMap := obj.(*corev1.ConfigMap)
 	switch {
-	case apierrors.IsNotFound(err):
+	case ok && !found:
 		exists := false
 		state.Exists = &exists
 		state.Reason = "not found"
 		return ref
-	case err != nil:
-		log.Printf("[cnpg] Failed to read ConfigMap %s/%s: %v", namespace, name, err)
+	case !ok || !isConfigMap:
 		state.Reason = "could not read the ConfigMap"
 		return ref
 	}

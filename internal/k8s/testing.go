@@ -96,9 +96,8 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 		MinimalSet:          map[string]bool{"services": true},
 		SyncTimeout:         syncTimeout,
 		DeferredSyncTimeout: deferredSyncTimeout,
-		// Delaying the informer START is the only safe way to hold a kind
-		// unsynced against a fake clientset: a blocking list reactor wedges
-		// every other kind too (reactors run under the fake's lock).
+		// Blocking a list reactor wedges other kinds under the fake's lock.
+		// Delay informer start or return errors immediately to hold it unsynced.
 		DebugSyncDelays: syncDelays,
 	}
 
@@ -192,6 +191,23 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 
 	waitForInformerStatuses(resourceCache.Load())
 
+	return nil
+}
+
+// InitTestResourceCacheFromConfig installs a cache built from cfg as given and
+// does not wait for it to sync, for tests whose informers must stay loading
+// (a namespace that never answers, a deadline that has to fire).
+func InitTestResourceCacheFromConfig(cfg k8score.CacheConfig) error {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	core, err := k8score.NewResourceCache(cfg)
+	if err != nil {
+		return err
+	}
+	initialSyncComplete.Store(true)
+	resourceCache.Store(&ResourceCache{ResourceCache: core, generation: cacheGeneration})
+	cacheOnce = new(sync.Once)
+	cacheOnce.Do(func() {})
 	return nil
 }
 

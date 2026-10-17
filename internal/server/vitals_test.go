@@ -9,7 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestVitals_HappyPath(t *testing.T) {
@@ -82,6 +86,16 @@ func TestVitals_NodeRBACDeniedSurfacesRestricted(t *testing.T) {
 }
 
 func TestVitals_DeploymentsOnlyUserGetsNoPodData(t *testing.T) {
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCache(fake.NewClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}, Status: corev1.NodeStatus{Allocatable: corev1.ResourceList{corev1.ResourceCPU: mustQty(t, "4"), corev1.ResourceMemory: mustQty(t, "8Gi")}}})); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
 	if testServerSrv.permCache == nil {
 		testServerSrv.permCache = pkgauth.NewPermissionCache()
 	}
@@ -114,8 +128,8 @@ func TestVitals_DeploymentsOnlyUserGetsNoPodData(t *testing.T) {
 	if !foundPods {
 		t.Errorf("restricted = %v, want to contain \"pods\"", got.Completeness.Restricted)
 	}
-	if got.CPU != nil && got.CPU.RequestsMillis != 0 {
-		t.Errorf("pod request totals leaked: %+v", got.CPU)
+	if got.CPU == nil || got.Memory == nil || got.CPU.CapacityMillis != 4000 || got.CPU.RequestsMillis != 0 {
+		t.Errorf("node capacity must remain visible without exposing Pod requests: cpu=%+v memory=%+v", got.CPU, got.Memory)
 	}
 }
 
