@@ -32,8 +32,9 @@ func (k Kind) APIVersion() string {
 }
 
 // Kinds are the kinds generated Worlds use: built-ins the typed cache holds,
-// custom kinds Radar watches on demand, one kind that can't be watched,
-// Events, and the GitOps managers whose status lists their members.
+// custom kinds Radar watches on demand (one named like a built-in of another
+// scope), one kind that can't be watched, Events, and the GitOps managers
+// whose status lists their members.
 var Kinds = []Kind{
 	{GroupKind: resourceid.GroupKind{Kind: "Pod"}, Version: "v1", Resource: "pods", Namespaced: true, Typed: true, Watchable: true},
 	{GroupKind: resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}, Version: "v1", Resource: "replicasets", Namespaced: true, Typed: true, Watchable: true},
@@ -47,6 +48,7 @@ var Kinds = []Kind{
 	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Gadget"}, Version: "v1", Resource: "gadgets", Namespaced: true, Watchable: true},
 	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "ClusterWidget"}, Version: "v1", Resource: "clusterwidgets", Watchable: true},
 	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Summary"}, Version: "v1", Resource: "summaries", Namespaced: true},
+	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Node"}, Version: "v1", Resource: "nodes", Namespaced: true, Watchable: true},
 	{GroupKind: ownership.ArgoApplication, Version: "v1alpha1", Resource: "applications", Namespaced: true, Watchable: true},
 	{GroupKind: ownership.FluxHelmRelease, Version: "v2", Resource: "helmreleases", Namespaced: true, Watchable: true},
 	{GroupKind: ownership.FluxKustomization, Version: "v1", Resource: "kustomizations", Namespaced: true, Watchable: true},
@@ -91,7 +93,7 @@ func Fixture() World {
 	b.deleting(podA, "foregroundDeletion")
 	cfg := b.add("", "ConfigMap", "alpha", "cfg")
 	b.add("", "Pod", "alpha", "web-1-b", rs.OwnerRef(true), cfg.OwnerRef(false))
-	b.add("", "Pod", "beta", "stray", rs.OwnerRef(true))
+	stray := b.add("", "Pod", "beta", "stray", rs.OwnerRef(true))
 	wrong := rs.OwnerRef(false)
 	wrong.Kind, wrong.Name = "Deployment", "nope"
 	b.add("", "Pod", "alpha", "wrong-coordinates", wrong)
@@ -117,15 +119,18 @@ func Fixture() World {
 
 	// Argo CD lists a namespaced member in its destination, one elsewhere,
 	// cluster-scoped ones, one already gone, one of a kind discovery doesn't
-	// serve, and one twice, with and without its namespace.
+	// serve, a built-in and a custom kind twice each, with and without their
+	// namespace, and a namespaced custom kind named like a cluster-scoped
+	// built-in.
 	gone := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "alpha", Name: "gone"}
 	unknownKind := resourceid.Ref{Group: "example.io", Kind: "Unserved", Namespace: "alpha", Name: "x"}
 	shared := resourceid.Ref{Kind: "ConfigMap", Namespace: "alpha", Name: "shared"}
 	g1 := resourceid.Ref{Group: "example.io", Kind: "Gadget", Namespace: "beta", Name: "g1"}
+	customNode := b.add("example.io", "Node", "alpha", "n1")
 	cw1 := resourceid.Ref{Group: "example.io", Kind: "ClusterWidget", Name: "cw1"}
 	app := ownership.ArgoApplication
-	b.manager(app, "argocd", "web", ownership.MembersRecorded, 0, "alpha", web.Ref, cfg.Ref, n1.Ref, w1.Ref, gone, unknownKind, g1, n1.Ref, cfg.Ref)
-	b.manager(app, "argocd", "by-name", ownership.MembersRecorded, 1, "beta", g1, pv1.Ref, web.Ref)
+	b.manager(app, "argocd", "web", ownership.MembersRecorded, 0, "alpha", web.Ref, cfg.Ref, n1.Ref, w1.Ref, gone, unknownKind, g1, n1.Ref, cfg.Ref, customNode.Ref, w1.Ref)
+	b.manager(app, "argocd", "by-name", ownership.MembersRecorded, 1, "beta", g1, pv1.Ref, web.Ref, stray.Ref)
 	b.manager(app, "argocd", "no-destination-namespace", ownership.MembersRecorded, 0, "", n1.Ref, cfg.Ref)
 	b.manager(app, "argocd", "empty-list", ownership.MembersRecorded, 0, "alpha")
 	b.manager(app, "argocd", "empty", ownership.MembersRecorded, 1, "alpha")

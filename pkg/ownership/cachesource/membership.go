@@ -40,14 +40,17 @@ func MembershipIndexers() map[schema.GroupResource]cache.Indexers {
 	return out
 }
 
-// reading is one way to read a status entry's namespace. The index can't ask
-// discovery a kind's scope — an index function runs when an object changes,
-// not when discovery does — so it keys an entry under each reading its kind's
-// scope could call for, and a session looks up only the readings the catalog
-// does.
+// reading is one way to read a status entry's namespace. A built-in kind's
+// scope is fixed, so the index files its entries by the object they mean. For
+// any other kind the index can't ask discovery the scope — an index function
+// runs when an object changes, not when discovery does — so it files an entry
+// under each reading the kind's scope could call for, and a session looks up
+// only the readings its catalog does.
 type reading byte
 
 const (
+	// meant: the object an entry of a built-in kind names.
+	meant reading = 'm'
 	// asRecorded: the namespace the entry records.
 	asRecorded reading = 'r'
 	// clusterScoped: an entry recording a namespace, read for a
@@ -193,6 +196,10 @@ func managerKeys(gk resourceid.GroupKind) cache.IndexFunc {
 		}
 		keys := make([]string, 0, len(m.entries))
 		for _, e := range m.entries {
+			if b, builtin := builtinKind(e.group, e.kind); builtin {
+				keys = append(keys, memberKey(meant, e.group, e.kind, inScope(b.Namespaced, e.namespace, m.destination), e.name))
+				continue
+			}
 			keys = append(keys, memberKey(asRecorded, e.group, e.kind, e.namespace, e.name))
 			switch {
 			case e.namespace != "":
@@ -229,28 +236,53 @@ func (s *session) Inventory(manager resourceid.Ref) ownership.InventoryRead {
 	return r
 }
 
-// align reads an entry as the catalog states its kind's scope.
+// builtinKind returns the built-in kind group/kind names, if it is one.
+func builtinKind(group, kind string) (resourceid.Builtin, bool) {
+	b, ok := resourceid.BuiltinForKind(kind)
+	return b, ok && b.Group == group
+}
+
+// inScope is the namespace of the object an entry recording namespace means,
+// for a kind whose scope is known: none for a cluster-scoped kind, and the
+// destination for a namespaced one recorded without a namespace.
+func inScope(namespaced bool, namespace, destination string) string {
+	switch {
+	case !namespaced:
+		return ""
+	case namespace == "":
+		return destination
+	}
+	return namespace
+}
+
+// align reads an entry as its kind's scope says: a built-in kind's own, or
+// the catalog's for any other.
 func (s *session) align(e memberEntry, destination string) resourceid.Ref {
 	ref := resourceid.Ref{Group: e.group, Kind: e.kind, Namespace: e.namespace, Name: e.name}
-	if k, known := s.catalog.Kind(ref.GroupKind()); known {
-		switch {
-		case !k.Namespaced:
-			ref.Namespace = ""
-		case ref.Namespace == "":
-			ref.Namespace = destination
-		}
+	if b, builtin := builtinKind(e.group, e.kind); builtin {
+		ref.Namespace = inScope(b.Namespaced, e.namespace, destination)
+	} else if k, known := s.catalog.Kind(ref.GroupKind()); known {
+		ref.Namespace = inScope(k.Namespaced, e.namespace, destination)
 	}
 	return ref
 }
 
 // readings returns the members-index keys under which an entry naming ref is
-// filed, as the catalog states ref's kind's scope, or why no entry can name
-// ref.
+// filed, as its kind's scope says, or why no entry can name ref.
 func (s *session) readings(ref resourceid.Ref) ([]string, readreason.Code) {
 	if ref.Kind == "" || ref.Name == "" {
 		return nil, readreason.ReadError
 	}
 	gk := ref.GroupKind()
+	if b, builtin := builtinKind(ref.Group, ref.Kind); builtin {
+		switch {
+		case b.Namespaced && ref.Namespace == "":
+			return nil, readreason.NamespaceRequired
+		case !b.Namespaced && ref.Namespace != "":
+			return nil, readreason.ReadError
+		}
+		return []string{memberKey(meant, ref.Group, ref.Kind, ref.Namespace, ref.Name)}, ""
+	}
 	recorded := memberKey(asRecorded, ref.Group, ref.Kind, ref.Namespace, ref.Name)
 	k, known := s.catalog.Kind(gk)
 	switch {
