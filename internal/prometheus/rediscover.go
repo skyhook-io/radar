@@ -432,8 +432,9 @@ func candidateServiceSelecting(lister listerscorev1.ServiceLister, pod *corev1.P
 
 // failureReportingTransport tells the client when a request to the connected
 // endpoint got no HTTP response while its caller was still waiting — the
-// endpoint, or the forward in front of it, is likely gone. An HTTP error
-// status, an unreadable body or the caller's own deadline say nothing about
+// endpoint, or the forward in front of it, is likely gone or hung. That
+// includes the HTTP client's own timeout. An HTTP error status, an unreadable
+// body or the caller's own cancellation or deadline say nothing about
 // reachability and are not reported.
 type failureReportingTransport struct {
 	prom.Transport
@@ -449,11 +450,12 @@ func (t failureReportingTransport) Do(ctx context.Context, method, path string, 
 	return body, err
 }
 
+// isNoResponseError is checked only while the caller's context is live, so a
+// context error here is the HTTP client's own timeout, which counts.
 func isNoResponseError(err error) bool {
 	var httpErr *prom.HTTPError
 	var respErr *prom.ResponseError
-	return !errors.As(err, &httpErr) && !errors.As(err, &respErr) &&
-		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	return !errors.As(err, &httpErr) && !errors.As(err, &respErr)
 }
 
 // newConnectedPromClientLocked builds a prom.Client for the connected endpoint

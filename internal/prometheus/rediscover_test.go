@@ -335,13 +335,20 @@ func TestFailureReportingTransport(t *testing.T) {
 	}))
 	t.Cleanup(failing.Close)
 
+	hung := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	}))
+	t.Cleanup(hung.Close)
+
 	for _, tc := range []struct {
 		name       string
 		addr       string
+		httpClient *http.Client
 		ctx        func() context.Context
 		wantReport bool
 	}{
 		{name: "no response", addr: deadURL(t), ctx: context.Background, wantReport: true},
+		{name: "HTTP client timeout", addr: hung.URL, httpClient: &http.Client{Timeout: 50 * time.Millisecond}, ctx: context.Background, wantReport: true},
 		{name: "HTTP error status", addr: failing.URL, ctx: context.Background},
 		{name: "caller gave up", addr: deadURL(t), ctx: func() context.Context {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -352,7 +359,7 @@ func TestFailureReportingTransport(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var reported []string
 			tr := failureReportingTransport{
-				Transport: prom.NewHTTPTransport(tc.addr, "", nil),
+				Transport: prom.NewHTTPTransport(tc.addr, "", tc.httpClient),
 				addr:      tc.addr,
 				report:    func(addr string, _ error) { reported = append(reported, addr) },
 			}
