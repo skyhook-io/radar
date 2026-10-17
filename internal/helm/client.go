@@ -3053,7 +3053,13 @@ func (c *Client) loadTargetChart(actionConfig *action.Configuration, rel *releas
 		locate.SetRegistryClient(rc)
 	}
 
-	cp, err := locate.ChartPathOptions.LocateChart(chartPath, c.settings)
+	locatePath := chartPath
+	if resolvedRepo != "oci" {
+		// A repo-qualified reference keeps Helm on the repository selected above.
+		// Passing the absolute URL makes Helm scan every configured cache first.
+		locatePath = resolvedRepo + "/" + chartName
+	}
+	cp, err := locate.ChartPathOptions.LocateChart(locatePath, c.settings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
 	}
