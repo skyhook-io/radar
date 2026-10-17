@@ -290,15 +290,17 @@ func cnpgDesiredImage(cluster *unstructured.Unstructured) string {
 	return img
 }
 
-func cnpgUncachedReason(fact, kind, namespace string, assessment KindReadAssessment) string {
+func cnpgUncachedReason(fact, kind, namespace string, assessment k8score.KindReadAssessment) string {
 	switch {
 	case len(assessment.Uncovered) > 0:
 		return fmt.Sprintf("%s unknown: Radar watches %s only in the namespaces it chose when it connected, and %s is not one of them", fact, kind, namespace)
 	case assessment.Readiness == k8score.KindUnavailable:
 		return fmt.Sprintf("%s unknown: Radar is not collecting %s", fact, kind)
-	case assessment.Readiness == k8score.KindPending:
+	}
+	switch assessment.TargetReadiness() {
+	case k8score.KindPending:
 		return fmt.Sprintf("%s unknown: Radar is still loading %s", fact, kind)
-	case assessment.Readiness == k8score.KindFailed:
+	case k8score.KindFailed:
 		return fmt.Sprintf("%s unknown: Radar failed to load %s", fact, kind)
 	}
 	return ""
@@ -308,7 +310,7 @@ func (s *Reader) hANodesSource(ctx context.Context, cache *k8s.ResourceCache) in
 	if !s.Access.CanRead(ctx, "", "nodes", "", "get") {
 		return cnpgHAClusterDenied(auth.Grant{Verb: "get", Resource: "nodes"})
 	}
-	if reason := cnpgUncachedReason("Zones", "Nodes", "", AssessKindRead(cache, "nodes", nil)); reason != "" {
+	if reason := cnpgUncachedReason("Zones", "Nodes", "", cache.AssessKindRead("nodes", nil)); reason != "" {
 		return integration.ReadSource{State: cnpgHAStateUnavailable, Reason: reason}
 	}
 	return integration.ReadSource{State: cnpgHAStateOK}
@@ -458,15 +460,14 @@ func (s *Reader) hAPDBs(ctx context.Context, cache *k8s.ResourceCache, cluster *
 		out.ReadSource = cnpgHADenied(grant, namespace)
 		return out
 	}
-	lister := cache.PodDisruptionBudgets()
-	assessment := AssessKindRead(cache, "poddisruptionbudgets", []string{namespace})
+	assessment := cache.AssessKindRead("poddisruptionbudgets", []string{namespace})
 	if reason := cnpgUncachedReason("Disruption budgets", "PodDisruptionBudgets", namespace, assessment); reason != "" {
 		out.ReadSource = integration.ReadSource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
 	}
-	list, err := lister.PodDisruptionBudgets(namespace).List(labels.SelectorFromSet(labels.Set{clusterLabel: cluster.GetName()}))
-	if err != nil {
-		out.ReadSource = integration.ReadSource{State: cnpgHAStateError, Reason: err.Error()}
+	list, ok := readableIn[*policyv1.PodDisruptionBudget](cache, "poddisruptionbudgets", namespace, labels.SelectorFromSet(labels.Set{clusterLabel: cluster.GetName()}))
+	if !ok {
+		out.ReadSource = integration.ReadSource{State: cnpgHAStateError, Reason: "could not read PodDisruptionBudgets in " + namespace}
 		return out
 	}
 	out.ReadSource = integration.ReadSource{State: cnpgHAStateOK}
@@ -609,7 +610,7 @@ func (s *Reader) hAJobs(ctx context.Context, cache *k8s.ResourceCache, cluster *
 		return out
 	}
 	lister := cache.Jobs()
-	assessment := AssessKindRead(cache, "jobs", []string{namespace})
+	assessment := cache.AssessKindRead("jobs", []string{namespace})
 	if reason := cnpgUncachedReason("Instance Jobs", "Jobs", namespace, assessment); reason != "" {
 		out.ReadSource = integration.ReadSource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
@@ -621,7 +622,7 @@ func (s *Reader) hAJobs(ctx context.Context, cache *k8s.ResourceCache, cluster *
 	}
 	out.ReadSource = integration.ReadSource{State: cnpgHAStateOK}
 	var jobPods []*corev1.Pod
-	if s.Access.CanRead(ctx, "", "pods", namespace, "list") && AssessKindRead(cache, "pods", []string{namespace}).Complete && cache.Pods() != nil {
+	if s.Access.CanRead(ctx, "", "pods", namespace, "list") && cache.AssessKindRead("pods", []string{namespace}).Complete && cache.Pods() != nil {
 		jobPods, _ = cache.Pods().Pods(namespace).List(labels.Everything())
 	}
 	for _, j := range list {

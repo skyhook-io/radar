@@ -40,16 +40,23 @@ func TestCNPGQuorumArithmetic(t *testing.T) {
 }
 
 func TestCNPGUncachedReasonSaysWhatIsUnknownAndWhy(t *testing.T) {
-	if got := cnpgUncachedReason("Zones", "Nodes", "", KindReadAssessment{Readiness: k8score.KindUnavailable}); got != "Zones unknown: Radar is not collecting Nodes" {
+	if got := cnpgUncachedReason("Zones", "Nodes", "", k8score.KindReadAssessment{Readiness: k8score.KindUnavailable}); got != "Zones unknown: Radar is not collecting Nodes" {
 		t.Errorf("uncached = %q", got)
 	}
-	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", KindReadAssessment{Readiness: k8score.KindReady, Uncovered: []string{"pg"}}); got != "Instance Jobs unknown: Radar watches Jobs only in the namespaces it chose when it connected, and pg is not one of them" {
+	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", k8score.KindReadAssessment{Readiness: k8score.KindReady, Requested: []string{"pg"}, Uncovered: []string{"pg"}}); got != "Instance Jobs unknown: Radar watches Jobs only in the namespaces it chose when it connected, and pg is not one of them" {
 		t.Errorf("out of scope = %q", got)
 	}
-	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", KindReadAssessment{Readiness: k8score.KindPending}); got != "Instance Jobs unknown: Radar is still loading Jobs" {
+	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", k8score.KindReadAssessment{Readiness: k8score.KindPending, Requested: []string{"pg"}, Read: []string{}, Loading: []string{"pg"}}); got != "Instance Jobs unknown: Radar is still loading Jobs" {
 		t.Errorf("syncing = %q", got)
 	}
-	if got := cnpgUncachedReason("Zones", "Nodes", "", KindReadAssessment{Readiness: k8score.KindReady, Complete: true}); got != "" {
+	// pg's own informer has synced while another namespace of the kind loads.
+	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", k8score.KindReadAssessment{Readiness: k8score.KindFailed, Requested: []string{"pg"}, Read: []string{}, Failed: []string{"pg"}}); got != "Instance Jobs unknown: Radar failed to load Jobs" {
+		t.Fatalf("failed reason = %q", got)
+	}
+	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", k8score.KindReadAssessment{Readiness: k8score.KindPending, Requested: []string{"pg"}, Read: []string{"pg"}, Complete: true}); got != "" {
+		t.Errorf("a synced namespace reads while another loads = %q", got)
+	}
+	if got := cnpgUncachedReason("Zones", "Nodes", "", k8score.KindReadAssessment{Readiness: k8score.KindReady, AllNamespaces: true, Complete: true}); got != "" {
 		t.Errorf("cached = %q", got)
 	}
 }

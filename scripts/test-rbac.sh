@@ -374,6 +374,17 @@ arr_len() {
   jq -r 'if type == "array" then length else "ERR" end' 2>/dev/null || echo "ERR"
 }
 
+# expect_mcp_code <description> <mcp_call text> <code> — passes when the tool
+# answered with a read error carrying that error_code.
+expect_mcp_code() {
+  local desc=$1 text=$2 want=$3
+  if echo "$text" | jq -e --arg c "$want" '.error_code == $c' >/dev/null 2>&1; then
+    ok "$desc"
+  else
+    fail "$desc — expected error_code $want, got: $text"
+  fi
+}
+
 # expect_zero <description> <count> — passes when count is "0", fails on
 # anything else (including "ERR" from arr_len). Use for "no leak" tests.
 expect_zero() {
@@ -445,14 +456,14 @@ expect_zero "alice sees 0 nodes (cluster-only kind, restricted user) — REST st
 echo
 echo -e "${B}=== MCP: list_resources filters per-user ===${N}"
 
-ALICE_MCP_PODS=$(mcp_call alice list_resources '{"kind":"pods"}' | jq -r '.[].name // empty' 2>/dev/null | sort | tr '\n' ',' | sed 's/,$//')
+ALICE_MCP_PODS=$(mcp_call alice list_resources '{"kind":"pods"}' | jq -r '.items[].name // empty' 2>/dev/null | sort | tr '\n' ',' | sed 's/,$//')
 if [[ "$ALICE_MCP_PODS" == "rbac-test-pod-a" ]]; then
   ok "MCP alice list_resources kind=pods returns only rbac-test-pod-a"
 else
   fail "MCP alice pods = [$ALICE_MCP_PODS], expected [rbac-test-pod-a]"
 fi
 
-BOB_MCP_PODS=$(mcp_call bob list_resources '{"kind":"pods"}' | jq -r '.[].name // empty' 2>/dev/null | sort | tr '\n' ',' | sed 's/,$//')
+BOB_MCP_PODS=$(mcp_call bob list_resources '{"kind":"pods"}' | jq -r '.items[].name // empty' 2>/dev/null | sort | tr '\n' ',' | sed 's/,$//')
 if [[ "$BOB_MCP_PODS" == "rbac-test-pod-b" ]]; then
   ok "MCP bob list_resources kind=pods returns only rbac-test-pod-b"
 else
@@ -462,8 +473,7 @@ fi
 echo
 echo -e "${B}=== MCP: cluster-only kinds hidden ===${N}"
 
-ALICE_MCP_NODES=$(mcp_call alice list_resources '{"kind":"nodes"}' | arr_len)
-expect_zero "MCP alice list_resources kind=nodes returns 0 (cluster-only)" "$ALICE_MCP_NODES"
+expect_mcp_code "MCP alice list_resources kind=nodes is her own denial (cluster-only)" "$(mcp_call alice list_resources '{"kind":"nodes"}')" rbac_denied
 
 echo
 echo -e "${B}=== MCP: list_namespaces filters ===${N}"
@@ -553,8 +563,7 @@ expect_zero "carol cannot see Nodes (no list-nodes RBAC even though she has list
 CAROL_CRBS=$(as_user carol GET /api/resources/clusterroles | arr_len)
 expect_zero "carol cannot see ClusterRoles" "$CAROL_CRBS"
 
-CAROL_MCP_NODES=$(mcp_call carol list_resources '{"kind":"nodes"}' | arr_len)
-expect_zero "MCP carol list_resources kind=nodes returns 0" "$CAROL_MCP_NODES"
+expect_mcp_code "MCP carol list_resources kind=nodes is her own denial" "$(mcp_call carol list_resources '{"kind":"nodes"}')" rbac_denied
 
 echo
 echo -e "${B}=== Multi-namespace user dashboard aggregates only allowed namespaces (dave) ===${N}"
@@ -657,7 +666,7 @@ expect_at_least_one "REST erin can list nodes despite no namespace access" "$ERI
 ERIN_PODS=$(as_user erin GET /api/resources/pods | arr_len)
 expect_zero "REST erin cannot list pods (no namespace RBAC)" "$ERIN_PODS"
 
-ERIN_MCP_NODES=$(mcp_call erin list_resources '{"kind":"nodes"}' | arr_len)
+ERIN_MCP_NODES=$(mcp_call erin list_resources '{"kind":"nodes"}' | jq '.items' 2>/dev/null | arr_len)
 if [[ "$ERIN_MCP_NODES" -ge 1 ]]; then
   ok "MCP erin list_resources kind=nodes returns ≥1"
 else

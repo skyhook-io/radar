@@ -8,8 +8,8 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/autoscalerstatus"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	corelisters "k8s.io/client-go/listers/core/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -18,11 +18,13 @@ const (
 )
 
 // capacityConfigMapSource is the cache surface the autoscaler-status read
-// needs: informer scope plus the ConfigMap lister. Narrowed to an interface so
-// the coverage-verdict/detection pairing is testable without an informer.
+// needs: informer scope plus a read of one ConfigMap from its namespace's own
+// store, which serves kube-system once it has loaded even while ConfigMaps in
+// another namespace still load. Narrowed to an interface so the
+// coverage-verdict/detection pairing is testable without an informer.
 type capacityConfigMapSource interface {
-	capacityInformerScope
-	ConfigMaps() corelisters.ConfigMapLister
+	kindReadSource
+	ReadableObject(resource, namespace, name string) (obj runtime.Object, found, ok bool)
 }
 
 // loadCapacityAutoscalerStatus reads and parses the cluster-autoscaler status
@@ -53,21 +55,27 @@ func capacityAutoscalerStatus(allowed bool, cache capacityConfigMapSource) (*aut
 	if !allowed {
 		return unavailable(deniedCoverage("autoscaler_status_configmap_denied", impact))
 	}
-	if cache == nil || !capacityCacheCoversNamespace(cache, "configmaps", autoscalerStatusNamespace) {
-		return unavailable(unavailableCoverage("autoscaler_status_cache_scope", impact))
-	}
-	lister := cache.ConfigMaps()
-	if lister == nil {
+	if cache == nil {
 		return unavailable(unavailableCoverage("autoscaler_status_cache_unavailable", impact))
 	}
-	configMap, err := lister.ConfigMaps(autoscalerStatusNamespace).Get(autoscalerStatusConfigMapName)
-	if apierrors.IsNotFound(err) {
+	obj, found, ok := cache.ReadableObject("configmaps", autoscalerStatusNamespace, autoscalerStatusConfigMapName)
+	if !ok {
+		// Outside what Radar collects is a scope verdict; still loading or
+		// past its load deadline is an unreadable cache, not a scope limit.
+		assessment := cache.AssessKindRead("configmaps", []string{autoscalerStatusNamespace})
+		if len(assessment.Uncovered) > 0 || assessment.Readiness == k8s.KindUnavailable {
+			return unavailable(unavailableCoverage("autoscaler_status_cache_scope", impact))
+		}
+		return unavailable(unavailableCoverage("autoscaler_status_cache_unavailable", impact))
+	}
+	if !found {
 		coverage := unavailableCoverage("autoscaler_status_not_published", impact)
 		coverage.Namespaces = []string{autoscalerStatusNamespace}
 		return nil, coverage, capacitymodel.AutoscalerNotPublished
 	}
-	if err != nil {
-		log.Printf("[capacity] Failed to read %s/%s: %v", autoscalerStatusNamespace, autoscalerStatusConfigMapName, err)
+	configMap, isConfigMap := obj.(*corev1.ConfigMap)
+	if !isConfigMap {
+		log.Printf("[capacity] Unexpected %T for %s/%s", obj, autoscalerStatusNamespace, autoscalerStatusConfigMapName)
 		return unavailable(errorCoverage("autoscaler_status_read_failed", impact))
 	}
 	status, err := autoscalerstatus.Parse(configMap.Data["status"])

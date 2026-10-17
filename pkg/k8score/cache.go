@@ -29,11 +29,16 @@ import (
 // using SharedInformers. It is the shared core used by both Radar and
 // skyhook-connector.
 type ResourceCache struct {
-	factory          informers.SharedInformerFactory            // cluster-wide factory (always present)
-	nsFactories      map[string]informers.SharedInformerFactory // per-namespace factories (for mixed-scope mode)
-	factoryByKind    map[string]informers.SharedInformerFactory // resolved factory per enabled kind — listers MUST go through this
-	indexerByKind    map[string]cache.Indexer                   // union indexer for kinds watched in multiple namespace factories
-	pagedInformers   map[string]cache.SharedIndexInformer       // per-kind paginating informers (ListPageSize>0); listers read these instead of the factory's
+	factory        informers.SharedInformerFactory            // cluster-wide factory (always present)
+	nsFactories    map[string]informers.SharedInformerFactory // per-namespace factories (for mixed-scope mode)
+	factoryByKind  map[string]informers.SharedInformerFactory // resolved factory per enabled kind — listers MUST go through this
+	indexerByKind  map[string]cache.Indexer                   // union indexer for kinds watched in multiple namespace factories
+	pagedInformers map[string]cache.SharedIndexInformer       // per-kind paginating informers (ListPageSize>0); listers read these instead of the factory's
+	// kindStores holds each enabled kind's informer stores keyed by the
+	// namespace each one watches ("" for one informer over the kind's whole
+	// scope), so a read can trust a namespace whose own informer has synced
+	// while another namespace of the same kind is still loading.
+	kindStores       map[string]map[string]kindStore
 	changes          chan ResourceChange
 	stopCh           chan struct{}
 	stopOnce         sync.Once
@@ -483,6 +488,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		factoryByKind:    map[string]informers.SharedInformerFactory{},
 		indexerByKind:    map[string]cache.Indexer{},
 		pagedInformers:   map[string]cache.SharedIndexInformer{},
+		kindStores:       map[string]map[string]kindStore{},
 		changes:          changes,
 		stopCh:           stopCh,
 		enabledResources: enabled,
@@ -564,6 +570,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				}
 				informersForKind = append(informersForKind, inf)
 				stores = append(stores, inf.GetIndexer())
+				rc.addKindStore(s.key, namespace, inf)
 			}
 			rc.indexerByKind[s.key] = &unionIndexer{indexers: stores}
 			synced = func() bool {
@@ -596,6 +603,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				close(stopCh)
 				return nil, err
 			}
+			rc.addKindStore(s.key, "", inf)
 			synced = inf.HasSynced
 			run = inf.Run
 		}
@@ -1953,18 +1961,13 @@ func (rc *ResourceCache) KindReadinessFor(key string) KindReadiness {
 	if synced {
 		return KindReady
 	}
-	if rc.deferredFailed.Load() && !rc.backgroundKeys[key] {
-		// The give-up deadline only covers kinds in the deferred tracking set
-		// (statically deferred + promoted criticals). A kind mid-Phase-1 is
-		// still pending even if a previous generation's flag lingers — the
-		// tracking map tells them apart. Background kinds (Events) share the
-		// tracking map but have no deadline: they stay pending, not failed.
-		rc.deferredMu.RLock()
-		_, tracked := rc.deferredSynced[key]
-		rc.deferredMu.RUnlock()
-		if tracked {
-			return KindFailed
-		}
+	// The give-up deadline only covers kinds in the deferred tracking set
+	// (statically deferred + promoted criticals). A kind mid-Phase-1 is still
+	// pending even if a previous generation's flag lingers — the tracking map
+	// tells them apart. Background kinds (Events) share the tracking map but
+	// have no deadline: they stay pending, not failed.
+	if rc.pastDeadline(key) {
+		return KindFailed
 	}
 	return KindPending
 }

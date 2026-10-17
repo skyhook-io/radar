@@ -378,6 +378,11 @@ type DynamicCacheConfig struct {
 	// cluster-wide and falls back to per-namespace informers.
 	NamespaceFallbacksTruncated bool
 
+	// SyncStallAfter is how long an informer may stay unsynced before its
+	// observation reports sync_stalled instead of initial_sync. Zero means 30
+	// seconds.
+	SyncStallAfter time.Duration
+
 	// DebugEvents enables verbose debug logging.
 	DebugEvents bool
 }

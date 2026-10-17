@@ -203,7 +203,7 @@ export function projectInvestigationEvidence(
         builder.limit(
           source,
           investigationResultLabel(source),
-          item.result || "This investigation step failed.",
+          failedStepMessage(item.result) || "This investigation step failed.",
           "error",
         );
         continue;
@@ -439,4 +439,16 @@ export function projectInvestigationEvidence(
       checked: builder.checkedSources.size,
     },
   };
+}
+
+// A resource read's failure arrives as its JSON body ({error, error_code,
+// coverage?}); Findings shows the explanation, not the JSON.
+export function failedStepMessage(
+  result: string | undefined,
+): string | undefined {
+  if (!result) return result;
+  const body = record(parseJSON(result));
+  return nonEmptyString(body?.error) && typeof body.error_code === "string"
+    ? body.error
+    : result;
 }

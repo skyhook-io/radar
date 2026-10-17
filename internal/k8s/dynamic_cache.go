@@ -26,6 +26,9 @@ var (
 	dynamicResourceCache *DynamicResourceCache
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
+	// dynamicSyncStallAfter overrides k8score's stall threshold in tests;
+	// zero keeps the default.
+	dynamicSyncStallAfter time.Duration
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache.
@@ -87,6 +90,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceFallbacksTruncated: nsFallbacksTruncated,
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
+			SyncStallAfter:              dynamicSyncStallAfter,
 			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)

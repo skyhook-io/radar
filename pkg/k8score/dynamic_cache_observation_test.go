@@ -478,3 +478,127 @@ func TestDynamicObservationStalledNamespaceIsNotHiddenByNewerInformer(t *testing
 		t.Fatalf("old stalled namespace masked: %+v", got)
 	}
 }
+
+// Per-namespace informers sync independently, so a namespace's observation
+// comes from its own informer, never from another namespace's.
+func TestNamespaceObservationReadsOnlyTheServingInformer(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	release := make(chan struct{})
+	defer close(release)
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() != "synced" {
+			<-release
+		}
+		return false, nil, nil
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, SyncStallAfter: 45 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if err := d.startWatching(gvr, "synced"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !d.IsNamespaceSynced(gvr, "synced") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !d.IsNamespaceSynced(gvr, "synced") {
+		t.Fatal("synced namespace did not sync")
+	}
+	for _, ns := range []string{"stalled", "slow", "fresh"} {
+		if err := d.startWatching(gvr, ns); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.mu.Lock()
+	d.informers[informerKey{gvr: gvr, ns: "stalled"}].startedAt = time.Now().Add(-time.Minute)
+	// Past the 30-second default, inside the configured SyncStallAfter.
+	d.informers[informerKey{gvr: gvr, ns: "slow"}].startedAt = time.Now().Add(-40 * time.Second)
+	d.mu.Unlock()
+
+	watched := []string{"fresh", "slow", "stalled", "synced"}
+	for _, tc := range []struct {
+		namespace string
+		state     DynamicObservationState
+		reason    string
+	}{
+		{"synced", DynamicObservationSynced, "namespace_partial"},
+		{"stalled", DynamicObservationSyncing, "sync_stalled"},
+		{"slow", DynamicObservationSyncing, "initial_sync"},
+		{"fresh", DynamicObservationSyncing, "initial_sync"},
+		{"unwatched", DynamicObservationUnwatched, "not_observed"},
+	} {
+		got := d.NamespaceObservation(gvr, tc.namespace)
+		if got.State != tc.state || got.ReasonCode != tc.reason || got.Scope != DynamicObservationScopeExplicitNamespaces || !reflect.DeepEqual(got.Namespaces, watched) {
+			t.Errorf("%s: %+v, want state=%s reason=%s over the kind's namespaces", tc.namespace, got, tc.state, tc.reason)
+		}
+	}
+	whole := d.Observation(gvr)
+	if whole.State != DynamicObservationSyncing || whole.ReasonCode != "sync_stalled" {
+		t.Fatalf("kind observation must still report its stalled namespace: %+v", whole)
+	}
+	if got := d.NamespaceObservation(gvr, ""); !reflect.DeepEqual(got, whole) {
+		t.Fatalf("all-namespaces observation %+v differs from the kind's %+v", got, whole)
+	}
+
+	clusterGVR := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "gadgets"}
+	clusterWide, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{clusterGVR: "GadgetList"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(clusterWide.Stop)
+	if err := clusterWide.startWatching(clusterGVR, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !clusterWide.WaitForSync(clusterGVR, 3*time.Second) {
+		t.Fatal("cluster-wide informer did not sync")
+	}
+	if got, want := clusterWide.NamespaceObservation(clusterGVR, "any"), clusterWide.Observation(clusterGVR); !reflect.DeepEqual(got, want) || got.ReasonCode != "informer_synced" {
+		t.Fatalf("a cluster-wide informer serves every namespace: %+v, want %+v", got, want)
+	}
+}
+
+func TestReadServerChangesWhenAClusterWideInformerReplacesNamespaceOnes(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	release := make(chan struct{})
+	defer close(release)
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			<-release
+		}
+		return false, nil, nil
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if err := d.startWatching(gvr, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !d.IsNamespaceSynced(gvr, "alpha") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	before, synced := d.ReadServer(gvr, "alpha")
+	if !synced {
+		t.Fatal("alpha's informer did not sync")
+	}
+	if again, _ := d.ReadServer(gvr, "alpha"); !again.Same(before) {
+		t.Fatal("the same informer must compare equal")
+	}
+	if _, synced := d.ReadServer(gvr, ""); synced {
+		t.Fatal("namespace informers must not answer a cluster-wide read")
+	}
+	// The cluster-wide informer replaces alpha's; its initial list is held.
+	if err := d.startWatching(gvr, ""); err != nil {
+		t.Fatal(err)
+	}
+	after, synced := d.ReadServer(gvr, "alpha")
+	if after.Same(before) || synced {
+		t.Fatalf("after the replacement: same=%v synced=%v; want a different, unsynced server", after.Same(before), synced)
+	}
+}

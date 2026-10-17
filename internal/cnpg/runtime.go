@@ -127,7 +127,7 @@ func poolerPods(cache *k8s.ResourceCache, pooler *unstructured.Unstructured) ([]
 	for _, kind := range []struct{ resource, kind string }{
 		{"pods", "Pods"}, {"replicasets", "ReplicaSets"}, {"deployments", "Deployments"},
 	} {
-		assessment := AssessKindRead(cache, kind.resource, []string{namespace})
+		assessment := cache.AssessKindRead(kind.resource, []string{namespace})
 		if !assessment.Complete {
 			return nil, errors.New(cnpgUncachedReason("Pooler Pods", kind.kind, namespace, assessment))
 		}
