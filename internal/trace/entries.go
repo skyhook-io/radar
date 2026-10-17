@@ -10,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -445,19 +444,24 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 		Meta:     meta,
 		Config:   podsConfig(pods, svc),
 	}
-	if hop.Config != nil {
-		hop.Config.Workload = podsWorkload(deps, pods)
-	}
-	// Several workloads behind one Service is often deliberate (canary,
-	// blue/green), so the grouping is context only. When the workloads are
-	// different applications, the issues engine raises a warning on the Service.
-	if backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods); backends.MultipleWorkloads() && canNameWorkloads(deps, backends.Workloads, svc.Namespace) {
-		meta["workloads"] = traceBackendWorkloads(backends.Workloads)
-		hop.Findings = append(hop.Findings, Finding{
-			Code:     "pods:multiple-workloads",
-			Severity: SeverityInfo,
-			Message:  "Selects " + backends.Summary(),
-		})
+	// What runs these Pods: one workload is named on the hop; several are a
+	// breakdown, often deliberate (canary, blue/green), so context only. When
+	// they are different applications, the issues engine warns on the Service.
+	backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods)
+	if canNameWorkloads(deps, backends.Workloads, svc.Namespace) {
+		switch {
+		case backends.MultipleWorkloads():
+			meta["workloads"] = traceBackendWorkloads(backends.Workloads)
+			hop.Findings = append(hop.Findings, Finding{
+				Code:     "pods:multiple-workloads",
+				Severity: SeverityInfo,
+				Message:  "Selects " + backends.Summary(),
+			})
+		case len(backends.Workloads) == 1 && backends.Workloads[0].Kind != "Pod" && hop.Config != nil:
+			w := backends.Workloads[0]
+			ns, _ := k8s.WorkloadAccessNamespace(w, svc.Namespace)
+			hop.Config.Workload = &ResourceRef{Group: w.Group, Kind: w.Kind, Namespace: ns, Name: w.Name}
+		}
 	}
 	if unreadable {
 		hop.Findings = append(hop.Findings, Finding{
@@ -2308,29 +2312,6 @@ func sortRefs(refs []ResourceRef) {
 	})
 }
 
-// podsWorkload resolves what RUNS the selected Pods, walking the owner chain
-// (Pod -> ReplicaSet -> Deployment; a StatefulSet/DaemonSet/Job owns its Pods
-// directly). Returns nil unless EVERY sampled Pod agrees on one owner: a Service
-// fronting two workloads has no single answer, and naming one of them would be a
-// guess in a view whose whole point is not guessing.
-func podsWorkload(deps Deps, pods []*corev1.Pod) *ResourceRef {
-	var found *ResourceRef
-	for _, p := range pods {
-		ref := ownerWorkload(deps, p)
-		if ref == nil {
-			return nil
-		}
-		if found == nil {
-			found = ref
-			continue
-		}
-		if *found != *ref {
-			return nil
-		}
-	}
-	return found
-}
-
 func canNameWorkloads(deps Deps, workloads []k8s.ServiceBackendWorkload, namespace string) bool {
 	if deps.CanReadWorkload == nil {
 		return false
@@ -2362,23 +2343,4 @@ func traceBackendWorkloads(workloads []k8s.ServiceBackendWorkload) []map[string]
 		out = append(out, row)
 	}
 	return out
-}
-
-// ownerWorkload names the workload that runs one Pod, or nil for a Pod with no
-// controller.
-func ownerWorkload(deps Deps, pod *corev1.Pod) *ResourceRef {
-	owner, ok := k8s.PodWorkload(deps.Cache, pod)
-	if !ok {
-		return nil
-	}
-	return &ResourceRef{Kind: owner.Kind, Namespace: pod.Namespace, Name: owner.Name}
-}
-
-func controllerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {
-	for i := range refs {
-		if refs[i].Controller != nil && *refs[i].Controller {
-			return &refs[i]
-		}
-	}
-	return nil
 }
