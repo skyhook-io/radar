@@ -427,7 +427,7 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 				podGroups = append(podGroups, pods)
 			}
 		}
-		if versionsOfOneApplication(podGroups) {
+		if versionsOfOneApplication(podGroups) || (sp != nil && sameServerForPort(sp, podGroups)) {
 			return nil, nil
 		}
 		return labels, repos
@@ -442,6 +442,76 @@ func distinctApplicationsPerPort(svc *corev1.Service, workloads []*backendWorklo
 		}
 	}
 	return worst
+}
+
+// sameServerForPort reports whether one identical container (same name and
+// image repository), such as a mesh proxy, serves the port in every workload:
+// then traffic to that port reaches the same software whatever else the Pods
+// run.
+func sameServerForPort(sp *corev1.ServicePort, podGroups [][]*corev1.Pod) bool {
+	if len(podGroups) < 2 {
+		return false
+	}
+	var shared map[string]bool
+	for _, pods := range podGroups {
+		servers := map[string]bool{}
+		for _, pod := range pods {
+			for _, c := range podPortContainers(pod) {
+				if containerServesPort(c, sp) {
+					servers[c.Name+"\x00"+comparableImageRepository(c.Image)] = true
+				}
+			}
+		}
+		if shared == nil {
+			shared = servers
+			continue
+		}
+		for k := range shared {
+			if !servers[k] {
+				delete(shared, k)
+			}
+		}
+	}
+	return len(shared) > 0
+}
+
+// podPortContainers are the containers that can serve a Service port: regular
+// containers and native sidecars.
+func podPortContainers(pod *corev1.Pod) []*corev1.Container {
+	var out []*corev1.Container
+	for i := range pod.Spec.Containers {
+		out = append(out, &pod.Spec.Containers[i])
+	}
+	for i := range pod.Spec.InitContainers {
+		if isNativeSidecar(&pod.Spec.InitContainers[i]) {
+			out = append(out, &pod.Spec.InitContainers[i])
+		}
+	}
+	return out
+}
+
+func containerServesPort(c *corev1.Container, sp *corev1.ServicePort) bool {
+	proto := portProtocol(sp.Protocol)
+	for _, cp := range c.Ports {
+		if portProtocol(cp.Protocol) != proto {
+			continue
+		}
+		switch {
+		case sp.TargetPort.Type == intstr.String && sp.TargetPort.StrVal != "":
+			if cp.Name == sp.TargetPort.StrVal {
+				return true
+			}
+		default:
+			target := sp.TargetPort.IntVal
+			if target == 0 {
+				target = sp.Port
+			}
+			if cp.ContainerPort == target {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Pods labelled with one application name and a version are versions of one

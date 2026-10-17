@@ -601,6 +601,35 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantGapPorts:  []int32{5000},
 		},
 		{
+			name: "a port every workload serves from the same mesh proxy",
+			svc: func() *corev1.Service {
+				svc := backendService()
+				svc.Spec.Ports = []corev1.ServicePort{{Name: "envoy-metrics", Port: 15090, TargetPort: intstr.FromString("http-envoy-prom")}}
+				return svc
+			}(),
+			pods: []*corev1.Pod{
+				backendPod("frontend-1", "StatefulSet", "frontend", []corev1.Container{container("frontend", "acme/frontend:1"), {Name: "istio-proxy", Image: "docker.io/istio/proxyv2:1.22", Ports: []corev1.ContainerPort{{Name: "http-envoy-prom", ContainerPort: 15090}}}}),
+				backendPod("search-1", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:1"), {Name: "istio-proxy", Image: "docker.io/istio/proxyv2:1.22", Ports: []corev1.ContainerPort{{Name: "http-envoy-prom", ContainerPort: 15090}}}}),
+			},
+			wantWorkloads: 2,
+		},
+		{
+			name: "the same mesh proxy on another port doesn't hide different applications",
+			svc: func() *corev1.Service {
+				svc := backendService(p5000)
+				svc.Spec.Ports = append(svc.Spec.Ports, corev1.ServicePort{Name: "envoy-metrics", Port: 15090, TargetPort: intstr.FromInt32(15090)})
+				return svc
+			}(),
+			pods: []*corev1.Pod{
+				backendPod("frontend-1", "StatefulSet", "frontend", []corev1.Container{container("frontend", "acme/frontend:1", 5000), container("istio-proxy", "docker.io/istio/proxyv2:1.22", 15090)}),
+				backendPod("search-1", "StatefulSet", "search", []corev1.Container{container("search", "acme/search:1", 8082), container("istio-proxy", "docker.io/istio/proxyv2:1.22", 15090)}),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantApps:      [][]string{{"frontend"}, {"search"}},
+			wantGapPorts:  []int32{5000},
+		},
+		{
 			name: "stable and canary of one app plus an unrelated app",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{
