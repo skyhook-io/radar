@@ -2342,7 +2342,11 @@ func traceBackendWorkloads(workloads []k8s.ServiceBackendWorkload) []map[string]
 	}
 	out := make([]map[string]any, 0, len(workloads))
 	for _, w := range workloads {
-		out = append(out, map[string]any{"kind": w.Kind, "name": w.Name, "pods": w.Pods, "ready": w.Ready})
+		row := map[string]any{"kind": w.Kind, "name": w.Name, "pods": w.Pods, "ready": w.Ready}
+		if w.Group != "" {
+			row["group"] = w.Group
+		}
+		out = append(out, row)
 	}
 	return out
 }

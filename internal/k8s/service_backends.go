@@ -35,6 +35,8 @@ type ServiceBackendWorkload struct {
 	Group string
 	Kind  string
 	Name  string
+	// Label is Name, or Kind/Name when two selected workloads share a name.
+	Label string
 	Pods  int
 	Ready int
 }
@@ -87,7 +89,7 @@ func (b ServiceBackends) Summary() string {
 	parts := make([]string, 0, len(b.Workloads))
 	for _, w := range b.Workloads {
 		total += w.Pods
-		parts = append(parts, fmt.Sprintf("%s (%d)", w.Name, w.Pods))
+		parts = append(parts, fmt.Sprintf("%s (%d)", w.Label, w.Pods))
 	}
 	return fmt.Sprintf("%s from %d workloads: %s", plural(total, "pod"), len(b.Workloads), strings.Join(capNames(parts), ", "))
 }
@@ -154,19 +156,19 @@ func (b ServiceBackends) gapWorkloadNames() []string {
 	var serving, missing []string
 	for _, w := range b.Workloads {
 		for _, g := range b.PortGaps {
-			if containsString(g.Serving, w.Name) {
-				serving = append(serving, w.Name)
+			if containsString(g.Serving, w.Label) {
+				serving = append(serving, w.Label)
 				break
 			}
 		}
 	}
 	for _, w := range b.Workloads {
-		if containsString(serving, w.Name) {
+		if containsString(serving, w.Label) {
 			continue
 		}
 		for _, g := range b.PortGaps {
-			if containsString(g.Missing, w.Name) {
-				missing = append(missing, w.Name)
+			if containsString(g.Missing, w.Label) {
+				missing = append(missing, w.Label)
 				break
 			}
 		}
@@ -204,25 +206,35 @@ func containsString(list []string, s string) bool {
 // from the name would invent an object. Every other controller is the
 // workload. ok is false for a Pod with no controller.
 func PodWorkload(cache *ResourceCache, pod *corev1.Pod) (TopOwnerInfo, bool) {
+	ref, ok, _ := podWorkload(cache, pod)
+	return ref, ok
+}
+
+// podWorkload also reports whether the owner is known to be the workload: false
+// for a ReplicaSet that couldn't be read, whose real parent is unknown.
+func podWorkload(cache *ResourceCache, pod *corev1.Pod) (ref TopOwnerInfo, ok, settled bool) {
 	if pod == nil {
-		return TopOwnerInfo{}, false
+		return TopOwnerInfo{}, false, true
 	}
 	owner := controllerOwnerRef(pod.OwnerReferences)
 	if owner == nil {
-		return TopOwnerInfo{}, false
+		return TopOwnerInfo{}, false, true
 	}
-	ref := TopOwnerInfo{Group: schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind).Group, Kind: owner.Kind, Name: owner.Name}
-	if owner.Kind != "ReplicaSet" || cache == nil || cache.ReplicaSets() == nil {
-		return ref, true
+	ref = TopOwnerInfo{Group: schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind).Group, Kind: owner.Kind, Name: owner.Name}
+	if owner.Kind != "ReplicaSet" {
+		return ref, true, true
+	}
+	if cache == nil || cache.ReplicaSets() == nil {
+		return ref, true, false
 	}
 	rs, err := cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
 	if err != nil || rs == nil {
-		return ref, true
+		return ref, true, false
 	}
 	if parent := controllerOwnerRef(rs.OwnerReferences); parent != nil {
-		return TopOwnerInfo{Group: schema.FromAPIVersionAndKind(parent.APIVersion, parent.Kind).Group, Kind: parent.Kind, Name: parent.Name}, true
+		return TopOwnerInfo{Group: schema.FromAPIVersionAndKind(parent.APIVersion, parent.Kind).Group, Kind: parent.Kind, Name: parent.Name}, true, true
 	}
-	return ref, true
+	return ref, true, true
 }
 
 type backendContainer struct {
@@ -269,13 +281,24 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 	}
 	byKey := map[string]*backendWorkload{}
 	var order []*backendWorkload
+	// Revisions of one workload whose ReplicaSets couldn't be read show up as
+	// separate ReplicaSets; judging them as different applications would be
+	// a guess, so their name prefixes are counted to hold the judgment back.
+	unsettledRevisions := map[string]map[string]bool{}
 	for _, pod := range pods {
 		if pod == nil || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			continue
 		}
-		ref, ok := PodWorkload(cache, pod)
+		ref, ok, settled := podWorkload(cache, pod)
 		if !ok {
 			ref = TopOwnerInfo{Kind: "Pod", Name: pod.Name}
+		}
+		if !settled {
+			prefix := stripReplicaSetHash(ref.Name)
+			if unsettledRevisions[prefix] == nil {
+				unsettledRevisions[prefix] = map[string]bool{}
+			}
+			unsettledRevisions[prefix][ref.Name] = true
 		}
 		if owner := controllerOwnerRef(pod.OwnerReferences); owner != nil && owner.Kind == "ReplicaSet" && ref.Kind != "ReplicaSet" {
 			out.ResolvedThroughReplicaSets = true
@@ -313,11 +336,24 @@ func AnalyzeServiceBackends(cache *ResourceCache, svc *corev1.Service, pods []*c
 		}
 		return order[i].Name < order[j].Name
 	})
+	names := map[string]int{}
 	for _, w := range order {
+		names[w.Name]++
+	}
+	for _, w := range order {
+		w.Label = w.Name
+		if names[w.Name] > 1 {
+			w.Label = w.Kind + "/" + w.Name
+		}
 		out.Workloads = append(out.Workloads, w.ServiceBackendWorkload)
 	}
 	if len(order) < 2 || svc.Spec.ClusterIP == corev1.ClusterIPNone {
 		return out
+	}
+	for _, revisions := range unsettledRevisions {
+		if len(revisions) > 1 {
+			return out
+		}
 	}
 
 	var receiving []*backendWorkload
@@ -492,12 +528,12 @@ func servicePortGaps(svc *corev1.Service, workloads []*backendWorkload, common m
 		gap := ServicePortGap{Port: port, Protocol: proto}
 		for _, w := range workloads {
 			if declaresPort(w.containers, port, proto) {
-				gap.Serving = append(gap.Serving, w.Name)
+				gap.Serving = append(gap.Serving, w.Label)
 				continue
 			}
 			for _, c := range appContainers(w, common) {
 				if len(c.ports) > 0 {
-					gap.Missing = append(gap.Missing, w.Name)
+					gap.Missing = append(gap.Missing, w.Label)
 					break
 				}
 			}
@@ -558,7 +594,7 @@ func distinctApplications(workloads []*backendWorkload) [][]string {
 		if _, ok := groups[r]; !ok {
 			roots = append(roots, r)
 		}
-		groups[r] = append(groups[r], w.Name)
+		groups[r] = append(groups[r], w.Label)
 	}
 	if len(roots) < 2 {
 		return nil
@@ -605,8 +641,19 @@ func (l ServiceBackendLookup) GroupServiceBackends(svc *corev1.Service, pods []*
 	backends := AnalyzeServiceBackends(l.Cache, svc, pods)
 	out := resourcecontext.ServiceBackendGrouping{}
 	for _, w := range backends.Workloads {
+		namespace := svc.Namespace
+		if w.Kind != "Pod" {
+			// The access check passes kinds it can't resolve, so a workload
+			// of an unknown kind would be named without one.
+			if _, resource := LookupResourceGVR(w.Kind, w.Group); resource == "" {
+				return resourcecontext.ServiceBackendGrouping{}
+			}
+			if clusterScoped, _, _ := ClassifyKindScope(w.Kind, w.Group); clusterScoped {
+				namespace = ""
+			}
+		}
 		out.Workloads = append(out.Workloads, resourcecontext.ServiceBackendWorkload{
-			ContextRef: resourcecontext.ContextRef{Kind: w.Kind, Group: w.Group, Namespace: svc.Namespace, Name: w.Name},
+			ContextRef: resourcecontext.ContextRef{Kind: w.Kind, Group: w.Group, Namespace: namespace, Name: w.Name},
 			Pods:       w.Pods,
 			Ready:      w.Ready,
 		})

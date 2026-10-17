@@ -418,6 +418,27 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 			wantApps:      [][]string{{"frontend"}, {"search"}},
 		},
 		{
+			name: "workloads that share a name are labelled by kind",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("api-1", "StatefulSet", "api", []corev1.Container{container("api", "acme/api:1", 5000)}),
+				backendPod("api-abc12", "DaemonSet", "api", []corev1.Container{container("agent", "acme/agent:1", 9100)}),
+			},
+			wantWorkloads: 2,
+			wantDifferent: true,
+			wantGapPorts:  []int32{5000},
+			wantProblem:   "Service frontend routes to 2 different applications (DaemonSet/api, StatefulSet/api); DaemonSet/api's pods don't declare port 5000",
+		},
+		{
+			name: "revisions whose ReplicaSets can't be read are not judged",
+			svc:  backendService(p5000),
+			pods: []*corev1.Pod{
+				backendPod("web-6d4cf56db6-a", "ReplicaSet", "web-6d4cf56db6", []corev1.Container{container("web", "old-registry/web:1", 5000)}),
+				backendPod("web-7f9b8c5d44-b", "ReplicaSet", "web-7f9b8c5d44", []corev1.Container{container("web", "new-registry/web:2", 5000)}),
+			},
+			wantWorkloads: 2,
+		},
+		{
 			name: "stable and canary of one app plus an unrelated app",
 			svc:  backendService(p5000),
 			pods: []*corev1.Pod{
@@ -461,12 +482,13 @@ func TestAnalyzeServiceBackends(t *testing.T) {
 }
 
 func TestServiceBackendsSummary(t *testing.T) {
-	b := ServiceBackends{Workloads: []ServiceBackendWorkload{{Kind: "Deployment", Name: "frontend", Pods: 2}, {Kind: "Deployment", Name: "search", Pods: 1}}}
+	b := ServiceBackends{Workloads: []ServiceBackendWorkload{{Kind: "Deployment", Name: "frontend", Label: "frontend", Pods: 2}, {Kind: "Deployment", Name: "search", Label: "search", Pods: 1}}}
 	if got, want := b.Summary(), "3 pods from 2 workloads: frontend (2), search (1)"; got != want {
 		t.Fatalf("Summary = %q, want %q", got, want)
 	}
 	for i := 0; i < 5; i++ {
-		b.Workloads = append(b.Workloads, ServiceBackendWorkload{Kind: "Pod", Name: "p" + string(rune('a'+i)), Pods: 1})
+		name := "p" + string(rune('a'+i))
+		b.Workloads = append(b.Workloads, ServiceBackendWorkload{Kind: "Pod", Name: name, Label: name, Pods: 1})
 	}
 	if got := b.Summary(); !strings.HasSuffix(got, "pc (1), 2 more") {
 		t.Fatalf("Summary should cap the list: %q", got)
@@ -567,10 +589,33 @@ func TestDetectServiceBackendProblemsMixedBackends(t *testing.T) {
 
 func TestServiceBackendsCauseWithoutPortGap(t *testing.T) {
 	b := ServiceBackends{
-		Workloads:    []ServiceBackendWorkload{{Name: "web-stable"}, {Name: "web-canary"}, {Name: "search"}},
+		Workloads:    []ServiceBackendWorkload{{Name: "web-stable", Label: "web-stable"}, {Name: "web-canary", Label: "web-canary"}, {Name: "search", Label: "search"}},
 		Applications: [][]string{{"web-stable", "web-canary"}, {"search"}},
 	}
 	if got, want := b.Cause(), "The selector matches pods of web-stable + web-canary and search, so requests are spread across all of them."; got != want {
 		t.Fatalf("Cause = %q, want %q", got, want)
+	}
+}
+
+func TestServiceBackendLookupGroupsOnlyCheckableWorkloads(t *testing.T) {
+	svc := backendService(intstr.FromInt32(8080))
+	web := []corev1.Container{container("web", "acme/web:1", 8080)}
+	mirror := backendPod("etcd-node-a", "Node", "node-a", web, func(p *corev1.Pod) { p.OwnerReferences[0].APIVersion = "v1" })
+	got := ServiceBackendLookup{}.GroupServiceBackends(svc, []*corev1.Pod{backendPod("web-0", "StatefulSet", "web", web), mirror})
+	if len(got.Workloads) != 2 {
+		t.Fatalf("workloads = %+v", got.Workloads)
+	}
+	for _, w := range got.Workloads {
+		if w.Kind == "Node" && w.Namespace != "" {
+			t.Fatalf("a cluster-scoped owner must be checked cluster-wide: %+v", w)
+		}
+		if w.Kind == "StatefulSet" && w.Namespace != "shop" {
+			t.Fatalf("a namespaced owner keeps the Service namespace: %+v", w)
+		}
+	}
+
+	custom := backendPod("widget-0", "Widget", "widget", web, func(p *corev1.Pod) { p.OwnerReferences[0].APIVersion = "example.com/v1" })
+	if got := (ServiceBackendLookup{}).GroupServiceBackends(svc, []*corev1.Pod{backendPod("web-0", "StatefulSet", "web", web), custom}); len(got.Workloads) != 0 || got.DifferentApplications != "" {
+		t.Fatalf("a workload kind the access check can't resolve must withhold the breakdown: %+v", got)
 	}
 }
