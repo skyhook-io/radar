@@ -1,6 +1,6 @@
 // Package ownershiplive checks Radar's ownership source against a live
 // cluster: build with the liveparity tag and point it at one (see
-// TestLiveParity). It only lists and watches.
+// TestLiveParity). It only lists, watches and gets.
 package ownershiplive
 
 import (
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
@@ -17,17 +18,38 @@ import (
 // apiRead reads an object's current state straight from the API server.
 type apiRead func(ref resourceid.Ref) (o ownershiptest.Object, exists bool, err error)
 
-// settleTries bounds how long a check waits for the cache to catch up with
-// the API server, which it follows through a watch a moment behind.
-var settleTries, settlePause = 20, 100 * time.Millisecond
+// settle bounds how long a check waits for the cache to catch up with the API
+// server, which it follows through a watch a moment behind.
+type settle struct {
+	tries int
+	pause time.Duration
+}
+
+var liveSettle = settle{tries: 20, pause: 100 * time.Millisecond}
+
+// outcome is what rechecking one difference against the API server showed.
+type outcome uint8
+
+const (
+	// unresolved: the cache still answers wrong after catching up, or the
+	// difference is about coverage. The live check fails on it.
+	unresolved outcome = iota
+	// confirmed: the cache now answers right, and the API server shows the
+	// disputed objects changed since the list, which explains the difference.
+	confirmed
+	// caughtUp: the cache now answers right, but the API server shows no
+	// change since the list. The cache was behind, or answered wrong for a
+	// while; the check can't tell which.
+	caughtUp
+)
 
 // settled reads ref from the cache and from the API server until both say
 // the same: absent, or present in the same state. It reports what the API
 // server says, and false if they never agreed.
-func settled(ref resourceid.Ref, cache ownership.Session, api apiRead) (ownershiptest.Object, bool, bool) {
-	for try := range settleTries {
+func (st settle) settled(ref resourceid.Ref, cache ownership.Session, api apiRead) (ownershiptest.Object, bool, bool) {
+	for try := range st.tries {
 		if try > 0 {
-			time.Sleep(settlePause)
+			time.Sleep(st.pause)
 		}
 		read := cache.Object(ref)
 		o, exists, err := api(ref)
@@ -44,50 +66,77 @@ func settled(ref resourceid.Ref, cache ownership.Session, api apiRead) (ownershi
 	return ownershiptest.Object{}, false, false
 }
 
-// explained reports whether a difference between a listed World and a cache
-// session is explained by the cluster changing while they were compared. It
-// is, only when for every object the difference disputes the cache now
-// agrees with a fresh read from the API server, and the cache's answer to the
-// disputed question now matches what those reads imply. A difference about
-// coverage never is.
-func explained(d ownershiptest.Difference, cache ownership.Session, api apiRead) bool {
-	if d.Coverage || len(d.Objects) == 0 {
-		return false
+// changedSince reports whether the API server's current state of an object
+// differs from its listed copy.
+func changedSince(listed map[resourceid.Ref]ownershiptest.Object, ref resourceid.Ref, now ownershiptest.Object, exists bool) bool {
+	was, wasListed := listed[ref]
+	if wasListed != exists {
+		return true
 	}
-	var now ownership.CandidateRead
-	if d.Candidates {
-		// A cut-off answer can't show whether it holds an object.
-		if now = cache.OwnerCandidates(d.UID, d.Domain, d.Limit); now.Truncated {
-			return false
-		}
-	}
-	for _, ref := range d.Objects {
-		o, exists, ok := settled(ref, cache, api)
-		if !ok {
-			return false
-		}
-		if !d.Candidates {
-			continue
-		}
-		named := exists && slices.ContainsFunc(o.Owners, func(r metav1.OwnerReference) bool { return r.UID == d.UID })
-		if named != slices.ContainsFunc(now.Candidates, func(c ownership.Observation) bool { return c.Ref == ref }) {
-			return false
-		}
-	}
-	return true
+	return exists && (was.UID != now.UID || was.ResourceVersion != now.ResourceVersion)
 }
 
-// explainedResolution reports whether a ResolveOwner difference is explained
-// by the owner changing while the two were compared: the cache now agrees
-// with the API server about the owner, and its resolution now is what the
-// owner's current state implies.
-func explainedResolution(want, got ownership.OwnerResolution, dependent ownership.Observation, ref metav1.OwnerReference, cache ownership.Session, api apiRead) bool {
-	if want.Ref != got.Ref || want.Ref == (resourceid.Ref{}) || want.Gap != got.Gap {
-		return false
+// recheck asks a difference's question of the cache again once the objects
+// it disputes have caught up, and checks the whole fresh answer against the
+// API server: for a search, every candidate must name the UID in its current
+// copy and match that copy exactly, and every disputed object left out must
+// not name it.
+func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]ownershiptest.Object, cache ownership.Session, api apiRead) outcome {
+	if d.Coverage || len(d.Objects) == 0 {
+		return unresolved
 	}
-	o, exists, ok := settled(want.Ref, cache, api)
+	changed := false
+	current := map[resourceid.Ref]ownershiptest.Object{}
+	exists := map[resourceid.Ref]bool{}
+	settleRef := func(ref resourceid.Ref) bool {
+		o, present, ok := st.settled(ref, cache, api)
+		if ok {
+			current[ref], exists[ref] = o, present
+			changed = changed || changedSince(listed, ref, o, present)
+		}
+		return ok
+	}
+	for _, ref := range d.Objects {
+		if !settleRef(ref) {
+			return unresolved
+		}
+	}
+	if d.Candidates {
+		fresh := cache.OwnerCandidates(d.UID, d.Domain, d.Limit)
+		if fresh.Truncated {
+			return unresolved
+		}
+		for _, c := range fresh.Candidates {
+			if _, seen := current[c.Ref]; !seen && !settleRef(c.Ref) {
+				return unresolved
+			}
+			if !exists[c.Ref] || !names(current[c.Ref].Owners, d.UID) || !ownershiptest.SameObservation(c, ownershiptest.Observe(current[c.Ref])) {
+				return unresolved
+			}
+		}
+		for _, ref := range d.Objects {
+			in := slices.ContainsFunc(fresh.Candidates, func(c ownership.Observation) bool { return c.Ref == ref })
+			if !in && exists[ref] && names(current[ref].Owners, d.UID) {
+				return unresolved
+			}
+		}
+	}
+	if changed {
+		return confirmed
+	}
+	return caughtUp
+}
+
+// recheckResolution is recheck for a ResolveOwner difference: once the owner
+// has caught up, the cache's resolution must be what the owner's current
+// state implies. The dependent need not have changed.
+func (st settle) recheckResolution(want, got ownership.OwnerResolution, dependent ownership.Observation, ref metav1.OwnerReference, listed map[resourceid.Ref]ownershiptest.Object, cache ownership.Session, api apiRead) outcome {
+	if want.Ref != got.Ref || want.Ref == (resourceid.Ref{}) || want.Gap != got.Gap {
+		return unresolved
+	}
+	o, exists, ok := st.settled(want.Ref, cache, api)
 	if !ok {
-		return false
+		return unresolved
 	}
 	implied := ownership.OwnerGone
 	if exists {
@@ -96,5 +145,15 @@ func explainedResolution(want, got ownership.OwnerResolution, dependent ownershi
 			implied = ownership.OwnerFound
 		}
 	}
-	return ownership.ResolveOwner(cache, dependent, ref).State == implied
+	if ownership.ResolveOwner(cache, dependent, ref).State != implied {
+		return unresolved
+	}
+	if changedSince(listed, want.Ref, o, exists) {
+		return confirmed
+	}
+	return caughtUp
+}
+
+func names(owners []metav1.OwnerReference, uid types.UID) bool {
+	return slices.ContainsFunc(owners, func(r metav1.OwnerReference) bool { return r.UID == uid })
 }

@@ -42,10 +42,12 @@ var typedKinds = func() map[resourceid.GroupKind]resourceid.Builtin {
 const passes = 2
 
 // TestLiveParity checks the cache source over a live cluster against Scan of
-// a World listed straight from the same cluster. A difference the cluster
-// changing mid-comparison explains — checked against fresh reads from the API
-// server, see explained — is reported; any other difference fails. It only
-// lists, watches and gets.
+// a World listed straight from the same cluster. Each difference is asked
+// again once the objects it disputes have caught up, and the fresh answer is
+// checked against reads straight from the API server (see recheck). It fails
+// on any answer still wrong then, and on any coverage difference; it reports
+// the rest as confirmed by a change the API server shows, or as caught up
+// with no change shown. It only lists, watches and gets.
 //
 //	RADAR_LIVE_KUBECONFIG=... RADAR_LIVE_CONTEXT=... go test -tags liveparity,withoutebpf -run TestLiveParity -timeout 20m ./internal/ownershiplive/
 func TestLiveParity(t *testing.T) {
@@ -236,17 +238,27 @@ func TestLiveParity(t *testing.T) {
 			t.Fatal(err)
 		}
 		q := questions(w)
+		listed := map[resourceid.Ref]ownershiptest.Object{}
+		for _, o := range w.Objects {
+			listed[o.Ref] = o
+		}
+		counts := map[outcome]int{}
+		var caughtUpQuestions []string
+		judge := func(question string, o outcome, detail string) {
+			counts[o]++
+			switch o {
+			case unresolved:
+				failures++
+				if failures <= 20 {
+					t.Errorf("pass %d: %s", pass, detail)
+				}
+			case caughtUp:
+				caughtUpQuestions = append(caughtUpQuestions, question)
+			}
+		}
 		diffs := ownershiptest.Differences(want, got, q)
-		changed := 0
 		for _, d := range diffs {
-			if explained(d, got, api) {
-				changed++
-				continue
-			}
-			failures++
-			if failures <= 20 {
-				t.Errorf("pass %d: %v", pass, d)
-			}
+			judge(d.Question, liveSettle.recheck(d, listed, got, api), fmt.Sprint(d))
 		}
 		resolutions, resolutionDiffs := 0, 0
 		for _, o := range w.Objects {
@@ -261,21 +273,24 @@ func TestLiveParity(t *testing.T) {
 					continue
 				}
 				resolutionDiffs++
-				if explainedResolution(a, b, dependent.Object, ref, got, api) {
-					changed++
-					continue
-				}
-				failures++
-				if failures <= 20 {
-					t.Errorf("pass %d: ResolveOwner(%v, %s %s/%s): listed %v %v %+v, cache %v %v %+v", pass, o.Ref, ref.APIVersion, ref.Kind, ref.Name, a.State, a.Ref, a.Gap, b.State, b.Ref, b.Gap)
-				}
+				question := fmt.Sprintf("ResolveOwner(%v, %s %s/%s)", o.Ref, ref.APIVersion, ref.Kind, ref.Name)
+				judge(question, liveSettle.recheckResolution(a, b, dependent.Object, ref, listed, got, api),
+					fmt.Sprintf("%s: listed %v %v %+v, cache %v %v %+v", question, a.State, a.Ref, a.Gap, b.State, b.Ref, b.Gap))
 			}
 		}
 		if err := got.Validate(); err != nil {
 			t.Errorf("pass %d: Validate: %v", pass, err)
 		}
-		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains) and %d owner references resolved; %d differ, %d of them explained by the cluster changing as the API server confirms",
-			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions, len(diffs)+resolutionDiffs, changed)
+		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d still wrong",
+			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions,
+			len(diffs)+resolutionDiffs, counts[confirmed], counts[caughtUp], counts[unresolved])
+		for i, question := range caughtUpQuestions {
+			if i == 10 {
+				t.Logf("  ... and %d more caught up", len(caughtUpQuestions)-10)
+				break
+			}
+			t.Logf("  caught up: %s", question)
+		}
 	}
-	t.Logf("%d differences unexplained", failures)
+	t.Logf("%d answers still wrong after catching up", failures)
 }

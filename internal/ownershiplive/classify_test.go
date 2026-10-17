@@ -12,8 +12,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// candidateDrop answers like its session but drops every candidate: a source
-// with a broken owner index.
+var quick = settle{tries: 3, pause: time.Millisecond}
+
+// candidateDrop drops every candidate: a broken owner index.
 type candidateDrop struct{ ownership.Session }
 
 func (c candidateDrop) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
@@ -22,17 +23,55 @@ func (c candidateDrop) OwnerCandidates(uid types.UID, d ownership.Domain, limit 
 	return r
 }
 
-// falseAbsence answers like its session but reports one object absent.
+// inventedUID returns every candidate under a UID it doesn't have.
+type inventedUID struct{ ownership.Session }
+
+func (c inventedUID) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	r := c.Session.OwnerCandidates(uid, d, limit)
+	for i := range r.Candidates {
+		r.Candidates[i].UID = "invented"
+	}
+	return r
+}
+
+// falseAbsence reports one object absent, always or only the first time.
 type falseAbsence struct {
 	ownership.Session
-	ref resourceid.Ref
+	ref   resourceid.Ref
+	once  bool
+	calls *int
 }
 
 func (f falseAbsence) Object(ref resourceid.Ref) ownership.ObjectRead {
 	if ref == f.ref {
-		return ownership.ObjectRead{State: ownership.Absent}
+		*f.calls++
+		if !f.once || *f.calls == 1 {
+			return ownership.ObjectRead{State: ownership.Absent}
+		}
 	}
 	return f.Session.Object(ref)
+}
+
+// lagging answers from an older view of the cluster until it has been asked
+// twice, as a cache does while its watch catches up.
+type lagging struct {
+	ownership.Session
+	old   ownership.Session
+	calls *int
+}
+
+func (l lagging) view() ownership.Session {
+	*l.calls++
+	if *l.calls <= 2 {
+		return l.old
+	}
+	return l.Session
+}
+
+func (l lagging) Object(ref resourceid.Ref) ownership.ObjectRead { return l.view().Object(ref) }
+
+func (l lagging) OwnerCandidates(uid types.UID, d ownership.Domain, limit int) ownership.CandidateRead {
+	return l.view().OwnerCandidates(uid, d, limit)
 }
 
 func world(objects ...ownershiptest.Object) ownershiptest.World {
@@ -55,6 +94,14 @@ func apiOf(w ownershiptest.World) apiRead {
 	}
 }
 
+func listedOf(w ownershiptest.World) map[resourceid.Ref]ownershiptest.Object {
+	out := map[resourceid.Ref]ownershiptest.Object{}
+	for _, o := range w.Objects {
+		out[o.Ref] = o
+	}
+	return out
+}
+
 func begin(t *testing.T, w ownershiptest.World) ownership.Session {
 	t.Helper()
 	s, err := ownershiptest.Scan(w).Begin()
@@ -64,8 +111,7 @@ func begin(t *testing.T, w ownershiptest.World) ownership.Session {
 	return s
 }
 
-func TestExplainedNeedsTheCacheToAgreeWithTheAPIServer(t *testing.T) {
-	settleTries, settlePause = 2, time.Millisecond
+func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 	rs := ownershiptest.Object{Ref: resourceid.Ref{Group: "apps", Kind: "ReplicaSet", Namespace: "alpha", Name: "rs"}, APIVersion: "apps/v1", UID: "uid-rs", ResourceVersion: "1"}
 	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "p"}, APIVersion: "v1", UID: "uid-p", ResourceVersion: "10", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
 	updated := pod
@@ -78,27 +124,57 @@ func TestExplainedNeedsTheCacheToAgreeWithTheAPIServer(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		now   ownershiptest.World
-		cache func(ownership.Session) ownership.Session
-		// want says, per question, whether its difference is explained.
-		want map[string]bool
+		cache func(now ownership.Session) ownership.Session
+		// want is each question's outcome.
+		want map[string]outcome
+		// listed, when set, is what the list saw instead of the Pod before
+		// any change.
+		listed *ownershiptest.World
 	}{
-		{"the Pod was updated, and the cache has the update", world(rs, updated), nil, map[string]bool{"Object": true, "OwnerCandidates": true}},
-		{"the Pod lost its owner, and the cache knows", world(rs, orphaned), nil, map[string]bool{"Object": true, "OwnerCandidates": true}},
-		{"the Pod was deleted, and the cache knows", world(rs), nil, map[string]bool{"Object": true, "OwnerCandidates": true}},
+		{"the Pod was updated, and the cache has the update", world(rs, updated), nil,
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": confirmed}, nil},
+		{"the Pod lost its owner, and the cache knows", world(rs, orphaned), nil,
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": confirmed}, nil},
+		{"the Pod was deleted, and the cache knows", world(rs), nil,
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": confirmed}, nil},
+		// The list already saw the Pod orphaned; the cache, behind, still
+		// had it as a candidate and catches up only on its third answer. The
+		// disputed question is asked afresh after the objects settle, and
+		// with nothing changed since the list the cache had merely been
+		// behind.
+		{"the cache was behind the list", world(rs, orphaned),
+			func(now ownership.Session) ownership.Session { return lagging{now, begin(t, listed), new(int)} },
+			map[string]outcome{"Object": caughtUp, "OwnerCandidates": caughtUp}, &ownershiptest.World{}},
 		// The cache's own absence is not evidence: the API server still has it.
-		{"the cache falsely reports the Pod absent", world(rs, pod), func(s ownership.Session) ownership.Session { return falseAbsence{s, pod.Ref} }, map[string]bool{"Object": false}},
-		// The Pod's update explains its Object difference, but a write that
-		// kept its owner doesn't explain a missing candidate.
-		{"a status write, and the index drops the Pod", world(rs, updated), func(s ownership.Session) ownership.Session { return candidateDrop{s} }, map[string]bool{"Object": true, "OwnerCandidates": false}},
+		{"the cache keeps reporting the Pod absent", world(rs, pod),
+			func(now ownership.Session) ownership.Session { return falseAbsence{now, pod.Ref, false, new(int)} },
+			map[string]outcome{"Object": unresolved}, nil},
+		// Right once asked again, with nothing changed: not a confirmed
+		// change, whatever made the first answer wrong.
+		{"the cache reports the Pod absent once", world(rs, pod),
+			func(now ownership.Session) ownership.Session { return falseAbsence{now, pod.Ref, true, new(int)} },
+			map[string]outcome{"Object": caughtUp}, nil},
+		// A write that kept the Pod's owner doesn't excuse a missing
+		// candidate.
+		{"a status write, and the index drops the Pod", world(rs, updated),
+			func(now ownership.Session) ownership.Session { return candidateDrop{now} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
+		// Membership right, copy wrong.
+		{"a candidate under a UID it doesn't have", world(rs, updated),
+			func(now ownership.Session) ownership.Session { return inventedUID{now} },
+			map[string]outcome{"Object": confirmed, "OwnerCandidates": unresolved}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cache := begin(t, tc.now)
 			if tc.cache != nil {
 				cache = tc.cache(cache)
 			}
-			diffs := ownershiptest.Differences(begin(t, listed), cache, q)
+			from := listed
+			if tc.listed != nil {
+				from = tc.now
+			}
 			seen := map[string]bool{}
-			for _, d := range diffs {
+			for _, d := range ownershiptest.Differences(begin(t, from), cache, q) {
 				question := "Object"
 				if d.Candidates {
 					question = "OwnerCandidates"
@@ -106,10 +182,10 @@ func TestExplainedNeedsTheCacheToAgreeWithTheAPIServer(t *testing.T) {
 				seen[question] = true
 				want, expected := tc.want[question]
 				if !expected {
-					t.Fatalf("unexpected difference %s", d.Question)
+					continue
 				}
-				if got := explained(d, cache, apiOf(tc.now)); got != want {
-					t.Errorf("%s: explained = %v, want %v", d.Question, got, want)
+				if got := quick.recheck(d, listedOf(from), cache, apiOf(tc.now)); got != want {
+					t.Errorf("%s: %v, want %v", d.Question, got, want)
 				}
 			}
 			for question := range tc.want {
@@ -121,39 +197,39 @@ func TestExplainedNeedsTheCacheToAgreeWithTheAPIServer(t *testing.T) {
 	}
 }
 
-func TestExplainedResolutionNeedsOnlyTheOwnerToChange(t *testing.T) {
-	settleTries, settlePause = 2, time.Millisecond
+func TestRecheckResolutionNeedsOnlyTheOwnerToChange(t *testing.T) {
 	rs := ownershiptest.Object{Ref: resourceid.Ref{Group: "apps", Kind: "ReplicaSet", Namespace: "alpha", Name: "rs"}, APIVersion: "apps/v1", UID: "uid-rs", ResourceVersion: "1"}
 	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "p"}, APIVersion: "v1", UID: "uid-p", ResourceVersion: "10", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
 	recreated := rs
 	recreated.UID, recreated.ResourceVersion = "uid-rs-again", "2"
-	listed := begin(t, world(rs, pod))
+	listedWorld := world(rs, pod)
+	listed := begin(t, listedWorld)
 	dependent := listed.Object(pod.Ref).Object
 	ref := dependent.OwnerReferences[0]
+	unchanged := world(rs, pod)
 	for _, tc := range []struct {
-		name string
-		now  ownershiptest.World
-		want bool
+		name  string
+		now   ownershiptest.World
+		cache ownership.Session
+		want  outcome
 	}{
-		{"the owner was recreated", world(recreated, pod), true},
-		{"the owner was deleted", world(pod), true},
+		{"the owner was recreated", world(recreated, pod), nil, confirmed},
+		{"the owner was deleted", world(pod), nil, confirmed},
+		{"an unchanged owner resolved wrongly", unchanged, falseAbsence{begin(t, unchanged), rs.Ref, false, new(int)}, unresolved},
+		{"an unchanged owner resolved wrongly once", unchanged, falseAbsence{begin(t, unchanged), rs.Ref, true, new(int)}, caughtUp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cache := begin(t, tc.now)
+			cache := tc.cache
+			if cache == nil {
+				cache = begin(t, tc.now)
+			}
 			a, b := ownership.ResolveOwner(listed, dependent, ref), ownership.ResolveOwner(cache, dependent, ref)
 			if a.State == b.State {
 				t.Fatal("scenario: the resolutions should differ")
 			}
-			if got := explainedResolution(a, b, dependent, ref, cache, apiOf(tc.now)); got != tc.want {
-				t.Fatalf("explained = %v, want %v (%v vs %v)", got, tc.want, a.State, b.State)
+			if got := quick.recheckResolution(a, b, dependent, ref, listedOf(listedWorld), cache, apiOf(tc.now)); got != tc.want {
+				t.Fatalf("%v, want %v (%v vs %v)", got, tc.want, a.State, b.State)
 			}
 		})
-	}
-	// The owner unchanged, yet the cache resolves it differently: a defect.
-	unchanged := world(rs, pod)
-	lying := falseAbsence{begin(t, unchanged), rs.Ref}
-	a, b := ownership.ResolveOwner(listed, dependent, ref), ownership.ResolveOwner(lying, dependent, ref)
-	if explainedResolution(a, b, dependent, ref, lying, apiOf(unchanged)) {
-		t.Fatal("a wrong resolution of an unchanged owner was explained")
 	}
 }
