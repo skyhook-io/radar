@@ -282,3 +282,61 @@ func TestClusterScopedForNamespaceDisclosesEvictedHistoryAndUncachedKinds(t *tes
 		t.Fatalf("per-kind cache coverage: %+v", got)
 	}
 }
+
+// A CEL-only edit has to survive the whole path: the history differ records
+// it, the timeline keeps it, and the namespace view reads it as a re-scope.
+func TestClusterScopedForNamespaceSeesMatchConditionEditThroughTheDiffer(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	defer k8s.ResetTestDynamicState()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	timeline.SetObservationStartForTest(now.Add(-2 * time.Hour))
+	config := func(expression string) *unstructured.Unstructured {
+		data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&admissionv1.MutatingWebhookConfiguration{
+			TypeMeta:   metav1.TypeMeta{Kind: "MutatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1"},
+			ObjectMeta: metav1.ObjectMeta{Name: "policy"},
+			Webhooks: []admissionv1.MutatingWebhook{{
+				Name:              "policy.example",
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"team": "other"}},
+				Rules:             []admissionv1.RuleWithOperations{{Operations: []admissionv1.OperationType{admissionv1.Create}, Rule: admissionv1.Rule{APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"pods"}}}},
+				MatchConditions:   []admissionv1.MatchCondition{{Name: "scope", Expression: expression}},
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &unstructured.Unstructured{Object: data}
+	}
+	before, after := config("object.metadata.namespace == 'shop'"), config("object.metadata.namespace == 'billing'")
+	diff := k8s.ComputeDiff("MutatingWebhookConfiguration", before, after)
+	if diff == nil {
+		t.Fatal("the history differ dropped a CEL-only webhook edit")
+	}
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{ID: "cel", Timestamp: now, Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "MutatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1", Name: "policy", EventType: timeline.EventTypeUpdate, Diff: diff}); err != nil {
+		t.Fatal(err)
+	}
+	gvr := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
+	vgvr := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "MutatingWebhookConfigurationList", vgvr: "ValidatingWebhookConfigurationList"}, after)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{
+		{Group: gvr.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: gvr.Resource, Verbs: []string{"list", "watch"}},
+		{Group: vgvr.Group, Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: vgvr.Resource, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []schema.GroupVersionResource{gvr, vgvr} {
+		if err := k8s.GetDynamicResourceCache().EnsureWatching(r); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(r, 2*time.Second) {
+			t.Fatalf("watch %s: %v", r, err)
+		}
+	}
+	// The current selector excludes "shop"; only the recorded CEL edit puts
+	// the change in its view, as one whose earlier scope is unknown.
+	got := ClusterScopedForNamespace(context.Background(), "shop", NamespaceLabels{Labels: labels.Set{"team": "shop"}, Known: true}, time.Hour, nil)
+	if len(got.Changes) != 1 || got.Changes[0].Applicability != issuesapi.ClusterScopedMayApply || !strings.Contains(got.Changes[0].AppliesBecause, "re-scoped webhook policy.example") {
+		t.Fatalf("CEL-only edit not surfaced as a possible re-scope: %+v", got)
+	}
+}
