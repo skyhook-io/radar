@@ -12,8 +12,10 @@ import (
 	"log"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 )
 
 // ResourceType identifies a Kubernetes resource type tracked by the cache.
@@ -382,6 +384,11 @@ type DynamicCacheConfig struct {
 	// observation reports sync_stalled instead of initial_sync. Zero means 30
 	// seconds.
 	SyncStallAfter time.Duration
+
+	// Indexers adds indexes to the informers of a resource, whatever version
+	// it is watched at, for ReadableIndexed. They are installed before an
+	// informer starts.
+	Indexers map[schema.GroupResource]cache.Indexers
 
 	// DebugEvents enables verbose debug logging.
 	DebugEvents bool

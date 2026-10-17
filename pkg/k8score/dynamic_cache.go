@@ -479,6 +479,17 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, sc
 			log.Printf("Warning: indexing %v by owner failed: %v", gvr, err)
 		}
 	}
+	extra := cache.Indexers{}
+	for name, index := range d.config.Indexers[gvr.GroupResource()] {
+		if _, indexed := informer.GetIndexer().GetIndexers()[name]; !indexed {
+			extra[name] = index
+		}
+	}
+	if len(extra) > 0 {
+		if err := informer.AddIndexers(extra); err != nil {
+			log.Printf("Warning: indexing %v failed: %v", gvr, err)
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
