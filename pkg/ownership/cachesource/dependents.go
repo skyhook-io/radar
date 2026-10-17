@@ -159,6 +159,17 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 }
 
 func (s *session) dynamicCandidates(q *search, kind ownership.Kind) {
+	s.dynamicIndexed(q, kind, k8score.OwnerUIDIndex, q.uid, func(gvr schema.GroupVersionResource, u *unstructured.Unstructured) {
+		q.add(kind.GroupKind, gvr.GroupVersion().String(), u, u.GetNamespace(), u.GetName())
+	})
+}
+
+// dynamicIndexed reads index[key] for a dynamic kind across q's domain,
+// handing each object found to found and recording a gap for each part of the
+// domain it can't read. Every watched version the catalog serves is read, and
+// versions that disagree leave their namespace unread: one of their watches
+// hasn't caught up.
+func (s *session) dynamicIndexed(q *search, kind ownership.Kind, index, key string, found func(schema.GroupVersionResource, *unstructured.Unstructured)) {
 	gk := kind.GroupKind
 	if s.caches.Dynamic == nil {
 		q.gapEverywhere(gk, kind.Namespaced, readreason.KindNotWatched)
@@ -170,19 +181,17 @@ func (s *session) dynamicCandidates(q *search, kind ownership.Kind) {
 		return
 	}
 	// read searches the informers serving namespace at every watched version
-	// that can answer, and says which versions answered. Versions that
-	// disagree leave the namespace unread: one of their watches hasn't caught
-	// up.
-	read := func(namespace string) (found []*unstructured.Unstructured, at schema.GroupVersionResource, answered []schema.GroupVersionResource, reason readreason.Code) {
+	// that can answer, and says which versions answered.
+	read := func(namespace string) (objs []*unstructured.Unstructured, at schema.GroupVersionResource, answered []schema.GroupVersionResource, reason readreason.Code) {
 		for _, gvr := range versions {
-			objs, server, ok := s.caches.Dynamic.ReadableDependents(gvr, namespace, q.uid)
+			got, server, ok := s.caches.Dynamic.ReadableIndexed(gvr, namespace, index, key)
 			if !ok {
 				continue
 			}
 			s.record(gvr, namespace, server)
 			if len(answered) == 0 {
-				found, at = objs, gvr
-			} else if !sameIncarnations(found, objs) {
+				objs, at = got, gvr
+			} else if !sameIncarnations(objs, got) {
 				return nil, at, nil, readreason.KindSyncPending
 			}
 			answered = append(answered, gvr)
@@ -190,12 +199,12 @@ func (s *session) dynamicCandidates(q *search, kind ownership.Kind) {
 		if len(answered) == 0 {
 			return nil, at, nil, dynamicReason(s.caches.Dynamic.NamespaceObservation(versions[0], namespace))
 		}
-		return found, at, answered, ""
+		return objs, at, answered, ""
 	}
-	add := func(objs []*unstructured.Unstructured, at schema.GroupVersionResource, skip map[string]bool) {
+	hand := func(objs []*unstructured.Unstructured, at schema.GroupVersionResource, skip map[string]bool) {
 		for _, u := range objs {
 			if !skip[u.GetNamespace()] {
-				q.add(gk, at.GroupVersion().String(), u, u.GetNamespace(), u.GetName())
+				found(at, u)
 			}
 		}
 	}
@@ -204,7 +213,7 @@ func (s *session) dynamicCandidates(q *search, kind ownership.Kind) {
 			if objs, at, _, reason := read(ns); reason != "" {
 				q.gap(gk, ns, reason)
 			} else {
-				add(objs, at, nil)
+				hand(objs, at, nil)
 			}
 		}
 	}
@@ -212,7 +221,7 @@ func (s *session) dynamicCandidates(q *search, kind ownership.Kind) {
 		readNamespaces(q.namespaces)
 		return
 	}
-	found, at, answered, reason := read("")
+	objs, at, answered, reason := read("")
 	// A version watched only namespace by namespace holds evidence of its
 	// own about those namespaces.
 	var namespaces []string
@@ -232,7 +241,7 @@ func (s *session) dynamicCandidates(q *search, kind ownership.Kind) {
 				q.gap(gk, ns, reason)
 			}
 		}
-		add(found, at, pending)
+		hand(objs, at, pending)
 		return
 	}
 	if !kind.Namespaced || len(namespaces) == 0 {

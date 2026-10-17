@@ -7,6 +7,7 @@ import (
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -117,6 +118,12 @@ func (s *session) Catalog() *ownership.Catalog {
 }
 
 func (s *session) Object(ref resourceid.Ref) ownership.ObjectRead {
+	return s.readObject(ref, nil)
+}
+
+// readObject is Object, lending the cached object it answered from, when
+// present, to borrow, which must not modify or keep it.
+func (s *session) readObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
 	if ref.Kind == "" || ref.Name == "" {
 		return unavailable(ref, readreason.ReadError)
 	}
@@ -126,7 +133,7 @@ func (s *session) Object(ref resourceid.Ref) ownership.ObjectRead {
 	if b, ok := typedKinds[ref.GroupKind()]; ok {
 		return s.typedObject(ref, b)
 	}
-	return s.dynamicObject(ref)
+	return s.dynamicObject(ref, borrow)
 }
 
 func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownership.ObjectRead {
@@ -143,7 +150,7 @@ func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownershi
 	return observe(ref, b.APIVersion(), obj)
 }
 
-func (s *session) dynamicObject(ref resourceid.Ref) ownership.ObjectRead {
+func (s *session) dynamicObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
 	if s.catalog.Ambiguous(ref.GroupKind()) {
 		return unavailable(ref, readreason.ReadError)
 	}
@@ -159,6 +166,7 @@ func (s *session) dynamicObject(ref resourceid.Ref) ownership.ObjectRead {
 	}
 	versions := s.servingVersions(kind)
 	var answer ownership.ObjectRead
+	var answeredFrom *unstructured.Unstructured
 	answered := false
 	for _, gvr := range versions {
 		obj, server, found, ok := s.caches.Dynamic.ReadableObject(gvr, ref.Namespace, ref.Name)
@@ -172,7 +180,7 @@ func (s *session) dynamicObject(ref resourceid.Ref) ownership.ObjectRead {
 		}
 		switch {
 		case !answered:
-			answer, answered = read, true
+			answer, answeredFrom, answered = read, obj, true
 		case read.State != answer.State || read.Object.UID != answer.Object.UID:
 			// Two version watches disagree: one hasn't caught up yet.
 			return unavailable(ref, readreason.KindSyncPending)
@@ -180,6 +188,9 @@ func (s *session) dynamicObject(ref resourceid.Ref) ownership.ObjectRead {
 	}
 	if !answered {
 		return unavailable(ref, dynamicReason(s.caches.Dynamic.NamespaceObservation(versions[0], ref.Namespace)))
+	}
+	if borrow != nil && answer.State == ownership.Present {
+		borrow(answeredFrom)
 	}
 	return answer
 }

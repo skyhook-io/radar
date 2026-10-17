@@ -111,18 +111,33 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 	return out, true
 }
 
-// ReadableDependents returns the objects of gvr in namespace whose owner
-// references name uid, from the informers serving namespace now, under
-// ReadableObject's rules. namespace "" reads only a cluster-wide informer,
-// which holds every namespace of a namespaced resource. The objects are the
-// cached ones: callers must not modify or keep them.
-func (d *DynamicResourceCache) ReadableDependents(gvr schema.GroupVersionResource, namespace, uid string) (objs []*unstructured.Unstructured, server DynamicReadServer, ok bool) {
+// Indexes reports whether gr's informers carry index: OwnerUIDIndex for every
+// resource but Events, and the indexes DynamicCacheConfig.Indexers gives it.
+func (d *DynamicResourceCache) Indexes(gr schema.GroupResource, index string) bool {
+	if d == nil {
+		return false
+	}
+	if index == OwnerUIDIndex {
+		return !isEventResource(gr.WithVersion(""))
+	}
+	_, ok := d.config.Indexers[gr][index]
+	return ok
+}
+
+// ReadableIndexed returns the objects of gvr in namespace that index holds
+// under key — for OwnerUIDIndex, those whose owner references name the UID key
+// — from the informers serving namespace now, under ReadableObject's rules.
+// namespace "" reads only a cluster-wide informer, which holds every namespace
+// of a namespaced resource. ok is also false when the serving informers lack
+// the index. The objects are the cached ones: callers must not modify or keep
+// them.
+func (d *DynamicResourceCache) ReadableIndexed(gvr schema.GroupVersionResource, namespace, index, key string) (objs []*unstructured.Unstructured, server DynamicReadServer, ok bool) {
 	server, ok = d.ReadServer(gvr, namespace)
 	if !ok {
 		return nil, server, false
 	}
 	for _, e := range server.entries {
-		items, err := e.informer.GetIndexer().ByIndex(OwnerUIDIndex, uid)
+		items, err := e.informer.GetIndexer().ByIndex(index, key)
 		if err != nil {
 			return nil, server, false
 		}

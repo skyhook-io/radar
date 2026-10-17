@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 )
 
 func ownedPod(namespace, name string, owners ...metav1.OwnerReference) *corev1.Pod {
@@ -184,7 +185,7 @@ func waitFor(t *testing.T, what string, done func() bool) {
 	}
 }
 
-func TestDynamicReadableDependentsReadsOnlyItsServingInformers(t *testing.T) {
+func TestDynamicReadableIndexedReadsOnlyItsServingInformers(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	owned := func(namespace, name, uid string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]any{
@@ -200,34 +201,73 @@ func TestDynamicReadableDependentsReadsOnlyItsServingInformers(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Stop)
-	if _, _, ok := d.ReadableDependents(gvr, "alpha", "uid-d"); ok {
+	if _, _, ok := d.ReadableIndexed(gvr, "alpha", OwnerUIDIndex, "uid-d"); ok {
 		t.Fatal("with no informer, nothing can answer")
 	}
 	if err := d.startWatching(gvr, "alpha"); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "alpha's informer", func() bool { return d.IsNamespaceSynced(gvr, "alpha") })
-	got, server, ok := d.ReadableDependents(gvr, "alpha", "uid-d")
+	got, server, ok := d.ReadableIndexed(gvr, "alpha", OwnerUIDIndex, "uid-d")
 	if !ok || !slices.Equal(names(got), []string{"a"}) {
 		t.Fatalf("alpha = %v, %v", names(got), ok)
 	}
 	if serving, _ := d.ReadServer(gvr, "alpha"); !server.Same(serving) {
 		t.Fatal("the read must name the informers that answered")
 	}
-	if _, _, ok := d.ReadableDependents(gvr, "", "uid-d"); ok {
+	if _, _, ok := d.ReadableIndexed(gvr, "", OwnerUIDIndex, "uid-d"); ok {
 		t.Fatal("namespace informers can't answer for the cluster")
 	}
 	if err := d.startWatching(gvr, ""); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the cluster-wide informer", func() bool { return d.IsClusterWideSynced(gvr) })
-	all, _, ok := d.ReadableDependents(gvr, "", "uid-d")
+	all, _, ok := d.ReadableIndexed(gvr, "", OwnerUIDIndex, "uid-d")
 	if !ok || !slices.Equal(names(all), []string{"a", "b"}) {
 		t.Fatalf("cluster-wide = %v, %v", names(all), ok)
 	}
-	beta, _, ok := d.ReadableDependents(gvr, "beta", "uid-d")
+	beta, _, ok := d.ReadableIndexed(gvr, "beta", OwnerUIDIndex, "uid-d")
 	if !ok || !slices.Equal(names(beta), []string{"b"}) {
 		t.Fatalf("beta from the cluster-wide informer = %v, %v; want beta's only", names(beta), ok)
+	}
+}
+
+// A host's indexes are on a resource's informers from their start, whatever
+// version it is watched at, and a read of an index the informers lack refuses
+// to answer rather than answering empty.
+func TestDynamicIndexersAreInstalledBeforeStart(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	widget := func(name, color string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "example.io/v1", "kind": "Widget",
+			"metadata": map[string]any{"name": name, "namespace": "alpha", "labels": map[string]any{"color": color}},
+		}}
+	}
+	byColor := cache.Indexers{"color": func(obj any) ([]string, error) {
+		return []string{obj.(*unstructured.Unstructured).GetLabels()["color"]}, nil
+	}}
+	dyn := newWidgetDynamicClient(widget("a", "red"), widget("b", "blue"), widget("c", "red"))
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, Indexers: map[schema.GroupResource]cache.Indexers{gvr.GroupResource(): byColor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if !d.Indexes(gvr.GroupResource(), "color") || d.Indexes(gvr.GroupResource(), "shape") || d.Indexes(schema.GroupResource{Group: "example.io", Resource: "gadgets"}, "color") {
+		t.Fatal("Indexes must report the configured indexes, per resource")
+	}
+	if !d.Indexes(gvr.GroupResource(), OwnerUIDIndex) || d.Indexes(schema.GroupResource{Resource: "events"}, OwnerUIDIndex) || d.Indexes(schema.GroupResource{Group: "events.k8s.io", Resource: "events"}, OwnerUIDIndex) {
+		t.Fatal("every resource but Events carries the owner index")
+	}
+	if err := d.startWatching(gvr, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the cluster-wide informer", func() bool { return d.IsClusterWideSynced(gvr) })
+	red, _, ok := d.ReadableIndexed(gvr, "", "color", "red")
+	if !ok || !slices.Equal(names(red), []string{"a", "c"}) {
+		t.Fatalf("red = %v, %v", names(red), ok)
+	}
+	if _, _, ok := d.ReadableIndexed(gvr, "", "shape", "round"); ok {
+		t.Fatal("an index the informers lack can't answer")
 	}
 }
 
