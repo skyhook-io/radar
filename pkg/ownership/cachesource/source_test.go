@@ -1,7 +1,6 @@
 package cachesource
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"sync/atomic"
@@ -41,7 +40,7 @@ func ref(group, kind, namespace, name string) resourceid.Ref {
 }
 
 func objectMeta(namespace, name, uid string) metav1.ObjectMeta {
-	return metav1.ObjectMeta{Namespace: namespace, Name: name, UID: types.UID(uid)}
+	return metav1.ObjectMeta{Namespace: namespace, Name: name, UID: types.UID(uid), ResourceVersion: "rv-" + name}
 }
 
 // replicaSetOwners mixes a controller with a non-controller whose apiVersion
@@ -73,7 +72,7 @@ func fullWidget() *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "example.io/v1", "kind": "Widget",
 		"metadata": map[string]any{
-			"name": "w2", "namespace": "alpha", "uid": "uid-w2",
+			"name": "w2", "namespace": "alpha", "uid": "uid-w2", "resourceVersion": "rv-w2",
 			"deletionTimestamp": deletedAt.UTC().Format(time.RFC3339),
 			"finalizers":        []any{"example.io/keep"},
 			"ownerReferences": []any{map[string]any{
@@ -88,7 +87,7 @@ func widget(namespace, name, uid string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "example.io/v1", "kind": "Widget",
 		"metadata": map[string]any{
-			"name": name, "namespace": namespace, "uid": uid,
+			"name": name, "namespace": namespace, "uid": uid, "resourceVersion": "rv-" + name,
 			"ownerReferences": []any{map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web", "uid": "uid-deploy"}},
 		},
 	}}
@@ -190,16 +189,12 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 	f.watch(t, widgets)
 	s := begin(t, f.source())
 
-	stored, err := f.typed.AppsV1().ReplicaSets("alpha").Get(context.Background(), "web-1", metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	read := s.Object(ref("apps", "ReplicaSet", "alpha", "web-1"))
 	want := ownership.Observation{
 		Ref:             ref("apps", "ReplicaSet", "alpha", "web-1"),
 		APIVersion:      "apps/v1",
 		UID:             "uid-rs",
-		ResourceVersion: stored.ResourceVersion,
+		ResourceVersion: "rv-web-1",
 		OwnerReferences: replicaSetOwners,
 	}
 	if read.State != ownership.Present || !reflect.DeepEqual(read.Object, want) {
@@ -251,7 +246,7 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 
 	w2 := s.Object(ref("example.io", "Widget", "alpha", "w2"))
 	wantW2 := ownership.Observation{
-		Ref: ref("example.io", "Widget", "alpha", "w2"), APIVersion: "example.io/v1", UID: "uid-w2",
+		Ref: ref("example.io", "Widget", "alpha", "w2"), APIVersion: "example.io/v1", UID: "uid-w2", ResourceVersion: "rv-w2",
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "uid-deploy", Controller: ptr(true), BlockOwnerDeletion: ptr(false)}},
 		Finalizers:      []string{"example.io/keep"},
 	}
@@ -479,6 +474,19 @@ func TestValidateFailsOnceAReadStoreIsReplaced(t *testing.T) {
 	}
 	if err := during.Validate(); err != nil {
 		t.Fatalf("a session that read only the replacement: %v", err)
+	}
+}
+
+// An absence depends on its store as much as a presence does.
+func TestValidateFailsOnceTheStoreBehindAnAbsenceIsReplaced(t *testing.T) {
+	f, p := newPromotionFixture(t)
+	s := begin(t, f.source())
+	if got := s.Object(ref("example.io", "Widget", "alpha", "missing")); got.State != ownership.Absent {
+		t.Fatalf("a miss in alpha's loaded watch = %v %+v", got.State, got.Gap)
+	}
+	p.run(t, f, true)
+	if err := s.Validate(); !errors.Is(err, ownership.ErrStoreReplaced) {
+		t.Fatalf("Validate after the store behind an absence was replaced = %v, want ErrStoreReplaced", err)
 	}
 }
 
