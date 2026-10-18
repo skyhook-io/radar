@@ -17,7 +17,7 @@ func TestParse_FreeTokens(t *testing.T) {
 
 func TestParse_Modifiers(t *testing.T) {
 	q := Parse("kind:Pod ns:prod label:app=redis image:redis:6.2 c:east")
-	if got, want := q.KindFilter, []string{"pod"}; !reflect.DeepEqual(got, want) {
+	if got, want := q.KindFilter, []string{"Pod"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kind filter: got %v want %v", got, want)
 	}
 	if got, want := q.NSFilter, []string{"prod"}; !reflect.DeepEqual(got, want) {

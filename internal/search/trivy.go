@@ -328,7 +328,7 @@ const findingsCheckEvery = 256
 type findingsScan struct {
 	ctx      context.Context
 	deadline time.Time
-	reason   string
+	spent    bool
 }
 
 func newFindingsScan(ctx context.Context) *findingsScan {
@@ -350,12 +350,18 @@ func (f *findingsScan) within() bool {
 	if f == nil {
 		return true
 	}
-	if f.reason != "" {
+	if f.spent {
 		return false
 	}
 	if f.ctx.Err() != nil || (!f.deadline.IsZero() && time.Now().After(f.deadline)) {
-		f.reason = FindingsTimeLimit
+		f.spent = true
 		return false
 	}
 	return true
+}
+
+// exhausted reports whether the budget ran out, so a report searched since
+// may have been searched only in part.
+func (f *findingsScan) exhausted() bool {
+	return f != nil && f.spent
 }

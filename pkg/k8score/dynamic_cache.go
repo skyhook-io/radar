@@ -2005,6 +2005,22 @@ func (d *DynamicResourceCache) ListReadOnly(gvr schema.GroupVersionResource, nam
 	if err := d.ensureWatching(gvr, namespace); err != nil {
 		return nil, err
 	}
+	return d.readOnlyItems(gvr, namespace)
+}
+
+// ListReadOnlyContext is ListReadOnly with ctx bounding the wait to start
+// watching gvr, as ListContext is to List.
+func (d *DynamicResourceCache) ListReadOnlyContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	if d == nil {
+		return nil, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	if err := d.EnsureWatchingContext(ctx, gvr, namespace); err != nil {
+		return nil, err
+	}
+	return d.readOnlyItems(gvr, namespace)
+}
+
+func (d *DynamicResourceCache) readOnlyItems(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	entries := d.readEntries(gvr, namespace)
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("informer not found for %v", gvr)

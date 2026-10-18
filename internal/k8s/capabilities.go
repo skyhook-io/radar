@@ -163,6 +163,7 @@ type CloudConnectCapability struct {
 type FeatureCapabilities struct {
 	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
 	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
+	SearchCoverage        bool `json:"searchCoverage"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
@@ -1545,4 +1546,14 @@ func clonePermissionCheckResult(result *PermissionCheckResult) *PermissionCheckR
 		ScopeCandidates:          append([]string(nil), result.ScopeCandidates...),
 		ScopeCandidatesTruncated: result.ScopeCandidatesTruncated,
 	}
+}
+
+func (p *ResourcePermissions) CanList(kind string) bool {
+	resource := CanonicalBuiltinKind(kind)
+	for _, probe := range resourceProbeTargets(p) {
+		if probe.gvr.Resource == resource {
+			return *probe.field
+		}
+	}
+	return false
 }

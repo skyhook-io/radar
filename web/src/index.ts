@@ -96,6 +96,8 @@ export type {
   OmnibarHandle,
   OmnibarRecent,
   OmnibarSearchResult,
+  OmnibarNote,
+  OmnibarNotePart,
 } from './components/ui/Omnibar';
 export { bestScore } from './components/ui/command-items';
 export type { CommandItem } from './components/ui/command-items';
@@ -104,3 +106,4 @@ export type { SearchHit, SearchMatchedField } from './api/client';
 export { fetchResourceList, type ResourceListOptions } from './api/client';
 export { normalizeResourceList, type ResourceListBody, type ResourceListResult } from './api/resourceLists';
 export type { ResourceCoverage, ResourceReadCoverage, ResourceListResponse } from '@skyhook-io/k8s-ui';
+export type { SearchCoverageEntry } from './components/ui/searchCoverageNote';
