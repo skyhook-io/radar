@@ -65,9 +65,9 @@ func wireCoverage(t *testing.T, text string) map[string]any {
 	return coverage
 }
 
-// An empty answer over evicted history used to read as a complete
-// {"changes":[]}. It must say the history is incomplete; the store-wide
-// boundary goes only to callers who can read every namespace.
+// An empty answer over evicted history must say the history is incomplete,
+// or it reads as a complete {"changes":[]}. The store-wide boundary goes only
+// to callers who can read every namespace.
 func TestGetChangesQualifiesEmptyAnswerOverEvictedHistory(t *testing.T) {
 	_, evictedThrough := initEvictingStore(t)
 
@@ -108,9 +108,8 @@ func TestGetChangesQualifiesEmptyAnswerOverEvictedHistory(t *testing.T) {
 	}
 }
 
-// A restricted caller's internal top-50 used to be taken before rows they
-// can't read were removed, so newer unreadable rows could push out the only
-// readable one.
+// Rows a restricted caller can't read are removed before the internal top-50
+// cut, so newer unreadable rows can't push out the only readable one.
 func TestGetChangesDropsUnreadableRowsBeforeTheCut(t *testing.T) {
 	store := initCorrelationStore(t)
 	now := time.Now()
@@ -154,8 +153,8 @@ func issuesForTest(t *testing.T, ctx context.Context) issuesapi.Response {
 	return response
 }
 
-// A saturated recent-changes fetch with no surviving change used to drop
-// every recent-changes field, which reads the same as "nothing changed".
+// A saturated recent-changes fetch with no surviving change still reports
+// the truncation; an omitted block reads the same as "nothing changed".
 func TestIssuesReportsSaturatedFetchWithNoSurvivingChange(t *testing.T) {
 	store := initCorrelationStore(t)
 	now := time.Now()

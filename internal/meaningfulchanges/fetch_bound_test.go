@@ -39,9 +39,8 @@ func appendEvent(t *testing.T, store timeline.EventStore, e timeline.TimelineEve
 	}
 }
 
-// An install's creates and status churn used to share one bounded query with
-// edits, so an older edit fell out of the fetch. Creates now come only from
-// the lifecycle query, and the update query's bound covers an install's churn.
+// An install's creates must not share a bounded query with edits, or an older
+// edit falls out of the fetch: creates come only from the lifecycle query.
 func TestRecentInstallBurstDoesNotHideOlderEdit(t *testing.T) {
 	store := initFetchBoundStore(t, 2000)
 	now := time.Now()
