@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Decides which jobs a PR needs from the files it changes (the whole PR diff,
-  # not only the latest push). Pushes to main, and any PR touching .github/,
+  # Decides which jobs a PR needs from every file it changes, not only those in
+  # the latest push. Pushes to main, and any PR touching .github/,
   # run every job, so a gap in these filters surfaces on main at the latest.
   changes:
     name: Detect changes
@@ -175,8 +175,11 @@ jobs:
           fi
 
       # internal/server runs in its own job; it is the slowest package by far.
+      # The assignment fails the step if go list does; an argument would not.
       - name: Run tests
-        run: go test $(go list ./... | grep -vx 'github.com/skyhook-io/radar/internal/server')
+        run: |
+          pkgs=$(go list ./...)
+          go test $(grep -vx 'github.com/skyhook-io/radar/internal/server' <<<"$pkgs")
 
       - name: Evaluate PVC and CNPG PromQL in Prometheus
         env:
