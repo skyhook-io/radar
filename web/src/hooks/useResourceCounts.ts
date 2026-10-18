@@ -1,9 +1,11 @@
+import type { ResourceCoverage } from '@skyhook-io/k8s-ui'
 import { useQuery } from '@tanstack/react-query'
 import { debugNamespaceLog, fetchJSON, isStillLoadingError } from '../api/client'
 import { useConnection } from '../context/ConnectionContext'
 
 export interface ResourceCountsResponse {
   counts: Record<string, number>
+  coverage?: Record<string, ResourceCoverage>
   forbidden?: string[]
   reasons?: Record<string, string>
   unavailable?: string[]

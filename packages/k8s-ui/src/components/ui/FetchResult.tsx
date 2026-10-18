@@ -3,6 +3,7 @@ import { ShieldOff, AlertTriangle, ServerCrash, LogIn, Copy, Check, RefreshCw, t
 import { clsx } from 'clsx'
 import { PaneLoader } from './PaneLoader'
 import { isFetchError } from '../../types/fetch-error'
+import { readActionFor, canonicalReadCode } from '../../utils/read-actions'
 
 // FetchResult collapses (loading, error, no-data) into one rendered outcome:
 // loader while loading, a typed error surface when the fetch threw, or the
@@ -15,6 +16,7 @@ import { isFetchError } from '../../types/fetch-error'
 //   error (403)              → "Access denied"            + error.message
 //   error (404)              → notFoundMessage            + error.message
 //   error (503 sync failed)  → "Couldn't load this view"  + error.message
+//   error (503 collector)    → "Radar can't read this"    + error.message
 //   error (503)              → "Cluster unavailable"      + error.message
 //   error (401)              → "Sign-in required"         (apiFetch redirects; fallback)
 //   error (other / no shape) → "Couldn't load this view"  + error.message
@@ -118,8 +120,18 @@ function classify(error: unknown, notFoundMessage: string): Classified {
       case 503:
         // The cluster is connected; one kind's informer missed its sync
         // deadline, so "Cluster unavailable" would send the reader the wrong way.
-        if (errorCodeOf(error) === 'kind_sync_failed') {
+        if (canonicalReadCode(errorCodeOf(error)) === 'kind_sync_timed_out') {
           return { headline: "Couldn't load this view", detail: error.message, icon: AlertTriangle }
+        }
+        // Shares the collector's action, but it is the cluster connection
+        // that is down rather than one read.
+        if (errorCodeOf(error) === 'cluster_disconnected') {
+          return { headline: 'Cluster unavailable', detail: error.message, icon: ServerCrash }
+        }
+        // Radar's own identity or collection can't serve the read: neither
+        // the cluster being down nor the reader's access.
+        if (readActionFor(errorCodeOf(error)) === 'radar_config') {
+          return { headline: "Radar can't read this", detail: error.message, icon: ShieldOff }
         }
         // The cluster is healthy and still loading — the retry policies keep
         // these surfaces polling, but a caller without one must not tell the

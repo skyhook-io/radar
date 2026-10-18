@@ -1,3 +1,4 @@
+import type { ResourceCoverage } from '@skyhook-io/k8s-ui'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -53,7 +54,9 @@ import { useDestinationCluster } from './useDestinationCluster'
 import { destinationToast } from './destination-toast'
 
 import {
+  ApiError,
   fetchJSON,
+  fetchResourceList as fetchCoveredResourceList,
   buildArgoResourceSyncVars,
   useApplyResource,
   useArgoRefresh,
@@ -72,8 +75,8 @@ import {
   useResource,
 } from '../../api/client'
 import { useAPIResources, GITOPS_KINDS } from '../../api/apiResources'
+import { combinedListStatus, lowerBound } from '../../api/resourceLists'
 import { useConnection } from '../../context/ConnectionContext'
-import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { CodeViewer } from '../ui/CodeViewer'
 import { ArgoResourceDiffLoader } from './ArgoResourceDiffLoader'
@@ -97,6 +100,7 @@ const GITOPS_ROWS_REFRESH_INTERVAL_MS = 120_000
 
 interface ResourceCountsResponse {
   counts: Record<string, number>
+  coverage?: Record<string, ResourceCoverage>
   forbidden?: string[]
   unavailable?: string[]
 }
@@ -182,6 +186,19 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const rowsQuery = useQuery({
     queryKey: ['gitops-rows-main', namespaces, apiResources?.length ?? 0],
     queryFn: async () => {
+      const coverage: ResourceCoverage[] = []
+      const failures: unknown[] = []
+      const fetchResourceList = async (kind: string, group: string, namespacesParam: string): Promise<any[]> => {
+        try {
+          const result = await fetchCoveredResourceList<any>(kind, { group, namespaces: namespacesParam ? namespacesParam.split(',') : [] })
+          coverage.push(result.coverage)
+          return result.items
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401) throw error
+          failures.push(error)
+          return []
+        }
+      }
       const hasApplications = hasAPIResource(apiResources, 'applications', 'argoproj.io')
       const hasApplicationSets = hasAPIResource(apiResources, 'applicationsets', 'argoproj.io')
       const hasKustomizations = hasAPIResource(apiResources, 'kustomizations', 'kustomize.toolkit.fluxcd.io')
@@ -201,13 +218,17 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         hasOCIRepos ? fetchResourceList('ocirepositories', 'source.toolkit.fluxcd.io', '') : Promise.resolve([]),
         hasBuckets ? fetchResourceList('buckets', 'source.toolkit.fluxcd.io', '') : Promise.resolve([]),
       ])
+      if (coverage.length === 0 && failures.length > 0) throw failures[0]
       const fluxSourceUrls = buildFluxSourceUrlMap([...gitRepos, ...helmRepos, ...ociRepos, ...buckets])
-      return [
+      // Discovery that finds no row kind is itself a complete answer: nothing
+      // was fetched because there is nothing to fetch.
+      const rowKindsDiscovered = hasApplications || hasApplicationSets || hasKustomizations || hasHelmReleases
+      return { coverageStatus: combinedListStatus(coverage, failures.length > 0, apiResources != null && !rowKindsDiscovered), rows: [
         ...applications.map((r) => normalizeArgoApplication(r)),
         ...applicationSets.map((r) => normalizeArgoApplicationSet(r)),
         ...kustomizations.map((r) => normalizeFluxKustomization(r, fluxSourceUrls)),
         ...helmReleases.map((r) => normalizeFluxHelmRelease(r, fluxSourceUrls)),
-      ]
+      ] }
     },
     enabled: !apiResourcesLoading,
     staleTime: 30_000,
@@ -246,7 +267,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   useEffect(() => {
     if (!hasGitOpsRowResource || rowsQuery.error) { setColdRetrying(false); return }
     if (apiResourcesLoading || rowsQuery.isFetching) return
-    if ((rowsQuery.data?.length ?? 0) > 0) { setColdRetrying(false); return }
+    if ((rowsQuery.data?.rows.length ?? 0) > 0) { setColdRetrying(false); return }
     if (coldRetriesRef.current >= 4) { setColdRetrying(false); return }
     setColdRetrying(true)
     const t = window.setTimeout(() => { coldRetriesRef.current += 1; refetchTable() }, 2000)
@@ -295,11 +316,13 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   return (
     <>
       <SharedGitOpsTableView
-        rows={rowsQuery.data ?? []}
+        rows={rowsQuery.data?.rows ?? []}
+        coverageStatus={rowsQuery.data?.coverageStatus ?? 'unknown'}
         loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading || coldRetrying}
-        error={(rowsQuery.error as Error | null) ?? null}
+        error={rowsQuery.error}
         counts={countsQuery.data?.counts ?? {}}
         countsUnavailable={countsQuery.data?.unavailable}
+        countsPartial={Object.entries(countsQuery.data?.coverage ?? {}).filter(([, c]) => lowerBound(c)).map(([key]) => key)}
         freshnessSlot={
           <FreshnessControl
             mode="auto"
@@ -1042,19 +1065,6 @@ function isValidKubernetesName(name: string): boolean {
 
 function hasAPIResource(resources: APIResource[] | undefined, name: string, group: string): boolean {
   return (resources ?? []).some((resource) => resource.name === name && resource.group === group)
-}
-
-async function fetchResourceList(kind: string, group: string, namespacesParam: string): Promise<any[]> {
-  const params = new URLSearchParams()
-  if (namespacesParam) params.set('namespaces', namespacesParam)
-  if (group) params.set('group', group)
-  const res = await fetch(apiUrl(`/resources/${kind}?${params}`), {
-    credentials: getCredentialsMode(),
-    headers: getAuthHeaders(),
-  })
-  if (res.status === 400 || res.status === 403 || res.status === 404) return []
-  if (!res.ok) throw new Error(`Failed to fetch ${kind}: HTTP ${res.status}`)
-  return res.json()
 }
 
 function isTerminating(resource: any): boolean {

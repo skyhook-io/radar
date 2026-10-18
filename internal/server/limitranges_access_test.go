@@ -3,11 +3,14 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,7 +35,7 @@ func TestLimitRangeResourceAccess(t *testing.T) {
 		{"namespace denied is not empty", "/api/resources/limitranges?namespace=default", "list", []string{"other"}, map[string]bool{"default": true}, 403},
 		{"cluster pod visibility does not grant rules", "/api/resources/limitranges", "list", nil, map[string]bool{"": false}, 403},
 		{"cluster grant", "/api/resources/limitranges", "list", nil, map[string]bool{"": true}, 200},
-		{"mixed grants cannot claim completeness", "/api/resources/limitranges?namespaces=default,other", "list", []string{"default", "other"}, map[string]bool{"default": true, "other": false}, 403},
+		{"mixed grants are a partial list", "/api/resources/limitranges?namespaces=default,other", "list", []string{"default", "other"}, map[string]bool{"default": true, "other": false}, 200},
 		{"table denial is explicit", "/api/resources/limitranges?namespace=default&table=1", "list", []string{"default"}, map[string]bool{"default": false}, 403},
 	}
 	for _, tt := range tests {
@@ -49,14 +52,20 @@ func TestLimitRangeResourceAccess(t *testing.T) {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.want)
 			}
 			if tt.want == http.StatusForbidden {
-				var body map[string]string
-				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body["error"] == "" {
+				var body map[string]any
+				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body["error"] == "" || body["error_code"] == "" {
 					t.Fatalf("expected explicit error, got %v (%v)", body, err)
 				}
 			} else if tt.verb == "list" {
-				var items []corev1.LimitRange
-				if err := json.NewDecoder(resp.Body).Decode(&items); err != nil || len(items) != 1 || items[0].Name != "rules" {
-					t.Fatalf("expected rules, got %v (%v)", items, err)
+				var response testResourceListEnvelope
+				if err := json.NewDecoder(resp.Body).Decode(&response); err != nil || len(response.Items) != 1 || mustNested(t, response.Items[0], "metadata", "name") != "rules" {
+					t.Fatalf("expected rules list envelope, got %v (%v)", response, err)
+				}
+				// A namespace whose LimitRanges the caller can't list is a gap,
+				// so the rows from the others never read as the whole answer.
+				denied := slices.IndexFunc(response.Coverage.Gaps, func(gap resourceapi.Gap) bool { return gap.Code == readreason.UserForbidden })
+				if mixed := len(tt.grants) > 1; mixed != (response.Coverage.Status == resourceapi.CoveragePartial) || mixed && (denied < 0 || !slices.Equal(response.Coverage.Gaps[denied].Namespaces.Names, []string{"other"})) {
+					t.Fatalf("coverage = %+v", response.Coverage)
 				}
 			}
 		})
@@ -83,10 +92,10 @@ func TestLimitRangeCacheCoverage(t *testing.T) {
 		want int
 	}{
 		{"/api/resources/limitranges?namespace=default", 200},
-		{"/api/resources/limitranges?namespace=other", 403},
-		{"/api/resources/limitranges?namespaces=default,other", 403},
-		{"/api/resources/limitranges", 403},
-		{"/api/resources/limitranges/other/unknown", 403},
+		{"/api/resources/limitranges?namespace=other", 409},
+		{"/api/resources/limitranges?namespaces=default,other", 200},
+		{"/api/resources/limitranges", 200},
+		{"/api/resources/limitranges/other/unknown", 409},
 		{"/api/resources/limitranges/default/unknown", 404},
 	} {
 		t.Run(tt.path, func(t *testing.T) {

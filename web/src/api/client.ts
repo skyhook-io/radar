@@ -1,7 +1,9 @@
+import { LIST_SYNC_PENDING_REFETCH_MS, listSyncPending, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
 import type {
   AppHistory,
@@ -289,13 +291,14 @@ export function isStillLoadingError(error: unknown): boolean {
   return isKindSyncPending(error) || isClusterConnecting(error);
 }
 
-// isKindSyncFailed matches the terminal variant: the kind never synced within
-// the deadline for this connection. Retrying won't help — show the error.
+// isKindSyncFailed matches a kind that missed its sync deadline. Radar keeps
+// loading it, so a later reload may succeed, but retrying at once won't —
+// show the error. Older Radars spelled the code kind_sync_failed.
 export function isKindSyncFailed(error: unknown): boolean {
   return (
     error instanceof ApiError &&
     error.status === 503 &&
-    error.data?.error_code === "kind_sync_failed"
+    canonicalReadCode(error.data?.error_code) === "kind_sync_timed_out"
   );
 }
 
@@ -2806,6 +2809,38 @@ export function useResourceWithRelationships<T>(
   });
 }
 
+export interface ResourceListOptions {
+  namespaces?: string[]
+  group?: string
+  table?: boolean
+  summary?: boolean
+  signal?: AbortSignal
+}
+
+export async function fetchResourceList<T>(kind: string, options: ResourceListOptions = {}): Promise<ResourceListResult<T>> {
+  const params = new URLSearchParams()
+  if (options.namespaces?.length) params.set('namespaces', options.namespaces.join(','))
+  if (options.group) params.set('group', options.group)
+  if (options.table) params.set('table', '1')
+  if (options.summary) params.set('include', 'summary')
+  // A Radar that predates the list budget ignores the parameter.
+  params.set('maxItems', options.summary ? '50000' : '25000')
+  const body = await fetchJSON<ResourceListBody<T>>(`/resources/${encodeURIComponent(kind)}?${params}`, options.signal)
+  return normalizeResourceList<T>(body)
+}
+
+// A read failure no retry can answer: the request, the caller's access or
+// Radar's collection has to change first (too large, outside the collector, a
+// denial), so it is shown at once.
+export function isUnretryableReadError(error: unknown): boolean {
+  return error instanceof ApiError && !['retry', undefined].includes(readActionFor(error.data?.error_code))
+}
+
+// The list is over the request's size budget; the body carries `count` and `limit`.
+export function isListTooLargeError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.data?.error_code === 'list_too_large'
+}
+
 // List resources - queryKey includes group for cache sharing with ResourcesView
 export function useResources<T>(
   kind: string,
@@ -2813,29 +2848,25 @@ export function useResources<T>(
   group?: string,
   options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
 ) {
-  const params = new URLSearchParams();
-  if (namespace) params.set("namespace", namespace);
-  if (group) params.set("group", group);
-  const queryString = params.toString();
-
-  return useQuery<T[]>({
+  const query = useQuery<ResourceListResult<T>>({
     queryKey: ["resources", kind, group, namespace, ...(options?.cacheScope ? [options.cacheScope] : [])],
-    queryFn: () =>
-      fetchJSON(`/resources/${kind}${queryString ? `?${queryString}` : ""}`),
+    queryFn: ({ signal }) => fetchResourceList<T>(kind, { namespaces: namespace ? [namespace] : [], group, signal }),
     enabled: (options?.enabled ?? true) && Boolean(kind),
     staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
-    refetchInterval: options?.refetchInterval,
+    refetchInterval: (q) => listSyncPending(q.state.data?.coverage) ? LIST_SYNC_PENDING_REFETCH_MS : options?.refetchInterval,
     // Kind still completing its initial sync (progressive shell, or a
     // deferred kind shortly after connect): keep polling instead of
     // surfacing an error.
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
+      if (isUnretryableReadError(error)) return false;
       return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
+  return { ...query, data: query.data?.items, coverage: query.data?.coverage };
 }
 
 // Timeline changes (unified view of changes + K8s events)

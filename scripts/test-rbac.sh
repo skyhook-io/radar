@@ -351,8 +351,7 @@ as_user() {
   curl "${args[@]}" "http://localhost:$PORT$path"
 }
 
-mcp_call() {
-  # mcp_call <user> <tool> <args-json>
+mcp_response() {
   local user=$1 tool=$2 args=$3
   local body
   body=$(jq -n --arg t "$tool" --argjson a "$args" \
@@ -362,7 +361,26 @@ mcp_call() {
     -H 'Accept: application/json, text/event-stream' \
     -d "$body" \
     "http://localhost:$PORT/mcp" \
-  | sed -n 's/^data: //p' | jq -r '.result.content[0].text // ""'
+  | sed -n 's/^data: //p'
+}
+
+mcp_call() {
+  mcp_response "$@" | jq -r '.result.content[0].text'
+}
+
+expect_mcp_denied() {
+  local desc=$1 user=$2 tool=$3 args=$4
+  if mcp_response "$user" "$tool" "$args" | jq -e '.result.isError == true and .result.structuredContent.error_code == "rbac_denied" and (.result.content[0].text | fromjson | .error_code == "rbac_denied")' >/dev/null; then
+    ok "$desc"
+  else
+    fail "$desc — expected explicit RBAC error"
+  fi
+}
+
+expect_rest_forbidden() {
+  local desc=$1 user=$2 path=$3 status
+  status=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Forwarded-User: $user" "http://localhost:$PORT$path")
+  if [[ "$status" == "403" ]]; then ok "$desc"; else fail "$desc — expected 403, got $status"; fi
 }
 
 # arr_len reads a JSON array on stdin and prints its length, or "ERR" if
@@ -419,14 +437,14 @@ fi
 echo
 echo -e "${B}=== REST: pod listing is filtered ===${N}"
 
-ALICE_PODS=$(as_user alice GET /api/resources/pods | jq -r '.[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
+ALICE_PODS=$(as_user alice GET /api/resources/pods | jq -r '.items[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
 if [[ "$ALICE_PODS" == "rbac-test-pod-a" ]]; then
   ok "alice sees only rbac-test-pod-a"
 else
   fail "alice pod list = [$ALICE_PODS], expected [rbac-test-pod-a]"
 fi
 
-BOB_PODS=$(as_user bob GET /api/resources/pods | jq -r '.[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
+BOB_PODS=$(as_user bob GET /api/resources/pods | jq -r '.items[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
 if [[ "$BOB_PODS" == "rbac-test-pod-b" ]]; then
   ok "bob sees only rbac-test-pod-b"
 else
@@ -436,11 +454,7 @@ fi
 echo
 echo -e "${B}=== REST: cluster-only kinds hidden from restricted users ===${N}"
 
-ALICE_NODES_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Forwarded-User: alice" \
-  "http://localhost:$PORT/api/resources/nodes")
-ALICE_NODES_BODY=$(as_user alice GET /api/resources/nodes 2>/dev/null || echo '[]')
-ALICE_NODE_COUNT=$(echo "$ALICE_NODES_BODY" | arr_len)
-expect_zero "alice sees 0 nodes (cluster-only kind, restricted user) — REST status $ALICE_NODES_HTTP" "$ALICE_NODE_COUNT"
+expect_rest_forbidden "alice cannot list Nodes" alice /api/resources/nodes
 
 echo
 echo -e "${B}=== MCP: list_resources filters per-user ===${N}"
@@ -496,7 +510,7 @@ else
 fi
 
 # bob's pod list should still work after alice's pick — proves cache still has bob's namespace
-BOB_PODS_AFTER=$(as_user bob GET /api/resources/pods | jq -r '.[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
+BOB_PODS_AFTER=$(as_user bob GET /api/resources/pods | jq -r '.items[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
 if [[ "$BOB_PODS_AFTER" == "rbac-test-pod-b" ]]; then
   ok "bob's pod list still works after alice's pick (cache wasn't shrunk)"
 else
@@ -540,18 +554,16 @@ echo -e "${B}=== Cluster-wide pods does NOT imply cluster-scoped reads (carol) =
 # read Nodes / ClusterRoles / Secrets via the cache — those need their own
 # RBAC. This is the per-kind SAR gate's primary regression test.
 
-CAROL_PODS=$(as_user carol GET /api/resources/pods | jq -r '.[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
+CAROL_PODS=$(as_user carol GET /api/resources/pods | jq -r '.items[].metadata.name // empty' | sort | tr '\n' ',' | sed 's/,$//')
 if [[ "$CAROL_PODS" == *"rbac-test-pod-a"* && "$CAROL_PODS" == *"rbac-test-pod-b"* ]]; then
   ok "carol sees pods cluster-wide (her actual permission)"
 else
   fail "carol should see all pods, got: $CAROL_PODS"
 fi
 
-CAROL_NODES=$(as_user carol GET /api/resources/nodes | arr_len)
-expect_zero "carol cannot see Nodes (no list-nodes RBAC even though she has list-pods cluster-wide)" "$CAROL_NODES"
+expect_rest_forbidden "carol cannot list Nodes" carol /api/resources/nodes
 
-CAROL_CRBS=$(as_user carol GET /api/resources/clusterroles | arr_len)
-expect_zero "carol cannot see ClusterRoles" "$CAROL_CRBS"
+expect_rest_forbidden "carol cannot list ClusterRoles" carol /api/resources/clusterroles
 
 CAROL_MCP_NODES=$(mcp_call carol list_resources '{"kind":"nodes"}' | arr_len)
 expect_zero "MCP carol list_resources kind=nodes returns 0" "$CAROL_MCP_NODES"
@@ -620,21 +632,16 @@ echo -e "${B}=== Cluster-scoped CRDs not in the static map are gated via discove
 # explicitly-permitted users should see it.
 
 # carol has cluster-wide pods+namespaces but NOT RadarTest read.
-CAROL_REST_RT=$(as_user carol GET /api/resources/radartests | arr_len)
-expect_zero "REST carol cannot list radartests (cluster-scoped CRD without explicit RBAC)" "$CAROL_REST_RT"
+expect_rest_forbidden "REST carol cannot list radartests" carol /api/resources/radartests
 
 # Same via the grouped-path:
-CAROL_REST_RT_GROUP=$(curl -s -H "X-Forwarded-User: carol" \
-  "http://localhost:$PORT/api/resources/radartests?group=test.skyhook.io" | arr_len)
-expect_zero "REST carol cannot list radartests via ?group= path" "$CAROL_REST_RT_GROUP"
+expect_rest_forbidden "REST carol cannot list grouped radartests" carol "/api/resources/radartests?group=test.skyhook.io"
 
 # MCP path:
-CAROL_MCP_RT=$(mcp_call carol list_resources '{"kind":"radartests"}' | arr_len)
-expect_zero "MCP carol list_resources kind=radartests returns 0" "$CAROL_MCP_RT"
+expect_mcp_denied "MCP carol cannot list radartests" carol list_resources '{"kind":"radartests"}'
 
 # dave (multi-namespace user) also can't see cluster-scoped CRDs without explicit RBAC.
-DAVE_REST_RT=$(as_user dave GET /api/resources/radartests | arr_len)
-expect_zero "REST dave cannot list radartests" "$DAVE_REST_RT"
+expect_rest_forbidden "REST dave cannot list radartests" dave /api/resources/radartests
 
 echo
 echo -e "${B}=== Cluster-scoped reads aren't blocked by the noNamespaceAccess short-circuit (erin) ===${N}"
@@ -651,11 +658,10 @@ else
   fail "erin's accessibleNamespaces = [$ERIN_NS]; expected empty"
 fi
 
-ERIN_NODES=$(as_user erin GET /api/resources/nodes | arr_len)
+ERIN_NODES=$(as_user erin GET /api/resources/nodes | jq -c .items | arr_len)
 expect_at_least_one "REST erin can list nodes despite no namespace access" "$ERIN_NODES"
 
-ERIN_PODS=$(as_user erin GET /api/resources/pods | arr_len)
-expect_zero "REST erin cannot list pods (no namespace RBAC)" "$ERIN_PODS"
+expect_rest_forbidden "REST erin cannot list Pods" erin /api/resources/pods
 
 ERIN_MCP_NODES=$(mcp_call erin list_resources '{"kind":"nodes"}' | arr_len)
 if [[ "$ERIN_MCP_NODES" -ge 1 ]]; then
@@ -692,8 +698,7 @@ echo -e "${B}=== Per-namespace Secret RBAC (alice's view role excludes secrets) 
 # and she sees nothing. frank (same namespace, plus explicit secret-reader
 # Role) sees the secret.
 
-ALICE_SECRETS=$(as_user alice GET /api/resources/secrets | arr_len)
-expect_zero "REST alice cannot list secrets (view role excludes them)" "$ALICE_SECRETS"
+expect_rest_forbidden "REST alice cannot list Secrets" alice /api/resources/secrets
 
 ALICE_SECRET_GET_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Forwarded-User: alice" \
   "http://localhost:$PORT/api/resources/secrets/$NS_ALICE/rbac-test-secret-a")
@@ -703,17 +708,9 @@ else
   fail "REST alice GET secret returned $ALICE_SECRET_GET_HTTP; expected 403"
 fi
 
-ALICE_MCP_SECRETS=$(mcp_call alice list_resources '{"kind":"secrets"}' | arr_len)
-expect_zero "MCP alice list_resources kind=secrets returns 0" "$ALICE_MCP_SECRETS"
+expect_mcp_denied "MCP alice cannot list secrets" alice list_resources '{"kind":"secrets"}'
 
-# MCP get_resource returns an error string on forbidden — not a structured
-# 403. Check for the substring instead of HTTP code.
-ALICE_MCP_SECRET_GET=$(mcp_call alice get_resource "{\"kind\":\"secrets\",\"namespace\":\"$NS_ALICE\",\"name\":\"rbac-test-secret-a\"}")
-if [[ -z "$ALICE_MCP_SECRET_GET" ]] || ! echo "$ALICE_MCP_SECRET_GET" | jq -e '.name == "rbac-test-secret-a"' >/dev/null 2>&1; then
-  ok "MCP alice get_resource secrets denied (no rbac-test-secret-a in payload)"
-else
-  fail "MCP alice get_resource leaked secret: $ALICE_MCP_SECRET_GET"
-fi
+expect_mcp_denied "MCP alice cannot get Secret" alice get_resource "{\"kind\":\"secrets\",\"namespace\":\"$NS_ALICE\",\"name\":\"rbac-test-secret-a\"}"
 
 ALICE_SEARCH_SECRETS=$(as_user alice GET "/api/search?q=kind:Secret" | jq -r '[.hits[]?.name] | join(",")' 2>/dev/null || echo "ERR")
 if [[ "$ALICE_SEARCH_SECRETS" != *"rbac-test-secret-a"* ]]; then
@@ -724,7 +721,7 @@ fi
 
 # frank: positive control. Same namespace ceiling as alice, but with explicit
 # secret-reader Role bound. He must see the secret.
-FRANK_SECRETS=$(as_user frank GET /api/resources/secrets | jq -r '[.[].metadata.name] | join(",")')
+FRANK_SECRETS=$(as_user frank GET /api/resources/secrets | jq -r '[.items[].metadata.name] | join(",")')
 if [[ "$FRANK_SECRETS" == *"rbac-test-secret-a"* ]]; then
   ok "REST frank can list secrets (explicit secret-reader Role)"
 else

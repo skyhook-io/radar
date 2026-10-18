@@ -23,5 +23,5 @@ export function useCompareCandidates(kind: string, group: string | undefined, en
         group,
       }))
   }, [query.data, kind, group])
-  return { candidates, isPending: query.isPending, error: query.error }
+  return { candidates, coverage: query.coverage, isPending: query.isPending, error: query.error }
 }

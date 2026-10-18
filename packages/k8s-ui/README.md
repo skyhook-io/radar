@@ -42,6 +42,12 @@ resolve: {
 
 webpack 5 hosts need the same mapping in `resolve.alias`. Without it the build fails to resolve the worker import.
 
+## Resource read coverage
+
+`ResourceReadCoverage` describes the scope an answer covers (and `narrowedBy`, when the caller's access, Radar's pin or the saved pick narrowed it), what Radar read of it, and coded gaps naming what it did not read and why. `READ_ACTIONS` / `readActionFor` say what resolves each code. `ResourceCoverage` additionally permits `unknown` in UI adapters for older Radar instances. It does not describe object freshness or count truncation.
+
+Pass list coverage through `ResourceQueryResult.coverage`, and per-kind count coverage through `ResourcesView.resourceCoverage` / `ResourcesSidebar.resourceCoverage`. Counts stay useful for sizing; a partial count displays as a lower bound and a partial zero does not hide a kind as empty. A complete list whose scope Radar's collection narrowed (`narrowedBy: ["collection"]`) gets a neutral note naming the collected namespaces. Unknown or absent coverage keeps the presentation that predates coverage. Loaded list counts retain their coverage when cached. `GitOpsTableView` accepts aggregate `coverageStatus` and `countsPartial` keys; hosts must combine coverage across every cluster/source contributing to the view, and a host that passes no `coverageStatus` gets the unqualified view. Keep source-specific metadata in the host rather than repeating it on every row.
+
 ## Resource kind views and certainty
 
 `ResourcesView.renderKindView(kind)` optionally replaces a kind's table while

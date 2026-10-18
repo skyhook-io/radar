@@ -100,3 +100,7 @@ export type {
 export { bestScore } from './components/ui/command-items';
 export type { CommandItem } from './components/ui/command-items';
 export type { SearchHit, SearchMatchedField } from './api/client';
+
+export { fetchResourceList, type ResourceListOptions } from './api/client';
+export { normalizeResourceList, type ResourceListBody, type ResourceListResult } from './api/resourceLists';
+export type { ResourceCoverage, ResourceReadCoverage, ResourceListResponse } from '@skyhook-io/k8s-ui';
