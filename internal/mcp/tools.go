@@ -685,6 +685,11 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"expectedSkip: normal exclusions. Complete does not certify shutdown safety.",
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
+
+	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
+	if execToolsEnabled.Load() {
+		registerExecTools(server, paramRegistry, writeTool)
+	}
 }
 
 // Tool input types

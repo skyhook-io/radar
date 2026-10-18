@@ -147,6 +147,7 @@ func main() {
 	// MCP server
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
+	mcpExecTools := flag.Bool("mcp-exec-tools", false, "Add MCP tools that run commands in the cluster: exec_pod (a command in a running container) and run_pod (a one-off pod). Each call runs under the caller's RBAC (pods/exec, pod create). Off by default; ignored with --disable-exec")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
 	// Auth flags
 	authMode := flag.String("auth-mode", "none", "Authentication mode: none, proxy, or oidc")
@@ -456,6 +457,7 @@ func main() {
 		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:                  mcpEnabled,
 		MCPReadOnly:                 mcpMode.ReadOnly,
+		MCPExecTools:                *mcpExecTools,
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,
