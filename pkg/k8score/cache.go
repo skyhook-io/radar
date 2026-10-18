@@ -518,7 +518,24 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		return s.setup(factory)
 	}
 
-	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int) error {
+	trackListFailures := cfg.ListFailureAfter > 0 && cfg.ListProbe != nil
+	// newProgress follows one informer's lists, or returns nil when tracking
+	// is off.
+	newProgress := func(inf cache.SharedIndexInformer, s informerSetup, namespace string) *listProgress {
+		if !trackListFailures {
+			return nil
+		}
+		label := s.kind
+		if namespace != "" {
+			label += " in namespace " + namespace
+		}
+		kind := s.kind
+		return newListProgress(label, inf.LastSyncResourceVersion, inf.HasSynced, func(ctx context.Context) error {
+			return cfg.ListProbe(ctx, kind, namespace)
+		})
+	}
+
+	wireInformer := func(inf cache.SharedIndexInformer, s informerSetup, idx int, progress *listProgress) error {
 		var err error
 		if s.isEvent {
 			err = rc.addEventHandlers(inf, changes)
@@ -539,6 +556,9 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		kind := s.kind
 		if hErr := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 			rc.recordWatchError(idx, key, kind, err)
+			if progress != nil {
+				progress.observe(err, time.Now())
+			}
 		}); hErr != nil {
 			// SetWatchErrorHandler only errors after the informer has
 			// started, which can't happen here — log and continue.
@@ -564,13 +584,14 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			for _, namespace := range scopeNamespaces {
 				factory := nsFactories[namespace]
 				inf := buildInformer(s, factory, namespace)
-				if err := wireInformer(inf, s, idx); err != nil {
+				progress := newProgress(inf, s, namespace)
+				if err := wireInformer(inf, s, idx, progress); err != nil {
 					close(stopCh)
 					return nil, err
 				}
 				informersForKind = append(informersForKind, inf)
 				stores = append(stores, inf.GetIndexer())
-				rc.addKindStore(s.key, namespace, inf)
+				rc.addKindStore(s.key, namespace, inf, progress)
 			}
 			rc.indexerByKind[s.key] = &unionIndexer{indexers: stores}
 			synced = func() bool {
@@ -599,11 +620,12 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				// (the factory's informer for this kind is never started).
 				rc.pagedInformers[s.key] = inf
 			}
-			if err := wireInformer(inf, s, idx); err != nil {
+			progress := newProgress(inf, s, namespace)
+			if err := wireInformer(inf, s, idx, progress); err != nil {
 				close(stopCh)
 				return nil, err
 			}
-			rc.addKindStore(s.key, "", inf)
+			rc.addKindStore(s.key, "", inf, progress)
 			synced = inf.HasSynced
 			run = inf.Run
 		}
@@ -670,6 +692,9 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		if !e.deferred {
 			go e.run(stopCh)
 		}
+	}
+	if trackListFailures {
+		go runListWatchdog(stopCh, cfg.ListFailureAfter, cfg.APIReachability, rc.listProgressTrackers)
 	}
 
 	if len(backgroundKeys) > 0 {

@@ -598,6 +598,7 @@ otherwise the code says why it couldn't look.
 | `radar_namespace_not_collected` | The namespace is outside what Radar collects. | Radar's collection (`--namespaces`, `--max-scope-candidates`, or its RBAC) |
 | `kind_sync_pending` | The kind is still loading. | Retry shortly |
 | `kind_sync_timed_out` | The kind's initial load missed its deadline; Radar keeps trying. | Retry later; if it persists, Radar's connection or list/watch access |
+| `kind_stale` | The kind had loaded, but its lists have failed for minutes, so Radar's copy stopped updating and isn't used. When Kubernetes refuses or rejects Radar's own identity instead, the code is `radar_forbidden` or `radar_credentials_rejected`. | Retry later; if it persists, Radar's connection or the API server (for a custom resource, often a conversion webhook) |
 | `radar_kind_not_collected` | Radar's setup leaves the kind out. | Radar's collection configuration |
 | `kind_not_watchable` | The API can't be list/watched. | Use another tool; retrying won't help |
 | `kind_unknown` | The kind isn't in the catalog or discovery. Before answering this, Radar refreshes discovery (at most every 30 seconds), so a custom resource installed since the last refresh resolves. When discovery failed for the group the request named, or Radar's last discovery refresh failed outright, the answer is `read_error` instead: the kind may exist behind an API that isn't answering. | Check spelling, `group`, and installation |

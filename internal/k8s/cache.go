@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	toolscache "k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -382,6 +383,25 @@ var (
 // it cannot grow without limit; misses are silent (null enrichment).
 var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
 
+// listFailureAfter is how long an informer's lists may keep failing before
+// Radar stops vouching for its store. A variable so tests can shorten it.
+var listFailureAfter = k8score.DefaultListFailureAfter
+
+// typedListProbe verifies that a typed kind can be listed again, through the
+// same shared transport as its informer. Without a dynamic client, or for a
+// kind with no known resource, the probe fails, so only the informer's own
+// progress clears the kind.
+func typedListProbe(dyn dynamic.Interface) func(ctx context.Context, kind, namespace string) error {
+	return func(ctx context.Context, kind, namespace string) error {
+		gvr, ok := BuiltinGVRAnyGroup(kind)
+		if dyn == nil || !ok {
+			return fmt.Errorf("no list probe for %s", kind)
+		}
+		_, err := dyn.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{Limit: 1})
+		return err
+	}
+}
+
 // InitResourceCache initializes the resource cache with timeline-wired callbacks.
 func InitResourceCache(ctx context.Context) error {
 	var initErr error
@@ -454,6 +474,9 @@ func InitResourceCache(ctx context.Context) error {
 			SyncProgress:            emitSyncProgress,
 			DeferredSyncTimeout:     3 * time.Minute,
 			ListPageSize:            ListPageSize,
+			ListFailureAfter:        listFailureAfter,
+			ListProbe:               typedListProbe(GetDynamicClient()),
+			APIReachability:         getAPIReachability(),
 
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)

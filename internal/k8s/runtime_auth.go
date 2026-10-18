@@ -21,10 +21,11 @@ import (
 )
 
 type sharedKubernetesClients struct {
-	clientset  *kubernetes.Clientset
-	discovery  *discovery.DiscoveryClient
-	dynamic    dynamic.Interface
-	generation uint64
+	clientset    *kubernetes.Clientset
+	discovery    *discovery.DiscoveryClient
+	dynamic      dynamic.Interface
+	reachability *k8score.APIReachability
+	generation   uint64
 }
 
 const (
@@ -92,9 +93,11 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
+	reachability := &k8score.APIReachability{}
 	observedClient.Transport = &runtimeAuthRoundTripper{
-		next:       transport,
-		generation: generation,
+		next:         transport,
+		generation:   generation,
+		reachability: reachability,
 	}
 	// The discovery client needs its own shallow copy: client-go applies its
 	// 32s discovery default only when it builds the http.Client itself, so a
@@ -120,16 +123,18 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 	}
 
 	return &sharedKubernetesClients{
-		clientset:  clientset,
-		discovery:  discoveryClient,
-		dynamic:    dynamicClient,
-		generation: generation,
+		clientset:    clientset,
+		discovery:    discoveryClient,
+		dynamic:      dynamicClient,
+		reachability: reachability,
+		generation:   generation,
 	}, nil
 }
 
 type runtimeAuthRoundTripper struct {
-	next       http.RoundTripper
-	generation uint64
+	next         http.RoundTripper
+	generation   uint64
+	reachability *k8score.APIReachability
 }
 
 // isAuthClassification reports whether a classification is authentication-shaped.
@@ -139,6 +144,7 @@ func isAuthClassification(classification string) bool {
 
 func (rt *runtimeAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := rt.next.RoundTrip(req)
+	rt.reachability.ObserveRoundTrip(req, resp, err)
 	// Two distinct shapes of credential loss: transport errors carry exec
 	// plugin failures (client-go surfaces them before any request is sent),
 	// while an expired-but-presentable token comes back as a plain 401

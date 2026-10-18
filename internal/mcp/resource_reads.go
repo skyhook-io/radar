@@ -625,6 +625,8 @@ func gapReason(ctx context.Context, resource string, code readreason.Code) (why,
 		return fmt.Sprintf("Radar is still loading %s there", resource), ""
 	case readreason.KindSyncTimedOut:
 		return fmt.Sprintf("Radar's load of %s there didn't finish in time", resource), "if it keeps failing, whoever runs Radar should check its cluster connection and list/watch permissions"
+	case readreason.KindStale:
+		return fmt.Sprintf("Radar's copy of %s there stopped updating, so Radar doesn't use it", resource), "if it keeps failing, whoever runs Radar should check its cluster connection, the API server and any webhooks for " + resource
 	case readreason.UserForbidden:
 		return fmt.Sprintf("your Kubernetes access doesn't allow listing %s there", resource), withCloudRole(ctx, "a cluster admin can grant it")
 	case readreason.UserPermissionCheckFailed:
@@ -856,21 +858,22 @@ func resourceReadCache(ctx context.Context, kind, group string, namespaces []str
 		return nil, nil, errKindNotCollected(qualifiedResource(gvr.Group, gvr.Resource))
 	}
 	pending := errKindLoading(gvr.Resource)
-	failed := errKindLoadFailed(gvr.Resource)
 	plan := &typedRead{resource: gvr.Resource, whole: a.Readiness == k8s.KindReady}
+	target := collectorTarget{resource: gvr.Resource, group: gvr.Group, action: "list/watch"}
 	if a.AllNamespaces && namespaces == nil {
 		switch a.Readiness {
 		case k8s.KindReady:
 			plan.all = true
 			return cache, plan, nil
 		case k8s.KindFailed:
-			plan.gaps.add(readreason.KindSyncTimedOut, failed)
+			failure, failing := a.ListFailures[""]
+			code, err := failedLoadError(ctx, target, "", failure, failing)
+			plan.gaps.add(code, err)
 		default:
 			plan.gaps.add(readreason.KindSyncPending, pending)
 		}
 		return nil, nil, plan.gaps.failure()
 	}
-	target := collectorTarget{resource: gvr.Resource, group: gvr.Group, action: "list/watch"}
 	notCollected := slices.DeleteFunc(slices.Clone(a.Uncovered), func(ns string) bool { return slices.Contains(rejected, ns) })
 	uncovered := len(notCollected) > 0 || (namespaces == nil && !a.AllNamespaces)
 	switch {
@@ -888,8 +891,15 @@ func resourceReadCache(ctx context.Context, kind, group string, namespaces []str
 	if len(a.Loading) > 0 {
 		plan.gaps.add(readreason.KindSyncPending, pending, a.Loading...)
 	}
-	if len(a.Failed) > 0 {
-		plan.gaps.add(readreason.KindSyncTimedOut, failed, a.Failed...)
+	for _, namespace := range a.Failed {
+		failure, failing := a.ListFailures[namespace]
+		where := fmt.Sprintf(" in namespace %q", namespace)
+		if a.AllNamespaces && len(a.Failed) > 1 {
+			// One informer serves them all, so one sentence covers them.
+			where = ""
+		}
+		code, err := failedLoadError(ctx, target, where, failure, failing)
+		plan.gaps.add(code, err, namespace)
 	}
 	if len(rejected) > 0 {
 		plan.gaps.add(readreason.RadarCredentialsRejected, errRecordedCredentialsRejected(gvr.Resource, rejected, rejectedCause), rejected...)
@@ -934,6 +944,83 @@ func errKindLoading(resource string) error {
 
 func errKindLoadFailed(resource string) error {
 	return readErrorf(readreason.KindSyncTimedOut, "Radar's load of %s didn't finish in time, so it can't answer yet. It keeps trying; if this persists, whoever runs Radar should check its cluster connection and list/watch permissions.", resource)
+}
+
+// failedLoadError is the code and error for a store Radar doesn't use: one
+// that missed its initial load deadline, or (failing) one whose lists keep
+// failing. When Kubernetes refuses or rejects Radar's own identity, the code
+// says so, since someone has to fix that access; a store that loaded and then
+// stopped updating for any other reason is kind_stale; one that never loaded
+// stays kind_sync_timed_out. where is "" or a place such as ` in namespace
+// "x"`.
+func failedLoadError(ctx context.Context, target collectorTarget, where string, failure k8score.ListFailure, failing bool) (readreason.Code, error) {
+	if !failing {
+		return readreason.KindSyncTimedOut, errKindLoadFailed(target.resource)
+	}
+	name := qualifiedResource(target.group, target.resource)
+	there := ""
+	if where != "" {
+		there = " there"
+	}
+	switch failure.Cause {
+	case k8score.ListFailureForbidden:
+		lost := fmt.Sprintf("has refused %s permission to list %s%s for %s, so Radar no longer uses its copy and can't say what exists%s", collectorName(), name, where, durationAgo(failure.Since), there)
+		if !failure.Stale {
+			lost = fmt.Sprintf("refuses %s permission to list %s%s, so Radar never loaded them and can't say which exist", collectorName(), name, where)
+		}
+		return readreason.RadarForbidden, &readError{code: readreason.RadarForbidden, err: &collectorError{
+			msg:   fmt.Sprintf("Kubernetes %s. %s; Radar keeps retrying and reads them again once it may.%s", lost, upperFirst(identityRemedy(name, there, "list/watch")), notYourAccess(ctx)),
+			cause: errListRefused,
+		}}
+	case k8score.ListFailureUnauthorized:
+		credentials := "kubeconfig credentials"
+		if k8s.IsInCluster() {
+			credentials = "service-account credentials"
+		}
+		lost := fmt.Sprintf("has rejected Radar's own %s for %s, so Radar no longer uses its copy of %s%s and read nothing", credentials, durationAgo(failure.Since), name, where)
+		if !failure.Stale {
+			lost = fmt.Sprintf("rejects Radar's own %s, so Radar never loaded %s%s and read nothing", credentials, name, where)
+		}
+		return readreason.RadarCredentialsRejected, &readError{code: readreason.RadarCredentialsRejected, err: &collectorError{
+			msg:   fmt.Sprintf("Kubernetes %s. Whoever runs Radar must refresh them; Radar keeps retrying and reads them again once they work.", lost),
+			cause: errListRefused,
+		}}
+	}
+	if !failure.Stale {
+		return readreason.KindSyncTimedOut, errKindLoadFailed(target.resource)
+	}
+	why, check := staleCause(failure.Cause, target.resource)
+	return readreason.KindStale, readErrorf(readreason.KindStale, "Radar's copy of %s%s has stopped updating, so Radar doesn't use it and can't answer: %s for %s. It keeps retrying; if this persists, whoever runs Radar should check %s.", target.resource, where, why, durationAgo(failure.Since), check)
+}
+
+// errListRefused stands for the API server response behind a list failure,
+// which Radar keeps in its logs and sync diagnostics rather than in answers.
+var errListRefused = errors.New("Radar's informer lists were refused")
+
+// staleCause says, as clauses, what has kept failing (completed by "for
+// <duration>") and what whoever runs Radar should check.
+func staleCause(cause k8score.ListFailureCause, resource string) (why, check string) {
+	switch cause {
+	case k8score.ListFailureUnreachable:
+		return "Radar hasn't reached the Kubernetes API server", "its cluster connection"
+	case k8score.ListFailureTimeout:
+		return "its lists of them have timed out", "its cluster connection and the API server's load"
+	case k8score.ListFailureServerError:
+		return "the API server has failed its lists of them (for a custom resource, often because a conversion webhook is down)", "the API server and any webhooks for " + resource
+	}
+	return "its lists of them have failed", "its cluster connection and list/watch permissions"
+}
+
+// durationAgo renders how long ago since was, in whole minutes.
+func durationAgo(since time.Time) string {
+	switch minutes := int(time.Since(since) / time.Minute); minutes {
+	case 0:
+		return "under a minute"
+	case 1:
+		return "1 minute"
+	default:
+		return fmt.Sprintf("%d minutes", minutes)
+	}
 }
 
 func errKindNotCollected(resource string) error {
@@ -1119,6 +1206,14 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 				return checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, waitErr, dynamicCache, gvr, ok)
 			}
 		}
+	}
+	if failure, failing := dynamicCache.NamespaceListFailure(gvr, namespace); failing {
+		where := ""
+		if namespace != "" {
+			where = fmt.Sprintf(" in namespace %q", namespace)
+		}
+		_, err := failedLoadError(ctx, dynamicCollectorTarget(kind, group, verb), where, failure, true)
+		return false, err
 	}
 	observation := dynamicCache.Observation(gvr)
 	switch observation.State {

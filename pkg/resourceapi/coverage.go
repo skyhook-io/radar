@@ -190,8 +190,14 @@ type Gap struct {
 // count. Status is relative to Scope. An explicit target (namespaces the
 // request named) stays the scope, and what of it could not be read is a gap;
 // an implicitly broad request's scope is what remained after NarrowedBy, so
-// "complete" there means complete within that narrowed scope only. It does
-// not assert continuous watch health.
+// "complete" there means complete within that narrowed scope only.
+//
+// Radar reads from informer caches, so "complete" means every store read had
+// loaded and its lists had not been failing for Radar's stall threshold
+// (three minutes). A store whose lists keep failing is a gap (kind_stale, or
+// radar_forbidden or radar_credentials_rejected when Kubernetes refuses or
+// rejects Radar's identity), and its rows are withheld. Detection takes that
+// threshold, so a store frozen for less time still reads complete.
 //
 // Read is what Radar read within Scope. Every successful answer has it; on an
 // error it is absent: the error returns no rows, though Radar may have read

@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"maps"
 	"sync"
 	"time"
@@ -163,6 +164,8 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 			secretWriteTimes.capture(obj)
 		},
 		OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
+		ListFailureAfter: testListFailureAfter,
+		ListProbe:        testListProbe,
 	}
 
 	core, err := k8score.NewResourceCache(cfg)
@@ -278,6 +281,23 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 	discoveryMu.Unlock()
 
 	return InitDynamicResourceCache(nil)
+}
+
+var (
+	testListFailureAfter time.Duration
+	testListProbe        func(ctx context.Context, kind, namespace string) error
+)
+
+// SetTestListFailureTracking turns on list-failure tracking with a short
+// threshold for test resource caches and dynamic caches initialized after the
+// call. probe verifies typed kinds; dynamic caches use their own client.
+// Returns a restore func.
+func SetTestListFailureTracking(after time.Duration, probe func(ctx context.Context, kind, namespace string) error) func() {
+	prevAfter, prevProbe, prevDynamic := testListFailureAfter, testListProbe, listFailureAfter
+	testListFailureAfter, testListProbe, listFailureAfter = after, probe, after
+	return func() {
+		testListFailureAfter, testListProbe, listFailureAfter = prevAfter, prevProbe, prevDynamic
+	}
 }
 
 // SetTestDynamicSyncStallAfter sets how long a dynamic informer may stay
@@ -525,6 +545,7 @@ func ResetTestState() {
 	k8sClient = nil
 	discoveryClient = nil
 	dynamicClient = nil
+	apiReachability = nil
 	activeClientGeneration = 0
 	kubeconfigMode = ""
 	contextBinding = ""

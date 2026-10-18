@@ -91,6 +91,8 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
 			SyncStallAfter:              dynamicSyncStallAfter,
+			ListFailureAfter:            listFailureAfter,
+			APIReachability:             getAPIReachability(),
 			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)

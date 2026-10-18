@@ -49,6 +49,13 @@ const (
 	// does not restart it; if it persists, Radar's connection or
 	// list/watch permissions need attention.
 	KindSyncTimedOut Code = "kind_sync_timed_out"
+	// KindStale: the kind had loaded, but its lists have kept failing for
+	// minutes, so Radar's copy stopped updating and Radar doesn't use it.
+	// Radar keeps retrying; if it persists, Radar's cluster connection or the
+	// API server (for a custom resource, often a conversion webhook) needs
+	// attention. When Kubernetes refuses or rejects Radar's own identity
+	// instead, the code is RadarForbidden or RadarCredentialsRejected.
+	KindStale Code = "kind_stale"
 	// RadarKindNotCollected: Radar's setup leaves the kind out, so it can't say
 	// which exist. Whoever runs Radar can include it, if Radar's identity may
 	// list and watch it.
@@ -130,6 +137,7 @@ var actions = map[Code]Action{
 	RadarNamespaceNotCollected: ActionRadarConfig,
 	KindSyncPending:            ActionRetry,
 	KindSyncTimedOut:           ActionWait,
+	KindStale:                  ActionWait,
 	RadarKindNotCollected:      ActionRadarConfig,
 	KindUnknown:                ActionChangeRequest,
 	KindNotWatchable:           ActionChangeRequest,
@@ -195,7 +203,7 @@ var precedence = []Code{
 	UserForbidden, UserNoNamespaceAccess, UserNamespaceNotVisible, NamespaceNotFound,
 	OutsideNamespaceSelection, OutsideNamespacePin,
 	RadarCredentialsRejected, RadarForbidden, RadarKindNotCollected,
-	KindSyncTimedOut, RadarNamespaceNotCollected, FilterEvalFailed, ReadError,
+	KindSyncTimedOut, KindStale, RadarNamespaceNotCollected, FilterEvalFailed, ReadError,
 	ObjectNotFound,
 }
 

@@ -9,6 +9,7 @@
 package k8score
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -267,6 +268,21 @@ type CacheConfig struct {
 	// buildInformerSetups (currently Pods, ReplicaSets) paginate.
 	ListPageSize int64
 
+	// ListFailureAfter is how long an informer's lists may keep failing, with
+	// no sign of progress, before AssessKindRead stops vouching for its store
+	// (see ListFailure). Zero turns the tracking off, and so does a nil
+	// ListProbe. Radar uses DefaultListFailureAfter.
+	ListFailureAfter time.Duration
+
+	// ListProbe lists at most one object of kind in namespace ("" for the
+	// kind's whole scope). It verifies that a kind whose list failed can be
+	// listed again when nothing in its store shows it.
+	ListProbe func(ctx context.Context, kind, namespace string) error
+
+	// APIReachability, when set, is fed by the transport of the client the
+	// informers use, so the cache can tell when the API server is unreachable.
+	APIReachability *APIReachability
+
 	// DebugEvents enables verbose event debug logging.
 	DebugEvents bool
 
@@ -382,6 +398,13 @@ type DynamicCacheConfig struct {
 	// observation reports sync_stalled instead of initial_sync. Zero means 30
 	// seconds.
 	SyncStallAfter time.Duration
+
+	// ListFailureAfter is CacheConfig.ListFailureAfter for dynamic informers,
+	// which verify with DynamicClient. Zero turns the tracking off.
+	ListFailureAfter time.Duration
+
+	// APIReachability is CacheConfig.APIReachability for dynamic informers.
+	APIReachability *APIReachability
 
 	// DebugEvents enables verbose debug logging.
 	DebugEvents bool

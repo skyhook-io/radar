@@ -2,22 +2,48 @@ package k8score
 
 import (
 	"slices"
+	"time"
 
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 )
 
-// kindStore is one informer's store for a kind and that informer's own sync.
+// kindStore is one informer's store for a kind, that informer's own sync,
+// and, when list failures are tracked, its lists' progress.
 type kindStore struct {
-	indexer cache.Indexer
-	synced  func() bool
+	indexer  cache.Indexer
+	synced   func() bool
+	progress *listProgress
 }
 
-func (rc *ResourceCache) addKindStore(key, namespace string, inf cache.SharedIndexInformer) {
+func (rc *ResourceCache) addKindStore(key, namespace string, inf cache.SharedIndexInformer, progress *listProgress) {
 	if rc.kindStores[key] == nil {
 		rc.kindStores[key] = map[string]kindStore{}
 	}
-	rc.kindStores[key][namespace] = kindStore{indexer: inf.GetIndexer(), synced: inf.HasSynced}
+	rc.kindStores[key][namespace] = kindStore{indexer: inf.GetIndexer(), synced: inf.HasSynced, progress: progress}
+}
+
+// listProgressTrackers returns every informer's list tracker. kindStores is
+// complete once the cache is built and never changes after.
+func (rc *ResourceCache) listProgressTrackers() []*listProgress {
+	var out []*listProgress
+	for _, stores := range rc.kindStores {
+		for _, st := range stores {
+			if st.progress != nil {
+				out = append(out, st.progress)
+			}
+		}
+	}
+	return out
+}
+
+// listFailure reports a store Radar no longer vouches for because its lists
+// keep failing.
+func (rc *ResourceCache) listFailure(st kindStore, now time.Time) (ListFailure, bool) {
+	if st.progress == nil {
+		return ListFailure{}, false
+	}
+	return st.progress.failure(now, rc.config.ListFailureAfter, rc.config.APIReachability)
 }
 
 // storeFor returns the store holding namespace's objects: that namespace's own
@@ -44,14 +70,19 @@ func (rc *ResourceCache) pastDeadline(key string) bool {
 	return tracked
 }
 
-func (rc *ResourceCache) storeReadiness(key string, st kindStore) KindReadiness {
+// storeReadiness is a store's state now. A store whose lists keep failing
+// is Failed, whether or not it had loaded.
+func (rc *ResourceCache) storeReadiness(key string, st kindStore, now time.Time) (KindReadiness, ListFailure, bool) {
+	if failure, failing := rc.listFailure(st, now); failing {
+		return KindFailed, failure, true
+	}
 	if st.synced() {
-		return KindReady
+		return KindReady, ListFailure{}, false
 	}
 	if rc.pastDeadline(key) {
-		return KindFailed
+		return KindFailed, ListFailure{}, false
 	}
-	return KindPending
+	return KindPending, ListFailure{}, false
 }
 
 // KindReadAssessment contains full membership facts for one cache handle.
@@ -59,7 +90,8 @@ func (rc *ResourceCache) storeReadiness(key string, st kindStore) KindReadiness 
 // Consumers must project namespaces to what the caller may see.
 type KindReadAssessment struct {
 	// Readiness is the whole kind's state; it is Ready only once every
-	// informer for the kind has synced.
+	// informer for the kind has synced, and while none of its stores is
+	// failing (see ListFailures).
 	Readiness KindReadiness
 	Requested []string
 	// AllNamespaces: one informer covers every namespace, so each namespace's
@@ -68,7 +100,8 @@ type KindReadAssessment struct {
 	// Read, Loading, Failed and Uncovered partition the target: Requested, or
 	// for an all-namespaces request on a namespace-scoped collector, the
 	// namespaces it collects. A namespace is Read when the store holding it is
-	// complete now; Failed when its load missed the sync deadline. Uncovered
+	// complete now; Failed when its load missed the sync deadline, or its
+	// store's lists keep failing (see ListFailures). Uncovered
 	// is known from configuration before any sync. An all-namespaces request
 	// on an all-namespaces informer has no partition: Readiness is its state
 	// and Read is nil. So is a kind Radar doesn't watch (Readiness
@@ -76,6 +109,12 @@ type KindReadAssessment struct {
 	// even when empty, because readers take a nil namespace list to mean
 	// every namespace.
 	Read, Loading, Failed, Uncovered []string
+	// ListFailures holds, for each Failed namespace whose store's lists keep
+	// failing, since when and why, and whether the store had loaded (so a copy
+	// is stale) or never did. Without a partition the one entry is keyed "".
+	// A Failed namespace with no entry missed its initial load deadline with
+	// no failing list on record. Nil when there are none.
+	ListFailures map[string]ListFailure
 	// Complete: every requested namespace is readable now; an empty target is
 	// complete. An all-namespaces request (Requested nil) is complete only on
 	// one informer over every namespace that has loaded: a namespace-scoped
@@ -90,9 +129,21 @@ func (rc *ResourceCache) AssessKindRead(resource string, requested []string) Kin
 	if a.Readiness == KindUnavailable {
 		return a
 	}
+	now := time.Now()
 	covered := rc.KindNamespaces(resource)
 	if covered == nil {
 		a.AllNamespaces = true
+		if st, ok := rc.storeFor(resource, ""); ok {
+			if failure, failing := rc.listFailure(st, now); failing {
+				a.Readiness = KindFailed
+				if requested == nil {
+					a.ListFailures = map[string]ListFailure{"": failure}
+				}
+				for _, namespace := range requested {
+					a.addListFailure(namespace, failure)
+				}
+			}
+		}
 		if requested == nil {
 			a.Complete = a.Readiness == KindReady
 			return a
@@ -101,6 +152,16 @@ func (rc *ResourceCache) AssessKindRead(resource string, requested []string) Kin
 		a.assign(a.Readiness, slices.Clone(requested)...)
 		a.Complete = len(a.Loading) == 0 && len(a.Failed) == 0
 		return a
+	}
+	if a.Readiness == KindReady {
+		// A failing store of any namespace keeps the whole kind from being
+		// Ready, so readers take it namespace by namespace.
+		for _, st := range rc.kindStores[resource] {
+			if _, failing := rc.listFailure(st, now); failing {
+				a.Readiness = KindFailed
+				break
+			}
+		}
 	}
 	a.Read = []string{}
 	target := requested
@@ -115,7 +176,12 @@ func (rc *ResourceCache) AssessKindRead(resource string, requested []string) Kin
 		}
 		state := a.Readiness
 		if st, ok := rc.storeFor(resource, namespace); ok {
-			state = rc.storeReadiness(resource, st)
+			var failure ListFailure
+			var failing bool
+			state, failure, failing = rc.storeReadiness(resource, st, now)
+			if failing {
+				a.addListFailure(namespace, failure)
+			}
 		}
 		a.assign(state, namespace)
 	}
@@ -150,6 +216,13 @@ func namespaceSet(namespaces []string) map[string]bool {
 		set[ns] = true
 	}
 	return set
+}
+
+func (a *KindReadAssessment) addListFailure(namespace string, failure ListFailure) {
+	if a.ListFailures == nil {
+		a.ListFailures = map[string]ListFailure{}
+	}
+	a.ListFailures[namespace] = failure
 }
 
 func (a *KindReadAssessment) assign(state KindReadiness, namespaces ...string) {

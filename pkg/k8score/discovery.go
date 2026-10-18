@@ -616,6 +616,23 @@ func (d *ResourceDiscovery) IsCRDGVR(gvr schema.GroupVersionResource) bool {
 	return false
 }
 
+// CRDServedInOtherVersions reports a custom resource that discovery also
+// lists in a version other than gvr's, so reading it may convert objects
+// between versions.
+func (d *ResourceDiscovery) CRDServedInOtherVersions(gvr schema.GroupVersionResource) bool {
+	if d == nil {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, res := range d.resources {
+		if res.IsCRD && res.Group == gvr.Group && res.Name == gvr.Resource && res.Version != gvr.Version {
+			return true
+		}
+	}
+	return false
+}
+
 // SupportsWatch checks if a resource supports list and watch verbs.
 func (d *ResourceDiscovery) SupportsWatch(kindOrName string) bool {
 	res, ok := d.GetResource(kindOrName)

@@ -29,13 +29,17 @@ import (
 	"k8s.io/client-go/util/homedir"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 var (
-	k8sClient                    *kubernetes.Clientset
-	k8sConfig                    *rest.Config
-	discoveryClient              *discovery.DiscoveryClient
-	dynamicClient                dynamic.Interface
+	k8sClient       *kubernetes.Clientset
+	k8sConfig       *rest.Config
+	discoveryClient *discovery.DiscoveryClient
+	dynamicClient   dynamic.Interface
+	// apiReachability follows whether the shared clients reach the API
+	// server; set with them.
+	apiReachability              *k8score.APIReachability
 	initOnce                     sync.Once
 	initErr                      error
 	kubeconfigPath               string
@@ -338,6 +342,7 @@ func doInit(opts InitOptions) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
+	apiReachability = clients.reachability
 	activeClientGeneration = clients.generation
 
 	return nil
@@ -785,6 +790,14 @@ func GetDiscoveryClient() *discovery.DiscoveryClient {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	return discoveryClient
+}
+
+// getAPIReachability returns the reachability tracker of the active shared
+// clients, or nil before they exist.
+func getAPIReachability() *k8score.APIReachability {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return apiReachability
 }
 
 // GetDynamicClient returns the K8s dynamic client for CRD access
@@ -1895,6 +1908,7 @@ func SwitchContext(name string) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
+	apiReachability = clients.reachability
 	activeClientGeneration = clients.generation
 	contextName = name
 	contextBinding = newContextBinding

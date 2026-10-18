@@ -44,6 +44,8 @@ type informerEntry struct {
 	cancel    context.CancelFunc
 	synced    bool
 	startedAt time.Time
+	// progress follows the informer's lists when list failures are tracked.
+	progress *listProgress
 }
 
 type retainedObservation struct {
@@ -131,6 +133,10 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 		discoveryStatus:  CRDDiscoveryIdle,
 		discoveryDone:    make(chan struct{}),
 		gvrHandlers:      make(map[schema.GroupVersionResource][]cache.ResourceEventHandler),
+	}
+
+	if cfg.ListFailureAfter > 0 {
+		go runListWatchdog(d.stopCh, cfg.ListFailureAfter, cfg.APIReachability, d.listProgressTrackers)
 	}
 
 	log.Println("Dynamic resource cache initialized")
@@ -477,7 +483,14 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, sc
 	}
 
 	factory := d.factoryForNs(scopeNS)
-	informer := factory.ForResource(gvr).Informer()
+	d.runInformerLocked(key, factory.ForResource(gvr).Informer())
+	return nil
+}
+
+// runInformerLocked registers informer as key's and starts it. Caller holds
+// d.mu and has checked the cache isn't stopped.
+func (d *DynamicResourceCache) runInformerLocked(key informerKey, informer cache.SharedIndexInformer) {
+	gvr, scopeNS := key.gvr, key.ns
 	// Apply the dynamic-cache transform BEFORE informer.Run so every
 	// object entering the store is shrunk in place. SetTransform must
 	// be called pre-Run (returns ErrRunning otherwise). If it ever
@@ -495,11 +508,15 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, sc
 		case <-ctx.Done():
 		}
 	}()
-	d.informers[key] = &informerEntry{
+	entry := &informerEntry{
 		informer:  informer,
 		cancel:    cancel,
 		startedAt: time.Now().UTC(),
 	}
+	if d.config.ListFailureAfter > 0 {
+		d.trackListFailures(entry, key)
+	}
+	d.informers[key] = entry
 	delete(d.observations, gvr)
 
 	kind := d.gvrToKind(gvr)
@@ -537,12 +554,113 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, sc
 		}
 
 		d.mu.Lock()
-		if e := d.informers[key]; e != nil {
+		if e := d.informers[key]; e != nil && e.informer == informer {
 			e.synced = true
 		}
 		d.mu.Unlock()
 	}()
-	return nil
+}
+
+// restartInformer replaces key's informer, if it is still old, with a new one
+// that lists from scratch. A watch can drop events without reporting them (an
+// API server does for objects a failing conversion webhook can't convert),
+// and the dropped events never come back, so only a new list repairs the
+// store. The factory hands back a stopped informer once it built one for a
+// resource, so the replacement is built directly.
+func (d *DynamicResourceCache) restartInformer(key informerKey, old cache.SharedIndexInformer) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	entry := d.informers[key]
+	if d.stopped || entry == nil || entry.informer != old {
+		return
+	}
+	entry.cancel()
+	delete(d.informers, key)
+	informer := dynamicinformer.NewFilteredDynamicInformer(d.config.DynamicClient, key.gvr, key.ns, 0,
+		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, nil).Informer()
+	log.Printf("Relisting %s.%s/%s (namespace %q): its watch may have dropped events while its lists failed", key.gvr.Resource, key.gvr.Group, key.gvr.Version, key.ns)
+	d.runInformerLocked(key, informer)
+}
+
+// trackListFailures gives entry a list tracker fed by its informer's watch
+// error handler. The factory hands back the same informer when a key is
+// watched again after an idle reap, and a started informer keeps its first
+// handler, so the handler finds the live entry by key.
+func (d *DynamicResourceCache) trackListFailures(entry *informerEntry, key informerKey) {
+	label := key.gvr.Resource + "." + key.gvr.Group + "/" + key.gvr.Version
+	if key.ns != "" {
+		label += " in namespace " + key.ns
+	}
+	client := d.config.DynamicClient
+	informer := entry.informer
+	entry.progress = newListProgress(label, informer.LastSyncResourceVersion, informer.HasSynced,
+		func(ctx context.Context) error {
+			_, err := client.Resource(key.gvr).Namespace(key.ns).List(ctx, metav1.ListOptions{Limit: 1})
+			return err
+		})
+	// A custom resource served in several versions may go through a
+	// conversion webhook. When that webhook fails, the API server drops the
+	// watch events it can't convert without telling the informer, which
+	// never relists, so only a periodic list notices.
+	if d.config.Discovery.CRDServedInOtherVersions(key.gvr) {
+		entry.progress.heartbeat = true
+		entry.progress.onRecover = func() { d.restartInformer(key, informer) }
+	}
+	if err := informer.SetWatchErrorHandler(func(r *cache.Reflector, err error) {
+		// Keep client-go's own logging of the failure: callers only ever see
+		// its classified cause.
+		cache.DefaultWatchErrorHandler(context.Background(), r, err)
+		d.mu.RLock()
+		live := d.informers[key]
+		d.mu.RUnlock()
+		if live != nil && live.informer == informer && live.progress != nil {
+			live.progress.observe(err, time.Now())
+		}
+	}); err != nil {
+		log.Printf("Warning: failed to set watch error handler for %s: %v", label, err)
+	}
+}
+
+// listProgressTrackers returns the list tracker of every informer.
+func (d *DynamicResourceCache) listProgressTrackers() []*listProgress {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]*listProgress, 0, len(d.informers))
+	for _, e := range d.informers {
+		if e.progress != nil {
+			out = append(out, e.progress)
+		}
+	}
+	return out
+}
+
+// NamespaceListFailure reports that Radar no longer vouches for the store
+// serving reads of gvr in namespace (the cluster-wide informer when there is
+// one, otherwise namespace's own; "" asks for every informer an
+// all-namespaces read would use), because its lists keep failing. A stopped
+// cache, a kind with no informer, and a cache that doesn't track list
+// failures report none.
+func (d *DynamicResourceCache) NamespaceListFailure(gvr schema.GroupVersionResource, namespace string) (ListFailure, bool) {
+	if d == nil || d.config.ListFailureAfter <= 0 {
+		return ListFailure{}, false
+	}
+	entries := d.readEntries(gvr, namespace)
+	d.mu.RLock()
+	stopped := d.stopped
+	d.mu.RUnlock()
+	if stopped {
+		return ListFailure{}, false
+	}
+	now := time.Now()
+	for _, e := range entries {
+		if e.progress == nil {
+			continue
+		}
+		if failure, failing := e.progress.failure(now, d.config.ListFailureAfter, d.config.APIReachability); failing {
+			return failure, true
+		}
+	}
+	return ListFailure{}, false
 }
 
 // nsCtxExpired reports whether a probe error is a context deadline/cancel —
