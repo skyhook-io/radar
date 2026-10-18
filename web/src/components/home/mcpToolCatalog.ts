@@ -382,4 +382,17 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'timeout', desc: 'drain timeout in seconds (default 60)' },
     ],
   },
+  {
+    name: 'wait_for',
+    desc: 'Wait until objects reach a state, like kubectl rollout status and kubectl wait: a rollout finished, a Job complete, a Pod Ready, an object deleted, or any status condition True. Stops early when the state cannot come without another change.',
+    params: [
+      { arg: 'kind', required: true, desc: 'resource kind, e.g. deployment, job, pod' },
+      { arg: 'name', desc: 'object name; or use label_selector' },
+      { arg: 'label_selector', desc: 'wait on every matching object' },
+      { arg: 'namespace', desc: 'namespace for namespaced kinds' },
+      { arg: 'group', desc: 'API group when the kind is ambiguous' },
+      { arg: 'condition', desc: 'rollout, complete, ready, deleted, or a condition type; defaults by kind' },
+      { arg: 'timeout_seconds', desc: 'default 120, max 600' },
+    ],
+  },
 ]
