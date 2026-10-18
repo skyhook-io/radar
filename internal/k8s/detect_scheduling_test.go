@@ -46,6 +46,7 @@ func TestParseSchedulerMessage_Classes(t *testing.T) {
 		{"existing anti-affinity", "3 node(s) didn't satisfy existing pods anti-affinity rules", SchedPodAntiAffinity, "", "", ""},
 		{"topology spread", "3 node(s) didn't match pod topology spread constraints", SchedTopologySpread, "", "", ""},
 		{"volume node affinity", "3 node(s) had volume node affinity conflict", SchedVolumeNodeAffinity, "", "", ""},
+		{"PersistentVolume node affinity", "3 node(s) didn't match PersistentVolume's node affinity", SchedVolumeNodeAffinity, "", "", ""},
 		{"volume count", "3 node(s) exceed max volume count", SchedVolumeCount, "", "", ""},
 		{"no free ports", "3 node(s) didn't have free ports for the requested pod ports", SchedNoPorts, "", "", ""},
 		{"cordoned", "3 node(s) were unschedulable", SchedNodeUnschedulable, "", "", ""},
@@ -540,5 +541,18 @@ func TestParseAdmissionBlocker(t *testing.T) {
 				t.Fatalf("ParseAdmissionBlocker(%q) = %+v, %v; want %+v, %v", tc.msg, got, ok, tc.want, tc.ok)
 			}
 		})
+	}
+}
+
+// A PersistentVolume's zone pin is not the Pod's nodeSelector: the advice must
+// point at the volume, never at relabelling nodes.
+func TestDiagnoseUnschedulable_PersistentVolumeNodeAffinity(t *testing.T) {
+	msg := "0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity."
+	message, action := diagnoseUnschedulable(&corev1.Pod{}, msg, nil)
+	if strings.Contains(message, "node affinity/selector mismatch") || strings.Contains(action, "nodeSelector") || strings.Contains(action, "matching node") {
+		t.Fatalf("PV node affinity read as a Pod selector mismatch: message=%q action=%q", message, action)
+	}
+	if !strings.Contains(message, "2 node(s) volume node-affinity conflict") || !strings.Contains(action, "PersistentVolume") {
+		t.Fatalf("message=%q action=%q, want the volume conflict named", message, action)
 	}
 }

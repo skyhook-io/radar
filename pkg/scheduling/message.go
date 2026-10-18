@@ -131,7 +131,15 @@ func classifyClause(clause string) (Reason, bool) {
 		if IsNodeLifecycleTaint(reason.TaintKey) {
 			reason.Class = NodeUnschedulable
 		}
-	case strings.Contains(lower, "volume node affinity"):
+	// Volume topology must match before the generic "node affinity" case:
+	// kube-scheduler's VolumeBinding plugin says "didn't match
+	// PersistentVolume's node affinity" (older releases: "had volume node
+	// affinity conflict"), and VolumeZone says "had no available volume zone".
+	// All mean the Pod's bound volume can't attach on those nodes, not that the
+	// Pod's own nodeSelector/affinity is wrong.
+	case strings.Contains(lower, "volume node affinity"),
+		strings.Contains(lower, "persistentvolume") && strings.Contains(lower, "node affinity"),
+		strings.Contains(lower, "volume zone"):
 		reason.Class = VolumeNodeAffinity
 	case strings.Contains(lower, "anti-affinity"):
 		reason.Class = PodAntiAffinity

@@ -346,7 +346,9 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				dur = ageDur
 			}
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
-			schedMessage, schedAction := diagnoseUnschedulable(pod, cond.Message, nodes)
+			total, reasons := parseSchedulerMessage(cond.Message)
+			vol := volumePlacementFor(cache, pod, pods, ownerKind, ownerName, reasons)
+			schedMessage, schedAction := diagnoseParsedUnschedulable(pod, cond.Message, total, reasons, nodes, vol)
 			detection := Detection{
 				Kind:                       "Pod",
 				Namespace:                  pod.Namespace,
@@ -407,10 +409,23 @@ const genericUnschedulableAction = "Use the scheduler message to decide: free or
 // derived from different parses. Pure over its inputs.
 func diagnoseUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) (message, action string) {
 	total, reasons := parseSchedulerMessage(schedMsg)
+	return diagnoseParsedUnschedulable(pod, schedMsg, total, reasons, nodes, nil)
+}
+
+// diagnoseParsedUnschedulable renders an already-parsed verdict. vol, when
+// set, names the PersistentVolume pinning the pod ahead of the scheduler
+// summary, and a rollout deadlock replaces the per-class action.
+func diagnoseParsedUnschedulable(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts, vol *volumePlacement) (message, action string) {
 	message = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes)
 	action = unschedulableAction(reasons)
 	if action == "" {
 		action = genericUnschedulableAction
+	}
+	if vol != nil {
+		message = vol.lead(nodes) + "; " + message
+		if vol.holderPod != "" {
+			action = vol.deadlockAction()
+		}
 	}
 	return message, action
 }
@@ -552,7 +567,7 @@ func actionForSchedClass(r SchedulingReason) string {
 	case SchedVolumeBinding:
 		return "The pod's volume can't be provisioned or bound — check the PVC, its StorageClass/provisioner, and storage quota."
 	case SchedVolumeNodeAffinity:
-		return "The pod's bound volume can't be placed on any candidate node (its zone/topology doesn't match where the pod can run) — align the pod's placement with the volume's topology, free capacity there, or use a volume that can move."
+		return "The pod's PersistentVolume can only attach on nodes matching its nodeAffinity or zone labels (usually one zone), and none of those nodes can take the pod — check the PV's nodeAffinity and zone labels, then free room or add a node in that zone, or use a volume that can move."
 	case SchedVolumeCount:
 		return "Candidate nodes have hit their volume-attachment limit — attach fewer volumes per node, or add nodes."
 	case SchedNoPorts:
