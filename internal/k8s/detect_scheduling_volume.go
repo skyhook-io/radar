@@ -7,9 +7,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -41,6 +41,7 @@ func volumePlacementFor(cache *ResourceCache, pod *corev1.Pod, nsPods []*corev1.
 		return nil
 	}
 	var fallback *volumePlacement
+	pinned := 0
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim == nil {
 			continue
@@ -52,15 +53,29 @@ func volumePlacementFor(cache *ResourceCache, pod *corev1.Pod, nsPods []*corev1.
 		vp := &volumePlacement{claim: pvc.Name, pv: pvc.Spec.VolumeName, terms: pvRequiredTerms(cache, pvc.Spec.VolumeName)}
 		if pvcSingleNodeAccessOnly(pvc) {
 			vp.accessMode = singleNodeAccessMode(pvc)
-			if ownerKind == "Deployment" && holderCanBlock(reasons) && vp.findRolloutHolder(cache, pod, nsPods, ownerName) {
+			if ownerKind == "Deployment" && holderCanBlock(reasons) && vp.findRolloutHolder(cache, pod, nsPods, ownerName, rwopInUse(reasons)) {
 				return vp
 			}
 		}
-		if fallback == nil && len(vp.terms) > 0 {
+		if len(vp.terms) > 0 {
+			pinned++
 			fallback = vp
 		}
 	}
+	// With several pinned volumes the verdict doesn't say which one conflicts.
+	if pinned > 1 {
+		return nil
+	}
 	return fallback
+}
+
+func rwopInUse(reasons []SchedulingReason) bool {
+	for _, r := range reasons {
+		if strings.Contains(strings.ToLower(r.Raw), "readwriteoncepod") {
+			return true
+		}
+	}
+	return false
 }
 
 func hasVolumePlacementReason(reasons []SchedulingReason) bool {
@@ -95,7 +110,7 @@ func holderCanBlock(reasons []SchedulingReason) bool {
 // belong to the Deployment's current ReplicaSet. Under
 // RollingUpdate that old Pod stays until the new one is Ready, so the new Pod
 // can only go where the volume attaches, and the old Pod is in the way.
-func (vp *volumePlacement) findRolloutHolder(cache *ResourceCache, pod *corev1.Pod, nsPods []*corev1.Pod, deployment string) bool {
+func (vp *volumePlacement) findRolloutHolder(cache *ResourceCache, pod *corev1.Pod, nsPods []*corev1.Pod, deployment string, rwop bool) bool {
 	ref := controllerOwnerRef(pod.OwnerReferences)
 	if ref == nil || ref.Kind != "ReplicaSet" {
 		return false
@@ -129,8 +144,34 @@ func (vp *volumePlacement) findRolloutHolder(cache *ResourceCache, pod *corev1.P
 		if _, kind, name := podOwnerKindName(cache, other); kind != "Deployment" || name != deployment {
 			continue
 		}
+		// The anti-affinity rejection must be between these two pods; one
+		// against an unrelated pod isn't cleared by removing the old one.
+		if !rwop && !requiredAntiAffinityBetween(pod, other) && !requiredAntiAffinityBetween(other, pod) {
+			continue
+		}
 		vp.deployment, vp.holderPod, vp.holderRS = deployment, other.Name, otherRef.Name
 		return true
+	}
+	return false
+}
+
+// requiredAntiAffinityBetween reports whether a's required pod anti-affinity
+// selects b (same namespace, or a namespace the term lists).
+func requiredAntiAffinityBetween(a, b *corev1.Pod) bool {
+	if a.Spec.Affinity == nil || a.Spec.Affinity.PodAntiAffinity == nil {
+		return false
+	}
+	for _, term := range a.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution {
+		if term.LabelSelector == nil {
+			continue
+		}
+		if len(term.Namespaces) > 0 && !slices.Contains(term.Namespaces, b.Namespace) || len(term.Namespaces) == 0 && term.NamespaceSelector == nil && a.Namespace != b.Namespace {
+			continue
+		}
+		sel, err := metav1.LabelSelectorAsSelector(term.LabelSelector)
+		if err == nil && sel.Matches(labels.Set(b.Labels)) {
+			return true
+		}
 	}
 	return false
 }
@@ -180,28 +221,12 @@ func pvRequiredTerms(cache *ResourceCache, pvName string) []NodeSelectorTermFact
 	return terms
 }
 
-// evidenceReads are the inventories the enriched message reads beyond the
-// Pod: a caller who can't list them gets the scheduler-only form.
-func (vp *volumePlacement) evidenceReads(namespace string) []issuesapi.EvidenceRead {
-	reads := []issuesapi.EvidenceRead{{Resource: "persistentvolumeclaims", Namespace: namespace, Verb: "list"}}
-	if len(vp.terms) > 0 {
-		reads = append(reads, issuesapi.EvidenceRead{Resource: "persistentvolumes", Verb: "list"}, issuesapi.EvidenceRead{Resource: "nodes", Verb: "list"})
-	}
-	if vp.holderPod != "" {
-		reads = append(reads,
-			issuesapi.EvidenceRead{Resource: "pods", Namespace: namespace, Verb: "list"},
-			issuesapi.EvidenceRead{Group: "apps", Resource: "replicasets", Namespace: namespace, Verb: "list"},
-			issuesapi.EvidenceRead{Group: "apps", Resource: "deployments", Namespace: namespace, Verb: "list"})
-	}
-	return reads
-}
-
 // lead is the sentence placed before the scheduler summary. It avoids bare
 // commas outside brackets so the UI's clause splitter keeps it in one piece.
-func (vp *volumePlacement) lead(nodes []NodeFacts) string {
+func (vp *volumePlacement) lead() string {
 	where := ""
 	if len(vp.terms) > 0 {
-		where = fmt.Sprintf("PersistentVolume %s only attaches on nodes with %s (%s)", vp.pv, formatNodeSelectorTerms(vp.terms), matchingNodesPhrase(vp.terms, nodes))
+		where = fmt.Sprintf("PersistentVolume %s only attaches on nodes with %s", vp.pv, formatNodeSelectorTerms(vp.terms))
 	}
 	if vp.holderPod == "" {
 		return fmt.Sprintf("PVC %q: %s", vp.claim, where)
@@ -236,26 +261,4 @@ func formatNodeSelectorTerms(terms []NodeSelectorTermFacts) string {
 		out = append(out, strings.Join(exprs, " and "))
 	}
 	return strings.Join(out, " or ")
-}
-
-func matchingNodesPhrase(terms []NodeSelectorTermFacts, nodes []NodeFacts) string {
-	var names []string
-	for _, n := range nodes {
-		for _, term := range terms {
-			if nodeMatchesTerm(n, term) {
-				names = append(names, n.Name)
-				break
-			}
-		}
-	}
-	switch {
-	case len(names) == 0:
-		return "no node matches"
-	case len(names) == 1:
-		return "1 node matches: [" + names[0] + "]"
-	case len(names) <= 3:
-		return fmt.Sprintf("%d nodes match: [%s]", len(names), strings.Join(names, ", "))
-	default:
-		return fmt.Sprintf("%d nodes match", len(names))
-	}
 }

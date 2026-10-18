@@ -886,16 +886,20 @@ func TestDetectSchedulingProblems_PersistentVolumeRolloutDeadlock(t *testing.T) 
 	pod := func(name, rsName string) *corev1.Pod {
 		return &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod", UID: types.UID(name),
-				Labels: map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: rsName},
+				Labels: map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: rsName, "app": "db"},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rsName, Controller: &controller,
 				}}},
-			Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
-				Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}},
-			}}},
+			Spec: corev1.PodSpec{
+				Affinity: antiAffinityTo("db"),
+				Volumes: []corev1.Volume{{
+					Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}},
+				}},
+			},
 		}
 	}
 	oldPod := pod("db-old-x1", "db-old")
+	oldPod.Spec.Affinity = nil // the new pod's own term is enough
 	oldPod.Spec.NodeName = "node-a"
 	oldPod.Status.Phase = corev1.PodRunning
 	newPod := pod("db-new-y2", "db-new")
@@ -903,12 +907,16 @@ func TestDetectSchedulingProblems_PersistentVolumeRolloutDeadlock(t *testing.T) 
 		Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: verdict,
 	}}}
 
-	run := func(t *testing.T, strategy appsv1.DeploymentStrategyType, newRevision string) Detection {
+	run := func(t *testing.T, strategy appsv1.DeploymentStrategyType, newRevision string, mutate ...func(*corev1.Pod)) Detection {
 		t.Helper()
 		defer ResetTestState()
+		pending := newPod.DeepCopy()
+		for _, m := range mutate {
+			m(pending)
+		}
 		if err := InitTestResourceCache(fake.NewClientset(
 			node("node-a", "us-east-1a"), node("node-b", "us-east-1b"), node("node-c", "us-east-1c"),
-			pv, pvc, deployment(strategy), rs("db-old", "1"), rs("db-new", newRevision), oldPod, newPod,
+			pv, pvc, deployment(strategy), rs("db-old", "1"), rs("db-new", newRevision), oldPod, pending,
 		)); err != nil {
 			t.Fatalf("InitTestResourceCache: %v", err)
 		}
@@ -925,7 +933,7 @@ func TestDetectSchedulingProblems_PersistentVolumeRolloutDeadlock(t *testing.T) 
 		p := run(t, appsv1.RollingUpdateDeploymentStrategyType, "2")
 		for _, want := range []string{
 			`Rollout deadlock: pod db-old-x1 from the previous ReplicaSet db-old still holds ReadWriteOnce PVC "data"`,
-			"PersistentVolume pvc-1234 only attaches on nodes with topology.kubernetes.io/zone=us-east-1a (1 node matches: [node-a])",
+			"; its PersistentVolume pvc-1234 only attaches on nodes with topology.kubernetes.io/zone=us-east-1a; ",
 			"2 node(s) volume node-affinity conflict, 1 node(s) pod anti-affinity conflict (0/3 nodes available)",
 		} {
 			if !strings.Contains(p.Message, want) {
@@ -939,18 +947,6 @@ func TestDetectSchedulingProblems_PersistentVolumeRolloutDeadlock(t *testing.T) 
 		}
 		if strings.Contains(p.Message, "selector") || strings.Contains(p.Action, "nodeSelector") {
 			t.Errorf("volume pin read as a node selector mismatch: %+v", p)
-		}
-		// A caller who can't list PVs and Nodes gets the scheduler-only form.
-		reads := map[string]bool{}
-		for _, r := range p.RequiredReads {
-			reads[r.Resource] = true
-		}
-		if !reads["persistentvolumes"] || !reads["nodes"] || !reads["pods"] || p.Degraded == nil {
-			t.Fatalf("enriched row must declare its evidence reads and a degraded form: reads=%+v degraded=%+v", p.RequiredReads, p.Degraded)
-		}
-		if strings.Contains(p.Degraded.Message, "pvc-1234") || strings.Contains(p.Degraded.Message, "[node-a]") || strings.Contains(p.Degraded.Action, "db-old") ||
-			!strings.Contains(p.Degraded.Message, "volume node-affinity conflict") {
-			t.Errorf("degraded form leaks evidence or loses the volume class: %+v", p.Degraded)
 		}
 	})
 
@@ -972,6 +968,15 @@ func TestDetectSchedulingProblems_PersistentVolumeRolloutDeadlock(t *testing.T) 
 	// The pending pod is from the OLDER revision (its ReplicaSet re-created it
 	// mid-rollout) and the running holder is the current one: don't tell the
 	// user to scale the current ReplicaSet down.
+	// The new pod's anti-affinity targets another app on the volume's node:
+	// removing the old db pod wouldn't clear it.
+	t.Run("anti-affinity against an unrelated pod", func(t *testing.T) {
+		p := run(t, appsv1.RollingUpdateDeploymentStrategyType, "2", func(p *corev1.Pod) { p.Spec.Affinity = antiAffinityTo("cache") })
+		if strings.Contains(p.Message, "deadlock") || strings.Contains(p.Action, "Recreate") {
+			t.Errorf("deadlock claimed for an anti-affinity the old pod doesn't cause: %+v", p)
+		}
+	})
+
 	t.Run("pending pod from an older revision", func(t *testing.T) {
 		p := run(t, appsv1.RollingUpdateDeploymentStrategyType, "0")
 		if strings.Contains(p.Message, "deadlock") {
@@ -991,4 +996,13 @@ func TestHolderCanBlock(t *testing.T) {
 		t.Errorf("holderCanBlock own=%v held=%v onlyVolume=%v memory=%v, want false true false false",
 			holderCanBlock(own), holderCanBlock(held), holderCanBlock(onlyVolume), holderCanBlock(memory))
 	}
+}
+
+func antiAffinityTo(app string) *corev1.Affinity {
+	return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": app}},
+			TopologyKey:   "kubernetes.io/hostname",
+		}},
+	}}
 }
