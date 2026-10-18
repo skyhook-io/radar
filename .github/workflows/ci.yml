@@ -39,6 +39,7 @@ jobs:
             pkg:
               - 'pkg/**'
               - 'testdata/**'
+              - 'go.work*'
             # Go tests also read files outside Go packages: the chart, shared
             # golden fixtures, docs and README, and frontend sources they keep
             # in sync with. A new test that reads another path needs it here.
@@ -46,6 +47,7 @@ jobs:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
+              - 'go.work*'
               - 'cmd/**'
               - 'internal/**'
               - 'pkg/**'
@@ -62,22 +64,26 @@ jobs:
               - 'packages/k8s-ui/src/components/trace/reachVerdict.ts'
               - 'packages/k8s-ui/src/components/resources/resource-utils-cnpg.ts'
             # Frontend and k8s-ui tests read Go golden fixtures, the chart's
-            # read baseline and the GPU ecosystem registry.
+            # read baseline and the GPU ecosystem registry, and run scripts/.
             web:
               - 'web/**'
               - 'packages/**'
               - 'package.json'
               - 'package-lock.json'
+              - '.npmrc'
               - '**/testdata/**'
               - 'deploy/helm/radar/files/**'
               - 'scripts/gpu-ecosystem-demo/**'
               - 'scripts/workload-metrics-demo/**'
+              - 'scripts/check-whats-new.sh'
             # What the settings browser journeys build and serve: the frontend
-            # embedded in cmd/testserver. Go tests and fixtures are not part of it.
+            # embedded in cmd/testserver. Go tests and their fixtures are not part
+            # of it; web fixtures are, since the build type-checks web tests.
             app:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
+              - 'go.work*'
               - 'cmd/**'
               - 'internal/**'
               - 'pkg/**'
@@ -85,9 +91,10 @@ jobs:
               - 'packages/**'
               - 'package.json'
               - 'package-lock.json'
+              - '.npmrc'
               - 'Makefile'
               - '!**/*_test.go'
-              - '!**/testdata/**'
+              - '!{cmd,internal,pkg}/**/testdata/**'
             helm:
               - 'deploy/helm/**'
               - 'scripts/test-chart.sh'
