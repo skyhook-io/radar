@@ -64,32 +64,8 @@ export function adaptIssues(
       "error",
     );
   }
-  if (value.recent_changes_truncated === true) {
-    builder.limit(
-      source,
-      "Issue-related changes",
-      "The issue response omitted some recent changes.",
-      "truncated",
-    );
-  }
   const historyIncomplete =
     record(value.recent_changes_history_coverage)?.incomplete === true;
-  if (nonEmptyString(value.recent_changes_error)) {
-    builder.limit(
-      source,
-      "Issue-related changes",
-      value.recent_changes_error,
-      "error",
-    );
-  }
-  if (value.correlation_truncated === true) {
-    builder.limit(
-      source,
-      "Issue change correlation",
-      "Change correlation was not evaluated for every returned issue.",
-      "truncated",
-    );
-  }
   const visibility = record(value.visibility);
   if (
     visibility &&
@@ -152,37 +128,20 @@ export function adaptIssues(
     }
   }
   if (issues.length === 0) {
-    if (!source.confirmedSuccess || builder.limitedSources.has(source.id))
-      return;
-    const args = record(source.args ? parseJSON(source.args) : undefined);
-    if (!nonEmptyString(args?.namespace)) {
-      builder.limit(
-        source,
-        "Issues",
-        "Radar found no matching issues, but the search covered only namespaces the current user can access.",
-        "unknown",
-      );
-      return;
-    }
-    const scope = scopeFromArgs(source);
-    const relevance = sourceArgsRelevance(builder, source);
-    builder.observe(`issues:${source.args ?? scope}`, "receipt", source, {
-      tier: evidenceTierForRelevance("checked", relevance),
-      relevance,
-      tone: "neutral",
-      title: "No live issues matched this search",
-      summary: scope,
-      data: {
-        type: "receipt",
-        checked: "issues",
-        scope,
-      },
-    });
+    addNoIssuesReceipt(builder, source);
   } else {
     for (const item of issues) addIssueObservation(builder, source, item);
   }
-  // Added last: it limits the change feed only, so it must not withhold the
-  // live-issue receipt above.
+  // Added last: these limit the change feed only, so they must not withhold
+  // the live-issue receipt above.
+  if (value.recent_changes_truncated === true) {
+    builder.limit(
+      source,
+      "Issue-related changes",
+      "The issue response omitted some recent changes.",
+      "truncated",
+    );
+  }
   if (historyIncomplete) {
     builder.limit(
       source,
@@ -191,4 +150,53 @@ export function adaptIssues(
       "unknown",
     );
   }
+  if (nonEmptyString(value.recent_changes_error)) {
+    builder.limit(
+      source,
+      "Issue-related changes",
+      value.recent_changes_error,
+      "error",
+    );
+  }
+  if (value.correlation_truncated === true) {
+    builder.limit(
+      source,
+      "Issue change correlation",
+      "Change correlation was not evaluated for every returned issue.",
+      "truncated",
+    );
+  }
+}
+
+// The receipt for a scan that found nothing, unless the scan itself was
+// limited or covered only the caller's namespaces.
+function addNoIssuesReceipt(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+): void {
+  if (!source.confirmedSuccess || builder.limitedSources.has(source.id)) return;
+  const args = record(source.args ? parseJSON(source.args) : undefined);
+  if (!nonEmptyString(args?.namespace)) {
+    builder.limit(
+      source,
+      "Issues",
+      "Radar found no matching issues, but the search covered only namespaces the current user can access.",
+      "unknown",
+    );
+    return;
+  }
+  const scope = scopeFromArgs(source);
+  const relevance = sourceArgsRelevance(builder, source);
+  builder.observe(`issues:${source.args ?? scope}`, "receipt", source, {
+    tier: evidenceTierForRelevance("checked", relevance),
+    relevance,
+    tone: "neutral",
+    title: "No live issues matched this search",
+    summary: scope,
+    data: {
+      type: "receipt",
+      checked: "issues",
+      scope,
+    },
+  });
 }

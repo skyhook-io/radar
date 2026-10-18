@@ -1827,3 +1827,51 @@ func TestSQLiteStore_EvictedThrough(t *testing.T) {
 		t.Fatalf("EvictedThrough = %v, want the retention cutoff %v once it is later than any pruned row", got, cutoff)
 	}
 }
+
+// A K8s Event upsert moves its row forward in time, which changes which rows
+// are the oldest. The prune boundary must be the newest row actually deleted,
+// so no kept-history claim covers a deleted row.
+func TestSQLiteStore_PruneBoundaryFollowsUpsertedRows(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+
+	event := TimelineEvent{
+		ID: "k8s-event", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc", EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+	}
+	if err := store.Append(ctx, event); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	for i, offset := range []time.Duration{5 * time.Minute, 10 * time.Minute, 15 * time.Minute} {
+		if err := store.Append(ctx, TimelineEvent{
+			ID: fmt.Sprintf("edit-%d", i), Timestamp: base.Add(offset), Source: SourceInformer,
+			Kind: "Deployment", Namespace: "default", Name: "web", EventType: EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	// The bump moves the oldest row past every edit.
+	event.Timestamp, event.Count = base.Add(20*time.Minute), 2
+	if err := store.Append(ctx, event); err != nil {
+		t.Fatalf("Append bump: %v", err)
+	}
+
+	deleted, err := store.deleteOldestEvents(ctx, 2)
+	if err != nil || deleted != 2 {
+		t.Fatalf("deleteOldestEvents = %d, %v; want 2 rows", deleted, err)
+	}
+	if got, want := store.EvictedThrough(), base.Add(10*time.Minute); !got.Equal(want) {
+		t.Fatalf("EvictedThrough = %v, want the newest deleted row's time %v", got, want)
+	}
+	kept, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	for _, e := range kept {
+		if !e.Timestamp.After(store.EvictedThrough()) {
+			t.Fatalf("kept row %s at %v is not after the boundary %v", e.ID, e.Timestamp, store.EvictedThrough())
+		}
+	}
+}

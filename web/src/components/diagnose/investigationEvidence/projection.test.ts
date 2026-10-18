@@ -284,6 +284,24 @@ describe("strict evidence adapters", () => {
     // Incomplete change history limits the change feed, not the live scan.
     expect(groupsOf(evictedIssueFeed.groups, "receipt")).toHaveLength(1);
 
+    // So does a saturated change fetch whose rows were all discarded.
+    const saturatedIssueFeed = project([
+      tool("issues-saturated", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_reason: "no_critical_issues",
+        recent_changes_truncated: true,
+      }),
+    ]);
+    expect(saturatedIssueFeed.limitations).toEqual([
+      expect.objectContaining({
+        source: "Issue-related changes",
+        kind: "truncated",
+      }),
+    ]);
+    expect(groupsOf(saturatedIssueFeed.groups, "receipt")).toHaveLength(1);
+
     const filtered = project([
       tool("filtered", "get_resource", {
         resource: deployment,

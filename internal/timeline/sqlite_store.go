@@ -1257,36 +1257,41 @@ func (s *SQLiteStore) countEvents(ctx context.Context) (int64, error) {
 }
 
 func (s *SQLiteStore) deleteOldestEvents(ctx context.Context, limit int64) (int64, error) {
-	// The newest timestamp in the batch bounds what pruning removed. Read it
-	// first: a row arriving in between can only be older than it or survive.
-	var newest sql.NullString
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT MAX(timestamp) FROM (
-			SELECT timestamp FROM events
-			ORDER BY timestamp ASC, created_at ASC
-			LIMIT ?
-		)
-	`, limit).Scan(&newest); err != nil {
-		return 0, err
-	}
-	result, err := s.db.ExecContext(ctx, `
+	// The boundary comes from the rows this statement deleted. Reading it in
+	// a separate query would race a K8s Event upsert that moves a selected
+	// row forward and pulls a newer row into the batch.
+	rows, err := s.db.QueryContext(ctx, `
 		DELETE FROM events
 		WHERE id IN (
 			SELECT id FROM events
 			ORDER BY timestamp ASC, created_at ASC
 			LIMIT ?
 		)
+		RETURNING timestamp
 	`, limit)
 	if err != nil {
 		return 0, err
 	}
-	n, err := result.RowsAffected()
-	if n > 0 && newest.Valid {
-		if t, parseErr := time.Parse(time.RFC3339Nano, newest.String); parseErr == nil {
-			s.recordPrunedThrough(t)
+	defer rows.Close()
+	var n int64
+	var newest time.Time
+	for rows.Next() {
+		var ts string
+		if err := rows.Scan(&ts); err != nil {
+			return n, err
+		}
+		n++
+		if t, parseErr := time.Parse(time.RFC3339Nano, ts); parseErr == nil && t.After(newest) {
+			newest = t
 		}
 	}
-	return n, err
+	if err := rows.Err(); err != nil {
+		return n, err
+	}
+	if !newest.IsZero() {
+		s.recordPrunedThrough(newest)
+	}
+	return n, nil
 }
 
 func (s *SQLiteStore) reclaimStorage(ctx context.Context) error {
