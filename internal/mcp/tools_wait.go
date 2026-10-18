@@ -374,6 +374,11 @@ func podReadyCheck(obj *unstructured.Unstructured) (bool, string, string) {
 func statusConditionCheck(condType string) waitCheck {
 	return func(obj *unstructured.Unstructured) (bool, string, string) {
 		status, message := conditionStatus(obj, condType)
+		// Like kubectl wait: a condition the controller reported for an older
+		// generation says nothing about the current spec.
+		if gen, observed := obj.GetGeneration(), conditionObservedGeneration(obj, condType); gen > 0 && observed > 0 && observed < gen {
+			return false, fmt.Sprintf("%s=%s was reported for generation %d; waiting for the controller to observe generation %d", condType, status, observed, gen), ""
+		}
 		switch status {
 		case "True":
 			return true, condType + "=True", ""
@@ -385,6 +390,27 @@ func statusConditionCheck(condType string) waitCheck {
 		}
 		return false, condType + "=" + status, ""
 	}
+}
+
+// conditionObservedGeneration is the generation the named condition was
+// computed for: its own observedGeneration, else status.observedGeneration,
+// else 0 when the object reports neither.
+func conditionObservedGeneration(obj *unstructured.Unstructured, condType string) int64 {
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	for _, raw := range conditions {
+		c, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := c["type"].(string); strings.EqualFold(t, condType) {
+			if g, ok := c["observedGeneration"].(int64); ok && g > 0 {
+				return g
+			}
+			break
+		}
+	}
+	g, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
+	return g
 }
 
 // conditionStatus returns the status and message of the named condition,

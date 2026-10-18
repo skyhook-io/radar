@@ -200,6 +200,22 @@ func TestWaitForSelectorNeedsEveryMatch(t *testing.T) {
 	}
 }
 
+func TestWaitForIgnoresConditionsFromAnOlderGeneration(t *testing.T) {
+	check := statusConditionCheck("Available")
+	stale := deploymentObj("web", 2, 1, 3, 3, 3, 3, map[string]any{"type": "Available", "status": "True"})
+	if met, message, _ := check(stale); met || !strings.Contains(message, "generation 1") {
+		t.Fatalf("stale Available=True accepted: met=%v %q", met, message)
+	}
+	perCondition := deploymentObj("web", 2, 2, 3, 3, 3, 3, map[string]any{"type": "Available", "status": "True", "observedGeneration": int64(1)})
+	if met, _, _ := check(perCondition); met {
+		t.Fatal("condition-level observedGeneration ignored")
+	}
+	current := deploymentObj("web", 2, 2, 3, 3, 3, 3, map[string]any{"type": "Available", "status": "True"})
+	if met, _, _ := check(current); !met {
+		t.Fatal("current Available=True not accepted")
+	}
+}
+
 func TestWaitForRefusesBadInput(t *testing.T) {
 	dyn := waitDynamic()
 	for name, tc := range map[string]struct {
