@@ -58,6 +58,10 @@ const (
 	// KindNotWatchable: the API cannot be list/watched, so Radar cannot collect
 	// it; warming a watch will not help.
 	KindNotWatchable Code = "kind_not_watchable"
+	// KindNotSearchable: search doesn't cover the kind (RBAC kinds, LimitRanges,
+	// and kinds Radar reads directly instead of watching), so a search can't
+	// say which exist; list_resources or get_resource reads it.
+	KindNotSearchable Code = "kind_not_searchable"
 
 	// OutsideNamespacePin: a namespace the request names is outside Radar's
 	// --namespace-scope pin, which whoever runs Radar sets.
@@ -133,6 +137,7 @@ var actions = map[Code]Action{
 	RadarKindNotCollected:      ActionRadarConfig,
 	KindUnknown:                ActionChangeRequest,
 	KindNotWatchable:           ActionChangeRequest,
+	KindNotSearchable:          ActionChangeRequest,
 	OutsideNamespacePin:        ActionRadarConfig,
 	OutsideNamespaceSelection:  ActionChangeRequest,
 	UserNamespaceNotVisible:    ActionChangeRequest,
@@ -184,7 +189,7 @@ func AffectsWholeCluster(c Code) bool {
 // what resolves by itself — a retry then returns at least part of the answer —
 // then act on their own access, then on Radar's limits.
 var precedence = []Code{
-	NamespaceRequired, KindUnknown, KindNotWatchable, ListTooLarge,
+	NamespaceRequired, KindUnknown, KindNotWatchable, KindNotSearchable, ListTooLarge,
 	ClusterDisconnected, ClusterConnecting, ConnectionChanged,
 	KindSyncPending, UserPermissionCheckFailed,
 	UserForbidden, UserNoNamespaceAccess, UserNamespaceNotVisible, NamespaceNotFound,

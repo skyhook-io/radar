@@ -14,7 +14,7 @@ import (
 // Examples:
 //
 //	"redis"                          → {Tokens: [redis]}
-//	"kind:Pod redis"                 → {KindFilter: [pod], Tokens: [redis]}
+//	"kind:Pod redis"                 → {KindFilter: [Pod], Tokens: [redis]}
 //	"l:app=foo image:nginx"          → {LabelFilter: [{app,foo}], ImageFilter: [nginx]}
 //	"\"my service\" ns:prod"         → {NSFilter: [prod], Tokens: [my service]}
 func Parse(q string) Query {
@@ -27,7 +27,7 @@ func Parse(q string) Query {
 		}
 		switch key {
 		case "kind", "k":
-			out.KindFilter = append(out.KindFilter, strings.ToLower(val))
+			out.KindFilter = append(out.KindFilter, val)
 		case "ns", "n", "namespace":
 			out.NSFilter = append(out.NSFilter, val)
 		case "cluster", "c":

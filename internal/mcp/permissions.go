@@ -133,32 +133,42 @@ func getPermCache() *pkgauth.PermissionCache {
 // struct with a non-nil but empty AllowedNamespaces on discovery failure
 // (fail-closed: treat the user as having no access rather than leaking).
 func resolveUserPerms(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions) {
+	user, perms, _ := resolveUserPermsDecision(ctx)
+	return user, perms
+}
+
+func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions, bool) {
 	user := pkgauth.UserFromContext(ctx)
 	if user == nil {
-		return nil, nil
+		return nil, nil, true
 	}
 	cache := getPermCache()
 	if perms := cache.Get(user.Username, user.Groups); perms != nil {
-		return user, perms
+		return user, perms, true
 	}
 
 	client := k8s.GetClient()
 	if client == nil {
 		log.Printf("[mcp] K8s client unavailable for namespace discovery (user=%s) — denying access", user.Username)
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}
+		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
 
 	allNamespaces := mcpAllNamespaceNames(ctx)
 	allowed, err := pkgauth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
 	if err != nil {
 		log.Printf("[mcp] DiscoverNamespaces failed for %s: %v — denying access (fail-closed)", user.Username, err)
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}
+		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
 
 	perms := &pkgauth.UserPermissions{AllowedNamespaces: allowed}
 	cache.Set(user.Username, user.Groups, perms)
-	return user, perms
+	return user, perms, true
+}
+
+func resolveUserPermsWithStatus(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions, bool) {
+	user, perms, checked := resolveUserPermsDecision(ctx)
+	return user, perms, !checked
 }
 
 func mcpAllNamespaceNames(ctx context.Context) []string {
@@ -189,11 +199,18 @@ func mcpAllNamespaceNames(ctx context.Context) []string {
 // requested may be nil ("all namespaces"). Pass a single-element slice to
 // check a specific namespace.
 func filterNamespacesForUser(ctx context.Context, requested []string) []string {
-	user, perms := resolveUserPerms(ctx)
+	namespaces, _ := filterNamespacesForUserWithStatus(ctx, requested)
+	return namespaces
+}
+
+// filterNamespacesForUserWithStatus is filterNamespacesForUser plus whether
+// the result is fail-closed because namespace discovery failed.
+func filterNamespacesForUserWithStatus(ctx context.Context, requested []string) ([]string, bool) {
+	user, perms, failed := resolveUserPermsWithStatus(ctx)
 	if user == nil {
-		return requested
+		return requested, false
 	}
-	return pkgauth.FilterNamespacesForUser(requested, user, perms)
+	return pkgauth.FilterNamespacesForUser(requested, user, perms), failed
 }
 
 // scopedNamespacesForUser applies the --namespace pin before the RBAC filter,
@@ -293,37 +310,16 @@ var subjectCanI = pkgauth.SubjectCanI
 // Returns true (passthrough) when the kind is namespaced/unknown — the
 // caller's namespace check is the gate in that case.
 func canReadClusterScopedKind(ctx context.Context, kind, group, verb string) bool {
-	user, perms := resolveUserPerms(ctx)
-	if user == nil {
-		return true
-	}
+	allowed, _ := canReadClusterScopedKindDecision(ctx, kind, group, verb)
+	return allowed
+}
 
+func canReadClusterScopedKindDecision(ctx context.Context, kind, group, verb string) (bool, bool) {
 	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
 	if !clusterScoped {
-		return true // namespaced or unknown — gate via namespace check elsewhere
+		return true, true
 	}
-
-	if perms != nil {
-		if v, ok := perms.CanI(verb, gvrGroup, gvrResource, ""); ok {
-			return v
-		}
-	}
-	client := k8s.GetClient()
-	if client == nil {
-		// Fail-closed: no apiserver to ask, refuse the read rather than
-		// quietly serving the user something they may not be entitled to.
-		log.Printf("[mcp] canReadClusterScopedKind: no K8s client, denying %s on %s/%s for %s", verb, gvrGroup, gvrResource, user.Username)
-		return false
-	}
-	allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, "", gvrGroup, gvrResource, verb)
-	if err != nil {
-		log.Printf("[mcp] canReadClusterScopedKind SAR failed for %s on %s/%s: %v", user.Username, gvrGroup, gvrResource, err)
-		return false
-	}
-	if perms != nil {
-		perms.SetCanI(verb, gvrGroup, gvrResource, "", allowed)
-	}
-	return allowed
+	return canReadInNamespaceDecision(ctx, gvrGroup, gvrResource, "", verb)
 }
 
 // canReadInNamespace authorizes a single (verb, group, resource, namespace)
@@ -380,30 +376,51 @@ func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace,
 //
 // nil or empty input is returned unchanged.
 func filterNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) []string {
+	namespaces, _ = filterNamespacesByCanReadDecision(ctx, group, resource, verb, namespaces)
+	return namespaces
+}
+
+func filterNamespacesByCanReadDecision(ctx context.Context, group, resource, verb string, namespaces []string) ([]string, bool) {
 	if len(namespaces) == 0 {
-		return namespaces
+		return namespaces, true
 	}
+	allowed, _, unchecked := partitionNamespacesByCanRead(ctx, group, resource, verb, namespaces)
+	return allowed, len(unchecked) == 0
+}
+
+// partitionNamespacesByCanRead splits namespaces by the caller's per-namespace
+// SAR: allowed, denied, and unchecked (the check itself failed). Each part is
+// sorted and non-nil.
+func partitionNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) (allowed, denied, unchecked []string) {
 	const maxConcurrent = 16
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	out := make([]string, 0, len(namespaces))
+	allowed, denied, unchecked = []string{}, []string{}, []string{}
 	for _, ns := range namespaces {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(ns string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if canReadInNamespace(ctx, group, resource, ns, verb) {
-				mu.Lock()
-				out = append(out, ns)
-				mu.Unlock()
+			ok, checked := canReadInNamespaceDecision(ctx, group, resource, ns, verb)
+			mu.Lock()
+			switch {
+			case ok:
+				allowed = append(allowed, ns)
+			case checked:
+				denied = append(denied, ns)
+			default:
+				unchecked = append(unchecked, ns)
 			}
+			mu.Unlock()
 		}(ns)
 	}
 	wg.Wait()
-	slices.Sort(out)
-	return out
+	slices.Sort(allowed)
+	slices.Sort(denied)
+	slices.Sort(unchecked)
+	return allowed, denied, unchecked
 }
 
 // retainAllowedObjects post-filters cache results for namespace-restricted users.

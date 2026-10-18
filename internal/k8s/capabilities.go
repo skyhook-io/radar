@@ -142,11 +142,13 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
+	SearchCoverage        bool `json:"searchCoverage"`
+	ResourceIssueCoverage bool `json:"resourceIssueCoverage"`
+	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
 	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
-	ResourceIssueCoverage bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
 	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
@@ -155,7 +157,6 @@ type FeatureCapabilities struct {
 	CNPGProtectionSetup   bool `json:"cnpgProtectionSetup"`
 	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -1520,4 +1521,14 @@ func clonePermissionCheckResult(result *PermissionCheckResult) *PermissionCheckR
 		ScopeCandidates:          append([]string(nil), result.ScopeCandidates...),
 		ScopeCandidatesTruncated: result.ScopeCandidatesTruncated,
 	}
+}
+
+func (p *ResourcePermissions) CanList(kind string) bool {
+	resource := CanonicalBuiltinKind(kind)
+	for _, probe := range resourceProbeTargets(p) {
+		if probe.gvr.Resource == resource {
+			return *probe.field
+		}
+	}
+	return false
 }

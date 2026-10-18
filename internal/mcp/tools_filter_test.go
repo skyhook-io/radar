@@ -705,6 +705,7 @@ func TestHandleSearch_Secrets_PerNamespaceFanout(t *testing.T) {
 	// searchable; those in denied namespaces are not.
 	setupFakeCacheForFilterTests(t)
 	ctx := withRestrictedUser(t, "alice", []string{"alpha", "beta"})
+	getPermCache().Get("alice", nil).SetCanI("list", "", "secrets", "", false)
 	seedSecretListCanI(t, "alice", []string{"alpha"}, []string{"beta"})
 
 	result, _, err := handleSearch(ctx, nil, searchInput{Query: "kind:Secret"})

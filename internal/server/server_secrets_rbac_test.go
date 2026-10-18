@@ -183,6 +183,7 @@ func TestProxyAuth_SearchSecrets_PerNamespaceFanout(t *testing.T) {
 	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
+	env.srv.permCache.Get("alice", nil).SetCanI("list", "", "secrets", "", false)
 	seedServerSecretListCanI(t, env, "alice", []string{"default"}, nil)
 
 	resp := env.authGet(t, "/api/search?q=kind:Secret", "alice", "")
@@ -217,6 +218,7 @@ func TestProxyAuth_SearchSecrets_NamespaceDenied(t *testing.T) {
 	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
+	env.srv.permCache.Get("alice", nil).SetCanI("list", "", "secrets", "", false)
 	seedServerSecretListCanI(t, env, "alice", nil, []string{"default"})
 
 	resp := env.authGet(t, "/api/search?q=kind:Secret", "alice", "")

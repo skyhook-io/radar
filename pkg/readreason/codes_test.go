@@ -22,6 +22,7 @@ func TestCodeWireValues(t *testing.T) {
 		RadarKindNotCollected:      "radar_kind_not_collected",
 		KindUnknown:                "kind_unknown",
 		KindNotWatchable:           "kind_not_watchable",
+		KindNotSearchable:          "kind_not_searchable",
 		OutsideNamespacePin:        "outside_namespace_pin",
 		OutsideNamespaceSelection:  "outside_namespace_selection",
 		UserNamespaceNotVisible:    "user_namespace_not_visible",

@@ -31,7 +31,6 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/internal/summarycontext"
@@ -41,6 +40,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
 	"github.com/skyhook-io/radar/pkg/servinginsight"
@@ -451,8 +451,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
-			"summaryContext. Use CEL filter for structural predicates. Searches typed kinds " +
-			"plus warmed CRDs; cold CRDs need list_resources first.",
+			"summaryContext. Covers what you can list; big CRDs need kind:. partial=true: absence " +
+			"unproven, see coverageHint.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -713,10 +713,10 @@ type podLogsInput struct {
 
 type searchInput struct {
 	Query     string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd. Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
-	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace to scope the search; equivalent to an inline ns: modifier. When set, overrides all inline namespace modifiers"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace scope, as an inline ns: modifier; overrides inline ones. Skips cluster-scoped kinds unless kind: names one"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations. Guard fields with has(spec.sources); check map keys with '\"app\" in labels'. Example, Deployments with zero or unreported ready replicas: 'kind == \"Deployment\" && (!has(status.readyReplicas) || status.readyReplicas == 0)'"`
 	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare hits"`
 }
 
@@ -3268,89 +3268,33 @@ func splitCSVStr(v string) []string {
 	return out
 }
 
-// mcpSensitiveSearchKinds is the MCP mirror of the REST sensitiveSearchKinds —
-// cluster-scoped kinds that need their own list-SAR per user. Secrets are
-// namespaced and handled by mcpSearchSecretsRBAC instead, which supports
-// per-namespace permission.
-var mcpSensitiveSearchKinds = []struct {
-	Kind     string
-	Resource string
-	Group    string
-}{
-	{"Node", "nodes", ""},
-	{"PersistentVolume", "persistentvolumes", ""},
-	{"StorageClass", "storageclasses", "storage.k8s.io"},
-	{"Namespace", "namespaces", ""},
-}
-
-func mcpSearchSkipKinds(ctx context.Context) map[string]bool {
-	user, perms := resolveUserPerms(ctx)
-	if user == nil {
-		return nil
-	}
-	client := k8s.GetClient()
-	if client == nil {
-		out := make(map[string]bool, len(mcpSensitiveSearchKinds))
-		for _, k := range mcpSensitiveSearchKinds {
-			out[k.Kind] = true
-		}
-		return out
-	}
-	out := make(map[string]bool, len(mcpSensitiveSearchKinds))
-	for _, k := range mcpSensitiveSearchKinds {
-		if perms != nil {
-			if allowed, ok := perms.CanI("list", k.Group, k.Resource, ""); ok {
-				if !allowed {
-					out[k.Kind] = true
-				}
-				continue
-			}
-		}
-		allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, "", k.Group, k.Resource, "list")
-		if err != nil {
-			log.Printf("[mcp] search SAR failed for %s on %s/%s: %v", user.Username, k.Group, k.Resource, err)
-			out[k.Kind] = true
-			continue
-		}
-		if perms != nil {
-			perms.SetCanI("list", k.Group, k.Resource, "", allowed)
-		}
-		if !allowed {
-			out[k.Kind] = true
-		}
-	}
-	return out
-}
-
-// mcpSearchSecretsRBAC mirrors Server.computeSearchSecretsRBAC for MCP. See
-// that function for the three-case semantics. scanNamespaces is the
-// effective scan scope (intersection of the user's RBAC-allowed namespaces
-// and any `ns:` modifier in the query) — nil means a true cluster-wide scan.
-//
-// Cached canI hits short-circuit before the live-client path, so a seeded
-// test cache authorizes without needing a real K8s client.
-func mcpSearchSecretsRBAC(ctx context.Context, scanNamespaces []string) (decision string, scopedNamespaces []string) {
+// mcpSearchKindRBAC mirrors the REST exact-kind gate for namespaced searches.
+func mcpSearchKindRBAC(ctx context.Context, scanNamespaces []string, group, resource string) (decision string, scopedNamespaces []string) {
 	if user, _ := resolveUserPerms(ctx); user == nil {
 		return "", nil
 	}
-
-	if scanNamespaces == nil {
-		if canReadInNamespace(ctx, "", "secrets", "", "list") {
-			return "", nil
-		}
-		return "skip", nil
+	// scanNamespaces is already intersected with caller visibility. A denied
+	// cluster-wide check may narrow that scope, never expand it; failed checks
+	// fail closed without describing a transient error as an RBAC verdict.
+	allowed, authoritative := canReadInNamespaceDecision(ctx, group, resource, "", "list")
+	if allowed {
+		return "", nil
+	}
+	if !authoritative {
+		return "permission_check_failed", nil
 	}
 	if len(scanNamespaces) == 0 {
 		return "skip", nil
 	}
-	scoped := make([]string, 0, len(scanNamespaces))
-	for _, ns := range scanNamespaces {
-		if canReadInNamespace(ctx, "", "secrets", ns, "list") {
-			scoped = append(scoped, ns)
-		}
+	scoped, authoritative := filterNamespacesByCanReadDecision(ctx, group, resource, "list", scanNamespaces)
+	if !authoritative {
+		return "permission_check_failed", scoped
 	}
 	if len(scoped) == 0 {
 		return "skip", nil
+	}
+	if len(scoped) == len(scanNamespaces) {
+		return "", nil
 	}
 	return "override", scoped
 }
@@ -3368,15 +3312,12 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	if input.Namespace != "" {
 		parsed.NSFilter = []string{input.Namespace}
 	}
-	allowed := filterNamespacesForUser(ctx, nil)
-	if allowed != nil && len(allowed) == 0 {
-		return toJSONResult(search.Result{Hits: []search.Hit{}})
+	ceiling, namespaceCheckFailed := filterNamespacesForUserWithStatus(ctx, nil)
+	visible := ceiling
+	if !namespaceCheckFailed {
+		visible = scopedNamespacesForUser(ctx, nil)
 	}
-	scanNamespaces := readscope.SelectNamespaces(allowed, parsed.NSFilter)
-	if allowed != nil && len(scanNamespaces) == 0 {
-		return toJSONResult(search.Result{Hits: []search.Hit{}})
-	}
-	parsed.NSFilter = scanNamespaces
+
 	var include search.IncludeMode
 	switch input.Include {
 	case "", "summary":
@@ -3389,36 +3330,20 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		return nil, nil, fmt.Errorf("unknown include=%q (want: summary, raw, none)", input.Include)
 	}
 
-	skipKinds := mcpSearchSkipKinds(ctx)
-	// Secrets: per-namespace SAR fanout. See REST handleSearch for rationale.
-	// scanNamespaces (not allowed) is the SAR-fanout input — a user with
-	// AllowedNamespaces==nil (cluster-wide-pods sentinel) who constrains
-	// with `ns:team-a` should fanout over team-a, not run a cluster-scope
-	// `list secrets` SAR they may not have.
-	var namespacesByKind map[string][]string
-	switch decision, scoped := mcpSearchSecretsRBAC(ctx, scanNamespaces); decision {
-	case "skip":
-		if skipKinds == nil {
-			skipKinds = make(map[string]bool)
-		}
-		skipKinds["Secret"] = true
-	case "override":
-		// scoped ⊆ scanNamespaces ⊆ parsed.NSFilter already (the SAR fanout
-		// iterates scanNamespaces, which is the upstream intersection of
-		// allowed and parsed.NSFilter). Use the SAR result directly.
-		namespacesByKind = map[string][]string{"Secret": scoped}
-	}
-
 	opts := search.Options{
-		Limit:            input.Limit,
-		Include:          include,
-		Namespaces:       scanNamespaces,
-		SkipKinds:        skipKinds,
-		NamespacesByKind: namespacesByKind,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			return canReadClusterScopedKind(ctx, kind, group, "list")
+		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
+			return mcpSearchKindRBAC(ctx, namespaces, group, resource)
+		},
+		Limit:   input.Limit,
+		Include: include,
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return canReadInNamespaceDecision(ctx, group, resource, "", "list")
 		},
 	}
+	opts.Pinned = k8s.ForceNamespaceScope
+	opts.ScopeNamespaces(parsed, visible, ceiling)
+	opts.NamespaceCheckFailed = namespaceCheckFailed
+	scanNamespaces := opts.Namespaces
 	if input.Filter != "" {
 		f, err := filter.CachedObjectFilter(input.Filter)
 		if err != nil {
@@ -3433,55 +3358,41 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	// builder routes per-hit by scope; CanReadClusterScoped above
 	// already gates which cluster-scoped kinds are reachable.
 	if input.Context != "none" {
-		if builder := newSearchSummaryContextBuilder(ctx, scanNamespaces); builder != nil {
+		if builder := summarycontext.Within(summarycontext.SearchBudget, func() summarycontext.Builder {
+			return newSearchSummaryContextBuilder(ctx, scanNamespaces)
+		}); builder != nil {
 			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 		}
 	}
 	result, err := search.Search(ctx, provider, parsed, opts)
+	if errors.Is(err, search.ErrConnectionChanged) || (err == nil && !provider.Current()) {
+		return nil, nil, errSearchConnectionChanged
+	}
 	if err != nil {
 		return nil, nil, err
 	}
-	resp := searchResponseMCP{Result: result, KindHint: searchKindHint(result.UnsearchedKinds)}
-	// Steering hint when the result was capped.
+	response := searchResponseMCP{Result: result}
 	if result.TotalMatched > result.Total {
-		resp.NarrowHint = fmt.Sprintf(
+		response.NarrowHint = fmt.Sprintf(
 			"returned %d of %d hits — narrow with modifiers (kind:, ns:, label:k=v, image:), tighten the query, add a filter= CEL expression, or raise limit (cap 500)",
 			result.Total, result.TotalMatched,
 		)
 	}
-	return toJSONResult(resp)
+	if result.Coverage.Status == resourceapi.CoveragePartial {
+		response.CoverageHint = coverageHint(result, len(parsed.KindFilter) > 0)
+	} else if len(result.Coverage.NarrowedBy) > 0 && len(result.Hits) == 0 {
+		response.CoverageHint = "No matches within what your access and Radar's collection cover; that does not rule out matches outside them."
+	}
+	return toJSONResult(response)
 }
 
 // searchResponseMCP embeds search.Result so the JSON shape stays identical
-// except for the added hint fields.
+// except for the added hints: narrowHint when the hit limit cut the result,
+// coverageHint whenever it is partial.
 type searchResponseMCP struct {
 	search.Result
-	NarrowHint string `json:"narrowHint,omitempty"`
-	KindHint   string `json:"kindHint,omitempty"`
-}
-
-// searchKindHint tells the agent what to do about each kind the search could
-// not answer for, so an empty result isn't read as "none exist".
-func searchKindHint(unsearched []search.UnsearchedKind) string {
-	hints := make([]string, 0, len(unsearched))
-	for _, u := range unsearched {
-		switch u.Reason {
-		case search.UnsearchedNotIndexed:
-			hints = append(hints, fmt.Sprintf("Search has no cached kind matching kind:%s; use list_resources kind=%s or get_resource. For a short name, try the Kind or its plural.", u.Kind, u.Kind))
-		case search.UnsearchedUnreadable:
-			hints = append(hints, fmt.Sprintf("Radar couldn't read %s from its cache%s; it may still be loading, or Radar may not be allowed to list it. An empty result for it doesn't mean none exist.", u.Kind, searchHintNamespaces(u.Namespaces)))
-		case search.UnsearchedClusterScoped:
-			hints = append(hints, fmt.Sprintf("%s is cluster-scoped and this search was limited to namespaces (by the request or your namespace scope); use list_resources kind=%s.", u.Kind, u.Kind))
-		}
-	}
-	return strings.Join(hints, " ")
-}
-
-func searchHintNamespaces(namespaces []string) string {
-	if len(namespaces) == 0 {
-		return ""
-	}
-	return " for namespaces " + strings.Join(namespaces, ", ")
+	NarrowHint   string `json:"narrowHint,omitempty"`
+	CoverageHint string `json:"coverageHint,omitempty"`
 }
 
 // toJSONResult marshals data into a text content MCP result.
