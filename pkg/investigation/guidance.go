@@ -26,7 +26,7 @@ const GuidanceRouting = `Radar keeps a live model of this Kubernetes cluster, so
 
 WHICH TOOL
 - Symptom known, faulty resource not: issues. Ranked live failures, including references to missing objects and unschedulable pods.
-- One failing resource: diagnose, for a Pod, Deployment, StatefulSet, DaemonSet or Rollout; a Service, Ingress or route that traffic doesn't reach; an Argo CD Application or Flux Kustomization or HelmRelease (sync and health).
+- One suspect resource: diagnose, for a Pod, Deployment, StatefulSet, DaemonSet or Rollout; a Service, Ingress or route that traffic doesn't reach; an Argo CD Application or Flux Kustomization or HelmRelease (sync and health).
 - What changed: get_changes.
 - More logs: get_workload_logs for a workload's pods, get_pod_logs for one container or its previous instance.
 - A string in objects (config value, image, status message): search. In logs: the grep argument of get_pod_logs or get_workload_logs.
@@ -43,15 +43,15 @@ WHICH TOOL
 // organizations) while still listing other vendors' write tools, so the line
 // conditions each Kubernetes write tool on that tool being listed rather than
 // on write tools in general.
-const GuidanceWriteRouting = "- Fixes, each only if listed: patch_resource or apply_resource for spec changes; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node.\n"
+const GuidanceWriteRouting = "- Fixes, each only if listed: patch_resource or apply_resource for spec changes; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node. Fix only the diagnosed cause; don't mask symptoms.\n"
 
 // GuidanceSignals says how to read what Radar returns.
 const GuidanceSignals = `READING RADAR'S SIGNALS
-- An issues row that names a mechanism and an action is the leading hypothesis; start from its incident_parent when present. Confirm it with a targeted read (a log line, a field); don't re-derive it. If it points at another resource, follow that dependency. Conclude when the evidence names the resource, explains the mechanism and accounts for the reported impact.
-- Read the changes attached to issues first; call get_changes when they are absent or you need another window or scope. Reuse the logs diagnose returned; fetch more only for a specific gap.
-- issue_timing started_after_resource_was_healthy means a healthy window preceded the failure: look for what changed. started_at_resource_creation means the resource, or its owner workload, started failing during creation or first reconciliation. Compare resource_created_at with the incident window. Timing alone does not establish cause or relevance. Prefer timing_summary when present.
+- An issues row that names a mechanism and an action is the leading hypothesis; start from its incident_parent when present. Confirm it with a targeted read; don't re-derive it. If it points at another resource, follow that dependency. Conclude only when the evidence names the resource, explains the mechanism and accounts for the reported symptom; keep other findings separate.
+- Read the changes attached to issues first; call get_changes when absent or for another window or scope. Reuse the logs diagnose returned; fetch more only for a specific gap.
+- issue_timing started_after_resource_was_healthy means a healthy window preceded the failure: look for what changed. started_at_resource_creation means the resource, or its owner workload, started failing during creation or first reconciliation. Compare resource_created_at with the incident window. Timing alone does not establish cause. Prefer timing_summary when present.
 - issues is live state; get_cluster_audit is configuration posture.
-- After a fix, wait on a condition with a time limit, never a fixed sleep: rollout complete, new pods Ready, the issue gone from issues. Check the symptom directly only when those signals do not cover it.
+- After a fix, wait on a condition with a time limit, never a fixed sleep: rollout complete, new pods Ready, the issue gone from issues. Check the symptom only if they don't cover it.
 `
 
 // GeneralGuidanceReadOnly is the general guidance for a surface without write
