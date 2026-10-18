@@ -655,6 +655,63 @@ func TestZeroExitWithoutWriteCannotBecomeApplied(t *testing.T) {
 	}
 }
 
+func TestApplyPreviewConfirmationAccounting(t *testing.T) {
+	for _, tool := range []string{"delete_resource", "manage_helm_release"} {
+		for _, confirm := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/confirm=%t", tool, confirm), func(t *testing.T) {
+				m, r, calls := controlledRunManager(t, nil)
+				_, live, _, cancel, err := r.Subscribe(0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer cancel()
+				if err := m.AddTurn(r.ID, "", true, "Delete the confirmed target", false); err != nil {
+					t.Fatal(err)
+				}
+				apply := receiveDiagnoseCall(t, calls)
+				apply.emit(StreamEvent{Type: "step", Step: &StepInfo{
+					ID: "preview", Tool: tool, Status: "running", Summary: `{"dry_run":true}`,
+				}})
+				apply.emit(StreamEvent{Type: "step", Step: &StepInfo{
+					ID: "preview", Status: "done", IsError: boolPointer(false),
+					Result: `{"status":"ok","dry_run":true,"confirm":"preview-token"}`,
+				}})
+				if confirm {
+					apply.emit(StreamEvent{Type: "step", Step: &StepInfo{
+						ID: "confirm", Tool: tool, Status: "running", Summary: `{"dry_run":false,"confirm":"preview-token"}`,
+					}})
+					apply.emit(StreamEvent{Type: "step", Step: &StepInfo{
+						ID: "confirm", Status: "done", IsError: boolPointer(false), Result: `{"status":"ok","dry_run":false}`,
+					}})
+				}
+				apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Report: "Apply finished"}}}
+				terminalType, outcome := "error", ApplyMutationFailed
+				if confirm {
+					terminalType, outcome = "done", ApplyMutationConfirmed
+				}
+				terminal := waitForEvent(t, live, terminalType, 1)
+				if terminal.Event.ApplyOutcome != outcome || terminal.Event.VerificationScheduled != confirm {
+					t.Fatalf("preview/confirm outcome: %+v", terminal.Event)
+				}
+				if confirm {
+					verify := receiveDiagnoseCall(t, calls)
+					if !verify.request.Verify || verify.request.Question != automaticVerificationPrompt {
+						t.Fatalf("confirmation did not schedule verification: %+v", verify.request)
+					}
+					verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Healthy: true}}}
+					waitForEvent(t, live, "done", 1)
+				}
+				waitForRunNotInFlight(t, r)
+				select {
+				case call := <-calls:
+					t.Fatalf("unexpected additional turn: %+v", call.request)
+				default:
+				}
+			})
+		}
+	}
+}
+
 func TestAmbiguousApplyFailureRunsReadOnlyVerification(t *testing.T) {
 	store := newBarrierRunStore("")
 	m, r, calls := controlledRunManager(t, store)

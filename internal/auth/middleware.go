@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -230,15 +231,18 @@ func AuditLog(r *http.Request, namespace, name string) {
 }
 
 type AuditActionDetails struct {
-	Kind      string
-	Group     string
-	Action    string
-	Namespace string
-	Name      string
-	Container string
-	Variable  string
-	Source    string
-	Outcome   string
+	Kind        string
+	Group       string
+	Action      string
+	Namespace   string
+	Name        string
+	Container   string
+	Variable    string
+	Source      string
+	Outcome     string
+	Revision    int
+	NoHooks     *bool
+	KeepHistory *bool
 }
 
 func AuditLogAction(r *http.Request, details AuditActionDetails) {
@@ -248,7 +252,11 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 		username = user.Username
 		groups = user.Groups
 	}
-	log.Printf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
+	detailsSuffix := ""
+	if details.NoHooks != nil && details.KeepHistory != nil {
+		detailsSuffix = fmt.Sprintf(" revision=%d no_hooks=%t keep_history=%t", details.Revision, *details.NoHooks, *details.KeepHistory)
+	}
+	log.Printf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q%s",
 		username, groups, details.Action, r.URL.Path, details.Kind, details.Group, details.Namespace, details.Name,
-		details.Container, details.Variable, details.Source, details.Outcome)
+		details.Container, details.Variable, details.Source, details.Outcome, detailsSuffix)
 }

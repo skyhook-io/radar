@@ -564,6 +564,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"(requires 'replicas' parameter), 'rollback' reverts to a previous revision " +
 			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions). " +
 			"Use list_resources or get_dashboard first to identify the target. " +
+			"For a Helm-managed workload, roll back the release with manage_helm_release. " +
 			"On a Rollout, 'rollback' rewrites the pod template and so starts a NEW rollout that re-runs every " +
 			"canary step, pause, and analysis — to revert traffic now use manage_rollout abort, or follow the " +
 			"rollback with manage_rollout promote-full.",
@@ -645,6 +646,15 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"Propagation defaults to background; foreground and orphan are supported. Finalizers are never removed; accepted deletion may still be pending. Use patch_resource only as a separate, explicit finalizer intervention after inspecting cleanup.",
 		Annotations: writeTool,
 	}, logToolCall("delete_resource", handleDeleteResource))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "manage_helm_release",
+		Description: "Uninstall or rollback one Helm release as the caller. dry_run=true (default) returns a mandatory stored-manifest preview of resources, action hooks, status, and history policy. Review the preview before dry_run=false with confirm; uninstall with history purge is irreversible. " +
+			"Preview checks release-storage write capability and live rollback/hook evidence; it does not simulate hooks, live finalizers, controller cleanup, or all write permissions. Confirm expires after five minutes and is bound to release state, action/options, caller, and context. " +
+			"Use the Helm storageNamespace as namespace. Rollback requires an explicit existing revision up to the current revision from get_helm_release include=history and creates a new revision. " +
+			"Uninstall retries an uninstalling release; no_hooks skips cleanup hooks (may leave external resources), keep_history retains only Helm history (default false purges it). Finalizers are never stripped. GitOps-managed releases should be changed at their source. Avoid concurrent Helm operations.",
+		Annotations: writeTool,
+	}, logToolCall("manage_helm_release", handleManageHelmRelease))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",

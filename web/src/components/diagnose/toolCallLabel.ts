@@ -42,6 +42,14 @@ export function describeToolCall(tool: string, args?: string): string {
       return "Reading alert rules";
     case "get_helm_release":
       return `Reading Helm release ${target ?? ""}`.trim();
+    case "manage_helm_release":
+      if (a.action === "rollback") {
+        return `${a.dry_run === false ? "Rolling back" : "Previewing rollback of"} ${target ?? "Helm release"}${a.revision ? ` to revision ${a.revision}` : ""}`;
+      }
+      if (a.action === "uninstall") {
+        return `${a.dry_run === false ? "Uninstalling" : "Previewing uninstall of"} ${target ?? "Helm release"}`;
+      }
+      return `Managing Helm release ${target ?? ""}`.trim();
     case "list_helm_releases":
       return scoped("Listing Helm releases");
     case "get_neighborhood":
@@ -92,6 +100,8 @@ export function describeToolCall(tool: string, args?: string): string {
 }
 
 interface ToolArgs {
+  action?: string;
+  revision?: number;
   kind?: string;
   namespace?: string;
   name?: string;
@@ -111,6 +121,8 @@ function parseArgs(args: string | undefined): ToolArgs {
         ? (raw[key] as string).trim()
         : undefined;
     return {
+      action: str("action"),
+      revision: typeof raw.revision === "number" ? raw.revision : undefined,
       kind: str("kind"),
       namespace: str("namespace"),
       name: str("name"),
