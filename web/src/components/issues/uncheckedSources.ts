@@ -1,5 +1,3 @@
-import type { IssuesResponse } from "../../api/client";
-
 // The issue sources /api/issues can list in unchecked_sources, and the line
 // each one gets wherever Radar's issues would otherwise read as complete.
 const SOURCE_LINES: Record<string, string> = {
@@ -10,7 +8,7 @@ const SOURCE_LINES: Record<string, string> = {
 export const UNKNOWN_SOURCE_LINE = "Some issue checks couldn't run, so issues may be missing.";
 
 /** One line per unchecked source, known sources first, without repeats. */
-export function uncheckedSourceLines(sources: IssuesResponse["unchecked_sources"]): string[] {
+export function uncheckedSourceLines(sources: readonly { source: string }[] | undefined): string[] {
   const known = new Set<string>();
   let unknown = false;
   for (const { source } of sources ?? []) {
