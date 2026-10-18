@@ -389,6 +389,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'kind', required: true, desc: 'resource kind, e.g. deployment, job, pod' },
       { arg: 'name', desc: 'object name; or use label_selector' },
       { arg: 'label_selector', desc: 'wait on every matching object' },
+      { arg: 'all', desc: 'wait on every object of the kind in the namespace' },
       { arg: 'namespace', desc: 'namespace for namespaced kinds' },
       { arg: 'group', desc: 'API group when the kind is ambiguous' },
       { arg: 'condition', desc: 'rollout, complete, ready, deleted, or a condition type; defaults by kind' },

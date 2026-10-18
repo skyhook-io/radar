@@ -33,6 +33,7 @@ type waitForInput struct {
 	Namespace      string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds"`
 	Name           string `json:"name,omitempty" jsonschema:"object name; or set label_selector instead"`
 	LabelSelector  string `json:"label_selector,omitempty" jsonschema:"every matching object must meet the condition; with deleted, none may remain"`
+	All            bool   `json:"all,omitempty" jsonschema:"every object of the kind in the namespace"`
 	Condition      string `json:"condition,omitempty" jsonschema:"rollout, complete, ready, deleted, or a status condition type; defaults by kind"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"default 120, max 600"`
 }
@@ -63,8 +64,8 @@ func waitFor(ctx context.Context, dyn dynamic.Interface, input waitForInput) (*m
 	if kind == "" {
 		return nil, nil, fmt.Errorf("kind is required")
 	}
-	if (name == "") == (selector == "") {
-		return nil, nil, fmt.Errorf("set exactly one of name or label_selector")
+	if targets := btoi(name != "") + btoi(selector != "") + btoi(input.All); targets != 1 {
+		return nil, nil, fmt.Errorf("set exactly one of name, label_selector or all")
 	}
 	timeout, err := boundedTimeout(input.TimeoutSeconds, waitDefaultTimeout, waitMaxTimeout)
 	if err != nil {
@@ -105,6 +106,9 @@ func waitFor(ctx context.Context, dyn dynamic.Interface, input waitForInput) (*m
 		result["name"] = name
 	} else {
 		result["label_selector"] = selector
+	}
+	if input.All {
+		result["all"] = true
 	}
 
 	// deleted by name tracks the first UID seen: a replacement with the same
@@ -199,9 +203,19 @@ func readWaitTargets(ctx context.Context, client dynamic.ResourceInterface, name
 	return out, nil
 }
 
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func waitTargetLabel(name, selector string) string {
 	if name != "" {
 		return "name " + name
+	}
+	if selector == "" {
+		return "all"
 	}
 	return "selector " + selector
 }

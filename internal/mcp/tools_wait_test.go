@@ -216,6 +216,35 @@ func TestWaitForIgnoresConditionsFromAnOlderGeneration(t *testing.T) {
 	}
 }
 
+func TestWaitForAllCoversEveryObjectOfTheKind(t *testing.T) {
+	fastWaitPolling(t)
+	job := func(name string, done bool) *unstructured.Unstructured {
+		status := "False"
+		if done {
+			status = "True"
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "batch/v1", "kind": "Job",
+			"metadata": map[string]any{"name": name, "namespace": "shop"},
+			"status":   map[string]any{"conditions": []any{map[string]any{"type": "Complete", "status": status}}},
+		}}
+	}
+	res, _, err := waitFor(t.Context(), waitDynamic(job("a", true), job("b", false)), waitForInput{Kind: "job", Namespace: "shop", All: true, TimeoutSeconds: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeToolResult(t, res); got["met"] != false || got["all"] != true || len(got["objects"].([]any)) != 2 {
+		t.Fatalf("result: %+v", got)
+	}
+	res, _, err = waitFor(t.Context(), waitDynamic(job("a", true), job("b", true)), waitForInput{Kind: "job", Namespace: "shop", All: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeToolResult(t, res); got["met"] != true {
+		t.Fatalf("result: %+v", got)
+	}
+}
+
 func TestWaitForRefusesBadInput(t *testing.T) {
 	dyn := waitDynamic()
 	for name, tc := range map[string]struct {
@@ -223,6 +252,7 @@ func TestWaitForRefusesBadInput(t *testing.T) {
 		want  string
 	}{
 		"name and selector":   {waitForInput{Kind: "pod", Namespace: "shop", Name: "a", LabelSelector: "app=a"}, "exactly one"},
+		"name and all":        {waitForInput{Kind: "pod", Namespace: "shop", Name: "a", All: true}, "exactly one"},
 		"neither":             {waitForInput{Kind: "pod", Namespace: "shop"}, "exactly one"},
 		"no namespace":        {waitForInput{Kind: "deployment", Name: "web"}, "namespace is required"},
 		"no default":          {waitForInput{Kind: "configmap", Namespace: "shop", Name: "x"}, "condition is required"},

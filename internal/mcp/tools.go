@@ -553,13 +553,12 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "wait_for",
-		Description: "Block until objects reach a state, then return it: the verify step after a fix, like kubectl rollout status and kubectl wait. " +
+		Description: "Wait until objects reach a state: the check after a fix, like kubectl rollout status and kubectl wait. " +
 			"condition: rollout (default for Deployment, StatefulSet, DaemonSet, Rollout; all replicas updated, old ones gone, new ones available), " +
 			"complete (default for Job), ready (default for Pod), deleted, or any status condition type that must be True. " +
-			"Target one object by name or every match of label_selector. " +
+			"Target one object by name, every match of label_selector, or all of the kind in the namespace. " +
 			"Returns met, per-object state, and elapsed time; stops early with failed when the state can't come without another change " +
-			"(progress deadline exceeded, Job failed, Pod finished). On timeout (default 120s, max 600s) returns met=false with the last state seen. " +
-			"Read-only.",
+			"(progress deadline exceeded, Job failed, Pod finished). On timeout (default 120s, max 600s) returns met=false with the last state seen.",
 		Annotations: readOnly,
 	}, logToolCall("wait_for", handleWaitFor))
 
