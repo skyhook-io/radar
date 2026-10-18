@@ -541,3 +541,5 @@ func homebrewUpgradeCommand(exe string) string {
 }
 
 // scratch: Go-only change to prove CI path filters
+
+// scratch: second Go-only change (warm cache)
