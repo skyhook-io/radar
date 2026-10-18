@@ -539,3 +539,4 @@ func homebrewUpgradeCommand(exe string) string {
 	}
 	return "brew upgrade skyhook-io/tap/radar"
 }
+// scratch: Go-only change to prove CI path filters
