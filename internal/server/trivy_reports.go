@@ -10,27 +10,12 @@ import (
 	"github.com/skyhook-io/radar/internal/search"
 )
 
-// readableTrivyNamespaces narrows namespaces (nil = every namespace) to those
-// where the caller may list the Trivy report resource gvr, the way Secrets
-// are narrowed. all reports that the caller may list it everywhere in scope,
-// so namespaces need no narrowing. Otherwise the result is the readable
-// subset, empty when there is none. A caller reading every namespace needs the
-// cluster-wide grant: checking each namespace would cost one check per
-// namespace per report kind.
-func (s *Server) readableTrivyNamespaces(r *http.Request, gvr schema.GroupVersionResource, namespaces []string) (allowed []string, all bool) {
-	if s.canRead(r, gvr.Group, gvr.Resource, "", "list") {
-		return namespaces, true
-	}
-	readable := s.filterNamespacesByCanRead(r, gvr.Group, gvr.Resource, "list", namespaces)
-	if readable == nil {
-		// nil means every namespace to the callers; nothing readable is empty.
-		readable = []string{}
-	}
-	return readable, false
-}
-
-// trivyCountAccess is readableTrivyNamespaces for count surfaces, which visit
-// every report kind on each load. Fresh per-namespace checks share one
+// trivyCountAccess decides where the caller may list a Trivy report kind, for
+// count surfaces, which visit every report kind on each load. A Trivy report
+// needs the caller's own list permission, as a Secret does: an
+// ExposedSecretReport quotes the leaked credential. A caller reading every
+// namespace needs the cluster-wide grant: checking each namespace would cost
+// one check per namespace per report kind. Fresh per-namespace checks share one
 // request's budget (search.MaxAccessChecks); complete is false when a
 // namespace went unchecked, so the caller reports the count as unavailable
 // instead of a partial number. Later loads reuse the remembered decisions.

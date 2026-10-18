@@ -85,6 +85,7 @@ func TestProxyAuth_TrivyReportsDeniedWithoutReportRBAC(t *testing.T) {
 	// The fake has no apiserver to answer checks, so bob's denial is seeded.
 	bob.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "", false)
 	bob.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "legacy", false)
+	bob.SetCanI("get", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "legacy", false)
 	env.srv.permCache.Set("bob", nil, bob)
 
 	for _, path := range []string{
@@ -94,8 +95,10 @@ func TestProxyAuth_TrivyReportsDeniedWithoutReportRBAC(t *testing.T) {
 	} {
 		resp := env.authGet(t, path, "bob", "")
 		body := readBody(t, resp)
-		if resp.StatusCode != http.StatusOK || strings.TrimSpace(body) != "[]" {
-			t.Errorf("%s: status %d body %s, want 200 []", path, resp.StatusCode, body)
+		// Nothing bob may read was read, so the list fails and says why
+		// rather than answering an empty list.
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, `"error_code":"user_forbidden"`) || strings.Contains(body, leakedMatch) {
+			t.Errorf("%s: status %d body %s, want 403 user_forbidden", path, resp.StatusCode, body)
 		}
 	}
 	for _, path := range []string{
@@ -167,12 +170,14 @@ func TestProxyAuth_TrivyReportsFollowReportRBAC(t *testing.T) {
 			env.srv.permCache.Set("reader", nil, perms)
 
 			resp := env.authGet(t, tt.listPath, "reader", "")
-			var items []unstructured.Unstructured
-			if err := json.Unmarshal([]byte(readBody(t, resp)), &items); err != nil {
+			var list struct {
+				Items []unstructured.Unstructured `json:"items"`
+			}
+			if err := json.Unmarshal([]byte(readBody(t, resp)), &list); err != nil {
 				t.Fatal(err)
 			}
 			var got []string
-			for _, u := range items {
+			for _, u := range list.Items {
 				got = append(got, u.GetNamespace())
 			}
 			slices.Sort(got)

@@ -9,10 +9,10 @@
 vendor/
 
 # Node
-node_modules/
-web/node_modules/
+node_modules
+web/node_modules
 web/dist/
-packages/*/node_modules/
+packages/*/node_modules
 
 # IDE
 .idea/

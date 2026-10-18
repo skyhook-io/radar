@@ -99,6 +99,11 @@ func TestProxyAuth_PlainReadsIgnoreSavedPick(t *testing.T) {
 		return out
 	}
 	list := func(body []byte) []string { return itemNamespaces(decodeInto[[]nsItem](t, body)) }
+	resources := func(body []byte) []string {
+		return itemNamespaces(decodeInto[struct {
+			Items []nsItem `json:"items"`
+		}](t, body).Items)
+	}
 	topology := func(body []byte) []string {
 		return itemNamespaces(decodeInto[struct {
 			Nodes []nsItem `json:"nodes"`
@@ -128,20 +133,20 @@ func TestProxyAuth_PlainReadsIgnoreSavedPick(t *testing.T) {
 		pick       func([]byte) []string
 		want       []string
 	}{
-		{"alice", "/api/resources/deployments", list, both},
+		{"alice", "/api/resources/deployments", resources, both},
 		{"alice", "/api/topology", topology, both},
 		{"alice", "/api/issues", issues, both},
 		{"alice", "/api/changes", list, both},
 		{"alice", "/api/search?q=kind:Deployment", search, both},
 		{"alice", "/api/dashboard", dashboard, both},
 		// An explicit filter still narrows.
-		{"alice", "/api/resources/deployments?namespaces=default", list, onlyDefault},
+		{"alice", "/api/resources/deployments?namespaces=default", resources, onlyDefault},
 		{"alice", "/api/topology?namespaces=default", topology, onlyDefault},
 		{"alice", "/api/issues?namespaces=default", issues, onlyDefault},
 		{"alice", "/api/changes?namespaces=default", list, onlyDefault},
 		{"alice", "/api/search?q=kind:Deployment&namespaces=default", search, onlyDefault},
 		// RBAC still bounds a plain read.
-		{"carol", "/api/resources/deployments", list, onlyBroken},
+		{"carol", "/api/resources/deployments", resources, onlyBroken},
 		{"carol", "/api/issues", issues, onlyBroken},
 		{"carol", "/api/search?q=kind:Deployment", search, onlyBroken},
 	}
@@ -294,14 +299,18 @@ func TestProxyAuth_PlainReadsKeepForcedCacheScope(t *testing.T) {
 		t.Errorf("global search for Namespaces under --namespace-scope = %v, want [broken default]", got)
 	}
 
+	// A namespace outside the pin is never read, so the list says so rather
+	// than answering an empty list.
 	resp := env.authGet(t, "/api/resources/deployments?namespaces=broken", "root", "")
 	defer func() { _ = resp.Body.Close() }()
-	var items []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+	var failure struct {
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&failure); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK || len(items) != 0 {
-		t.Errorf("list outside the pinned namespace = status %d, %d items, want 200 with none", resp.StatusCode, len(items))
+	if resp.StatusCode != http.StatusConflict || failure.ErrorCode != "outside_namespace_pin" {
+		t.Errorf("list outside the pinned namespace = status %d, code %q, want 409 outside_namespace_pin", resp.StatusCode, failure.ErrorCode)
 	}
 }
 
