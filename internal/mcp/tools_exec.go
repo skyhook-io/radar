@@ -104,7 +104,10 @@ func execPod(ctx context.Context, client kubernetes.Interface, run execStreams, 
 		return nil, nil, err
 	}
 
-	pod, picked, err := resolveExecPod(ctx, client, input.Kind, namespace, name)
+	// One deadline covers finding the pod and running the command.
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	pod, picked, err := resolveExecPod(runCtx, client, input.Kind, namespace, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -120,8 +123,6 @@ func execPod(ctx context.Context, client kubernetes.Interface, run execStreams, 
 	defer func() { auth.AuditLogAction(auditRequest, audit) }()
 
 	stdout, stderr := &cappedBuffer{limit: execOutputCap}, &cappedBuffer{limit: execOutputCap}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	start := time.Now()
 	streamErr := run(runCtx, namespace, pod.Name, container, input.Command, stdout, stderr)
 	elapsed := time.Since(start)
