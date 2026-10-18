@@ -169,7 +169,9 @@ jobs:
 
       # internal/server runs in its own job; it is the slowest package by far.
       - name: Run tests
-        run: go test $(go list ./... | grep -vx 'github.com/skyhook-io/radar/internal/server')
+        run: |
+          go test -json $(go list ./... | grep -vx 'github.com/skyhook-io/radar/internal/server') > /tmp/t.json || true
+          jq -r 'select(.Test != null and (.Action=="pass" or .Action=="fail") and (.Test|contains("/")|not)) | "\(.Elapsed)\t\(.Package|sub("github.com/skyhook-io/radar/";""))\t\(.Test)"' /tmp/t.json | sort -rn | head -60
 
       - name: Evaluate PVC and CNPG PromQL in Prometheus
         env:
@@ -208,7 +210,9 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test ./internal/server
+        run: |
+          go test -json ./internal/server > /tmp/t.json || true
+          jq -r 'select(.Test != null and (.Action=="pass" or .Action=="fail") and (.Test|contains("/")|not)) | "\(.Elapsed)\t\(.Package|sub("github.com/skyhook-io/radar/";""))\t\(.Test)"' /tmp/t.json | sort -rn | head -60
 
   frontend:
     name: Frontend
