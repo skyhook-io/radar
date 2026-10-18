@@ -8,6 +8,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -55,6 +56,9 @@ func targetNamespaceActionConfig(t *testing.T) (*action.Configuration, *[]string
 		}
 		objects[ns+"/"+name] = obj
 	}
+	// The kube client issues requests concurrently, so the handler's shared
+	// state needs a lock.
+	var mu sync.Mutex
 	var writes []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -83,6 +87,8 @@ func targetNamespaceActionConfig(t *testing.T) (*action.Configuration, *[]string
 			return
 		}
 		key := parts[3] + "/" + path.Base(r.URL.Path)
+		mu.Lock()
+		defer mu.Unlock()
 		if r.Method == "POST" {
 			obj := &corev1.ConfigMap{}
 			if err := json.NewDecoder(r.Body).Decode(obj); err != nil {
