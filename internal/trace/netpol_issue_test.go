@@ -423,7 +423,7 @@ func TestReconcilePolicySettlesFromServiceProbeWithoutContainerPort(t *testing.T
 			{Resource: ResourceRef{Kind: "Pods", Namespace: "shop"}, Edge: "Service->Pods",
 				Meta:     map[string]any{"policyVerdict": "would-deny", "policyNames": []string{"deny-all"}, "policyPort": ":80", "policyDenyPort": int32(80), "policyProtocol": "TCP"},
 				Findings: []Finding{{Code: codePolicyWouldDeny, Severity: SeverityWarning, Message: "A network rule here would block this traffic"}}},
-		}, BrokenAt: -1}
+		}, BrokenAt: -1, radarUnmeshed: true}
 	}
 	tr := trace(true)
 	reconcilePolicyFindings(tr)
@@ -441,6 +441,16 @@ func TestReconcilePolicySettlesFromServiceProbeWithoutContainerPort(t *testing.T
 	for i, h := range tr.Downstream {
 		if f := h.Findings[0]; f.Severity != SeverityWarning {
 			t.Errorf("hop %d %s = %s, want the warning kept when the probe was dropped", i, f.Code, f.Severity)
+		}
+	}
+
+	// Radar couldn't read its own pod, so a sidecar there can't be ruled out.
+	tr = trace(true)
+	tr.radarUnmeshed = false
+	reconcilePolicyFindings(tr)
+	for i, h := range tr.Downstream {
+		if f := h.Findings[0]; f.Severity != SeverityWarning {
+			t.Errorf("hop %d %s = %s, want the warning kept when Radar's own mesh status is unknown", i, f.Code, f.Severity)
 		}
 	}
 }
@@ -491,10 +501,13 @@ func TestSelfPodMesh(t *testing.T) {
 		t.Fatalf("init: %v", err)
 	}
 	t.Setenv("MY_POD_NAMESPACE", "radar")
-	for name, want := range map[string]string{"radar-meshed": "Istio", "radar-plain": "", "radar-missing": ""} {
-		t.Setenv("MY_POD_NAME", name)
-		if got := selfPodMesh(); got != want {
-			t.Errorf("%s: selfPodMesh = %q, want %q", name, got, want)
+	for _, tt := range []struct {
+		name, mesh string
+		known      bool
+	}{{"radar-meshed", "Istio", true}, {"radar-plain", "", true}, {"radar-missing", "", false}} {
+		t.Setenv("MY_POD_NAME", tt.name)
+		if mesh, known := selfPodMesh(); mesh != tt.mesh || known != tt.known {
+			t.Errorf("%s: selfPodMesh = %q, %v; want %q, %v", tt.name, mesh, known, tt.mesh, tt.known)
 		}
 	}
 }

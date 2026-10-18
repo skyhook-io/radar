@@ -140,7 +140,9 @@ func runProbes(ctx context.Context, t *Trace, opts Options, client kubernetes.In
 	wg.Wait()
 	// A sidecar proxy in Radar's own pod can accept a connection before the
 	// backend does; record it on the results, as for a probe Job.
-	if mesh := selfPodMesh(); mesh != "" {
+	mesh, known := selfPodMesh()
+	t.radarUnmeshed = known && mesh == ""
+	if mesh != "" {
 		for _, hops := range [][]Hop{t.Downstream, t.Upstreams} {
 			for i := range hops {
 				for j := range hops[i].Probes {
@@ -188,7 +190,11 @@ func reconcilePolicyFindings(t *Trace) {
 			var svcProbes []probe.Result
 			if i > 0 && h.Edge == "Service->Pods" && hops[i-1].Resource.Kind == "Service" {
 				svc = &hops[i-1]
-				svcProbes = unmeshed(svc.Probes)
+				// Only when Radar's own pod is known to run without a
+				// sidecar: otherwise its proxy may have answered.
+				if t.radarUnmeshed {
+					svcProbes = unmeshed(svc.Probes)
+				}
 			}
 			// The Service hop's own data probe, through its ClusterIP, counts
 			// too: pods that declare no containerPort get no per-pod probes.
@@ -297,19 +303,20 @@ func unmeshed(results []probe.Result) []probe.Result {
 }
 
 // selfPodMesh names the mesh whose sidecar proxy runs in Radar's own pod, found
-// in the cache by the chart's downward-API env, or "" when Radar isn't a pod or
-// its pod isn't in the cache.
-func selfPodMesh() string {
+// in the cache by the chart's downward-API env. known is false when Radar
+// isn't a pod or its pod isn't in the cache (a namespace-scoped install that
+// doesn't cover its own namespace).
+func selfPodMesh() (mesh string, known bool) {
 	name, namespace := os.Getenv("MY_POD_NAME"), os.Getenv("MY_POD_NAMESPACE")
 	cache := k8s.GetResourceCache()
 	if name == "" || namespace == "" || cache == nil || cache.Pods() == nil {
-		return ""
+		return "", false
 	}
 	pod, err := cache.Pods().Pods(namespace).Get(name)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return k8s.PodMesh(pod)
+	return k8s.PodMesh(pod), true
 }
 
 type probeOutcome struct {
