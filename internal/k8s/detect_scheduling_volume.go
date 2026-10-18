@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -71,19 +72,18 @@ func hasVolumePlacementReason(reasons []SchedulingReason) bool {
 	return false
 }
 
-// holderCanBlock reports whether the verdict has a rejection an old pod on the
-// volume's node can cause (anti-affinity, resources, host ports, an in-use
-// ReadWriteOncePod claim) and none from the pod's own node selection. A pod
-// whose new template selects nodes outside the volume's zone is stuck by its
-// own spec; removing the old pod wouldn't help.
+// holderCanBlock reports whether the verdict has a rejection that only another
+// pod causes (anti-affinity, an in-use ReadWriteOncePod claim) and none from
+// the pod's own node selection. A pod whose new template selects nodes outside
+// the volume's zone is stuck by its own spec, and a resource shortage may not
+// clear when the old pod goes, so neither is called a deadlock.
 func holderCanBlock(reasons []SchedulingReason) bool {
 	holderCaused := false
 	for _, r := range reasons {
 		switch {
 		case r.Class == SchedNodeAffinitySelector:
 			return false
-		case r.Class == SchedPodAntiAffinity, r.Class == SchedInsufficientResource, r.Class == SchedNoPorts,
-			strings.Contains(strings.ToLower(r.Raw), "readwriteoncepod"):
+		case r.Class == SchedPodAntiAffinity, strings.Contains(strings.ToLower(r.Raw), "readwriteoncepod"):
 			holderCaused = true
 		}
 	}
@@ -178,6 +178,22 @@ func pvRequiredTerms(cache *ResourceCache, pvName string) []NodeSelectorTermFact
 		terms = append(terms, t)
 	}
 	return terms
+}
+
+// evidenceReads are the inventories the enriched message reads beyond the
+// Pod: a caller who can't list them gets the scheduler-only form.
+func (vp *volumePlacement) evidenceReads(namespace string) []issuesapi.EvidenceRead {
+	reads := []issuesapi.EvidenceRead{{Resource: "persistentvolumeclaims", Namespace: namespace, Verb: "list"}}
+	if len(vp.terms) > 0 {
+		reads = append(reads, issuesapi.EvidenceRead{Resource: "persistentvolumes", Verb: "list"}, issuesapi.EvidenceRead{Resource: "nodes", Verb: "list"})
+	}
+	if vp.holderPod != "" {
+		reads = append(reads,
+			issuesapi.EvidenceRead{Resource: "pods", Namespace: namespace, Verb: "list"},
+			issuesapi.EvidenceRead{Group: "apps", Resource: "replicasets", Namespace: namespace, Verb: "list"},
+			issuesapi.EvidenceRead{Group: "apps", Resource: "deployments", Namespace: namespace, Verb: "list"})
+	}
+	return reads
 }
 
 // lead is the sentence placed before the scheduler summary. It avoids bare

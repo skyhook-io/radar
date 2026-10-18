@@ -940,6 +940,18 @@ func TestDetectSchedulingProblems_PersistentVolumeRolloutDeadlock(t *testing.T) 
 		if strings.Contains(p.Message, "selector") || strings.Contains(p.Action, "nodeSelector") {
 			t.Errorf("volume pin read as a node selector mismatch: %+v", p)
 		}
+		// A caller who can't list PVs and Nodes gets the scheduler-only form.
+		reads := map[string]bool{}
+		for _, r := range p.RequiredReads {
+			reads[r.Resource] = true
+		}
+		if !reads["persistentvolumes"] || !reads["nodes"] || !reads["pods"] || p.Degraded == nil {
+			t.Fatalf("enriched row must declare its evidence reads and a degraded form: reads=%+v degraded=%+v", p.RequiredReads, p.Degraded)
+		}
+		if strings.Contains(p.Degraded.Message, "pvc-1234") || strings.Contains(p.Degraded.Message, "[node-a]") || strings.Contains(p.Degraded.Action, "db-old") ||
+			!strings.Contains(p.Degraded.Message, "volume node-affinity conflict") {
+			t.Errorf("degraded form leaks evidence or loses the volume class: %+v", p.Degraded)
+		}
 	})
 
 	// Recreate never runs old and new pods together, so the same verdict is a
@@ -974,7 +986,9 @@ func TestHolderCanBlock(t *testing.T) {
 	_, own := parseSchedulerMessage("0/3 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 2 node(s) didn't match PersistentVolume's node affinity.")
 	_, held := parseSchedulerMessage("0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity.")
 	_, onlyVolume := parseSchedulerMessage("0/3 nodes are available: 3 node(s) didn't match PersistentVolume's node affinity.")
-	if holderCanBlock(own) || !holderCanBlock(held) || holderCanBlock(onlyVolume) {
-		t.Errorf("holderCanBlock own=%v held=%v onlyVolume=%v, want false true false", holderCanBlock(own), holderCanBlock(held), holderCanBlock(onlyVolume))
+	_, memory := parseSchedulerMessage("0/3 nodes are available: 1 Insufficient memory, 2 node(s) didn't match PersistentVolume's node affinity.")
+	if holderCanBlock(own) || !holderCanBlock(held) || holderCanBlock(onlyVolume) || holderCanBlock(memory) {
+		t.Errorf("holderCanBlock own=%v held=%v onlyVolume=%v memory=%v, want false true false false",
+			holderCanBlock(own), holderCanBlock(held), holderCanBlock(onlyVolume), holderCanBlock(memory))
 	}
 }

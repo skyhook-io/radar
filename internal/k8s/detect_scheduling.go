@@ -22,6 +22,7 @@ import (
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/gkedisk"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/scheduling"
@@ -365,6 +366,11 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 				OwnerName:                  ownerName,
 				CapacityRelevant:           podRequiresKarpenterNodePool(pod),
 				CapacityRelevantCorrelated: podEvaluatedAgainstKarpenterPools(pod, karpenterPools()),
+			}
+			if vol != nil {
+				plainMessage, plainAction := diagnoseParsedUnschedulable(pod, cond.Message, total, reasons, nodes, nil)
+				detection.RequiredReads = vol.evidenceReads(pod.Namespace)
+				detection.Degraded = &issuesapi.DegradedFinding{Message: plainMessage, Action: plainAction}
 			}
 			setDetectionOnset(&detection, now, cond.LastTransitionTime.Time)
 			problems = append(problems, detection)
