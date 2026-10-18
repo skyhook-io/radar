@@ -180,6 +180,11 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 	return user, perms, true
 }
 
+func resolveUserPermsWithStatus(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions, bool) {
+	user, perms, checked := resolveUserPermsDecision(ctx)
+	return user, perms, !checked
+}
+
 func mcpAllNamespaceNames(ctx context.Context) []string {
 	var allNamespaces []string
 	if rc := k8s.GetResourceCache(); rc != nil {
@@ -208,11 +213,18 @@ func mcpAllNamespaceNames(ctx context.Context) []string {
 // requested may be nil ("all namespaces"). Pass a single-element slice to
 // check a specific namespace.
 func filterNamespacesForUser(ctx context.Context, requested []string) []string {
-	user, perms := resolveUserPerms(ctx)
+	namespaces, _ := filterNamespacesForUserWithStatus(ctx, requested)
+	return namespaces
+}
+
+// filterNamespacesForUserWithStatus is filterNamespacesForUser plus whether
+// the result is fail-closed because namespace discovery failed.
+func filterNamespacesForUserWithStatus(ctx context.Context, requested []string) ([]string, bool) {
+	user, perms, failed := resolveUserPermsWithStatus(ctx)
 	if user == nil {
-		return requested
+		return requested, false
 	}
-	return pkgauth.FilterNamespacesForUser(requested, user, perms)
+	return pkgauth.FilterNamespacesForUser(requested, user, perms), failed
 }
 
 // scopedNamespacesForUser applies the --namespace pin before the RBAC filter,

@@ -3,7 +3,6 @@ package search
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 var (
@@ -69,7 +69,8 @@ func trivyProvider(gvr schema.GroupVersionResource, kind string, items ...*unstr
 	}
 }
 
-func hitNames(res Result) []string {
+// reportHitNames is the hits as namespace/name, sorted.
+func reportHitNames(res Result) []string {
 	out := make([]string, 0, len(res.Hits))
 	for _, h := range res.Hits {
 		out = append(out, h.Namespace+"/"+h.Name)
@@ -134,7 +135,7 @@ func TestSearch_FindsTrivyReportByCVE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := hitNames(res); !slices.Equal(got, []string{"shop/replicaset-web-5d8f9-php"}) {
+	if got := reportHitNames(res); !slices.Equal(got, []string{"shop/replicaset-web-5d8f9-php"}) {
 		t.Fatalf("hits = %v", got)
 	}
 	snips := res.Hits[0].Snippets
@@ -146,7 +147,7 @@ func TestSearch_FindsTrivyReportByCVE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := hitNames(res); !slices.Equal(got, []string{"shop/replicaset-web-5d8f9-php"}) {
+	if got := reportHitNames(res); !slices.Equal(got, []string{"shop/replicaset-web-5d8f9-php"}) {
 		t.Fatalf("image: modifier should match the scanned image, got %v", got)
 	}
 }
@@ -159,7 +160,7 @@ func TestSearch_SeverityWordsDoNotMatchReports(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Hits) != 0 {
-		t.Fatalf("severity words should not be indexed, got %v", hitNames(res))
+		t.Fatalf("severity words should not be indexed, got %v", reportHitNames(res))
 	}
 }
 
@@ -177,7 +178,7 @@ func TestSearch_ReportFieldOutsidetrivyGroupIsNotIndexed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Hits) != 0 {
-		t.Fatalf("only Trivy's group is read under report, got %v", hitNames(res))
+		t.Fatalf("only Trivy's group is read under report, got %v", reportHitNames(res))
 	}
 }
 
@@ -196,7 +197,7 @@ func TestSearch_ReportCELBindingMatchesOneFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := hitNames(res); !slices.Equal(got, []string{"shop/exact", "shop/mixed"}) {
+	if got := reportHitNames(res); !slices.Equal(got, []string{"shop/exact", "shop/mixed"}) {
 		t.Fatalf("free tokens: hits = %v", got)
 	}
 
@@ -208,7 +209,7 @@ func TestSearch_ReportCELBindingMatchesOneFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := hitNames(res); !slices.Equal(got, []string{"shop/exact"}) {
+	if got := reportHitNames(res); !slices.Equal(got, []string{"shop/exact"}) {
 		t.Fatalf("CEL: hits = %v (filter errors %d: %s)", got, res.FilterErrors, res.FilterErrorSample)
 	}
 }
@@ -232,7 +233,7 @@ func TestSearch_ReportCELBindingCannotReadSecretMatch(t *testing.T) {
 		}
 		wantHit := strings.Contains(expr, "!has")
 		if (len(res.Hits) == 1) != wantHit {
-			t.Errorf("%s: hits = %v, want hit = %v", expr, hitNames(res), wantHit)
+			t.Errorf("%s: hits = %v, want hit = %v", expr, reportHitNames(res), wantHit)
 		}
 	}
 	res, err := Search(context.Background(), p, Parse("AKIAREALSECRETVALUE"), Options{Include: IncludeNone})
@@ -240,7 +241,7 @@ func TestSearch_ReportCELBindingCannotReadSecretMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Hits) != 0 {
-		t.Fatalf("secret match must not be searchable, got %v", hitNames(res))
+		t.Fatalf("secret match must not be searchable, got %v", reportHitNames(res))
 	}
 }
 
@@ -255,7 +256,7 @@ func TestSearch_ReportBindingIsEmptyForOtherObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Hits) != 1 {
-		t.Fatalf("hits = %v, filter errors %d: %s", hitNames(res), res.FilterErrors, res.FilterErrorSample)
+		t.Fatalf("hits = %v, filter errors %d: %s", reportHitNames(res), res.FilterErrors, res.FilterErrorSample)
 	}
 }
 
@@ -321,25 +322,32 @@ func TestSearch_TrivyKindsNeedTheCallersListPermission(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := hitNames(res); !slices.Equal(got, tc.want) {
+			if got := reportHitNames(res); !slices.Equal(got, tc.want) {
 				t.Fatalf("hits = %v, want %v (asked %v)", got, tc.want, tc.access)
 			}
 		})
 	}
 }
 
+// A read failure is a gap only where the caller may list the report kind:
+// one in a namespace they can't list would tell them about reports they may
+// not read.
 func TestSearch_TrivyCoverageGapsOnlyWhereTheCallerMayList(t *testing.T) {
-	p := trivyProvider(vulnGVR, "VulnerabilityReport")
-	p.filterDynamicByNamespace = true
-	p.dynamicErrNamespaces = map[string]bool{"team-a": true, "team-b": true}
-	access := &kindAccess{namespaces: []string{"team-b"}}
-	res, err := Search(context.Background(), p, Parse("kind:VulnerabilityReport"), Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []UnsearchedKind{{Kind: "VulnerabilityReport", Group: trivyGroup, Reason: UnsearchedUnreadable, Namespaces: []string{"team-b"}}}
-	if !reflect.DeepEqual(res.UnsearchedKinds, want) {
-		t.Fatalf("unsearched = %+v, want %+v", res.UnsearchedKinds, want)
+	for _, tc := range []struct {
+		failing string
+		gap     bool
+	}{{"team-a", false}, {"team-b", true}} {
+		p := trivyProvider(vulnGVR, "VulnerabilityReport")
+		p.filterDynamicByNamespace = true
+		p.dynamicErrNamespaces = map[string]bool{tc.failing: true}
+		access := &kindAccess{namespaces: []string{"team-b"}}
+		res, err := Search(context.Background(), p, Parse("kind:VulnerabilityReport"), Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hasKindGap(res, readreason.ReadError, "VulnerabilityReport"); got != tc.gap {
+			t.Fatalf("failing in %s: read_error gap = %v, want %v (gaps %+v)", tc.failing, got, tc.gap, res.Coverage.Gaps)
+		}
 	}
 }
 
@@ -357,7 +365,7 @@ func TestSearch_KindAccessLeavesOtherCRDsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Hits) != 1 || len(access.asked) != 0 {
-		t.Fatalf("hits = %v, asked = %v", hitNames(res), access.asked)
+		t.Fatalf("hits = %v, asked = %v", reportHitNames(res), access.asked)
 	}
 }
 
@@ -384,7 +392,7 @@ func TestSearch_SbomAndFailedChecksAreSearchable(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := hitNames(res); !slices.Equal(got, want) {
+		if got := reportHitNames(res); !slices.Equal(got, want) {
 			t.Errorf("%q: hits = %v, want %v", q, got, want)
 		}
 	}
