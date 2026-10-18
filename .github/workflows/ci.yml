@@ -6,9 +6,96 @@ on:
   pull_request:
     branches: [main]
 
+# A new push to a PR cancels its running checks. Other runs get a unique group:
+# a shared one would queue main pushes and drop the pending ones.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Decides which jobs a PR needs from the files it changes (the whole PR diff,
+  # not only the latest push). Pushes to main, and any PR touching .github/,
+  # run every job, so a gap in these filters surfaces on main at the latest.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      pkg: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.pkg == 'true' }}
+      go: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.go == 'true' }}
+      web: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.web == 'true' }}
+      app: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.app == 'true' }}
+      helm: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ci == 'true' || steps.filter.outputs.helm == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            ci:
+              - '.github/**'
+            pkg:
+              - 'pkg/**'
+              - 'testdata/**'
+            # Go tests also read files outside Go packages: the chart, shared
+            # golden fixtures, docs and README, and frontend sources they keep
+            # in sync with. A new test that reads another path needs it here.
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'cmd/**'
+              - 'internal/**'
+              - 'pkg/**'
+              - '**/testdata/**'
+              - 'deploy/helm/**'
+              - 'scripts/gpu-ecosystem-demo/**'
+              - 'README.md'
+              - 'docs/mcp.md'
+              - 'docs/reachability.md'
+              - 'web/src/api/radarFeatures.ts'
+              - 'web/src/components/home/mcpToolCatalog.ts'
+              - 'web/src/components/resources/renderers/**'
+              - 'packages/k8s-ui/src/components/workload/WorkloadView.tsx'
+              - 'packages/k8s-ui/src/components/trace/reachVerdict.ts'
+              - 'packages/k8s-ui/src/components/resources/resource-utils-cnpg.ts'
+            # Frontend and k8s-ui tests read Go golden fixtures, the chart's
+            # read baseline and the GPU ecosystem registry.
+            web:
+              - 'web/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '**/testdata/**'
+              - 'deploy/helm/radar/files/**'
+              - 'scripts/gpu-ecosystem-demo/**'
+              - 'scripts/workload-metrics-demo/**'
+            # What the settings browser journeys build and serve: the frontend
+            # embedded in cmd/testserver. Go tests and fixtures are not part of it.
+            app:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'cmd/**'
+              - 'internal/**'
+              - 'pkg/**'
+              - 'web/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'Makefile'
+              - '!**/*_test.go'
+              - '!**/testdata/**'
+            helm:
+              - 'deploy/helm/**'
+              - 'scripts/test-chart.sh'
+
   pkg:
     name: pkg (shared library)
+    needs: changes
+    if: needs.changes.outputs.pkg == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -20,6 +107,9 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          # Its own build cache: sharing the root module's key let this job,
+          # which finishes first, save a cache holding only pkg's packages.
+          cache-dependency-path: pkg/go.sum
 
       - name: Download dependencies
         run: go mod download
@@ -37,6 +127,8 @@ jobs:
 
   backend:
     name: Backend
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -59,6 +151,9 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          cache-dependency-path: |
+            go.sum
+            pkg/go.sum
 
       - name: Download dependencies
         run: go mod download
@@ -72,8 +167,9 @@ jobs:
             exit 1
           fi
 
+      # internal/server runs in its own job; it is the slowest package by far.
       - name: Run tests
-        run: go test ./...
+        run: go test $(go list ./... | grep -vx 'github.com/skyhook-io/radar/internal/server')
 
       - name: Evaluate PVC and CNPG PromQL in Prometheus
         env:
@@ -92,8 +188,32 @@ jobs:
       - name: Build
         run: go build -o explorer ./cmd/explorer
 
+  backend-server:
+    name: Backend (internal/server)
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: |
+            go.sum
+            pkg/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./internal/server
+
   frontend:
     name: Frontend
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -129,6 +249,8 @@ jobs:
 
   settings-browser:
     name: Settings browser journeys
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -136,6 +258,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+          cache-dependency-path: |
+            go.sum
+            pkg/go.sum
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -150,6 +275,8 @@ jobs:
 
   k8s-ui:
     name: k8s-ui (shared UI)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -175,6 +302,8 @@ jobs:
 
   helm:
     name: Helm chart
+    needs: changes
+    if: needs.changes.outputs.helm == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
