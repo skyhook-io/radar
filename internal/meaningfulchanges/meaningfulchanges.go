@@ -29,7 +29,17 @@ const (
 	// before the public response is capped.
 	IssueChangesCandidateLimit = 10
 	ResourceLimit              = 3
-	maxCandidateLimit          = 100
+)
+
+// Each candidate query reads at most this many of the newest matching rows;
+// ranking and the output limit apply afterwards. A query that has more rows
+// in the window marks the answer saturated. The bound decides which rows
+// compete for the output, not how many are returned, so it does not depend on
+// the output limit. A name filter reads one object's history, which a smaller
+// bound covers.
+const (
+	FetchBound      = 1000
+	NamedFetchBound = 100
 )
 
 const (
@@ -42,7 +52,7 @@ const (
 	truncatedIssueMembersGuidance = "Radar did not promote changes based on issue linkage because at least one returned grouped issue omitted members; an omitted member may explain a change."
 	// FetchSaturatedGuidance distinguishes an incomplete candidate query from
 	// a complete window whose lower-ranked results were omitted from output.
-	FetchSaturatedGuidance = "Radar's change query hit its candidate cap, so this window may contain changes the query never saw; absence from this feed is not evidence a change did not occur."
+	FetchSaturatedGuidance = "A change query exceeded its fetch bound in this window, so relevant changes may be missing; absence from this feed is not evidence they did not occur."
 )
 
 // issueChangesGuidance returns response-level steering prose for reason tokens
@@ -119,6 +129,40 @@ func PrioritizeIssueChanges(changes []issuesapi.RecentChange, activeIssues []iss
 	return changes, guidance, opts.Limit > 0 && originalLen > len(changes)
 }
 
+// ApplyIssueChanges fills an issues response's recent-changes fields from
+// one Recent answer. A saturated answer, or one whose window starts before the
+// history Radar holds, is reported even when no change survives, so an empty
+// block never reads as a complete one.
+func ApplyIssueChanges(resp *issuesapi.Response, result RecentResult, activeIssues []issuesapi.Issue, reason string, unfilteredIssueSet, readsAllNamespaces bool) {
+	coverage := HistoryCoverageFor(result.History, readsAllNamespaces)
+	if len(result.Changes) == 0 && !result.FetchSaturated && coverage == nil {
+		return
+	}
+	changes := result.Changes
+	var guidance string
+	var recapped bool
+	if len(changes) > 0 {
+		changes, guidance, recapped = PrioritizeIssueChanges(changes, activeIssues, IssueChangePriorityOptions{
+			Reason:             reason,
+			Limit:              IssueChangesLimit,
+			UnfilteredIssueSet: unfilteredIssueSet,
+			FetchSaturated:     result.FetchSaturated,
+		})
+	} else if result.FetchSaturated {
+		// The reason-specific guidance is about listed changes; with none
+		// listed, only the completeness warning applies.
+		guidance = FetchSaturatedGuidance
+	}
+	if coverage != nil {
+		guidance = appendGuidance(guidance, HistoryCoverageGuidance(*coverage))
+	}
+	resp.RecentChanges = changes
+	resp.RecentChangesReason = reason
+	resp.RecentChangesGuidance = guidance
+	resp.RecentChangesTruncated = result.OutputCapped || result.FetchSaturated || recapped
+	resp.RecentChangesHistoryCoverage = coverage
+}
+
 func appendGuidance(current, addition string) string {
 	if current == "" {
 		return addition
@@ -191,74 +235,157 @@ type Query struct {
 	Since      time.Duration
 	Limit      int
 	FieldLimit int
+	// Allow, when set, drops changes the caller may not read before ranking
+	// and the output limit, so hidden rows cannot take the visible ones'
+	// places.
+	Allow func(issuesapi.RecentChange) bool
+
+	// start is the window's lower bound, fixed once per answer so every
+	// candidate query reads the same window.
+	start time.Time
 }
 
 type RecentResult struct {
 	Changes        []issuesapi.RecentChange
 	OutputCapped   bool
 	FetchSaturated bool
+	// History reports whether Radar's held history covers the window; see
+	// HistoryCoverageSince.
+	History issuesapi.HistoryCoverage
 }
 
+// Recent returns ranked changes plus two distinct truncation signals:
+// OutputCapped (more qualifying changes existed than the requested limit) and
+// FetchSaturated (a candidate query had more rows than its fetch bound, so the
+// window may contain older events the fetch never saw). Negative claims ("no
+// recent changes") must key on FetchSaturated and History, never on
+// OutputCapped: output capping still read the full window and ranks
+// spec/config changes above the churn that gets dropped.
 func Recent(ctx context.Context, q Query) (RecentResult, error) {
-	changes, outputCapped, fetchSaturated, err := recent(ctx, q)
-	return RecentResult{
-		Changes:        changes,
-		OutputCapped:   outputCapped,
-		FetchSaturated: fetchSaturated,
-	}, err
-}
-
-// recent returns ranked changes plus two distinct truncation signals:
-// outputCapped (more qualifying changes existed than the requested limit) and
-// fetchSaturated (a candidate query hit its cap, so the window may contain
-// older events the fetch never saw). Negative claims ("no recent changes")
-// must key on fetchSaturated alone — output capping still observes the full
-// window and ranks spec/config changes above the churn that gets dropped.
-func recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, bool, error) {
 	store := timeline.GetStore()
 	if store == nil {
-		return nil, false, false, timeline.StoreMissingError()
+		return RecentResult{}, timeline.StoreMissingError()
 	}
 	q = normalizeQuery(q)
-
-	if len(q.Kinds) > 0 || q.Name != "" {
-		queryLimit := candidateLimit(q.Limit, q.Name != "")
-		events, rawEvents, err := queryCandidates(ctx, store, q, q.Kinds, queryLimit)
-		if err != nil {
-			return nil, false, false, err
-		}
-		// Lifecycle events (add/delete) are fetched separately so a burst of
-		// update churn can't push them out of the newest-N candidate window
-		// before ranking ever sees them. Ranking scores deletes above status
-		// churn, but it can only rank what the fetch returns.
-		lifecycleEvents, rawLifecycle, err := queryLifecycleCandidates(ctx, store, q, q.Kinds)
-		if err != nil {
-			return nil, false, false, err
-		}
-		changes, capped, err := rankedChanges(coalesceRecreatePairs(dedupeEvents(append(events, lifecycleEvents...))), q.Name, q.Limit, q.FieldLimit)
-		saturated := rawEvents >= queryLimit || rawLifecycle >= lifecycleCandidateLimit
-		return changes, capped, saturated, err
+	bound := FetchBound
+	if q.Name != "" {
+		bound = NamedFetchBound
 	}
 
-	perQueryLimit := candidateLimit(q.Limit, false)
-	configEvents, rawConfig, err := queryCandidates(ctx, store, q, configKinds, perQueryLimit)
-	if err != nil {
-		return nil, false, false, err
+	// Updates and lifecycle events (add/delete) are fetched in separate
+	// queries, so a burst of creates can't push an edit out of the bound and
+	// update churn can't push out a delete. Creates and deletes come only from
+	// the lifecycle query.
+	updateKinds := [][]string{q.Kinds}
+	lifecycleKinds := q.Kinds
+	if len(q.Kinds) == 0 && q.Name == "" {
+		updateKinds = [][]string{configKinds, specKinds}
+		lifecycleKinds = append(append(append([]string{}, configKinds...), specKinds...), lifecycleOnlyKinds...)
 	}
-	specEvents, rawSpec, err := queryCandidates(ctx, store, q, specKinds, perQueryLimit)
-	if err != nil {
-		return nil, false, false, err
+	var events []timeline.TimelineEvent
+	saturated := false
+	for _, kinds := range updateKinds {
+		got, full, err := queryCandidates(ctx, store, q, kinds, updateEventTypes, bound)
+		if err != nil {
+			return RecentResult{}, err
+		}
+		events = append(events, got...)
+		saturated = saturated || full
 	}
-	lifecycleKinds := append(append([]string{}, configKinds...), specKinds...)
-	lifecycleKinds = append(lifecycleKinds, lifecycleOnlyKinds...)
-	lifecycleEvents, rawLifecycle, err := queryLifecycleCandidates(ctx, store, q, lifecycleKinds)
+	got, full, err := queryCandidates(ctx, store, q, lifecycleKinds, lifecycleEventTypes, bound)
 	if err != nil {
-		return nil, false, false, err
+		return RecentResult{}, err
 	}
-	merged := coalesceRecreatePairs(dedupeEvents(append(append(configEvents, specEvents...), lifecycleEvents...)))
-	changes, capped, err := rankedChanges(merged, "", q.Limit, q.FieldLimit)
-	saturated := rawConfig >= perQueryLimit || rawSpec >= perQueryLimit || rawLifecycle >= lifecycleCandidateLimit
-	return changes, capped, saturated, err
+	events = append(events, got...)
+	saturated = saturated || full
+
+	changes, capped := rankedChanges(coalesceRecreatePairs(dedupeEvents(events)), q)
+	return RecentResult{
+		Changes:        changes,
+		OutputCapped:   capped,
+		FetchSaturated: saturated,
+		History:        historyCoverage(q.start, q.Namespaces),
+	}, nil
+}
+
+// historyCoverage is HistoryCoverageSince for an answer scoped to
+// namespaces. A namespace created after the boundary holds its whole history,
+// since nothing in it can predate it; an answer scoped to such namespaces is
+// complete.
+func historyCoverage(windowStart time.Time, namespaces []string) issuesapi.HistoryCoverage {
+	coverage := HistoryCoverageSince(windowStart)
+	if coverage.Incomplete && namespacesCreatedAfter(namespaces, coverage.CompleteSince) {
+		return issuesapi.HistoryCoverage{}
+	}
+	return coverage
+}
+
+func namespacesCreatedAfter(namespaces []string, t time.Time) bool {
+	cache := k8s.GetResourceCache()
+	if len(namespaces) == 0 || cache == nil || cache.Namespaces() == nil {
+		return false
+	}
+	for _, name := range namespaces {
+		ns, err := cache.Namespaces().Get(name)
+		if err != nil || !ns.CreationTimestamp.After(t) {
+			return false
+		}
+	}
+	return true
+}
+
+// HistoryCoverageFor returns coverage as a response carries it: nil when the
+// history covers the window. CompleteSince is store-wide, so it can date
+// events the caller may not read; it is kept only for callers who can read
+// every namespace.
+func HistoryCoverageFor(coverage issuesapi.HistoryCoverage, readsAllNamespaces bool) *issuesapi.HistoryCoverage {
+	if !coverage.Incomplete {
+		return nil
+	}
+	if !readsAllNamespaces {
+		coverage.CompleteSince = time.Time{}
+	}
+	return &coverage
+}
+
+// HistoryCoverageGuidance is the sentence an answer carries when its window
+// starts before the history Radar holds.
+func HistoryCoverageGuidance(coverage issuesapi.HistoryCoverage) string {
+	const rest = "; changes before then may be missing, so an empty or short result does not establish that nothing changed. " +
+		"For older changes to one object, check it directly (get_resource, its ReplicaSet revisions)."
+	if coverage.CompleteSince.IsZero() {
+		return "Radar's change history is incomplete for part of this window" + rest
+	}
+	return "Radar's change history is complete only from " + coverage.CompleteSince.Format(time.RFC3339) + rest
+}
+
+// HistoryCoverageSince reports whether the history Radar holds covers
+// everything from windowStart on. It is incomplete when this process started
+// observing after windowStart, or when the store has deleted events newer than
+// windowStart; CompleteSince is then the later of those two times, rounded up
+// to the second. Rows Radar never saw for other reasons (a missed watch event)
+// are not covered by this.
+func HistoryCoverageSince(windowStart time.Time) issuesapi.HistoryCoverage {
+	var coverage issuesapi.HistoryCoverage
+	if started := timeline.ObservationStart(); started.After(windowStart) {
+		coverage.Reasons = append(coverage.Reasons, issuesapi.HistoryObservationStartedLate)
+		coverage.CompleteSince = started
+	}
+	if evicted := timeline.HistoryEvictedThrough(); evicted.After(windowStart) {
+		coverage.Reasons = append(coverage.Reasons, issuesapi.HistoryEventsEvicted)
+		if evicted.After(coverage.CompleteSince) {
+			coverage.CompleteSince = evicted
+		}
+	}
+	if len(coverage.Reasons) == 0 {
+		return issuesapi.HistoryCoverage{}
+	}
+	coverage.Incomplete = true
+	if rounded := coverage.CompleteSince.Truncate(time.Second); !rounded.Equal(coverage.CompleteSince) {
+		coverage.CompleteSince = rounded.Add(time.Second)
+	}
+	coverage.CompleteSince = coverage.CompleteSince.UTC()
+	return coverage
 }
 
 // RecentForResource returns the subject's ranked changes plus a saturation
@@ -275,7 +402,7 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 // exposes only fetch saturation because issue-correlation uses that bool for
 // negative-claim gating.
 func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) (RecentResult, error) {
-	changes, outputCapped, fetchSaturated, err := recent(ctx, Query{
+	return Recent(ctx, Query{
 		Namespaces: []string{namespace},
 		Kinds:      []string{canonicalKind(kind)},
 		Name:       name,
@@ -283,11 +410,6 @@ func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string
 		Limit:      limit,
 		FieldLimit: fieldLimit,
 	})
-	return RecentResult{
-		Changes:        changes,
-		OutputCapped:   outputCapped,
-		FetchSaturated: fetchSaturated,
-	}, err
 }
 
 func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
@@ -313,6 +435,7 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 	limit, fieldLimit int,
 	includeSource func(kind, name string) bool,
 ) (result RecentResult, coverageLimited bool, err error) {
+	start := time.Now().Add(-since)
 	fetch := func(resourceKind, resourceName string) error {
 		canonicalResourceKind := canonicalKind(resourceKind)
 		if includeSource != nil && !includeSource(canonicalResourceKind, resourceName) {
@@ -326,6 +449,7 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			Since:      since,
 			Limit:      limit,
 			FieldLimit: fieldLimit,
+			start:      start,
 		})
 		if err != nil {
 			return err
@@ -346,6 +470,7 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			return RecentResult{}, coverageLimited, err
 		}
 	}
+	result.History = historyCoverage(start, []string{namespace})
 	preCapCount := len(result.Changes)
 	RankAndCap(&result.Changes, limit)
 	result.OutputCapped = result.OutputCapped || len(result.Changes) < preCapCount
@@ -462,73 +587,49 @@ func normalizeQuery(q Query) Query {
 	for i, kind := range q.Kinds {
 		q.Kinds[i] = canonicalKind(kind)
 	}
+	if q.start.IsZero() {
+		q.start = time.Now().Add(-q.Since)
+	}
 	return q
 }
 
-func candidateLimit(finalLimit int, nameFiltered bool) int {
-	limit := finalLimit * 4
-	if limit < 50 {
-		limit = 50
-	}
-	if nameFiltered && limit < 100 {
-		limit = 100
-	}
-	if limit > maxCandidateLimit {
-		limit = maxCandidateLimit
-	}
-	return limit
-}
+var (
+	updateEventTypes    = []timeline.EventType{timeline.EventTypeUpdate}
+	lifecycleEventTypes = []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete}
+)
 
-// lifecycleCandidateLimit bounds the dedicated add/delete query. Lifecycle
-// events are rare relative to updates, so a modest window covers the lookback
-// without re-importing the churn the separate query exists to escape.
-const lifecycleCandidateLimit = 50
-
-// queryLifecycleCandidates fetches add/delete events for the given kinds in a
-// query of their own, immune to crowding by update events.
-// queryLifecycleCandidates returns group-filtered events plus the bounded
-// query's count. When all kinds share one known group, the store applies that
-// group before its limit; heterogeneous queries retain the row-level guard.
-func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string) ([]timeline.TimelineEvent, int, error) {
-	queryKinds := compactKinds(kinds)
-	opts := timeline.QueryOptions{
-		Namespaces:       q.Namespaces,
-		Kinds:            queryKinds,
-		Names:            compactNames(q.Name),
-		APIGroups:        commonTrackedAPIGroups(queryKinds),
-		Since:            time.Now().Add(-q.Since),
-		Sources:          []timeline.EventSource{timeline.SourceInformer},
-		EventTypes:       []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete},
-		ClusterContext:   k8s.ActiveClusterContext(),
-		Limit:            lifecycleCandidateLimit,
-		IncludeManaged:   false,
-		IncludeK8sEvents: false,
-	}
-	events, err := store.Query(ctx, opts)
-	return filterTrackedGroupEvents(events), len(events), err
-}
-
-// queryCandidates returns group-filtered events plus the bounded query's
-// count (see queryLifecycleCandidates for group-filter placement).
-func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, int, error) {
+// queryCandidates reads up to bound of the newest matching rows and reports
+// whether the window held more: it asks for one extra row, which it drops.
+// The returned events are group-filtered; when all kinds share one known
+// group, the store applies that group before its limit, and heterogeneous
+// queries keep the row-level guard.
+func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
 		Kinds:      queryKinds,
 		Names:      compactNames(q.Name),
 		APIGroups:  commonTrackedAPIGroups(queryKinds),
-		Since:      time.Now().Add(-q.Since),
+		Since:      q.start,
 		Sources:    []timeline.EventSource{timeline.SourceInformer},
+		EventTypes: eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the
 		// persistent store retains other contexts' events across switches,
 		// and serving those here hands agents phantom changes.
 		ClusterContext:   k8s.ActiveClusterContext(),
-		Limit:            limit,
+		Limit:            bound + 1,
 		IncludeManaged:   false,
 		IncludeK8sEvents: false,
 	}
 	events, err := store.Query(ctx, opts)
-	return filterTrackedGroupEvents(events), len(events), err
+	if err != nil {
+		return nil, false, err
+	}
+	saturated := len(events) > bound
+	if saturated {
+		events = events[:bound]
+	}
+	return filterTrackedGroupEvents(events), saturated, nil
 }
 
 // commonTrackedAPIGroups returns a store-level filter only when every queried
@@ -582,22 +683,25 @@ func eventGroupMatchesTracked(kind, apiVersion string) bool {
 	return resourceid.GroupFromAPIVersion(apiVersion) == expected
 }
 
-func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
+func rankedChanges(events []timeline.TimelineEvent, q Query) ([]issuesapi.RecentChange, bool) {
 	out := make([]issuesapi.RecentChange, 0, len(events))
 	for _, e := range events {
-		if name != "" && e.Name != name {
+		if q.Name != "" && e.Name != q.Name {
 			continue
 		}
-		change := fromEvent(e, fieldLimit)
+		change := fromEvent(e, q.FieldLimit)
 		if change.ChangeCategory == "" {
+			continue
+		}
+		if q.Allow != nil && !q.Allow(change) {
 			continue
 		}
 		out = append(out, change)
 	}
-	capped := len(out) > limit
+	capped := len(out) > q.Limit
 	annotateConfigMapConsumers(out)
-	RankAndCap(&out, limit)
-	return out, capped, nil
+	RankAndCap(&out, q.Limit)
+	return out, capped
 }
 
 // maxConsumersPerEntry bounds the consumed_by list on a ConfigMap entry.

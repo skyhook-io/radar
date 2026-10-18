@@ -755,6 +755,13 @@ export interface IssuesResponse {
   recent_changes_reason?: string
   recent_changes_guidance?: string
   recent_changes_truncated?: boolean
+  // Present when the recent-changes window starts before the history Radar
+  // holds; complete_since is sent only to callers who can read every namespace.
+  recent_changes_history_coverage?: {
+    incomplete: boolean
+    complete_since?: string
+    reasons: string[]
+  }
   // Present only when RBAC visibility is incomplete (absent = full access).
   // state 'degraded' means core workload reads are denied, so an empty list may
   // mean "can't see" rather than "nothing broken" — the UI must say so.

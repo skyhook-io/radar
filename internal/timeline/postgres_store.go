@@ -514,7 +514,16 @@ func (s *PostgresStore) Query(ctx context.Context, opts QueryOptions) ([]Timelin
 func (s *PostgresStore) query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error) {
 	ctx, cancel := withPostgresOperationTimeout(ctx)
 	defer cancel()
-	q, args, err := s.buildQuery(opts)
+	// Resolve the preset first: whether it admits managed rows decides the SQL.
+	var cf *CompiledFilter
+	if opts.FilterPreset != "" {
+		var filterErr error
+		cf, filterErr = s.getOrCompileFilter(opts.FilterPreset)
+		if filterErr != nil {
+			log.Printf("Warning: failed to compile filter preset %q: %v", opts.FilterPreset, filterErr)
+		}
+	}
+	q, args, err := s.buildQuery(opts, !opts.IncludeManaged && !cf.IncludesManaged())
 	if err != nil {
 		return nil, err
 	}
@@ -524,15 +533,6 @@ func (s *PostgresStore) query(ctx context.Context, opts QueryOptions) ([]Timelin
 		return nil, fmt.Errorf("query events: %w", err)
 	}
 	defer rows.Close()
-
-	var cf *CompiledFilter
-	if opts.FilterPreset != "" {
-		var filterErr error
-		cf, filterErr = s.getOrCompileFilter(opts.FilterPreset)
-		if filterErr != nil {
-			log.Printf("Warning: failed to compile filter preset %q: %v", opts.FilterPreset, filterErr)
-		}
-	}
 
 	events := make([]TimelineEvent, 0)
 	for rows.Next() {
@@ -545,6 +545,8 @@ func (s *PostgresStore) query(ctx context.Context, opts QueryOptions) ([]Timelin
 			continue
 		}
 
+		// Managed rows and K8s Events are excluded in SQL; these checks stay
+		// as a guard.
 		if event.IsManaged() && !opts.IncludeManaged && !cf.IncludesManaged() {
 			continue
 		}
@@ -972,6 +974,19 @@ func (s *PostgresStore) StartCleanupLoop(retention, interval time.Duration, maxS
 	}()
 }
 
+// EvictedThrough implements EvictionBoundary: retention is the only deletion
+// here, so the boundary is its cutoff, whether or not a sweep has run yet.
+// Restart gaps are not tracked here: callers also bound history by when this
+// process started observing.
+func (s *PostgresStore) EvictedThrough() time.Time {
+	s.cleanupMu.RLock()
+	defer s.cleanupMu.RUnlock()
+	if s.retentionAge <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(-s.retentionAge)
+}
+
 func (s *PostgresStore) runCleanup(retention time.Duration) {
 	ctx := context.Background()
 	n, err := s.Cleanup(ctx, retention)
@@ -1108,7 +1123,10 @@ func (s *PostgresStore) identities(ctx context.Context, q IdentityQuery, limit i
 	return out, rows.Err()
 }
 
-func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
+// buildQuery renders opts as SQL. excludeManaged applies IsManaged before
+// LIMIT, so managed rows cannot fill the limit and leave the page short; the
+// caller resolves it because a filter preset can admit managed rows.
+func (s *PostgresStore) buildQuery(opts QueryOptions, excludeManaged bool) (string, []any, error) {
 	query := strings.Builder{}
 	query.WriteString(`SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
@@ -1190,6 +1208,12 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 	}
 	if opts.ExcludeDeleted {
 		addFilter(" AND event_type != $%d", string(EventTypeDelete))
+	}
+	if excludeManaged {
+		query.WriteString(" AND " + unmanagedRowsSQL)
+	}
+	if !opts.IncludeK8sEvents {
+		addFilter(" AND source != $%d", string(SourceK8sEvent))
 	}
 	if opts.ClusterContext != "" {
 		addFilter(" AND cluster_context = $%d", opts.ClusterContext)

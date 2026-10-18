@@ -95,31 +95,26 @@ func ClusterScopedForNamespace(ctx context.Context, namespace string, nsLabels N
 		startup = append(startup, fmt.Sprintf("Radar has recorded changes only since %s; earlier changes in the window are unknown.", start.UTC().Format(time.RFC3339)))
 	}
 	// Eviction is a gap of its own: a recent start does not explain history
-	// recorded since and then dropped. The oldest retained event can belong to
-	// any namespace or kind, so its time is not shown.
-	if stats := store.Stats(); stats.EventsEvicted && stats.OldestEvent.After(windowStart) {
+	// recorded since and then dropped. The eviction boundary can date any
+	// namespace or kind, so its time is not shown.
+	if timeline.HistoryEvictedThrough().After(windowStart) {
 		incomplete = append(incomplete, "Radar has evicted older change history; earlier changes in the window are unknown.")
 	}
-	q := normalizeQuery(Query{Kinds: readable, Since: since})
-	events, raw, err := queryCandidates(ctx, store, q, q.Kinds, maxCandidateLimit)
-	if err != nil {
-		out.Error = err.Error()
-		return out
+	q := normalizeQuery(Query{Kinds: readable, Since: since, start: windowStart})
+	var events []timeline.TimelineEvent
+	for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
+		got, full, err := queryCandidates(ctx, store, q, q.Kinds, eventTypes, FetchBound)
+		if err != nil {
+			out.Error = err.Error()
+			return out
+		}
+		events = append(events, got...)
+		out.Truncated = out.Truncated || full
 	}
-	lifecycle, rawLifecycle, err := queryLifecycleCandidates(ctx, store, q, q.Kinds)
-	if err != nil {
-		out.Error = err.Error()
-		return out
-	}
-	out.Truncated = raw >= maxCandidateLimit || rawLifecycle >= lifecycleCandidateLimit
-	merged := coalesceRecreatePairs(dedupeEvents(append(events, lifecycle...)))
+	merged := coalesceRecreatePairs(dedupeEvents(events))
 	// Applicability is decided per changed webhook, so keep every recorded
 	// webhook row and cap fields only for display.
-	changes, _, err := rankedChanges(merged, "", len(merged), clusterScopedFieldLimit)
-	if err != nil {
-		out.Error = err.Error()
-		return out
-	}
+	changes, _ := rankedChanges(merged, Query{Limit: len(merged), FieldLimit: clusterScopedFieldLimit})
 	current, loaded, watchedSince := currentWebhookConfigurations()
 	for _, kind := range readable {
 		switch {

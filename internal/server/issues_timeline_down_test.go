@@ -1,6 +1,10 @@
 package server
 
 import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +14,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -62,5 +67,60 @@ func TestIssuesSayWhenRecentChangesCouldNotBeRead(t *testing.T) {
 	}
 	if response.RecentChangesError == "" {
 		t.Fatalf("recent_changes_error is empty with no timeline store: %+v", response)
+	}
+}
+
+// A saturated fetch with no surviving change, over a window whose history was
+// partly evicted, must still say both: an omitted block reads as "nothing
+// changed".
+func TestIssuesReportIncompleteRecentChangesWithNoSurvivingChange(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
+			t.Fatalf("re-init global store: %v", err)
+		}
+	})
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: meaningfulchanges.FetchBound + 2}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	timeline.SetObservationStartForTest(time.Now().Add(-2 * time.Hour))
+	store := timeline.GetStore()
+	now := time.Now()
+	appendAt := func(id, kind, namespace string, eventType timeline.EventType, at time.Time) {
+		t.Helper()
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID: id, Timestamp: at, Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+			Kind: kind, APIVersion: "v1", Namespace: namespace, Name: id, EventType: eventType,
+		}); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+	// Evicted by the Secret burst below, from inside the last hour.
+	for i := range 5 {
+		appendAt(fmt.Sprintf("busy-%d", i), "Service", "busy", timeline.EventTypeAdd, now.Add(-time.Duration(50-i)*time.Minute))
+	}
+	// The feed shows Secrets only when deleted, so none of these survives.
+	for i := range meaningfulchanges.FetchBound + 1 {
+		appendAt(fmt.Sprintf("secret-%d", i), "Secret", "quiet", timeline.EventTypeAdd, now.Add(-time.Duration(1001-i)*time.Second))
+	}
+
+	var response issuesapi.Response
+	assertOK(t, get(t, "/api/issues?namespace=quiet"), &response)
+	if len(response.RecentChanges) != 0 {
+		t.Fatalf("recent_changes = %+v, want none", response.RecentChanges)
+	}
+	if !response.RecentChangesTruncated {
+		t.Fatalf("recent_changes_truncated is false for a saturated fetch: %+v", response)
+	}
+	coverage := response.RecentChangesHistoryCoverage
+	if coverage == nil || !coverage.Incomplete || coverage.CompleteSince.IsZero() ||
+		!slices.Equal(coverage.Reasons, []issuesapi.HistoryGapReason{issuesapi.HistoryEventsEvicted}) {
+		t.Fatalf("recent_changes_history_coverage = %+v, want events_evicted with complete_since", coverage)
+	}
+	for _, want := range []string{meaningfulchanges.FetchSaturatedGuidance, "is complete only from"} {
+		if !strings.Contains(response.RecentChangesGuidance, want) {
+			t.Fatalf("recent_changes_guidance = %q, want it to contain %q", response.RecentChangesGuidance, want)
+		}
 	}
 }

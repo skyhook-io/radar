@@ -72,6 +72,8 @@ export function adaptIssues(
       "truncated",
     );
   }
+  const historyIncomplete =
+    record(value.recent_changes_history_coverage)?.incomplete === true;
   if (nonEmptyString(value.recent_changes_error)) {
     builder.limit(
       source,
@@ -115,7 +117,7 @@ export function adaptIssues(
         changes,
         `changes:issues:${source.args ?? scopeFromArgs(source)}`,
         undefined,
-        value.recent_changes_truncated !== true,
+        value.recent_changes_truncated !== true && !historyIncomplete,
       );
     } else {
       invalidPayload(builder, source, "Issue-related changes");
@@ -178,5 +180,15 @@ export function adaptIssues(
     });
   } else {
     for (const item of issues) addIssueObservation(builder, source, item);
+  }
+  // Added last: it limits the change feed only, so it must not withhold the
+  // live-issue receipt above.
+  if (historyIncomplete) {
+    builder.limit(
+      source,
+      "Issue-related changes",
+      "Radar's change history is incomplete for part of the window, so earlier changes may be missing.",
+      "unknown",
+    );
   }
 }

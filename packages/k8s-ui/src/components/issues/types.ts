@@ -287,6 +287,9 @@ export interface Issue {
    *  NEITHER correlation field was not checked — absence must not be read as
    *  "no changes". MCP-only, like correlated_changes. */
   no_recent_changes?: IssueNoRecentChanges;
+  /** The subject's change history in the window was larger than Radar reads,
+   *  so correlated_changes are leads, not its full history. MCP-only. */
+  correlated_changes_incomplete?: boolean;
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

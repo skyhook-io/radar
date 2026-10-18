@@ -23,22 +23,30 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// filterRecentChangesByRBAC drops RecentChange rows the ctx user can't read, via
-// the shared per-kind gate (RecentChange.APIVersion disambiguates CRD kind
-// collisions). Auth off → returned unchanged. Used by both the /api/issues
-// recent_changes enrichment and per-issue change correlation.
-func (s *Server) filterRecentChangesByRBAC(ctx context.Context, changes []issuesapi.RecentChange) []issuesapi.RecentChange {
+// callerReadsAllNamespaces reports whether the caller is unrestricted by
+// namespace, from the permissions parseNamespacesForUser already resolved.
+// Store-wide facts, such as when Radar's held history becomes complete, go
+// only to such callers.
+func (s *Server) callerReadsAllNamespaces(r *http.Request) bool {
+	user := auth.UserFromContext(r.Context())
+	if user == nil || s.permCache == nil {
+		return true
+	}
+	perms := s.permCache.Get(user.Username, user.Groups)
+	return perms != nil && perms.AllowedNamespaces == nil
+}
+
+// recentChangeReadFilter admits only RecentChange rows the ctx user can read,
+// via the shared per-kind gate (RecentChange.APIVersion disambiguates CRD kind
+// collisions), for meaningfulchanges.Query.Allow. nil when auth is off.
+func (s *Server) recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bool {
 	if auth.UserFromContext(ctx) == nil {
-		return changes
+		return nil
 	}
 	authz := s.changeAuthorizerForCtx(ctx)
-	out := changes[:0]
-	for _, c := range changes {
-		if k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz) {
-			out = append(out, c)
-		}
+	return func(c issuesapi.RecentChange) bool {
+		return k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz)
 	}
-	return out
 }
 
 // handleIssues serves GET /api/issues — "what's broken right now."
@@ -137,26 +145,17 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 				Since:      meaningfulchanges.DefaultSince,
 				Limit:      meaningfulchanges.IssueChangesFetchLimit(recentChangesReason),
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
+				// Per-kind RBAC: recent_changes is namespace-filtered but not
+				// per-kind — drop changes for kinds the caller can't read before
+				// ranking and the cut, so priority/recap logic operates on the
+				// visible set.
+				Allow: s.recentChangeReadFilter(r.Context()),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()
-			} else if len(recentResult.Changes) > 0 {
-				// Per-kind RBAC: recent_changes is namespace-filtered but not
-				// per-kind — drop changes for kinds the caller can't read before
-				// ranking, so priority/recap logic operates on the visible set.
-				recentResult.Changes = s.filterRecentChangesByRBAC(r.Context(), recentResult.Changes)
-				changes, guidance, recapped := meaningfulchanges.PrioritizeIssueChanges(
-					recentResult.Changes, out, meaningfulchanges.IssueChangePriorityOptions{
-						Reason:             recentChangesReason,
-						Limit:              meaningfulchanges.IssueChangesLimit,
-						UnfilteredIssueSet: meaningfulchanges.IssueSeveritySetComplete(severities),
-						FetchSaturated:     recentResult.FetchSaturated,
-					},
-				)
-				resp.RecentChanges = changes
-				resp.RecentChangesReason = recentChangesReason
-				resp.RecentChangesGuidance = guidance
-				resp.RecentChangesTruncated = recentResult.OutputCapped || recentResult.FetchSaturated || recapped
+			} else {
+				meaningfulchanges.ApplyIssueChanges(&resp, recentResult, out, recentChangesReason,
+					meaningfulchanges.IssueSeveritySetComplete(severities), s.callerReadsAllNamespaces(r))
 			}
 		}
 	}

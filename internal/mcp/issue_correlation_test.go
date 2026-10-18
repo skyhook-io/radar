@@ -23,7 +23,7 @@ func initCorrelationStore(t *testing.T) timeline.EventStore {
 	t.Helper()
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 200}); err != nil {
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 2000}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
 	// Backdate observation past the full window: a fresh store has watched
@@ -183,13 +183,13 @@ func TestCorrelationWindow_ClampsToObservation(t *testing.T) {
 }
 
 // When the subject's candidate fetch saturates (churn-heavy subjects can
-// exceed the newest-N window in an hour), an empty filtered result is
+// exceed the fetch bound in an hour), an empty filtered result is
 // UNKNOWN: emitting no_recent_changes would steer the agent away from a real
 // change the fetch never saw.
 func TestAttachIssueChangeCorrelation_OmitsMarkerOnSaturatedFetch(t *testing.T) {
 	store := initCorrelationStore(t)
 	now := time.Now()
-	for i := 0; i < 100; i++ {
+	for i := 0; i < meaningfulchanges.NamedFetchBound+1; i++ {
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID: fmt.Sprintf("churn-%d", i), Timestamp: now.Add(-time.Duration(i) * time.Second),
 			Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),

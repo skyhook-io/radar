@@ -258,7 +258,7 @@ func TestRecentSurfacesNetworkPolicyChanges(t *testing.T) {
 func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 2000}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
 	store := timeline.GetStore()
@@ -276,13 +276,12 @@ func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append delete: %v", err)
 	}
-	// 120 newer status-churn updates — more than the candidate window
-	// (candidateLimit(20) = 80), so the delete cannot survive a single
-	// newest-first fetch.
-	for i := 0; i < 120; i++ {
+	// More newer status-churn updates than the fetch bound: the delete
+	// must come from the lifecycle query, which update churn cannot fill.
+	for i := 0; i < FetchBound+20; i++ {
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID:             fmt.Sprintf("churn-%d", i),
-			Timestamp:      now.Add(-time.Duration(120-i) * time.Second),
+			Timestamp:      now.Add(-time.Duration(FetchBound+20-i) * time.Second),
 			Source:         timeline.SourceInformer,
 			ClusterContext: k8s.ActiveClusterContext(),
 			Kind:           "Deployment",
@@ -344,9 +343,9 @@ func TestRecentForResourceLifecycleEventSurvivesLifecycleChurn(t *testing.T) {
 		t.Fatalf("append target delete: %v", err)
 	}
 
-	// More than both candidate caps for a named query (100) and lifecycle query
-	// (50). Without a store-level name filter, the target delete is not fetched
-	// and RecentForResource returns no changes.
+	// More than the named fetch bound (100). Without a store-level name
+	// filter, the target delete is not fetched and RecentForResource returns
+	// no changes.
 	for i := 0; i < 120; i++ {
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID:             fmt.Sprintf("other-delete-%d", i),
@@ -392,7 +391,8 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 	store := timeline.GetStore()
 	now := time.Now()
 
-	for i := 0; i < maxCandidateLimit; i++ {
+	appendChurn := func(i int) {
+		t.Helper()
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID:             fmt.Sprintf("self-churn-%d", i),
 			Timestamp:      now.Add(-time.Duration(i) * time.Second),
@@ -407,13 +407,26 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 			t.Fatalf("append churn %d: %v", i, err)
 		}
 	}
+	for i := 0; i < NamedFetchBound; i++ {
+		appendChurn(i)
+	}
 
+	// Exactly the bound is a complete read: the extra row decides.
 	_, saturated, err := RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit)
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
 	}
+	if saturated {
+		t.Fatal("a window holding exactly the fetch bound was read in full and must not report saturation")
+	}
+
+	appendChurn(NamedFetchBound)
+	_, saturated, err = RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit)
+	if err != nil {
+		t.Fatalf("RecentForResource: %v", err)
+	}
 	if !saturated {
-		t.Fatal("a candidate fetch at its cap must report saturation")
+		t.Fatal("a window holding more rows than the fetch bound must report saturation")
 	}
 }
 
@@ -445,9 +458,10 @@ func TestRecentForResourceGroupCollisionChurnDoesNotCrowdOrSaturate(t *testing.T
 		t.Fatalf("append unknown-version delete: %v", err)
 	}
 
-	// This is enough newer same-kind/name churn to saturate both bounded
-	// candidate queries if group filtering happens after their limits.
-	for i := 0; i < maxCandidateLimit+20; i++ {
+	// Alternating updates and deletes put more than the named fetch bound
+	// into each of the two queries, enough to saturate both if group
+	// filtering happens after their limits.
+	for i := 0; i < 2*(NamedFetchBound+20); i++ {
 		eventType := timeline.EventTypeUpdate
 		if i%2 == 0 {
 			eventType = timeline.EventTypeDelete
@@ -661,8 +675,13 @@ func TestRecentSeparatesOutputCapFromFetchSaturation(t *testing.T) {
 			wantOutputCapped: true,
 		},
 		{
-			name:               "candidate query reaches its cap",
-			eventCount:         100,
+			name:             "candidate query holds exactly its fetch bound",
+			eventCount:       FetchBound,
+			wantOutputCapped: true,
+		},
+		{
+			name:               "candidate query exceeds its fetch bound",
+			eventCount:         FetchBound + 1,
 			wantOutputCapped:   true,
 			wantFetchSaturated: true,
 		},
@@ -1479,7 +1498,7 @@ func TestPrioritizeIssueChangesReportsSecondStageCap(t *testing.T) {
 	if len(got) != IssueChangesLimit || !capped {
 		t.Fatalf("second-stage cap = len %d capped %v, want %d/true", len(got), capped, IssueChangesLimit)
 	}
-	if strings.Contains(guidance, "candidate cap") {
+	if strings.Contains(guidance, "fetch bound") {
 		t.Fatalf("output recap must not claim the candidate query saturated: %q", guidance)
 	}
 }

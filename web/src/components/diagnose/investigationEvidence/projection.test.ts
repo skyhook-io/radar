@@ -263,6 +263,27 @@ describe("strict evidence adapters", () => {
       }),
     ]);
 
+    const evictedIssueFeed = project([
+      tool("issues-evicted", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_history_coverage: {
+          incomplete: true,
+          reasons: ["events_evicted"],
+        },
+      }),
+    ]);
+    expect(evictedIssueFeed.limitations).toEqual([
+      expect.objectContaining({
+        source: "Issue-related changes",
+        kind: "unknown",
+        message: expect.stringContaining("incomplete for part of the window"),
+      }),
+    ]);
+    // Incomplete change history limits the change feed, not the live scan.
+    expect(groupsOf(evictedIssueFeed.groups, "receipt")).toHaveLength(1);
+
     const filtered = project([
       tool("filtered", "get_resource", {
         resource: deployment,

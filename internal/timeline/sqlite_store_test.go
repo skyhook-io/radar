@@ -1781,3 +1781,49 @@ func TestSQLiteOptimizeIsUnbounded(t *testing.T) {
 		t.Errorf("%s: want ANALYZE (0x2) over every table (0x10000) without the analysis bound (0x10)", sqliteOptimize)
 	}
 }
+
+// EvictedThrough must never be earlier than a row the store has deleted:
+// with retention configured it is the retention cutoff even before a sweep
+// deletes anything, and size pruning raises it to the newest pruned row.
+func TestSQLiteStore_EvictedThrough(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if got := store.EvictedThrough(); !got.IsZero() {
+		t.Fatalf("EvictedThrough with no retention or pruning = %v, want zero", got)
+	}
+
+	base := time.Now().Add(-30 * time.Minute)
+	for i := range 5 {
+		if err := store.Append(ctx, TimelineEvent{
+			ID: fmt.Sprintf("event-%d", i), Timestamp: base.Add(time.Duration(i) * time.Minute),
+			Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "web",
+			EventType: EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	if _, err := store.deleteOldestEvents(ctx, 2); err != nil {
+		t.Fatalf("deleteOldestEvents: %v", err)
+	}
+	if got, want := store.EvictedThrough(), base.Add(time.Minute); !got.Equal(want) {
+		t.Fatalf("EvictedThrough after pruning two rows = %v, want the newer pruned row's time %v", got, want)
+	}
+
+	store.StartCleanupLoop(2*time.Hour, time.Hour, 0)
+	got := store.EvictedThrough()
+	if cutoff := time.Now().Add(-2 * time.Hour); got.Before(cutoff.Add(-time.Second)) {
+		t.Fatalf("EvictedThrough = %v, want at least the pruned row's time", got)
+	}
+	if !got.Equal(base.Add(time.Minute)) {
+		t.Fatalf("EvictedThrough = %v, want the later of the pruned row (%v) and the retention cutoff", got, base.Add(time.Minute))
+	}
+
+	store.cleanupMu.Lock()
+	store.retentionAge = 10 * time.Minute
+	store.cleanupMu.Unlock()
+	if got, cutoff := store.EvictedThrough(), time.Now().Add(-10*time.Minute); got.Before(cutoff.Add(-time.Second)) || got.After(cutoff.Add(time.Second)) {
+		t.Fatalf("EvictedThrough = %v, want the retention cutoff %v once it is later than any pruned row", got, cutoff)
+	}
+}

@@ -419,14 +419,15 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"`application_configuration_change: true` is a factual edit classification and " +
 			"narrow ranking hint, not a causal or universal relevance verdict; its presence " +
 			"inside `correlated_changes` does not strengthen causality. " +
-			"`recent_changes_truncated=true` makes the feed incomplete, so absence from the " +
-			"feed is not evidence that a relevant change did not occur. Per-issue " +
+			"Under `recent_changes_truncated=true` or `recent_changes_history_coverage`, absence " +
+			"from the feed is not evidence. Per-issue " +
 			"`no_recent_changes.window_seconds` is the observed window with no tracked change; " +
 			"treat it as evidence against, not disproof of, that cause. Secret values and " +
 			"external dependencies may still have changed. If " +
 			"neither `correlated_changes` nor `no_recent_changes` is present, correlation is " +
 			"unknown. `correlated_changes` covers tracked edits on the issue subject and, for " +
-			"workloads, directly referenced ConfigMaps. " +
+			"workloads, directly referenced ConfigMaps; `correlated_changes_incomplete`: older ones " +
+			"were not read. " +
 			"Use get_events for raw events, get_cluster_audit for posture, diagnose for workloads " +
 			"or GitOps, get_resource for other kinds, and get_neighborhood across resources. " +
 			"`group=" + issues.NativeHelmGroup + "` routes to get_helm_release; " +
@@ -1527,6 +1528,7 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		Limit:      50,
 		FieldLimit: meaningfulchanges.DefaultFieldLimit,
 		Name:       input.Name,
+		Allow:      recentChangeReadFilter(ctx),
 	}
 	switch {
 	case input.Namespace != "":
@@ -1548,27 +1550,36 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if err != nil {
 		sourcesErrored = append(sourcesErrored, "helm: "+err.Error())
 	} else {
+		// Helm rows are always readable here (filterRecentChangesRBAC); the
+		// timeline rows were filtered by query.Allow before their own cut.
 		changes = append(changes, helmChanges...)
 	}
-	changes = filterRecentChangesRBAC(ctx, changes)
 	totalMatched := len(changes)
 	meaningfulchanges.RankAndCap(&changes, limit)
 
 	// Always wrap so capped + uncapped agree on wire shape
 	// ({changes: [...], narrowHint?: "..."}).
 	resp := getChangesResponseMCP{
-		Changes:        changes,
-		SourcesErrored: sourcesErrored,
+		Changes:         changes,
+		SourcesErrored:  sourcesErrored,
+		HistoryCoverage: meaningfulchanges.HistoryCoverageFor(recentResult.History, callerReadsAllNamespaces(ctx)),
 	}
 	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
 		resp.ClusterScopedChanges = mcpClusterScopedChanges(ctx, input.Namespace, since, false)
 	}
-	narrowAdvice := " Narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)."
+	var hints []string
 	if recentResult.FetchSaturated {
-		resp.NarrowHint = meaningfulchanges.FetchSaturatedGuidance + narrowAdvice
+		hints = append(hints, meaningfulchanges.FetchSaturatedGuidance+
+			" Narrow with namespace=, kind= or name=. limit changes how many rows are returned, not the fetch bound."+
+			" Shorten since= only if the shorter window still covers the incident.")
 	} else if recentResult.OutputCapped || totalMatched > len(changes) {
-		resp.NarrowHint = "Radar observed the full requested window but returned only its highest-ranked changes; lower-ranked changes were omitted." + narrowAdvice
+		hints = append(hints, "Radar fetched every recorded change in this window but returned only the highest-ranked; lower-ranked changes were omitted."+
+			" Narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50).")
 	}
+	if resp.HistoryCoverage != nil {
+		hints = append(hints, meaningfulchanges.HistoryCoverageGuidance(*resp.HistoryCoverage))
+	}
+	resp.NarrowHint = strings.Join(hints, " ")
 	// After the cap and the hint, so both still describe every returned
 	// change. A name= query is one object's history and stays as rows.
 	if input.Name == "" {
@@ -1588,6 +1599,9 @@ type getChangesResponseMCP struct {
 	// cluster-scoped admission configuration that applies, or may apply, to
 	// the namespace. Changes above never include cluster-scoped objects.
 	ClusterScopedChanges *issuesapi.ClusterScopedChanges `json:"clusterScopedChanges,omitempty"`
+	// HistoryCoverage is set when the window starts before the history Radar
+	// holds, including when no change was returned.
+	HistoryCoverage *issuesapi.HistoryCoverage `json:"historyCoverage,omitempty"`
 }
 
 func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topologyInput) (*mcp.CallToolResult, any, error) {
@@ -3145,24 +3159,15 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 				Since:      meaningfulchanges.DefaultSince,
 				Limit:      meaningfulchanges.IssueChangesFetchLimit(recentChangesReason),
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
+				// Per-kind RBAC before ranking and the cut, so priority/recap
+				// see the visible set.
+				Allow: recentChangeReadFilter(ctx),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()
-			} else if len(recentResult.Changes) > 0 {
-				// Per-kind RBAC before ranking, so priority/recap see the visible set.
-				recentResult.Changes = filterRecentChangesRBAC(ctx, recentResult.Changes)
-				changes, guidance, recapped := meaningfulchanges.PrioritizeIssueChanges(
-					recentResult.Changes, out, meaningfulchanges.IssueChangePriorityOptions{
-						Reason:             recentChangesReason,
-						Limit:              meaningfulchanges.IssueChangesLimit,
-						UnfilteredIssueSet: meaningfulchanges.IssueSeveritySetComplete(severities),
-						FetchSaturated:     recentResult.FetchSaturated,
-					},
-				)
-				resp.RecentChanges = changes
-				resp.RecentChangesReason = recentChangesReason
-				resp.RecentChangesGuidance = guidance
-				resp.RecentChangesTruncated = recentResult.OutputCapped || recentResult.FetchSaturated || recapped
+			} else {
+				meaningfulchanges.ApplyIssueChanges(&resp, recentResult, out, recentChangesReason,
+					meaningfulchanges.IssueSeveritySetComplete(severities), callerReadsAllNamespaces(ctx))
 			}
 		}
 	}

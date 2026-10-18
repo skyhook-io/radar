@@ -18,11 +18,15 @@ type MemoryStore struct {
 	count         int
 	lastSeq       int64 // arrival counter; every head write (incl. upsert re-append) takes the next value
 	eventsEvicted bool
-	index         map[string]int // event id -> ring slot, for dedup + upsert
-	mu            sync.RWMutex
-	seenResources map[string]bool
-	seenMu        sync.RWMutex
-	filterCache   map[string]*CompiledFilter
+	// evictedThrough is the newest timestamp among events the ring has
+	// overwritten. The ring evicts by arrival, not by event time, so the
+	// boundary is the maximum, not the last evicted event's time.
+	evictedThrough time.Time
+	index          map[string]int // event id -> ring slot, for dedup + upsert
+	mu             sync.RWMutex
+	seenResources  map[string]bool
+	seenMu         sync.RWMutex
+	filterCache    map[string]*CompiledFilter
 
 	// degradedReason, when non-empty, marks this store as a fallback for a
 	// persistent backend that could not be opened. Set once at construction
@@ -120,6 +124,9 @@ func (m *MemoryStore) writeAtHead(event TimelineEvent) {
 	// so a wrapped-over id can't leave a dangling mapping.
 	if evicted := m.records[m.head]; evicted.ID != "" {
 		m.eventsEvicted = true
+		if evicted.Timestamp.After(m.evictedThrough) {
+			m.evictedThrough = evicted.Timestamp
+		}
 		if idx, ok := m.index[evicted.ID]; ok && idx == m.head {
 			delete(m.index, evicted.ID)
 		}
@@ -161,7 +168,9 @@ func (m *MemoryStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		limit = 10000
 	}
 
-	results := make([]TimelineEvent, 0, limit)
+	// Large bounds are usually far from filled, so grow on demand instead of
+	// preallocating the whole bound.
+	results := make([]TimelineEvent, 0, min(limit, 256))
 	skipped := 0
 
 	// Delta reads (SinceSeq>0) page by ascending arrival order so a burst larger
@@ -285,6 +294,13 @@ func (m *MemoryStore) Stats() StoreStats {
 		Degraded:       m.degradedReason != "",
 		DegradedReason: m.degradedReason,
 	}
+}
+
+// EvictedThrough implements EvictionBoundary.
+func (m *MemoryStore) EvictedThrough() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.evictedThrough
 }
 
 // Close releases any resources held by the store

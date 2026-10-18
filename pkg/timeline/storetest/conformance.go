@@ -606,6 +606,47 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 
 	})
 
+	// Excluding managed rows or K8s Events after the limit would let newer
+	// excluded rows fill it, returning a short page with an older visible row
+	// missing and nothing to say so.
+	t.Run("managed rows and k8s events are excluded before the limit", func(t *testing.T) {
+		store := newStore(t)
+		mustAppend(t, store, informer("unowned-edit", 0))
+		// Appended in event-time order, so arrival and time order agree.
+		for i := 0; i < 3; i++ {
+			owned := informer(fmt.Sprintf("owned-%d", i), time.Minute+time.Duration(i)*time.Second)
+			owned.Owner = &timeline.OwnerInfo{Kind: "ScaledObject", Name: "web", UID: "uid-so"}
+			mustAppend(t, store, owned)
+		}
+		for i := 0; i < 3; i++ {
+			pod := informer(fmt.Sprintf("pod-%d", i), 2*time.Minute+time.Duration(i)*time.Second)
+			pod.Kind = "Pod"
+			mustAppend(t, store, pod)
+		}
+		for i := 0; i < 3; i++ {
+			event := informer(fmt.Sprintf("event-%d", i), 3*time.Minute+time.Duration(i)*time.Second)
+			event.Source, event.EventType, event.Reason = timeline.SourceK8sEvent, timeline.EventTypeWarning, "BackOff"
+			mustAppend(t, store, event)
+		}
+		query := func(opts timeline.QueryOptions) []string {
+			t.Helper()
+			got, err := store.Query(ctx, opts)
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			return idsOfEvents(got)
+		}
+		if got := query(timeline.QueryOptions{Limit: 1}); fmt.Sprint(got) != "[unowned-edit]" {
+			t.Fatalf("limit 1 without managed rows or k8s events: got %v, want [unowned-edit]", got)
+		}
+		if got := query(timeline.QueryOptions{Limit: 3, IncludeManaged: true}); fmt.Sprint(got) != "[pod-2 pod-1 pod-0]" {
+			t.Fatalf("limit 3 with managed rows: got %v, want the newest pods", got)
+		}
+		if got := query(timeline.QueryOptions{Limit: 1, IncludeK8sEvents: true, IncludeManaged: true}); fmt.Sprint(got) != "[event-2]" {
+			t.Fatalf("limit 1 with everything: got %v, want [event-2]", got)
+		}
+	})
+
 	// A workload's history: the workload, what it owns (by owner UID), K8s
 	// Events about any of those (subject UID), and attached resources by key.
 	scopedFixture := func(t *testing.T, store timeline.EventStore) {

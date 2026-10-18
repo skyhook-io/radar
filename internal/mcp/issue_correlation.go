@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -99,27 +101,32 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 }
 
 // correlateIssue attaches CorrelatedChanges or NoRecentChanges to one issue,
-// or neither when the answer is unknown (fetch error, saturated fetch).
+// or neither when the answer is unknown (fetch error, saturated fetch,
+// evicted history).
 func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration, nativeHelmIssue bool) {
-	var changes []issuesapi.RecentChange
-	var saturated bool
+	var result meaningfulchanges.RecentResult
+	var sourcesWithheld bool
+	var obj any
 	var err error
 	if nativeHelmIssue {
-		changes, saturated, err = helmIssueChangesForCorrelation(ctx, iss, window)
+		// Helm history comes from release records, not the timeline store,
+		// so timeline coverage does not apply.
+		result.Changes, err = helmIssueChangesForCorrelation(ctx, iss, window)
 	} else {
-		changes, saturated, err = correlationChangesForIssue(ctx, iss, window)
+		result, sourcesWithheld, obj, err = correlationChangesForIssue(ctx, iss, window)
 	}
 	if err != nil {
 		log.Printf("[mcp] issue change correlation failed for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
 		return // marker omitted = unknown, never a false "no changes"
 	}
-	changes, rbacHidden := applyCorrelationVisibilityFilters(ctx, changes)
+	changes, rbacHidden := applyCorrelationVisibilityFilters(ctx, result.Changes)
 	if len(changes) == 0 {
 		// A saturated candidate fetch may have missed older changes in
-		// the window (churn-heavy subjects overflow the newest-N query),
-		// and an RBAC-hidden change exists even though this caller can't
-		// see it — both are unknown, not "no changes".
-		if saturated || rbacHidden {
+		// the window (churn-heavy subjects overflow the fetch bound), an
+		// RBAC-hidden change exists even though this caller can't see it (or
+		// a source they can't read was not queried), and evicted history may
+		// have held one — all are unknown, not "no changes".
+		if result.FetchSaturated || rbacHidden || sourcesWithheld || !correlationHistoryComplete(obj, iss.Namespace, result.History) {
 			return
 		}
 		iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
@@ -131,6 +138,35 @@ func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Durat
 		changes = changes[:correlationChangeCap]
 	}
 	iss.CorrelatedChanges = changes
+	iss.CorrelatedChangesIncomplete = result.FetchSaturated
+}
+
+// correlationHistoryComplete reports whether Radar holds the whole window's
+// history for the correlated objects: either the store covers the window, or
+// every object was created after the point where its history becomes
+// complete, so nothing about it can have been evicted. Only a cached workload
+// is dated, from its own creation time (a grouped issue's
+// resource_created_at can be a newer member's); its referenced ConfigMaps
+// must be new too, and one missing from the cache is not known to be new.
+func correlationHistoryComplete(obj any, namespace string, coverage issuesapi.HistoryCoverage) bool {
+	if !coverage.Incomplete {
+		return true
+	}
+	workload, ok := obj.(metav1.Object)
+	if !ok || !workload.GetCreationTimestamp().After(coverage.CompleteSince) {
+		return false
+	}
+	cache := k8s.GetResourceCache()
+	for _, name := range meaningfulchanges.DirectConfigMapNames(obj) {
+		if cache == nil || cache.ConfigMaps() == nil {
+			return false
+		}
+		cm, err := cache.ConfigMaps().ConfigMaps(namespace).Get(name)
+		if err != nil || !cm.CreationTimestamp.After(coverage.CompleteSince) {
+			return false
+		}
+	}
+	return true
 }
 
 // applyCorrelationVisibilityFilters reduces candidate changes to the evidence
@@ -162,29 +198,46 @@ func filterSpecConfigChanges(changes []issuesapi.RecentChange) []issuesapi.Recen
 	return out
 }
 
-func helmIssueChangesForCorrelation(ctx context.Context, iss *issuesapi.Issue, window time.Duration) ([]issuesapi.RecentChange, bool, error) {
-	changes, err := helmRecentChangesForContext(ctx, getChangesInput{
+func helmIssueChangesForCorrelation(ctx context.Context, iss *issuesapi.Issue, window time.Duration) ([]issuesapi.RecentChange, error) {
+	return helmRecentChangesForContext(ctx, getChangesInput{
 		Namespace: iss.Namespace,
 		Kind:      "HelmRelease",
 		Name:      iss.Name,
 	}, window)
-	return changes, false, err
 }
 
-func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration) ([]issuesapi.RecentChange, bool, error) {
+// correlationChangesForIssue also reports whether sources were withheld from
+// the caller, and returns the workload object whose ConfigMaps were
+// correlated, or nil.
+func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration) (meaningfulchanges.RecentResult, bool, any, error) {
 	if meaningfulchanges.WorkloadKind(iss.Kind) {
 		// Workload subjects also correlate against their directly referenced
 		// ConfigMaps; obj==nil degrades to workload-only changes.
 		obj := workloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
-		return meaningfulchanges.RecentForWorkloadAndConfigMaps(
+		result, sourcesWithheld, err := meaningfulchanges.RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			ctx, obj, iss.Kind, iss.Namespace, iss.Name,
-			window, correlationChangeCap, correlationFieldLimit,
+			window, correlationChangeCap, correlationFieldLimit, configMapSourceFilter(ctx, iss.Namespace),
 		)
+		return result, sourcesWithheld, obj, err
 	}
-	return meaningfulchanges.RecentForResource(
+	result, err := meaningfulchanges.RecentForResourceDetailed(
 		ctx, iss.Kind, iss.Namespace, iss.Name,
 		window, correlationChangeCap, correlationFieldLimit,
 	)
+	return result, false, nil, err
+}
+
+// configMapSourceFilter skips a workload's referenced ConfigMaps the caller
+// can't read before they are queried, so neither their rows nor their fetch
+// saturation reach the caller. nil when auth is off.
+func configMapSourceFilter(ctx context.Context, namespace string) func(kind, name string) bool {
+	allow := recentChangeReadFilter(ctx)
+	if allow == nil {
+		return nil
+	}
+	return func(kind, _ string) bool {
+		return kind != "ConfigMap" || allow(issuesapi.RecentChange{Kind: "ConfigMap", APIVersion: "v1", Namespace: namespace})
+	}
 }
 
 func workloadObjectFromCache(kind, namespace, name string) any {

@@ -608,6 +608,35 @@ type Issue struct {
 	// or when the candidate fetch saturated and may have missed changes;
 	// absence must never be read as "no changes".
 	NoRecentChanges *NoRecentChangesMarker `json:"no_recent_changes,omitempty"`
+	// CorrelatedChangesIncomplete is set when CorrelatedChanges is non-empty
+	// but the subject's change history in the window was larger than Radar's
+	// fetch bound, so older changes were not read. The listed changes are
+	// leads, not the subject's full history.
+	CorrelatedChangesIncomplete bool `json:"correlated_changes_incomplete,omitempty"`
+}
+
+// HistoryGapReason names why Radar's recorded change history does not cover a
+// requested window. Wire contract: clients branch on the values.
+type HistoryGapReason string
+
+const (
+	// HistoryObservationStartedLate: this Radar process started observing
+	// after the window began, so earlier changes were never recorded by it.
+	HistoryObservationStartedLate HistoryGapReason = "observation_started_late"
+	// HistoryEventsEvicted: Radar deleted recorded events from the window to
+	// stay within its history size or retention limit.
+	HistoryEventsEvicted HistoryGapReason = "events_evicted"
+)
+
+// HistoryCoverage reports that a change answer's window starts before the
+// history Radar holds, so an empty or short answer does not establish that
+// nothing changed. Present only when Incomplete. CompleteSince is when the
+// held history becomes complete; it is store-wide, so it is sent only to
+// callers who can read the whole cluster.
+type HistoryCoverage struct {
+	Incomplete    bool               `json:"incomplete"`
+	CompleteSince time.Time          `json:"complete_since,omitzero"`
+	Reasons       []HistoryGapReason `json:"reasons"`
 }
 
 // NoRecentChangesMarker carries the window so the "no changes" claim is
@@ -637,6 +666,9 @@ type Response struct {
 	// the lookback window itself: changes older than the window are out of
 	// scope either way, not implied absent.
 	RecentChangesTruncated bool `json:"recent_changes_truncated,omitempty"`
+	// RecentChangesHistoryCoverage is set when the recent-changes window starts
+	// before the history Radar holds, including when no change was returned.
+	RecentChangesHistoryCoverage *HistoryCoverage `json:"recent_changes_history_coverage,omitempty"`
 	// RecentChangesError is set when the recent-changes feed was due but could
 	// not be read, such as while the timeline database is unreachable. Without
 	// it, a missing recent_changes would read the same as no changes.

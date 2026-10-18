@@ -138,22 +138,22 @@ func TestGetChangesDistinguishesOutputCappingFromFetchSaturation(t *testing.T) {
 	t.Run("output capped after complete fetch", func(t *testing.T) {
 		appendChanges(t, 6)
 		hint := getHint(t)
-		if !strings.Contains(hint, "full requested window") ||
+		if !strings.Contains(hint, "fetched every recorded change in this window") ||
 			!strings.Contains(hint, "lower-ranked changes were omitted") {
 			t.Fatalf("output-cap hint = %q, want complete-window semantics", hint)
 		}
-		if strings.Contains(hint, "candidate cap") || strings.Contains(hint, "query never saw") {
+		if strings.Contains(hint, "fetch bound") || strings.Contains(hint, "may be missing") {
 			t.Fatalf("output-cap hint falsely claims fetch saturation: %q", hint)
 		}
 	})
 
 	t.Run("candidate fetch saturated", func(t *testing.T) {
-		appendChanges(t, 100)
+		appendChanges(t, meaningfulchanges.FetchBound+1)
 		hint := getHint(t)
 		if !strings.Contains(hint, meaningfulchanges.FetchSaturatedGuidance) {
 			t.Fatalf("fetch-saturation hint = %q, want %q", hint, meaningfulchanges.FetchSaturatedGuidance)
 		}
-		if strings.Contains(hint, "full requested window") {
+		if strings.Contains(hint, "fetched every recorded change") {
 			t.Fatalf("fetch-saturation hint falsely claims complete observation: %q", hint)
 		}
 	})
@@ -261,7 +261,7 @@ func TestIssuesResponseUnlinkedChangesNeverOverlapCorrelatedChanges(t *testing.T
 	if !response.RecentChangesTruncated {
 		t.Fatal("six observed changes recapped to five must set recent_changes_truncated")
 	}
-	if strings.Contains(response.RecentChangesGuidance, "candidate cap") {
+	if strings.Contains(response.RecentChangesGuidance, "fetch bound") {
 		t.Fatalf("recap-only response must not claim the candidate query saturated: %q", response.RecentChangesGuidance)
 	}
 
