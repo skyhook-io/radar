@@ -549,7 +549,7 @@ func TestParseAdmissionBlocker(t *testing.T) {
 func TestDiagnoseUnschedulable_PersistentVolumeNodeAffinity(t *testing.T) {
 	msg := "0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity."
 	message, action := diagnoseUnschedulable(&corev1.Pod{}, msg, nil)
-	if strings.Contains(message, "node affinity/selector mismatch") || strings.Contains(action, "nodeSelector") || strings.Contains(action, "matching node") {
+	if strings.Contains(message, "node affinity/selector mismatch") || strings.Contains(action, "nodeSelector") || strings.Contains(action, "label (or add) a matching node") {
 		t.Fatalf("PV node affinity read as a Pod selector mismatch: message=%q action=%q", message, action)
 	}
 	if !strings.Contains(message, "2 node(s) volume node-affinity conflict") || !strings.Contains(action, "PersistentVolume") {

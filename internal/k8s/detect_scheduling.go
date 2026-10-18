@@ -567,7 +567,7 @@ func actionForSchedClass(r SchedulingReason) string {
 	case SchedVolumeBinding:
 		return "The pod's volume can't be provisioned or bound — check the PVC, its StorageClass/provisioner, and storage quota."
 	case SchedVolumeNodeAffinity:
-		return "The pod's PersistentVolume can only attach on nodes matching its nodeAffinity or zone labels (usually one zone), and none of those nodes can take the pod — check the PV's nodeAffinity and zone labels, then free room or add a node in that zone, or use a volume that can move."
+		return "The pod's PersistentVolume can only attach on nodes matching its nodeAffinity or zone labels (one zone, or one node for a local volume), and none of those nodes can take the pod — check the PV's nodeAffinity and zone labels, then free room on a matching node (or add one, for a zonal volume), or move the data to a volume that can attach elsewhere."
 	case SchedVolumeCount:
 		return "Candidate nodes have hit their volume-attachment limit — attach fewer volumes per node, or add nodes."
 	case SchedNoPorts:
