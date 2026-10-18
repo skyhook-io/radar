@@ -457,3 +457,44 @@ func TestInClusterPassNeedsThePredictionsServicePort(t *testing.T) {
 		t.Error("a pass on the prediction's Service port didn't settle it")
 	}
 }
+
+// Radar's own probes through a sidecar proxy in its pod don't settle policy
+// findings either: the proxy can accept before the backend does.
+func TestReconcilePolicyIgnoresMeshedRadarProbes(t *testing.T) {
+	tr := &Trace{Downstream: []Hop{
+		{Resource: ResourceRef{Kind: "Service", Namespace: "shop", Name: "rec"}, Edge: "entry:Service",
+			Findings: []Finding{{Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress"}},
+			Probes:   []probe.Result{{Layer: probe.LayerTCP, Target: "10.96.0.10:80", Port: 80, Path: probe.PathData, Vantage: probe.VantageInCluster, OK: true, Mesh: "Istio"}}},
+		{Resource: ResourceRef{Kind: "Pods", Namespace: "shop"}, Edge: "Service->Pods",
+			Meta:     map[string]any{"policyVerdict": "would-deny", "policyNames": []string{"deny-all"}, "policyPort": ":80", "policyDenyPort": int32(80), "policyProtocol": "TCP"},
+			Findings: []Finding{{Code: codePolicyWouldDeny, Severity: SeverityWarning, Message: "A network rule here would block this traffic"}}},
+	}}
+	reconcilePolicyFindings(tr)
+	for i, h := range tr.Downstream {
+		if f := h.Findings[0]; f.Severity != SeverityWarning {
+			t.Errorf("hop %d %s = %s, want the warning kept after a meshed probe", i, f.Code, f.Severity)
+		}
+	}
+}
+
+// selfPodMesh finds Radar's own pod in the cache by the downward-API env.
+func TestSelfPodMesh(t *testing.T) {
+	defer k8s.ResetTestState()
+	pod := func(name string, containers ...string) *corev1.Pod {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "radar"}}
+		for _, c := range containers {
+			p.Spec.Containers = append(p.Spec.Containers, corev1.Container{Name: c})
+		}
+		return p
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod("radar-meshed", "radar", "istio-proxy"), pod("radar-plain", "radar"))); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	t.Setenv("MY_POD_NAMESPACE", "radar")
+	for name, want := range map[string]string{"radar-meshed": "Istio", "radar-plain": "", "radar-missing": ""} {
+		t.Setenv("MY_POD_NAME", name)
+		if got := selfPodMesh(); got != want {
+			t.Errorf("%s: selfPodMesh = %q, want %q", name, got, want)
+		}
+	}
+}
