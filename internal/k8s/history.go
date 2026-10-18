@@ -258,7 +258,9 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 	var changes []FieldChange
 	var summary []string
 
-	if deletionAccountsForGenerationBump(oldU, newU) {
+	// Kinds whose deletion does not bump generation (CustomResourceDefinition)
+	// can still fold a spec edit into a +1 update, so the spec must match too.
+	if deletionAccountsForGenerationBump(oldU, newU) && reflect.DeepEqual(oldU.Object["spec"], newU.Object["spec"]) {
 		// Without this row the update would read as "resource changed".
 		changes = append(changes, FieldChange{
 			Path:     "metadata.deletionTimestamp",

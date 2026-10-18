@@ -140,7 +140,7 @@ func TestRecordToTimelineStore_DeploymentGenerationFallbackRequiresSpecChange(t 
 }
 
 // From Kubernetes 1.33 the API server bumps a Pod's generation when graceful
-// deletion sets deletionTimestamp. That is not a spec change (#2152).
+// deletion sets deletionTimestamp. That is not a spec change.
 func TestRecordToTimelineStore_DeletionStartIsNotSpecChange(t *testing.T) {
 	deleting := metav1.NewTime(time.Now().Add(30 * time.Second))
 	deadline := int64(60)

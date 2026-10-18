@@ -995,7 +995,7 @@ func TestDiffGenericUnstructured_SpecChangeBesideConditions(t *testing.T) {
 }
 
 // A custom resource held by a finalizer gets a generation bump when deletion
-// starts. That reads as the start of deletion, not a spec change (#2152).
+// starts. That reads as the start of deletion, not a spec change.
 func TestDiffGenericUnstructured_DeletionStart(t *testing.T) {
 	obj := func(gen int64, replicas int64, deleting bool) *unstructured.Unstructured {
 		meta := map[string]any{"name": "w", "generation": gen, "finalizers": []any{"example.com/cleanup"}}
@@ -1017,6 +1017,12 @@ func TestDiffGenericUnstructured_DeletionStart(t *testing.T) {
 	_, summary = diffGenericUnstructured(obj(1, 1, false), obj(3, 2, true))
 	if strings.Join(summary, ", ") != "spec changed (gen 1→3, fields not specifically tracked)" {
 		t.Fatalf("folded spec edit summary = %q", summary)
+	}
+	// A CustomResourceDefinition is deleted without a generation bump, so a
+	// folded spec edit can arrive as +1.
+	_, summary = diffGenericUnstructured(obj(1, 1, false), obj(2, 2, true))
+	if strings.Join(summary, ", ") != "spec changed (gen 1→2, fields not specifically tracked)" {
+		t.Fatalf("folded +1 spec edit summary = %q", summary)
 	}
 }
 
