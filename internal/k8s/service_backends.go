@@ -29,6 +29,36 @@ var MeshProxyContainers = map[string]string{
 	"consul-dataplane": "Consul",
 }
 
+// PodMesh names the service mesh whose sidecar proxy runs in the pod, from its
+// proxy containers (regular or native sidecar) or its injection markers, or ""
+// when there is none.
+func PodMesh(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	for _, containers := range [][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
+		for _, c := range containers {
+			if mesh := MeshProxyContainers[c.Name]; mesh != "" {
+				return mesh
+			}
+		}
+	}
+	switch {
+	case pod.Annotations["sidecar.istio.io/status"] != "" ||
+		pod.Labels["istio.io/rev"] != "" ||
+		pod.Labels["sidecar.istio.io/inject"] == "true" ||
+		pod.Annotations["sidecar.istio.io/inject"] == "true":
+		return "Istio"
+	case pod.Labels["linkerd.io/inject"] == "enabled" ||
+		pod.Annotations["linkerd.io/inject"] == "enabled":
+		return "Linkerd"
+	case pod.Labels["consul.hashicorp.com/connect-inject"] == "true" ||
+		pod.Annotations["consul.hashicorp.com/connect-inject"] == "true":
+		return "Consul"
+	}
+	return ""
+}
+
 // ServiceBackendWorkload is one workload whose Pods a Service selects. A Pod
 // with no controller is its own workload (Kind "Pod").
 type ServiceBackendWorkload struct {

@@ -169,10 +169,15 @@ func reconcilePolicyFindings(t *Trace) {
 			// pods, and policies can split the pods, each with its own issue,
 			// so a data-path pass settles only a lone issue, whose policy
 			// isolates every backend.
-			if i > 0 && h.Edge == "Service->Pods" && hops[i-1].Resource.Kind == "Service" &&
-				countFindings(hops[i-1].Findings, k8s.NetworkPolicyDenyAllIngressFingerprint) == 1 &&
-				portScopedOutcome(h.Probes, 0).dataOK {
-				downgradeDenyAllIngress(&hops[i-1])
+			var svc *Hop
+			if i > 0 && h.Edge == "Service->Pods" && hops[i-1].Resource.Kind == "Service" {
+				svc = &hops[i-1]
+			}
+			// The Service hop's own data probe, through its ClusterIP, counts
+			// too: pods that declare no containerPort get no per-pod probes.
+			if svc != nil && countFindings(svc.Findings, k8s.NetworkPolicyDenyAllIngressFingerprint) == 1 &&
+				(portScopedOutcome(h.Probes, 0).dataOK || portScopedOutcome(svc.Probes, 0).dataOK) {
+				downgradeDenyAllIngress(svc)
 			}
 			if h.Meta == nil || h.Meta["policyVerdict"] != "would-deny" {
 				continue
@@ -189,8 +194,18 @@ func reconcilePolicyFindings(t *Trace) {
 			port := metaInt32(h.Meta["policyDenyPort"])
 			o := portScopedOutcome(h.Probes, port)
 			names := metaStrings(h.Meta["policyNames"])
+			// Without a per-pod data probe on the denied port (the pods
+			// declare no containerPort), a data probe through the Service on
+			// the Service port the prediction is about is the evidence.
+			viaService := false
+			if !o.dataOK && !o.dataFail && svc != nil {
+				if sp := predictionServicePort(h.Meta); sp > 0 {
+					so := portScopedOutcome(svc.Probes, sp)
+					viaService = so.dataOK && !so.dataFail
+				}
+			}
 			switch {
-			case o.dataOK && !o.dataFail && port > 0:
+			case (o.dataOK && !o.dataFail && port > 0) || viaService:
 				// Real in-cluster traffic on the DENIED port got through UNANIMOUSLY.
 				// The apiserver proxy bypasses NetworkPolicy, but the DATA path does
 				// not - a clean data-path success is ground truth the prediction
