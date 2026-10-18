@@ -87,7 +87,11 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 			// (Knative Service vs core Service) must not be correlated against
 			// the same-named core object's changes.
 			nativeHelmIssue := iss.Kind == "HelmRelease" && iss.Group == issues.NativeHelmGroup
-			if !nativeHelmIssue && !meaningfulchanges.TrackedKindForGroup(iss.Kind, iss.Group) {
+			subjectTracked := nativeHelmIssue || meaningfulchanges.TrackedKindForGroup(iss.Kind, iss.Group)
+			// An admission rejection on an untracked subject (a Job, a
+			// ReplicaSet) is still correlated against the policy that
+			// rejected it.
+			if !subjectTracked && !isAdmissionIssue(iss) {
 				continue
 			}
 			if checked >= correlationIssueCap {
@@ -95,38 +99,59 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 				return
 			}
 			checked++
-			correlateIssue(ctx, iss, window, nativeHelmIssue)
+			correlateIssue(ctx, iss, window, nativeHelmIssue, subjectTracked)
 		}
 	}
 }
 
 // correlateIssue attaches CorrelatedChanges or NoRecentChanges to one issue,
 // or neither when the answer is unknown (fetch error, saturated fetch,
-// evicted history).
-func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration, nativeHelmIssue bool) {
+// evicted history). An admission issue whose message names its blocking
+// object also carries that object's changes and which side changed last.
+func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration, nativeHelmIssue, subjectTracked bool) {
 	var result meaningfulchanges.RecentResult
 	var sourcesWithheld bool
 	var obj any
-	var err error
-	if nativeHelmIssue {
-		// Helm history comes from release records, not the timeline store,
-		// so timeline coverage does not apply.
-		result.Changes, err = helmIssueChangesForCorrelation(ctx, iss, window)
-	} else {
-		result, sourcesWithheld, obj, err = correlationChangesForIssue(ctx, iss, window)
+	var changes []issuesapi.RecentChange
+	var rbacHidden bool
+	if subjectTracked {
+		var err error
+		if nativeHelmIssue {
+			// Helm history comes from release records, not the timeline store,
+			// so timeline coverage does not apply.
+			result.Changes, err = helmIssueChangesForCorrelation(ctx, iss, window)
+		} else {
+			limit := correlationChangeCap
+			if isAdmissionIssue(iss) {
+				// Saying which side changed last needs the newest change,
+				// which a significance-ranked top 3 can drop.
+				limit = admissionOrderFetchLimit
+			}
+			result, sourcesWithheld, obj, err = correlationChangesForIssue(ctx, iss, window, limit)
+		}
+		if err != nil {
+			log.Printf("[mcp] issue change correlation failed for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
+			return // marker omitted = unknown, never a false "no changes"
+		}
+		changes, rbacHidden = applyCorrelationVisibilityFilters(ctx, result.Changes)
 	}
-	if err != nil {
-		log.Printf("[mcp] issue change correlation failed for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
-		return // marker omitted = unknown, never a false "no changes"
+	// A saturated candidate fetch may have missed older changes in the
+	// window (churn-heavy subjects overflow the fetch bound), an RBAC-hidden
+	// change exists even though this caller can't see it (or a source they
+	// can't read was not queried), and evicted history may have held one —
+	// all are unknown, not "no changes".
+	subjectComplete := subjectTracked && !result.FetchSaturated && !rbacHidden && !sourcesWithheld &&
+		correlationHistoryComplete(obj, iss.Namespace, result.History)
+	if blocker := admissionBlockerForIssue(ctx, iss, window); blocker != nil &&
+		attachAdmissionBlocker(iss, blocker, changes, subjectComplete, window) {
+		iss.CorrelatedChangesIncomplete = result.FetchSaturated || blocker.saturated
+		return
 	}
-	changes, rbacHidden := applyCorrelationVisibilityFilters(ctx, result.Changes)
+	if !subjectTracked {
+		return
+	}
 	if len(changes) == 0 {
-		// A saturated candidate fetch may have missed older changes in
-		// the window (churn-heavy subjects overflow the fetch bound), an
-		// RBAC-hidden change exists even though this caller can't see it (or
-		// a source they can't read was not queried), and evicted history may
-		// have held one — all are unknown, not "no changes".
-		if result.FetchSaturated || rbacHidden || sourcesWithheld || !correlationHistoryComplete(obj, iss.Namespace, result.History) {
+		if !subjectComplete {
 			return
 		}
 		iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
@@ -209,20 +234,20 @@ func helmIssueChangesForCorrelation(ctx context.Context, iss *issuesapi.Issue, w
 // correlationChangesForIssue also reports whether sources were withheld from
 // the caller, and returns the workload object whose ConfigMaps were
 // correlated, or nil.
-func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration) (meaningfulchanges.RecentResult, bool, any, error) {
+func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration, limit int) (meaningfulchanges.RecentResult, bool, any, error) {
 	if meaningfulchanges.WorkloadKind(iss.Kind) {
 		// Workload subjects also correlate against their directly referenced
 		// ConfigMaps; obj==nil degrades to workload-only changes.
 		obj := workloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
 		result, sourcesWithheld, err := meaningfulchanges.RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			ctx, obj, iss.Kind, iss.Namespace, iss.Name,
-			window, correlationChangeCap, correlationFieldLimit, configMapSourceFilter(ctx, iss.Namespace),
+			window, limit, correlationFieldLimit, configMapSourceFilter(ctx, iss.Namespace),
 		)
 		return result, sourcesWithheld, obj, err
 	}
 	result, err := meaningfulchanges.RecentForResourceDetailed(
 		ctx, iss.Kind, iss.Namespace, iss.Name,
-		window, correlationChangeCap, correlationFieldLimit,
+		window, limit, correlationFieldLimit,
 	)
 	return result, false, nil, err
 }

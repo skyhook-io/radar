@@ -596,6 +596,10 @@ type Issue struct {
 	// CorrelatedChanges lists recent non-status changes (spec/config and
 	// lifecycle) on this issue's subject (and, for workload subjects, its
 	// directly referenced ConfigMaps) within the correlation lookback window.
+	// For an admission rejection whose message names its blocking object (a
+	// ResourceQuota, the namespace's LimitRanges, a webhook's configuration),
+	// that object's changes are listed first, and TimingSummary says which
+	// side changed last.
 	// Deterministic evidence, not a causal claim — the consumer weighs
 	// whether the change explains the issue.
 	CorrelatedChanges []RecentChange `json:"correlated_changes,omitempty"`

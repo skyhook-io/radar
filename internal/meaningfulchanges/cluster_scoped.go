@@ -198,6 +198,34 @@ func currentWebhookConfigurations() (map[string][]webhookScope, map[string]bool,
 	return out, loaded, watchedSince
 }
 
+// WebhookConfigurationRef names one cached webhook configuration.
+type WebhookConfigurationRef struct {
+	Kind string
+	Name string
+}
+
+// WebhookConfigurationsDeclaring returns the cached webhook configurations
+// that declare a webhook named webhookName (webhooks[].name, the name an
+// admission rejection quotes), sorted by kind and name. Webhook names are
+// unique only within a configuration, so more than one can match.
+func WebhookConfigurationsDeclaring(webhookName string) []WebhookConfigurationRef {
+	current, _, _ := currentWebhookConfigurations()
+	var out []WebhookConfigurationRef
+	for key, scopes := range current {
+		for _, scope := range scopes {
+			if scope.name == webhookName {
+				kind, name, _ := strings.Cut(key, "/")
+				out = append(out, WebhookConfigurationRef{Kind: kind, Name: name})
+				break
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b WebhookConfigurationRef) int {
+		return strings.Compare(a.Kind+"/"+a.Name, b.Kind+"/"+b.Name)
+	})
+	return out
+}
+
 func webhookScopes(kind string, item *unstructured.Unstructured) []webhookScope {
 	var scopes []webhookScope
 	add := func(name string, ns, obj *metav1.LabelSelector, rules []admissionv1.RuleWithOperations, conditions int) {

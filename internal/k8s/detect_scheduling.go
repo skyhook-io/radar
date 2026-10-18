@@ -826,6 +826,9 @@ func schedulingNodeFacts(cache *ResourceCache) []NodeFacts {
 // so a fresh LastTimestamp means the failure is active.
 const admissionFailureWindow = 30 * time.Minute
 
+// admissionBlockedPrefix leads every admission detection's message.
+const admissionBlockedPrefix = "pod creation blocked: "
+
 // DetectAdmissionProblems flags pod-template rejections at admission time.
 // namespace="" scans all namespaces.
 func DetectAdmissionProblems(cache *ResourceCache, namespace string) []Detection {
@@ -908,7 +911,7 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 			Name:              obj.Name,
 			Severity:          "critical",
 			Reason:            c.reason,
-			Message:           "pod creation blocked: " + strings.TrimSpace(c.ev.Message),
+			Message:           admissionBlockedPrefix + strings.TrimSpace(c.ev.Message),
 			ResourceCreatedAt: createdAt,
 			OwnerGroup:        ownerGroup,
 			OwnerKind:         ownerKind,
@@ -1158,7 +1161,7 @@ func admissionConditionProblem(kind, namespace, name, message string, createdAt,
 		Name:              name,
 		Severity:          "critical",
 		Reason:            reason,
-		Message:           "pod creation blocked: " + strings.TrimSpace(message),
+		Message:           admissionBlockedPrefix + strings.TrimSpace(message),
 		Age:               timeutil.FormatAgeShort(ageDur),
 		AgeSeconds:        int64(ageDur.Seconds()),
 		ResourceCreatedAt: createdAt,
@@ -1307,6 +1310,46 @@ func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBacken
 		ServiceName:      hostParts[0],
 		Kind:             kind,
 	}, true
+}
+
+// AdmissionBlocker names the policy object an admission rejection came from,
+// so its recent changes can be set beside the workload's. Exactly one form is
+// set: a ResourceQuota by name; every LimitRange in the namespace (LimitRanger
+// messages never say which one); or a webhook by its webhooks[].name, which the
+// caller resolves to the configurations that declare it.
+type AdmissionBlocker struct {
+	Kind        string // "ResourceQuota" | "LimitRange" | "" for a webhook
+	Name        string // empty for LimitRange: any LimitRange in the namespace
+	WebhookName string
+}
+
+var (
+	admissionQuotaNamePattern         = regexp.MustCompile(`(?i)(?:exceeded|failed) quota: ([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)`)
+	admissionWebhookQuotedNamePattern = regexp.MustCompile(`(?i)(?:admission webhook|failed calling webhook) "([^"\r\n]+)"`)
+)
+
+// ParseAdmissionBlocker extracts the blocking object from a pod-creation
+// rejection message, using the message shapes classifyAdmissionFailure
+// recognizes. ok=false for rejections that name no object (PodSecurity, RBAC).
+func ParseAdmissionBlocker(message string) (AdmissionBlocker, bool) {
+	message = strings.TrimPrefix(strings.TrimSpace(message), admissionBlockedPrefix)
+	reason, ok := classifyAdmissionFailure(message)
+	if !ok {
+		return AdmissionBlocker{}, false
+	}
+	switch reason {
+	case "QuotaExceeded":
+		if m := admissionQuotaNamePattern.FindStringSubmatch(message); len(m) == 2 {
+			return AdmissionBlocker{Kind: "ResourceQuota", Name: m[1]}, true
+		}
+	case "LimitRangeViolation":
+		return AdmissionBlocker{Kind: "LimitRange"}, true
+	case "WebhookDenied", "WebhookUnavailable":
+		if m := admissionWebhookQuotedNamePattern.FindStringSubmatch(message); len(m) == 2 {
+			return AdmissionBlocker{WebhookName: m[1]}, true
+		}
+	}
+	return AdmissionBlocker{}, false
 }
 
 // ---- Post-bind detection ------------------------------------------------

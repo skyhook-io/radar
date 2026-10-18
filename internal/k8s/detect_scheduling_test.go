@@ -517,3 +517,28 @@ func TestDiagnoseUnschedulableSharesOneParse(t *testing.T) {
 		t.Errorf("unrecognized verdict should fall back to generic action, got %q", fallback)
 	}
 }
+
+func TestParseAdmissionBlocker(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want AdmissionBlocker
+		ok   bool
+	}{
+		{"failed quota", `pod creation blocked: pods "search-x" is forbidden: failed quota: memory-limit-quota: must specify memory for: hotel-reserv-search`, AdmissionBlocker{Kind: "ResourceQuota", Name: "memory-limit-quota"}, true},
+		{"exceeded quota", `Error creating: pods "web-x" is forbidden: exceeded quota: compute.team-a, requested: pods=1, used: pods=3, limited: pods=3`, AdmissionBlocker{Kind: "ResourceQuota", Name: "compute.team-a"}, true},
+		{"limit range", `pods "api-x" is forbidden: maximum memory usage per Container is 512Mi, but limit is 1Gi`, AdmissionBlocker{Kind: "LimitRange"}, true},
+		{"webhook denial", `pod creation blocked: Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`, AdmissionBlocker{WebhookName: "deny-root.policy.example.com"}, true},
+		{"webhook call failure", `Internal error occurred: failed calling webhook "inject.mesh.example.com": Post "https://mesh.mesh-system.svc:443/inject": no endpoints available for service "mesh"`, AdmissionBlocker{WebhookName: "inject.mesh.example.com"}, true},
+		{"pod security names no object", `pods "x" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false`, AdmissionBlocker{}, false},
+		{"not an admission failure", `object is being deleted: replicasets.apps "x" already exists`, AdmissionBlocker{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseAdmissionBlocker(tc.msg)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("ParseAdmissionBlocker(%q) = %+v, %v; want %+v, %v", tc.msg, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}

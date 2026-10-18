@@ -425,9 +425,9 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"treat it as evidence against, not disproof of, that cause. Secret values and " +
 			"external dependencies may still have changed. If " +
 			"neither `correlated_changes` nor `no_recent_changes` is present, correlation is " +
-			"unknown. `correlated_changes` covers tracked edits on the issue subject and, for " +
-			"workloads, directly referenced ConfigMaps; `correlated_changes_incomplete`: older ones " +
-			"were not read. " +
+			"unknown. `correlated_changes` covers tracked edits on the issue subject, its " +
+			"directly referenced ConfigMaps, and a rejecting quota/LimitRange/webhook; " +
+			"`correlated_changes_incomplete`: older ones were not read. " +
 			"Use get_events for raw events, get_cluster_audit for posture, diagnose for workloads " +
 			"or GitOps, get_resource for other kinds, and get_neighborhood across resources. " +
 			"`group=" + issues.NativeHelmGroup + "` routes to get_helm_release; " +
@@ -3159,6 +3159,16 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})
+	// Per-issue change correlation (single-namespace responses): each
+	// critical and warning issue (criticals first under a shared cap)
+	// carries either its correlated non-status changes or an explicit
+	// no_recent_changes marker — deterministic per-subject evidence the
+	// global recent_changes list can't bind to individual issues. It runs
+	// first because it can withdraw an issue's timing, which the
+	// recent_changes reason below reads.
+	if len(allowedNamespaces) == 1 {
+		attachIssueChangeCorrelation(ctx, &resp)
+	}
 	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(input.Kind, input.Filter, input.Severity) {
 		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {
 			recentResult, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
@@ -3182,14 +3192,6 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		if clusterScoped := mcpClusterScopedChanges(ctx, allowedNamespaces[0], meaningfulchanges.DefaultSince, true); clusterScoped.Informative() {
 			resp.ClusterScopedChanges = clusterScoped
 		}
-	}
-	// Per-issue change correlation (single-namespace responses): each
-	// critical and warning issue (criticals first under a shared cap)
-	// carries either its correlated non-status changes or an explicit
-	// no_recent_changes marker — deterministic per-subject evidence the
-	// global recent_changes list can't bind to individual issues.
-	if len(allowedNamespaces) == 1 {
-		attachIssueChangeCorrelation(ctx, &resp)
 	}
 	// Steering hint when the issue list was capped (MCP-only).
 	if stats.TotalMatched > len(out) {
