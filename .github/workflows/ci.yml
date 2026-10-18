@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, ci/scratch-base]
 
 # A new push to a PR cancels its running checks. Other runs get a unique group:
 # a shared one would queue main pushes and drop the pending ones.
