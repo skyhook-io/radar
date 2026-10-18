@@ -588,7 +588,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_cronjob",
 		Description: "Operate on a Kubernetes CronJob: " +
-			"'trigger' runs a Job now from the CronJob's template, so a fix can be checked without waiting for the schedule; " +
+			"'trigger' runs a Job now from the CronJob's template, to check a fix without waiting for the schedule when an extra run is safe; " +
 			"'suspend' pauses the schedule (no new Jobs are created); " +
 			"'resume' re-enables a suspended schedule.",
 		Annotations: writeTool,
