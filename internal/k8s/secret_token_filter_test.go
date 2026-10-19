@@ -107,6 +107,7 @@ func TestRecordToTimelineStore_ServiceAccountTokenUpdateDrop(t *testing.T) {
 					}
 					newSecret := oldSecret.DeepCopy()
 					newSecret.Data["token"] = []byte("dummy-new-sa-credential")
+					newSecret.Labels = map[string]string{"app": "rotated"}
 					var oldObj, newObj any = oldSecret, newSecret
 					if shape == "unstructured" {
 						oldMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(oldSecret)
@@ -129,6 +130,10 @@ func TestRecordToTimelineStore_ServiceAccountTokenUpdateDrop(t *testing.T) {
 						}
 						if len(events) != 0 {
 							t.Fatalf("recorded %d ServiceAccount token updates, want 0", len(events))
+						}
+						// Later Kubernetes Events about the Secret are enriched from its tombstone.
+						if entry, ok := tombstones.Get(string(newSecret.UID), "v1", "Secret", "shop", name); !ok || entry.Labels["app"] != "rotated" {
+							t.Fatal("tombstone not refreshed from the dropped update")
 						}
 					}
 					snapshot := timeline.GetMetrics().GetSnapshot()
