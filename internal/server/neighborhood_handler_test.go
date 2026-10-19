@@ -1,9 +1,19 @@
 package server
 
 import (
+	"encoding/json"
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -94,4 +104,118 @@ func TestParseNeighborhoodOptions_ProfileNormalization(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNeighborhoodMissingRootDoesNotEstablishAbsenceDuringSync(t *testing.T) {
+	old := k8s.GetConnectionStatus()
+	t.Cleanup(func() {
+		k8s.SetConnectionStatus(old)
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestPromotedSyncingCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}), 5*time.Second, 300*time.Millisecond, map[string]time.Duration{"replicasets": time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
+	probeKind := func(kind string) (int, string) {
+		resp := env.authGet(t, "/api/ai/neighborhood/"+kind+"/default/missing", "bob", "")
+		defer resp.Body.Close()
+		var body struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, body.ErrorCode
+	}
+	probe := func() (int, string) { return probeKind("ReplicaSet") }
+	for _, kind := range []string{"replicaset", "ReplicaSet", "REPLICASET"} {
+		if status, code := probeKind(kind); status != http.StatusServiceUnavailable || code != "kind_sync_pending" {
+			t.Fatalf("pending %s: %d %s", kind, status, code)
+		}
+	}
+	if status, code := probe(); status != http.StatusServiceUnavailable || code != "kind_sync_pending" {
+		t.Fatalf("pending inventory: %d %s", status, code)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, code := probe()
+		if status == http.StatusServiceUnavailable && code == "kind_sync_failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed inventory: %d %s", status, code)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for {
+		status, code := probe()
+		if status == http.StatusNotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ready absent root: %d %s", status, code)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestTypedRootsOutsideCacheCoverageDoNotClaimAbsence(t *testing.T) {
+	old := k8s.GetConnectionStatus()
+	t.Cleanup(func() {
+		k8s.SetConnectionStatus(old)
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	k8s.ResetResourceCache()
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "known", Namespace: "a"}}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "known", Namespace: "b"}}), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{AllowedNamespaces: []string{"a", "b"}})
+	for _, path := range []string{
+		"/api/ai/neighborhood/Pod/b/known",
+		"/api/resources/pods/b/known",
+		"/api/ai/resources/Pod/b/known",
+		"/api/ai/resources/pods/b/known?context=none",
+		"/api/ai/resources/pods?namespace=b",
+		"/api/ai/resources/pods?namespaces=a,b",
+		"/api/ai/resources/pods?context=none",
+	} {
+		resp := env.authGet(t, path, "bob", "")
+		var body struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict || body.ErrorCode != "kind_namespace_uncovered" {
+			t.Fatalf("%s claimed absence: %d %+v", path, resp.StatusCode, body)
+		}
+	}
+	resp := env.authGet(t, "/api/ai/neighborhood/Pod/a/known", "bob", "")
+	defer resp.Body.Close()
+	var result neighborhoodResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, omitted := range result.Omitted {
+		if omitted.Field == "subgraph.nodes" && omitted.Reason == resourcecontext.OmittedUnavailable {
+			found = true
+		}
+	}
+	if resp.StatusCode != http.StatusOK || !found {
+		t.Fatalf("supporting inventories looked complete: %d %+v", resp.StatusCode, result)
+	}
+
 }

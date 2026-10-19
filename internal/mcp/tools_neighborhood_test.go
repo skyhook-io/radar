@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -542,5 +544,114 @@ func TestNeighborhoodMCP_SecretRootIncluded(t *testing.T) {
 		t.Error("unauthorized user got success for Secret root — Allow gate must produce not-found via empty subgraph (existence-hiding)")
 	} else if !strings.Contains(err2.Error(), "not found") {
 		t.Errorf("unauthorized user got unexpected error %v — expected 'not found' shape to mirror existence-hiding", err2)
+	}
+}
+
+func TestNeighborhoodIncompleteRootInventoryIsExplicit(t *testing.T) {
+	k8s.ResetResourceCache()
+	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitTestPromotedSyncingCache(fake.NewClientset(), 5*time.Second, 300*time.Millisecond, map[string]time.Duration{"replicasets": time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := withTestUserPerms(t, "bob", nil, []string{"default"})
+	for _, group := range []string{"", "apps"} {
+		_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "ReplicaSet", Group: group, Namespace: "default", Name: "missing"})
+		if err == nil || !strings.Contains(err.Error(), "still syncing") {
+			t.Fatalf("group %q pending inventory: %v", group, err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "ReplicaSet", Namespace: "default", Name: "missing"})
+		if err != nil && strings.Contains(err.Error(), "sync failed") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed inventory: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestNeighborhoodRootOutsideCacheCoverageIsExplicit(t *testing.T) {
+	k8s.ResetResourceCache()
+	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "known", Namespace: "b"}}), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := withTestUserPerms(t, "bob", nil, []string{"b"})
+	_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "Pod", Namespace: "b", Name: "known"})
+	if err == nil || !strings.Contains(err.Error(), "does not watch pods") {
+		t.Fatalf("uncovered inventory claimed absence: %v", err)
+	}
+	_, _, err = handleGetResource(ctx, nil, getResourceInput{Kind: "Pod", Namespace: "b", Name: "known"})
+	if err == nil || !strings.Contains(err.Error(), "does not watch pods") {
+		t.Fatalf("get_resource claimed absence: %v", err)
+	}
+	_, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "Pod", Namespace: "b"})
+	if err == nil || !strings.Contains(err.Error(), "does not watch pods") {
+		t.Fatalf("list_resources claimed absence: %v", err)
+	}
+}
+
+func TestResourceListDefaultsToConfiguredNamespacePin(t *testing.T) {
+	oldForce, oldTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	k8s.ResetResourceCache()
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = oldForce
+		k8s.SetNamespaceScopeOverride(oldTarget)
+		k8s.ResetTestState()
+	})
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "visible", Namespace: "pinned"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "outside", Namespace: "other"}},
+	), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "pinned"}}); err != nil {
+		t.Fatal(err)
+	}
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("pinned")
+	result, _, err := handleListResources(t.Context(), nil, listResourcesInput{Kind: "Pod", Context: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := []byte(result.Content[0].(*mcp.TextContent).Text)
+	var rows []map[string]any
+	if err := json.Unmarshal(encoded, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0]["name"] != "visible" {
+		t.Fatalf("default namespace pin lost: %s", encoded)
+	}
+	if _, _, err := handleListResources(t.Context(), nil, listResourcesInput{Kind: "Pod", Namespace: "other", Context: "none"}); err == nil || !strings.Contains(err.Error(), "namespace scope") {
+		t.Fatalf("outside pin looked like a complete empty list: %v", err)
+	}
+}
+
+func TestResourceListScopeErrorOffersAuthorizedWatchedNamespaces(t *testing.T) {
+	k8s.ResetResourceCache()
+	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "a"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		allowed  []string
+		wantHint bool
+	}{
+		{"unrestricted", nil, true},
+		{"authorized intersection", []string{"a", "b"}, true},
+		{"no authorized watched namespace", []string{"b"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := withTestUserPerms(t, "bob", nil, tc.allowed)
+			_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "Pod", Context: "none"})
+			if err == nil {
+				t.Fatal("uncovered scope claimed a complete list")
+			}
+			hint := strings.Contains(err.Error(), "Watched namespaces within this authorized scope: a.")
+			if hint != tc.wantHint {
+				t.Fatalf("hint visibility = %v, want %v: %v", hint, tc.wantHint, err)
+			}
+		})
 	}
 }

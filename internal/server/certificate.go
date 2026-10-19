@@ -93,8 +93,8 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 
 	// kubernetes.io/tls secrets. We only read tls.crt (the public chain) and
 	// emit metadata; tls.key never leaves the cluster. A nil error with no
-	// secrets is a benign deferred-cache state; a non-nil error means we
-	// genuinely couldn't read secrets.
+	// secrets means the inventory is ready and empty; a non-nil error means
+	// the inventory is incomplete or could not be read.
 	//
 	// The cache holds every secret (the SA can have cluster-wide secrets RBAC
 	// the calling user doesn't), so the TLS leg must respect per-user secrets
@@ -197,6 +197,22 @@ func (s *Server) handleSecretCertExpiry(w http.ResponseWriter, r *http.Request) 
 	// Cert expiry is read from TLS Secrets — gate by per-user secrets RBAC.
 	result, err := topology.GetCertificateExpiry(provider, s.secretReadableNamespaces(r, namespaces))
 	if err != nil {
+		var inventory *topology.InventoryError
+		if errors.As(err, &inventory) {
+			code := "kind_inventory_unavailable"
+			status := http.StatusServiceUnavailable
+			switch inventory.State {
+			case topology.InventoryPending:
+				code = "kind_sync_pending"
+			case topology.InventoryFailed:
+				code = "kind_sync_failed"
+			case topology.InventoryUncovered:
+				code = "kind_namespace_uncovered"
+				status = http.StatusConflict
+			}
+			s.writeErrorCode(w, status, code, inventory.Error())
+			return
+		}
 		log.Printf("[certificate] Failed to get certificate expiry: %v", err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to list secrets")
 		return

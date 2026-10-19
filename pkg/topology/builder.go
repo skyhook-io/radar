@@ -34,8 +34,9 @@ import (
 
 // Builder constructs topology graphs from K8s resources
 type Builder struct {
-	provider ResourceProvider
-	dynamic  DynamicProvider
+	provider  ResourceProvider
+	dynamic   DynamicProvider
+	inventory *topologyInventoryTracker
 	// Iterations of the Service/Job pairing loop, counted so a test can pin
 	// the loop's complexity class without timing anything: completed Jobs can
 	// never back a Service, so the count must not grow with them.
@@ -146,14 +147,20 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 		opts.SummaryMode = true
 	}
 
+	inventory := &topologyInventoryTracker{provider: b.provider, namespaces: opts.Namespaces}
+	working := *b
+	working.inventory = inventory
+	if b.dynamic != nil {
+		working.dynamic = inventoryDynamicProvider{DynamicProvider: b.dynamic, tracker: inventory}
+	}
 	var topo *Topology
 	var err error
 
 	switch opts.ViewMode {
 	case ViewModeTraffic:
-		topo, err = b.buildTrafficTopology(opts)
+		topo, err = working.buildTrafficTopology(opts)
 	default:
-		topo, err = b.buildResourcesTopology(opts)
+		topo, err = working.buildResourcesTopology(opts)
 	}
 
 	if err != nil {
@@ -161,9 +168,24 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 	}
 
 	if opts.ViewMode != ViewModeTraffic {
-		b.addReflectionRelationships(topo, opts)
+		working.addReflectionRelationships(topo, opts)
 	}
 
+	b.serviceJobComparisons = working.serviceJobComparisons
+	topo.IncompleteInventories = inventory.snapshot()
+	for _, warning := range topo.IncompleteInventories {
+		// Typed disabled inventories already have the provider's RBAC warning.
+		if builtin, known := resourceid.BuiltinForName(warning.Resource); warning.State == InventoryUnavailable && known && builtin.Group == warning.Group {
+			continue
+		}
+		message := warning.Message
+		if warning.State == InventoryPending || warning.State == InventoryUncovered {
+			message = "Topology view: " + message
+		}
+		if !slices.Contains(topo.Warnings, message) {
+			topo.Warnings = append(topo.Warnings, message)
+		}
+	}
 	// Set large cluster flags in response
 	if isLargeCluster {
 		topo.LargeCluster = true
@@ -342,6 +364,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	nodes := make([]Node, 0)
 	edges := make([]Edge, 0)
 	warnings := make([]string, 0)
+	inventory := b.inventory
 
 	// Track IDs for linking
 	deploymentIDs := make(map[string]string)
@@ -397,7 +420,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 1. Add Deployment nodes
 	var deployments []*appsv1.Deployment
 	{
-		deps, depsErr := b.provider.Deployments()
+		deps, depsErr := readTopologyInventory(inventory, "deployments", b.provider.Deployments)
 		if depsErr != nil {
 			log.Printf("WARNING [topology] Failed to list Deployments: %v", depsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Deployments: %v", depsErr))
@@ -1070,7 +1093,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 1h-ii-a. Add Karpenter-managed Node nodes (NodeClaim → Node edges)
 	if len(nodeClaimNodeNames) > 0 {
-		allNodes, nodeErr := b.provider.Nodes()
+		allNodes, nodeErr := readTopologyInventory(inventory, "nodes", b.provider.Nodes)
 		if nodeErr != nil {
 			log.Printf("WARNING [topology] Failed to list Nodes for Karpenter edges: %v", nodeErr)
 		} else {
@@ -1637,7 +1660,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// CAPI Machine → Node edges (via status.nodeRef)
 	if len(capiMachineNodeNames) > 0 {
-		allNodes, nodeErr := b.provider.Nodes()
+		allNodes, nodeErr := readTopologyInventory(inventory, "nodes", b.provider.Nodes)
 		if nodeErr != nil {
 			log.Printf("WARNING [topology] Failed to list Nodes for CAPI Machine edges: %v", nodeErr)
 		} else {
@@ -2584,7 +2607,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 2. Add DaemonSet nodes
 	var daemonsets []*appsv1.DaemonSet
 	{
-		dss, dssErr := b.provider.DaemonSets()
+		dss, dssErr := readTopologyInventory(inventory, "daemonsets", b.provider.DaemonSets)
 		if dssErr != nil {
 			log.Printf("WARNING [topology] Failed to list DaemonSets: %v", dssErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list DaemonSets: %v", dssErr))
@@ -2632,7 +2655,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 3. Add StatefulSet nodes
 	var statefulsets []*appsv1.StatefulSet
 	{
-		stss, stssErr := b.provider.StatefulSets()
+		stss, stssErr := readTopologyInventory(inventory, "statefulsets", b.provider.StatefulSets)
 		if stssErr != nil {
 			log.Printf("WARNING [topology] Failed to list StatefulSets: %v", stssErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list StatefulSets: %v", stssErr))
@@ -2704,7 +2727,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 4. Add CronJob nodes
 	var cronjobs []*batchv1.CronJob
 	{
-		cjs, cjsErr := b.provider.CronJobs()
+		cjs, cjsErr := readTopologyInventory(inventory, "cronjobs", b.provider.CronJobs)
 		if cjsErr != nil {
 			log.Printf("WARNING [topology] Failed to list CronJobs: %v", cjsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list CronJobs: %v", cjsErr))
@@ -2910,7 +2933,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 5. Add Job nodes
 	var jobs []*batchv1.Job
 	{
-		js, jsErr := b.provider.Jobs()
+		js, jsErr := readTopologyInventory(inventory, "jobs", b.provider.Jobs)
 		if jsErr != nil {
 			log.Printf("WARNING [topology] Failed to list Jobs: %v", jsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Jobs: %v", jsErr))
@@ -2998,7 +3021,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// Even if not shown, we still track them for shortcut edges
 	var replicasets []*appsv1.ReplicaSet
 	{
-		rss, rssErr := b.provider.ReplicaSets()
+		rss, rssErr := readTopologyInventory(inventory, "replicasets", b.provider.ReplicaSets)
 		if rssErr != nil {
 			log.Printf("WARNING [topology] Failed to list ReplicaSets: %v", rssErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list ReplicaSets: %v", rssErr))
@@ -3188,7 +3211,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 5. Add Pod nodes - grouped by app label when there are multiple pods
 	var pods []*corev1.Pod
 	{
-		ps, psErr := b.provider.Pods()
+		ps, psErr := readTopologyInventory(inventory, "pods", b.provider.Pods)
 		if psErr != nil {
 			log.Printf("WARNING [topology] Failed to list Pods: %v", psErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Pods: %v", psErr))
@@ -3377,7 +3400,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 8. Add Service nodes
 	var services []*corev1.Service
 	{
-		svcs, svcsErr := b.provider.Services()
+		svcs, svcsErr := readTopologyInventory(inventory, "services", b.provider.Services)
 		if svcsErr != nil {
 			log.Printf("WARNING [topology] Failed to list Services: %v", svcsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Services: %v", svcsErr))
@@ -3653,7 +3676,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 7. Add Ingress nodes
 	var ingresses []*networkingv1.Ingress
 	{
-		ings, ingsErr := b.provider.Ingresses()
+		ings, ingsErr := readTopologyInventory(inventory, "ingresses", b.provider.Ingresses)
 		if ingsErr != nil {
 			log.Printf("WARNING [topology] Failed to list Ingresses: %v", ingsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Ingresses: %v", ingsErr))
@@ -3848,7 +3871,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 8. Add ConfigMap nodes (if enabled)
 	if opts.IncludeConfigMaps {
-		configmaps, cmErr := b.provider.ConfigMaps()
+		configmaps, cmErr := readTopologyInventory(inventory, "configmaps", b.provider.ConfigMaps)
 		if cmErr != nil {
 			log.Printf("WARNING [topology] Failed to list ConfigMaps: %v", cmErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list ConfigMaps: %v", cmErr))
@@ -3889,7 +3912,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			return
 		}
 		secretsLoaded = true
-		secrets, secretsErr = b.provider.Secrets()
+		secrets, secretsErr = readTopologyInventory(inventory, "secrets", b.provider.Secrets)
 		for _, secret := range secrets {
 			observedSecrets["secret/"+secret.Namespace+"/"+secret.Name] = secret
 		}
@@ -3928,7 +3951,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// Workload identities are useful topology only when explicitly selected.
 	if provider, ok := b.provider.(ServiceAccountProvider); ok {
-		serviceAccounts, serviceAccountsErr := provider.ServiceAccounts()
+		serviceAccounts, serviceAccountsErr := readTopologyInventory(inventory, "serviceaccounts", provider.ServiceAccounts)
 		if serviceAccountsErr != nil {
 			log.Printf("WARNING [topology] Failed to list ServiceAccounts: %v", serviceAccountsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list ServiceAccounts: %v", serviceAccountsErr))
@@ -4002,7 +4025,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 10. Add PVC nodes (if enabled)
 	if opts.IncludePVCs {
-		pvcs, pvcErr := b.provider.PersistentVolumeClaims()
+		pvcs, pvcErr := readTopologyInventory(inventory, "persistentvolumeclaims", b.provider.PersistentVolumeClaims)
 		if pvcErr != nil {
 			log.Printf("WARNING [topology] Failed to list PersistentVolumeClaims: %v", pvcErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list PersistentVolumeClaims: %v", pvcErr))
@@ -4059,7 +4082,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 11. Add HPA nodes
-	hpas, hpaErr := b.provider.HorizontalPodAutoscalers()
+	hpas, hpaErr := readTopologyInventory(inventory, "horizontalpodautoscalers", b.provider.HorizontalPodAutoscalers)
 	if hpaErr != nil {
 		log.Printf("WARNING [topology] Failed to list HorizontalPodAutoscalers: %v", hpaErr)
 		warnings = append(warnings, fmt.Sprintf("Failed to list HorizontalPodAutoscalers: %v", hpaErr))
@@ -4117,7 +4140,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 11b. Add PDB nodes
-	pdbs, pdbErr := b.provider.PodDisruptionBudgets()
+	pdbs, pdbErr := readTopologyInventory(inventory, "poddisruptionbudgets", b.provider.PodDisruptionBudgets)
 	if pdbErr != nil {
 		log.Printf("WARNING [topology] Failed to list PodDisruptionBudgets: %v", pdbErr)
 		warnings = append(warnings, fmt.Sprintf("Failed to list PodDisruptionBudgets: %v", pdbErr))
@@ -4198,7 +4221,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 11c. Add NetworkPolicy nodes
-	netpols, npErr := b.provider.NetworkPolicies()
+	netpols, npErr := readTopologyInventory(inventory, "networkpolicies", b.provider.NetworkPolicies)
 	if npErr != nil {
 		log.Printf("WARNING [topology] Failed to list NetworkPolicies: %v", npErr)
 		warnings = append(warnings, fmt.Sprintf("Failed to list NetworkPolicies: %v", npErr))
@@ -5777,7 +5800,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// Summary mode: stamp collapsed pod counts onto their workload nodes.
 	stampPodSummaries(nodes, podSummaries)
 
-	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings, podConsumers: podConsumers}
+	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings, IncompleteInventories: inventory.snapshot(), podConsumers: podConsumers}
 
 	// Add CRD discovery status
 	if b.dynamic != nil {
@@ -5892,19 +5915,20 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	nodes := make([]Node, 0)
 	edges := make([]Edge, 0)
 	warnings := make([]string, 0)
+	inventory := b.inventory
 
 	// First, collect all raw data
-	ingresses, ingressErr := b.provider.Ingresses()
+	ingresses, ingressErr := readTopologyInventory(inventory, "ingresses", b.provider.Ingresses)
 	if ingressErr != nil {
 		log.Printf("WARNING [topology/traffic] Failed to list Ingresses: %v", ingressErr)
 		warnings = append(warnings, fmt.Sprintf("Failed to list Ingresses: %v", ingressErr))
 	}
-	services, svcErr := b.provider.Services()
+	services, svcErr := readTopologyInventory(inventory, "services", b.provider.Services)
 	if svcErr != nil {
 		log.Printf("WARNING [topology/traffic] Failed to list Services: %v", svcErr)
 		warnings = append(warnings, fmt.Sprintf("Failed to list Services: %v", svcErr))
 	}
-	pods, podErr := b.provider.Pods()
+	pods, podErr := readTopologyInventory(inventory, "pods", b.provider.Pods)
 	if podErr != nil {
 		log.Printf("WARNING [topology/traffic] Failed to list Pods: %v", podErr)
 		warnings = append(warnings, fmt.Sprintf("Failed to list Pods: %v", podErr))
@@ -7458,7 +7482,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings}
+	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings, IncompleteInventories: inventory.snapshot()}
 
 	// Add CRD discovery status
 	if b.dynamic != nil {

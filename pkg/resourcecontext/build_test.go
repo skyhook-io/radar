@@ -2250,6 +2250,129 @@ func TestBuild_NodeAssignedPodsBounded(t *testing.T) {
 	}
 }
 
+func TestRelationshipLookupWarningCarriesIncompleteContext(t *testing.T) {
+	obj := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}
+	rc := Build(context.Background(), obj, Options{Relationships: &topology.Relationships{Warnings: []string{"Pod data is still loading"}, IncompleteInventories: []topology.InventoryWarning{{Resource: "pods", State: topology.InventoryPending}}}})
+	for _, omission := range rc.Omitted {
+		if omission.Field == "relationships" && omission.Reason == OmittedCacheCold {
+			return
+		}
+	}
+	t.Fatalf("lookup failure lost incomplete-context evidence: %+v", rc.Omitted)
+}
+
+type failingContextInventory struct {
+	mockResourceProvider
+	failed string
+}
+
+func (p failingContextInventory) Deployments() ([]*appsv1.Deployment, error) {
+	if p.failed == "Deployment" {
+		return nil, &topology.InventoryError{Resource: "deployments", State: topology.InventoryPending}
+	}
+	return p.mockResourceProvider.Deployments()
+}
+func (p failingContextInventory) StatefulSets() ([]*appsv1.StatefulSet, error) {
+	if p.failed == "StatefulSet" {
+		return nil, &topology.InventoryError{Resource: "statefulsets", State: topology.InventoryPending}
+	}
+	return p.mockResourceProvider.StatefulSets()
+}
+func (p failingContextInventory) DaemonSets() ([]*appsv1.DaemonSet, error) {
+	if p.failed == "DaemonSet" {
+		return nil, &topology.InventoryError{Resource: "daemonsets", State: topology.InventoryPending}
+	}
+	return p.mockResourceProvider.DaemonSets()
+}
+func (p failingContextInventory) Jobs() ([]*batchv1.Job, error) {
+	if p.failed == "Job" {
+		return nil, &topology.InventoryError{Resource: "jobs", State: topology.InventoryPending}
+	}
+	return p.mockResourceProvider.Jobs()
+}
+func (p failingContextInventory) CronJobs() ([]*batchv1.CronJob, error) {
+	if p.failed == "CronJob" {
+		return nil, &topology.InventoryError{Resource: "cronjobs", State: topology.InventoryPending}
+	}
+	return p.mockResourceProvider.CronJobs()
+}
+func (p failingContextInventory) Pods() ([]*corev1.Pod, error) {
+	if p.failed == "Pod" {
+		return nil, &topology.InventoryError{Resource: "pods", State: topology.InventoryPending}
+	}
+	return p.mockResourceProvider.Pods()
+}
+func (p failingContextInventory) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
+	if p.failed == "HorizontalPodAutoscaler" {
+		return nil, &topology.InventoryError{Resource: "horizontalpodautoscalers", State: topology.InventoryPending}
+	}
+	return p.mockResourceProvider.HorizontalPodAutoscalers()
+}
+func TestBuild_ReferencedByPreservesEveryInventoryError(t *testing.T) {
+	spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "app", EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}}}}
+	provider := mockResourceProvider{
+		pods:    []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "team"}, Spec: spec}},
+		deploys: []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "deployment", Namespace: "team"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: spec}}}},
+	}
+	for _, kind := range []string{"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "Pod"} {
+		t.Run(kind, func(t *testing.T) {
+			rc := Build(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "team"}}, Options{Provider: failingContextInventory{mockResourceProvider: provider, failed: kind}})
+			if rc.ReferencedBy == nil || len(rc.ReferencedBy.Items) == 0 {
+				t.Fatalf("positive visible references lost: %+v", rc)
+			}
+			found := false
+			for _, o := range rc.Omitted {
+				if o.Field == "referencedBy" && o.Reason == OmittedCacheCold {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s failure was swallowed: %+v", kind, rc)
+			}
+		})
+	}
+	rc := Build(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "team"}}, Options{Provider: mockResourceProvider{}})
+	if len(rc.Omitted) != 0 || rc.ReferencedBy != nil {
+		t.Fatalf("ready empty inventory changed: %+v", rc)
+	}
+}
+func TestBuild_ScalerInventoryFailureRetainsReference(t *testing.T) {
+	rc := Build(context.Background(), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team"}}, Options{
+		Relationships: &topology.Relationships{Scalers: []topology.ResourceRef{{Kind: "HorizontalPodAutoscaler", Group: "autoscaling", Name: "autoscaler", Namespace: "team"}}},
+		Provider:      failingContextInventory{failed: "HorizontalPodAutoscaler"},
+	})
+	if len(rc.ScaledBy) != 1 || rc.ScaledBy[0].HPASummary != nil {
+		t.Fatalf("scaler ref/summary: %+v", rc)
+	}
+	for _, o := range rc.Omitted {
+		if o.Field == "scaledBy.hpaSummary" && o.Reason == OmittedCacheCold {
+			return
+		}
+	}
+	t.Fatalf("failed HPA summary claimed complete evidence: %+v", rc)
+}
+
+func TestBuild_GraphInventoryOmissionsDescribeActualState(t *testing.T) {
+	for _, state := range []topology.InventoryState{topology.InventoryPending, topology.InventoryFailed, topology.InventoryUncovered, topology.InventoryUnavailable} {
+		warning := topology.InventoryWarningFor("horizontalpodautoscalers", &topology.InventoryError{Resource: "horizontalpodautoscalers", State: state})
+		rc := Build(context.Background(), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team"}}, Options{Relationships: &topology.Relationships{Warnings: []string{warning.Message}, IncompleteInventories: []topology.InventoryWarning{warning}}})
+		reason := OmittedUnavailable
+		if state == topology.InventoryPending {
+			reason = OmittedCacheCold
+		}
+		seen := map[string]bool{}
+		for _, omission := range rc.Omitted {
+			if omission.Reason != reason {
+				t.Fatalf("%s mislabeled: %+v", state, omission)
+			}
+			seen[omission.Field] = true
+		}
+		if !seen["relationships"] || !seen["scaledBy"] {
+			t.Fatalf("absent graph scaler looked complete: %+v", rc)
+		}
+	}
+}
+
 func TestBuildCrossNamespaceGraphDependenciesAreAuthorized(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",

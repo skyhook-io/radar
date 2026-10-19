@@ -3,12 +3,27 @@ package resourcecontext
 import (
 	"context"
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"slices"
 	"testing"
 )
+
+type pendingIngressProvider struct{ mockResourceProvider }
+
+func (pendingIngressProvider) Ingresses() ([]*networkingv1.Ingress, error) {
+	return nil, &topology.InventoryError{Resource: "ingresses", State: topology.InventoryPending}
+}
+
+func TestBuild_IngressTLSColdSourceIsQualified(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tls", Namespace: "a"}}
+	rc := Build(context.Background(), secret, Options{Provider: pendingIngressProvider{}})
+	if !slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedCacheCold}) {
+		t.Fatalf("loading Ingress evidence was not marked cache_cold: %+v", rc.Omitted)
+	}
+}
 
 type unavailableIngressProvider struct{ mockResourceProvider }
 

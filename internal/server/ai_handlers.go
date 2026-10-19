@@ -146,7 +146,7 @@ func parseVerbosity(r *http.Request, defaultLevel aicontext.VerbosityLevel) aico
 // at Summary verbosity by default. Pass ?context=none to opt out for a
 // bare list.
 func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireAIResourceConnection(w, r) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
@@ -168,9 +168,8 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	namespaces = finalNamespaces
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ok := s.gateAIResourceRead(w, kind, group, namespaces)
+	if !ok {
 		return
 	}
 
@@ -307,7 +306,7 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 //
 //	<minified>
 func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireAIResourceConnection(w, r) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
@@ -333,9 +332,8 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ok := s.gateAIResourceRead(w, kind, group, []string{namespace})
+	if !ok {
 		return
 	}
 
@@ -365,6 +363,47 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		"resource":        minified,
 		"resourceContext": rc,
 	})
+}
+
+func (s *Server) requireAIResourceConnection(w http.ResponseWriter, r *http.Request) bool {
+	// Context depends on indexes published after the cache finishes startup.
+	if r.URL.Query().Get("context") == "none" {
+		return s.requireConnectedOrSyncing(w)
+	}
+	return s.requireConnected(w)
+}
+
+// AI lists must cover every requested namespace before treating an empty result
+// as absence; an empty scope asks for cluster-wide completeness.
+func (s *Server) gateAIResourceRead(w http.ResponseWriter, kind, group string, namespaces []string) (*k8s.ResourceCache, bool) {
+	cache, ok := s.gateResourceRead(w, kind, group)
+	if !ok {
+		return nil, false
+	}
+	key := informerKeyForKind(kind)
+	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) || cache.KindReadinessFor(key) != k8s.KindReady {
+		return cache, true
+	}
+	inventory := k8s.NewTopologyResourceProvider(cache).(topology.ResourceInventoryProvider)
+	scopes := namespaces
+	if len(scopes) == 0 {
+		scopes = []string{""}
+	}
+	for _, namespace := range scopes {
+		if err := inventory.InventoryError(key, namespace); err != nil {
+			if key == "limitranges" {
+				s.writeError(w, http.StatusForbidden, "Radar does not have LimitRange visibility for the requested namespace scope")
+			} else {
+				message := err.Error()
+				if hint := k8s.InventoryNamespaceHint(cache, key, namespaces); hint != "" {
+					message += ". " + hint
+				}
+				s.writeErrorCode(w, http.StatusConflict, "kind_namespace_uncovered", message)
+			}
+			return nil, false
+		}
+	}
+	return cache, true
 }
 
 // fetchAIResource resolves the resource from the typed cache or dynamic cache.

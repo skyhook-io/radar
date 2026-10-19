@@ -72,6 +72,13 @@ describe('FetchResult', () => {
     expect(renderToString(<FetchResult loading={false} error={err} />)).not.toContain('Retry')
   })
 
+  it('explains an unwatched namespace without calling the cluster unavailable', () => {
+    const html = renderToString(<FetchResult loading={false} error={shaped('Radar does not watch pods in namespace other', 409, { error_code: 'kind_namespace_uncovered' })} />)
+    expect(html).toContain('Namespace not watched')
+    expect(html).toContain('Radar does not watch pods in namespace other')
+    expect(html).not.toContain('Cluster unavailable')
+  })
+
   it('renders "Sign-in required" on 401', () => {
     const html = renderToString(
       <FetchResult loading={false} error={shaped('Unauthorized', 401)} />,

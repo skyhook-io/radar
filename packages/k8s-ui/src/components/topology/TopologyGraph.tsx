@@ -25,6 +25,7 @@ import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Info, Layers, 
 import { PaneLoader } from '../ui/PaneLoader'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { TopologyOverlayBar } from './TopologyOverlayBar'
+import { topologyWarningNotice } from './inventory-notice'
 import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
@@ -37,7 +38,6 @@ import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, isGroupEffectivelyCollapsed, type GroupDisplayLevel } from './layout'
 import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode, HealthStatus } from '../../types'
-import { pluralize } from '../../utils/pluralize'
 import { foldHash } from '../../utils/structure-hash'
 import { recordLayoutDuration, recordLayoutSkipped, recordStructureKeyDuration } from '../../perf'
 
@@ -1055,11 +1055,7 @@ export function TopologyGraph({
       <TopologyOverlayBar>
         {/* Warning banner for partial topology data */}
         {topology?.warnings && topology.warnings.length > 0 && (() => {
-          const rbacWarnings = topology.warnings.filter(w => w.includes('RBAC not granted'))
-          const viewWarnings = topology.warnings.filter(w => w.startsWith('Topology view:'))
-          const otherWarnings = topology.warnings.filter(w => !w.includes('RBAC not granted') && !w.startsWith('Topology view:'))
-          const isAllRbac = otherWarnings.length === 0 && viewWarnings.length === 0
-          const isViewLimited = otherWarnings.length === 0 && rbacWarnings.length === 0 && viewWarnings.length > 0
+          const { rbacWarnings, viewWarnings, otherWarnings, isAllRbac, isViewLimited, label, message } = topologyWarningNotice(topology)
           return (
             <div className={`pointer-events-auto ${isViewLimited ? 'max-w-xl' : 'w-full'} ${isAllRbac ? 'bg-amber-500/10 border-amber-500/20' : 'bg-amber-500/10 border-amber-500/30'} border rounded-lg p-2 backdrop-blur-sm`}>
               <div className="flex items-start gap-2">
@@ -1070,14 +1066,10 @@ export function TopologyGraph({
                 )}
                 <div className="text-sm">
                   <span className="font-medium text-amber-400">
-                    {isAllRbac ? 'Limited Access:' : isViewLimited ? 'View limited:' : 'Warning:'}
+                    {label}
                   </span>
                   <span className="text-theme-text-secondary ml-1">
-                    {isAllRbac
-                      ? `${pluralize(rbacWarnings.length, 'resource type')} not accessible due to RBAC restrictions.`
-                      : isViewLimited
-                        ? 'Large retained run history is summarized to keep the graph readable.'
-                        : 'Some resources failed to load. Data may be incomplete.'}
+                    {message}
                   </span>
                   <button
                     {...warningsDisclosure.buttonProps}

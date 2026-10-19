@@ -139,3 +139,40 @@ func TestBuild_ReverseReferenceSourceFailureIsExplicit(t *testing.T) {
 		}
 	}
 }
+
+type pendingPodInventoryProvider struct{ mockResourceProvider }
+
+func (p pendingPodInventoryProvider) Pods() ([]*corev1.Pod, error) {
+	return p.pods, p.InventoryError("pods", "")
+}
+
+func (p pendingPodInventoryProvider) InventoryError(resource, _ string) error {
+	if resource == "pods" {
+		return &topology.InventoryError{Resource: "pods", State: topology.InventoryPending}
+	}
+	return nil
+}
+
+func TestBuild_NodePlacementRetainsVisiblePodsWhileInventoryLoads(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}
+	provider := pendingPodInventoryProvider{mockResourceProvider{pods: []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "prod"}, Spec: corev1.PodSpec{NodeName: "worker"}}}}}
+	for _, withTopology := range []bool{false, true} {
+		opts := Options{Tier: TierBasic, Provider: provider}
+		if withTopology {
+			opts.Topology = &topology.Topology{}
+		}
+		rc := Build(context.Background(), node, opts)
+		if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 {
+			t.Fatalf("topology=%v: visible Pod dropped while loading: %+v", withTopology, rc.ReferencedBy)
+		}
+		found := false
+		for _, field := range rc.Omitted {
+			if field.Field == "referencedBy" && field.Reason == OmittedCacheCold {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("topology=%v: loading inventory not reported: %+v", withTopology, rc.Omitted)
+		}
+	}
+}
