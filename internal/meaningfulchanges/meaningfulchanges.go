@@ -10,6 +10,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -1533,9 +1534,42 @@ func podSpecForObject(obj any) (corev1.PodSpec, bool) {
 					return spec, true
 				}
 			}
+			return rolloutWorkloadRefPodSpec(o)
 		}
 	}
 	return corev1.PodSpec{}, false
+}
+
+// rolloutWorkloadRefPodSpec reads the pod template of the Deployment or
+// ReplicaSet a Rollout's spec.workloadRef names, from the informer cache.
+func rolloutWorkloadRefPodSpec(rollout *unstructured.Unstructured) (corev1.PodSpec, bool) {
+	target, err := rollouts.ResolveTemplateTarget(rollout)
+	cache := k8s.GetResourceCache()
+	if err != nil || target.GVR == rollouts.GVR || cache == nil {
+		return corev1.PodSpec{}, false
+	}
+	switch target.GVR.Resource {
+	case "deployments":
+		if lister := cache.Deployments(); lister != nil {
+			if deployment, err := lister.Deployments(rollout.GetNamespace()).Get(target.Name); err == nil {
+				return deployment.Spec.Template.Spec, true
+			}
+		}
+	case "replicasets":
+		if lister := cache.ReplicaSets(); lister != nil {
+			if replicaSet, err := lister.ReplicaSets(rollout.GetNamespace()).Get(target.Name); err == nil {
+				return replicaSet.Spec.Template.Spec, true
+			}
+		}
+	}
+	return corev1.PodSpec{}, false
+}
+
+// ConfigReferencesKnown reports whether obj's pod template could be read, so
+// its referenced ConfigMaps and Secrets are known.
+func ConfigReferencesKnown(obj any) bool {
+	_, ok := podSpecForObject(obj)
+	return ok
 }
 
 func changeKey(c issuesapi.RecentChange) string {

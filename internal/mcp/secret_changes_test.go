@@ -197,3 +197,40 @@ func TestRolloutIssueCorrelatesReferencedSecret(t *testing.T) {
 		t.Fatalf("Rollout correlation changes = %+v", result.Changes)
 	}
 }
+
+func TestRolloutWorkloadRefCorrelatesReferencedSecret(t *testing.T) {
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Env: []corev1.EnvVar{{Name: "PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "db"}, Key: "password"}}}}}}}}}}
+	client := fake.NewSimpleClientset(deployment, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := func(name, target string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"name": name, "namespace": "shop"}, "spec": map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": target}}}}
+	}
+	dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rollout("ref", "api"), rollout("dangling", "missing"))
+	if err := k8s.InitTestDynamicResourceCache(dynamic, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Rollout", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !k8s.GetDynamicResourceCache().WaitForSync(gvr, 2*time.Second) {
+		t.Fatal("Rollout cache did not sync")
+	}
+	store := initCorrelationStore(t)
+	if err := store.Append(context.Background(), timeline.TimelineEvent{ID: "secret-write", Kind: "Secret", APIVersion: "v1", Name: "db", Namespace: "shop", Timestamp: time.Now().Add(-5 * time.Minute), ClusterContext: k8s.ActiveClusterContext(), Source: timeline.SourceInformer, EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", OldValue: []string{"password"}, NewValue: []string{"password"}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	result, withheld, _, err := correlationChangesForIssue(context.Background(), &issuesapi.Issue{Kind: "Rollout", Namespace: "shop", Name: "ref"}, time.Hour, 10)
+	if err != nil || withheld || len(result.Changes) != 1 || result.Changes[0].Name != "db" {
+		t.Fatalf("workloadRef Rollout: changes=%+v withheld=%v err=%v", result.Changes, withheld, err)
+	}
+	// An unresolvable target leaves the sources unknown, so no absence claim.
+	result, withheld, _, err = correlationChangesForIssue(context.Background(), &issuesapi.Issue{Kind: "Rollout", Namespace: "shop", Name: "dangling"}, time.Hour, 10)
+	if err != nil || !withheld || len(result.Changes) != 0 {
+		t.Fatalf("dangling workloadRef Rollout: changes=%+v withheld=%v err=%v", result.Changes, withheld, err)
+	}
+}

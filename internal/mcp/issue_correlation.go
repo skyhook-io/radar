@@ -251,7 +251,7 @@ func helmIssueChangesForCorrelation(ctx context.Context, iss *issuesapi.Issue, w
 }
 
 // correlationChangesForIssue also reports whether sources were withheld from
-// the caller, and returns the workload object whose ConfigMaps and Secrets were
+// the caller or could not be determined, and returns the workload object whose ConfigMaps and Secrets were
 // correlated, or nil.
 func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration, limit int) (meaningfulchanges.RecentResult, bool, any, error) {
 	if meaningfulchanges.WorkloadKind(iss.Kind) {
@@ -262,6 +262,11 @@ func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, windo
 			ctx, obj, iss.Kind, iss.Namespace, iss.Name,
 			window, limit, correlationFieldLimit, configSourceFilter(ctx, iss.Namespace), recentChangePodReadFilter(ctx),
 		)
+		// A Rollout whose template can't be read (an unsupported or missing
+		// workloadRef target) has unknown sources, so absence proves nothing.
+		if strings.EqualFold(iss.Kind, "Rollout") && !meaningfulchanges.ConfigReferencesKnown(obj) {
+			sourcesWithheld = true
+		}
 		return result, sourcesWithheld, obj, err
 	}
 	result, err := meaningfulchanges.RecentForResourceDetailed(
