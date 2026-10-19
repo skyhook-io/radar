@@ -22,8 +22,10 @@ var (
 func fastWaitPolling(t *testing.T) {
 	t.Helper()
 	prev := waitPollInterval
+	capBefore := waitMaxTimeout
+	waitMaxTimeout = 80 * time.Millisecond
 	waitPollInterval = 10 * time.Millisecond
-	t.Cleanup(func() { waitPollInterval = prev })
+	t.Cleanup(func() { waitPollInterval = prev; waitMaxTimeout = capBefore })
 }
 
 func waitDynamic(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
@@ -72,7 +74,7 @@ func TestWaitForRolloutWaitsUntilDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := decodeToolResult(t, res)
-	if got["met"] != true || got["condition"] != "rollout" || gets != 4 {
+	if got["state"] != "met" || got["condition"] != "rollout" || gets != 4 {
 		t.Fatalf("met after %d gets: %+v", gets, got)
 	}
 }
@@ -113,7 +115,7 @@ func TestWaitForStopsOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := decodeToolResult(t, res)
-	if got["met"] != false || !strings.Contains(got["failed"].(string), "BackoffLimitExceeded") || got["condition"] != "complete" {
+	if got["state"] != "failed" || !strings.Contains(got["objects"].([]any)[0].(map[string]any)["observed"].(string), "BackoffLimitExceeded") || got["condition"] != "complete" {
 		t.Fatalf("result: %+v", got)
 	}
 }
@@ -131,7 +133,7 @@ func TestWaitForTimesOutWithLastState(t *testing.T) {
 	}
 	got := decodeToolResult(t, res)
 	objects := got["objects"].([]any)
-	if got["met"] != false || got["timedOut"] != true || !strings.Contains(objects[0].(map[string]any)["message"].(string), "1 of 3 new replicas updated") {
+	if got["state"] != "waiting" || !strings.Contains(objects[0].(map[string]any)["observed"].(string), "1 of 3 new replicas updated") {
 		t.Fatalf("result: %+v", got)
 	}
 }
@@ -147,7 +149,7 @@ func TestWaitForDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := decodeToolResult(t, res)
-	if got["met"] != false || !strings.Contains(got["objects"].([]any)[0].(map[string]any)["message"].(string), "example.com/cleanup") {
+	if got["state"] != "waiting" || !strings.Contains(got["objects"].([]any)[0].(map[string]any)["observed"].(string), "example.com/cleanup") {
 		t.Fatalf("finalizer-held object: %+v", got)
 	}
 
@@ -168,7 +170,7 @@ func TestWaitForDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeToolResult(t, res); got["met"] != true {
+	if got := decodeToolResult(t, res); got["state"] != "met" {
 		t.Fatalf("replacement kept the wait open: %+v", got)
 	}
 
@@ -176,7 +178,7 @@ func TestWaitForDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeToolResult(t, res); got["met"] != true {
+	if got := decodeToolResult(t, res); got["state"] != "met" {
 		t.Fatalf("no matches must satisfy deleted: %+v", got)
 	}
 }
@@ -195,7 +197,7 @@ func TestWaitForSelectorNeedsEveryMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := decodeToolResult(t, res)
-	if got["met"] != false || len(got["objects"].([]any)) != 2 {
+	if got["state"] != "waiting" || len(got["objects"].([]any)) != 2 {
 		t.Fatalf("one unready pod must keep the wait open: %+v", got)
 	}
 }
@@ -233,35 +235,50 @@ func TestWaitForAllCoversEveryObjectOfTheKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeToolResult(t, res); got["met"] != false || got["all"] != true || len(got["objects"].([]any)) != 2 {
+	if got := decodeToolResult(t, res); got["state"] != "waiting" || got["all"] != true || len(got["objects"].([]any)) != 2 {
 		t.Fatalf("result: %+v", got)
 	}
 	res, _, err = waitFor(t.Context(), waitDynamic(job("a", true), job("b", true)), waitForInput{Kind: "job", Namespace: "shop", All: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeToolResult(t, res); got["met"] != true {
+	if got := decodeToolResult(t, res); got["state"] != "met" {
 		t.Fatalf("result: %+v", got)
 	}
 }
 
 func TestWaitForRefusesBadInput(t *testing.T) {
+	fastWaitPolling(t)
 	dyn := waitDynamic()
 	for name, tc := range map[string]struct {
 		input waitForInput
 		want  string
 	}{
+		"nothing matches":     {waitForInput{Kind: "deployment", Namespace: "shop", Name: "ghost"}, ""},
+		"timeout above limit": {waitForInput{Kind: "deployment", Namespace: "shop", Name: "web", TimeoutSeconds: 601}, ""},
 		"name and selector":   {waitForInput{Kind: "pod", Namespace: "shop", Name: "a", LabelSelector: "app=a"}, "exactly one"},
 		"name and all":        {waitForInput{Kind: "pod", Namespace: "shop", Name: "a", All: true}, "exactly one"},
 		"neither":             {waitForInput{Kind: "pod", Namespace: "shop"}, "exactly one"},
 		"no namespace":        {waitForInput{Kind: "deployment", Name: "web"}, "namespace is required"},
 		"no default":          {waitForInput{Kind: "configmap", Namespace: "shop", Name: "x"}, "condition is required"},
 		"rollout on a job":    {waitForInput{Kind: "job", Namespace: "shop", Name: "x", Condition: "rollout"}, "applies to Deployment"},
-		"nothing matches":     {waitForInput{Kind: "deployment", Namespace: "shop", Name: "ghost"}, "no deployment matches"},
-		"timeout above limit": {waitForInput{Kind: "deployment", Namespace: "shop", Name: "web", TimeoutSeconds: 601}, "at most 600"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := waitFor(t.Context(), dyn, tc.input); err == nil || !strings.Contains(err.Error(), tc.want) {
+			res, _, err := waitFor(t.Context(), dyn, tc.input)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := decodeToolResult(t, res)
+				if got["state"] != "waiting" || got["observed"] != "nothing matches" {
+					t.Fatal(got)
+				}
+				if tc.input.TimeoutSeconds > 45 && got["note"] != "one call waits at most 45s; call again to keep waiting" {
+					t.Fatal(got)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 		})

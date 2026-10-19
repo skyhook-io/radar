@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,43 +14,76 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
-const (
-	waitDefaultTimeout = 120 * time.Second
-	waitMaxTimeout     = 600 * time.Second
+var (
+	waitMaxTimeout   = 45 * time.Second
+	waitPollInterval = 2 * time.Second
+	waitEmptyGrace   = 10 * time.Second
+	waitBlockerGrace = 10 * time.Second
+	waitNow          = time.Now
 )
-
-// waitPollInterval is a var so tests don't wait real seconds.
-var waitPollInterval = 2 * time.Second
 
 type waitForInput struct {
-	Kind           string `json:"kind" jsonschema:"resource kind, e.g. deployment, job, pod"`
+	Kind           string `json:"kind" jsonschema:"resource kind: deployment, statefulset, daemonset, rollout, job, pod, namespace, or any kind including CRDs"`
 	Group          string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous"`
 	Namespace      string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds"`
-	Name           string `json:"name,omitempty" jsonschema:"object name; or set label_selector instead"`
-	LabelSelector  string `json:"label_selector,omitempty" jsonschema:"every matching object must meet the condition; with deleted, none may remain"`
+	Name           string `json:"name,omitempty" jsonschema:"object name; or set label_selector or all"`
+	UID            string `json:"uid,omitempty" jsonschema:"with name: the uid a previous wait_for call returned, so a replacement with the same name doesn't count as this object"`
+	LabelSelector  string `json:"label_selector,omitempty" jsonschema:"every matching object must meet the condition; with deleted, none may remain; to wait for replacements, wait on their controller's rollout"`
 	All            bool   `json:"all,omitempty" jsonschema:"every object of the kind in the namespace"`
-	Condition      string `json:"condition,omitempty" jsonschema:"rollout, complete, ready, deleted, or a status condition type; defaults by kind"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"default 120, max 600"`
+	Condition      string `json:"condition,omitempty" jsonschema:"rollout, complete, ready, deleted, a condition type (Type or Type=Status), or jsonpath={.status.path}=value; defaults by kind"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"seconds this call waits, 1-45 (default 45); larger values wait 45"`
 }
 
 type waitObjectState struct {
-	Name    string `json:"name"`
-	Met     bool   `json:"met"`
-	Message string `json:"message,omitempty"`
+	Name               string           `json:"name"`
+	UID                types.UID        `json:"uid"`
+	Met                bool             `json:"met"`
+	Generation         int64            `json:"generation"`
+	ObservedGeneration any              `json:"observedGeneration,omitempty"`
+	Observed           string           `json:"observed"`
+	Replicas           map[string]int64 `json:"replicas,omitempty"`
+	InStateSeconds     *int64           `json:"inStateSeconds,omitempty"`
+	state              string
+	next               string
+	controllerObserved bool
 }
 
-// waitCheck reports whether one object meets the condition. A non-empty
-// failure means it never will without another change, so waiting stops.
 type waitCheck func(obj *unstructured.Unstructured) (met bool, message, failure string)
 
+type waitStepResult[T any] struct {
+	value T
+	err   error
+}
+
+// Cache and discovery helpers are synchronous; the call deadline also bounds those steps.
+func waitStep[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	if err := ctx.Err(); err != nil {
+		var zero T
+		return zero, err
+	}
+	ch := make(chan waitStepResult[T], 1)
+	go func() { v, err := fn(); ch <- waitStepResult[T]{v, err} }()
+	select {
+	case r := <-ch:
+		return r.value, r.err
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	}
+}
+
 func handleWaitFor(ctx context.Context, req *mcp.CallToolRequest, input waitForInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, waitTimeout(input.TimeoutSeconds))
+	defer cancel()
 	if err := requireConnected(); err != nil {
 		return nil, nil, err
 	}
@@ -56,10 +91,24 @@ func handleWaitFor(ctx context.Context, req *mcp.CallToolRequest, input waitForI
 	if dyn == nil {
 		return nil, nil, errNotConnected()
 	}
-	return waitFor(ctx, dyn, input)
+	return waitForUntil(ctx, dyn, input, start)
+}
+
+func waitTimeout(seconds int) time.Duration {
+	if seconds <= 0 || seconds >= 45 {
+		return waitMaxTimeout
+	}
+	return min(time.Duration(seconds)*time.Second, waitMaxTimeout)
 }
 
 func waitFor(ctx context.Context, dyn dynamic.Interface, input waitForInput) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, waitTimeout(input.TimeoutSeconds))
+	defer cancel()
+	return waitForUntil(ctx, dyn, input, start)
+}
+
+func waitForUntil(ctx context.Context, dyn dynamic.Interface, input waitForInput, start time.Time) (*mcp.CallToolResult, any, error) {
 	kind, name, selector := strings.TrimSpace(input.Kind), strings.TrimSpace(input.Name), strings.TrimSpace(input.LabelSelector)
 	if kind == "" {
 		return nil, nil, fmt.Errorf("kind is required")
@@ -67,119 +116,303 @@ func waitFor(ctx context.Context, dyn dynamic.Interface, input waitForInput) (*m
 	if targets := btoi(name != "") + btoi(selector != "") + btoi(input.All); targets != 1 {
 		return nil, nil, fmt.Errorf("set exactly one of name, label_selector or all")
 	}
-	timeout, err := boundedTimeout(input.TimeoutSeconds, waitDefaultTimeout, waitMaxTimeout)
+	if input.UID != "" && name == "" {
+		return nil, nil, fmt.Errorf("uid needs name")
+	}
+	if input.TimeoutSeconds < 0 {
+		return nil, nil, fmt.Errorf("timeout_seconds must be positive")
+	}
+	type resolved struct {
+		gvr        schema.GroupVersionResource
+		namespaced bool
+	}
+	r, err := waitStep(ctx, func() (resolved, error) {
+		g, ns, e := resolveMutationGVR(kind, strings.TrimSpace(input.Group))
+		return resolved{g, ns}, e
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	gvr, namespaced, err := resolveMutationGVR(kind, strings.TrimSpace(input.Group))
-	if err != nil {
-		return nil, nil, err
+	gvr := r.gvr
+	if prefix, suffix, ok := strings.Cut(name, "/"); ok {
+		other, err := waitStep(ctx, func() (schema.GroupVersionResource, error) {
+			g, _, e := resolveMutationGVR(prefix, strings.TrimSpace(input.Group))
+			return g, e
+		})
+		if err != nil || other != gvr {
+			return nil, nil, fmt.Errorf("name %q names a different kind; set kind=%s", name, prefix)
+		}
+		if suffix == "" || strings.Contains(suffix, "/") {
+			return nil, nil, fmt.Errorf("name must be a non-empty object name or kind/name")
+		}
+		name = suffix
 	}
 	namespace := strings.TrimSpace(input.Namespace)
-	if namespaced && namespace == "" {
+	if r.namespaced && namespace == "" {
 		return nil, nil, fmt.Errorf("namespace is required for namespaced kind %q", kind)
 	}
-	var client dynamic.ResourceInterface = dyn.Resource(gvr)
-	if namespaced {
-		client = dyn.Resource(gvr).Namespace(namespace)
+	if !r.namespaced {
+		namespace = ""
 	}
 	condition := strings.TrimSpace(input.Condition)
 	if condition == "" {
-		condition = defaultWaitCondition(gvr.Resource)
+		condition = defaultWaitCondition(gvr)
 		if condition == "" {
-			return nil, nil, fmt.Errorf("condition is required for kind %q: deleted, or a status condition type such as Ready", kind)
+			return nil, nil, fmt.Errorf("condition is required for kind %q: deleted, a condition type (Type=Status), or jsonpath={.status.field}=value", kind)
 		}
+	}
+	if strings.EqualFold(condition, "delete") {
+		condition = "deleted"
 	}
 	deleted := strings.EqualFold(condition, "deleted")
-	var check waitCheck
-	if !deleted {
-		if check, err = waitCheckFor(gvr.Resource, condition); err != nil {
-			return nil, nil, err
-		}
+	if gvr.Group == "" && gvr.Resource == "secrets" && !deleted {
+		return nil, nil, fmt.Errorf("Secrets support only condition=deleted")
 	}
-
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	start := time.Now()
-	result := map[string]any{"kind": kind, "namespace": namespace, "condition": condition}
+	var check waitCheck
+	var jp *waitJSONPath
+	if strings.HasPrefix(strings.ToLower(condition), "jsonpath=") {
+		jp, err = parseWaitJSONPath(condition[len("jsonpath="):])
+	} else if !deleted {
+		check, err = waitCheckFor(gvr, condition)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var client dynamic.ResourceInterface = dyn.Resource(gvr)
+	if r.namespaced {
+		client = dyn.Resource(gvr).Namespace(namespace)
+	}
+	result := map[string]any{"kind": kind, "apiVersion": gvr.GroupVersion().String(), "condition": condition}
+	if namespace != "" {
+		result["namespace"] = namespace
+	}
 	if name != "" {
 		result["name"] = name
-	} else {
-		result["label_selector"] = selector
-	}
-	if input.All {
+	} else if input.All {
 		result["all"] = true
+	} else {
+		result["labelSelector"] = selector
 	}
-
-	// deleted by name tracks the first UID seen: a replacement with the same
-	// name is a new object, and the one being waited on is gone.
-	var firstUID types.UID
-	ticker := time.NewTicker(waitPollInterval)
-	defer ticker.Stop()
-	for poll := 0; ; poll++ {
-		objs, readErr := readWaitTargets(waitCtx, client, name, selector)
-		var states []waitObjectState
-		met, failure := false, ""
-		switch {
-		case readErr != nil && waitCtx.Err() != nil:
-			// The deadline cut a read short; report the last full poll below.
-		case readErr != nil:
-			return nil, nil, fmt.Errorf("failed to read %s: %w", kind, readErr)
-		case deleted:
-			if name != "" && len(objs) == 1 && firstUID == "" {
-				firstUID = objs[0].GetUID()
-			}
-			remaining := 0
-			for _, obj := range objs {
-				if name == "" || obj.GetUID() == firstUID {
-					remaining++
-					states = append(states, waitObjectState{Name: obj.GetName(), Message: deletionState(obj)})
+	if input.TimeoutSeconds > 45 {
+		result["note"] = "one call waits at most 45s; call again to keep waiting"
+	}
+	pinnedUID := types.UID(input.UID)
+	successful, strikes := false, 0
+	var lastErr error
+	var states []waitObjectState
+	var emptySince time.Time
+	blockerSince := map[waitBlockerKey]time.Time{}
+	finish := func(state, next string) (*mcp.CallToolResult, any, error) {
+		result["state"] = state
+		result["waitedSeconds"] = int64(time.Since(start) / time.Second)
+		sort.SliceStable(states, func(i, j int) bool { return waitStateRank(states[i]) < waitStateRank(states[j]) })
+		if len(states) > 10 {
+			count := 0
+			for _, s := range states {
+				if s.Met {
+					count++
 				}
 			}
-			met = remaining == 0
-		default:
-			if len(objs) == 0 {
-				if poll == 0 {
-					return nil, nil, fmt.Errorf("no %s matches %s in %q", kind, waitTargetLabel(name, selector), namespace)
-				}
-				failure = "the objects were deleted while waiting"
+			result["total"] = len(states)
+			result["metCount"] = count
+		}
+		if states == nil {
+			states = []waitObjectState{}
+		}
+		result["objects"] = states[:min(len(states), 10)]
+		if state != "met" {
+			result["next"] = truncateCrashLogLine(next, 300)
+		}
+		return toJSONResult(result)
+	}
+	for {
+		if r.namespaced {
+			allowed, e := waitStep(ctx, func() (bool, error) {
+				return namespaceWithinPin(namespace) && checkNamespaceAccess(ctx, namespace), nil
+			})
+			if e != nil {
+				lastErr = e
 				break
 			}
-			met = true
+			if !allowed {
+				return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", namespace)
+			}
+		}
+		objs, readErr := waitStep(ctx, func() ([]*unstructured.Unstructured, error) { return readWaitTargets(ctx, client, name, selector) })
+		if readErr != nil {
+			lastErr = readErr
+			if apierrors.IsForbidden(readErr) {
+				return nil, nil, fmt.Errorf("cannot get %s in %q: %v. get_subject_permissions shows what this identity can do", gvr.Resource, namespace, readErr)
+			}
+			if _, ok := readErr.(*waitInputError); ok {
+				return nil, nil, &waitInputError{fmt.Sprintf("more than 200 %s match; narrow with label_selector", gvr.Resource)}
+			}
+			strikes++
+			if strikes >= 3 {
+				return nil, nil, fmt.Errorf("failed to read %s after three consecutive errors: %w", kind, readErr)
+			}
+		} else {
+			successful = true
+			strikes = 0
+			previousStates := states
+			states = nil
+			interrupted := false
+			replaced := false
+			delete(result, "blockers")
+			delete(result, "blockersUnavailable")
+			delete(result, "observed")
+			if len(objs) == 0 {
+				if deleted {
+					return finish("met", "")
+				}
+				result["observed"] = "nothing matches"
+				if emptySince.IsZero() {
+					emptySince = waitNow()
+				}
+			} else {
+				emptySince = time.Time{}
+			}
+			allMet := len(objs) > 0
+			verdict, next := "waiting", "not met yet; call wait_for again with the same arguments until your own time limit"
+			if len(objs) == 0 {
+				next = fmt.Sprintf("nothing matches %s in %s; check the name or selector with list_resources", waitTargetLabel(name, selector), namespace)
+			}
+			var blockers []waitBlocker
+			seenBlockers := map[waitBlockerKey]bool{}
+			checked := 0
 			for _, obj := range objs {
-				ok, message, fail := check(obj)
-				states = append(states, waitObjectState{Name: obj.GetName(), Met: ok, Message: message})
-				met = met && ok
-				if fail != "" && failure == "" {
-					failure = obj.GetName() + ": " + fail
+				result["kind"] = obj.GetKind()
+				result["apiVersion"] = obj.GetAPIVersion()
+				s := waitObjectState{Name: obj.GetName(), UID: obj.GetUID(), Generation: obj.GetGeneration()}
+				if v, ok, _ := unstructured.NestedFieldNoCopy(obj.Object, "status", "observedGeneration"); ok {
+					s.ObservedGeneration = v
+				}
+				if deleted {
+					if name != "" && pinnedUID == "" {
+						pinnedUID = obj.GetUID()
+					}
+					if name != "" && pinnedUID != obj.GetUID() {
+						continue
+					}
+					s.Observed = deletionState(obj)
+					s.InStateSeconds = waitAge(obj.GetDeletionTimestamp())
+					if fs := obj.GetFinalizers(); obj.GetDeletionTimestamp() != nil && len(fs) > 0 {
+						s.next = fmt.Sprintf("terminating for %ds, waiting on finalizers [%s]; the controller that owns them must finish (get_resource shows them)", *s.InStateSeconds, strings.Join(fs[:min(len(fs), 5)], ", "))
+					}
+				} else if name != "" && input.UID != "" && types.UID(input.UID) != obj.GetUID() {
+					s.Observed = "replaced by uid " + string(obj.GetUID())
+					s.next = "drop uid to follow the new object"
+					replaced = true
+				} else {
+					evaluated, e := waitStep(ctx, func() (waitObjectState, error) {
+						return evaluateWaitObject(ctx, dyn, gvr, obj, condition, check, jp, s)
+					})
+					if e != nil {
+						if ctx.Err() != nil {
+							lastErr = e
+							interrupted = true
+							break
+						}
+						return nil, nil, e
+					}
+					s = evaluated
+				}
+				s.Observed = truncateCrashLogLine(s.Observed, 300)
+				states = append(states, s)
+				allMet = allMet && s.Met
+				if s.state == "failed" || (s.state == "blocked" && verdict != "failed") {
+					verdict = s.state
+					next = s.next
+				} else if verdict == "waiting" && s.next != "" {
+					next = s.next
+				}
+				if !s.Met && !deleted && checked < 3 && isWaitWorkload(gvr) && !(name != "" && input.UID != "" && types.UID(input.UID) != obj.GetUID()) && obj.GetDeletionTimestamp() == nil && (gvr.Group != "argoproj.io" || s.controllerObserved) {
+					checked++
+					b, e := waitStep(ctx, func() (waitBlockerResult, error) { return readWaitBlockers(ctx, gvr, obj), nil })
+					if e != nil {
+						lastErr = e
+						break
+					}
+					if b.unavailable != "" {
+						result["blockersUnavailable"] = b.unavailable
+					}
+					for _, problem := range b.blockers {
+						blockers = append(blockers, problem)
+						key := problem.key
+						seenBlockers[key] = true
+						if problem.Reason != "Unschedulable" {
+							if _, ok := blockerSince[key]; !ok {
+								blockerSince[key] = waitNow()
+							}
+							if waitNow().Sub(blockerSince[key]) >= waitBlockerGrace && verdict != "failed" {
+								verdict = "blocked"
+								next = waitDiagnoseNext(obj) + "; the rollout is stalled on this pod problem"
+								if gvr.Group == "batch" {
+									next = waitLogsNext(obj)
+								}
+								states[len(states)-1].state = "blocked"
+							}
+						} else if verdict == "waiting" {
+							next = "pods can't be scheduled; unless nodes are being added, " + waitDiagnoseNext(obj)
+						}
+					}
 				}
 			}
-		}
-		if states != nil {
-			result["objects"] = states
-		}
-		result["elapsedMs"] = time.Since(start).Milliseconds()
-		switch {
-		case met:
-			result["met"] = true
-			return toJSONResult(result)
-		case failure != "":
-			result["met"] = false
-			result["failed"] = failure
-			return toJSONResult(result)
-		}
-		select {
-		case <-waitCtx.Done():
-			result["met"] = false
-			if ctx.Err() == nil {
-				result["timedOut"] = true
-				result["message"] = fmt.Sprintf("condition %s not met within %ds; objects show the last state seen", condition, int(timeout.Seconds()))
+			for key := range blockerSince {
+				if !seenBlockers[key] {
+					delete(blockerSince, key)
+				}
 			}
-			return toJSONResult(result)
-		case <-ticker.C:
+			if _, unavailable := result["blockersUnavailable"]; !unavailable && len(blockers) > 0 {
+				result["blockers"] = blockers[:min(len(blockers), 3)]
+			}
+			if interrupted {
+				states = previousStates
+				break
+			}
+			if replaced {
+				return finish("waiting", next)
+			}
+			if deleted {
+				allMet = len(states) == 0
+			}
+			if allMet {
+				return finish("met", "")
+			}
+			if deleted && name != "" && pinnedUID != "" {
+				next += "; uid=" + string(pinnedUID)
+			}
+			result["next"] = truncateCrashLogLine(next, 300)
+			if verdict != "waiting" || (!emptySince.IsZero() && waitNow().Sub(emptySince) >= waitEmptyGrace) {
+				return finish(verdict, next)
+			}
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		timer := time.NewTimer(waitPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			break
 		}
 	}
+	if !successful {
+		return nil, nil, fmt.Errorf("no successful read of %s: %w", kind, lastErr)
+	}
+	next, _ := result["next"].(string)
+	if next == "" {
+		next = "not met yet; call wait_for again with the same arguments until your own time limit"
+	}
+	return finish("waiting", next)
 }
+
+type waitInputError struct{ message string }
+
+func (e *waitInputError) Error() string { return e.message }
 
 func readWaitTargets(ctx context.Context, client dynamic.ResourceInterface, name, selector string) ([]*unstructured.Unstructured, error) {
 	if name != "" {
@@ -192,15 +425,27 @@ func readWaitTargets(ctx context.Context, client dynamic.ResourceInterface, name
 		}
 		return []*unstructured.Unstructured{obj}, nil
 	}
-	list, err := client.List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return nil, err
+	var out []*unstructured.Unstructured
+	token := ""
+	for {
+		list, err := client.List(ctx, metav1.ListOptions{LabelSelector: selector, Limit: 100, Continue: token})
+		if err != nil {
+			return nil, err
+		}
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		for i := range list.Items {
+			out = append(out, &list.Items[i])
+		}
+		if len(out) > 200 {
+			return nil, &waitInputError{fmt.Sprintf("more than 200 objects match; narrow with label_selector")}
+		}
+		token = list.GetContinue()
+		if token == "" {
+			return out, nil
+		}
 	}
-	out := make([]*unstructured.Unstructured, 0, len(list.Items))
-	for i := range list.Items {
-		out = append(out, &list.Items[i])
-	}
-	return out, nil
 }
 
 func btoi(b bool) int {
@@ -209,7 +454,6 @@ func btoi(b bool) int {
 	}
 	return 0
 }
-
 func waitTargetLabel(name, selector string) string {
 	if name != "" {
 		return "name " + name
@@ -219,56 +463,232 @@ func waitTargetLabel(name, selector string) string {
 	}
 	return "selector " + selector
 }
-
 func deletionState(obj *unstructured.Unstructured) string {
 	if obj.GetDeletionTimestamp() == nil {
 		return "not being deleted"
 	}
-	if finalizers := obj.GetFinalizers(); len(finalizers) > 0 {
-		return "terminating; waiting on finalizers " + strings.Join(finalizers, ", ")
+	if fs := obj.GetFinalizers(); len(fs) > 0 {
+		return "terminating; waiting on finalizers " + strings.Join(fs[:min(len(fs), 5)], ", ")
 	}
 	return "terminating"
 }
-
-func defaultWaitCondition(resource string) string {
-	switch resource {
-	case "deployments", "statefulsets", "daemonsets", "rollouts":
+func defaultWaitCondition(gvr schema.GroupVersionResource) string {
+	switch gvr.GroupResource() {
+	case schema.GroupResource{Group: "apps", Resource: "deployments"}, schema.GroupResource{Group: "apps", Resource: "statefulsets"}, schema.GroupResource{Group: "apps", Resource: "daemonsets"}, schema.GroupResource{Group: "argoproj.io", Resource: "rollouts"}:
 		return "rollout"
-	case "jobs":
+	case schema.GroupResource{Group: "batch", Resource: "jobs"}:
 		return "complete"
-	case "pods":
+	case schema.GroupResource{Resource: "pods"}:
 		return "ready"
 	}
 	return ""
 }
-
-func waitCheckFor(resource, condition string) (waitCheck, error) {
+func isWaitWorkload(gvr schema.GroupVersionResource) bool { return defaultWaitCondition(gvr) != "" }
+func waitCheckFor(gvr schema.GroupVersionResource, condition string) (waitCheck, error) {
 	switch strings.ToLower(condition) {
 	case "rollout":
-		switch resource {
-		case "deployments", "statefulsets", "daemonsets", "rollouts":
-			return rolloutStatus, nil
+		if defaultWaitCondition(gvr) != "rollout" {
+			return nil, fmt.Errorf("condition rollout applies to Deployment, StatefulSet, DaemonSet and Argo Rollout, not %s", gvr.Resource)
 		}
-		return nil, fmt.Errorf("condition rollout applies to Deployment, StatefulSet, DaemonSet and Rollout, not %s", resource)
+		return rolloutStatus, nil
 	case "complete":
-		if resource != "jobs" {
-			return nil, fmt.Errorf("condition complete applies to Job, not %s; name a status condition type instead", resource)
+		if gvr.Group != "batch" || gvr.Resource != "jobs" {
+			return nil, fmt.Errorf("condition complete applies to Job, not %s; name a status condition type instead", gvr.Resource)
 		}
 		return jobComplete, nil
 	case "ready":
-		if resource == "pods" {
+		if gvr.Group == "" && gvr.Resource == "pods" {
 			return podReadyCheck, nil
 		}
 		return statusConditionCheck("Ready"), nil
 	}
-	return statusConditionCheck(condition), nil
+	c := condition
+	if strings.HasPrefix(strings.ToLower(c), "condition=") {
+		c = c[len("condition="):]
+	}
+	parts := strings.Split(c, "=")
+	if len(parts) > 2 || parts[0] == "" || (len(parts) == 2 && parts[1] == "") || strings.ContainsAny(parts[0], " /{}") {
+		return nil, fmt.Errorf("condition must be rollout, complete, ready, deleted, Type[=Status], or jsonpath={.status.field}=value")
+	}
+	return statusConditionCheck(c), nil
+}
+
+func waitStateRank(s waitObjectState) int {
+	if s.state == "failed" {
+		return 0
+	}
+	if s.state == "blocked" {
+		return 1
+	}
+	if !s.Met {
+		return 2
+	}
+	return 3
+}
+func waitAge(t *metav1.Time) *int64 {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	n := max(int64(0), int64(waitNow().Sub(t.Time)/time.Second))
+	return &n
+}
+func waitDiagnoseNext(obj *unstructured.Unstructured) string {
+	return fmt.Sprintf("diagnose %s %s in %s", obj.GetKind(), obj.GetName(), obj.GetNamespace())
+}
+func waitLogsNext(obj *unstructured.Unstructured) string {
+	return fmt.Sprintf("get_workload_logs for Job %s in %s", obj.GetName(), obj.GetNamespace())
+}
+
+func evaluateWaitObject(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, condition string, check waitCheck, jp *waitJSONPath, s waitObjectState) (waitObjectState, error) {
+	if obj.GetDeletionTimestamp() != nil {
+		s.Observed = "terminating"
+		return s, nil
+	}
+	if strings.EqualFold(condition, "rollout") {
+		strategy, _, _ := unstructured.NestedString(obj.Object, "spec", "updateStrategy", "type")
+		if gvr.Group == "apps" && (gvr.Resource == "statefulsets" || gvr.Resource == "daemonsets") && strategy == "OnDelete" {
+			return s, fmt.Errorf("rollout status needs the RollingUpdate strategy; %s uses OnDelete, so wait on its pods (kind=pod, label_selector=…, condition=ready)", obj.GetKind())
+		}
+		if gvr.Group == "argoproj.io" {
+			observed, err := rollouts.ControllerObservedSpec(ctx, dyn, obj)
+			if err != nil {
+				return s, err
+			}
+			gen, present := waitGeneration(obj)
+			if !observed || (present && gen != obj.GetGeneration()) {
+				s.Observed = "waiting for the rollout controller to observe the new spec"
+				return s, nil
+			}
+			s.controllerObserved = true
+			phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
+			message, _, _ := unstructured.NestedString(obj.Object, "status", "message")
+			s.Observed = phase + ": " + message
+			switch phase {
+			case "Healthy":
+				s.Met = true
+			case "Degraded":
+				s.state = "blocked"
+				s.next = waitDiagnoseNext(obj)
+			case "Paused":
+				s.Observed = "paused: " + message
+				s.next = s.Observed + "; a pause with a duration resumes by itself, one without needs a promote"
+			}
+			return s, nil
+		}
+	}
+	if jp != nil {
+		met, observed, missing, err := jp.evaluate(obj)
+		if err != nil {
+			return s, err
+		}
+		s.Met = met
+		s.Observed = observed
+		if gen, present := waitGeneration(obj); present && gen < obj.GetGeneration() {
+			s.Met = false
+			s.Observed = "waiting for the controller to observe the new spec"
+		}
+		if missing {
+			s.next = jp.path + " not present; status has [" + strings.Join(waitStatusFields(obj), ", ") + "]"
+		}
+		return s, nil
+	}
+	met, message, failure := check(obj)
+	s.Met = met
+	s.Observed = message
+	if failure != "" {
+		s.Observed = failure
+		s.state = "blocked"
+		s.next = waitDiagnoseNext(obj)
+		if gvr.Group == "batch" && gvr.Resource == "jobs" {
+			s.state = "failed"
+			s.next = waitLogsNext(obj)
+		}
+		if gvr.Group == "" && gvr.Resource == "pods" {
+			s.state = "failed"
+			s.next = "the pod ran to completion; wait on its controller (rollout) or replacement pods (label_selector)"
+		}
+	}
+	cond := condition
+	if strings.HasPrefix(strings.ToLower(cond), "condition=") {
+		cond = cond[len("condition="):]
+	}
+	cond, _, _ = strings.Cut(cond, "=")
+	switch strings.ToLower(condition) {
+	case "ready":
+		cond = "Ready"
+	case "complete":
+		cond = "Complete"
+	}
+	if strings.EqualFold(condition, "rollout") {
+		if observed, present := waitGeneration(obj); present && observed >= obj.GetGeneration() {
+			if c := waitCondition(obj, "Progressing"); c != nil && gvr.Resource == "deployments" {
+				timestamp, _ := c["lastUpdateTime"].(string)
+				s.InStateSeconds = waitTimestampAge(timestamp)
+				if !s.Met && s.state == "" && s.InStateSeconds != nil && *s.InStateSeconds > 120 {
+					s.next = fmt.Sprintf("no progress for %ds; %s", *s.InStateSeconds, waitDiagnoseNext(obj))
+				}
+			}
+		}
+		if summary := summarizeWorkloadRollout(obj); summary != nil {
+			s.Replicas = map[string]int64{"desired": nestedInt64Default(obj, 1, "spec", "replicas"), "updated": nestedInt64Default(obj, 0, "status", "updatedReplicas"), "ready": nestedInt64Default(obj, 0, "status", "readyReplicas"), "available": nestedInt64Default(obj, 0, "status", "availableReplicas")}
+			if gvr.Resource == "daemonsets" {
+				s.Replicas = map[string]int64{"desired": nestedInt64Default(obj, 0, "status", "desiredNumberScheduled"), "updated": nestedInt64Default(obj, 0, "status", "updatedNumberScheduled"), "ready": nestedInt64Default(obj, 0, "status", "numberReady"), "available": nestedInt64Default(obj, 0, "status", "numberAvailable")}
+			}
+		}
+	} else if c := waitCondition(obj, cond); c != nil {
+		timestamp, _ := c["lastTransitionTime"].(string)
+		s.InStateSeconds = waitTimestampAge(timestamp)
+	} else if !s.Met && failure == "" {
+		names := []string{}
+		raw, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+		for _, v := range raw {
+			if c, ok := v.(map[string]any); ok {
+				if n, ok := c["type"].(string); ok {
+					names = append(names, n)
+				}
+			}
+		}
+		sort.Strings(names)
+		s.next = fmt.Sprintf("no %s condition on %s; it has [%s]; for state outside conditions use jsonpath={.status.<field>}=value (status has [%s])", cond, obj.GetName(), strings.Join(names, ", "), strings.Join(waitStatusFields(obj), ", "))
+	}
+	return s, nil
+}
+func waitTimestampAge(s string) *int64 {
+	t, e := time.Parse(time.RFC3339, s)
+	if e != nil {
+		return nil
+	}
+	v := metav1.NewTime(t)
+	return waitAge(&v)
+}
+func waitStatusFields(obj *unstructured.Unstructured) []string {
+	status, _, _ := unstructured.NestedMap(obj.Object, "status")
+	keys := make([]string, 0, len(status))
+	for k := range status {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+func waitGeneration(obj *unstructured.Unstructured) (int64, bool) {
+	v, ok, _ := unstructured.NestedFieldNoCopy(obj.Object, "status", "observedGeneration")
+	if !ok {
+		return 0, false
+	}
+	switch g := v.(type) {
+	case int64:
+		return g, true
+	case string:
+		n, e := strconv.ParseInt(g, 10, 64)
+		return n, e == nil
+	}
+	return 0, false
 }
 
 // rolloutStatus mirrors kubectl rollout status for the built-in workloads
 // (k8s.io/kubectl/pkg/polymorphichelpers/rollout_status.go): the controller
 // has observed the spec, every replica is updated, old replicas are gone and
-// the updated ones are available. An exceeded progress deadline fails. Argo
-// Rollouts use Radar's rollout health.
+// the updated ones are available. An exceeded progress deadline is a stall.
 func rolloutStatus(obj *unstructured.Unstructured) (bool, string, string) {
 	switch obj.GetKind() {
 	case "Deployment":
@@ -280,7 +700,7 @@ func rolloutStatus(obj *unstructured.Unstructured) (bool, string, string) {
 			return false, "waiting for the deployment controller to observe the new spec", ""
 		}
 		for _, c := range d.Status.Conditions {
-			if c.Type == appsv1.DeploymentProgressing && c.Reason == "ProgressDeadlineExceeded" {
+			if c.Type == appsv1.DeploymentProgressing && c.Status == "False" && c.Reason == "ProgressDeadlineExceeded" {
 				return false, "", "progress deadline exceeded: " + c.Message
 			}
 		}
@@ -346,101 +766,83 @@ func rolloutStatus(obj *unstructured.Unstructured) (bool, string, string) {
 		}
 		return true, fmt.Sprintf("rolled out: %d/%d available", s.NumberAvailable, s.DesiredNumberScheduled), ""
 	}
-	activity := health.WorkloadRollout(obj)
-	switch {
-	case activity.Phase == health.RolloutStalled:
-		return false, "", activity.Detail
-	case activity.Phase == health.RolloutPaused && activity.Active:
-		return false, "", "paused: " + activity.Detail + "; promote or abort it with manage_rollout"
-	case activity.Active:
-		return false, activity.Label + ": " + activity.Detail, ""
-	}
-	return true, activity.Label + ": " + activity.Detail, ""
+	return false, "", "unsupported rollout kind"
 }
 
 func jobComplete(obj *unstructured.Unstructured) (bool, string, string) {
-	if status, message := conditionStatus(obj, "Failed"); status == "True" {
+	if status, message := conditionStatus(obj, "Failed"); status == "True" && waitConditionFresh(obj, "Failed") {
 		return false, "", "job failed: " + message
 	}
-	if status, _ := conditionStatus(obj, "Complete"); status == "True" {
-		return true, "complete", ""
+	if met, message, _ := statusConditionCheck("Complete")(obj); met {
+		return true, message, ""
 	}
-	active, _, _ := unstructured.NestedInt64(obj.Object, "status", "active")
-	succeeded, _, _ := unstructured.NestedInt64(obj.Object, "status", "succeeded")
-	return false, fmt.Sprintf("%d active, %d succeeded", active, succeeded), ""
+	return statusConditionCheck("Complete")(obj)
 }
-
 func podReadyCheck(obj *unstructured.Unstructured) (bool, string, string) {
 	phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
 	if phase == "Succeeded" || phase == "Failed" {
 		return false, "", "pod is " + phase + " and will not become Ready"
 	}
-	status, message := conditionStatus(obj, "Ready")
-	if status == "True" {
-		return true, "Ready", ""
-	}
-	if message == "" {
-		message = "phase " + phase
-	}
-	return false, "not Ready: " + message, ""
+	return statusConditionCheck("Ready")(obj)
 }
-
-func statusConditionCheck(condType string) waitCheck {
+func statusConditionCheck(condition string) waitCheck {
+	typ, want, ok := strings.Cut(condition, "=")
+	if !ok {
+		want = "True"
+	}
 	return func(obj *unstructured.Unstructured) (bool, string, string) {
-		status, message := conditionStatus(obj, condType)
-		// Like kubectl wait: a condition the controller reported for an older
-		// generation says nothing about the current spec.
-		if gen, observed := obj.GetGeneration(), conditionObservedGeneration(obj, condType); gen > 0 && observed > 0 && observed < gen {
-			return false, fmt.Sprintf("%s=%s was reported for generation %d; waiting for the controller to observe generation %d", condType, status, observed, gen), ""
+		if obj.GetDeletionTimestamp() != nil {
+			return false, "terminating", ""
 		}
-		switch status {
-		case "True":
-			return true, condType + "=True", ""
-		case "":
-			return false, "no " + condType + " condition yet", ""
+		status, message := conditionStatus(obj, typ)
+		if !waitConditionFresh(obj, typ) {
+			g, _ := conditionObservedGeneration(obj, typ)
+			return false, fmt.Sprintf("%s=%s was reported for generation %d; waiting for the controller to observe generation %d", typ, status, g, obj.GetGeneration()), ""
 		}
-		if message != "" {
-			return false, condType + "=" + status + ": " + message, ""
+		if status == "" {
+			return false, "no " + typ + " condition yet", ""
 		}
-		return false, condType + "=" + status, ""
-	}
-}
-
-// conditionObservedGeneration is the generation the named condition was
-// computed for: its own observedGeneration, else status.observedGeneration,
-// else 0 when the object reports neither.
-func conditionObservedGeneration(obj *unstructured.Unstructured, condType string) int64 {
-	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	for _, raw := range conditions {
-		c, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if t, _ := c["type"].(string); strings.EqualFold(t, condType) {
-			if g, ok := c["observedGeneration"].(int64); ok && g > 0 {
-				return g
+		if strings.EqualFold(status, want) {
+			observed := typ + "=" + status
+			if message != "" {
+				observed += ": " + message
 			}
-			break
+			return true, observed, ""
 		}
+		return false, typ + "=" + status + ": " + message, ""
 	}
-	g, _, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration")
-	return g
 }
-
-// conditionStatus returns the status and message of the named condition,
-// matched case-insensitively, or "" when absent.
-func conditionStatus(obj *unstructured.Unstructured, condType string) (string, string) {
-	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	for _, raw := range conditions {
-		c, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if t, _ := c["type"].(string); strings.EqualFold(t, condType) {
-			status, _ := c["status"].(string)
-			message, _ := c["message"].(string)
-			return status, message
+func waitConditionFresh(obj *unstructured.Unstructured, typ string) bool {
+	g, present := conditionObservedGeneration(obj, typ)
+	return !present || g >= obj.GetGeneration()
+}
+func conditionObservedGeneration(obj *unstructured.Unstructured, typ string) (int64, bool) {
+	if c := waitCondition(obj, typ); c != nil {
+		if g, ok := c["observedGeneration"].(int64); ok {
+			return g, true
 		}
 	}
-	return "", ""
+	return waitGeneration(obj)
+}
+func waitCondition(obj *unstructured.Unstructured, typ string) map[string]any {
+	rawConditions, _, _ := unstructured.NestedFieldNoCopy(obj.Object, "status", "conditions")
+	conditions, _ := rawConditions.([]any)
+	for _, raw := range conditions {
+		if c, ok := raw.(map[string]any); ok {
+			if t, _ := c["type"].(string); strings.EqualFold(t, typ) {
+				return c
+			}
+		}
+	}
+	return nil
+}
+func conditionStatus(obj *unstructured.Unstructured, typ string) (string, string) {
+	c := waitCondition(obj, typ)
+	if c == nil {
+		return "", ""
+	}
+	s, _ := c["status"].(string)
+	r, _ := c["reason"].(string)
+	m, _ := c["message"].(string)
+	return s, strings.Trim(strings.Join([]string{r, m}, ": "), ": ")
 }

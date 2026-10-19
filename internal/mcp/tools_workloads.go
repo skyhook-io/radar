@@ -109,6 +109,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 			return nil, nil, fmt.Errorf("restart failed: %w", err)
 		}
 		resp := map[string]any{
+			"next":    fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
 			"status":  "ok",
 			"message": fmt.Sprintf("Rolling restart initiated for %s %s/%s", kind, input.Namespace, input.Name),
 		}
@@ -128,6 +129,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 			return nil, nil, fmt.Errorf("scale failed: %w", err)
 		}
 		return toJSONResult(map[string]any{
+			"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
 			"status":   "ok",
 			"message":  fmt.Sprintf("Scaled %s %s/%s to %d replicas", kind, input.Namespace, input.Name, *input.Replicas),
 			"replicas": *input.Replicas,
@@ -141,6 +143,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 			return nil, nil, fmt.Errorf("rollback failed: %w", err)
 		}
 		resp := map[string]any{
+			"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
 			"status":   "ok",
 			"message":  fmt.Sprintf("Rollback of %s %s/%s to revision %d initiated — the controller applies it", kind, input.Namespace, input.Name, *input.Revision),
 			"revision": *input.Revision,

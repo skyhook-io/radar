@@ -552,13 +552,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}, logToolCall("get_workload_logs", handleGetWorkloadLogs))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
-		Name: "wait_for",
-		Description: "Wait until objects reach a state: the check after a fix, like kubectl rollout status and kubectl wait. " +
-			"condition: rollout (default for Deployment, StatefulSet, DaemonSet, Rollout; all replicas updated, old ones gone, new ones available), " +
-			"complete (default for Job), ready (default for Pod), deleted, or any status condition type that must be True. " +
-			"Target one object by name, every match of label_selector, or all of the kind in the namespace. " +
-			"Returns met, per-object state, and elapsed time; stops early with failed when the state can't come without another change " +
-			"(progress deadline exceeded, Job failed, Pod finished). On timeout (default 120s, max 600s) returns met=false with the last state seen.",
+		Name:        "wait_for",
+		Description: "Wait until a change takes effect, like kubectl rollout status and kubectl wait; use it after a fix instead of sleeping and re-reading. condition: rollout (default for Deployment, StatefulSet, DaemonSet, Argo Rollout), complete (default for Job), ready (default for Pod), deleted, a status condition type that must be True (Type=Status for another value), or jsonpath={.status.field}=value. Target one object by name, every match of label_selector, or all of the kind in the namespace. One call waits at most 45s and returns state: met; waiting (not yet: call again, passing back uid if one was returned, until your own time limit); blocked (stalled on the problem in blockers; it may clear, but usually needs a fix); failed (Job failed or Pod finished). Not a timer: to let time pass, run the check that needs it.",
 		Annotations: readOnly,
 	}, logToolCall("wait_for", handleWaitFor))
 

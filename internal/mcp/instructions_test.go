@@ -115,6 +115,7 @@ func TestServerInstructionsNameOnlyRegisteredTools(t *testing.T) {
 // (backedBy) or a parameter in its input schema (param). It is a tripwire: when
 // either side changes, the test fails and the pairing gets rechecked by hand.
 var instructionClaims = []struct{ tool, says, backedBy, param string }{
+	{tool: "wait_for", says: "wait_for its rollout within a time limit", backedBy: "until your own time limit"},
 	{tool: "issues", says: "Symptom known, faulty resource not: issues", backedBy: "live state"},
 	{tool: "issues", says: "references to missing objects", backedBy: "references"},
 	{tool: "diagnose", says: "a Pod, Deployment, StatefulSet, DaemonSet or Rollout", backedBy: "Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout"},

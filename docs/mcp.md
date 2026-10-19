@@ -90,6 +90,17 @@ When a client connects, Radar returns MCP [server instructions](https://modelcon
 
 What a client does with the text depends on the client and its version. Some add it to the model's context at session start; others show it only after the model loads Radar's tools; some ignore it. Claude Code keeps the first 4,096 characters (2,048 before v2.1.296; see its [MCP documentation](https://code.claude.com/docs/en/mcp)), so Radar puts tool routing first and keeps it within the first 2,048 characters. Codex describes a server whose tools it loads on demand by the first line alone, cut at 250 characters, so that line says on its own what Radar is, that its tools are preferred over kubectl for reading cluster state, and which core tools to load. Each tool's description carries its own routing, so agents in clients that ignore server instructions still get it. `/mcp-readonly` sends the same text without the write tools.
 
+### Waiting for a fix to land
+
+Use `wait_for` after a change to wait for a controller's rollout, Pod readiness,
+Job completion, deletion, or a status condition. Each call waits at most 45 seconds
+so it can return within common MCP client timeouts. The caller owns the total deadline:
+repeat `waiting` calls within that limit, passing back the named object's `uid` to pin it.
+The states are `met`, `waiting`, `blocked` (an observed stall), and `failed` (terminal).
+Selector waits check the current set; use the controller's rollout to wait for replacements.
+`jsonpath={.status.field}=value` reads only `.status`; its freshness guard uses
+`status.observedGeneration` when present. `inStateSeconds` is condition age, not time since the fix.
+
 ## Catalog Introspection
 
 MCP registries and inspectors can start Radar without a Kubernetes cluster when they only need the tool and resource catalog:

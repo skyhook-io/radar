@@ -182,6 +182,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_neighborhood: "Relationships",
   get_topology: "Topology",
   get_workload_logs: "Workload logs",
+  wait_for: "Wait",
   get_prometheus_rules: "Alert rules",
   get_helm_release: "Helm release",
   get_subject_permissions: "Permissions",
