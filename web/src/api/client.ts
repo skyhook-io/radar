@@ -4393,28 +4393,61 @@ interface DeleteResourceResult {
   deletionTimestamp?: string;
   pendingFinalizers?: string[];
   observationError?: string;
+  removedFinalizers?: string[];
 }
 
-async function readDeleteResult(response: Response): Promise<DeleteResourceResult> {
+// The delete got an error status. `code` is Radar's error_code, if any.
+class DeleteRejectedError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+  }
+}
+
+// A delete that asked to remove finalizers but whose outcome is unknown. It
+// gets its own warning toast instead of the generic "Failed to delete".
+class FinalizerRemovalUnknownError extends Error {}
+
+// `strict` is for a request that asked to remove finalizers: a 200 whose body
+// can't be read hides whether they were removed, so it is an error rather
+// than the "nothing to report" an older Radar's empty answer means.
+async function readDeleteResult(response: Response, strict = false): Promise<DeleteResourceResult> {
   if (!response.ok) {
     const error = await readErrorBody(response);
     // Older Radars reported this only after Kubernetes accepted DELETE.
     if (response.status === 409 && error.error === "resource is stuck in Terminating state due to finalizers — use force delete to remove it") {
       return { legacyPendingFinalizers: true };
     }
-    throw new Error(error.error || `HTTP ${response.status}`);
+    throw new DeleteRejectedError(error.error || `HTTP ${response.status}`, error.error_code);
   }
   if (response.status === 204) return {};
   const body = await response.text();
-  if (!body.trim()) return {};
+  if (!body.trim()) {
+    if (strict) throw new Error("empty response");
+    return {};
+  }
   try {
     return JSON.parse(body) as DeleteResourceResult;
-  } catch {
+  } catch (err) {
+    if (strict) throw new Error("unreadable response", { cause: err });
     return {};
   }
 }
 
-function deleteResourceNotification(result: DeleteResourceResult): { message: string; type: "info" | "success"; detail?: string } {
+function deleteResourceNotification(result: DeleteResourceResult): { message: string; type: "info" | "success" | "warning"; detail?: string } {
+  if (result.removedFinalizers?.length) {
+    const removed = result.removedFinalizers.join(", ");
+    const cleanup = "Their controllers may not have finished cleaning up. Check for anything they manage outside Kubernetes, such as a cloud instance or a volume.";
+    if (result.observationError) {
+      return { message: `Removed finalizers: ${removed}; couldn't check whether it's gone`, type: "warning", detail: `${cleanup} ${result.observationError}` };
+    }
+    if (result.pendingFinalizers?.length) {
+      return { message: `Removed finalizers: ${removed}; still waiting on: ${result.pendingFinalizers.join(", ")}`, type: "warning", detail: cleanup };
+    }
+    if (result.deletionTimestamp) {
+      return { message: `Removed finalizers: ${removed}; still deleting`, type: "warning", detail: cleanup };
+    }
+    return { message: `Deleted after removing finalizers: ${removed}`, type: "warning", detail: cleanup };
+  }
   if (result.observationError) {
     return { message: "Deletion accepted; current state unavailable", type: "info", detail: result.observationError };
   }
@@ -4439,12 +4472,18 @@ export function useDeleteResource() {
       namespace,
       name,
       force,
+      uid,
+      removeFinalizers,
     }: {
       kind: string;
       group?: string;
       namespace: string;
       name: string;
       force?: boolean;
+      /** The object the user was shown; a replacement under the same name is not deleted. */
+      uid?: string;
+      /** Finalizers the user agreed to remove; see ForceDeleteConfirmDialog. */
+      removeFinalizers?: string[];
     }) => {
       const url = new URL(
         `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
@@ -4453,16 +4492,52 @@ export function useDeleteResource() {
       if (group) {
         url.searchParams.set("group", group);
       }
+      if (uid) {
+        url.searchParams.set("uid", uid);
+      }
       if (force) {
         url.searchParams.set("force", "true");
+        for (const f of removeFinalizers ?? []) url.searchParams.append("removeFinalizers", f);
       }
-      const response = await apiFetch(url.toString(), {
-        method: "DELETE",
-      });
-      return readDeleteResult(response);
+      const consented = Boolean(force && removeFinalizers?.length);
+      try {
+        const response = await apiFetch(url.toString(), {
+          method: "DELETE",
+        });
+        return await readDeleteResult(response, consented);
+      } catch (err) {
+        // With consent, Radar marks every answer that means none were
+        // removed. Anything else leaves the outcome unknown: an answer that
+        // was lost or can't be read, an error from something in front of
+        // Radar (which may have acted already), or Radar saying it couldn't
+        // tell.
+        if (consented && !(err instanceof DeleteRejectedError && err.code === "finalizers_not_removed")) {
+          const one = removeFinalizers!.length === 1;
+          const radarUnsure = err instanceof DeleteRejectedError && err.code === "finalizer_removal_unknown";
+          // Radar's own answer starts with the same advice as this message;
+          // keep only the cause it adds.
+          const reason = (err instanceof Error ? err.message : String(err))
+            .replace(/^couldn't confirm whether the finalizers were removed\. Check the resource before trying again: /, "");
+          const unknown = new FinalizerRemovalUnknownError(
+            `${radarUnsure ? "Kubernetes" : "Radar"} didn't confirm the result, so it isn't known whether ${removeFinalizers!.join(", ")} ${one ? "was" : "were"} removed. If ${one ? "it was, its" : "they were, their"} cleanup may have been skipped. Check the resource before trying again. Details: ${reason}`,
+            { cause: err },
+          );
+          markShownInline(unknown);
+          throw unknown;
+        }
+        throw err;
+      }
     },
     meta: {
       errorMessage: "Failed to delete resource",
+    },
+    // After a failed delete the dialog stays open; reread the resource so a
+    // retry shows (and consents to) its current finalizers.
+    onError: (err) => {
+      if (err instanceof FinalizerRemovalUnknownError) {
+        showToast("Couldn't confirm the force delete", { type: "warning", detail: err.message });
+      }
+      queryClient.invalidateQueries({ queryKey: ["resource"] });
     },
     onSuccess: (result, variables) => {
       const { message, ...options } = deleteResourceNotification(result);

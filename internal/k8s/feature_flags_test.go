@@ -21,6 +21,8 @@ var flagsWithoutUpgradeNote = map[string]bool{
 	"yamlReview":     true,
 	"yamlSchemas":    true,
 	"workloadImages": true,
+	// Changes the force-delete warning, not an endpoint.
+	"safeForceDelete": true,
 }
 
 // TestFeatureFlagsHaveFrontendGates fails when FeatureCapabilities and the

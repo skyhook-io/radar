@@ -29,6 +29,7 @@ import {
   ListChecks,
   Minus,
   Scale,
+  Info,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -213,6 +214,7 @@ import { ResourcesSidebar } from './ResourcesSidebar'
 import type { SelectedKindInfo, SidebarCategoryWorkspace } from './ResourcesSidebar'
 import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick, type NamespacedRef } from '../compare'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { FINALIZER_ORPHAN_WARNING } from '../ui/ForceDeleteConfirmDialog'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts', 'Init Failed', 'Exit Code Error', 'Failed', 'Other'] as const
@@ -3526,6 +3528,9 @@ interface ResourcesViewProps {
   // Bulk operations
   onBulkDelete?: (items: BulkResourceItem[], options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
+  // The connected Radar removes finalizers on force delete only from a
+  // resource already being deleted. Unset keeps the stronger warning.
+  safeForceDelete?: boolean
   onBulkRestart?: (items: BulkResourceItem[], options?: { onSuccess?: () => void }) => void
   isBulkRestarting?: boolean
   onBulkScale?: (items: BulkResourceItem[], replicas: number, options?: { onSuccess?: () => void }) => void
@@ -3719,6 +3724,7 @@ export function ResourcesView({
   onApplyNamespacesToAllSections,
   onBulkDelete,
   isBulkDeleting = false,
+  safeForceDelete = false,
   onBulkRestart,
   isBulkRestarting = false,
   onBulkScale,
@@ -6969,8 +6975,20 @@ export function ResourcesView({
           onChange={(e) => setBulkForceDelete(e.target.checked)}
           className="w-4 h-4 rounded border-theme-border bg-theme-base text-red-600 focus:ring-red-500 focus:ring-offset-0"
         />
-        <span>Force delete (strips finalizers and bypasses grace period)</span>
+        <span>Force delete (no grace period)</span>
       </label>
+      {bulkForceDelete && (
+        <div className={`mt-2 flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs ${safeForceDelete ? 'text-theme-text-secondary' : 'text-warning-text'}`}>
+          {safeForceDelete
+            ? <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+          <span>
+            {safeForceDelete
+              ? 'Finalizers are not removed.'
+              : `Selected resources also lose their finalizers. ${FINALIZER_ORPHAN_WARNING}`}
+          </span>
+        </div>
+      )}
     </ConfirmDialog>
     <ConfirmDialog
       open={tableActive && showBulkRestartConfirm}

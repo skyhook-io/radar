@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,7 +69,33 @@ type DeleteResourceOptions struct {
 	Namespace string
 	Name      string
 	Force     bool // Force delete with grace period 0
+	// RemoveFinalizers is the caller's consent, with Force, to remove exactly
+	// these finalizers from a resource that is already terminating. Empty
+	// means no finalizers are removed.
+	RemoveFinalizers []string
+	// ExpectedUID is the UID of the object the caller was shown. When set, a
+	// different object under the same name is not deleted.
+	ExpectedUID string
 }
+
+// ErrResourceChanged means the name now belongs to a different object than
+// the one read or shown, so nothing was deleted.
+var ErrResourceChanged = errors.New("this resource was replaced by a new one with the same name, so nothing was deleted. Check the current resource and try again")
+
+// ErrConsentWithoutUID means a request named finalizers to remove without
+// the UID of the object they were shown on, so the consent could belong to a
+// different object that has the same name now.
+var ErrConsentWithoutUID = errors.New("removing finalizers needs the uid of the resource they were shown on, so nothing was deleted")
+
+// ErrFinalizerRemovalUnknown means the request to remove finalizers failed in
+// a way that does not show whether it was applied.
+// The web client (web/src/api/client.ts) drops this text from the start of
+// Radar's answer before showing the cause, so keep the two in step.
+var ErrFinalizerRemovalUnknown = errors.New("couldn't confirm whether the finalizers were removed. Check the resource before trying again")
+
+// ErrFinalizersChanged means the finalizers on the resource are not the ones
+// the caller agreed to remove, so none were removed.
+var ErrFinalizersChanged = errors.New("the finalizers on this resource changed since they were shown, so none were removed. Check the current finalizers and try again")
 
 // ApplyResourceOptions contains options for creating or applying a resource.
 type ApplyResourceOptions struct {
@@ -592,6 +620,17 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 }
 
 // DeleteResourceWithResult deletes a resource and observes asynchronous cleanup.
+//
+// Force deletes with grace period 0. It removes finalizers only with explicit
+// consent (RemoveFinalizers), only from a resource Radar read as already
+// terminating, and only when its finalizers are exactly the ones consented
+// to. A finalizer is how a controller gets to clean up before the object goes
+// (Karpenter drains the node and terminates its cloud instance), so a live
+// resource always gets the normal delete first and keeps its finalizers.
+//
+// Every write is pinned to one object: the one read here, or the one the
+// caller was shown (ExpectedUID). A different object that takes the name in
+// between is refused by the API server instead of changed or deleted.
 func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts DeleteResourceOptions) (*DeleteResourceResult, error) {
 	if m.discovery == nil {
 		return nil, fmt.Errorf("resource discovery not initialized")
@@ -605,63 +644,206 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 		return nil, fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}
 
+	if opts.Force && len(opts.RemoveFinalizers) > 0 && opts.ExpectedUID == "" {
+		return nil, ErrConsentWithoutUID
+	}
+
 	var client dynamic.ResourceInterface = m.dynClient.Resource(gvr)
 	if opts.Namespace != "" {
 		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
 	}
 	// A caller may have delete permission without get permission. Only observe
-	// cleanup when a pre-delete read identifies the object by UID.
+	// cleanup when a pre-delete read identifies the object by UID, and only
+	// remove finalizers Radar has read.
 	var uid types.UID
 	obj, readErr := client.Get(ctx, opts.Name, metav1.GetOptions{})
 	if readErr == nil {
 		uid = obj.GetUID()
+		if opts.ExpectedUID != "" && uid != types.UID(opts.ExpectedUID) {
+			return nil, ErrResourceChanged
+		}
+	}
+	// The user agreed to remove finalizers they were shown. If Radar can't
+	// read what is there now it can't honor that, and a grace-0 delete alone
+	// does nothing to a resource that is already terminating.
+	if opts.Force && len(opts.RemoveFinalizers) > 0 && readErr != nil && !apierrors.IsNotFound(readErr) {
+		return nil, fmt.Errorf("couldn't read the resource, so no finalizers were removed and nothing was deleted: %w", readErr)
+	}
+	pinUID := uid
+	if pinUID == "" {
+		pinUID = types.UID(opts.ExpectedUID)
 	}
 
-	if opts.Force {
-		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
-		var patchErr error
-		if opts.Namespace != "" {
-			_, patchErr = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
-		} else {
-			_, patchErr = m.dynClient.Resource(gvr).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
+	var removed []string
+	if opts.Force && len(opts.RemoveFinalizers) > 0 && readErr == nil &&
+		obj.GetDeletionTimestamp() != nil && len(obj.GetFinalizers()) > 0 {
+		if !sameFinalizers(obj.GetFinalizers(), opts.RemoveFinalizers) {
+			return nil, ErrFinalizersChanged
 		}
-		if patchErr != nil && !apierrors.IsNotFound(patchErr) {
-			if apierrors.IsForbidden(patchErr) {
-				return nil, fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
-			}
-			log.Printf("[delete] Failed to strip finalizers from %s %s/%s: %v", opts.Kind, opts.Namespace, opts.Name, patchErr)
+		var err error
+		removed, err = removeFinalizers(ctx, client, opts.Name, uid, obj.GetFinalizers())
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	deleteOpts := metav1.DeleteOptions{}
+	if pinUID != "" {
+		deleteOpts.Preconditions = &metav1.Preconditions{UID: &pinUID}
+	}
 	if opts.Force {
 		gracePeriod := int64(0)
 		deleteOpts.GracePeriodSeconds = &gracePeriod
 	}
 
-	var err error
-	if opts.Namespace != "" {
-		err = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Delete(ctx, opts.Name, deleteOpts)
-	} else {
-		err = m.dynClient.Resource(gvr).Delete(ctx, opts.Name, deleteOpts)
-	}
-	if err != nil {
+	if err := client.Delete(ctx, opts.Name, deleteOpts); err != nil {
+		// Removing the finalizers was already written, and an object that was
+		// terminating goes away once they are gone, whatever happens to this
+		// call. Report what was removed and what is there now rather than an
+		// error that hides it.
+		if len(removed) > 0 {
+			result := ObserveResourceDeletion(ctx, client, opts.Name, uid)
+			result.RemovedFinalizers = removed
+			return result, nil
+		}
 		if opts.Force && apierrors.IsNotFound(err) {
 			return &DeleteResourceResult{}, nil
+		}
+		// A failed UID precondition comes back as 409 Conflict: the name
+		// belongs to a different object now.
+		if pinUID != "" && isUIDPreconditionConflict(err) {
+			return nil, fmt.Errorf("%w: %v", ErrResourceChanged, err)
 		}
 		return nil, fmt.Errorf("failed to delete resource: %w", err)
 	}
 
+	var result *DeleteResourceResult
 	if uid == "" {
-		result := &DeleteResourceResult{}
+		result = &DeleteResourceResult{}
 		if readErr != nil && !apierrors.IsNotFound(readErr) {
 			result.ObservationError = readErr.Error()
 		} else if readErr == nil {
 			result.ObservationError = "Deletion target UID is unavailable; cleanup was not observed."
 		}
-		return result, nil
+	} else {
+		result = ObserveResourceDeletion(ctx, client, opts.Name, uid)
 	}
-	return ObserveResourceDeletion(ctx, client, opts.Name, uid), nil
+	result.RemovedFinalizers = removed
+	return result, nil
+}
+
+// isUIDPreconditionConflict tells a failed UID precondition apart from other
+// conflicts a DELETE can return. The API server says so only in the message:
+// "the UID in the precondition (...) does not match the UID in record" from
+// the registry, or "Precondition failed: UID in precondition: ..." from
+// storage.
+func isUIDPreconditionConflict(err error) bool {
+	if !apierrors.IsConflict(err) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "UID in the precondition") || strings.Contains(msg, "UID in precondition")
+}
+
+func sameFinalizers(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
+}
+
+// removeFinalizers removes exactly the finalizers the caller saw, from exactly
+// the object Radar read. The JSON patch tests both the UID and the list, so a
+// replaced object or a changed list makes the whole patch fail and the result
+// never claims to have removed something it did not.
+func removeFinalizers(ctx context.Context, client dynamic.ResourceInterface, name string, uid types.UID, seen []string) ([]string, error) {
+	patch, err := json.Marshal([]map[string]any{
+		{"op": "test", "path": "/metadata/uid", "value": uid},
+		{"op": "test", "path": "/metadata/finalizers", "value": seen},
+		{"op": "remove", "path": "/metadata/finalizers"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build finalizer patch: %w", err)
+	}
+	patched, err := client.Patch(ctx, name, types.JSONPatchType, patch, metav1.PatchOptions{})
+	if err == nil {
+		// A mutating admission webhook can put a finalizer back, so report
+		// only the ones the stored object no longer has.
+		if patched == nil {
+			return seen, nil
+		}
+		kept := patched.GetFinalizers()
+		var removed []string
+		for _, f := range seen {
+			if !slices.Contains(kept, f) {
+				removed = append(removed, f)
+			}
+		}
+		return removed, nil
+	}
+	// A rejection is only the last attempt's answer: client-go retries a patch
+	// that got a 5xx or 429 with Retry-After, and an earlier attempt may have
+	// removed the finalizers. So a rejection says nothing was removed only
+	// when the object Radar read still has all of them.
+	stillHeld := func() bool {
+		now, getErr := client.Get(ctx, name, metav1.GetOptions{})
+		return getErr == nil && now.GetUID() == uid &&
+			!slices.ContainsFunc(seen, func(f string) bool { return !slices.Contains(now.GetFinalizers(), f) })
+	}
+	if apierrors.IsForbidden(err) {
+		if !stillHeld() {
+			return nil, fmt.Errorf("%w: %v", ErrFinalizerRemovalUnknown, err)
+		}
+		return nil, fmt.Errorf("Kubernetes refused the finalizer patch (missing patch permission or a policy), so nothing was removed: %w", err)
+	}
+	// client-go retries a request that got a 5xx with Retry-After, and the
+	// error returned is the last attempt's. An earlier attempt may have
+	// removed the finalizers, after which a retry finds the object gone (404)
+	// or the list changed (422). Those two say nothing was removed only when
+	// what is there now shows the removal did not happen.
+	if apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("%w: %v", ErrFinalizerRemovalUnknown, err)
+	}
+	if apierrors.IsInvalid(err) {
+		now, getErr := client.Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case getErr != nil, now.GetUID() != uid:
+			// A new object under the name can mean it was replaced before the
+			// patch, or that an earlier attempt removed the finalizers and the
+			// original went away. The two look the same from here.
+			return nil, fmt.Errorf("%w: %v", ErrFinalizerRemovalUnknown, err)
+		case slices.Equal(now.GetFinalizers(), seen):
+			// Both tests would pass now (the list test is order-sensitive),
+			// so the 422 came from validation of the update (a CRD schema or
+			// CEL rule), not from a change.
+			return nil, fmt.Errorf("failed to remove finalizers, none were removed: %w", err)
+		case slices.ContainsFunc(seen, func(f string) bool { return !slices.Contains(now.GetFinalizers(), f) }):
+			// Some of them are gone, which is what a removal that landed
+			// (possibly with a webhook keeping the rest) looks like.
+			return nil, fmt.Errorf("%w: %v", ErrFinalizerRemovalUnknown, err)
+		}
+		// All of them are still there, alongside others: the list changed
+		// and the removal did not happen.
+		return nil, fmt.Errorf("%w: %v", ErrFinalizersChanged, err)
+	}
+	// Any other client error (an admission webhook denial, a bad request,
+	// throttling) is a rejection of the last attempt.
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		if code := status.Status().Code; code >= 400 && code < 500 && code != http.StatusRequestTimeout {
+			if !stillHeld() {
+				return nil, fmt.Errorf("%w: %v", ErrFinalizerRemovalUnknown, err)
+			}
+			return nil, fmt.Errorf("failed to remove finalizers, none were removed: %w", err)
+		}
+	}
+	// A timeout, a server error or a dropped connection can arrive before or
+	// after the patch is applied, and a read afterwards can't rule out that it
+	// still lands, so the outcome is unknown.
+	return nil, fmt.Errorf("%w: %v", ErrFinalizerRemovalUnknown, err)
 }
 
 // TriggerCronJob creates a Job from a CronJob.

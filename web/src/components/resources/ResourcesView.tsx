@@ -450,6 +450,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       renderKindView={renderKindView}
       // Bulk operations
       onBulkDelete={(items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: options?.onSuccess })}
+      safeForceDelete={capabilities?.features?.safeForceDelete === true}
       isBulkDeleting={bulkDeleteMutation.isPending}
       onBulkRestart={canBulkRestartSelectedKind ? (items, options) => bulkRestartMutation.mutate({ items }, { onSuccess: options?.onSuccess }) : undefined}
       isBulkRestarting={canBulkRestartSelectedKind && bulkRestartMutation.isPending}

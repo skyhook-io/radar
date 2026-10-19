@@ -403,6 +403,7 @@ function useActionsBarProps(
     cascadeLoading,
     cascadeRootResolved: cascadePreview?.rootResolved,
     cascadePreviewFailed: Boolean(cascadeError),
+    safeForceDelete: features?.safeForceDelete === true,
     onRestart: rolloutAllows('restart')
       ? (params: Parameters<typeof restartWorkloadMutation.mutate>[0]) =>
           restartWorkloadMutation.mutate(params)

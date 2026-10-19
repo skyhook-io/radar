@@ -1395,6 +1395,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		ServiceEndpointSlices: true,
 		TrafficRecords:        true,
 		GitOpsWriteEvidence:   true,
+		SafeForceDelete:       true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
@@ -4456,32 +4457,85 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	force := r.URL.Query().Get("force") == "true"
 	group := r.URL.Query().Get("group")
+	// One value per finalizer the user saw and agreed to remove.
+	removeFinalizers := r.URL.Query()["removeFinalizers"]
+	// The UID of the object the user was shown; a replacement is not deleted.
+	expectedUID := r.URL.Query().Get("uid")
+
+	// A request that asked to remove finalizers gets a code on every answer
+	// that means none were removed, so the UI can tell it from an error that
+	// came from something in front of Radar and says nothing about them.
+	consented := force && len(removeFinalizers) > 0
+	writeError := func(status int, message string) {
+		if consented {
+			s.writeErrorCode(w, status, "finalizers_not_removed", message)
+			return
+		}
+		s.writeError(w, status, message)
+	}
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		writeError(http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 	result, err := k8s.DeleteResourceWithClient(r.Context(), k8s.DeleteResourceOptions{
-		Kind:      kind,
-		Group:     group,
-		Namespace: namespace,
-		Name:      name,
-		Force:     force,
+		Kind:             kind,
+		Group:            group,
+		Namespace:        namespace,
+		Name:             name,
+		Force:            force,
+		RemoveFinalizers: removeFinalizers,
+		ExpectedUID:      expectedUID,
 	}, client)
 	if err != nil {
+		if errors.Is(err, k8score.ErrFinalizersChanged) || errors.Is(err, k8score.ErrResourceChanged) {
+			writeError(http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, k8score.ErrFinalizerRemovalUnknown) {
+			auth.AuditLogAction(r, auth.AuditActionDetails{
+				Kind:      kind,
+				Group:     group,
+				Action:    "remove-finalizers",
+				Namespace: namespace,
+				Name:      name,
+				Outcome:   "unknown " + strings.Join(removeFinalizers, ","),
+			})
+			log.Printf("[delete] Finalizer removal outcome unknown for %s %s/%s: %v", kind, namespace, name, err)
+			// The code lets the UI tell this apart from a delete that failed:
+			// the finalizers may have been removed.
+			s.writeErrorCode(w, http.StatusInternalServerError, "finalizer_removal_unknown", err.Error())
+			return
+		}
+		if errors.Is(err, k8score.ErrConsentWithoutUID) {
+			writeError(http.StatusBadRequest, err.Error())
+			return
+		}
 		if apierrors.IsNotFound(err) {
-			s.writeError(w, http.StatusNotFound, err.Error())
+			writeError(http.StatusNotFound, err.Error())
 			return
 		}
 		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, err.Error())
+			writeError(http.StatusForbidden, err.Error())
 			return
 		}
 		log.Printf("[delete] Failed to delete %s %s/%s (force=%v): %v", kind, namespace, name, force, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if len(result.RemovedFinalizers) > 0 {
+		// Removing finalizers skips their controllers' cleanup and can leave
+		// cloud resources behind, so it gets its own audit line with the user.
+		auth.AuditLogAction(r, auth.AuditActionDetails{
+			Kind:      kind,
+			Group:     group,
+			Action:    "remove-finalizers",
+			Namespace: namespace,
+			Name:      name,
+			Outcome:   "removed " + strings.Join(result.RemovedFinalizers, ","),
+		})
 	}
 
 	s.writeJSON(w, result)

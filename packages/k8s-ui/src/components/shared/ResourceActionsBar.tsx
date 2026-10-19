@@ -76,12 +76,15 @@ interface ResourceActionsBarProps {
   renderPortForward?: (props: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => React.ReactNode
 
   // Delete
-  onDelete?: (params: { kind: string; group?: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
+  onDelete?: (params: { kind: string; group?: string; namespace: string; name: string; force: boolean; uid?: string; removeFinalizers?: string[] }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isDeleting?: boolean
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
   cascadeRootResolved?: boolean
   cascadePreviewFailed?: boolean
+  // The connected Radar removes finalizers on force delete only from a
+  // resource already being deleted. Unset keeps the stronger warning.
+  safeForceDelete?: boolean
 
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
@@ -163,7 +166,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
+  onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed, safeForceDelete,
   onRestart, isRestarting,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
@@ -233,9 +236,9 @@ export function ResourceActionsBar({
   const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
   const hasMultipleRevisions = (revisionsList?.length ?? 0) > 1
 
-  function handleDeleteConfirm(force: boolean) {
+  function handleDeleteConfirm(force: boolean, scope: { uid?: string; removeFinalizers?: string[] }) {
     onDelete?.(
-      { kind: resource.kind, group: resource.group, namespace: resource.namespace, name: resource.name, force },
+      { kind: resource.kind, group: resource.group, namespace: resource.namespace, name: resource.name, force, ...scope },
       {
         onSuccess: () => {
           setShowDeleteConfirm(false)
@@ -691,6 +694,10 @@ export function ResourceActionsBar({
         cascadeLoading={cascadeLoading}
         cascadeRootResolved={cascadeRootResolved}
         cascadePreviewFailed={cascadePreviewFailed}
+        finalizers={Array.isArray(data?.metadata?.finalizers) ? data.metadata.finalizers : undefined}
+        terminating={Boolean(data?.metadata?.deletionTimestamp)}
+        resourceUid={typeof data?.metadata?.uid === 'string' ? data.metadata.uid : undefined}
+        safeForceDelete={safeForceDelete}
       />
 
       {onLoadImages && onSetImages && (

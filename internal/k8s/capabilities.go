@@ -156,6 +156,12 @@ type FeatureCapabilities struct {
 	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
 	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
 	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
+	// Force delete removes finalizers only when the request names them
+	// (removeFinalizers) and the resource is already terminating, and deletes
+	// are pinned to the object's UID. Older binaries remove finalizers on
+	// every force delete, so the delete dialog keeps that warning unless this
+	// is set.
+	SafeForceDelete bool `json:"safeForceDelete"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

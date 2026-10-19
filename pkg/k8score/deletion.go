@@ -15,6 +15,10 @@ type DeleteResourceResult struct {
 	DeletionTimestamp *metav1.Time `json:"deletionTimestamp,omitempty"`
 	PendingFinalizers []string     `json:"pendingFinalizers,omitempty"`
 	ObservationError  string       `json:"observationError,omitempty"`
+	// RemovedFinalizers lists finalizers a force delete removed with the
+	// caller's consent. Their controllers may not have finished the cleanup
+	// those finalizers guarded.
+	RemovedFinalizers []string `json:"removedFinalizers,omitempty"`
 }
 
 // ObserveResourceDeletion cannot turn an accepted DELETE into a failure. A GET
