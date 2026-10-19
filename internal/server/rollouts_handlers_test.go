@@ -38,6 +38,7 @@ func TestWriteRolloutErrorStatusMapping(t *testing.T) {
 		{"terminating", fmt.Errorf("wrapped: %w", rollouts.ErrResourceTerminating), http.StatusConflict},
 		{"template unchanged", fmt.Errorf("wrapped: %w", rollouts.ErrTemplateUnchanged), http.StatusConflict},
 		{"already at last step", fmt.Errorf("wrapped: %w", rollouts.ErrAlreadyAtLastStep), http.StatusConflict},
+		{"promote full in progress", fmt.Errorf("wrapped: %w", rollouts.ErrPromoteFullInProgress), http.StatusConflict},
 		{"no steps", fmt.Errorf("wrapped: %w", rollouts.ErrNoSteps), http.StatusBadRequest},
 		{"unsupported workloadRef", fmt.Errorf("wrapped: %w", rollouts.ErrWorkloadRefUnsupported), http.StatusBadRequest},
 		{"deadline exceeded", fmt.Errorf("wrapped: %w", context.DeadlineExceeded), http.StatusGatewayTimeout},

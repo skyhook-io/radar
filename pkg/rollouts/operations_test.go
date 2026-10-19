@@ -191,6 +191,40 @@ func TestAbortPatchesStatusSubresource(t *testing.T) {
 	}
 }
 
+// While promoteFull is set the controller clears status.abort on every reconcile, so
+// sending the patch would report an abort that never takes effect.
+func TestAbortRefusedDuringFullPromotion(t *testing.T) {
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v1", "promoteFull": true}
+	}))
+
+	_, err := Abort(context.Background(), client, "prod", "web")
+	if !errors.Is(err, ErrPromoteFullInProgress) {
+		t.Fatalf("Abort err = %v, want ErrPromoteFullInProgress", err)
+	}
+	if !strings.Contains(err.Error(), "roll back to the stable revision") {
+		t.Errorf("error %q does not say what stops the promotion", err)
+	}
+	if patches := recordedPatches(t, client); len(patches) != 0 {
+		t.Errorf("Abort patched the Rollout during a full promotion: %v", patches)
+	}
+}
+
+// The flag outlives the promotion only until the controller's next write; once the new
+// revision is stable it no longer blocks anything.
+func TestAbortAllowedWhenPromoteFullHasLanded(t *testing.T) {
+	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
+		o["status"] = map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v2", "promoteFull": true}
+	}))
+
+	if _, err := Abort(context.Background(), client, "prod", "web"); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	if len(statusPatchBodies(t, client)) != 1 {
+		t.Errorf("want the abort patch, got %v", statusPatchBodies(t, client))
+	}
+}
+
 func TestRetryClearsAbort(t *testing.T) {
 	client := newFakeRollouts(rolloutForTest("prod", "web", func(o map[string]any) {
 		o["status"] = map[string]any{"abort": true}
@@ -606,11 +640,15 @@ func TestPromoteFullStopsRepatchingOnceStable(t *testing.T) {
 		}), nil
 	})
 
-	if _, err := PromoteFull(context.Background(), client, "prod", "web"); err != nil {
+	res, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err != nil {
 		t.Fatalf("PromoteFull: %v", err)
 	}
 	if bodies := statusPatchBodies(t, client); len(bodies) != 1 {
 		t.Errorf("want only the initial patch once the controller lands it, got %d: %v", len(bodies), bodies)
+	}
+	if res.Outcome != OutcomeLanded {
+		t.Errorf("Outcome = %q, want %q", res.Outcome, OutcomeLanded)
 	}
 }
 
@@ -865,6 +903,9 @@ func TestPromoteFullReportsNoChangeWhenAlreadyAtFinalRevision(t *testing.T) {
 	if !res.NoChange {
 		t.Errorf("NoChange = false, want true when nothing was promoted")
 	}
+	if res.Outcome != "" {
+		t.Errorf("Outcome = %q, want none when nothing was sent", res.Outcome)
+	}
 	if strings.Contains(res.Message, "promoted to full") {
 		t.Errorf("message = %q, want it not to claim a promotion", res.Message)
 	}
@@ -887,6 +928,9 @@ func TestPromoteFullDoesNotClaimSuccessTheControllerNeverConfirmed(t *testing.T)
 	}
 	if !strings.Contains(res.Message, "not confirmed") {
 		t.Errorf("message = %q, want it to say the promotion is unconfirmed", res.Message)
+	}
+	if res.Outcome != OutcomeUnconfirmed {
+		t.Errorf("Outcome = %q, want %q", res.Outcome, OutcomeUnconfirmed)
 	}
 }
 
@@ -1082,6 +1126,9 @@ func assertUnderWayFast(t *testing.T, res OperationResult, elapsed time.Duration
 	}
 	if !strings.Contains(res.Message, "under way") {
 		t.Errorf("message = %q, want it to say the promotion is under way", res.Message)
+	}
+	if res.Outcome != OutcomeUnderway {
+		t.Errorf("Outcome = %q, want %q", res.Outcome, OutcomeUnderway)
 	}
 }
 

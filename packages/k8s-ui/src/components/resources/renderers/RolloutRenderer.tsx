@@ -112,6 +112,10 @@ export function rolloutActions(data: any, capabilities?: RolloutCapabilities): R
   const analysisInFlight =
     stepAnalysis === 'Running' || stepAnalysis === 'Pending' || stepAnalysis === 'Inconclusive'
   const promotable = phase === 'Paused' || analysisInFlight
+  // The controller clears any abort on every reconcile until promoteFull is gone, and
+  // only a new template or the new revision becoming stable clears that.
+  const promotingFull =
+    status.promoteFull === true && Boolean(status.currentPodHash) && status.currentPodHash !== status.stableRS
 
   const actions: RolloutActionSpec[] = []
   if (capabilities.promote) {
@@ -171,7 +175,11 @@ export function rolloutActions(data: any, capabilities?: RolloutCapabilities): R
       pendingLabel: 'Aborting…',
       icon: Undo2,
       hint: 'Shift all traffic back to the stable revision and stop progressing',
-      blocked: isSettled ? 'Rollout is fully promoted — roll back instead' : undefined,
+      blocked: isSettled
+        ? 'Rollout is fully promoted — roll back instead'
+        : promotingFull
+          ? 'Promote full is in progress, and the controller ignores an abort until it finishes. To go back, use Rollback and pick the Stable revision.'
+          : undefined,
       destructive: true,
       confirm: {
         title: 'Abort rollout?',

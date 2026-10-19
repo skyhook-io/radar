@@ -173,6 +173,10 @@ func handleManageRollout(ctx context.Context, req *mcp.CallToolRequest, input ma
 		return nil, nil, fmt.Errorf("%s failed: %w", action, err)
 	}
 
+	return toJSONResult(rolloutResponse(action, result))
+}
+
+func rolloutResponse(action string, result rollouts.OperationResult) map[string]any {
 	resp := map[string]any{
 		"status":    "ok",
 		"message":   result.Message,
@@ -184,11 +188,29 @@ func handleManageRollout(ctx context.Context, req *mcp.CallToolRequest, input ma
 	if result.NoChange {
 		resp["noChange"] = true
 	}
+	if result.Outcome != "" {
+		resp["outcome"] = result.Outcome
+	}
+	switch result.Outcome {
+	case rollouts.OutcomeUnderway:
+		resp["note"] = "The promotion is still in progress. " + rolloutPollNote
+	case rollouts.OutcomeUnconfirmed:
+		resp["note"] = "The controller was not seen acting on the promotion. " + rolloutPollNote
+	}
 	if action == "abort" {
 		resp["note"] = "The Rollout stays aborted until manage_rollout action=retry, or a new revision is pushed."
 	}
-	return toJSONResult(resp)
+	return resp
 }
+
+// rolloutPollNote tells an agent how to follow a promotion that hasn't landed.
+// A cleared status.promoteFull alone doesn't mean the controller dropped the
+// request: a new revision pushed meanwhile clears it too, and promoting again
+// would skip that revision's steps.
+const rolloutPollNote = "Poll get_resource kind=Rollout until status.stableRS equals status.currentPodHash. " +
+	"Stop and report if the Rollout is aborted or Degraded. " +
+	"If status.promoteFull disappears first, send promote-full again only if status.currentPodHash is still the revision you promoted; " +
+	"a different hash means someone pushed a new revision."
 
 func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input manageCronJobInput) (*mcp.CallToolResult, any, error) {
 	dynClient := k8s.DynamicClientFromContext(ctx)

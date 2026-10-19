@@ -144,6 +144,27 @@ describe('rolloutActions state gating', () => {
     expect(offered(abortedHealthy, allCapabilities)).toContain('retry')
   })
 
+  // Argo clears status.abort on every reconcile while promoteFull is set, so an enabled
+  // Abort would report a revert that never happens.
+  it('blocks Abort while a full promotion is in progress and points at Rollback', () => {
+    const promoting = canaryRollout({
+      phase: 'Progressing',
+      promoteFull: true,
+      currentStepIndex: 4,
+      currentPodHash: 'v2',
+      stableRS: 'v1',
+    })
+    expect(blockedReason(promoting, 'abort')).toContain('Rollback')
+    expect(blockedReason(promoting, 'abort')).toContain('Stable revision')
+  })
+
+  it('leaves Abort alone once the promoted revision is stable or the flag is gone', () => {
+    const landed = canaryRollout({ phase: 'Progressing', promoteFull: true, currentPodHash: 'v2', stableRS: 'v2' })
+    expect(blockedReason(landed, 'abort')).toBeUndefined()
+    const midCanary = canaryRollout({ phase: 'Paused', currentStepIndex: 1, currentPodHash: 'v2', stableRS: 'v1' })
+    expect(blockedReason(midCanary, 'abort')).toBeUndefined()
+  })
+
   it('blocks Skip step once the last step is reached', () => {
     expect(blockedReason(canaryRollout({ phase: 'Paused', currentStepIndex: 3 }, 4), 'skip-step')).toBeUndefined()
     expect(blockedReason(canaryRollout({ phase: 'Paused', currentStepIndex: 4 }, 4), 'skip-step')).toBe(
