@@ -2922,6 +2922,74 @@ describe("InvestigationEvidencePane metrics cards", () => {
     };
   }
 
+  it.each([true, false, "true"])(
+    "validates partial=%s while keeping valid charts",
+    (partial) => {
+      const projection = project(
+        tool("prom", "query_prometheus", {
+          ...rangeResult(targetSelectors),
+          partial,
+        }),
+      );
+      if (typeof partial !== "boolean") {
+        expect(projection.groups).toHaveLength(0);
+        expect(projection.limitations).toHaveLength(1);
+        return;
+      }
+      expect(render(projection)).toContain("Memory working set");
+      expect(projection.limitations).toHaveLength(partial ? 1 : 0);
+      if (partial) {
+        expect(projection.limitations[0]).toMatchObject({
+          kind: "unknown",
+          message:
+            "The metrics backend returned a partial result, so some series may be missing.",
+        });
+      }
+    },
+  );
+
+  it.each([
+    [
+      { warnings: ["PromQL info: metric might not be a counter"] },
+      "The metrics backend returned 1 warning with this result: PromQL info: metric might not be a counter",
+    ],
+    [
+      { warnings: ["a", "b"], warningsOmitted: 2 },
+      "The metrics backend returned 4 warnings with this result: a",
+    ],
+    [
+      { warningsOmitted: 1 },
+      "The metrics backend returned 1 warning with this result.",
+    ],
+  ])("keeps the chart and surfaces backend warnings %j", (extra, message) => {
+    const projection = project(
+      tool("prom", "query_prometheus", {
+        ...rangeResult(targetSelectors),
+        ...extra,
+      }),
+    );
+    expect(render(projection)).toContain("Memory working set");
+    expect(projection.limitations).toHaveLength(1);
+    expect(projection.limitations[0]).toMatchObject({
+      kind: "unknown",
+      message,
+    });
+  });
+
+  it.each([{ warnings: "x" }, { warnings: [1] }, { warningsOmitted: "1" }])(
+    "rejects a malformed warnings field %j",
+    (extra) => {
+      const projection = project(
+        tool("prom", "query_prometheus", {
+          ...rangeResult(targetSelectors),
+          ...extra,
+        }),
+      );
+      expect(projection.groups).toHaveLength(0);
+      expect(projection.limitations).toHaveLength(1);
+    },
+  );
+
   it("keeps an uncited target-scoped chart in the workload collection", () => {
     const projection = project(
       tool("prom", "query_prometheus", rangeResult(targetSelectors)),

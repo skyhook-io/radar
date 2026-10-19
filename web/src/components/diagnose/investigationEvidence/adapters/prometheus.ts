@@ -635,7 +635,13 @@ export function adaptQueryPrometheus(
     !Array.isArray(value.selectors) ||
     (value.selectorsUnknown !== undefined &&
       typeof value.selectorsUnknown !== "boolean") ||
-    (value.truncated !== undefined && typeof value.truncated !== "boolean")
+    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+    (value.partial !== undefined && typeof value.partial !== "boolean") ||
+    (value.warnings !== undefined &&
+      (!Array.isArray(value.warnings) ||
+        !value.warnings.every((item) => typeof item === "string"))) ||
+    (value.warningsOmitted !== undefined &&
+      typeof value.warningsOmitted !== "number")
   ) {
     invalidPayload(builder, source, "Prometheus query");
     return;
@@ -652,6 +658,26 @@ export function adaptQueryPrometheus(
   ) {
     invalidPayload(builder, source, "Prometheus query");
     return;
+  }
+  if (value.partial === true) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      "The metrics backend returned a partial result, so some series may be missing.",
+      "unknown",
+    );
+  }
+  const warnings = (value.warnings as string[] | undefined) ?? [];
+  const omitted =
+    typeof value.warningsOmitted === "number" ? value.warningsOmitted : 0;
+  if (warnings.length > 0 || omitted > 0) {
+    const count = warnings.length + omitted;
+    builder.limit(
+      source,
+      "Prometheus query",
+      `The metrics backend returned ${count} warning${count === 1 ? "" : "s"} with this result${warnings.length > 0 ? `: ${warnings[0]}` : "."}`,
+      "unknown",
+    );
   }
   const selectorsUnknown = value.selectorsUnknown === true;
   const relevance = metricsScope(
