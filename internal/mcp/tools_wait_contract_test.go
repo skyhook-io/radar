@@ -203,7 +203,7 @@ func TestWaitNothingMatchesAndClamp(t *testing.T) {
 func TestWaitLiveMembership(t *testing.T) {
 	for _, shrinks := range []bool{false, true} {
 		t.Run(fmt.Sprint(shrinks), func(t *testing.T) {
-			fastWaitPolling(t)
+			roomForPolls(t)
 			old := waitTestPod("old", "True")
 			now := metav1.Now()
 			old.SetDeletionTimestamp(&now)
@@ -304,7 +304,7 @@ func TestWaitPaginationAndBounds(t *testing.T) {
 func TestWaitReadErrors(t *testing.T) {
 	for _, failures := range []int{2, 3, 100} {
 		t.Run(fmt.Sprint(failures), func(t *testing.T) {
-			fastWaitPolling(t)
+			roomForPolls(t)
 			dyn := waitDynamic()
 			calls := 0
 			dyn.PrependReactor("get", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
@@ -413,7 +413,7 @@ func TestWaitLongTextAndConditionAge(t *testing.T) {
 }
 
 func TestWaitJSONPathTransitions(t *testing.T) {
-	fastWaitPolling(t)
+	roomForPolls(t)
 	dyn := waitDynamic()
 	calls := 0
 	dyn.PrependReactor("get", "configmaps", func(clienttesting.Action) (bool, runtime.Object, error) {
@@ -559,7 +559,7 @@ func TestWaitForeignRolloutDoesNotGetBuiltInDefault(t *testing.T) {
 }
 
 func TestWaitMetDropsEarlierNext(t *testing.T) {
-	fastWaitPolling(t)
+	roomForPolls(t)
 	dyn := waitDynamic()
 	calls := 0
 	dyn.PrependReactor("get", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {

@@ -206,10 +206,19 @@ func waitPodBlockers(gvr schema.GroupVersionResource, pods []*corev1.Pod, revisi
 			}
 		}
 		if reason != "" {
-			out = append(out, waitBlocker{Pod: pod.Name, Container: container, Reason: reason, Message: truncateCrashLogLine(message, 300), key: waitBlockerKey{pod.UID, container, reason}})
+			out = append(out, waitBlocker{Pod: pod.Name, Container: container, Reason: reason, Message: truncateCrashLogLine(message, 300), key: waitBlockerKey{pod.UID, container, waitBlockerFamily(reason)}})
 		}
 	}
 	return out
+}
+
+// waitBlockerFamily groups reasons a kubelet alternates between for one
+// problem, so the persistence clock doesn't restart on every image pull retry.
+func waitBlockerFamily(reason string) string {
+	if reason == "ErrImagePull" || reason == "ImagePullBackOff" {
+		return "ImagePull"
+	}
+	return reason
 }
 
 func waitPodReady(pod *corev1.Pod) bool {

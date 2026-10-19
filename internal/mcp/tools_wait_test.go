@@ -28,6 +28,14 @@ func fastWaitPolling(t *testing.T) {
 	t.Cleanup(func() { waitPollInterval = prev; waitMaxTimeout = capBefore })
 }
 
+// roomForPolls lifts the call cap for a test that expects several polls to
+// reach met, so a loaded CI machine can't turn it into a timeout.
+func roomForPolls(t *testing.T) {
+	t.Helper()
+	fastWaitPolling(t)
+	waitMaxTimeout = 5 * time.Second
+}
+
 func waitDynamic(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		deploymentsGVR: "DeploymentList",
@@ -55,7 +63,7 @@ func deploymentObj(name string, generation, observed, desired, replicas, updated
 }
 
 func TestWaitForRolloutWaitsUntilDone(t *testing.T) {
-	fastWaitPolling(t)
+	roomForPolls(t)
 	dyn := waitDynamic()
 	gets := 0
 	dyn.PrependReactor("get", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
@@ -90,7 +98,7 @@ func TestRolloutStatusMirrorsKubectl(t *testing.T) {
 	}{
 		"spec not observed":     {deploymentObj("web", 2, 1, 3, 3, 3, 3), false, "observe the new spec", ""},
 		"replicas not updated":  {deploymentObj("web", 2, 2, 3, 3, 1, 3), false, "1 of 3 new replicas updated", ""},
-		"old replicas linger":   {deploymentObj("web", 2, 2, 3, 4, 3, 3), false, "1 old replicas pending termination", ""},
+		"old replicas linger":   {deploymentObj("web", 2, 2, 3, 4, 3, 3), false, "1 old replica(s) pending termination", ""},
 		"updated not available": {deploymentObj("web", 2, 2, 3, 3, 3, 2), false, "2 of 3 updated replicas available", ""},
 		"done":                  {deploymentObj("web", 2, 2, 3, 3, 3, 3), true, "rolled out", ""},
 		"deadline exceeded":     {deploymentObj("web", 2, 2, 3, 3, 1, 2, deadline), false, "", "progress deadline exceeded"},

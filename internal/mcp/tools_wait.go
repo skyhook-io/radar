@@ -46,7 +46,7 @@ type waitObjectState struct {
 	Name               string           `json:"name"`
 	UID                types.UID        `json:"uid"`
 	Met                bool             `json:"met"`
-	Generation         int64            `json:"generation"`
+	Generation         int64            `json:"generation,omitempty"`
 	ObservedGeneration any              `json:"observedGeneration,omitempty"`
 	Observed           string           `json:"observed"`
 	Replicas           map[string]int64 `json:"replicas,omitempty"`
@@ -677,7 +677,11 @@ func evaluateWaitObject(ctx context.Context, dyn dynamic.Interface, gvr schema.G
 			}
 		}
 		sort.Strings(names)
-		s.next = fmt.Sprintf("no %s condition on %s; it has [%s]; for state outside conditions use jsonpath={.status.<field>}=value (status has [%s])", cond, obj.GetName(), strings.Join(names, ", "), strings.Join(waitStatusFields(obj), ", "))
+		has := "no conditions"
+		if len(names) > 0 {
+			has = "[" + strings.Join(names, ", ") + "]"
+		}
+		s.next = fmt.Sprintf("no %s condition on %s; it has %s; for state outside conditions use jsonpath={.status.<field>}=value (status has [%s])", cond, obj.GetName(), has, strings.Join(waitStatusFields(obj), ", "))
 	}
 	return s, nil
 }
@@ -741,7 +745,7 @@ func rolloutStatus(obj *unstructured.Unstructured) (bool, string, string) {
 		case s.UpdatedReplicas < desired:
 			return false, fmt.Sprintf("%d of %d new replicas updated", s.UpdatedReplicas, desired), ""
 		case s.Replicas > s.UpdatedReplicas:
-			return false, fmt.Sprintf("%d old replicas pending termination", s.Replicas-s.UpdatedReplicas), ""
+			return false, fmt.Sprintf("%d old replica(s) pending termination", s.Replicas-s.UpdatedReplicas), ""
 		case s.AvailableReplicas < s.UpdatedReplicas:
 			return false, fmt.Sprintf("%d of %d updated replicas available", s.AvailableReplicas, s.UpdatedReplicas), ""
 		}

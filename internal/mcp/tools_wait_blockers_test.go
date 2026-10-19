@@ -220,3 +220,9 @@ func TestWaitDaemonSetRevisionsReadThroughCallerClient(t *testing.T) {
 		t.Fatalf("%+v", result)
 	}
 }
+
+func TestWaitImagePullRetriesKeepOneBlockerClock(t *testing.T) {
+	if waitBlockerFamily("ErrImagePull") != waitBlockerFamily("ImagePullBackOff") || waitBlockerFamily("CrashLoopBackOff") != "CrashLoopBackOff" {
+		t.Fatal("image pull reasons must share a persistence key")
+	}
+}
