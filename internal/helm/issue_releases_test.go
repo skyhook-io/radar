@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -176,7 +178,7 @@ func TestIssueReleasesMatchAFullRead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			newRows, err := listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), "", namespaces)
+			newRows, err := (&Client{}).listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), "", namespaces)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,7 +218,7 @@ func TestIssueReleasesFallBackToAFullReadWithoutHelmLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newRows, err := listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), "", nil)
+	newRows, err := (&Client{}).listIssueReleasesWithClients(context.Background(), fake.NewSimpleClientset(secretsToObjects(secrets)...), metadataClientFor(t, secrets), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,17 +252,43 @@ func TestOnlyIssueStatusesRaiseIssues(t *testing.T) {
 }
 
 // labelledStorageServer is an API server holding Helm release Secrets. It
-// answers metadata-only lists with labels alone and counts the Secrets it
-// sends in full.
+// answers metadata-only lists with labels alone, pages full lists when asked,
+// and counts the Secrets it sends in full, and the lists by name (gets) and
+// other full lists it serves.
 type labelledStorageServer struct {
+	mu        sync.Mutex
 	secrets   []*corev1.Secret
 	fullSent  atomic.Int32
+	fullLists atomic.Int32
+	gets      atomic.Int32
 	labelOnly atomic.Int32
+	// hold, when set, runs before a full read of namespace is answered.
+	hold func(namespace string)
+}
+
+func (s *labelledStorageServer) set(secrets []*corev1.Secret) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.secrets = secrets
 }
 
 func (s *labelledStorageServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	secrets := s.secrets
+	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	if !strings.HasSuffix(r.URL.Path, "/secrets") {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	// api/v1/secrets or api/v1/namespaces/{ns}/secrets
+	namespace := ""
+	if len(parts) > 3 && parts[2] == "namespaces" {
+		namespace = parts[3]
+		parts = append(parts[:2], parts[4:]...)
+	}
+	if len(parts) < 3 || parts[2] != "secrets" {
+		http.NotFound(w, r)
+		return
+	}
+	if len(parts) != 3 {
 		http.NotFound(w, r)
 		return
 	}
@@ -269,15 +297,20 @@ func (s *labelledStorageServer) ServeHTTP(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	namespace := ""
-	if parts := strings.Split(r.URL.Path, "/"); len(parts) > 4 && parts[3] == "namespaces" {
-		namespace = parts[4]
+	byName, err := fields.ParseSelector(r.URL.Query().Get("fieldSelector"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	var matched []*corev1.Secret
-	for _, secret := range s.secrets {
-		if (namespace == "" || secret.Namespace == namespace) && selector.Matches(labels.Set(secret.Labels)) {
+	for _, secret := range secrets {
+		if (namespace == "" || secret.Namespace == namespace) && selector.Matches(labels.Set(secret.Labels)) &&
+			byName.Matches(fields.Set{"metadata.name": secret.Name}) {
 			matched = append(matched, secret)
 		}
+	}
+	if !byName.Empty() {
+		s.gets.Add(1)
 	}
 	if strings.Contains(r.Header.Get("Accept"), "as=PartialObjectMetadataList") {
 		s.labelOnly.Add(1)
@@ -291,7 +324,20 @@ func (s *labelledStorageServer) ServeHTTP(w http.ResponseWriter, r *http.Request
 		_ = json.NewEncoder(w).Encode(list)
 		return
 	}
+	if s.hold != nil {
+		s.hold(namespace)
+	}
+	if byName.Empty() {
+		s.fullLists.Add(1)
+	}
 	list := corev1.SecretList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "SecretList"}}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("continue"))
+	if limit, _ := strconv.Atoi(r.URL.Query().Get("limit")); limit > 0 && offset+limit < len(matched) {
+		list.Continue = strconv.Itoa(offset + limit)
+		matched = matched[offset : offset+limit]
+	} else {
+		matched = matched[offset:]
+	}
 	for _, secret := range matched {
 		list.Items = append(list.Items, *secret)
 	}
@@ -303,37 +349,45 @@ func (s *labelledStorageServer) ServeHTTP(w http.ResponseWriter, r *http.Request
 // pulls every revision of every release, which is what made /api/issues take
 // seconds on clusters with many Helm releases.
 func TestIssueReleasesReadOnlyFailedOrPendingReleasesInFull(t *testing.T) {
-	storage := &labelledStorageServer{}
-	for i := range 20 {
-		name := fmt.Sprintf("healthy-%02d", i)
-		for version := 1; version <= 3; version++ {
-			status := release.StatusSuperseded
-			if version == 3 {
-				status = release.StatusDeployed
+	// Few releases are fetched one by one, many by list.
+	for _, healthy := range []int{3, 20} {
+		t.Run(fmt.Sprintf("%d healthy releases", healthy), func(t *testing.T) {
+			storage := &labelledStorageServer{}
+			for i := range healthy {
+				name := fmt.Sprintf("healthy-%02d", i)
+				for version := 1; version <= 3; version++ {
+					status := release.StatusSuperseded
+					if version == 3 {
+						status = release.StatusDeployed
+					}
+					storage.secrets = append(storage.secrets, labelledReleaseSecret(t, "apps", helmTestRelease(name, "apps", version, status, "Upgrade complete")))
+				}
 			}
-			storage.secrets = append(storage.secrets, labelledReleaseSecret(t, "apps", helmTestRelease(name, "apps", version, status, "Upgrade complete")))
-		}
-	}
-	storage.secrets = append(storage.secrets,
-		labelledReleaseSecret(t, "apps", helmTestRelease("api", "apps", 1, release.StatusSuperseded, "Install complete")),
-		labelledReleaseSecret(t, "apps", helmTestRelease("api", "apps", 2, release.StatusFailed, "Upgrade \"api\" failed: timed out")),
-	)
-	server := httptest.NewServer(storage)
-	defer server.Close()
+			storage.secrets = append(storage.secrets,
+				labelledReleaseSecret(t, "apps", helmTestRelease("api", "apps", 1, release.StatusSuperseded, "Install complete")),
+				labelledReleaseSecret(t, "apps", helmTestRelease("api", "apps", 2, release.StatusFailed, "Upgrade \"api\" failed: timed out")),
+			)
+			server := httptest.NewServer(storage)
+			defer server.Close()
 
-	client := &Client{restConfig: &rest.Config{Host: server.URL}}
-	rows, err := client.ListIssueReleasesAcrossNamespaces(context.Background(), nil, "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := issueRowKeys(rows); !reflect.DeepEqual(got, []string{"apps//api"}) {
-		t.Fatalf("issue rows = %v, want the failed release", got)
-	}
-	if storage.labelOnly.Load() == 0 {
-		t.Fatal("release labels were never read on their own")
-	}
-	if got := storage.fullSent.Load(); got != 2 {
-		t.Fatalf("API server sent %d release Secrets in full, want the failed release's 2 revisions out of %d", got, len(storage.secrets))
+			client := &Client{restConfig: &rest.Config{Host: server.URL}}
+			for range 2 {
+				rows, err := client.ListIssueReleasesAcrossNamespaces(context.Background(), nil, "", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := issueRowKeys(rows); !reflect.DeepEqual(got, []string{"apps//api"}) {
+					t.Fatalf("issue rows = %v, want the failed release", got)
+				}
+			}
+			if storage.labelOnly.Load() == 0 {
+				t.Fatal("release labels were never read on their own")
+			}
+			// The second read decodes nothing new.
+			if got := storage.fullSent.Load(); got != 2 {
+				t.Fatalf("API server sent %d release Secrets in full, want the failed release's 2 revisions out of %d", got, len(storage.secrets))
+			}
+		})
 	}
 }
 
@@ -359,7 +413,7 @@ func TestIssueReleasesSkipOnlyDeniedNamespaces(t *testing.T) {
 				return false, nil, nil
 			})
 			ctx := context.Background()
-			_, err := listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(), labels, "", []string{"open", "blocked"})
+			_, err := (&Client{}).listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(), labels, "", []string{"open", "blocked"})
 			if got := IssueReadUnchecked(ctx, err); got != tc.unchecked {
 				t.Fatalf("IssueReadUnchecked = %v, want %v (err: %v)", got, tc.unchecked, err)
 			}

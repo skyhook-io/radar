@@ -2,13 +2,10 @@ package helm
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -72,6 +69,8 @@ type Client struct {
 	// singleton is up (the CLI install driver), so Helm can't diverge onto a
 	// different kubeconfig current-context than the caller's own client.
 	restConfig *rest.Config
+
+	summaries releaseSummaries
 }
 
 var (
@@ -365,19 +364,11 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 		return []HelmRelease{}, nil
 	}
 	contextName := k8s.GetContextName()
-	client, err := c.storageClient(username, groups)
+	client, labelsClient, err := c.releaseStorageClients(username, groups)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true)
-}
-
-// contextName is the cluster context the read started on; a release history
-// analysed after a switch away from it records no uninstall start.
-func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, IsForbiddenError, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
-		return helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
-	})
+	return listReleaseRows(ctx, contextName, namespaces, true, IsForbiddenError, c.releaseListReader(client, labelsClient))
 }
 
 // listReleaseRows reads one storage snapshot per namespace scope (nil means
@@ -526,11 +517,11 @@ func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Conf
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
 
-	client, err := c.storageClient(username, groups)
+	client, labelsClient, err := c.releaseStorageClients(username, groups)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true)
+	return listReleaseRows(ctx, contextName, []string{namespace}, true, IsForbiddenError, c.releaseListReader(client, labelsClient))
 }
 
 func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string, includeResourceHealth bool) ([]HelmRelease, error) {
@@ -545,7 +536,11 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		storageNs := snapshot.storageNamespaces[releaseStorageKey(rel)]
 		hr := toHelmReleaseSummary(rel, storageNs)
 		if includeResourceHealth {
-			addResourceHealth(&hr, rel)
+			if resources, ok := snapshot.latestResources[rel]; ok {
+				setResourceHealth(&hr, resources)
+			} else {
+				addResourceHealth(&hr, rel)
+			}
 		}
 		// Match against the release's *actual* storage namespace (the
 		// un-normalized value), since toHelmRelease zeroes StorageNamespace
@@ -1402,7 +1397,10 @@ func toHelmReleaseSummary(rel *release.Release, storageNamespace string) HelmRel
 // addResourceHealth computes health from the resources the release's
 // manifest declares.
 func addResourceHealth(hr *HelmRelease, rel *release.Release) {
-	resources := parseManifestResources(rel.Manifest, rel.Namespace)
+	setResourceHealth(hr, parseManifestResources(rel.Manifest, rel.Namespace))
+}
+
+func setResourceHealth(hr *HelmRelease, resources []OwnedResource) {
 	enrichResourcesWithStatus(resources)
 	hr.ResourceHealth, hr.HealthIssue, hr.HealthSummary = computeResourceHealth(resources)
 }
@@ -1476,6 +1474,9 @@ type helmReleaseStorageSnapshot struct {
 	storageNamespaces map[string]string
 	histories         map[string][]HelmRevision
 	latest            []*release.Release
+	// latestResources, when set, holds the resources each latest release's
+	// manifest declares, for a snapshot whose releases carry no manifest.
+	latestResources map[*release.Release][]OwnedResource
 }
 
 // storageClient reads Helm release Secrets on the same cluster as c's action
@@ -1529,11 +1530,7 @@ func helmReleaseStorageSnapshotWithClient(ctx context.Context, client kubernetes
 // helmReleaseStorageSnapshotFromSecrets decodes release Secrets and groups
 // their revisions by release.
 func helmReleaseStorageSnapshotFromSecrets(ctx context.Context, secrets []corev1.Secret) (*helmReleaseStorageSnapshot, error) {
-	snapshot := &helmReleaseStorageSnapshot{
-		storageNamespaces: make(map[string]string, len(secrets)),
-		histories:         make(map[string][]HelmRevision),
-	}
-	latestByRelease := make(map[string]*release.Release)
+	revisions := make([]storedRevision, 0, len(secrets))
 	for _, secret := range secrets {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1551,7 +1548,30 @@ func helmReleaseStorageSnapshotFromSecrets(ctx context.Context, secrets []corev1
 		// Restore them like Helm's own List does, so the batch upgrade check sees
 		// the recorded chart source.
 		rel.Labels = secret.Labels
-		snapshot.storageNamespaces[releaseStorageKey(rel)] = secret.Namespace
+		revisions = append(revisions, storedRevision{storageNamespace: secret.Namespace, release: rel})
+	}
+	return helmReleaseStorageSnapshotFromRevisions(ctx, revisions)
+}
+
+// storedRevision is one release revision and the namespace its Secret is in.
+type storedRevision struct {
+	storageNamespace string
+	release          *release.Release
+}
+
+// helmReleaseStorageSnapshotFromRevisions groups revisions by release.
+func helmReleaseStorageSnapshotFromRevisions(ctx context.Context, revisions []storedRevision) (*helmReleaseStorageSnapshot, error) {
+	snapshot := &helmReleaseStorageSnapshot{
+		storageNamespaces: make(map[string]string, len(revisions)),
+		histories:         make(map[string][]HelmRevision),
+	}
+	latestByRelease := make(map[string]*release.Release)
+	for _, stored := range revisions {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		rel := stored.release
+		snapshot.storageNamespaces[releaseStorageKey(rel)] = stored.storageNamespace
 
 		historyKey := releaseHistoryKey(rel)
 		if revision, ok := toHelmRevision(rel); ok {
@@ -1588,20 +1608,9 @@ func helmListAllIncludes(rel *release.Release) bool {
 }
 
 func decodeHelmReleaseData(data string) (*release.Release, error) {
-	b, err := base64.StdEncoding.DecodeString(data)
+	b, err := decodeReleaseJSON([]byte(data), -1)
 	if err != nil {
 		return nil, err
-	}
-	if len(b) > 3 && bytes.Equal(b[0:3], []byte{0x1f, 0x8b, 0x08}) {
-		r, err := gzip.NewReader(bytes.NewReader(b))
-		if err != nil {
-			return nil, err
-		}
-		defer r.Close()
-		b, err = io.ReadAll(r)
-		if err != nil {
-			return nil, err
-		}
 	}
 	var rel release.Release
 	if err := json.Unmarshal(b, &rel); err != nil {
@@ -1759,14 +1768,7 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 		if obj.GetKind() == "" || obj.GetName() == "" {
 			continue
 		}
-		apiGroup := ""
-		if group, _, ok := strings.Cut(obj.GetAPIVersion(), "/"); ok {
-			apiGroup = group
-		}
-		clusterScoped, _, _ := k8s.ClassifyKindScope(obj.GetKind(), apiGroup)
-		if obj.GetNamespace() == "" && !clusterScoped {
-			obj.SetNamespace(defaultNamespace)
-		}
+		obj.SetNamespace(manifestResourceNamespace(obj.GetKind(), obj.GetAPIVersion(), obj.GetNamespace(), defaultNamespace))
 		resources = append(resources, renderedResource{
 			Ref: ResourceRef{
 				Kind:       obj.GetKind(),
@@ -1785,16 +1787,45 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 	return resources, parseErrorCount
 }
 
+// manifestResourceNamespace is the namespace a manifest object lands in: its
+// own, else the release namespace unless the kind is cluster-scoped.
+func manifestResourceNamespace(kind, apiVersion, namespace, defaultNamespace string) string {
+	if namespace != "" {
+		return namespace
+	}
+	apiGroup := ""
+	if group, _, ok := strings.Cut(apiVersion, "/"); ok {
+		apiGroup = group
+	}
+	if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, apiGroup); clusterScoped {
+		return ""
+	}
+	return defaultNamespace
+}
+
 // parseManifestResources extracts K8s resources from a rendered manifest
 func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 	rendered, _ := parseManifestResourceObjects(manifest, defaultNamespace)
-	resources := make([]OwnedResource, 0, len(rendered))
+	refs := make([]ResourceRef, 0, len(rendered))
 	for _, resource := range rendered {
+		refs = append(refs, resource.Ref)
+	}
+	return ownedResourcesFromRefs(refs)
+}
+
+// ownedResourcesFromRefs orders refs the way parseManifestResourceObjects
+// returns them, then by kind and name.
+func ownedResourcesFromRefs(refs []ResourceRef) []OwnedResource {
+	sort.Slice(refs, func(i, j int) bool {
+		return resourceRefKey(refs[i]) < resourceRefKey(refs[j])
+	})
+	resources := make([]OwnedResource, 0, len(refs))
+	for _, ref := range refs {
 		resources = append(resources, OwnedResource{
-			Kind:       resource.Ref.Kind,
-			APIVersion: resource.Ref.APIVersion,
-			Name:       resource.Ref.Name,
-			Namespace:  resource.Ref.Namespace,
+			Kind:       ref.Kind,
+			APIVersion: ref.APIVersion,
+			Name:       ref.Name,
+			Namespace:  ref.Namespace,
 		})
 	}
 
