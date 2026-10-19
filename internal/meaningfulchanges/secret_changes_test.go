@@ -245,7 +245,7 @@ func TestConfigMapPreviousValueAndPodDeduplication(t *testing.T) {
 	if len(rows) != 1 || rows[0].RunningPreviousValue == nil || rows[0].RunningPreviousValue.Pods != 1 || !reflect.DeepEqual(rows[0].RunningPreviousValue.Keys, []string{"A", "B"}) {
 		t.Fatalf("rows=%+v", rows)
 	}
-	rows = feedRecent(t, Query{CanReadPods: func(string) bool { return false }})
+	rows = feedRecent(t, Query{Viewer: Viewer{CanReadPods: func(string) bool { return false }}})
 	if len(rows) != 1 || rows[0].RunningPreviousValue != nil || len(rows[0].ConsumedBy) != 0 {
 		t.Fatalf("Pod-derived context leaked: %+v", rows)
 	}
@@ -276,18 +276,18 @@ func TestSecretAuthorizationAndQueryConstructors(t *testing.T) {
 			var err error
 			switch constructor {
 			case "Recent":
-				rows = feedRecent(t, Query{Kinds: []string{"Secret"}, CanReadPods: deny})
+				rows = feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: Viewer{CanReadPods: deny}})
 			case "RecentForResource":
-				rows, _, err = RecentForResource(context.Background(), "Secret", "shop", "db", time.Hour, 20, 10, deny)
+				rows, _, err = RecentForResource(context.Background(), "Secret", "shop", "db", time.Hour, 20, 10, Viewer{CanReadPods: deny})
 			case "RecentForResourceDetailed":
 				var r RecentResult
-				r, err = RecentForResourceDetailed(context.Background(), "Secret", "shop", "db", time.Hour, 20, 10, deny)
+				r, err = RecentForResourceDetailed(context.Background(), "Secret", "shop", "db", time.Hour, 20, 10, Viewer{CanReadPods: deny})
 				rows = r.Changes
 			case "RecentForWorkloadAndConfigMaps":
-				rows, _, err = RecentForWorkloadAndConfigMaps(context.Background(), deployment, "Deployment", "shop", "app", time.Hour, 20, 10, deny)
+				rows, _, err = RecentForWorkloadAndConfigMaps(context.Background(), deployment, "Deployment", "shop", "app", time.Hour, 20, 10, Viewer{CanReadPods: deny})
 			case "RecentForWorkloadAndConfigMapsAuthorizedDetailed":
 				var r RecentResult
-				r, _, err = RecentForWorkloadAndConfigMapsAuthorizedDetailed(context.Background(), deployment, "Deployment", "shop", "app", time.Hour, 20, 10, nil, deny)
+				r, _, err = RecentForWorkloadAndConfigMapsAuthorizedDetailed(context.Background(), deployment, "Deployment", "shop", "app", time.Hour, 20, 10, nil, Viewer{CanReadPods: deny})
 				rows = r.Changes
 			}
 			if err != nil {
@@ -298,9 +298,21 @@ func TestSecretAuthorizationAndQueryConstructors(t *testing.T) {
 			}
 		})
 	}
-	rows = feedRecent(t, Query{CanReadPods: func(string) bool { return false }})
+	rows = feedRecent(t, Query{Viewer: Viewer{CanReadPods: func(string) bool { return false }}})
 	if len(rows) != 2 {
 		t.Fatalf("Pod permission gated admission: %+v", rows)
+	}
+	// A caller who can read the Secret and its Pods but not Deployments sees
+	// the bare Pod, not the Deployment whose template references the Secret.
+	noDeployments := Viewer{CanReadConsumer: func(c issuesapi.RecentChange) bool { return c.Kind != "Deployment" }}
+	rows = feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: noDeployments})
+	if len(rows) != 1 || !reflect.DeepEqual(rows[0].ConsumedBy, []string{"Pod/hidden"}) || rows[0].RunningPreviousValue == nil || !reflect.DeepEqual(rows[0].RunningPreviousValue.Workloads, []string{"Pod/hidden"}) {
+		t.Fatalf("workload name leaked to a caller without Deployment read: %+v", rows)
+	}
+	// Without Pod read either, no consumer is named at all.
+	rows = feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: Viewer{CanReadPods: func(string) bool { return false }, CanReadConsumer: noDeployments.CanReadConsumer}})
+	if len(rows) != 1 || len(rows[0].ConsumedBy) != 0 || rows[0].RunningPreviousValue != nil {
+		t.Fatalf("workload name leaked to a caller without Deployment read: %+v", rows)
 	}
 }
 
@@ -419,11 +431,11 @@ func TestSecretReferenceUnionAndRolloutSources(t *testing.T) {
 			t.Fatalf("Pod-less Rollout template admitted a row: %+v", row)
 		}
 	}
-	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(context.Background(), rollout, "Rollout", "shop", "roll", time.Hour, 20, 10, nil, nil)
+	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(context.Background(), rollout, "Rollout", "shop", "roll", time.Hour, 20, 10, nil, Viewer{})
 	if err != nil || len(result.Changes) != 1 || result.Changes[0].Name != "mounted" {
 		t.Fatalf("mounted Rollout source: %+v %v", result, err)
 	}
-	result, _, err = RecentForWorkloadAndConfigMapsAuthorizedDetailed(context.Background(), deployment, "Deployment", "shop", "app", time.Hour, 20, 10, nil, nil)
+	result, _, err = RecentForWorkloadAndConfigMapsAuthorizedDetailed(context.Background(), deployment, "Deployment", "shop", "app", time.Hour, 20, 10, nil, Viewer{})
 	if err != nil || len(result.Changes) != 1 || result.Changes[0].Name != "new-secret" {
 		t.Fatalf("workload sources: %+v %v", result, err)
 	}
@@ -467,7 +479,7 @@ func TestSecretManagedFieldsDoesNotAnnotateObservedRow(t *testing.T) {
 	if len(rows) != 1 || rows[0].RunningPreviousValue != nil {
 		t.Fatalf("managedFields evidence used: %+v", rows)
 	}
-	rows = feedRecent(t, Query{CanReadPods: func(string) bool { return false }})
+	rows = feedRecent(t, Query{Viewer: Viewer{CanReadPods: func(string) bool { return false }}})
 	if len(rows) != 1 || len(rows[0].ConsumedBy) != 0 || rows[0].RunningPreviousValue != nil {
 		t.Fatalf("Pod-derived names leaked or admission lost: %+v", rows)
 	}

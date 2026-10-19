@@ -482,7 +482,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 				mcpChangeAuthorizer(ctx),
 			)
 		},
-		recentChangePodReadFilter(ctx),
+		recentChangeViewer(ctx),
 	)
 	resp.RecentChangesCoverageLimited = changesCoverageLimited
 	resp.RecentChangesSaturated = changesResult.OutputCapped || changesResult.FetchSaturated

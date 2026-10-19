@@ -1172,7 +1172,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 			// saturation becomes a side channel for unreadable history.
 			recentChangesCoverageLimited = true
 		} else {
-			changesResult, err := meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit, recentChangePodReadFilter(ctx))
+			changesResult, err := meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit, recentChangeViewer(ctx))
 			recentChangesSaturated = changesResult.OutputCapped || changesResult.FetchSaturated
 			if err != nil {
 				changesErr = err.Error()
@@ -1533,12 +1533,12 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	}
 
 	query := meaningfulchanges.Query{
-		Since:       since,
-		Limit:       50,
-		FieldLimit:  meaningfulchanges.DefaultFieldLimit,
-		Name:        input.Name,
-		Allow:       recentChangeReadFilter(ctx),
-		CanReadPods: recentChangePodReadFilter(ctx),
+		Since:      since,
+		Limit:      50,
+		FieldLimit: meaningfulchanges.DefaultFieldLimit,
+		Name:       input.Name,
+		Allow:      recentChangeReadFilter(ctx),
+		Viewer:     recentChangeViewer(ctx),
 	}
 	switch {
 	case input.Namespace != "":
@@ -3181,8 +3181,8 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
 				// Per-kind RBAC before ranking and the cut, so priority/recap
 				// see the visible set.
-				Allow:       recentChangeReadFilter(ctx),
-				CanReadPods: recentChangePodReadFilter(ctx),
+				Allow:  recentChangeReadFilter(ctx),
+				Viewer: recentChangeViewer(ctx),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()

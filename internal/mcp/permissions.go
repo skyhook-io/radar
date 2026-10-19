@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -78,11 +79,16 @@ func recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bo
 	}
 }
 
-func recentChangePodReadFilter(ctx context.Context) func(string) bool {
+// recentChangeViewer gates the Pod and workload names change rows carry.
+// The zero Viewer when auth is off.
+func recentChangeViewer(ctx context.Context) meaningfulchanges.Viewer {
 	if pkgauth.UserFromContext(ctx) == nil {
-		return nil
+		return meaningfulchanges.Viewer{}
 	}
-	return func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "get") }
+	return meaningfulchanges.Viewer{
+		CanReadPods:     func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "get") },
+		CanReadConsumer: recentChangeReadFilter(ctx),
+	}
 }
 
 // callerReadsAllNamespaces reports whether the caller is unrestricted by

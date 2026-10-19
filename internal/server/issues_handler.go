@@ -46,12 +46,17 @@ func (s *Server) recentChangeReadFilter(ctx context.Context) func(issuesapi.Rece
 	}
 }
 
-func (s *Server) recentChangePodReadFilter(ctx context.Context) func(string) bool {
+// recentChangeViewer gates the Pod and workload names change rows carry.
+// The zero Viewer when auth is off.
+func (s *Server) recentChangeViewer(ctx context.Context) meaningfulchanges.Viewer {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil
+		return meaningfulchanges.Viewer{}
 	}
-	return func(namespace string) bool { return s.canReadUser(ctx, user, "", "pods", namespace, "get") }
+	return meaningfulchanges.Viewer{
+		CanReadPods:     func(namespace string) bool { return s.canReadUser(ctx, user, "", "pods", namespace, "get") },
+		CanReadConsumer: s.recentChangeReadFilter(ctx),
+	}
 }
 
 // handleIssues serves GET /api/issues — "what's broken right now."
@@ -154,8 +159,8 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 				// per-kind — drop changes for kinds the caller can't read before
 				// ranking and the cut, so priority/recap logic operates on the
 				// visible set.
-				Allow:       s.recentChangeReadFilter(r.Context()),
-				CanReadPods: s.recentChangePodReadFilter(r.Context()),
+				Allow:  s.recentChangeReadFilter(r.Context()),
+				Viewer: s.recentChangeViewer(r.Context()),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()

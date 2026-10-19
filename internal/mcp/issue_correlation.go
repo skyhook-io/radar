@@ -260,7 +260,7 @@ func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, windo
 		obj := workloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
 		result, sourcesWithheld, err := meaningfulchanges.RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			ctx, obj, iss.Kind, iss.Namespace, iss.Name,
-			window, limit, correlationFieldLimit, configSourceFilter(ctx, iss.Namespace), recentChangePodReadFilter(ctx),
+			window, limit, correlationFieldLimit, configSourceFilter(ctx, iss.Namespace), recentChangeViewer(ctx),
 		)
 		// A Rollout whose template can't be read (an unsupported or missing
 		// workloadRef target) has unknown sources, so absence proves nothing.
@@ -271,7 +271,7 @@ func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, windo
 	}
 	result, err := meaningfulchanges.RecentForResourceDetailed(
 		ctx, iss.Kind, iss.Namespace, iss.Name,
-		window, limit, correlationFieldLimit, recentChangePodReadFilter(ctx),
+		window, limit, correlationFieldLimit, recentChangeViewer(ctx),
 	)
 	return result, false, nil, err
 }

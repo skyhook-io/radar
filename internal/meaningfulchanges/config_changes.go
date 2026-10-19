@@ -15,7 +15,7 @@ import (
 
 const runningPreviousValueNote = "These Pods started before Radar observed this write and read the changed keys as env vars. Env values are set when a container starts, so they likely still hold the earlier value until they restart."
 
-func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.RecentChange, podsByNamespace map[string][]*corev1.Pod) {
+func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.RecentChange, podsByNamespace map[string][]*corev1.Pod, viewer Viewer) {
 	cache := k8s.GetResourceCache()
 	for namespace, pods := range podsByNamespace {
 		candidates := map[string]bool{}
@@ -66,10 +66,13 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 				keys[fact.Key] = true
 				for _, name := range fact.Pods {
 					podNames[name] = true
-					if owner, ok := k8s.PodWorkload(cache, byName[name]); ok {
+					owner, ok := k8s.PodWorkload(cache, byName[name])
+					if !ok {
+						owner = k8s.TopOwnerInfo{Kind: "Pod", Name: name}
+					}
+					// The Pod count stays; only the names the caller may read are listed.
+					if viewer.canNameConsumer(owner.Kind, owner.Group, namespace) {
 						workloads[owner.Kind+"/"+owner.Name] = true
-					} else {
-						workloads["Pod/"+name] = true
 					}
 				}
 			}

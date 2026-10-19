@@ -244,12 +244,37 @@ type Query struct {
 	// places.
 	Allow func(issuesapi.RecentChange) bool
 
-	// CanReadPods gates Pod-derived names and stale-env evidence; nil means auth off.
-	CanReadPods func(namespace string) bool
+	// Viewer gates what rows say about other objects.
+	Viewer Viewer
 
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
 	start time.Time
+}
+
+// Viewer gates the Pod and workload names a row carries beyond its own
+// object. Nil fields mean auth is off.
+type Viewer struct {
+	// CanReadPods gates Pod-derived names and stale-env evidence.
+	CanReadPods func(namespace string) bool
+	// CanReadConsumer gates each workload named in consumed_by and
+	// running_previous_value, checked as a change row of that kind.
+	CanReadConsumer func(issuesapi.RecentChange) bool
+}
+
+func (v Viewer) canReadPods(namespace string) bool {
+	return v.CanReadPods == nil || v.CanReadPods(namespace)
+}
+
+func (v Viewer) canNameConsumer(kind, group, namespace string) bool {
+	if v.CanReadConsumer == nil {
+		return true
+	}
+	apiVersion := "v1"
+	if group != "" {
+		apiVersion = group + "/v1"
+	}
+	return v.CanReadConsumer(issuesapi.RecentChange{Kind: kind, APIVersion: apiVersion, Namespace: namespace})
 }
 
 type RecentResult struct {
@@ -399,8 +424,8 @@ func HistoryCoverageSince(windowStart time.Time) issuesapi.HistoryCoverage {
 // flag: true when a candidate fetch hit its cap and the window may contain
 // changes the query never saw. Callers asserting "no recent changes" must
 // treat saturation as unknown, never as evidence of absence.
-func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, canReadPods func(string) bool) ([]issuesapi.RecentChange, bool, error) {
-	result, err := RecentForResourceDetailed(ctx, kind, namespace, name, since, limit, fieldLimit, canReadPods)
+func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) ([]issuesapi.RecentChange, bool, error) {
+	result, err := RecentForResourceDetailed(ctx, kind, namespace, name, since, limit, fieldLimit, viewer)
 	return result.Changes, result.FetchSaturated, err
 }
 
@@ -408,22 +433,22 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 // that display source coverage. The historical wrapper above intentionally
 // exposes only fetch saturation because issue-correlation uses that bool for
 // negative-claim gating.
-func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, canReadPods func(string) bool) (RecentResult, error) {
+func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) (RecentResult, error) {
 	return Recent(ctx, Query{
-		Namespaces:  []string{namespace},
-		Kinds:       []string{canonicalKind(kind)},
-		Name:        name,
-		Since:       since,
-		Limit:       limit,
-		FieldLimit:  fieldLimit,
-		CanReadPods: canReadPods,
+		Namespaces: []string{namespace},
+		Kinds:      []string{canonicalKind(kind)},
+		Name:       name,
+		Since:      since,
+		Limit:      limit,
+		FieldLimit: fieldLimit,
+		Viewer:     viewer,
 	})
 }
 
 // RecentForWorkloadAndConfigMaps includes directly referenced ConfigMaps and Secrets.
-func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int, canReadPods func(string) bool) ([]issuesapi.RecentChange, bool, error) {
+func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) ([]issuesapi.RecentChange, bool, error) {
 	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
-		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil, canReadPods,
+		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil, viewer,
 	)
 	return result.Changes, result.FetchSaturated, err
 }
@@ -443,13 +468,13 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 	since time.Duration,
 	limit, fieldLimit int,
 	includeSource func(kind, name string) bool,
-	canReadPods func(string) bool,
+	viewer Viewer,
 ) (result RecentResult, coverageLimited bool, err error) {
 	store := timeline.GetStore()
 	if store == nil {
 		return RecentResult{}, false, timeline.StoreMissingError()
 	}
-	q := normalizeQuery(Query{Namespaces: []string{namespace}, Since: since, Limit: limit, FieldLimit: fieldLimit, CanReadPods: canReadPods})
+	q := normalizeQuery(Query{Namespaces: []string{namespace}, Since: since, Limit: limit, FieldLimit: fieldLimit, Viewer: viewer})
 	var events []timeline.TimelineEvent
 	fetch := func(resourceKind, resourceName string) error {
 		canonicalResourceKind := canonicalKind(resourceKind)
@@ -720,7 +745,7 @@ func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query
 		}
 		out = visible
 	}
-	annotateRunningPreviousValue(ctx, out, pods)
+	annotateRunningPreviousValue(ctx, out, pods, q.Viewer)
 	if len(q.Kinds) == 0 && q.Name == "" {
 		out = collapseSecretUpdates(out)
 	}
@@ -757,6 +782,16 @@ func annotateConfigConsumers(ctx context.Context, changes []issuesapi.RecentChan
 func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespaces map[string]bool, q Query) (map[string]configConsumers, map[string][]*corev1.Pod) {
 	index := map[string]configConsumers{}
 	pods := map[string][]*corev1.Pod{}
+	nameable := map[string]bool{}
+	canName := func(kind, group, namespace string) bool {
+		key := group + "/" + kind + "/" + namespace
+		allowed, checked := nameable[key]
+		if !checked {
+			allowed = q.Viewer.canNameConsumer(kind, group, namespace)
+			nameable[key] = allowed
+		}
+		return allowed
+	}
 	add := func(namespace, kind, name string, obj any, showName bool) {
 		for _, ref := range DirectConfigReferences(obj) {
 			key := resourceKey(ref.Kind, namespace, ref.Name)
@@ -772,7 +807,7 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 		for namespace := range namespaces {
 			if items, err := lister.Deployments(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "Deployment", item.Name, item, true)
+					add(namespace, "Deployment", item.Name, item, canName("Deployment", "apps", namespace))
 				}
 			}
 		}
@@ -781,7 +816,7 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 		for namespace := range namespaces {
 			if items, err := lister.StatefulSets(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "StatefulSet", item.Name, item, true)
+					add(namespace, "StatefulSet", item.Name, item, canName("StatefulSet", "apps", namespace))
 				}
 			}
 		}
@@ -790,7 +825,7 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 		for namespace := range namespaces {
 			if items, err := lister.DaemonSets(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "DaemonSet", item.Name, item, true)
+					add(namespace, "DaemonSet", item.Name, item, canName("DaemonSet", "apps", namespace))
 				}
 			}
 		}
@@ -799,7 +834,7 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 		for namespace := range namespaces {
 			if items, err := lister.Jobs(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "Job", item.Name, item, true)
+					add(namespace, "Job", item.Name, item, canName("Job", "batch", namespace))
 				}
 			}
 		}
@@ -808,7 +843,7 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 		for namespace := range namespaces {
 			if items, err := lister.CronJobs(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "CronJob", item.Name, item, true)
+					add(namespace, "CronJob", item.Name, item, canName("CronJob", "batch", namespace))
 				}
 			}
 		}
@@ -824,13 +859,13 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 		if err != nil {
 			continue
 		}
-		readable := q.CanReadPods == nil || q.CanReadPods(namespace)
+		readable := q.Viewer.canReadPods(namespace)
 		for _, pod := range items {
-			kind, name := "Pod", pod.Name
+			kind, group, name := "Pod", "", pod.Name
 			if owner, ok := k8s.PodWorkload(cache, pod); ok {
-				kind, name = owner.Kind, owner.Name
+				kind, group, name = owner.Kind, owner.Group, owner.Name
 			}
-			add(namespace, kind, name, pod, readable)
+			add(namespace, kind, name, pod, readable && canName(kind, group, namespace))
 		}
 		if readable {
 			pods[namespace] = items

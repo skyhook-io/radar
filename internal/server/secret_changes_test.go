@@ -55,8 +55,8 @@ func TestIssuesSecretPreviousValueRequiresPodRead(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"shop"}}
 	perms.SetCanI("list", "", "secrets", "shop", true)
 	s.permCache.Set("secret-reader", nil, perms)
-	if s.recentChangePodReadFilter(context.Background()) != nil {
-		t.Fatal("auth-off filter must be nil")
+	if viewer := s.recentChangeViewer(context.Background()); viewer.CanReadPods != nil || viewer.CanReadConsumer != nil {
+		t.Fatal("auth-off viewer must be unrestricted")
 	}
 	for _, readable := range []bool{true, false} {
 		perms.SetCanI("get", "", "pods", "shop", readable)
