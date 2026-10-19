@@ -34,6 +34,7 @@ func waitDynamic(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
 		jobsGVR:        "JobList",
 		configMapsGVR:  "ConfigMapList",
 		podsGVR:        "PodList",
+		{Group: "apps", Version: "v1", Resource: "controllerrevisions"}: "ControllerRevisionList",
 	}, objs...)
 }
 

@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -49,7 +50,7 @@ func TestWaitCurrentRevisionBlockers(t *testing.T) {
 	newPod.Labels = map[string]string{"pod-template-hash": "new"}
 	newPod.Status.ContainerStatuses = nil
 	waitInstallPodCache(t, oldRS, newRS, oldPod, newPod)
-	result := readWaitBlockers(t.Context(), deploymentsGVR, obj)
+	result := readWaitBlockers(t.Context(), waitDynamic(), deploymentsGVR, obj)
 	if result.unavailable != "" || len(result.blockers) != 0 {
 		t.Fatalf("old revision leaked: %+v", result)
 	}
@@ -168,13 +169,13 @@ func TestWaitBlockerAuthorization(t *testing.T) {
 	perms.SetCanI("list", "", "pods", "shop", true)
 	perms.SetCanI("get", "apps", "replicasets", "shop", false)
 	for _, gvr := range []schema.GroupVersionResource{deploymentsGVR, {Group: "argoproj.io", Resource: "rollouts"}} {
-		result := readWaitBlockers(ctx, gvr, obj)
+		result := readWaitBlockers(ctx, waitDynamic(), gvr, obj)
 		if result.unavailable != "workload's ReplicaSets or ControllerRevisions are not readable" || len(result.blockers) != 0 {
 			t.Fatal(result)
 		}
 	}
 	perms.SetCanI("list", "apps", "controllerrevisions", "shop", false)
-	if result := readWaitBlockers(ctx, schema.GroupVersionResource{Group: "apps", Resource: "daemonsets"}, obj); result.unavailable != "workload's ReplicaSets or ControllerRevisions are not readable" {
+	if result := readWaitBlockers(ctx, waitDynamic(), schema.GroupVersionResource{Group: "apps", Resource: "daemonsets"}, obj); result.unavailable != "workload's ReplicaSets or ControllerRevisions are not readable" {
 		t.Fatal(result)
 	}
 }
@@ -190,5 +191,32 @@ func TestWaitNamespacePinPrecedesReads(t *testing.T) {
 	}
 	if len(dyn.Actions()) != 0 {
 		t.Fatal(dyn.Actions())
+	}
+}
+
+func TestWaitFatalBlockerSurvivesCap(t *testing.T) {
+	blockers := []waitBlocker{{Pod: "a", Reason: "Unschedulable"}, {Pod: "b", Reason: "Unschedulable"}, {Pod: "c", Reason: "Unschedulable"}, {Pod: "d", Reason: "CrashLoopBackOff"}}
+	got := capWaitBlockers(blockers)
+	if len(got) != 3 || got[0].Pod != "d" {
+		t.Fatal(got)
+	}
+}
+
+func TestWaitDaemonSetRevisionsReadThroughCallerClient(t *testing.T) {
+	ds := waitTestObject("DaemonSet", "apps/v1", "agent", map[string]any{"observedGeneration": int64(1)})
+	ds.Object["spec"] = map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "agent"}}}
+	yes := true
+	revision := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "ControllerRevision", "revision": int64(2),
+		"metadata": map[string]any{"name": "agent-new", "namespace": "shop", "labels": map[string]any{"app": "agent", "controller-revision-hash": "new"},
+			"ownerReferences": []any{map[string]any{"apiVersion": "apps/v1", "kind": "DaemonSet", "name": "agent", "uid": "uid-agent", "controller": yes}}},
+	}}
+	pod := waitFatalPod("agent-x", waitOwner("DaemonSet", "agent", "uid-agent"))
+	pod.Labels = map[string]string{"app": "agent", "controller-revision-hash": "new"}
+	waitInstallPodCache(t, pod)
+	dyn := waitDynamic(revision)
+	result := readWaitBlockers(t.Context(), dyn, schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, ds)
+	if result.unavailable != "" || len(result.blockers) != 1 || result.blockers[0].Reason != "CrashLoopBackOff" {
+		t.Fatalf("%+v", result)
 	}
 }

@@ -557,3 +557,31 @@ func TestWaitForeignRolloutDoesNotGetBuiltInDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestWaitMetDropsEarlierNext(t *testing.T) {
+	fastWaitPolling(t)
+	dyn := waitDynamic()
+	calls := 0
+	dyn.PrependReactor("get", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, waitTestPod("web", "False"), nil
+		}
+		return true, waitTestPod("web", "True"), nil
+	})
+	res, _, err := waitFor(t.Context(), dyn, waitForInput{Kind: "pod", Namespace: "shop", Name: "web"})
+	got := decodeToolResult(t, res)
+	if err != nil || got["state"] != "met" || got["next"] != nil {
+		t.Fatalf("%v %v", err, got)
+	}
+}
+
+func TestWaitDefaultReadyHasNoConditionHint(t *testing.T) {
+	fastWaitPolling(t)
+	pending := waitTestObject("Pod", "v1", "web", map[string]any{"phase": "Pending", "conditions": []any{map[string]any{"type": "PodScheduled", "status": "True"}}})
+	res, _, err := waitFor(t.Context(), waitDynamic(pending), waitForInput{Kind: "pod", Namespace: "shop", Name: "web", TimeoutSeconds: 1})
+	got := decodeToolResult(t, res)
+	if err != nil || got["state"] != "waiting" || strings.Contains(fmt.Sprint(got["next"]), "jsonpath") {
+		t.Fatalf("%v %v", err, got)
+	}
+}

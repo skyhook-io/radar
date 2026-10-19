@@ -220,7 +220,9 @@ func waitForUntil(ctx context.Context, dyn dynamic.Interface, input waitForInput
 			states = []waitObjectState{}
 		}
 		result["objects"] = states[:min(len(states), 10)]
-		if state != "met" {
+		if state == "met" {
+			delete(result, "next")
+		} else {
 			result["next"] = truncateCrashLogLine(next, 300)
 		}
 		return toJSONResult(result)
@@ -326,11 +328,12 @@ func waitForUntil(ctx context.Context, dyn dynamic.Interface, input waitForInput
 				} else if verdict == "waiting" && s.next != "" {
 					next = s.next
 				}
-				if !s.Met && !deleted && checked < 3 && isWaitWorkload(gvr) && !(name != "" && input.UID != "" && types.UID(input.UID) != obj.GetUID()) && obj.GetDeletionTimestamp() == nil && (gvr.Group != "argoproj.io" || s.controllerObserved) {
+				if !s.Met && !deleted && checked < 3 && waitBlockersApply(ctx, dyn, gvr, obj, s) {
 					checked++
-					b, e := waitStep(ctx, func() (waitBlockerResult, error) { return readWaitBlockers(ctx, gvr, obj), nil })
+					b, e := waitStep(ctx, func() (waitBlockerResult, error) { return readWaitBlockers(ctx, dyn, gvr, obj), nil })
 					if e != nil {
 						lastErr = e
+						result["blockersUnavailable"] = "permission check failed"
 						break
 					}
 					if b.unavailable != "" {
@@ -364,7 +367,7 @@ func waitForUntil(ctx context.Context, dyn dynamic.Interface, input waitForInput
 				}
 			}
 			if _, unavailable := result["blockersUnavailable"]; !unavailable && len(blockers) > 0 {
-				result["blockers"] = blockers[:min(len(blockers), 3)]
+				result["blockers"] = capWaitBlockers(blockers)
 			}
 			if interrupted {
 				states = previousStates
@@ -484,6 +487,30 @@ func defaultWaitCondition(gvr schema.GroupVersionResource) string {
 	return ""
 }
 func isWaitWorkload(gvr schema.GroupVersionResource) bool { return defaultWaitCondition(gvr) != "" }
+
+// capWaitBlockers keeps at most three blockers, fatal reasons first: a fatal
+// reason is what makes the call blocked, so it must survive the cap.
+func capWaitBlockers(blockers []waitBlocker) []waitBlocker {
+	sort.SliceStable(blockers, func(i, j int) bool {
+		return blockers[i].Reason != "Unschedulable" && blockers[j].Reason == "Unschedulable"
+	})
+	return blockers[:min(len(blockers), 3)]
+}
+
+// waitBlockersApply reports whether pod blockers can describe this object now:
+// a built-in workload or pod that isn't being replaced or deleted. An Argo
+// Rollout also needs its controller to have observed the current template,
+// whichever condition the caller waits on.
+func waitBlockersApply(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, s waitObjectState) bool {
+	if !isWaitWorkload(gvr) || obj.GetDeletionTimestamp() != nil || strings.HasPrefix(s.Observed, "replaced by uid ") {
+		return false
+	}
+	if gvr.Group != "argoproj.io" || s.controllerObserved {
+		return true
+	}
+	observed, err := rollouts.ControllerObservedSpec(ctx, dyn, obj)
+	return err == nil && observed
+}
 func waitCheckFor(gvr schema.GroupVersionResource, condition string) (waitCheck, error) {
 	switch strings.ToLower(condition) {
 	case "rollout":
@@ -638,7 +665,8 @@ func evaluateWaitObject(ctx context.Context, dyn dynamic.Interface, gvr schema.G
 	} else if c := waitCondition(obj, cond); c != nil {
 		timestamp, _ := c["lastTransitionTime"].(string)
 		s.InStateSeconds = waitTimestampAge(timestamp)
-	} else if !s.Met && failure == "" {
+	} else if !s.Met && failure == "" && !strings.EqualFold(condition, "ready") && !strings.EqualFold(condition, "complete") {
+		// Only an explicitly named condition can be the wrong one to wait on.
 		names := []string{}
 		raw, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
 		for _, v := range raw {

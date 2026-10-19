@@ -9,8 +9,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
@@ -44,7 +46,7 @@ func waitBlockerPermission(ctx context.Context, group, resource, ns, verb, denia
 	return ""
 }
 
-func readWaitBlockers(ctx context.Context, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) waitBlockerResult {
+func readWaitBlockers(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured) waitBlockerResult {
 	ns := obj.GetNamespace()
 	unavailable := func(reason string) waitBlockerResult { return waitBlockerResult{unavailable: reason} }
 	if !namespaceWithinPin(ns) {
@@ -133,20 +135,23 @@ func readWaitBlockers(ctx context.Context, gvr schema.GroupVersionResource, obj 
 	case schema.GroupResource{Group: "argoproj.io", Resource: "rollouts"}:
 		revision, _, _ = unstructured.NestedString(obj.Object, "status", "currentPodHash")
 	case schema.GroupResource{Group: "apps", Resource: "daemonsets"}:
-		revisionCache := k8s.GetDynamicResourceCache()
-		revisionGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "controllerrevisions"}
-		if revisionCache == nil || !revisionCache.IsNamespaceSynced(revisionGVR, ns) {
+		// ControllerRevisions aren't warmed in the cache, so list the DaemonSet's
+		// through the caller's own client, as workload logs do.
+		raw, _, _ := unstructured.NestedMap(obj.Object, "spec", "selector")
+		var labelSelector metav1.LabelSelector
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw, &labelSelector); err != nil {
 			return unavailable(dependencyDenied)
 		}
-		revisions, err := revisionCache.List(revisionGVR, ns)
+		selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
 		if err != nil {
 			return unavailable(dependencyDenied)
 		}
-		values := make([]unstructured.Unstructured, 0, len(revisions))
-		for _, r := range revisions {
-			values = append(values, *r)
+		revisionGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "controllerrevisions"}
+		revisions, err := dyn.Resource(revisionGVR).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
+		if err != nil {
+			return unavailable(dependencyDenied)
 		}
-		revision = k8score.CurrentControllerRevisionPodHashes(values)[obj.GetUID()]
+		revision = k8score.CurrentControllerRevisionPodHashes(revisions.Items)[obj.GetUID()]
 	}
 	return waitBlockerResult{blockers: waitPodBlockers(gvr, pods, revision, rsUID)}
 }

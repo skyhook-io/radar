@@ -92,14 +92,7 @@ What a client does with the text depends on the client and its version. Some add
 
 ### Waiting for a fix to land
 
-Use `wait_for` after a change to wait for a controller's rollout, Pod readiness,
-Job completion, deletion, or a status condition. Each call waits at most 45 seconds
-so it can return within common MCP client timeouts. The caller owns the total deadline:
-repeat `waiting` calls within that limit, passing back the named object's `uid` to pin it.
-The states are `met`, `waiting`, `blocked` (an observed stall), and `failed` (terminal).
-Selector waits check the current set; use the controller's rollout to wait for replacements.
-`jsonpath={.status.field}=value` reads only `.status`; its freshness guard uses
-`status.observedGeneration` when present. `inStateSeconds` is condition age, not time since the fix.
+Use `wait_for` after a change to wait for a controller's rollout, Pod readiness, Job completion, deletion, or a status condition. Each call waits at most 45 seconds so it can return within common MCP client timeouts. The caller owns the total deadline: repeat `waiting` calls within that limit, passing back the named object's `uid` to pin it. The states are `met`, `waiting`, `blocked` (an observed stall), and `failed` (terminal). Selector waits check the current set; use the controller's rollout to wait for replacements. `jsonpath={.status.field}=value` reads only `.status`; its freshness guard uses `status.observedGeneration` when present. `inStateSeconds` is condition age, not time since the fix.
 
 ## Catalog Introspection
 
