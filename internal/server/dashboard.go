@@ -1268,6 +1268,16 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 	}
 	releases, err := helmClient.ListReleasesAcrossNamespaces(r.Context(), namespaces, username, groups)
 	if err != nil {
+		if helm.IsUnauthorizedError(err) {
+			return DashboardHelmSummary{
+				Releases:  []DashboardHelmRelease{},
+				Error:     helm.UnauthorizedListMessage,
+				ErrorCode: ErrCodeAuthRequired,
+			}
+		}
+		if helm.IsImpersonationDenied(err) {
+			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Error: helm.ImpersonationDeniedListMessage}
+		}
 		if helm.IsForbiddenError(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
 		}

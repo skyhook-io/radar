@@ -2,6 +2,17 @@
 
 Radar treats Helm as a release system, not just a set of Kubernetes objects. The Helm view combines release metadata, rendered resources, revision history, operation insight, revision comparison, and live Kubernetes evidence around failed hooks.
 
+## Requirements
+
+Radar reads releases from Helm's default Secret storage.
+
+- **Permissions.** Viewing releases needs `get` and `list` on Secrets. Whose access counts depends on how Radar runs:
+  - With authentication, including every Radar Cloud cluster, Radar reads as each user, so users see releases only in namespaces where they can list Secrets. The built-in `edit` and `admin` roles include that; `view` doesn't, and neither does the Radar Cloud Viewer role by default.
+  - Without authentication, Radar reads as itself: a local binary uses your kubeconfig identity, and an in-cluster install uses its ServiceAccount. For the ServiceAccount, set `rbac.secrets=true`, or grant `get` and `list` on Secrets yourself if you manage Radar's RBAC with `rbac.create=false`. Anyone who can open Radar can then read every Secret in the cluster, including any ServiceAccount token Secrets; read [Opt-in Permissions](in-cluster.md#opt-in-permissions) first.
+
+  Changing releases needs write access as well: `rbac.helm` without authentication, or each user's own permissions with it.
+- **Storage driver.** Releases recorded with the ConfigMap or SQL storage driver don't appear.
+
 ## Release List
 
 The Helm list shows:

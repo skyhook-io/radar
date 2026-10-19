@@ -29,6 +29,42 @@ func IsForbiddenError(err error) bool {
 	return strings.Contains(errLower, "forbidden") || strings.Contains(errLower, "unauthorized")
 }
 
+// IsUnauthorizedError reports whether the cluster rejected the credentials
+// themselves (HTTP 401), e.g. an expired kubeconfig token. IsForbiddenError
+// also matches these, so check this first wherever the two need different
+// advice: granting more RBAC can't fix a credential the cluster won't accept.
+func IsUnauthorizedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsUnauthorized(err) {
+		return true
+	}
+	// A typed status is authoritative: a 403 can mention "unauthorized" in a
+	// namespace name or an authorizer's reason. Fall back to the text only
+	// when no status survived the wrapping.
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "unauthorized")
+}
+
+// UnauthorizedListMessage is shown when the release list fails with
+// IsUnauthorizedError.
+const UnauthorizedListMessage = "The cluster rejected Radar's credentials, so it couldn't list Helm releases. If Radar runs on your machine, your kubeconfig credentials may have expired: sign in to the cluster again, then retry."
+
+// IsImpersonationDenied reports whether Radar's own identity was refused
+// permission to impersonate the caller. That is a 403 too, but it says
+// nothing about the caller's Secret access.
+func IsImpersonationDenied(err error) bool {
+	return err != nil && apierrors.IsForbidden(err) && strings.Contains(err.Error(), "cannot impersonate")
+}
+
+// ImpersonationDeniedListMessage is shown when the release list fails with
+// IsImpersonationDenied.
+const ImpersonationDeniedListMessage = "Radar isn't allowed to act as your user, so it couldn't list Helm releases. Whoever installed Radar needs to let its ServiceAccount impersonate users and groups; the Radar chart does this when it manages RBAC."
+
 // writeReleaseReadError reports a failed read of release content made as the
 // caller. Helm stores releases as Secrets, so a denial is the caller's
 // Kubernetes RBAC, not a server fault.
@@ -241,6 +277,16 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			return // the caller left; this is not a Helm failure
+		}
+		// Not 401: the UI treats a 401 from Radar's own API as an expired
+		// Radar session and reloads or redirects to sign-in.
+		if IsUnauthorizedError(err) {
+			writeError(w, http.StatusBadGateway, UnauthorizedListMessage)
+			return
+		}
+		if IsImpersonationDenied(err) {
+			writeError(w, http.StatusInternalServerError, ImpersonationDeniedListMessage)
+			return
 		}
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to list Helm releases")

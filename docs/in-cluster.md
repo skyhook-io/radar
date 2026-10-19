@@ -410,11 +410,11 @@ Some features require additional permissions. Most are disabled by default for s
 
 | Feature | Value | Default | Description |
 |---------|-------|---------|-------------|
-| Secrets | `rbac.secrets: true` | `false` | Show secrets in resource list |
+| Secrets | `rbac.secrets: true` | `false` | Show Secrets in the resource list, and enable the Helm view, since Helm stores releases as Secrets. The grant is cluster-wide `get/list/watch` on **all** Secrets; it can't be narrowed to Helm's, because Helm finds them by label and Kubernetes RBAC can't scope a `list` by label. Without authentication, anyone who can reach Radar can read every Secret, including any ServiceAccount token Secrets, so treat it like cluster-admin access. **Prefer [authentication](authentication.md)**: Radar then reads as each user, so people see only the Secrets and Helm releases their own RBAC allows. The built-in `view` role doesn't include Secrets, so users who only have `view` won't see Helm releases. Set this flag only when everyone who can reach Radar may read every Secret in the cluster |
 | Terminal | `rbac.podExec: true` | `false` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | `false` | Port forwarding to pods/services. Also the traffic-source fallback (Hubble/Caretta): Radar dials the relay/metrics Service directly first, so this is only needed when a NetworkPolicy or routing blocks that direct path |
 | Logs | `rbac.podLogs: true` | `true` | View pod logs |
-| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
+| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings). Viewing releases doesn't need it; see the Secrets row |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Webhooks view | `rbac.viewWebhooks: true` | `false` | Show admission webhook configurations. Off by default because they expose the cluster's admission-control posture; auto-enabled when auth or cloud mode enforces each user's own RBAC |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | `false` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Enable only for a trusted no-auth audience; authenticated users need this permission on their own Kubernetes identity |
@@ -427,7 +427,7 @@ Enable features as needed:
 ```yaml
 # values.yaml
 rbac:
-  secrets: false      # Keep disabled unless needed
+  secrets: false      # true also enables the Helm view; read the trade-off above first
   podExec: true       # Enable terminal feature
   podLogs: true       # Enable log viewer (default)
   portForward: true   # Enable port forwarding
@@ -627,7 +627,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.podLogs` | Enable log viewer | `true` |
 | `rbac.podExec` | Enable terminal feature | `false` |
 | `rbac.portForward` | Enable port forwarding | `false` |
-| `rbac.secrets` | Show secrets in resource list | `false` |
+| `rbac.secrets` | Show Secrets in the resource list and enable the Helm view | `false` |
 | `rbac.helm` | Enable Helm write operations | `false` |
 | `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.viewWebhooks` | Show admission webhook configurations | `false` |
