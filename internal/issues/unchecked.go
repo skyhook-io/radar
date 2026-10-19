@@ -171,9 +171,9 @@ func callerCanListTypedKind(f Filters, tk typedIssueKind) bool {
 	return false
 }
 
-// dynamicSyncProvider reports whether the dynamic cache can answer for a
+// dynamicCoverageProvider reports whether the dynamic cache can answer for a
 // custom resource kind, and whether CRD discovery is still running.
-type dynamicSyncProvider interface {
+type dynamicCoverageProvider interface {
 	crdDiscoveryPending() bool
 	// dynamicSyncGap returns the reason a read of gvr in namespaces (nil for
 	// every watched scope, [""] for cluster-wide) may be incomplete, or "".

@@ -33,7 +33,7 @@ import (
 // list error, a kind whose cache is still loading, and CRD discovery still
 // running (so kinds it will watch aren't watched yet).
 func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool, unchecked *uncheckedSet) []Issue {
-	syncs, _ := p.(dynamicSyncProvider)
+	syncs, _ := p.(dynamicCoverageProvider)
 	// A kind filter can't say whether a requested kind is a CRD discovery
 	// hasn't reached yet, so only an unfiltered request reports discovery.
 	if syncs != nil && len(f.Kinds) == 0 && syncs.crdDiscoveryPending() {

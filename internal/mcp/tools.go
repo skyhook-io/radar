@@ -395,9 +395,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"grouped critical/warning failures in workloads, Jobs/CronJobs, HPAs, " +
 			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
-			"`unchecked_sources` lists sources Radar couldn't check, so their issues may be " +
-			"missing; don't call them healthy. `kinds`/`namespaces` narrow the gap when present; " +
-			"`kind_sync_pending` means still loading, so ask again shortly. " +
+			"`unchecked_sources`: sources Radar couldn't check (scoped by `kinds`/`namespaces`) " +
+			"may hide issues; never call them healthy. Retry on `kind_sync_pending`. " +
 			"`diagnostic_context.role` marks roots, rollups, symptoms, or context; " +
 			"`related_issues[].count` is the root's affected subset, not the linked issue total. " +
 			"Confidence: `high` declared edge, `medium` lead to verify, `low` heuristic. " +
