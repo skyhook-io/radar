@@ -153,7 +153,8 @@ function ChangeReferences({
     const kind = reference.slice(0, slash);
     const name = reference.slice(slash + 1);
     // The producer names only Kind/name, so a link is safe only for kinds
-    // whose group is known; a CRD owner such as a CNPG Cluster stays text.
+    // whose group is known and a row with a namespace; a CRD owner such as a
+    // CNPG Cluster stays text.
     const group =
       kind === "Rollout" ? "argoproj.io" : builtinGroupForKind(kind);
     return (
@@ -161,7 +162,7 @@ function ChangeReferences({
         key={reference}
         className="min-w-0 max-w-full font-mono [overflow-wrap:anywhere]"
       >
-        {group === undefined ? (
+        {group === undefined || !namespace ? (
           reference
         ) : (
           <ResourceLink

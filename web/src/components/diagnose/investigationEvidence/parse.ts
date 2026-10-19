@@ -217,7 +217,10 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
     ...(nonNegativeInteger(updates_in_window) && updates_in_window > 0
       ? { updates_in_window }
       : {}),
-    ...(typeof first_update_at === "string" ? { first_update_at } : {}),
+    ...(typeof first_update_at === "string" &&
+    Number.isFinite(Date.parse(first_update_at))
+      ? { first_update_at }
+      : {}),
     ...(consumers ? { consumed_by: consumers } : {}),
   } as unknown as IssueRecentChange;
 }

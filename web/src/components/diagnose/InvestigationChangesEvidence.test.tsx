@@ -156,6 +156,17 @@ describe("Secret and ConfigMap change evidence", () => {
     expect(render(secretChange)).not.toContain("(first 5)");
   });
 
+  it("renders references as text when the row has no namespace", () => {
+    render({ ...secretChange, namespace: undefined });
+    expect(
+      vi
+        .mocked(ResourceLink)
+        .mock.calls.filter(([props]) =>
+          String(props.label).startsWith("Deployment/"),
+        ),
+    ).toHaveLength(0);
+  });
+
   it("renders a reference of a kind with no known group as text, not a link", () => {
     const html = render({
       ...secretChange,
@@ -272,7 +283,7 @@ describe("Secret and ConfigMap change evidence", () => {
     },
   );
 
-  it.each([null, 3, {}, []].map((first_update_at) => ({ first_update_at })))(
+  it.each([null, 3, {}, [], "not a time"].map((first_update_at) => ({ first_update_at })))(
     "drops a non-string first update time (%j)",
     ({ first_update_at }) => {
       const row = { ...secretChange, updates_in_window: 3, first_update_at };
