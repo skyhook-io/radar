@@ -53,18 +53,14 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 			if err != nil {
 				continue
 			}
-			// Secret rows list their changed keys, so a fact must also name one
-			// of them: two writes in the same second can't swap evidence.
-			var rowKeys map[string]bool
-			if change.Kind == "Secret" {
-				rowKeys = secretChangedKeys(change.Fields)
-			}
 			podNames, keys, workloads := map[string]bool{}, map[string]bool{}, map[string]bool{}
 			for _, fact := range facts {
 				if fact.EvidenceSource != "observed_change" || fact.SourceKind != change.Kind || fact.SourceName != change.Name || fact.ChangedAt.Unix() != changedAt.Unix() {
 					continue
 				}
-				if rowKeys != nil && !rowKeys[fact.Key] {
+				// A fact must name a key this row changed, so two writes in the
+				// same second can't swap evidence.
+				if !rowChangedKey(change.Fields, fact.Key) {
 					continue
 				}
 				keys[fact.Key] = true
@@ -134,15 +130,16 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 		}
 		newest.UpdatesInWindow++
 		newest.FirstUpdateAt = change.Timestamp
+		// Key lists merge; other fields (type, immutable) keep the newest
+		// value, and an older one is kept only when the newer rows lack it.
 		for _, field := range change.Fields {
-			if !strings.HasPrefix(field.Path, "data (") && !strings.HasPrefix(field.Path, "stringData (") {
-				continue
-			}
 			merged := false
 			for i := range newest.Fields {
 				if newest.Fields[i].Path == field.Path {
-					newest.Fields[i].OldValue = mergeChangedKeys(newest.Fields[i].OldValue, field.OldValue)
-					newest.Fields[i].NewValue = mergeChangedKeys(newest.Fields[i].NewValue, field.NewValue)
+					if isKeyListPath(field.Path) {
+						newest.Fields[i].OldValue = mergeChangedKeys(newest.Fields[i].OldValue, field.OldValue)
+						newest.Fields[i].NewValue = mergeChangedKeys(newest.Fields[i].NewValue, field.NewValue)
+					}
 					merged = true
 					break
 				}
@@ -153,8 +150,11 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 		}
 		var summary []string
 		for _, field := range newest.Fields {
-			keys := mergeChangedKeys(field.OldValue, field.NewValue)
-			if keys != nil {
+			if !isKeyListPath(field.Path) {
+				summary = append(summary, field.Path+" changed")
+				continue
+			}
+			if keys := mergeChangedKeys(field.OldValue, field.NewValue); keys != nil {
 				// "data (modified keys)" reads "data modified keys: [...]", as diffSecret writes it.
 				label := strings.TrimSuffix(strings.Replace(field.Path, " (", " ", 1), ")")
 				summary = append(summary, fmt.Sprintf("%s: %v", label, keys))
@@ -165,12 +165,31 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 	return out
 }
 
-// secretChangedKeys returns the key names a Secret row's data or stringData
-// fields list as added, removed or modified.
+func isKeyListPath(path string) bool {
+	return strings.HasPrefix(path, "data (") || strings.HasPrefix(path, "stringData (") || strings.HasPrefix(path, "binaryData (")
+}
+
+// rowChangedKey reports whether a Secret or ConfigMap row changed key: listed
+// in a "(... keys)" field, or as the root of a structured ConfigMap data path.
+func rowChangedKey(fields []issuesapi.ChangeField, key string) bool {
+	if secretChangedKeys(fields)[key] {
+		return true
+	}
+	prefix := "data." + key
+	for _, field := range fields {
+		if field.Path == prefix || strings.HasPrefix(field.Path, prefix+".") || strings.HasPrefix(field.Path, prefix+"[") {
+			return true
+		}
+	}
+	return false
+}
+
+// secretChangedKeys returns the key names a row's data or stringData fields
+// list as added, removed or modified.
 func secretChangedKeys(fields []issuesapi.ChangeField) map[string]bool {
 	keys := map[string]bool{}
 	for _, field := range fields {
-		if !strings.HasPrefix(field.Path, "data (") && !strings.HasPrefix(field.Path, "stringData (") {
+		if !isKeyListPath(field.Path) {
 			continue
 		}
 		if names, ok := mergeChangedKeys(field.OldValue, field.NewValue).([]string); ok {

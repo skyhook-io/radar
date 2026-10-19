@@ -535,16 +535,6 @@ func ConfigMapKind(kind string) bool {
 
 func WorkloadKind(kind string) bool { return isWorkloadKind(kind) }
 
-func DirectConfigMapNames(obj any) []string {
-	var names []string
-	for _, ref := range DirectConfigReferences(obj) {
-		if ref.Kind == "ConfigMap" {
-			names = append(names, ref.Name)
-		}
-	}
-	return names
-}
-
 // DirectConfigReferences returns env and native volume references, excluding
 // image-pull and volume-driver credentials.
 func DirectConfigReferences(obj any) []configrefs.Ref {

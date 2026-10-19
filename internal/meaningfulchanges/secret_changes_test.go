@@ -155,6 +155,34 @@ func TestSecretSameSecondWritesKeepTheirOwnReaders(t *testing.T) {
 	}
 }
 
+func TestConfigMapSameSecondWritesKeepTheirOwnReaders(t *testing.T) {
+	second := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	config := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "shop"}, Data: map[string]string{"A": "a", "B": "b"}}
+	store := secretFeedFixture(t, config, feedPod("a", second.Add(-20*time.Minute), feedEnv("ConfigMap", "config", "A")), feedPod("b", second.Add(-20*time.Minute), feedEnv("ConfigMap", "config", "B")))
+	appendFeedWrite(t, store, "ConfigMap", "config", second.Add(100*time.Millisecond), "A")
+	appendFeedWrite(t, store, "ConfigMap", "config", second.Add(600*time.Millisecond), "B")
+	rows := feedRecent(t, Query{})
+	if len(rows) != 2 {
+		t.Fatalf("rows=%+v", rows)
+	}
+	for _, row := range rows {
+		if row.RunningPreviousValue == nil || len(row.RunningPreviousValue.Keys) != 1 || !rowChangedKey(row.Fields, row.RunningPreviousValue.Keys[0]) {
+			t.Fatalf("row carries another write's readers: %+v", row)
+		}
+	}
+}
+
+func TestSecretCollapseKeepsNonKeyFields(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	rows := collapseSecretUpdates([]issuesapi.RecentChange{
+		{Kind: "Secret", Namespace: "shop", Name: "db", ChangeType: "update", Timestamp: now.Add(-time.Minute).Format(time.RFC3339), Fields: []issuesapi.ChangeField{{Path: "data (modified keys)", OldValue: []string{"A"}, NewValue: []string{"A"}}}},
+		{Kind: "Secret", Namespace: "shop", Name: "db", ChangeType: "update", Timestamp: now.Add(-2 * time.Minute).Format(time.RFC3339), Fields: []issuesapi.ChangeField{{Path: "immutable", OldValue: false, NewValue: true}}},
+	})
+	if len(rows) != 1 || rows[0].UpdatesInWindow != 2 || rows[0].Summary != "data modified keys: [A]; immutable changed" {
+		t.Fatalf("collapsed row=%+v", rows)
+	}
+}
+
 // rank_reason claims references only when consumed_by names them.
 func TestSecretRankReasonStatesOnlyEstablishedFacts(t *testing.T) {
 	store := secretFeedFixture(t, feedSecret("loose"))

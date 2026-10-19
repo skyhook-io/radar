@@ -166,8 +166,6 @@ func TestSecretChangesRBACAcrossMCPSurfaces(t *testing.T) {
 	}
 }
 
-// A Rollout issue correlates against the Secrets its template references, as
-// Deployment issues do.
 func TestRolloutIssueCorrelatesReferencedSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})
 	if err := k8s.InitTestResourceCache(client); err != nil {
