@@ -86,16 +86,62 @@ describe("describeDrainResult", () => {
     expect(r.detail).not.toContain("may still be terminating");
   });
 
-  it("flags pods still terminating after a waited drain as incomplete", () => {
+  it("flags evicted pods still present after a waited drain as incomplete", () => {
     const r = describeDrainResult({
       evictedPods: ["shop/web-1", "shop/db-1"],
       pendingPods: ["shop/db-1"],
       waitedForDeletion: true,
     });
     expect(r.failed).toBe(true);
-    expect(r.title).toBe("Drain incomplete: 2 evicted, 1 still terminating, 0 skipped");
-    expect(r.detail).toContain("Still terminating 1: shop/db-1");
+    expect(r.title).toBe("Drain incomplete: 2 evicted, 1 still on the node, 0 skipped");
+    expect(r.detail).toContain("Still on the node 1: shop/db-1");
+    expect(r.detail).toContain("Those pods are still on the node");
     expect(r.detail).toContain("do not take it down");
+  });
+
+  it("does not call the node drained when evictions failed", () => {
+    const r = describeDrainResult({
+      evictedPods: ["shop/web-1"],
+      errors: [
+        "shop/db-1: pod is covered by more than one PodDisruptionBudget",
+        "shop/db-2: pod is covered by more than one PodDisruptionBudget",
+      ],
+      pendingPods: [],
+      waitedForDeletion: true,
+    });
+    expect(r.failed).toBe(true);
+    expect(r.title).toBe("Drain finished with 2 failed eviction(s): 1 evicted, 0 skipped");
+    expect(r.detail).toContain("All evicted pods have terminated");
+    expect(r.detail).not.toContain("The node is drained");
+  });
+
+  it("does not call the node drained when a non-DaemonSet pod was skipped", () => {
+    const r = describeDrainResult({
+      evictedPods: ["shop/web-1"],
+      skippedPods: [
+        { namespace: "shop", name: "debug", outcome: "skip", reason: "not managed by a controller", emptyDir: false, pdbChecked: false },
+      ],
+      pendingPods: [],
+      waitedForDeletion: true,
+    });
+    expect(r.failed).toBe(false);
+    expect(r.title).toBe("Drain finished: 1 evicted, 1 skipped (1 left on the node)");
+    expect(r.detail).toContain("All evicted pods have terminated");
+    expect(r.detail).not.toContain("The node is drained");
+  });
+
+  it("calls the node drained when only DaemonSet pods were skipped", () => {
+    const r = describeDrainResult({
+      evictedPods: ["shop/web-1"],
+      skippedPods: [
+        { namespace: "kube-system", name: "agent", outcome: "skip", reason: "managed by a DaemonSet", emptyDir: false, pdbChecked: false, daemonSet: true },
+      ],
+      pendingPods: [],
+      waitedForDeletion: true,
+    });
+    expect(r.failed).toBe(false);
+    expect(r.title).toBe("Node drained: 1 evicted, 1 skipped");
+    expect(r.detail).toContain("The node is drained and remains cordoned");
   });
 
   it("keeps the accepted caveat when the drain did not wait", () => {

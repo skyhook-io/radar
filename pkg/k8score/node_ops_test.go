@@ -7,9 +7,13 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -196,5 +200,83 @@ func TestDrainNodeTreatsRecreatedPodAsGone(t *testing.T) {
 	}
 	if len(res.PendingPods) != 0 {
 		t.Fatalf("a pod replaced under a new UID is gone, got pending %v", res.PendingPods)
+	}
+}
+
+// ctxHonouringClient fails pod lists on a done context, as a real API client does; the fake
+// clientset ignores the context entirely, which would hide a list made after the deadline.
+type ctxHonouringClient struct{ *fake.Clientset }
+
+func (c ctxHonouringClient) CoreV1() corev1client.CoreV1Interface {
+	return ctxHonouringCoreV1{c.Clientset.CoreV1()}
+}
+
+type ctxHonouringCoreV1 struct{ corev1client.CoreV1Interface }
+
+func (c ctxHonouringCoreV1) Pods(ns string) corev1client.PodInterface {
+	return ctxHonouringPods{c.CoreV1Interface.Pods(ns)}
+}
+
+type ctxHonouringPods struct{ corev1client.PodInterface }
+
+func (p ctxHonouringPods) List(ctx context.Context, opts metav1.ListOptions) (*corev1.PodList, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return p.PodInterface.List(ctx, opts)
+}
+
+var _ kubernetes.Interface = ctxHonouringClient{}
+
+// A PDB-blocked eviction retries until the shared deadline, so the wait phase starts with the
+// deadline already spent. A pod that was evicted and left in the meantime must still be
+// reported gone, not pending.
+func TestDrainNodeConfirmsDepartedPodsAfterPDBExhaustsDeadline(t *testing.T) {
+	shortenDrainPoll(t)
+
+	web := drainTestPod("web-1")
+	web.UID = "uid-web-1"
+	db := drainTestPod("db-1")
+	db.UID = "uid-db-1"
+	fakeClient := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}})
+
+	var mu sync.Mutex
+	webPresent := true
+	fakeClient.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		list := &corev1.PodList{Items: []corev1.Pod{db}}
+		if webPresent {
+			list.Items = append(list.Items, web)
+		}
+		return true, list, nil
+	})
+	fakeClient.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != "eviction" {
+			return false, nil, nil
+		}
+		ev := a.(k8stesting.CreateAction).GetObject().(*policyv1.Eviction)
+		if ev.Name == db.Name {
+			return true, nil, apierrors.NewTooManyRequests("Cannot evict pod as it would violate the pod's disruption budget.", 0)
+		}
+		mu.Lock()
+		webPresent = false
+		mu.Unlock()
+		return true, nil, nil
+	})
+
+	res, err := DrainNode(context.Background(), ctxHonouringClient{fakeClient}, "worker-1",
+		DrainOptions{IgnoreDaemonSets: true, WaitForDeletion: true, Timeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("DrainNode: %v", err)
+	}
+	if len(res.EvictedPods) != 1 || res.EvictedPods[0] != "shop/web-1" {
+		t.Fatalf("want web-1 evicted, got %+v", res.EvictedPods)
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("want the PDB-blocked db-1 reported as a failed eviction, got %+v", res.Errors)
+	}
+	if len(res.PendingPods) != 0 {
+		t.Fatalf("web-1 left the node before the final check; it must not be pending, got %v", res.PendingPods)
 	}
 }

@@ -230,9 +230,9 @@ func (s *Server) handleDrainNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(result.Errors) > 0 {
-		log.Printf("[node-ops] Drain node %s: %d evicted, %d errors: %v",
-			nodeName, len(result.EvictedPods), len(result.Errors), result.Errors)
+	if len(result.Errors) > 0 || len(result.PendingPods) > 0 {
+		log.Printf("[node-ops] Drain node %s incomplete: %d evicted, %d still on the node after the wait, %d errors: %v",
+			nodeName, len(result.EvictedPods), len(result.PendingPods), len(result.Errors), result.Errors)
 	} else {
 		log.Printf("[node-ops] Drain node %s completed: %d pods evicted", nodeName, len(result.EvictedPods))
 	}

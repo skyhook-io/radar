@@ -29,8 +29,8 @@ function plan(pods: DrainPlanPod[], options: Partial<DrainPlan['options']> = {})
   }
 }
 
-const off = { force: false, deleteEmptyDirData: false, waitForDeletion: true }
-const emptyDirOn = { force: false, deleteEmptyDirData: true, waitForDeletion: true }
+const off = { force: false, deleteEmptyDirData: false }
+const emptyDirOn = { force: false, deleteEmptyDirData: true }
 
 describe('planMatches', () => {
   it('rejects a plan computed for another node or other options', () => {
@@ -39,11 +39,6 @@ describe('planMatches', () => {
     expect(planMatches(p, 'worker-2', off)).toBe(false)
     expect(planMatches(p, 'worker-1', emptyDirOn)).toBe(false)
     expect(planMatches(null, 'worker-1', off)).toBe(false)
-  })
-
-  it('ignores waitForDeletion, which does not change what would be evicted', () => {
-    const p = plan([])
-    expect(planMatches(p, 'worker-1', { ...off, waitForDeletion: false })).toBe(true)
   })
 })
 

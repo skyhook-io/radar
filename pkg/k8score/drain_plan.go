@@ -42,6 +42,16 @@ type PodDrainDecision struct {
 	// not be listed (see DrainPlan.PDBError).
 	PDBChecked  bool `json:"pdbChecked"`
 	Terminating bool `json:"terminating"`
+	// DaemonSet is true for a pod managed by a DaemonSet. Such pods are always skipped and
+	// are expected to stay on a drained node; any other skipped pod is still running there,
+	// so callers must not report the node as drained.
+	DaemonSet bool `json:"daemonSet,omitempty"`
+}
+
+// LeftOnNode reports whether a skipped pod keeps the node from being drained: every skipped
+// pod except a DaemonSet's, which a drain leaves in place by design.
+func (d PodDrainDecision) LeftOnNode() bool {
+	return d.Outcome == DrainOutcomeSkip && !d.DaemonSet
 }
 
 // ClassifyPodForDrain decides, without touching the cluster, what DrainNode would do with pod
@@ -66,6 +76,7 @@ func ClassifyPodForDrain(pod corev1.Pod, opts DrainOptions, pdbs []policyv1.PodD
 	}
 	controller := metav1.GetControllerOf(&pod)
 	if controller != nil && controller.Kind == "DaemonSet" {
+		d.DaemonSet = true
 		if opts.IgnoreDaemonSets {
 			return skip("managed by a DaemonSet; the DaemonSet controller would recreate it on this node")
 		}

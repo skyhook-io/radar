@@ -23,6 +23,11 @@ const (
 	// disappear. Admitting an eviction is quick; a pod then runs through its termination
 	// grace period (30s by default, often minutes), so the wait needs more headroom.
 	defaultDrainWaitTimeout = 2 * time.Minute
+	// drainFinalCheckTimeout bounds the one pod list taken after the drain deadline has
+	// passed. PDB-blocked evictions retry until that deadline, so by the time the wait
+	// phase runs its context can already be spent; without a fresh look, pods that left
+	// long ago would be reported as still on the node.
+	drainFinalCheckTimeout = 5 * time.Second
 )
 
 // drainWaitPollInterval is how often the wait phase re-lists the node's pods to see which
@@ -51,9 +56,10 @@ type DrainResult struct {
 	// deleted. When false, EvictedPods lists pods whose eviction was merely accepted and
 	// which may still be terminating.
 	WaitedForDeletion bool `json:"waitedForDeletion"`
-	// PendingPods are evicted pods still present when the drain deadline passed — their
-	// termination grace period had not finished. Only populated when the drain waited;
-	// an empty list after a wait means every evicted pod is gone.
+	// PendingPods are evicted pods still on the node when the drain deadline passed (or
+	// that could not be confirmed gone because the node's pods could not be listed). Only
+	// populated when the drain waited; an empty list after a wait means every evicted pod
+	// is gone. Skipped pods and failed evictions are reported separately and are not here.
 	PendingPods []string `json:"pendingPods,omitempty"`
 }
 
@@ -209,16 +215,34 @@ func pendingPodNames(pods []drainedPod) []string {
 
 // waitForPodsGone blocks until every pod in evicted has left the node or ctx is done, and
 // returns those still present at that point. A pod counts as gone once it is absent from the
-// node's pod list or has reappeared under a new UID (the old instance was deleted); a pod
-// still present under its original UID is still inside its termination grace period.
+// node's pod list or has reappeared under a new UID (the old instance was deleted). Once ctx
+// is done, one last list runs under its own short timeout (see drainFinalCheckTimeout).
 func waitForPodsGone(ctx context.Context, client kubernetes.Interface, nodeName string, evicted []drainedPod) []drainedPod {
 	remaining := make(map[types.UID]drainedPod, len(evicted))
 	for _, p := range evicted {
 		remaining[p.uid] = p
 	}
 
-	if pruneDepartedPods(ctx, client, nodeName, remaining) {
+	if pollUntilPodsGone(ctx, client, nodeName, remaining) {
 		return nil
+	}
+
+	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainFinalCheckTimeout)
+	defer cancel()
+	if pruneDepartedPods(finalCtx, client, nodeName, remaining) {
+		return nil
+	}
+	return mapValues(remaining)
+}
+
+// pollUntilPodsGone re-lists the node's pods until remaining is empty (returning true) or ctx
+// is done (returning false). It makes no attempt at all when ctx is already done.
+func pollUntilPodsGone(ctx context.Context, client kubernetes.Interface, nodeName string, remaining map[types.UID]drainedPod) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if pruneDepartedPods(ctx, client, nodeName, remaining) {
+		return true
 	}
 
 	ticker := time.NewTicker(drainWaitPollInterval)
@@ -226,10 +250,10 @@ func waitForPodsGone(ctx context.Context, client kubernetes.Interface, nodeName 
 	for {
 		select {
 		case <-ctx.Done():
-			return mapValues(remaining)
+			return false
 		case <-ticker.C:
 			if pruneDepartedPods(ctx, client, nodeName, remaining) {
-				return nil
+				return true
 			}
 		}
 	}

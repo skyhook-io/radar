@@ -5486,7 +5486,6 @@ export function useUncordonNode() {
 export interface DrainNodeOptions {
   deleteEmptyDirData?: boolean;
   force?: boolean;
-  waitForDeletion?: boolean;
 }
 
 export interface DrainPlanRequestOptions {
@@ -5613,21 +5612,25 @@ function listWithOverflow(items: string[]): string {
 
 /**
  * The trailing line of the drain summary, stating what the result means for taking the
- * node down. A drain that waited says whether the pods have actually gone; one that did
- * not keeps the honest "accepted, may still be terminating" caveat.
+ * node down. Only a drain that waited, failed nothing, and skipped nothing but DaemonSet
+ * pods may call the node drained; anything else still has pods on it.
  */
-function drainClosingLine(
-  evicted: number,
-  waited: boolean,
-  pending: number,
-): string {
-  if (pending > 0) {
-    return "Those pods are still inside their termination grace period. The node remains cordoned — do not take it down until they are gone.";
+function drainClosingLine(r: {
+  evicted: number;
+  waited: boolean;
+  pending: number;
+  failed: number;
+  leftOnNode: number;
+}): string {
+  if (r.pending > 0) {
+    return "Those pods are still on the node. The node remains cordoned — do not take it down until they are gone.";
   }
-  if (waited && evicted > 0) {
-    return "All evicted pods have terminated. The node is drained and remains cordoned.";
+  if (r.waited && r.evicted > 0) {
+    return r.failed === 0 && r.leftOnNode === 0
+      ? "All evicted pods have terminated. The node is drained and remains cordoned."
+      : "All evicted pods have terminated. The node remains cordoned.";
   }
-  if (evicted > 0) {
+  if (r.evicted > 0) {
     return "Evictions were accepted; those pods may still be terminating. The node remains cordoned.";
   }
   return "The node remains cordoned.";
@@ -5635,8 +5638,8 @@ function drainClosingLine(
 
 /**
  * Turns the drain response into a legible summary: evicted, skipped (with reasons),
- * failed, and — when the drain waited — any pods still terminating. Lists are capped so
- * the toast stays readable on nodes with many pods.
+ * failed, and — when the drain waited — any evicted pods still on the node. Lists are
+ * capped so the toast stays readable on nodes with many pods.
  */
 export function describeDrainResult(data: {
   evictedPods?: string[];
@@ -5650,6 +5653,9 @@ export function describeDrainResult(data: {
   const errors = data?.errors ?? [];
   const pending = data?.pendingPods ?? [];
   const waited = data?.waitedForDeletion ?? false;
+  // A Radar that predates the daemonSet flag reports none, so every skip counts as left on
+  // the node and the toast never over-claims.
+  const leftOnNode = skipped.filter((p) => !p.daemonSet).length;
   const parts: string[] = [];
   if (skipped.length > 0) {
     parts.push(
@@ -5662,9 +5668,17 @@ export function describeDrainResult(data: {
     parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
   }
   if (pending.length > 0) {
-    parts.push(`Still terminating ${pending.length}: ${listWithOverflow(pending)}`);
+    parts.push(`Still on the node ${pending.length}: ${listWithOverflow(pending)}`);
   }
-  parts.push(drainClosingLine(evicted, waited, pending.length));
+  parts.push(
+    drainClosingLine({
+      evicted,
+      waited,
+      pending: pending.length,
+      failed: errors.length,
+      leftOnNode,
+    }),
+  );
   const detail = parts.join("\n");
   if (errors.length > 0) {
     return {
@@ -5675,9 +5689,16 @@ export function describeDrainResult(data: {
   }
   if (pending.length > 0) {
     return {
-      title: `Drain incomplete: ${evicted} evicted, ${pending.length} still terminating, ${skipped.length} skipped`,
+      title: `Drain incomplete: ${evicted} evicted, ${pending.length} still on the node, ${skipped.length} skipped`,
       detail,
       failed: true,
+    };
+  }
+  if (leftOnNode > 0) {
+    return {
+      title: `Drain finished: ${evicted} evicted, ${skipped.length} skipped (${leftOnNode} left on the node)`,
+      detail,
+      failed: false,
     };
   }
   return {

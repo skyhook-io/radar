@@ -738,8 +738,8 @@ type manageNodeInput struct {
 	Name               string `json:"name" jsonschema:"node name"`
 	DeleteEmptyDirData *bool  `json:"delete_empty_dir_data,omitempty" jsonschema:"evict pods with emptyDir volumes (default true, set false to skip them)"`
 	Force              bool   `json:"force,omitempty" jsonschema:"force evict pods not managed by a controller (default false)"`
-	WaitForDeletion    *bool  `json:"wait_for_deletion,omitempty" jsonschema:"wait for evicted pods to actually be deleted before returning (default true); false returns once evictions are accepted"`
-	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain timeout in seconds; 0 lets the server pick a default"`
+	WaitForDeletion    *bool  `json:"wait_for_deletion,omitempty" jsonschema:"default true; false returns once evictions are accepted (pods may still be terminating)"`
+	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain deadline in seconds; 0 = server default (2m when waiting)"`
 }
 
 func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manageNodeInput) (*mcp.CallToolResult, any, error) {
@@ -798,6 +798,7 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 			"status":            status,
 			"message":           msg,
 			"evictedPods":       result.EvictedPods,
+			"skippedPods":       skippedPodsForMCP(result.SkippedPods),
 			"pendingPods":       result.PendingPods,
 			"waitedForDeletion": result.WaitedForDeletion,
 			"errors":            result.Errors,
@@ -808,21 +809,60 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 	}
 }
 
-// describeNodeDrain turns a drain result into an MCP status and message. A drain that failed
-// some evictions, or that waited and still has pods terminating, is "partial": the node is
-// not yet empty and not safe to take down.
+type mcpSkippedPod struct {
+	Pod    string `json:"pod"`
+	Reason string `json:"reason"`
+}
+
+func skippedPodsForMCP(skipped []k8score.PodDrainDecision) []mcpSkippedPod {
+	out := make([]mcpSkippedPod, 0, len(skipped))
+	for _, d := range skipped {
+		out = append(out, mcpSkippedPod{Pod: d.Namespace + "/" + d.Name, Reason: d.Reason})
+	}
+	return out
+}
+
+// describeNodeDrain turns a drain result into an MCP status and message. Any pod still on the
+// node makes the drain "partial" — a failed eviction, an evicted pod still present at the
+// deadline, or a skipped pod other than a DaemonSet's — because an agent reads "ok" as safe to
+// take the node down.
 func describeNodeDrain(name string, result *k8s.DrainResult) (status, message string) {
+	evicted := len(result.EvictedPods)
+	leftOnNode, daemonSets := 0, 0
+	for _, d := range result.SkippedPods {
+		if d.LeftOnNode() {
+			leftOnNode++
+		} else {
+			daemonSets++
+		}
+	}
+
+	var problems []string
+	if n := len(result.Errors); n > 0 {
+		problems = append(problems, fmt.Sprintf("%d evictions failed (see errors)", n))
+	}
+	if n := len(result.PendingPods); n > 0 {
+		problems = append(problems, fmt.Sprintf("%d evicted pods still on the node at the timeout (see pendingPods)", n))
+	}
+	if leftOnNode > 0 {
+		problems = append(problems, fmt.Sprintf("%d pods skipped and still on the node (see skippedPods for reasons)", leftOnNode))
+	}
+	if len(problems) > 0 {
+		return "partial", fmt.Sprintf("Drain of node %s incomplete: %d pods evicted; %s. The node remains cordoned but pods are still on it; do not take it down.",
+			name, evicted, strings.Join(problems, "; "))
+	}
+
+	dsNote := ""
+	if daemonSets > 0 {
+		dsNote = fmt.Sprintf("; %d DaemonSet pods left in place", daemonSets)
+	}
 	switch {
-	case len(result.Errors) > 0:
-		return "partial", fmt.Sprintf("Drain partially completed on node %s: %d evicted, %d failed (node remains cordoned)",
-			name, len(result.EvictedPods), len(result.Errors))
-	case len(result.PendingPods) > 0:
-		return "partial", fmt.Sprintf("Drain on node %s: %d pods evicted, %d still terminating after the timeout (node remains cordoned; not yet safe to take down)",
-			name, len(result.EvictedPods), len(result.PendingPods))
+	case evicted == 0:
+		return "ok", fmt.Sprintf("Drained node %s: nothing to evict%s", name, dsNote)
 	case result.WaitedForDeletion:
-		return "ok", fmt.Sprintf("Drained node %s: %d pods evicted and confirmed gone", name, len(result.EvictedPods))
+		return "ok", fmt.Sprintf("Drained node %s: %d pods evicted and confirmed gone%s", name, evicted, dsNote)
 	default:
-		return "ok", fmt.Sprintf("Drained node %s: %d evictions accepted; pods may still be terminating", name, len(result.EvictedPods))
+		return "ok", fmt.Sprintf("Drained node %s: %d evictions accepted; pods may still be terminating%s", name, evicted, dsNote)
 	}
 }
 
