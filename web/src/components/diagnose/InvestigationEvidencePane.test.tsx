@@ -2982,7 +2982,17 @@ describe("InvestigationEvidencePane metrics cards", () => {
           ...extra,
         }),
       );
-      expect(render(projection)).toContain("Memory working set");
+      const html = render(projection);
+      expect(html).toContain("Memory working set");
+      const annotated = extra as { warnings?: string[]; infos?: string[] };
+      for (const text of [
+        ...(annotated.warnings ?? []),
+        ...(annotated.infos ?? []),
+      ]) {
+        expect(html).toContain(text);
+      }
+      if (annotated.warnings?.length) expect(html).toContain("Backend warning");
+      if (annotated.infos?.length) expect(html).toContain("Prometheus noted:");
       expect(projection.limitations.map((item) => item.message)).toEqual(
         messages,
       );

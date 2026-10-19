@@ -713,7 +713,16 @@ export function adaptQueryPrometheus(
   const start = nonEmptyString(value.start) ? value.start : undefined;
   const end = nonEmptyString(value.end) ? value.end : undefined;
   const step = nonEmptyString(value.step) ? value.step : undefined;
-  const note = nonEmptyString(value.note) ? value.note : undefined;
+  const qualifications = [
+    warnings.length > 0
+      ? `Backend warning${warnings.length === 1 ? "" : "s"}: ${warnings.join("; ")}.`
+      : "",
+    infos.length > 0 ? `Prometheus noted: ${infos.join("; ")}.` : "",
+  ].filter(Boolean);
+  const note =
+    [nonEmptyString(value.note) ? value.note : "", ...qualifications]
+      .filter(Boolean)
+      .join(" ") || undefined;
   if (value.truncated === true) {
     const summary = record(value.summary);
     const cardinality = record(summary?.labelCardinality);
