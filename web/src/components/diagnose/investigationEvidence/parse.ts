@@ -186,7 +186,40 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
   ) {
     return undefined;
   }
-  return candidate as unknown as IssueRecentChange;
+  const {
+    running_previous_value,
+    updates_in_window,
+    first_update_at,
+    consumed_by,
+    ...change
+  } = candidate;
+  const running = record(running_previous_value);
+  const workloads =
+    running?.workloads === null ? [] : stringArray(running?.workloads);
+  const keys = stringArray(running?.keys);
+  const consumers = stringArray(consumed_by);
+  return {
+    ...change,
+    ...(running &&
+    workloads &&
+    keys &&
+    nonNegativeInteger(running.pods) &&
+    typeof running.note === "string"
+      ? {
+          running_previous_value: {
+            workloads,
+            pods: running.pods,
+            keys,
+            note: running.note,
+          },
+        }
+      : {}),
+    ...(nonNegativeInteger(updates_in_window) && updates_in_window > 0
+      ? { updates_in_window }
+      : {}),
+    ...(typeof first_update_at === "string" ? { first_update_at } : {}),
+    ...(consumers ? { consumed_by: consumers } : {}),
+  } as unknown as IssueRecentChange;
 }
 export function diagnosisChangeContext(
   value: unknown,
