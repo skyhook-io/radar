@@ -81,6 +81,7 @@ func TestSecretAdmissionAndPreviousValue(t *testing.T) {
 	}{
 		{"env before write", func(*corev1.Pod) {}, true, true},
 		{"env after restart", func(p *corev1.Pod) { p.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.NewTime(now) }, true, false},
+		{"terminating env reader", func(p *corev1.Pod) { deleted := metav1.NewTime(now); p.DeletionTimestamp = &deleted }, true, false},
 		{"secret volume", func(p *corev1.Pod) {
 			p.Spec.Containers[0].Env = nil
 			p.Spec.Volumes = []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "db"}}}}
@@ -292,7 +293,7 @@ func TestSecretBurstSelectionAndMergedKeys(t *testing.T) {
 		t.Fatalf("rows=%+v", rows)
 	}
 	for _, row := range rows[1:] {
-		if row.UpdatesInWindow != 3 || row.FirstUpdateAt != now.Add(-3*time.Minute).Format(time.RFC3339) || score(row) != 100 || !reflect.DeepEqual(row.Fields[0].NewValue, []string{"KEY0", "KEY1", "KEY2"}) {
+		if row.UpdatesInWindow != 3 || row.FirstUpdateAt != now.Add(-3*time.Minute).Format(time.RFC3339) || score(row) != 100 || !reflect.DeepEqual(row.Fields[0].NewValue, []string{"KEY0", "KEY1", "KEY2"}) || row.Summary != "data modified keys: [KEY0 KEY1 KEY2]" {
 			t.Fatalf("collapsed=%+v score=%d", row, score(row))
 		}
 	}

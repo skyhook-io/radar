@@ -27,6 +27,11 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 		var readers []*corev1.Pod
 		byName := map[string]*corev1.Pod{}
 		for _, pod := range pods {
+			// A terminating Pod is on its way out; counting it would keep a
+			// finished restart reading as stale.
+			if pod.DeletionTimestamp != nil {
+				continue
+			}
 			for _, ref := range DirectConfigReferences(pod) {
 				if candidates[resourceKey(ref.Kind, namespace, ref.Name)] {
 					readers = append(readers, pod)
@@ -150,7 +155,9 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 		for _, field := range newest.Fields {
 			keys := mergeChangedKeys(field.OldValue, field.NewValue)
 			if keys != nil {
-				summary = append(summary, fmt.Sprintf("%s %v", field.Path, keys))
+				// "data (modified keys)" reads "data modified keys: [...]", as diffSecret writes it.
+				label := strings.TrimSuffix(strings.Replace(field.Path, " (", " ", 1), ")")
+				summary = append(summary, fmt.Sprintf("%s: %v", label, keys))
 			}
 		}
 		newest.Summary = strings.Join(summary, "; ")
