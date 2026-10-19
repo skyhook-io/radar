@@ -191,6 +191,10 @@ func TestSecretRankReasonStatesOnlyEstablishedFacts(t *testing.T) {
 	if len(rows) != 1 || rows[0].RankReason != "Secret data changed" {
 		t.Fatalf("unreferenced Secret row: %+v", rows)
 	}
+	one := secretRankReason(issuesapi.RecentChange{Kind: "Secret", Fields: rows[0].Fields, RunningPreviousValue: &issuesapi.RunningPreviousValue{Pods: 1}})
+	if one != "Secret data changed; 1 Pod likely still holds the earlier value" {
+		t.Fatalf("single-Pod reason = %q", one)
+	}
 	immutable := secretRankReason(issuesapi.RecentChange{Kind: "Secret", Fields: []issuesapi.ChangeField{{Path: "immutable", OldValue: false, NewValue: true}}})
 	if immutable != "Secret changed" {
 		t.Fatalf("immutable-only reason = %q", immutable)

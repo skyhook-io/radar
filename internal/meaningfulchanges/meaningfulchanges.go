@@ -1142,6 +1142,9 @@ func secretRankReason(change issuesapi.RecentChange) string {
 	}
 	switch {
 	case change.RunningPreviousValue != nil:
+		if change.RunningPreviousValue.Pods == 1 {
+			return reason + "; 1 Pod likely still holds the earlier value"
+		}
 		return fmt.Sprintf("%s; %d Pods likely still hold the earlier value", reason, change.RunningPreviousValue.Pods)
 	case len(change.ConsumedBy) > 0:
 		return reason + "; referenced by a workload template or current Pod spec"
