@@ -868,7 +868,7 @@ func isNoisyResource(kind, name, op string) bool {
 	}
 
 	if kind == "Secret" {
-		if strings.HasSuffix(name, "-token") || strings.Contains(name, "leader-election") {
+		if strings.Contains(name, "leader-election") {
 			return true
 		}
 	}
@@ -1007,6 +1007,20 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 	if apiVersion != "" {
 		apiGroup = resourceid.GroupFromAPIVersion(apiVersion)
+	}
+
+	if kind == "Secret" && apiGroup == "" && op == "update" {
+		var secretType string
+		switch secret := obj.(type) {
+		case *corev1.Secret:
+			secretType = string(secret.Type)
+		case *unstructured.Unstructured:
+			secretType, _, _ = unstructured.NestedString(secret.Object, "type")
+		}
+		if secretType == string(corev1.SecretTypeServiceAccountToken) {
+			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoisyFilter, op, clusterContext)
+			return
+		}
 	}
 
 	store := timeline.GetStore()
