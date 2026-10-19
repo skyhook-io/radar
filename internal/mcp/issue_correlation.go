@@ -170,7 +170,7 @@ func correlateIssue(ctx context.Context, iss *issuesapi.Issue, window time.Durat
 // every object was created after the point where its history becomes
 // complete, so nothing about it can have been evicted. Only a cached workload
 // is dated, from its own creation time (a grouped issue's
-// resource_created_at can be a newer member's); its referenced ConfigMaps
+// resource_created_at can be a newer member's); its referenced ConfigMaps and Secrets
 // must be new too, and one missing from the cache is not known to be new.
 func correlationHistoryComplete(obj any, namespace string, coverage issuesapi.HistoryCoverage) bool {
 	if !coverage.Incomplete {
@@ -181,12 +181,32 @@ func correlationHistoryComplete(obj any, namespace string, coverage issuesapi.Hi
 		return false
 	}
 	cache := k8s.GetResourceCache()
-	for _, name := range meaningfulchanges.DirectConfigMapNames(obj) {
-		if cache == nil || cache.ConfigMaps() == nil {
+	for _, ref := range meaningfulchanges.DirectConfigReferences(obj) {
+		if cache == nil {
 			return false
 		}
-		cm, err := cache.ConfigMaps().ConfigMaps(namespace).Get(name)
-		if err != nil || !cm.CreationTimestamp.After(coverage.CompleteSince) {
+		var created metav1.Time
+		switch ref.Kind {
+		case "ConfigMap":
+			if cache.ConfigMaps() == nil {
+				return false
+			}
+			cm, err := cache.ConfigMaps().ConfigMaps(namespace).Get(ref.Name)
+			if err != nil {
+				return false
+			}
+			created = cm.CreationTimestamp
+		case "Secret":
+			if cache.Secrets() == nil {
+				return false
+			}
+			secret, err := cache.Secrets().Secrets(namespace).Get(ref.Name)
+			if err != nil {
+				return false
+			}
+			created = secret.CreationTimestamp
+		}
+		if !created.After(coverage.CompleteSince) {
 			return false
 		}
 	}
@@ -231,36 +251,36 @@ func helmIssueChangesForCorrelation(ctx context.Context, iss *issuesapi.Issue, w
 }
 
 // correlationChangesForIssue also reports whether sources were withheld from
-// the caller, and returns the workload object whose ConfigMaps were
+// the caller, and returns the workload object whose ConfigMaps and Secrets were
 // correlated, or nil.
 func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration, limit int) (meaningfulchanges.RecentResult, bool, any, error) {
 	if meaningfulchanges.WorkloadKind(iss.Kind) {
 		// Workload subjects also correlate against their directly referenced
-		// ConfigMaps; obj==nil degrades to workload-only changes.
+		// ConfigMaps and Secrets; obj==nil degrades to workload-only changes.
 		obj := workloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
 		result, sourcesWithheld, err := meaningfulchanges.RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			ctx, obj, iss.Kind, iss.Namespace, iss.Name,
-			window, limit, correlationFieldLimit, configMapSourceFilter(ctx, iss.Namespace),
+			window, limit, correlationFieldLimit, configSourceFilter(ctx, iss.Namespace), recentChangePodReadFilter(ctx),
 		)
 		return result, sourcesWithheld, obj, err
 	}
 	result, err := meaningfulchanges.RecentForResourceDetailed(
 		ctx, iss.Kind, iss.Namespace, iss.Name,
-		window, limit, correlationFieldLimit,
+		window, limit, correlationFieldLimit, recentChangePodReadFilter(ctx),
 	)
 	return result, false, nil, err
 }
 
-// configMapSourceFilter skips a workload's referenced ConfigMaps the caller
+// configSourceFilter skips a workload's referenced ConfigMaps and Secrets the caller
 // can't read before they are queried, so neither their rows nor their fetch
 // saturation reach the caller. nil when auth is off.
-func configMapSourceFilter(ctx context.Context, namespace string) func(kind, name string) bool {
+func configSourceFilter(ctx context.Context, namespace string) func(kind, name string) bool {
 	allow := recentChangeReadFilter(ctx)
 	if allow == nil {
 		return nil
 	}
 	return func(kind, _ string) bool {
-		return kind != "ConfigMap" || allow(issuesapi.RecentChange{Kind: "ConfigMap", APIVersion: "v1", Namespace: namespace})
+		return (kind != "ConfigMap" && kind != "Secret") || allow(issuesapi.RecentChange{Kind: kind, APIVersion: "v1", Namespace: namespace})
 	}
 }
 

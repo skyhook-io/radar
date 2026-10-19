@@ -78,6 +78,13 @@ func recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bo
 	}
 }
 
+func recentChangePodReadFilter(ctx context.Context) func(string) bool {
+	if pkgauth.UserFromContext(ctx) == nil {
+		return nil
+	}
+	return func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "get") }
+}
+
 // callerReadsAllNamespaces reports whether the caller is unrestricted by
 // namespace. Store-wide facts, such as when Radar's held history becomes
 // complete, go only to such callers.

@@ -263,8 +263,10 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"after a deploy/config change.' Returns recent meaningful changes ranked with " +
 			"spec/config changes first, including field-level diffs for Deployment env/probes " +
 			"and structured ConfigMap data when available. " +
+			"Secret data updates appear when referenced by a workload template or current Pod spec at query time; kind=Secret lists all. " +
+			"consumed_by means referenced by; running_previous_value names Pods likely retaining earlier env values after an observed write (absence means not established). " +
 			"`application_configuration_change: true` identifies a workload-runtime or " +
-			"consumed-ConfigMap edit and supplies a narrow ranking hint, not a causal or " +
+			"referenced-ConfigMap edit or likely stale Secret env readers, a ranking hint, not a causal or " +
 			"universal relevance verdict. Helm operation entries rank by category and recency " +
 			"and are not raised by this flag. This is " +
 			"often faster than reading " +
@@ -426,7 +428,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"external dependencies may still have changed. If " +
 			"neither `correlated_changes` nor `no_recent_changes` is present, correlation is " +
 			"unknown. `correlated_changes` covers tracked edits on the issue subject, its " +
-			"directly referenced ConfigMaps, and a rejecting quota/LimitRange/webhook; " +
+			"directly referenced ConfigMaps/Secrets, and a rejecting quota/LimitRange/webhook; " +
 			"`correlated_changes_incomplete`: older ones were not read. " +
 			"Use get_events for raw events, get_cluster_audit for posture, diagnose for workloads " +
 			"or GitOps, get_resource for other kinds, and get_neighborhood across resources. " +
@@ -1170,7 +1172,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 			// saturation becomes a side channel for unreadable history.
 			recentChangesCoverageLimited = true
 		} else {
-			changesResult, err := meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
+			changesResult, err := meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit, recentChangePodReadFilter(ctx))
 			recentChangesSaturated = changesResult.OutputCapped || changesResult.FetchSaturated
 			if err != nil {
 				changesErr = err.Error()
@@ -1239,7 +1241,7 @@ func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
 	if gvk.Kind == "" || gvk.Version == "" {
 		return false
 	}
-	return meaningfulchanges.TrackedKindForGroup(gvk.Kind, gvk.Group)
+	return (gvk.Kind == "Secret" && gvk.Group == "") || meaningfulchanges.TrackedKindForGroup(gvk.Kind, gvk.Group)
 }
 
 // buildMCPResourceContext assembles the resourceContext section for MCP
@@ -1531,11 +1533,12 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	}
 
 	query := meaningfulchanges.Query{
-		Since:      since,
-		Limit:      50,
-		FieldLimit: meaningfulchanges.DefaultFieldLimit,
-		Name:       input.Name,
-		Allow:      recentChangeReadFilter(ctx),
+		Since:       since,
+		Limit:       50,
+		FieldLimit:  meaningfulchanges.DefaultFieldLimit,
+		Name:        input.Name,
+		Allow:       recentChangeReadFilter(ctx),
+		CanReadPods: recentChangePodReadFilter(ctx),
 	}
 	switch {
 	case input.Namespace != "":
@@ -3178,7 +3181,8 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
 				// Per-kind RBAC before ranking and the cut, so priority/recap
 				// see the visible set.
-				Allow: recentChangeReadFilter(ctx),
+				Allow:       recentChangeReadFilter(ctx),
+				CanReadPods: recentChangePodReadFilter(ctx),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()

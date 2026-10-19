@@ -46,6 +46,14 @@ func (s *Server) recentChangeReadFilter(ctx context.Context) func(issuesapi.Rece
 	}
 }
 
+func (s *Server) recentChangePodReadFilter(ctx context.Context) func(string) bool {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil
+	}
+	return func(namespace string) bool { return s.canReadUser(ctx, user, "", "pods", namespace, "get") }
+}
+
 // handleIssues serves GET /api/issues — "what's broken right now."
 // Composes the curated operational sources (workload/pod problems,
 // dangling references, pod-startup blockers, and False CRD conditions),
@@ -146,7 +154,8 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 				// per-kind — drop changes for kinds the caller can't read before
 				// ranking and the cut, so priority/recap logic operates on the
 				// visible set.
-				Allow: s.recentChangeReadFilter(r.Context()),
+				Allow:       s.recentChangeReadFilter(r.Context()),
+				CanReadPods: s.recentChangePodReadFilter(r.Context()),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()

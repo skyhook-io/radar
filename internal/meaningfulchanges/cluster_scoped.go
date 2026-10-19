@@ -114,7 +114,7 @@ func ClusterScopedForNamespace(ctx context.Context, namespace string, nsLabels N
 	merged := coalesceRecreatePairs(dedupeEvents(events))
 	// Applicability is decided per changed webhook, so keep every recorded
 	// webhook row and cap fields only for display.
-	changes, _ := rankedChanges(merged, Query{Limit: len(merged), FieldLimit: clusterScopedFieldLimit})
+	changes, _ := rankedChanges(ctx, merged, Query{Limit: len(merged), FieldLimit: clusterScopedFieldLimit})
 	current, loaded, watchedSince := currentWebhookConfigurations()
 	for _, kind := range readable {
 		switch {

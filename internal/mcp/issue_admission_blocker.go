@@ -124,9 +124,10 @@ func admissionBlockerForIssue(ctx context.Context, iss *issuesapi.Issue, window 
 			res, err = meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
 				Namespaces: []string{namespace}, Kinds: []string{kind},
 				Since: window, Limit: admissionOrderFetchLimit, FieldLimit: correlationFieldLimit,
+				CanReadPods: recentChangePodReadFilter(ctx),
 			})
 		} else {
-			res, err = meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, window, admissionOrderFetchLimit, correlationFieldLimit)
+			res, err = meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, window, admissionOrderFetchLimit, correlationFieldLimit, recentChangePodReadFilter(ctx))
 		}
 		if err != nil {
 			log.Printf("[mcp] admission blocker correlation failed for %s %s/%s: %v", kind, namespace, name, err)
