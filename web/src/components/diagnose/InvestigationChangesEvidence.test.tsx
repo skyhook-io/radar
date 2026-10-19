@@ -144,6 +144,18 @@ describe("Secret and ConfigMap change evidence", () => {
     },
   );
 
+  it("marks a full list of five references and stale workloads as capped", () => {
+    const five = ["a", "b", "c", "d", "e"].map((name) => `Deployment/${name}`);
+    const html = render({
+      ...secretChange,
+      consumed_by: five,
+      running_previous_value: { ...annotation, pods: 7, workloads: five },
+    });
+    expect(html.match(/\(first 5\)/g)).toHaveLength(2);
+    expect(html).toContain("In workloads you can view:");
+    expect(render(secretChange)).not.toContain("(first 5)");
+  });
+
   it("renders a reference of a kind with no known group as text, not a link", () => {
     const html = render({
       ...secretChange,

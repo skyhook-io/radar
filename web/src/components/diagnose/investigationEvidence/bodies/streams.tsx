@@ -136,6 +136,10 @@ export function EventsBody({ data }: { data: EvidenceDataOf<"events"> }) {
   );
 }
 
+// The producer caps consumed_by and running_previous_value.workloads at five
+// (maxConsumersPerEntry), so a full list may not be the whole set.
+const REFERENCE_LIST_CAP = 5;
+
 function ChangeReferences({
   references,
   namespace,
@@ -269,10 +273,15 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
                 </p>
                 {(change.running_previous_value.workloads ?? []).length > 0 ? (
                   <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1">
+                    <span>In workloads you can view:</span>
                     <ChangeReferences
                       references={change.running_previous_value.workloads ?? []}
                       namespace={change.namespace}
                     />
+                    {(change.running_previous_value.workloads ?? []).length >=
+                    REFERENCE_LIST_CAP ? (
+                      <span>(first {REFERENCE_LIST_CAP})</span>
+                    ) : null}
                   </div>
                 ) : (
                   <p>workload names hidden by your permissions</p>
@@ -288,6 +297,9 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
                 references={change.consumed_by}
                 namespace={change.namespace}
               />
+              {change.consumed_by.length >= REFERENCE_LIST_CAP ? (
+                <span>(first {REFERENCE_LIST_CAP})</span>
+              ) : null}
             </div>
           ) : null}
           {change.fields?.length ? (
