@@ -148,19 +148,27 @@ function ChangeReferences({
     const slash = reference.indexOf("/");
     const kind = reference.slice(0, slash);
     const name = reference.slice(slash + 1);
+    // The producer names only Kind/name, so a link is safe only for kinds
+    // whose group is known; a CRD owner such as a CNPG Cluster stays text.
+    const group =
+      kind === "Rollout" ? "argoproj.io" : builtinGroupForKind(kind);
     return (
       <span
         key={reference}
         className="min-w-0 max-w-full font-mono [overflow-wrap:anywhere]"
       >
-        <ResourceLink
-          name={name}
-          kind={kind}
-          namespace={namespace ?? ""}
-          group={kind === "Rollout" ? "argoproj.io" : builtinGroupForKind(kind)}
-          label={reference}
-          onNavigate={onOpenResource}
-        />
+        {group === undefined ? (
+          reference
+        ) : (
+          <ResourceLink
+            name={name}
+            kind={kind}
+            namespace={namespace ?? ""}
+            group={group}
+            label={reference}
+            onNavigate={onOpenResource}
+          />
+        )}
       </span>
     );
   });
@@ -207,24 +215,16 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
             </Badge>
             <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">
               {(change.updates_in_window ?? 0) > 1 ? (
-                <Tooltip
-                  content={
-                    change.first_update_at
-                      ? `First update: ${new Date(change.first_update_at).toLocaleString()}`
-                      : undefined
-                  }
-                  delay={150}
-                  position="left"
-                  wrapperClassName="min-w-0 max-w-full"
+                <Badge
+                  tone="structural"
+                  size="sm"
+                  className="max-w-full whitespace-normal"
                 >
-                  <Badge
-                    tone="structural"
-                    size="sm"
-                    className="max-w-full whitespace-normal"
-                  >
-                    {change.updates_in_window} updates in this window
-                  </Badge>
-                </Tooltip>
+                  {change.updates_in_window} updates
+                  {change.first_update_at
+                    ? `, first ${formatRelativeAgeTime(change.first_update_at)}`
+                    : ""}
+                </Badge>
               ) : null}
               <Tooltip
                 content={new Date(change.timestamp).toLocaleString()}
@@ -253,7 +253,7 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
             >
               <div className="mt-1 space-y-1.5 text-xs text-theme-text-secondary">
                 <p>
-                  Reads{" "}
+                  Changed keys read as env:{" "}
                   {change.running_previous_value.keys.map((key, keyIndex) => (
                     <Fragment key={key}>
                       {keyIndex > 0 ? ", " : null}
@@ -265,8 +265,7 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
                         {key}
                       </Badge>
                     </Fragment>
-                  ))}{" "}
-                  as env
+                  ))}
                 </p>
                 {(change.running_previous_value.workloads ?? []).length > 0 ? (
                   <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1">

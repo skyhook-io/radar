@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DiffViewer,
   ResourceLink,
+  formatRelativeAgeTime,
   type IssueRecentChange,
 } from "@skyhook-io/k8s-ui";
-import { Tooltip } from "../ui/Tooltip";
 import { ChangesBody } from "./investigationEvidence/bodies/streams";
 import { EvidenceNavigationContext } from "./investigationEvidence/navigation";
 import { recentChange } from "./investigationEvidence/parse";
@@ -21,10 +21,6 @@ vi.mock("@skyhook-io/k8s-ui", async (importOriginal) => {
       <actual.DiffViewer {...props} />
     )),
   };
-});
-vi.mock("../ui/Tooltip", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ui/Tooltip")>();
-  return { ...actual, Tooltip: vi.fn(actual.Tooltip) };
 });
 
 const annotation = {
@@ -115,7 +111,7 @@ describe("Secret and ConfigMap change evidence", () => {
         : "2 Pods likely still hold the earlier value",
     );
     expect(html).toMatch(
-      /Reads <span[^>]*font-mono[^>]*>password<\/span>, <span[^>]*>username<\/span> as env/,
+      /Changed keys read as env: <span[^>]*font-mono[^>]*>password<\/span>, <span[^>]*>username<\/span><\/p>/,
     );
     expect(html).toContain(annotation.note);
     expect(html).toMatch(/<button[^>]*>Deployment\/env-reader<\/button>/);
@@ -147,6 +143,20 @@ describe("Secret and ConfigMap change evidence", () => {
       ).toEqual([]);
     },
   );
+
+  it("renders a reference of a kind with no known group as text, not a link", () => {
+    const html = render({
+      ...secretChange,
+      consumed_by: ["Cluster/database"],
+      running_previous_value: { ...annotation, workloads: ["Cluster/database"] },
+    });
+    expect(html).toContain("Cluster/database");
+    expect(
+      vi
+        .mocked(ResourceLink)
+        .mock.calls.filter(([props]) => props.label === "Cluster/database"),
+    ).toHaveLength(0);
+  });
 
   it.each([
     ["Deployment", "apps"],
@@ -190,27 +200,23 @@ describe("Secret and ConfigMap change evidence", () => {
     expect(html).not.toContain("likely still");
   });
 
-  it("shows collapsed updates beside the timestamp with the first local time in a tooltip", () => {
+  it("shows collapsed updates and the first update's age beside the timestamp", () => {
     const first = "2026-10-19T17:50:00+03:00";
     const html = render({
       ...secretChange,
       updates_in_window: 4,
       first_update_at: first,
     });
-    expect(html).toContain("4 updates in this window");
-    expect(
-      vi.mocked(Tooltip).mock.calls.map(([props]) => props.content),
-    ).toContain(`First update: ${new Date(first).toLocaleString()}`);
-    expect(html.indexOf("4 updates in this window")).toBeLessThan(
-      html.indexOf("<time"),
-    );
+    const label = `4 updates, first ${formatRelativeAgeTime(first)}`;
+    expect(html).toContain(label);
+    expect(html.indexOf(label)).toBeLessThan(html.indexOf("<time"));
   });
 
   it.each([undefined, 1])(
     "omits the collapsed-update label for %s",
     (updates_in_window) => {
       expect(render({ ...secretChange, updates_in_window })).not.toContain(
-        "updates in this window",
+        " updates",
       );
     },
   );
@@ -250,7 +256,7 @@ describe("Secret and ConfigMap change evidence", () => {
       const html = render(row);
       expect(html).toContain(secretChange.summary);
       expect(html).toContain(annotation.note);
-      expect(html).not.toContain("updates in this window");
+      expect(html).not.toMatch(/\d updates/);
     },
   );
 
@@ -259,7 +265,7 @@ describe("Secret and ConfigMap change evidence", () => {
     ({ first_update_at }) => {
       const row = { ...secretChange, updates_in_window: 3, first_update_at };
       expect(recentChange(row)).not.toHaveProperty("first_update_at");
-      expect(render(row)).toContain("3 updates in this window");
+      expect(render(row)).toMatch(/>3 updates</);
     },
   );
 
