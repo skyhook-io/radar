@@ -2950,45 +2950,62 @@ describe("InvestigationEvidencePane metrics cards", () => {
 
   it.each([
     [
-      { warnings: ["PromQL info: metric might not be a counter"] },
-      "The metrics backend returned 1 warning with this result: PromQL info: metric might not be a counter",
+      { infos: ["PromQL info: metric might not be a counter"] },
+      [
+        "Prometheus noted about this query: PromQL info: metric might not be a counter",
+      ],
     ],
     [
-      { warnings: ["a", "b"], warningsOmitted: 2 },
-      "The metrics backend returned 4 warnings with this result: a",
+      { warnings: ["a", "b"], annotationsOmitted: 2 },
+      [
+        "The metrics backend returned 2 warnings with this result: a; b",
+        "2 more backend messages were left out to keep the result small.",
+      ],
     ],
     [
-      { warningsOmitted: 1 },
-      "The metrics backend returned 1 warning with this result.",
+      { warnings: ["store down"], infos: ["note"] },
+      [
+        "The metrics backend returned a warning with this result: store down",
+        "Prometheus noted about this query: note",
+      ],
     ],
-  ])("keeps the chart and surfaces backend warnings %j", (extra, message) => {
-    const projection = project(
-      tool("prom", "query_prometheus", {
-        ...rangeResult(targetSelectors),
-        ...extra,
-      }),
-    );
-    expect(render(projection)).toContain("Memory working set");
-    expect(projection.limitations).toHaveLength(1);
-    expect(projection.limitations[0]).toMatchObject({
-      kind: "unknown",
-      message,
-    });
-  });
-
-  it.each([{ warnings: "x" }, { warnings: [1] }, { warningsOmitted: "1" }])(
-    "rejects a malformed warnings field %j",
-    (extra) => {
+    [
+      { annotationsOmitted: 1 },
+      ["1 more backend message was left out to keep the result small."],
+    ],
+  ])(
+    "keeps the chart and surfaces backend annotations %j",
+    (extra, messages) => {
       const projection = project(
         tool("prom", "query_prometheus", {
           ...rangeResult(targetSelectors),
           ...extra,
         }),
       );
-      expect(projection.groups).toHaveLength(0);
-      expect(projection.limitations).toHaveLength(1);
+      expect(render(projection)).toContain("Memory working set");
+      expect(projection.limitations.map((item) => item.message)).toEqual(
+        messages,
+      );
+      for (const item of projection.limitations)
+        expect(item.kind).toBe("unknown");
     },
   );
+
+  it.each([
+    { warnings: "x" },
+    { warnings: [1] },
+    { infos: [true] },
+    { annotationsOmitted: "1" },
+  ])("rejects a malformed annotation field %j", (extra) => {
+    const projection = project(
+      tool("prom", "query_prometheus", {
+        ...rangeResult(targetSelectors),
+        ...extra,
+      }),
+    );
+    expect(projection.groups).toHaveLength(0);
+    expect(projection.limitations).toHaveLength(1);
+  });
 
   it("keeps an uncited target-scoped chart in the workload collection", () => {
     const projection = project(

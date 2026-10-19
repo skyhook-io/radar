@@ -1368,8 +1368,8 @@ func TestHandleQueryPrometheus_Annotations(t *testing.T) {
 			if !resp.Partial || !strings.HasPrefix(resp.Note, "backend returned a partial result (some stores did not answer) — absent series are not zero.") {
 				t.Fatalf("missing partial qualification: %+v", resp)
 			}
-			want := []string{prom.RedactURLs("store unavailable at https://private.example/api?token=secret"), "metric might not be a counter"}
-			if !reflect.DeepEqual(resp.Warnings, want) || resp.WarningsOmitted != 0 {
+			want := []string{prom.RedactURLs("store unavailable at https://private.example/api?token=secret")}
+			if !reflect.DeepEqual(resp.Warnings, want) || !reflect.DeepEqual(resp.Infos, []string{"metric might not be a counter"}) || resp.AnnotationsOmitted != 0 {
 				t.Fatalf("warnings: %+v", resp)
 			}
 			if tc.empty && (!strings.Contains(resp.Note, "suggestedMetrics contains") || len(resp.SuggestedMetrics) != 1) {
@@ -1404,8 +1404,8 @@ func TestHandleQueryPrometheus_AnnotationBudget(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp := decodeQueryResponse(t, extractText(t, result))
-			if !reflect.DeepEqual(resp.Warnings, tc.want) || resp.WarningsOmitted != tc.omitted {
-				t.Fatalf("warnings = %v, omitted = %d", resp.Warnings, resp.WarningsOmitted)
+			if got := append(append([]string{}, resp.Warnings...), resp.Infos...); !reflect.DeepEqual(got, tc.want) || resp.AnnotationsOmitted != tc.omitted {
+				t.Fatalf("warnings = %v, infos = %v, omitted = %d", resp.Warnings, resp.Infos, resp.AnnotationsOmitted)
 			}
 		})
 	}
@@ -1466,6 +1466,7 @@ func TestHandleDiscoverMetrics_NearMisses(t *testing.T) {
 	const scopeNames = `{"status":"success","data":["checkout_orders_attempts_total","orders_total","shop_queue_depth","unrelated"]}`
 	for _, tc := range []struct {
 		name, match, label, scope, scopeBody    string
+		usagePattern                            string
 		scopeError, timeout, counter, truncated bool
 		want                                    []string
 	}{
@@ -1484,6 +1485,7 @@ func TestHandleDiscoverMetrics_NearMisses(t *testing.T) {
 		{name: "scope truncated", match: match, scope: `{namespace="shop"}`, truncated: true},
 		{name: "preserved matchers", match: `{__name__=~"orders_.*|.*queue.*",namespace="shop",job!="x",pod!~"test.*",cluster=~"prod|stage",zone="a\"b\\c"}`, scope: `{namespace="shop",job!="x",pod!~"test.*",cluster=~"prod|stage",zone="a\"b\\c"}`, want: []string{"checkout_orders_attempts_total"}},
 		{name: "counter usage", match: match, scope: `{namespace="shop"}`, counter: true, want: []string{"checkout_orders_attempts_total"}},
+		{name: "escaped pattern", match: `{__name__=~"orders\\.v2_.*",namespace="shop"}`, scope: `{namespace="shop"}`, scopeBody: `{"status":"success","data":["checkout_orders.v2_total"]}`, want: []string{"checkout_orders.v2_total"}, usagePattern: `orders\.v2_.*`},
 		{name: "primary excluded", match: match, scope: `{namespace="shop"}`, scopeBody: `{"status":"success","data":["prefix_orders_total"]}`, want: []string{"prefix_orders_total"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1555,7 +1557,11 @@ func TestHandleDiscoverMetrics_NearMisses(t *testing.T) {
 				t.Errorf("label calls=%d want %d", gotCalls, wantCalls)
 			}
 			if len(tc.want) > 0 {
-				usage := "PromQL regex matchers are fully anchored; nearMisses contain your pattern but were excluded. To match anywhere use .*(?:" + pattern + ").*"
+				wantPattern := pattern
+				if tc.usagePattern != "" {
+					wantPattern = tc.usagePattern
+				}
+				usage := "PromQL regex matchers are fully anchored; nearMisses contain your pattern but were excluded. To match anywhere use __name__=~" + strconv.Quote(".*(?:"+wantPattern+").*")
 				if tc.counter {
 					usage = "some results are counters (type=counter) — they only ever increase, so wrap them in rate(metric[5m]) before querying; gauges can be queried directly; " + usage
 				}

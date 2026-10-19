@@ -620,6 +620,14 @@ const METRIC_FAMILY_LABELS: Record<string, string> = {
   container_fs_usage_bytes: "Filesystem usage",
   up: "Scrape target up",
 };
+
+function optionalStringList(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((item) => typeof item === "string"))
+  );
+}
+
 export function adaptQueryPrometheus(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
@@ -637,11 +645,10 @@ export function adaptQueryPrometheus(
       typeof value.selectorsUnknown !== "boolean") ||
     (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
     (value.partial !== undefined && typeof value.partial !== "boolean") ||
-    (value.warnings !== undefined &&
-      (!Array.isArray(value.warnings) ||
-        !value.warnings.every((item) => typeof item === "string"))) ||
-    (value.warningsOmitted !== undefined &&
-      typeof value.warningsOmitted !== "number")
+    !optionalStringList(value.warnings) ||
+    !optionalStringList(value.infos) ||
+    (value.annotationsOmitted !== undefined &&
+      typeof value.annotationsOmitted !== "number")
   ) {
     invalidPayload(builder, source, "Prometheus query");
     return;
@@ -668,14 +675,31 @@ export function adaptQueryPrometheus(
     );
   }
   const warnings = (value.warnings as string[] | undefined) ?? [];
-  const omitted =
-    typeof value.warningsOmitted === "number" ? value.warningsOmitted : 0;
-  if (warnings.length > 0 || omitted > 0) {
-    const count = warnings.length + omitted;
+  const infos = (value.infos as string[] | undefined) ?? [];
+  if (warnings.length > 0) {
     builder.limit(
       source,
       "Prometheus query",
-      `The metrics backend returned ${count} warning${count === 1 ? "" : "s"} with this result${warnings.length > 0 ? `: ${warnings[0]}` : "."}`,
+      `The metrics backend returned ${warnings.length === 1 ? "a warning" : `${warnings.length} warnings`} with this result: ${warnings.join("; ")}`,
+      "unknown",
+    );
+  }
+  if (infos.length > 0) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `Prometheus noted about this query: ${infos.join("; ")}`,
+      "unknown",
+    );
+  }
+  if (
+    typeof value.annotationsOmitted === "number" &&
+    value.annotationsOmitted > 0
+  ) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `${value.annotationsOmitted} more backend ${value.annotationsOmitted === 1 ? "message was" : "messages were"} left out to keep the result small.`,
       "unknown",
     );
   }

@@ -87,21 +87,22 @@ type discoverMetricsInput struct {
 }
 
 type promQueryResponse struct {
-	Warnings         []string        `json:"warnings,omitempty"`
-	WarningsOmitted  int             `json:"warningsOmitted,omitempty"`
-	Partial          bool            `json:"partial,omitempty"`
-	Query            string          `json:"query"`
-	Type             string          `json:"type"`
-	Start            string          `json:"start,omitempty"`
-	End              string          `json:"end,omitempty"`
-	Step             string          `json:"step,omitempty"`
-	ResultType       string          `json:"resultType,omitempty"`
-	SeriesCount      int             `json:"seriesCount"`
-	Series           []prom.Series   `json:"series"`
-	Truncated        bool            `json:"truncated,omitempty"`
-	Summary          json.RawMessage `json:"summary,omitempty"`
-	Note             string          `json:"note,omitempty"`
-	SuggestedMetrics []string        `json:"suggestedMetrics,omitempty"`
+	Warnings           []string        `json:"warnings,omitempty"`
+	Infos              []string        `json:"infos,omitempty"`
+	AnnotationsOmitted int             `json:"annotationsOmitted,omitempty"`
+	Partial            bool            `json:"partial,omitempty"`
+	Query              string          `json:"query"`
+	Type               string          `json:"type"`
+	Start              string          `json:"start,omitempty"`
+	End                string          `json:"end,omitempty"`
+	Step               string          `json:"step,omitempty"`
+	ResultType         string          `json:"resultType,omitempty"`
+	SeriesCount        int             `json:"seriesCount"`
+	Series             []prom.Series   `json:"series"`
+	Truncated          bool            `json:"truncated,omitempty"`
+	Summary            json.RawMessage `json:"summary,omitempty"`
+	Note               string          `json:"note,omitempty"`
+	SuggestedMetrics   []string        `json:"suggestedMetrics,omitempty"`
 	// Selectors is the query's vector-selector inventory, so a consumer can
 	// tell a query scoped to one workload from a cluster-wide one without
 	// re-parsing PromQL. Always an array; SelectorsUnknown marks a query the
@@ -192,15 +193,18 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	resp.Partial = result.Annotations.Partial
 	annotationBytes := 0
 	exhausted := false
-	for _, annotations := range [][]string{result.Annotations.Warnings, result.Annotations.Infos} {
-		for _, annotation := range annotations {
+	for _, kind := range []struct {
+		in  []string
+		out *[]string
+	}{{result.Annotations.Warnings, &resp.Warnings}, {result.Annotations.Infos, &resp.Infos}} {
+		for _, annotation := range kind.in {
 			annotation = prom.RedactURLs(annotation)
 			if exhausted || annotationBytes+len(annotation) > 2048 {
 				exhausted = true
-				resp.WarningsOmitted++
+				resp.AnnotationsOmitted++
 				continue
 			}
-			resp.Warnings = append(resp.Warnings, annotation)
+			*kind.out = append(*kind.out, annotation)
 			annotationBytes += len(annotation)
 		}
 	}
@@ -346,7 +350,7 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 		if resp.Usage != "" {
 			resp.Usage += "; "
 		}
-		resp.Usage += "PromQL regex matchers are fully anchored; nearMisses contain your pattern but were excluded. To match anywhere use .*(?:" + pattern + ").*"
+		resp.Usage += "PromQL regex matchers are fully anchored; nearMisses contain your pattern but were excluded. To match anywhere use __name__=~" + strconv.Quote(".*(?:"+pattern+").*")
 	}
 	return toJSONResult(resp)
 }
