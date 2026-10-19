@@ -135,6 +135,39 @@ func TestSecretAdmissionAndPreviousValue(t *testing.T) {
 	}
 }
 
+// Two writes inside one second share a row timestamp; each row keeps only the
+// readers of the keys it changed.
+func TestSecretSameSecondWritesKeepTheirOwnReaders(t *testing.T) {
+	second := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Second)
+	store := secretFeedFixture(t, feedSecret("db"), feedPod("a", second.Add(-20*time.Minute), feedEnv("Secret", "db", "A")), feedPod("b", second.Add(-20*time.Minute), feedEnv("Secret", "db", "B")))
+	appendFeedWrite(t, store, "Secret", "db", second.Add(100*time.Millisecond), "A")
+	appendFeedWrite(t, store, "Secret", "db", second.Add(600*time.Millisecond), "B")
+	rows := feedRecent(t, Query{Kinds: []string{"Secret"}})
+	if len(rows) != 2 {
+		t.Fatalf("rows=%+v", rows)
+	}
+	for _, row := range rows {
+		keys := secretChangedKeys(row.Fields)
+		if row.RunningPreviousValue == nil || len(row.RunningPreviousValue.Keys) != 1 || !keys[row.RunningPreviousValue.Keys[0]] {
+			t.Fatalf("row carries another write's readers: %+v", row)
+		}
+	}
+}
+
+// rank_reason claims references only when consumed_by names them.
+func TestSecretRankReasonStatesOnlyEstablishedFacts(t *testing.T) {
+	store := secretFeedFixture(t, feedSecret("loose"))
+	appendFeedWrite(t, store, "Secret", "loose", time.Now().Add(-time.Minute), "A")
+	rows := feedRecent(t, Query{Kinds: []string{"Secret"}})
+	if len(rows) != 1 || rows[0].RankReason != "Secret data changed" {
+		t.Fatalf("unreferenced Secret row: %+v", rows)
+	}
+	immutable := secretRankReason(issuesapi.RecentChange{Kind: "Secret", Fields: []issuesapi.ChangeField{{Path: "immutable", OldValue: false, NewValue: true}}})
+	if immutable != "Secret changed" {
+		t.Fatalf("immutable-only reason = %q", immutable)
+	}
+}
+
 func TestSecretHelmAndAPICollisionExcluded(t *testing.T) {
 	secret := feedSecret("sh.helm.release.v1.app.v1")
 	secret.Type = "helm.sh/release.v1"
@@ -341,13 +374,16 @@ func TestSecretReferenceUnionAndRolloutSources(t *testing.T) {
 	for _, name := range []string{"old-secret", "new-secret", "mounted"} {
 		appendFeedWrite(t, store, "Secret", name, now.Add(-time.Minute), "A")
 	}
+	// The feed indexes Rollouts through their running Pods only, so a Rollout
+	// template with no Pods admits nothing; diagnose and correlation still read
+	// the Rollout's own sources below.
 	rows := feedRecent(t, Query{})
-	if len(rows) != 3 {
+	if len(rows) != 2 {
 		t.Fatalf("reference union=%+v", rows)
 	}
 	for _, row := range rows {
-		if row.Name == "mounted" && !reflect.DeepEqual(row.ConsumedBy, []string{"Rollout/roll"}) {
-			t.Fatalf("Rollout absent from index: %+v", row)
+		if row.Name == "mounted" {
+			t.Fatalf("Pod-less Rollout template admitted a row: %+v", row)
 		}
 	}
 	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(context.Background(), rollout, "Rollout", "shop", "roll", time.Hour, 20, 10, nil, nil)

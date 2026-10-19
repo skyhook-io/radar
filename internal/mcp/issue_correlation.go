@@ -308,6 +308,10 @@ func workloadObjectFromCache(kind, namespace, name string) any {
 				return o
 			}
 		}
+	case "rollout":
+		if o, err := cache.GetDynamicWithGroup(context.Background(), "Rollout", namespace, name, "argoproj.io"); err == nil {
+			return o
+		}
 	}
 	return nil
 }

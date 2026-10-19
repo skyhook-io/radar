@@ -822,12 +822,10 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 			}
 		}
 	}
+	// Rollouts are indexed through their current Pods below, which resolve to
+	// the Rollout owner: listing the dynamic kind here could start an informer
+	// or probe access on every feed read.
 	for namespace := range namespaces {
-		if items, err := cache.ListDynamicWithGroup(ctx, "Rollout", namespace, "argoproj.io"); err == nil {
-			for _, item := range items {
-				add(namespace, "Rollout", item.GetName(), item, true)
-			}
-		}
 		if cache.Pods() == nil {
 			continue
 		}
@@ -1144,16 +1142,31 @@ func score(c issuesapi.RecentChange) int {
 
 const generationOnlyRankReason = "generation changed; specific fields were not tracked"
 
+// secretRankReason states only what the row establishes: a data change when
+// keys changed, references when consumed_by names them, and stale env readers
+// when running_previous_value is set.
+func secretRankReason(change issuesapi.RecentChange) string {
+	reason := "Secret changed"
+	if len(secretChangedKeys(change.Fields)) > 0 {
+		reason = "Secret data changed"
+	}
+	switch {
+	case change.RunningPreviousValue != nil:
+		return fmt.Sprintf("%s; %d Pods likely still hold the earlier value", reason, change.RunningPreviousValue.Pods)
+	case len(change.ConsumedBy) > 0:
+		return reason + "; referenced by a workload template or current Pod spec"
+	default:
+		return reason
+	}
+}
+
 func classifyApplicationConfigurationChange(change *issuesapi.RecentChange) {
 	if change == nil || change.NotLinkedToReturnedIssues {
 		return
 	}
 	if change.Kind == "Secret" && change.ChangeCategory == issuesapi.ChangeCategorySpecConfig {
 		change.ApplicationConfigurationChange = change.RunningPreviousValue != nil
-		change.RankReason = "Secret data changed; referenced by a workload template or current Pod spec"
-		if change.RunningPreviousValue != nil {
-			change.RankReason = fmt.Sprintf("Secret data changed; %d Pods likely still hold the earlier value", change.RunningPreviousValue.Pods)
-		}
+		change.RankReason = secretRankReason(*change)
 		return
 	}
 	if change.ApplicationConfigurationChange {

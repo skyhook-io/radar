@@ -48,9 +48,18 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 			if err != nil {
 				continue
 			}
+			// Secret rows list their changed keys, so a fact must also name one
+			// of them: two writes in the same second can't swap evidence.
+			var rowKeys map[string]bool
+			if change.Kind == "Secret" {
+				rowKeys = secretChangedKeys(change.Fields)
+			}
 			podNames, keys, workloads := map[string]bool{}, map[string]bool{}, map[string]bool{}
 			for _, fact := range facts {
 				if fact.EvidenceSource != "observed_change" || fact.SourceKind != change.Kind || fact.SourceName != change.Name || fact.ChangedAt.Unix() != changedAt.Unix() {
+					continue
+				}
+				if rowKeys != nil && !rowKeys[fact.Key] {
 					continue
 				}
 				keys[fact.Key] = true
@@ -147,6 +156,23 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 		newest.Summary = strings.Join(summary, "; ")
 	}
 	return out
+}
+
+// secretChangedKeys returns the key names a Secret row's data or stringData
+// fields list as added, removed or modified.
+func secretChangedKeys(fields []issuesapi.ChangeField) map[string]bool {
+	keys := map[string]bool{}
+	for _, field := range fields {
+		if !strings.HasPrefix(field.Path, "data (") && !strings.HasPrefix(field.Path, "stringData (") {
+			continue
+		}
+		if names, ok := mergeChangedKeys(field.OldValue, field.NewValue).([]string); ok {
+			for _, name := range names {
+				keys[name] = true
+			}
+		}
+	}
+	return keys
 }
 
 func mergeChangedKeys(a, b any) any {

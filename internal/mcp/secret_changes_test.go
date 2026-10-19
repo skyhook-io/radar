@@ -17,7 +17,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -160,5 +163,39 @@ func TestSecretChangesRBACAcrossMCPSurfaces(t *testing.T) {
 		if got := recentChangesSourceTracked(schema.GroupVersionKind{Kind: "Secret", Version: "v1", Group: tc.group}); got != tc.want {
 			t.Fatalf("Secret group %q tracked=%v", tc.group, got)
 		}
+	}
+}
+
+// A Rollout issue correlates against the Secrets its template references, as
+// Deployment issues do.
+func TestRolloutIssueCorrelatesReferencedSecret(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"name": "roll", "namespace": "shop"}, "spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"name": "app", "env": []any{map[string]any{"name": "PASSWORD", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "db", "key": "password"}}}}}}}}}}}
+	dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rollout)
+	if err := k8s.InitTestDynamicResourceCache(dynamic, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Rollout", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !k8s.GetDynamicResourceCache().WaitForSync(gvr, 2*time.Second) {
+		t.Fatal("Rollout cache did not sync")
+	}
+	store := initCorrelationStore(t)
+	if err := store.Append(context.Background(), timeline.TimelineEvent{ID: "secret-write", Kind: "Secret", APIVersion: "v1", Name: "db", Namespace: "shop", Timestamp: time.Now().Add(-5 * time.Minute), ClusterContext: k8s.ActiveClusterContext(), Source: timeline.SourceInformer, EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", OldValue: []string{"password"}, NewValue: []string{"password"}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	result, _, obj, err := correlationChangesForIssue(context.Background(), &issuesapi.Issue{Kind: "Rollout", Namespace: "shop", Name: "roll"}, time.Hour, 10)
+	if err != nil || obj == nil {
+		t.Fatalf("Rollout object not resolved: obj=%v err=%v", obj, err)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].Kind != "Secret" || result.Changes[0].Name != "db" {
+		t.Fatalf("Rollout correlation changes = %+v", result.Changes)
 	}
 }
