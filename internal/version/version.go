@@ -31,10 +31,11 @@ var (
 	// Controls install method detection and enables in-app update flow.
 	isDesktop bool
 
-	mu          sync.Mutex
-	updateCache = map[string]updateCacheEntry{}
-	cacheTTL    = 1 * time.Hour
-	errorTTL    = 5 * time.Minute
+	mu             sync.Mutex
+	updateCache    = map[string]updateCacheEntry{}
+	cacheTTL       = 1 * time.Hour
+	errorTTL       = 5 * time.Minute
+	disabledByFlag bool
 )
 
 type updateCacheEntry struct {
@@ -117,8 +118,51 @@ func IsDevelopmentBuild() bool {
 	return buildChannel(Current) == buildChannelDevelopment
 }
 
+// SetDisabled sets whether automatic version checks are disabled via CLI flag.
+func SetDisabled(disabled bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	disabledByFlag = disabled
+}
+
+// IsDisabled reports whether automatic version checks are disabled via CLI flag
+// or environment variables (RADAR_DISABLE_VERSION_CHECK, RADAR_NO_VERSION_CHECK, DO_NOT_TRACK).
+func IsDisabled() bool {
+	mu.Lock()
+	flagDisabled := disabledByFlag
+	mu.Unlock()
+	if flagDisabled {
+		return true
+	}
+	if v := os.Getenv("RADAR_DISABLE_VERSION_CHECK"); v == "1" || strings.EqualFold(v, "true") {
+		return true
+	}
+	if v := os.Getenv("RADAR_NO_VERSION_CHECK"); v == "1" || strings.EqualFold(v, "true") {
+		return true
+	}
+	if v := os.Getenv("DO_NOT_TRACK"); v == "1" || strings.EqualFold(v, "true") {
+		return true
+	}
+	return false
+}
+
+const defaultReleasesURL = "https://github.com/skyhook-io/radar/releases"
+
+func disabledUpdateInfo() *UpdateInfo {
+	method := detectInstallMethod()
+	return &UpdateInfo{
+		CurrentVersion: Current,
+		InstallMethod:  method,
+		UpdateCommand:  getUpdateCommand(method),
+		ReleaseURL:     defaultReleasesURL,
+	}
+}
+
 // CheckForUpdate checks GitHub for the latest release
 func CheckForUpdate(_ context.Context) *UpdateInfo {
+	if IsDisabled() {
+		return disabledUpdateInfo()
+	}
 	if buildChannel(Current) == buildChannelDevelopment {
 		return checkForUpdateCached(checkOptions{source: "release-only"})
 	}
@@ -127,11 +171,14 @@ func CheckForUpdate(_ context.Context) *UpdateInfo {
 
 // CheckForUpdateRelease returns release information using the release-only source.
 func CheckForUpdateRelease(_ context.Context) *UpdateInfo {
+	if IsDisabled() {
+		return disabledUpdateInfo()
+	}
 	return checkForUpdateCached(checkOptions{source: "release-only"})
 }
 
 func RelayUpdateCheck(ctx context.Context) error {
-	if buildChannel(Current) == buildChannelDevelopment {
+	if IsDisabled() || buildChannel(Current) == buildChannelDevelopment {
 		return nil
 	}
 
@@ -217,7 +264,7 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		UpdateCommand:  getUpdateCommand(method),
 	}
 
-	if Current == "dev" {
+	if IsDisabled() || Current == "dev" {
 		return result
 	}
 

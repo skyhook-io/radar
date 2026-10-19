@@ -70,7 +70,12 @@ func main() {
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
+	noVersionCheck := flag.Bool("no-version-check", fileCfg.NoVersionCheck, "Disable automatic check for newer Radar versions and releases (also enabled via RADAR_DISABLE_VERSION_CHECK=1 or DO_NOT_TRACK=1)")
 	flag.Parse()
+
+	if *noVersionCheck {
+		versionpkg.SetDisabled(true)
+	}
 
 	if *showVersion {
 		fmt.Printf("radar-desktop %s\n", version)

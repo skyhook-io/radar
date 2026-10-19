@@ -555,4 +555,97 @@ func resetUpdateCache() {
 	mu.Lock()
 	defer mu.Unlock()
 	updateCache = map[string]updateCacheEntry{}
+	disabledByFlag = false
+}
+
+func TestCheckForUpdateDisabledByFlag(t *testing.T) {
+	var requestCount int
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.0")
+	resetUpdateCache()
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	SetDisabled(true)
+	if !IsDisabled() {
+		t.Fatal("expected IsDisabled() to be true when disabled by flag")
+	}
+
+	info := CheckForUpdate(context.Background())
+	if info == nil {
+		t.Fatal("expected non-nil UpdateInfo when disabled")
+	}
+	if info.UpdateAvail {
+		t.Errorf("expected UpdateAvail to be false when disabled, got true")
+	}
+	if info.LatestVersion != "" {
+		t.Errorf("expected LatestVersion to be empty when disabled, got %q", info.LatestVersion)
+	}
+	if info.ReleaseURL != defaultReleasesURL {
+		t.Errorf("expected ReleaseURL to be %q when disabled, got %q", defaultReleasesURL, info.ReleaseURL)
+	}
+	if requestCount != 0 {
+		t.Errorf("CheckForUpdate made %d HTTP requests when disabled, want 0", requestCount)
+	}
+
+	infoRelease := CheckForUpdateRelease(context.Background())
+	if infoRelease == nil || infoRelease.UpdateAvail {
+		t.Errorf("expected CheckForUpdateRelease to return clean UpdateInfo with UpdateAvail=false")
+	}
+	if requestCount != 0 {
+		t.Errorf("CheckForUpdateRelease made %d HTTP requests when disabled, want 0", requestCount)
+	}
+
+	if err := RelayUpdateCheck(context.Background()); err != nil {
+		t.Errorf("RelayUpdateCheck returned error when disabled: %v", err)
+	}
+	if requestCount != 0 {
+		t.Errorf("RelayUpdateCheck made %d HTTP requests when disabled, want 0", requestCount)
+	}
+}
+
+func TestCheckForUpdateDisabledByEnvVars(t *testing.T) {
+	for _, envVar := range []string{"RADAR_DISABLE_VERSION_CHECK", "RADAR_NO_VERSION_CHECK", "DO_NOT_TRACK"} {
+		t.Run(envVar, func(t *testing.T) {
+			var requestCount int
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount++
+				_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+			}))
+			defer proxy.Close()
+
+			previousURL, previousVersion := releasesURL, Current
+			releasesURL = proxy.URL
+			SetCurrent("1.2.0")
+			resetUpdateCache()
+			t.Cleanup(func() {
+				releasesURL = previousURL
+				SetCurrent(previousVersion)
+				resetUpdateCache()
+			})
+
+			t.Setenv(envVar, "1")
+			if !IsDisabled() {
+				t.Fatalf("expected IsDisabled() to be true for %s=1", envVar)
+			}
+
+			info := CheckForUpdate(context.Background())
+			if info == nil || info.UpdateAvail || info.LatestVersion != "" {
+				t.Errorf("expected clean UpdateInfo when disabled via %s", envVar)
+			}
+			if requestCount != 0 {
+				t.Errorf("made %d requests when disabled via %s, want 0", requestCount, envVar)
+			}
+		})
+	}
 }
