@@ -535,7 +535,7 @@ Always granted (required for basic functionality):
 | API Group | Resources |
 |-----------|-----------|
 | Core (`""`) | pods, services, configmaps, events, namespaces, nodes, pvcs, serviceaccounts, endpoints |
-| `apps` | deployments, daemonsets, statefulsets, replicasets |
+| `apps` | deployments, daemonsets, statefulsets, replicasets, controllerrevisions |
 | `networking.k8s.io` | ingresses, networkpolicies |
 | `batch` | jobs, cronjobs |
 | `autoscaling` | horizontalpodautoscalers |

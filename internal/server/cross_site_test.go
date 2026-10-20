@@ -193,7 +193,7 @@ func TestAPIRoutesAreGuardedOnTheRealRouter(t *testing.T) {
 	param := regexp.MustCompile(`\{[^}]*\}`)
 
 	for _, basePath := range []string{"", "/radar"} {
-		srv := New(Config{DevMode: true, BasePath: basePath, MCPHandler: stub, MCPReadOnlyHandler: stub, MCPInvestigationHandler: stub})
+		srv := New(Config{DevMode: true, BasePath: basePath, MCPHandler: stub, MCPReadOnlyHandler: stub, MCPInvestigationHandler: stub, MCPApplyHandler: stub})
 		ts := httptest.NewServer(srv.Handler())
 		// Under a base path the app routes sit behind a wrapping handler that
 		// chi.Walk cannot see into, so walk a copy of the same route table and

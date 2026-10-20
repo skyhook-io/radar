@@ -24,7 +24,7 @@ func registerToolsOnce(t *testing.T) {
 		return
 	}
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar", Version: "test"}, nil)
-	registerTools(server, true, defaultToolParams)
+	registerTools(server, true, true, defaultToolParams)
 }
 
 func TestSubjectPermissionsAliasRepairsTheBenchmarkFailure(t *testing.T) {
@@ -486,7 +486,7 @@ func renderContent(content []mcpsdk.Content) string {
 // transport, so tests exercise the real middleware chain.
 func connectTestServer(t *testing.T) *mcpsdk.ClientSession {
 	t.Helper()
-	return connectTo(t, newServer(true, ""))
+	return connectTo(t, newServer(true, true, ""))
 }
 
 // connectTo wires a client to an already-built server over an in-memory

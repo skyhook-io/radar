@@ -108,7 +108,8 @@ using `/mcp` must be updated. Startup output and `/api/capabilities`
 Desktop), `"mcpExecTools": true` in `~/.radar/config.json`, or Helm
 `mcp.execTools: true` (default false). `--disable-exec` and `--mcp-read-only`
 override the opt-in. It is available only on full MCP, never on
-`/mcp-readonly` or the investigation mount, and is annotated destructive.
+`/mcp-readonly`, the investigation mount, or the internal `/mcp-apply` mount,
+and is annotated destructive.
 Radar's built-in AI doesn't use `exec_pod`.
 
 Pass `namespace`, `name`, and `command` as an argv array. Radar adds no shell,

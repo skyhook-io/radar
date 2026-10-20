@@ -560,7 +560,9 @@ func CreateServer(cfg AppConfig) *server.Server {
 		serverCfg.AIHistoryDB = dbPath
 	}
 
-	mcppkg.SetExecToolsEnabled(cfg.MCPEnabled && cfg.MCPExecTools && !cfg.DisableExec && !cfg.MCPReadOnly)
+	mcpExecTools := cfg.MCPEnabled && cfg.MCPExecTools && !cfg.DisableExec && !cfg.MCPReadOnly
+	mcppkg.SetExecToolsEnabled(mcpExecTools)
+	serverCfg.MCPExecTools = mcpExecTools
 	if cfg.MCPEnabled {
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP

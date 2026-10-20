@@ -369,7 +369,8 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": { "type": "boolean" },
+        "execTools": { "type": "boolean" }
       }
     },
     "cost": {
