@@ -935,9 +935,10 @@ func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, acti
 		}
 		isExplained := explained[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
 		if changes[i].Kind == "ConfigMap" || changes[i].Kind == "Secret" {
-			// consumed_by is capped. At the cap, an omitted consumer may carry
-			// the issue, so absence is not strong enough to promote this entry.
-			if len(changes[i].ConsumedBy) >= maxConsumersPerEntry {
+			// consumed_by is capped and filtered by access. At the cap, or with
+			// any consumer withheld, an omitted consumer may carry the issue,
+			// so absence is not strong enough to promote this entry.
+			if len(changes[i].ConsumedBy) >= maxConsumersPerEntry || changes[i].ConsumedByWithheld != nil {
 				continue
 			}
 			for _, consumer := range changes[i].ConsumedBy {

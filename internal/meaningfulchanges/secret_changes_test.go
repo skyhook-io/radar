@@ -429,10 +429,14 @@ func TestSecretRankingAndConsumerLinkage(t *testing.T) {
 		{"unlinked", []string{"Deployment/app"}, nil, true},
 		{"linked", []string{"Deployment/app"}, []issuesapi.Issue{{Kind: "Deployment", Namespace: "shop", Name: "app"}}, false},
 		{"capped", []string{"Deployment/a", "Deployment/b", "Deployment/c", "Deployment/d", "Deployment/e"}, nil, false},
+		{"withheld", nil, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := rows[0]
 			row.ConsumedBy = tc.consumers
+			if tc.name == "withheld" {
+				row.ConsumedByWithheld = &issuesapi.Withheld{Count: 1, Reason: readreason.UserForbidden}
+			}
 			changes, _, _ := PrioritizeIssueChanges([]issuesapi.RecentChange{row}, tc.issues, IssueChangePriorityOptions{Reason: ChangesReasonWithAllCreationTimeCriticalIssues, UnfilteredIssueSet: true})
 			if changes[0].NotLinkedToReturnedIssues != tc.promote {
 				t.Fatalf("row=%+v", changes[0])
