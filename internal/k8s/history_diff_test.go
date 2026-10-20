@@ -585,7 +585,7 @@ func TestDiffAdmissionWebhookConfiguration(t *testing.T) {
 	if len(changes) != 1 || changes[0].Path != "webhooks[pod-policy.validation.k8s.io]" {
 		t.Fatalf("caBundle rotation: changes = %+v", changes)
 	}
-	if !strings.Contains(strings.Join(summary, "; "), "changed") {
+	if strings.Join(summary, "; ") != "webhook pod-policy.validation.k8s.io caBundle rotated" {
 		t.Fatalf("caBundle rotation: summary = %q", summary)
 	}
 	// SECURITY: the cert bytes must never appear — only a digest.

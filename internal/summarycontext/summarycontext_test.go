@@ -32,6 +32,8 @@ import (
 // pin the actual bug.
 type fakeIssuesProvider struct {
 	problems []k8s.Detection
+	dynamic  map[schema.GroupVersionResource][]*unstructured.Unstructured
+	kinds    map[schema.GroupVersionResource]string
 }
 
 func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Detection {
@@ -63,16 +65,22 @@ func (f *fakeIssuesProvider) DetectScheduling(_ []string) []k8s.Detection     { 
 func (f *fakeIssuesProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
 	return nil
 }
-func (f *fakeIssuesProvider) WatchedDynamic() []schema.GroupVersionResource { return nil }
-func (f *fakeIssuesProvider) ListDynamic(_ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
-	return nil, nil
+func (f *fakeIssuesProvider) WatchedDynamic() []schema.GroupVersionResource {
+	var out []schema.GroupVersionResource
+	for gvr := range f.dynamic {
+		out = append(out, gvr)
+	}
+	return out
 }
-func (f *fakeIssuesProvider) ListDynamicAllNamespaces(_ schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
-	return nil, nil
+func (f *fakeIssuesProvider) ListDynamic(gvr schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+	return f.dynamic[gvr], nil
 }
-func (f *fakeIssuesProvider) KindForGVR(_ schema.GroupVersionResource) string  { return "" }
-func (f *fakeIssuesProvider) KyvernoFindings() []policyreports.SubjectFindings { return nil }
-func (f *fakeIssuesProvider) KyvernoStatus() string                            { return "" }
+func (f *fakeIssuesProvider) ListDynamicAllNamespaces(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
+	return f.dynamic[gvr], nil
+}
+func (f *fakeIssuesProvider) KindForGVR(gvr schema.GroupVersionResource) string { return f.kinds[gvr] }
+func (f *fakeIssuesProvider) KyvernoFindings() []policyreports.SubjectFindings  { return nil }
+func (f *fakeIssuesProvider) KyvernoStatus() string                             { return "" }
 
 func fmtPodName(i int) string { return fmt.Sprintf("pod-%05d", i) }
 
@@ -405,5 +413,29 @@ func TestManagedByFromRelationships_NilSafe(t *testing.T) {
 	}
 	if got := ManagedByFromRelationships(&topology.Relationships{}); got != nil {
 		t.Errorf("empty rel: got %#v, want nil", got)
+	}
+}
+
+func TestBuildIssueIndexAuthorizesInventoryEvidence(t *testing.T) {
+	clusterGVR := schema.GroupVersionResource{Group: "postgresql.cnpg.io", Version: "v1", Resource: "clusters"}
+	scheduleGVR := schema.GroupVersionResource{Group: clusterGVR.Group, Version: "v1", Resource: "scheduledbackups"}
+	cluster := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "postgresql.cnpg.io/v1", "kind": "Cluster", "metadata": map[string]any{"namespace": "db", "name": "pg"}}}
+	schedule := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "postgresql.cnpg.io/v1", "kind": "ScheduledBackup", "metadata": map[string]any{"namespace": "db", "name": "nightly"}, "spec": map[string]any{"cluster": map[string]any{"name": "pg"}}}}
+	p := &fakeIssuesProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{clusterGVR: {cluster}, scheduleGVR: {schedule}}, kinds: map[schema.GroupVersionResource]string{clusterGVR: "Cluster", scheduleGVR: "ScheduledBackup"}}
+	for _, tc := range []struct {
+		name    string
+		filters issues.Filters
+		count   int
+	}{
+		{"no authorizer", issues.Filters{}, 0},
+		{"target denied", issues.Filters{CanReadEvidence: func(r issues.EvidenceRead) bool { return r.Resource != "clusters" }}, 0},
+		{"all evidence authorized", issues.Filters{CanReadEvidence: func(issues.EvidenceRead) bool { return true }}, 1},
+		{"internal composition", issues.Filters{AllowUnfilteredEvidence: true}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := BuildIssueIndex(p, tc.filters).Count(clusterGVR.Group, "ScheduledBackup", "db", "nightly"); got != tc.count {
+				t.Fatalf("count=%d, want %d", got, tc.count)
+			}
+		})
 	}
 }

@@ -1,13 +1,33 @@
 import { createElement, Fragment, type ComponentProps, type ComponentType, type ReactNode } from 'react'
 import type { RendererOverrides, WorkloadExtraTab, WorkloadView } from '@skyhook-io/k8s-ui'
+import type { RadarFeature, RadarFeatureSupport } from '../api/radarFeatures'
+import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import type { SelectedResource } from '../types'
 import { kindToPluralWithGroup } from '../utils/navigation'
 
 export type HostResource = Pick<SelectedResource, 'kind' | 'group' | 'namespace' | 'name'>
 export type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions' | 'extraTabs'>
+export type HostFeatures = Partial<Record<RadarFeature, RadarFeatureSupport>>
+export type KindListMode = 'table' | 'wait' | 'view'
+export interface HostKind { name: string; kind: string; group: string }
+export interface KindListProps {
+  namespaces: string[]
+  inspected: SelectedResource | null
+  onInspect: (resource: SelectedResource) => void
+  onClearNamespaces: () => void
+  onCreate: (kind: HostKind) => void
+}
 type ExclusiveDetailSlot = 'summary' | 'destination' | 'logs'
 export interface ResourceHost {
   id: string
+  feature?: RadarFeature
+  diagnoseAction?: (render: RenderDiagnoseAction | undefined) => RenderDiagnoseAction | undefined
+  kindLists?: readonly {
+    kind: HostKind
+    title: string
+    mode: (support: RadarFeatureSupport, pending: boolean) => KindListMode
+    Component: ComponentType<KindListProps>
+  }[]
   renderers?: RendererOverrides
   resources?: readonly { name: string; group: string }[]
   expandedPath?: (resource: HostResource, context?: string, tab?: 'yaml') => string | null
@@ -19,6 +39,10 @@ export interface ResourceHost {
     ownsPath: (pathname: string) => boolean
     Component: ComponentType<{ resource: SelectedResource }>
   }
+}
+
+export function hostSupport(host: ResourceHost, features: HostFeatures): RadarFeatureSupport {
+  return host.feature ? features[host.feature] ?? 'unknown' : 'supported'
 }
 
 function resourceKey(name: string, group: string): string { return `${group}\u0000${name}` }
@@ -51,6 +75,7 @@ export function composeResourceHosts(hosts: readonly ResourceHost[]): RendererOv
     for (const kind of host.resources ?? []) {
       for (const slot of host.detailOwnership ?? []) claim(`${slot}:${resourceKey(kind.name, kind.group)}`, host.id)
     }
+    for (const list of host.kindLists ?? []) claim(`kind-list:${resourceKey(list.kind.name, list.kind.group)}`, host.id)
   }
   return renderers
 }

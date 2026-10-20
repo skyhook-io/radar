@@ -431,8 +431,10 @@ retain their finite grants.
 
 | Option | API Groups |
 |--------|------------|
+| `antrea` | `crd.antrea.io` (`networkpolicies`, `clusternetworkpolicies`) |
 | `apiRegistration` | `apiregistration.k8s.io` |
 | `argo` | `argoproj.io` |
+| `awsNetworkPolicy` | `networking.k8s.aws` (`applicationnetworkpolicies`, `clusternetworkpolicies`) |
 | `awx` | `awx.ansible.com` |
 | `calico` | `projectcalico.org`, `crd.projectcalico.org` |
 | `certManager` | `cert-manager.io`, `acme.cert-manager.io` |

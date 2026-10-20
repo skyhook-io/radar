@@ -98,7 +98,7 @@ func TestVeleroStoredBackups_DeniesRatherThanReportingAnEmptyLocation(t *testing
 // location.
 func TestVeleroStoredBackups_SeparatesAnAbsentCRDFromAFailedRead(t *testing.T) {
 	src := mustReadSource(t, "velero_handlers.go")
-	for _, want := range []string{"k8s.ErrUnknownDynamicKind", "errDynamicNotSynced", "listDynamicSynced", "sanitizeForLog"} {
+	for _, want := range []string{"k8s.ErrUnknownDynamicKind", "integration.ErrDynamicNotSynced", "listDynamicSynced", "sanitizeForLog"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("handler does not use %s — a failed or unsynced read would report an empty location", want)
 		}

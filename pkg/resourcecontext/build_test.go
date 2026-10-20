@@ -2317,3 +2317,92 @@ func TestFluxConfigurationEdgesPreserveResourceContext(t *testing.T) {
 		}
 	}
 }
+
+// groupingServiceBackends also implements ServiceBackendGrouper, recording the
+// Pods it was asked to group.
+type groupingServiceBackends struct {
+	mockServiceBackends
+	grouping ServiceBackendGrouping
+	grouped  *[]string
+}
+
+func (g groupingServiceBackends) GroupServiceBackends(_ *corev1.Service, pods []*corev1.Pod) ServiceBackendGrouping {
+	for _, p := range pods {
+		*g.grouped = append(*g.grouped, p.Name)
+	}
+	return g.grouping
+}
+
+func TestBuild_Service_WorkloadBreakdown(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"tier": "web"}},
+	}
+	web := map[string]string{"tier": "web"}
+	workloads := []ServiceBackendWorkload{
+		{ContextRef: ContextRef{Kind: "Deployment", Group: "apps", Namespace: "prod", Name: "frontend"}, Pods: 1, Ready: 1},
+		{ContextRef: ContextRef{Kind: "Deployment", Group: "apps", Namespace: "prod", Name: "search"}, Pods: 1, Ready: 1},
+	}
+	message := "Service frontend routes to 2 different applications (frontend, search); search's pods don't declare port 5000"
+	build := func(ac RefAccessChecker, grouping ServiceBackendGrouping) (*ResourceContext, []string) {
+		var grouped []string
+		rc := Build(context.Background(), svc, Options{
+			Tier:          TierBasic,
+			AccessChecker: ac,
+			ServiceBackends: groupingServiceBackends{
+				mockServiceBackends: mockServiceBackends{
+					readyPod("frontend-1", "prod", web, true),
+					readyPod("search-1", "prod", web, true),
+				},
+				grouping: grouping,
+				grouped:  &grouped,
+			},
+		})
+		return rc, grouped
+	}
+
+	rc, grouped := build(allowAllChecker{}, ServiceBackendGrouping{Workloads: workloads, MixedBackends: message})
+	if len(grouped) != 2 {
+		t.Fatalf("grouped pods = %v, want both visible pods", grouped)
+	}
+	s := rc.ServiceSummary
+	if len(s.Workloads) != 2 || s.Workloads[1].Name != "search" || s.MixedBackends != message {
+		t.Fatalf("ServiceSummary = %+v", s)
+	}
+	if len(s.Warnings) != 1 || s.Warnings[0] != ServiceWarningMixedBackends {
+		t.Fatalf("Warnings = %+v, want [%s]", s.Warnings, ServiceWarningMixedBackends)
+	}
+
+	// A canary: two workloads, no warning.
+	rc, _ = build(allowAllChecker{}, ServiceBackendGrouping{Workloads: workloads})
+	if len(rc.ServiceSummary.Workloads) != 2 || len(rc.ServiceSummary.Warnings) != 0 || rc.ServiceSummary.MixedBackends != "" {
+		t.Fatalf("canary ServiceSummary = %+v", rc.ServiceSummary)
+	}
+
+	// One workload: nothing to break down.
+	rc, _ = build(allowAllChecker{}, ServiceBackendGrouping{Workloads: workloads[:1]})
+	if rc.ServiceSummary.Workloads != nil {
+		t.Fatalf("single-workload ServiceSummary = %+v", rc.ServiceSummary)
+	}
+
+	// Pod access doesn't extend to the Deployments behind them.
+	rc, _ = build(denyChecker{group: "apps", kind: "Deployment", namespace: "prod"}, ServiceBackendGrouping{Workloads: workloads, MixedBackends: message})
+	if rc.ServiceSummary.Workloads != nil || len(rc.ServiceSummary.Warnings) != 0 || rc.ServiceSummary.MixedBackends != "" {
+		t.Fatalf("denied ServiceSummary = %+v", rc.ServiceSummary)
+	}
+	denied := false
+	for _, o := range rc.Omitted {
+		if o.Field == "serviceSummary.workloads" && o.Reason == OmittedRBACDenied {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatalf("omitted = %+v, want serviceSummary.workloads rbac_denied", rc.Omitted)
+	}
+
+	// Pods the caller can't read are never grouped.
+	_, grouped = build(denyChecker{group: "", kind: "Pod", namespace: "prod"}, ServiceBackendGrouping{Workloads: workloads})
+	if len(grouped) != 0 {
+		t.Fatalf("grouped hidden pods: %v", grouped)
+	}
+}

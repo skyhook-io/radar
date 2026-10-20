@@ -19,10 +19,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/imageutil"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -391,7 +394,7 @@ func (s *Server) historyAnchorsForSource(r *http.Request, source *appSourceRef) 
 func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {
 	if source.Namespace != "" {
 		allowed := s.getUserNamespaces(r, []string{source.Namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			return nil, []string{fmt.Sprintf("No access to source namespace %q.", source.Namespace)}
 		}
 	}
@@ -905,7 +908,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				Name:          name,
 				WorkloadClass: classifyWorkload(kind, rels),
 				Image:         image,
-				Version:       imageTag(image),
+				Version:       imageutil.ImageTag(image),
 				AppVersion:    lbls["app.kubernetes.io/version"],
 				Health:        string(workloadHealth),
 				Ready:         ready,
@@ -920,7 +923,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 			},
 			overlay:      overlay,
 			source:       sourceRefForInput(overlay, rootKind, rootGroup, rootKey),
-			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, pods),
+			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, workloadUID(obj), pods),
 			rels:         rels,
 			rootKey:      rootKey,
 			rootKind:     rootKind,
@@ -1775,7 +1778,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			if in.wl.Namespace != "" {
 				nss[in.wl.Namespace] = struct{}{}
 			}
-			if repo, tag := imageRepo(in.wl.Image), in.wl.Version; repo != "" && tag != "" {
+			if repo, tag := imageutil.Repository(in.wl.Image), in.wl.Version; repo != "" && tag != "" {
 				if tagsByRepo[repo] == nil {
 					tagsByRepo[repo] = map[string]struct{}{}
 				}
@@ -2556,20 +2559,30 @@ func podsRestarts(pods []*corev1.Pod) (int, string) {
 // eventsForWorkload joins a workload's Warning events from the per-namespace
 // index (the workload object + its pods), deduped by (object, reason) with
 // summed counts — the "why is it broken" feed (FailedScheduling, ImagePullBackOff,
-// FailedMount, …) that restarts alone miss.
-func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
+// FailedMount, …) that restarts alone miss. Only events about the current
+// workload and its current Pods join: a same-named Pod or workload replaced
+// earlier leaves events behind that would otherwise read as a current
+// problem. Those stay on the timeline.
+func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, uid types.UID, pods []*corev1.Pod) []appEvent {
 	if byObject == nil {
 		return nil
 	}
-	names := make([]string, 0, len(pods)+1)
-	names = append(names, resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName))
+	type subject struct {
+		key            string
+		uid, staticUID types.UID
+	}
+	subjects := make([]subject, 0, len(pods)+1)
+	subjects = append(subjects, subject{key: resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName), uid: uid})
 	for _, p := range pods {
-		names = append(names, resourceid.ResourceKey("", "Pod", "", p.Name))
+		subjects = append(subjects, subject{key: resourceid.ResourceKey("", "Pod", "", p.Name), uid: p.UID, staticUID: types.UID(p.Annotations[corev1.MirrorPodAnnotationKey])})
 	}
 	byKey := map[string]*appEvent{}
 	order := []string{}
-	for _, n := range names {
-		for _, e := range byObject[n] {
+	for _, n := range subjects {
+		for _, e := range byObject[n.key] {
+			if !k8s.EventDescribesIncarnation(e.InvolvedObject.UID, n.uid, n.staticUID) {
+				continue
+			}
 			key := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name + "/" + e.Reason
 			c := int(e.Count)
 			if c < 1 {
@@ -2600,6 +2613,14 @@ func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workl
 		out = append(out, *byKey[k])
 	}
 	return out
+}
+
+// workloadUID is the observed workload's UID, or "" when obj carries none.
+func workloadUID(obj any) types.UID {
+	if o, ok := obj.(metav1.Object); ok {
+		return o.GetUID()
+	}
+	return ""
 }
 
 func appEventFirstSeen(e *corev1.Event) string {
@@ -2648,40 +2669,6 @@ func cronWorkflowOwnerName(wf *unstructured.Unstructured) string {
 		return owner
 	}
 	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
-}
-
-// imageTag extracts the tag from an image ref. Digest-pinned refs (@sha256:…)
-// and untagged refs (implicit :latest) return "" — no false version.
-func imageTag(image string) string {
-	if image == "" {
-		return ""
-	}
-	if at := strings.Index(image, "@"); at >= 0 {
-		image = image[:at]
-	}
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon > slash {
-		return image[colon+1:]
-	}
-	return ""
-}
-
-// imageRepo is the image ref without its tag/digest — the unit version skew is
-// measured across: two workloads running the same repo at different tags.
-func imageRepo(image string) string {
-	if image == "" {
-		return ""
-	}
-	if at := strings.Index(image, "@"); at >= 0 {
-		image = image[:at]
-	}
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon > slash {
-		return image[:colon]
-	}
-	return image
 }
 
 // levelToPackagesHealth projects a canonical health.Level onto the package wire

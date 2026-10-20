@@ -18,9 +18,18 @@ import "sort"
 // applied upstream. This makes DiffObjects a field-level *summary* only — the
 // canonical, authoritative view is the desired/live YAML pair the caller
 // renders alongside these entries. Output is sorted by path and capped at
-// driftEntryCap.
+// driftEntryCap. The slice is never nil, so an empty diff serializes as []
+// rather than null. DiffObjectsTruncated also reports whether the cap cut
+// entries off.
 func DiffObjects(desired, live map[string]any) []DriftEntry {
-	var entries []DriftEntry
+	entries, _ := DiffObjectsTruncated(desired, live)
+	return entries
+}
+
+// DiffObjectsTruncated is DiffObjects plus whether driftEntryCap cut entries
+// off.
+func DiffObjectsTruncated(desired, live map[string]any) (entries []DriftEntry, truncated bool) {
+	entries = []DriftEntry{}
 	for _, key := range unionKeys(desired, live) {
 		switch key {
 		case "status":
@@ -31,8 +40,7 @@ func DiffObjects(desired, live map[string]any) []DriftEntry {
 			entries = diffValues(key, desired[key], live[key], entries)
 		}
 	}
-	entries, _ = sortAndCapDriftEntries(entries)
-	return entries
+	return sortAndCapDriftEntries(entries)
 }
 
 // diffMetadataScoped diffs only the labels and annotations sub-maps of two

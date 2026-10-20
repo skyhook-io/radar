@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -136,14 +137,9 @@ type scaleTargetRef struct {
 }
 
 func kedaScaleTargetRef(so *unstructured.Unstructured) (scaleTargetRef, bool) {
-	name, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
-	kind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
-	apiVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
-	if name == "" {
+	apiVersion, kind, name, ok := configrefs.KEDAScaleTarget(so)
+	if !ok {
 		return scaleTargetRef{}, false
-	}
-	if kind == "" {
-		kind = "Deployment"
 	}
 	return scaleTargetRef{
 		apiGroup: resourceid.GroupFromAPIVersion(apiVersion),

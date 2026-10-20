@@ -70,11 +70,13 @@ export interface WorkloadLogsViewerProps {
   initialPods?: string[]
   /** Container selected on mount; all containers when unset. */
   initialContainer?: string
+  /** Whether the backend supports reading all containers. Defaults to true; set initialContainer when false. */
+  allowAllContainers?: boolean
   /** Rendered only when the loaded source list is empty. */
   emptySourceState?: ReactNode
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer, emptySourceState, disableSourceControlsWithoutSource = false }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer, allowAllContainers = true, emptySourceState, disableSourceControlsWithoutSource = false }: WorkloadLogsViewerProps) {
   const initialSelection = (names: string[]) => {
     const wanted = names.filter((n) => initialPods?.includes(n))
     return new Set(wanted.length > 0 ? wanted : names)
@@ -95,7 +97,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
-  const { entries, append, set, clear } = useLogBuffer()
+  const { entries, isFollowing, pendingLineCount, retainedLineCount, missingLineCount, getRetainedEntries, setFollowing, append, set, clear } = useLogBuffer()
   const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
@@ -385,7 +387,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         containers={allContainers}
         value={selectedContainer}
         onChange={setSelectedContainer}
-        includeAll
+        includeAll={allowAllContainers}
         isDark={isDark}
       />
 
@@ -428,6 +430,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     {(fetchError || streamError) && entries.length > 0 && <div role="alert" className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-secondary">{fetchError || streamError} · Previously loaded logs remain below.</div>}
     <div className="min-h-0 flex-1"><LogCore
       entries={filteredEntries}
+      isFollowing={isFollowing}
+      onFollowingChange={setFollowing}
+      pendingLineCount={pendingLineCount}
+      retainedLineCount={retainedLineCount}
+      missingLineCount={missingLineCount}
+      getRetainedEntries={getRetainedEntries}
       allEntries={entries}
       isLoading={isLoading || isConnecting}
       isStreaming={isStreaming}

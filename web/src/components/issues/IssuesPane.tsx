@@ -26,6 +26,7 @@ import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
 import { uncheckedSourceLines } from "./uncheckedSources";
+import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
 // always single-cluster (unlike Argo hub-and-spoke), so the issue and the
@@ -181,7 +182,7 @@ export function IssuesPane({
 }: IssuesPaneProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const subject = useMemo(() => issueSubjectFromParams(searchParams), [searchParams]);
-  const { data, isLoading, error, dataUpdatedAt, refetch } =
+  const { data, isLoading, isFetching, error, dataUpdatedAt, refetch } =
     useIssues(namespaces, !subject);
   const { connection } = useConnection();
   const navigate = useNavigate();
@@ -246,7 +247,7 @@ export function IssuesPane({
     return <PaneLoader label="Loading issues…" className="flex-1" />;
   }
 
-  if (!subject && error) {
+  if (!subject && error && !data) {
     return (
       <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
         <p>Failed to load issues</p>
@@ -295,6 +296,13 @@ export function IssuesPane({
         }
       />
 
+      {!subject && error && (
+        <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden />
+          <span>Issue refresh failed. Showing the last successful result.</span>
+        </div>
+      )}
+
       {/* Visibility honesty: when RBAC reads are incomplete, an empty queue may
           mean "can't see" rather than "nothing broken" — say so up front so the
           empty state isn't mistaken for a clean bill of health. */}
@@ -311,12 +319,15 @@ export function IssuesPane({
       {/* Unchecked-source honesty: the rows can't include issues from a
           source Radar couldn't check. With no rows the empty state below says
           it instead. */}
-      {scopeIssues.length > 0 && uncheckedLines.map((line) => (
-        <div key={line} className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
+      {scopeIssues.length > 0 && uncheckedLines.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-          <span>{line}</span>
+          <div className="min-w-0 flex-1">
+            {uncheckedLines.map((line) => <p key={line}>{line}</p>)}
+            <UncheckedSourceHelp onRetry={() => { void refetch({ cancelRefetch: false }); }} isRefreshing={isFetching} />
+          </div>
         </div>
-      ))}
+      )}
 
       {/* Truncation honesty: when more issues matched than were returned, say
           so — don't present a capped list as the complete picture. */}
@@ -385,7 +396,20 @@ export function IssuesPane({
           </button>
         </div>
       ) : uncheckedLines.length > 0 && scopeIssues.length === 0 ? (
-        <EmptyState tone="neutral" variant="card" headline="No issues found" body={uncheckedLines.join(" ")} />
+        <EmptyState
+          tone="neutral"
+          variant="card"
+          headline="No issues found"
+          body={uncheckedLines.join(" ")}
+          action={<UncheckedSourceHelp onRetry={() => { void refetch({ cancelRefetch: false }); }} isRefreshing={isFetching} />}
+        />
+      ) : !subject && error && scopeIssues.length === 0 ? (
+        <EmptyState
+          tone="neutral"
+          variant="card"
+          headline="No issues in the last successful result"
+          body="Current issues could not be checked."
+        />
       ) : (
         /* anyData = the query resolved, i.e. the cluster is reachable; an empty
            list then means "nothing broken" rather than "not connected". */

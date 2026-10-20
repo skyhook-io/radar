@@ -41,6 +41,12 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 			watched[e.Group] = "topology.ClusterScopedKinds (pkg/topology/cluster_scoped_kinds.go)"
 		}
 	}
+	// The NetworkPolicy deny-all check treats an unreadable policy API as
+	// "may allow" and goes silent, so a missing grant hides the check, not
+	// just a resource.
+	for _, api := range otherPolicyAPIList() {
+		watched[api.group] = "otherPolicyAPIList (internal/k8s/detect_netpol_onset.go)"
+	}
 
 	for group, source := range watched {
 		if !granted[group] {

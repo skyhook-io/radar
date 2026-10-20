@@ -14,14 +14,20 @@ import (
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
-func newServer(includeWrites bool) *mcpsdk.Server {
+// newServer builds a Radar MCP server. instructions is the server-instructions
+// text sent in the initialize result and, on protocol 2026-07-28, the
+// server/discover result; empty sends none.
+func newServer(includeWrites bool, instructions string) *mcpsdk.Server {
 	paramRegistry := newToolParamRegistry()
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
 			Name:    "radar",
 			Version: version.Current,
 		},
-		nil,
+		&mcpsdk.ServerOptions{
+			Instructions: instructions,
+			SetCacheable: privateCacheScope,
+		},
 	)
 
 	// Repair recognisable argument-name mistakes before schema validation, and
@@ -36,24 +42,45 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	return server
 }
 
+// privateCacheScope marks every cacheable result (server/discover, the list
+// methods, resources/read) as cacheable only by the requesting user's client.
+// Radar answers with one caller's RBAC-filtered view of one cluster, so a
+// shared intermediary must not serve it to anyone else; the SDK's default
+// scope is "public".
+func privateCacheScope(_ context.Context, _ mcpsdk.Request, c *mcpsdk.Cacheable) {
+	c.CacheScope = "private"
+}
+
+// newFullServer is the public server with read and write tools, served over
+// stdio and on /mcp.
+func newFullServer() *mcpsdk.Server { return newServer(true, serverInstructions(true)) }
+
 // RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
-	return newServer(true).Run(ctx, &mcpsdk.StdioTransport{})
+	return RunStdioMode(ctx, false)
+}
+
+// RunStdioMode uses the same read-only catalog and enforcement as HTTP.
+func RunStdioMode(ctx context.Context, readOnly bool) error {
+	return newServer(!readOnly, serverInstructions(!readOnly)).Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+func NewHandler() http.Handler { return handlerForServer(newFullServer()) }
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
-func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
+func NewReadOnlyHandler() http.Handler {
+	return handlerForServer(newServer(false, serverInstructions(false)))
+}
 
 // NewInvestigationHandler creates the private read-only MCP transport used by
 // Radar's built-in investigation runner. It deliberately has a separate mount
 // from the public /mcp-readonly surface: the evidence marker is an internal
 // correlation protocol between Radar and its agent adapters, not part of the
-// normal tool result contract.
+// normal tool result contract. It sends no server instructions: the agent
+// already runs under investigation.SystemPrompt.
 func NewInvestigationHandler(refs *investigationrefs.Registry) http.Handler {
-	return investigationHandlerForServer(newServer(false), refs)
+	return investigationHandlerForServer(newServer(false, ""), refs)
 }
 
 func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationrefs.Registry) http.Handler {
@@ -83,7 +110,8 @@ func investigationEvidenceReferenceMiddleware(refs *investigationrefs.Registry) 
 			if err != nil {
 				return result, err
 			}
-			if method == "initialize" || method == "tools/list" {
+			// server/discover replaces initialize on protocol 2026-07-28.
+			if method == "initialize" || method == "server/discover" || method == "tools/list" {
 				if scope, _ := ctx.Value(investigationEvidenceScopeKey{}).(string); scope != "" {
 					refs.MarkConnected(scope)
 				}
@@ -136,8 +164,18 @@ func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref s
 	result.Content = append([]mcpsdk.Content{marker}, result.Content...)
 }
 
+// maxRequestBodyBytes bounds one MCP request over HTTP. The SDK's default is
+// 4 MiB, below what apply_resource accepts: a multi-document manifest of
+// objects that are each under the API server's limit can be larger, and the
+// JSON-escaped YAML grows in transit. This matches the SDK's cap on one stdio
+// frame, so both transports accept the same calls.
+const maxRequestBodyBytes = mcpsdk.DefaultMaxLineLength
+
 func handlerForServer(server *mcpsdk.Server) http.Handler {
-	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
+	streamOpts := &mcpsdk.StreamableHTTPOptions{
+		Stateless:           true,
+		MaxRequestBodyBytes: maxRequestBodyBytes,
+	}
 	// The MCP SDK auto-enables DNS-rebinding protection (Host header must be
 	// loopback) when the server binds to a loopback address. That blocks
 	// Docker-isolated callers reaching us via host.docker.internal. Allow

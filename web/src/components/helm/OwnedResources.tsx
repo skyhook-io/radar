@@ -12,7 +12,7 @@ import { PortForwardInlineButton } from '../portforward/PortForwardButton'
 import { useAvailablePorts } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
-import { pluralize } from '@skyhook-io/k8s-ui'
+import { pluralize, getExecContainerNames } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 
 interface OwnedResourcesProps {
@@ -358,7 +358,7 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
           namespace,
           podName,
           containerName: containers[0].name,
-          containers: containers.map((c: { name: string }) => c.name),
+          containers: getExecContainerNames(data.resource),
         })
       }
     } catch (error) {

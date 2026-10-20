@@ -435,9 +435,12 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
   const partialUnknown = issue.onset_coverage?.unknown ?? 0;
   const partialOnset = Boolean(issue.first_seen && partialUnknown > 0);
   const timing = issueTimingForDisplay(issue);
+  // A message Radar wrote itself is not raw output, so it never lands in the
+  // terminal block; its cause carries the same facts.
+  const messageIsRaw = issue.message_source !== 'radar';
   const rawError = [
     ...new Set(
-      [issue.raw_message ?? (issue.cause ? issue.message : undefined), detail].filter(
+      [issue.raw_message ?? (issue.cause && messageIsRaw ? issue.message : undefined), detail].filter(
         (s): s is string => !!s && s !== shownText,
       ),
     ),

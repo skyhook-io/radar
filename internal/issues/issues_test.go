@@ -1159,8 +1159,8 @@ func TestCompose_StaleSecretEnvSurvivesAsStableWorkloadIssue(t *testing.T) {
 }
 
 func TestCompose_ReadyStaleSecretEnvWorkloadDetectionKeepsAgentGuidance(t *testing.T) {
-	const message = "Deployment/catalog has 2 Ready pods whose running containers loaded 2 Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values."
-	const cause = "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers."
+	const message = "Deployment/catalog has 2 Ready pods with running containers that started before Radar observed Secret keys they reference change: 2 app containers started at or before 2026-07-25T10:00:00Z and reference Secret/db-conn key password as env DB_PASSWORD; Radar observed that key change at 2026-07-25T10:05:00Z. Kubernetes reads Secret-backed env values only when a container starts."
+	const cause = "Radar observed Secret keys referenced by these Ready containers' environment change after the containers started; Kubernetes does not refresh Secret-backed environment variables in running containers."
 	const action = "Confirm no rollout is already replacing the affected pods, then restart Deployment/catalog so its containers re-read Secret-backed environment variables."
 	p := &fakeProvider{problems: []k8s.Detection{{
 		Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "catalog",
@@ -2624,7 +2624,7 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 	// be listed. detectGenericCRDIssues lowercases the kind comparison
 	// (mirrors applyFilters), so the canonical "ScaledObject" matches the
 	// emitted Kind for the keda.sh GVR.
-	_ = detectGenericCRDIssues(p, Filters{Kinds: []string{"ScaledObject"}}, nil)
+	_ = detectGenericCRDIssues(p, Filters{Kinds: []string{"ScaledObject"}}, nil, nil)
 
 	if got := p.listCalls[podGVR]; got != 0 {
 		t.Errorf("Pod GVR ListDynamic calls = %d, want 0 (kind filter must skip non-matching GVRs)", got)
@@ -2640,7 +2640,7 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 	// when caller didn't ask for one). Pins that the fix is filter-aware
 	// rather than always-skip.
 	p.listCalls = nil
-	_ = detectGenericCRDIssues(p, Filters{}, nil)
+	_ = detectGenericCRDIssues(p, Filters{}, nil, nil)
 	for gvr, want := range map[schema.GroupVersionResource]bool{podGVR: true, soGVR: true, npGVR: true} {
 		if got := p.listCalls[gvr] > 0; got != want {
 			t.Errorf("no kind filter: GVR %s called=%v, want %v", gvr.Resource, got, want)

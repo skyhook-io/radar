@@ -10,7 +10,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -445,8 +444,24 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 		Meta:     meta,
 		Config:   podsConfig(pods, svc),
 	}
-	if hop.Config != nil {
-		hop.Config.Workload = podsWorkload(deps, pods)
+	// What runs these Pods: one workload is named on the hop; several are a
+	// breakdown, often deliberate (canary, blue/green), so context only. When
+	// they don't all serve the Service, the issues engine warns on it.
+	backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods)
+	if canNameWorkloads(deps, backends.Workloads, svc.Namespace) {
+		switch {
+		case backends.MultipleWorkloads():
+			meta["workloads"] = traceBackendWorkloads(backends.Workloads)
+			hop.Findings = append(hop.Findings, Finding{
+				Code:     "pods:multiple-workloads",
+				Severity: SeverityInfo,
+				Message:  "Selects " + backends.Summary(),
+			})
+		case len(backends.Workloads) == 1 && backends.Workloads[0].Kind != "Pod" && hop.Config != nil:
+			w := backends.Workloads[0]
+			ns, _ := k8s.WorkloadAccessNamespace(w, svc.Namespace)
+			hop.Config.Workload = &ResourceRef{Group: w.Group, Kind: w.Kind, Namespace: ns, Name: w.Name}
+		}
 	}
 	if unreadable {
 		hop.Findings = append(hop.Findings, Finding{
@@ -474,6 +489,9 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 		}
 		if res.denyPort > 0 {
 			meta["policyDenyPort"] = res.denyPort
+		}
+		if res.proto != "" {
+			meta["policyProtocol"] = string(res.proto)
 		}
 	}
 	if mesh := detectMesh(pods); mesh != "" {
@@ -527,32 +545,8 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 // labels/annotations are the injection request and catch the pre-Running case.
 func detectMesh(pods []*corev1.Pod) string {
 	for _, pod := range pods {
-		if pod == nil {
-			continue
-		}
-		for _, c := range pod.Spec.Containers {
-			switch c.Name {
-			case "istio-proxy":
-				return "Istio"
-			case "linkerd-proxy":
-				return "Linkerd"
-			case "consul-dataplane":
-				return "Consul"
-			}
-		}
-		if pod.Annotations["sidecar.istio.io/status"] != "" ||
-			pod.Labels["istio.io/rev"] != "" ||
-			pod.Labels["sidecar.istio.io/inject"] == "true" ||
-			pod.Annotations["sidecar.istio.io/inject"] == "true" {
-			return "Istio"
-		}
-		if pod.Labels["linkerd.io/inject"] == "enabled" ||
-			pod.Annotations["linkerd.io/inject"] == "enabled" {
-			return "Linkerd"
-		}
-		if pod.Labels["consul.hashicorp.com/connect-inject"] == "true" ||
-			pod.Annotations["consul.hashicorp.com/connect-inject"] == "true" {
-			return "Consul"
+		if mesh := k8s.PodMesh(pod); mesh != "" {
+			return mesh
 		}
 	}
 	return ""
@@ -874,6 +868,11 @@ func podFanoutFindings(deps Deps, pods []*corev1.Pod) []Finding {
 		ref := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		cause, command := podDiagnosis(pod)
 		for _, f := range hopFindings(deps, ref) {
+			// The hop's own policy evaluation reports the same isolation per
+			// port (netpol:would-deny); the policy issue shows on the Service.
+			if f.Code == k8s.NetworkPolicyDenyAllIngressFingerprint {
+				continue
+			}
 			prev, ok := seen[f.Code]
 			if !ok || severityRank(f.Severity) > severityRank(prev.Severity) {
 				podRef := ref
@@ -2297,62 +2296,35 @@ func sortRefs(refs []ResourceRef) {
 	})
 }
 
-// podsWorkload resolves what RUNS the selected Pods, walking the owner chain
-// (Pod -> ReplicaSet -> Deployment; a StatefulSet/DaemonSet/Job owns its Pods
-// directly). Returns nil unless EVERY sampled Pod agrees on one owner: a Service
-// fronting two workloads has no single answer, and naming one of them would be a
-// guess in a view whose whole point is not guessing.
-func podsWorkload(deps Deps, pods []*corev1.Pod) *ResourceRef {
-	var found *ResourceRef
-	for _, p := range pods {
-		ref := ownerWorkload(deps, p)
-		if ref == nil {
-			return nil
-		}
-		if found == nil {
-			found = ref
-			continue
-		}
-		if *found != *ref {
-			return nil
+func canNameWorkloads(deps Deps, workloads []k8s.ServiceBackendWorkload, namespace string) bool {
+	if deps.CanReadWorkload == nil {
+		return false
+	}
+	for _, w := range workloads {
+		ns, ok := k8s.WorkloadAccessNamespace(w, namespace)
+		if !ok || !deps.CanReadWorkload(w.Group, w.Kind, ns) {
+			return false
 		}
 	}
-	return found
+	return true
 }
 
-// ownerWorkload walks one Pod's owner chain to the workload a human would name.
-// A ReplicaSet is an implementation detail of a Deployment, so it resolves one
-// level further; every other controller IS the workload.
-func ownerWorkload(deps Deps, pod *corev1.Pod) *ResourceRef {
-	owner := controllerRef(pod.OwnerReferences)
-	if owner == nil {
-		return nil
-	}
-	if owner.Kind != "ReplicaSet" {
-		return &ResourceRef{Kind: owner.Kind, Namespace: pod.Namespace, Name: owner.Name}
-	}
-	// The ReplicaSet itself is a real answer whenever its parent can't be read -
-	// no cache and an unreadable ReplicaSet are the same situation, and returning
-	// nil for one of them would claim the Pod has no owner when we know it does.
-	rsRef := &ResourceRef{Kind: "ReplicaSet", Namespace: pod.Namespace, Name: owner.Name}
-	if deps.Cache == nil {
-		return rsRef
-	}
-	rs, err := deps.Cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
-	if err != nil || rs == nil {
-		return rsRef
-	}
-	if dep := controllerRef(rs.OwnerReferences); dep != nil {
-		return &ResourceRef{Kind: dep.Kind, Namespace: pod.Namespace, Name: dep.Name}
-	}
-	return rsRef
-}
+// maxTraceBackendWorkloads caps the breakdown like the per-pod roster; the
+// info finding still counts every workload.
+const maxTraceBackendWorkloads = 10
 
-func controllerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {
-	for i := range refs {
-		if refs[i].Controller != nil && *refs[i].Controller {
-			return &refs[i]
-		}
+// traceBackendWorkloads is the per-workload breakdown on a Pods hop's meta.
+func traceBackendWorkloads(workloads []k8s.ServiceBackendWorkload) []map[string]any {
+	if len(workloads) > maxTraceBackendWorkloads {
+		workloads = workloads[:maxTraceBackendWorkloads]
 	}
-	return nil
+	out := make([]map[string]any, 0, len(workloads))
+	for _, w := range workloads {
+		row := map[string]any{"kind": w.Kind, "name": w.Name, "pods": w.Pods, "ready": w.Ready}
+		if w.Group != "" {
+			row["group"] = w.Group
+		}
+		out = append(out, row)
+	}
+	return out
 }

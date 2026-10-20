@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Bot, GitCompareArrows, Layers, Network, RefreshCcw, Scale, ScrollText, SlidersHorizontal } from 'lucide-react'
+import { Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, Network, RefreshCcw, Scale, ScrollText, SlidersHorizontal, Undo2 } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -47,6 +47,68 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.17.0',
+    highlights: [
+      {
+        id: 'cloudnative-pg',
+        icon: Database,
+        title: 'CloudNativePG, end to end',
+        description: 'See which Postgres cluster needs attention and why, whether its backups would restore, and switch over, fence or restore with a review first.',
+        leadDescription: 'New views for CloudNativePG show which Postgres cluster needs attention and why, what each instance is doing, and whether its backups would actually let you restore. Create, restore, back up, switch over, fence and hibernate from Radar: you review exactly what will be written, then Radar follows the operation until it sees the outcome.',
+        importance: 9,
+        path: '/cnpg',
+        cta: 'Open CloudNativePG',
+      },
+      {
+        id: 'live-traffic-large-clusters',
+        icon: Network,
+        title: 'Live Traffic on large Cilium clusters',
+        description: 'Traffic is drawn per workload and stays fast on big clusters. Focus on one workload, or get a connection list when the map is too big.',
+        importance: 7,
+        path: '/traffic',
+        cta: 'Open Live Traffic',
+      },
+      {
+        id: 'gitops-revert-warnings',
+        icon: Undo2,
+        title: 'Know before an edit gets reverted',
+        description: 'Before Radar edits an object owned by Argo CD, Flux or Helm, it tells you whether the owner will undo the change.',
+        importance: 6,
+      },
+      {
+        id: 'stuck-deletion-issues',
+        icon: Hourglass,
+        title: 'Issues for stuck deletions',
+        description: "Helm uninstalls and custom resources stuck deleting raise issues, and so do volumes that can't attach to their node's machine type.",
+        importance: 6,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'audit-unused-storage',
+        icon: HardDrive,
+        title: 'Cluster Audit finds unused storage',
+        description: 'Claims nothing uses, claims Pending for over a day, and Released PersistentVolumes, with their size and storage class.',
+        // Below v1.16's headline at its 0.75 weight, so an upgrade from v1.15
+        // still shows that card.
+        importance: 4,
+        path: '/checks',
+        cta: 'Open Checks',
+      },
+    ],
+    improvements: [
+      // The grid fills row by row: pair lines of similar length.
+      "Capacity explains why a node pool isn't scaling down",
+      'Nodes being removed show as removed, not failed',
+      'Helm actions on Flux releases change the right objects',
+      'Flux Sync with source matches flux reconcile --with-source',
+      'Topology links Services only to the Pods they select',
+      'Namespaces stuck Terminating show what holds them',
+      'Filters stay put when you switch kinds or sections',
+      'Skip an audit check per resource with an annotation',
+    ],
+  },
   {
     version: 'v1.16.0',
     highlights: [

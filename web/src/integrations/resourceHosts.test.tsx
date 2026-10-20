@@ -3,10 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { ResourceRendererDispatch } from '@skyhook-io/k8s-ui'
-import { encodeDrawerTrail } from '../components/cnpg/routes'
+import { encodeDrawerTrail } from '../utils/drawer-trail'
 import { kindToPluralWithGroup } from '../utils/navigation'
 import {
-  ResourceDrawerNavigation,
+  decorateResourceDiagnose, renderResourceKindList, resourceKindListMode, resourceKindListTitle, ResourceDrawerNavigation,
   resourceDetailRedirect, resourceDetailSlots, resourceExpandedPath,
   resourceLogs, resourceRendererOverrides,
 } from './resourceHosts'
@@ -16,7 +16,15 @@ vi.mock('../api/client', () => ({
   useKueueAdmission: () => ({ data: { uid: 'job-id', installed: true, workloads: [], total: 0 }, isLoading: false, refetch: () => {} }),
 }))
 
+import type { HostFeatures } from './resourceHost'
+
 const cluster = { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }
+
+const cnpgKind = { name: 'clusters', group: cluster.group }
+const supported: HostFeatures = { cnpgWorkspace: 'supported' }
+const unsupported: HostFeatures = { cnpgWorkspace: 'unsupported' }
+const unknown: HostFeatures = { cnpgWorkspace: 'unknown' }
+const listProps = { namespaces: ['db'], inspected: null, onInspect: () => {}, onClearNamespaces: () => {}, onCreate: () => {} }
 
 function renderResource(data: any) {
   const group = data.apiVersion.split('/')[0]
@@ -101,4 +109,33 @@ describe('application resource hosts', () => {
     expect(foreignJob).not.toContain('No controller-owned Kueue Workload observed')
   })
 
+  it('makes the same kind-list decision for fetching and rendering across feature states', () => {
+    for (const [features, pending, mode] of [
+      [supported, true, 'view'], [supported, false, 'view'],
+      [unknown, true, 'wait'], [unknown, false, 'table'],
+      [unsupported, true, 'table'], [unsupported, false, 'table'],
+    ] as const) {
+      expect(resourceKindListMode(cnpgKind, features, pending)).toBe(mode)
+      const view = renderResourceKindList(cnpgKind, features, pending, listProps)
+      expect(view !== null).toBe(mode !== 'table')
+      if (mode === 'wait') expect(renderToStaticMarkup(view)).toContain('Loading…')
+    }
+    for (const group of ['', 'cluster.x-k8s.io']) {
+      expect(resourceKindListMode({ ...cnpgKind, group }, supported, true)).toBe('table')
+      expect(renderResourceKindList({ ...cnpgKind, group }, supported, true, listProps)).toBeNull()
+      expect(resourceKindListTitle({ ...cnpgKind, group })).toBeNull()
+    }
+    expect(resourceKindListTitle(cnpgKind)).toBe('CloudNativePG Clusters')
+  })
+
+  it('decorates Diagnose only for the integration-owned resource context', () => {
+    const render = vi.fn(() => <span>diagnose</span>)
+    const decorated = decorateResourceDiagnose(render)!
+    const context = { ...cluster, compact: false }
+    expect(isValidElement(decorated(context))).toBe(true)
+    expect(render).not.toHaveBeenCalled()
+    decorated({ ...context, group: 'cluster.x-k8s.io' })
+    expect(render).toHaveBeenCalledOnce()
+    expect(decorateResourceDiagnose(undefined)).toBeUndefined()
+  })
 })

@@ -209,7 +209,8 @@ The table below covers common startup flags. See the [full CLI reference](https:
 | `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](docs/workload-metrics.md#request-sources). |
 | `--opencost-currency` | (auto-detect, then USD) | Override the ISO 4217 currency label for OpenCost values. Radar labels values but does not convert them. |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
-| `--no-mcp` | `false` | Disable MCP server for AI tool integration |
+| `--no-mcp` | `false` | Disable all MCP endpoints |
+| `--mcp-read-only` | `false` | Expose only read-only MCP tools; disable `/mcp` (env: `RADAR_MCP_READ_ONLY`) |
 | `--mcp-catalog-stdio` | `false` | Start only the MCP catalog over stdio for registry introspection |
 | `--version` | | Show version and exit |
 
@@ -363,7 +364,7 @@ View TLS certificate details and expiry dates across all namespaces — catch ex
 
 ### GitOps
 
-Monitor, diagnose, and manage FluxCD and ArgoCD resources from a dedicated GitOps workspace.
+Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
 
 <p align="center">
   <img src="docs/screenshots/gitops-view.png" alt="GitOps fleet view" width="800">
@@ -499,7 +500,10 @@ Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.
 
 Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Diagnosis is read-only by default; optional in-cluster route probing uses short-lived, self-deleting probe pods. Write operations such as restart, scale, apply, and rollback are identified for client confirmation and enforced through Kubernetes RBAC.
 
-Enabled by default. Disable with `--no-mcp`. See the **[MCP Guide](docs/mcp.md)** for setup instructions.
+Enabled by default. Disable all MCP endpoints with `--no-mcp`, or expose only
+read-only MCP tools with `--mcp-read-only` and connect to `/mcp-readonly`.
+This setting does not restrict UI or REST API writes. See the
+**[MCP Guide](docs/mcp.md)** for setup and configuration precedence.
 
 ### Authentication
 
@@ -553,7 +557,7 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **Strimzi** | [KafkaConnector failure evidence](docs/integrations.md#strimzi-kafka-connectors) (connector/task status) |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
-| **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus a [workspace](docs/cnpg.md) for fleet, protection and declaration triage |
+| **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |
 | **Kyverno** | Policy, ClusterPolicy, PolicyReport, ClusterPolicyReport |
 | **Sealed Secrets** | SealedSecret |

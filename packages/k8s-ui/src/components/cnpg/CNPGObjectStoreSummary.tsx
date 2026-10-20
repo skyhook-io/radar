@@ -8,9 +8,12 @@ import {
   getCNPGObjectStoreRetention,
 } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
-import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { NotReported, Note, ObjectProblems, SummaryShell, TimeAgo } from './CNPGSharedSummary'
 import { clustersIn, inferredObjectStoreHealth, refOf, relationUnavailable, usersOfObjectStore } from './relations'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactValue } from '../facts'
+import { SectionHeading } from '../ui/FoldSection'
 
 function utc(at: string | undefined): string {
   if (!at || !Number.isFinite(Date.parse(at))) return 'unknown'
@@ -24,7 +27,7 @@ export function CNPGObjectStoreSummary({
 }: {
   resource: any
   workspace: CNPGWorkspaceResponse | null
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
 }) {
   const ns = resource?.metadata?.namespace ?? ''
   const clustersUnavailable = relationUnavailable(workspace, 'clusters', ns, 'Clusters')
@@ -46,7 +49,7 @@ export function CNPGObjectStoreSummary({
         onNavigate={onNavigate}
       />
 
-      <SummaryHeading hint="inferred">Upload health</SummaryHeading>
+      <SectionHeading hint="inferred">Upload health</SectionHeading>
       {clustersUnavailable ? (
         <div className="text-sm">
           <NotReported text={`Unknown · ${clustersUnavailable}, which are the only evidence`} />
@@ -89,7 +92,7 @@ export function CNPGObjectStoreSummary({
         </>
       )}
 
-      <SummaryHeading hint="ObjectStore status">Recovery window</SummaryHeading>
+      <SectionHeading hint="ObjectStore status">Recovery window</SectionHeading>
       {windows.length === 0 ? (
         <div className="text-sm">
           <NotReported text="No server has reported a recovery window" />
@@ -136,7 +139,7 @@ export function CNPGObjectStoreSummary({
         </FactGrid>
       )}
 
-      <SummaryHeading>Destination</SummaryHeading>
+      <SectionHeading>Destination</SectionHeading>
       <FactGrid>
         <FactRow label="Path">{destination !== '-' ? <span className="font-mono">{destination}</span> : <NotReported text="Not set" />}</FactRow>
         <FactRow label="Provider">{provider ?? <NotReported />}</FactRow>
@@ -152,7 +155,7 @@ export function CNPGObjectStoreSummary({
         <FactRow label="Retention">{retention ?? <NotReported text="Not set" />}</FactRow>
       </FactGrid>
 
-      <SummaryHeading>Used by</SummaryHeading>
+      <SectionHeading>Used by</SectionHeading>
       {clustersUnavailable ? (
         <div className="text-sm">
           <NotReported text={clustersUnavailable} />

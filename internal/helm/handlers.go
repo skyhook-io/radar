@@ -242,7 +242,7 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			return // the caller left; this is not a Helm failure
 		}
-		if IsForbiddenError(err) {
+		if ReleaseReadDeniedForCaller(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to list Helm releases")
 			return
 		}

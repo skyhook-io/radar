@@ -78,6 +78,7 @@ Capacity's core contract is **per-value certainty**. Every quantity carries one 
 Hover (or focus) a glyph for the coverage detail behind it. The invariants this enforces:
 
 - **Unavailable ≠ zero.** An RBAC-denied or unobserved source renders "Unavailable" / "Not observed" — never `0`.
+- **Loading ≠ empty.** Pods and Nodes still loading report `syncing`; a failed initial load reports `error`. Neither establishes counts.
 - **Partial ≠ exact.** Metrics sampled on 3 of 100 nodes render `≥` with the sampled share.
 - **Scheduling capacity ≠ actual usage.** Requests are what the scheduler consumes; usage is an efficiency signal. The ledger keeps them structurally apart, and the bar never acquires health colors — high utilization is a bin-packing goal, not an incident.
 - **Declared ≠ actual.** See below.

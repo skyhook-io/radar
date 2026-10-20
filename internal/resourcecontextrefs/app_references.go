@@ -42,8 +42,8 @@ func AppReferencesFromEnvChecks(serviceChecks []k8s.EnvServiceRefCheck, duplicat
 		occurrences := make([]resourcecontext.DuplicateEnvVarOccurrence, 0, len(displayed))
 		for _, occurrence := range displayed {
 			occurrences = append(occurrences, resourcecontext.DuplicateEnvVarOccurrence{
-				Position: occurrence.Position,
-				Value:    aicontext.RedactSecrets(occurrence.Value),
+				Path:  occurrence.Path,
+				Value: aicontext.RedactSecrets(occurrence.Value),
 			})
 		}
 		out.DuplicateEnv = append(out.DuplicateEnv, resourcecontext.DuplicateEnvVarReference{

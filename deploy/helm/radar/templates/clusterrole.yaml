@@ -243,6 +243,14 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- else }}
   # Per-group CRD access
+  {{- if .Values.rbac.crdGroups.antrea }}
+  # Antrea policies can allow traffic a core NetworkPolicy denies; the
+  # NetworkPolicy deny-all check treats an unreadable kind as "may allow" and
+  # stays silent, so it needs these reads.
+  - apiGroups: ["crd.antrea.io"]
+    resources: ["networkpolicies", "clusternetworkpolicies"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.apiRegistration }}
   - apiGroups: ["apiregistration.k8s.io"]
     resources: ["*"]
@@ -251,6 +259,14 @@ rules:
   {{- if .Values.rbac.crdGroups.argo }}
   - apiGroups: ["argoproj.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.awsNetworkPolicy }}
+  # EKS VPC CNI policies, served on EKS clusters by default. Same reason as
+  # antrea: unreadable, they silence the NetworkPolicy deny-all check
+  # cluster-wide.
+  - apiGroups: ["networking.k8s.aws"]
+    resources: ["applicationnetworkpolicies", "clusternetworkpolicies"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.awx }}

@@ -37,9 +37,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/auditcontext"
@@ -125,17 +123,6 @@ func (a policyReportLookupAdapter) FindingsFor(group, kind, namespace, name stri
 		}
 	}
 	return out
-}
-
-type serviceBackendLookup struct {
-	cache *k8s.ResourceCache
-}
-
-func (l serviceBackendLookup) PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error) {
-	if l.cache == nil || l.cache.Pods() == nil {
-		return nil, nil
-	}
-	return l.cache.Pods().Pods(namespace).List(selector)
 }
 
 // parseVerbosity reads the ?verbosity= query parameter and returns the matching level.
@@ -486,7 +473,10 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
 			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
 		),
-		ServiceBackends: serviceBackendLookup{cache: cache},
+		ServiceBackends: k8s.ServiceBackendLookup{Cache: cache},
+		TemplateDivergence: issues.NewCacheProvider().TemplateDivergence(obj, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), func(verb, group, resource, namespace string) bool {
+			return s.canRead(r, group, resource, namespace, verb)
+		}),
 	}
 
 	// Wire the PolicyReport index when Kyverno is installed. Build emits a
@@ -628,6 +618,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		Count:           count,
 		HighestSeverity: string(topSeverity),
 		TopReason:       topReason,
+		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
 	}, matched
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -142,6 +143,22 @@ func (d *DynamicResourceCache) retainObservation(gvr schema.GroupVersionResource
 	d.observations[gvr] = retainedObservation{state: state, reasonCode: reasonCode, truncated: truncated, observedAt: time.Now().UTC()}
 }
 
+// retainAuthProbeFailure records an access probe that failed authentication
+// or authorization, and reports whether err was one. A 401 rejects Radar's
+// credentials, which no grant on this kind fixes, so it is recorded apart from
+// an RBAC denial.
+func (d *DynamicResourceCache) retainAuthProbeFailure(gvr schema.GroupVersionResource, preferredNS string, complete bool, err error) bool {
+	switch {
+	case apierrors.IsUnauthorized(err):
+		d.retainObservation(gvr, DynamicObservationDenied, "credentials_rejected", false)
+	case isAuthProbeError(err):
+		d.retainDeniedObservation(gvr, preferredNS, complete)
+	default:
+		return false
+	}
+	return true
+}
+
 func (d *DynamicResourceCache) retainDeniedObservation(gvr schema.GroupVersionResource, preferredNS string, complete bool) {
 	// A preferred-namespace denial proves only that request scope; it cannot
 	// replace the observation retained for the GVR as a whole.
@@ -164,6 +181,33 @@ func (d *DynamicResourceCache) retainDeniedObservation(gvr schema.GroupVersionRe
 // It only reads cache bookkeeping; it never probes the API server, creates an
 // informer, or waits for sync.
 func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) DynamicResourceObservation {
+	return d.observation(gvr, "")
+}
+
+// NamespaceObservation is Observation with State, and the loading or stall
+// ReasonCode, taken only from the informer that serves reads of gvr in
+// namespace: the cluster-wide informer when there is one, otherwise
+// namespace's own. Per-namespace informers sync independently, so a
+// namespace's readiness never reflects an informer started for another
+// namespace, which in a shared cache may be another user's. Scope, Namespaces
+// and Truncated still describe the whole kind, and so does a synced
+// namespace's ReasonCode (such as namespace_partial). When the kind has informers but none serves namespace, State is
+// DynamicObservationUnwatched. An empty namespace, or a kind with no
+// informers, gets Observation(gvr).
+func (d *DynamicResourceCache) NamespaceObservation(gvr schema.GroupVersionResource, namespace string) DynamicResourceObservation {
+	return d.observation(gvr, namespace)
+}
+
+// syncStallAfter is how long an informer may stay unsynced before its
+// observation reports sync_stalled.
+func (d *DynamicResourceCache) syncStallAfter() time.Duration {
+	if d.config.SyncStallAfter > 0 {
+		return d.config.SyncStallAfter
+	}
+	return 30 * time.Second
+}
+
+func (d *DynamicResourceCache) observation(gvr schema.GroupVersionResource, namespace string) DynamicResourceObservation {
 	if d == nil {
 		return DynamicResourceObservation{State: DynamicObservationUnwatched, ReasonCode: "not_observed"}
 	}
@@ -207,9 +251,23 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 		return DynamicResourceObservation{State: DynamicObservationUnwatched, ReasonCode: "not_observed"}
 	}
 
+	readiness := entries
+	if namespace != "" {
+		readiness = nil
+		for i, candidate := range entries {
+			if candidate.ns == "" || candidate.ns == namespace {
+				readiness = entries[i : i+1]
+				break
+			}
+		}
+	}
+
 	state := DynamicObservationSynced
+	if len(readiness) == 0 {
+		state = DynamicObservationUnwatched
+	}
 	var oldestUnsynced *informerEntry
-	for _, candidate := range entries {
+	for _, candidate := range readiness {
 		if !candidate.entry.informer.HasSynced() {
 			if oldestUnsynced == nil || candidate.entry.startedAt.Before(oldestUnsynced.startedAt) {
 				oldestUnsynced = candidate.entry
@@ -229,7 +287,9 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 	}
 
 	switch {
-	case state == DynamicObservationSyncing && time.Since(oldestUnsynced.startedAt) >= 30*time.Second:
+	case state == DynamicObservationUnwatched:
+		observation.ReasonCode = "not_observed"
+	case state == DynamicObservationSyncing && time.Since(oldestUnsynced.startedAt) >= d.syncStallAfter():
 		observation.ReasonCode = "sync_stalled"
 	case state == DynamicObservationSyncing:
 		observation.ReasonCode = "initial_sync"
@@ -313,9 +373,7 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 		}
 		scopes, complete, err := d.probeScopes(gvr, preferredNS)
 		if err != nil {
-			if isAuthProbeError(err) {
-				d.retainDeniedObservation(gvr, preferredNS, complete)
-			}
+			d.retainAuthProbeFailure(gvr, preferredNS, complete, err)
 			return nil, fmt.Errorf("no access to %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
 		}
 		if preferredNS == "" {
@@ -524,6 +582,15 @@ func (d *DynamicResourceCache) fallbackNamespaces() []string {
 	return nil
 }
 
+// FallbackNamespaces returns the namespaces the cache walks when its identity
+// cannot list a namespaced resource cluster-wide.
+func (d *DynamicResourceCache) FallbackNamespaces() []string {
+	if d == nil {
+		return nil
+	}
+	return append([]string(nil), d.fallbackNamespaces()...)
+}
+
 // probeScopes decides which scopes to watch for gvr via limit=1 list probes.
 // It returns the scope namespaces to start informers for — [""] means one
 // cluster-wide informer — or a forbidden error when the identity can list
@@ -559,6 +626,9 @@ func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, pref
 	err = d.listProbe(ctx, gvr, "")
 	if err == nil {
 		return []string{""}, true, nil
+	}
+	if apierrors.IsUnauthorized(err) {
+		return nil, true, err
 	}
 	if !isAuthProbeError(err) {
 		// Transient/NotFound on proxy-fronted clusters — fail open to a
@@ -597,6 +667,9 @@ func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, pref
 		nsCtx, nsCancel := context.WithTimeout(ctx, 2*time.Second)
 		probeErr := d.listProbe(nsCtx, gvr, ns)
 		nsCancel()
+		if apierrors.IsUnauthorized(probeErr) {
+			return nil, true, probeErr
+		}
 		scoped, nsErr := d.classifyScope(gvr, ns, probeErr)
 		if ctx.Err() != nil {
 			// The probe ran into the shared deadline — classifyScope's
@@ -690,6 +763,12 @@ func (d *DynamicResourceCache) gvrIsNamespaced(gvr schema.GroupVersionResource) 
 // whether to eager-warm high-cardinality CRDs like PolicyReports) can gate
 // informer creation on cluster size before paying the watch-layer cost.
 func (d *DynamicResourceCache) ProbeCount(gvr schema.GroupVersionResource) int {
+	count, _ := d.probeCount(gvr)
+	return count
+}
+
+// probeCount is ProbeCount that also returns the error behind -1 and -2.
+func (d *DynamicResourceCache) probeCount(gvr schema.GroupVersionResource) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -699,25 +778,25 @@ func (d *DynamicResourceCache) ProbeCount(gvr schema.GroupVersionResource) int {
 
 	if err != nil {
 		if ctx.Err() != nil {
-			return -2
+			return -2, err
 		}
 		if isAuthProbeError(err) {
-			return -1
+			return -1, err
 		}
 		log.Printf("[dynamic cache] probeCount for %s.%s/%s returned non-auth error (deferring): %v",
 			gvr.Resource, gvr.Group, gvr.Version, err)
-		return -2
+		return -2, err
 	}
 
 	count := len(list.Items)
 	if remaining := list.GetRemainingItemCount(); remaining != nil {
 		count += int(*remaining)
-		return count
+		return count, nil
 	}
 	if list.GetContinue() != "" {
-		return -2
+		return -2, nil
 	}
-	return count
+	return count, nil
 }
 
 func (d *DynamicResourceCache) probeCountList(ctx context.Context, gvr schema.GroupVersionResource) (*unstructured.UnstructuredList, error) {
@@ -733,6 +812,9 @@ func (d *DynamicResourceCache) probeCountList(ctx context.Context, gvr schema.Gr
 	if err == nil {
 		return list, nil
 	}
+	if apierrors.IsUnauthorized(err) {
+		return nil, err
+	}
 	if isAuthProbeError(err) && d.gvrIsNamespaced(gvr) {
 		// Size heuristic only — the first granted fallback namespace is a
 		// good-enough sample for the eager-warm decision.
@@ -741,6 +823,9 @@ func (d *DynamicResourceCache) probeCountList(ctx context.Context, gvr schema.Gr
 			nsList, nsErr := d.config.DynamicClient.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{Limit: 1})
 			if nsErr == nil {
 				return nsList, nil
+			}
+			if apierrors.IsUnauthorized(nsErr) {
+				return nil, nsErr
 			}
 			if !isAuthProbeError(nsErr) && fallbackErr == nil {
 				fallbackErr = nsErr
@@ -1036,6 +1121,20 @@ func entriesSynced(entries []*informerEntry) bool {
 	return len(entries) > 0
 }
 
+// servedSynced is entriesSynced for an answer the cache vouches for. Stop
+// keeps the informers, and they go on reporting synced while their stores no
+// longer change, so a stopped cache vouches for nothing. stopped never resets,
+// so checking it after the informers keeps a true answer from describing a
+// cache that had already stopped.
+func (d *DynamicResourceCache) servedSynced(entries []*informerEntry) bool {
+	if !entriesSynced(entries) {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return !d.stopped
+}
+
 // Count returns the number of resources for a given GVR, optionally filtered by namespaces.
 // Unlike List(), this avoids allocating a result slice and skips StripUnstructuredFields.
 // Count reads only what is already watched and synced; it does not start informers.
@@ -1052,6 +1151,9 @@ func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
+	if d.stopped {
+		return 0, fmt.Errorf("dynamic cache stopped")
+	}
 	if e, ok := d.informers[informerKey{gvr: gvr}]; ok {
 		if !e.informer.HasSynced() {
 			return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
@@ -1118,6 +1220,9 @@ func (d *DynamicResourceCache) CountWatched(namespaces []string) map[schema.Grou
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
+	if d.stopped {
+		return nil
+	}
 	type watchedSet struct {
 		clusterWide *informerEntry
 		byNamespace map[string]*informerEntry
@@ -1666,9 +1771,7 @@ func (d *DynamicResourceCache) WarmupParallel(gvrs []schema.GroupVersionResource
 	for range gvrs {
 		r := <-results
 		if r.err != nil {
-			if isAuthProbeError(r.err) {
-				d.retainDeniedObservation(r.gvr, "", r.complete)
-			} else {
+			if !d.retainAuthProbeFailure(r.gvr, "", r.complete, r.err) {
 				d.retainObservation(r.gvr, DynamicObservationDeferred, "scope_probe_failed", false)
 			}
 			continue
@@ -1858,6 +1961,7 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 		type probeResult struct {
 			gvr   schema.GroupVersionResource
 			count int // -1 = no access
+			err   error
 		}
 		results := make(chan probeResult, len(remaining))
 		sem := make(chan struct{}, maxConcurrentProbes)
@@ -1871,8 +1975,8 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 						results <- probeResult{gvr: g, count: -2}
 					}
 				}()
-				count := d.ProbeCount(g)
-				results <- probeResult{gvr: g, count: count}
+				count, err := d.probeCount(g)
+				results <- probeResult{gvr: g, count: count, err: err}
 			}(gvr)
 		}
 
@@ -1883,7 +1987,7 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 			r := <-results
 			if r.count == -1 {
 				noAccessCount++
-				d.retainDeniedObservation(r.gvr, "", true)
+				d.retainAuthProbeFailure(r.gvr, "", true, r.err)
 				continue
 			}
 			if r.count == -2 {
@@ -1972,7 +2076,37 @@ func (d *DynamicResourceCache) WaitForSync(gvr schema.GroupVersionResource, time
 // synced-but-partial. Callers asserting completeness or absence must use
 // IsClusterWideSynced (or Count, which refuses unsettled fanouts) instead.
 func (d *DynamicResourceCache) IsSynced(gvr schema.GroupVersionResource) bool {
-	return entriesSynced(d.entriesForGVR(gvr))
+	return d.servedSynced(d.entriesForGVR(gvr))
+}
+
+// WatchedSince returns when the cache started watching gvr: the latest start
+// among its informers, so every change after it was delivered. ok is false
+// when gvr isn't watched or an informer hasn't synced yet.
+func (d *DynamicResourceCache) WatchedSince(gvr schema.GroupVersionResource) (since time.Time, ok bool) {
+	entries := d.entriesForGVR(gvr)
+	if !d.servedSynced(entries) {
+		return time.Time{}, false
+	}
+	for _, e := range entries {
+		if e.startedAt.After(since) {
+			since = e.startedAt
+		}
+	}
+	return since, true
+}
+
+// AllNamespacesFanoutIncomplete reports that the last all-namespaces walk for
+// gvr across the fallback namespaces ended early (its deadline hit mid-walk),
+// so a read across every namespace can miss some of them even once the
+// informers that did start have synced. The next all-namespaces read resumes
+// the walk.
+func (d *DynamicResourceCache) AllNamespacesFanoutIncomplete(gvr schema.GroupVersionResource) bool {
+	if d == nil || d.config.NamespaceScoped {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.fanoutIncomplete[gvr]
 }
 
 // IsClusterWideSynced reports whether gvr is served by a single cluster-wide
@@ -2020,7 +2154,51 @@ func (d *DynamicResourceCache) IsNamespaceSynced(gvr schema.GroupVersionResource
 	// neither does. entriesSynced then asks each informer directly rather than
 	// reading the bookkeeping flag, which the watch goroutine sets a moment later
 	// and which therefore reports a synced informer as unsynced.
-	return entriesSynced(d.readEntries(gvr, namespace))
+	return d.servedSynced(d.readEntries(gvr, namespace))
+}
+
+// DynamicReadServer identifies the informers serving reads of one GVR and
+// namespace at a moment. Starting a cluster-wide informer replaces a GVR's
+// namespace informers inside the same cache, so two readiness checks that
+// both pass can describe different informers; a read bracketed by two equal,
+// synced servers was answered by stores that were complete throughout.
+type DynamicReadServer struct {
+	entries []*informerEntry
+}
+
+// Same reports whether s and other are the same informers, in any order.
+func (s DynamicReadServer) Same(other DynamicReadServer) bool {
+	if len(s.entries) != len(other.entries) {
+		return false
+	}
+	for _, e := range s.entries {
+		if !slices.Contains(other.entries, e) {
+			return false
+		}
+	}
+	return true
+}
+
+// ReadServer returns the informers serving reads of gvr in namespace now and
+// whether they answer authoritatively, by IsNamespaceSynced's rules. Both come
+// from the same informers, so a replacement between them cannot mix them.
+func (d *DynamicResourceCache) ReadServer(gvr schema.GroupVersionResource, namespace string) (DynamicReadServer, bool) {
+	if d == nil {
+		return DynamicReadServer{}, false
+	}
+	d.mu.RLock()
+	clusterWide, ok := d.informers[informerKey{gvr: gvr}]
+	d.mu.RUnlock()
+	if ok {
+		entries := []*informerEntry{clusterWide}
+		return DynamicReadServer{entries: entries}, d.servedSynced(entries)
+	}
+	entries := d.readEntries(gvr, namespace)
+	if namespace == "" {
+		// Only the cluster-wide informer answers a cluster-wide read.
+		return DynamicReadServer{entries: entries}, false
+	}
+	return DynamicReadServer{entries: entries}, d.servedSynced(entries)
 }
 
 // ---------------------------------------------------------------------------

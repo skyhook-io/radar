@@ -126,6 +126,7 @@ export interface Capabilities {
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
   // Karpenter discovery and NodePool read state. Optional on the wire for the
   // same newer-frontend/older-backend reason as `deployment` below — consumers
@@ -168,9 +169,11 @@ export interface FeatureCapabilities {
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean
+  cnpgWorkspace?: boolean
+  cnpgProtectionSetup?: boolean
+  gitopsWriteEvidence?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
-  gitopsWriteEvidence?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -739,6 +742,7 @@ export interface HPADiagnosis extends HPADiagnosisView {
     name?: string
   }
   bounds: HPABounds
+  /** Spec order keeps source references paired with values; unmatched status entries follow. */
   metrics?: HPAMetricSummary[]
 }
 

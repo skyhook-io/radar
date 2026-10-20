@@ -3,8 +3,17 @@ import { act, type ComponentProps, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LogCore } from './LogCore'
+import { copyText } from '../../utils/clipboard'
 
-vi.mock('react-virtuoso', () => ({ Virtuoso: ({ data, itemContent }: { data: unknown[]; itemContent: (index: number, value: unknown) => ReactNode }) => <div>{data.map((value, index) => <div key={index}>{itemContent(index, value)}</div>)}</div> }))
+vi.mock('../../utils/clipboard', () => ({ copyText: vi.fn(async () => true) }))
+
+let atBottom: ((bottom: boolean) => void) | undefined
+let totalHeightChanged: (() => void) | undefined
+vi.mock('react-virtuoso', () => ({ Virtuoso: ({ data, itemContent, atBottomStateChange, totalListHeightChanged, scrollerRef }: { data: unknown[]; itemContent: (index: number, value: unknown) => ReactNode; atBottomStateChange: (bottom: boolean) => void; totalListHeightChanged: () => void; scrollerRef: (element: HTMLElement | null) => void }) => {
+  atBottom = atBottomStateChange
+  totalHeightChanged = totalListHeightChanged
+  return <div ref={scrollerRef} data-virtuoso-scroller>{data.map((value, index) => <div key={index}>{itemContent(index, value)}</div>)}</div>
+} }))
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -19,6 +28,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   element.remove()
+  vi.unstubAllGlobals()
 })
 
 const noop = () => {}
@@ -152,4 +162,119 @@ it('keeps Export and Clear usable when a Pod filter hides a nonempty buffer', as
   await render({ entries: [], allEntries: [{ id: 1, container: 'postgres', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false, content: 'hello', timestamp: '' }], onClear: noop })
   expect(element.querySelector<HTMLButtonElement>('[aria-label="Export logs"]')!.disabled).toBe(false)
   expect(element.querySelector<HTMLButtonElement>('[aria-label="Clear logs"]')!.disabled).toBe(false)
+})
+
+it('keeps return to live available when a Pod filter hides the saved reading window', async () => {
+  const onFollowingChange = vi.fn()
+  await render({ entries: [], isFollowing: false, pendingLineCount: 17, onFollowingChange })
+  const button = element.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')
+  expect(button?.textContent).toContain('17 new lines')
+  await act(async () => button?.click())
+  expect(onFollowingChange).toHaveBeenCalledWith(true)
+})
+
+it('collects retained windows only when exporting and downloads both windows', async () => {
+  const saved = { id: 1, container: 'app', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false, content: 'saved record', timestamp: '' } satisfies ComponentProps<typeof LogCore>['entries'][number]
+  const live = { ...saved, id: 30, content: 'live record' }
+  const getRetainedEntries = vi.fn(() => [saved, live])
+  const onDownload = vi.fn()
+  await render({ entries: [saved], getRetainedEntries, retainedLineCount: 2, missingLineCount: 28, onDownload })
+  expect(getRetainedEntries).not.toHaveBeenCalled()
+  await act(async () => element.querySelector<HTMLButtonElement>('[aria-label="Export logs"]')!.click())
+  expect(getRetainedEntries).toHaveBeenCalled()
+  const all = [...element.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(button => button.textContent === 'All 2')!
+  await act(async () => all.click())
+  expect(element.textContent).toContain('Some logs between your saved view and the latest logs are no longer available.')
+  const download = [...element.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === 'Download')!
+  await act(async () => download.click())
+  expect(onDownload).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('saved record') }))
+  expect(onDownload).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('live record') }))
+  await act(async () => element.querySelector<HTMLButtonElement>('[aria-label="Export logs"]')!.click())
+  const copy = [...element.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === 'Copy')!
+  await act(async () => copy.click())
+  expect(copyText).toHaveBeenLastCalledWith(onDownload.mock.calls[0][0].content)
+
+})
+
+it('does not resume at the saved end while newer records wait outside the reading view', async () => {
+  const onFollowingChange = vi.fn()
+  const entry = { id: 1, timestamp: '', content: 'INFO saved', container: 'app', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false } satisfies ComponentProps<typeof LogCore>['entries'][number]
+  await render({ entries: [entry], isFollowing: false, pendingLineCount: 300, onFollowingChange })
+  const scroller = element.querySelector('[data-virtuoso-scroller]')!
+  await act(async () => {
+    scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 40 }))
+    atBottom?.(true)
+  })
+  expect(onFollowingChange).not.toHaveBeenCalled()
+  await render({ entries: [entry], isFollowing: false, pendingLineCount: 0, onFollowingChange })
+  await act(async () => {
+    scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 40 }))
+    atBottom?.(true)
+  })
+  expect(onFollowingChange).toHaveBeenCalledWith(true)
+})
+
+it('pauses and reveals focused row controls without pausing for toolbar focus', async () => {
+  const onFollowingChange = vi.fn()
+  const reveal = vi.fn()
+  const entry = { id: 1, timestamp: '', content: 'INFO saved', container: 'app', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false } satisfies ComponentProps<typeof LogCore>['entries'][number]
+  await render({ entries: [entry], isFollowing: true, onFollowingChange })
+  await act(async () => element.querySelector<HTMLButtonElement>('[aria-label="Refresh logs"]')!.focus())
+  expect(onFollowingChange).not.toHaveBeenCalled()
+  const copy = element.querySelector<HTMLButtonElement>('[title="Copy line"]')!
+  copy.scrollIntoView = reveal
+  await act(async () => copy.focus())
+  expect(onFollowingChange).toHaveBeenCalledWith(false)
+  expect(reveal).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' })
+})
+
+it('pauses following before text selection or middle-button scrolling in the log area', async () => {
+  const onFollowingChange = vi.fn()
+  const entry = { id: 1, timestamp: '', content: 'INFO saved', container: 'app', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false } satisfies ComponentProps<typeof LogCore>['entries'][number]
+  await render({ entries: [entry], isFollowing: true, onFollowingChange })
+  const scroller = element.querySelector<HTMLElement>('[data-virtuoso-scroller]')!
+  scroller.getBoundingClientRect = () => new DOMRect(0, 0, 500, 300)
+  for (const button of [0, 1]) {
+    onFollowingChange.mockClear()
+    await act(async () => scroller.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button, clientX: 100 })))
+    expect(onFollowingChange).toHaveBeenCalledWith(false)
+  }
+})
+
+it('schedules one bottom update per height change without polling idle frames', async () => {
+  const frames: FrameRequestCallback[] = []
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length })
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  const entry = { id: 1, timestamp: '', content: 'INFO saved', container: 'app', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false } satisfies ComponentProps<typeof LogCore>['entries'][number]
+  await render({ entries: [entry] })
+  expect(frames).toHaveLength(1)
+  await act(async () => frames.shift()?.(0))
+  expect(frames).toHaveLength(0)
+  await act(async () => { totalHeightChanged?.(); totalHeightChanged?.() })
+  expect(frames).toHaveLength(1)
+  await act(async () => frames.shift()?.(0))
+  expect(frames).toHaveLength(0)
+})
+
+it('pauses for browser text selection inside logs but ignores selection outside them', async () => {
+  const onFollowingChange = vi.fn()
+  const entry = { id: 1, timestamp: '', content: 'INFO selected record', container: 'app', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false } satisfies ComponentProps<typeof LogCore>['entries'][number]
+  await render({ entries: [entry], isFollowing: true, onFollowingChange })
+  const outside = document.createTextNode('outside logs')
+  document.body.appendChild(outside)
+  const selection = document.getSelection()!
+  const range = document.createRange()
+  range.selectNodeContents(outside)
+  selection.removeAllRanges()
+  selection.addRange(range)
+  await act(async () => document.dispatchEvent(new Event('selectionchange')))
+  expect(onFollowingChange).not.toHaveBeenCalled()
+  const rowText = [...element.querySelectorAll('span')].find(span => span.textContent === entry.content)!
+  range.selectNodeContents(rowText)
+  selection.removeAllRanges()
+  selection.addRange(range)
+  await act(async () => document.dispatchEvent(new Event('selectionchange')))
+  expect(onFollowingChange).toHaveBeenCalledWith(false)
+  selection.removeAllRanges()
+  outside.remove()
 })

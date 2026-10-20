@@ -70,7 +70,37 @@ type ResourceContext struct {
 	AuditSummary    *AuditSummary      `json:"auditSummary,omitempty"`
 	PolicySummary   *PolicySummary     `json:"policySummary,omitempty"`
 	AppReferences   *AppReferences     `json:"appReferences,omitempty"`
-	Omitted         []OmittedField     `json:"omitted,omitempty"`
+	// TemplateDivergence compares live Pods with their owner's current
+	// template. It is context, not proof: it says what differs and what could
+	// have changed it, never who did.
+	TemplateDivergence *TemplateDivergence `json:"templateDivergence,omitempty"`
+	Omitted            []OmittedField      `json:"omitted,omitempty"`
+}
+
+// TemplateDivergence reports differences between live Pods and the current
+// template of their immediate ReplicaSet or Job. For a Pod, PodsCompared is 1
+// and ExamplePod is empty. For a workload, the counts cover the current Pods
+// compared (each against its own ReplicaSet or Job) and Differences describe
+// ExamplePod. Differences that
+// admission defaulting routinely produces (injected containers, added
+// tolerations, limit-to-request copies) are not reported. Pre-computed by
+// callers; access to every Pod and template behind it was checked there.
+type TemplateDivergence struct {
+	Summary       string `json:"summary"`
+	PodsCompared  int    `json:"podsCompared"`
+	PodsDiffering int    `json:"podsDiffering"`
+	// PodsCapped: only the most recent Pods were compared.
+	PodsCapped bool `json:"podsCapped,omitempty"`
+	// PodsNotCompared counts current Pods left out because their own
+	// template is unreadable or no longer exists.
+	PodsNotCompared int      `json:"podsNotCompared,omitempty"`
+	ExamplePod      string   `json:"examplePod,omitempty"`
+	Baseline        string   `json:"baseline,omitempty"`
+	Differences     []string `json:"differences"`
+	// Sources lists objects that currently could have produced the
+	// differences, every one named within a budget, plus what could not be
+	// inspected. List order does not indicate likelihood.
+	Sources []string `json:"sources,omitempty"`
 }
 
 // ContextTier signals how much enrichment is included. "basic" is the
@@ -168,8 +198,10 @@ type DuplicateEnvVarReference struct {
 }
 
 type DuplicateEnvVarOccurrence struct {
-	Position int    `json:"position"`
-	Value    string `json:"value"`
+	// Path is a 0-based JSON pointer to the declaration in the object as
+	// Radar last saw it, e.g. /spec/template/spec/containers/0/env/23.
+	Path  string `json:"path"`
+	Value string `json:"value"`
 }
 
 type RemovedServiceEnvReference struct {
@@ -550,7 +582,24 @@ type RolloutRiskSummary struct {
 // require looking at related resources.
 type ServiceSummary struct {
 	SelectedPods *PodSelectionSummary `json:"selectedPods,omitempty"`
-	Warnings     []ServiceWarning     `json:"warnings,omitempty"`
+	// Workloads groups the selected Pods by the workload that runs them. Set
+	// only when they come from more than one workload, which is often
+	// deliberate (canary, blue/green); the mixed_backends warning is
+	// what marks it as a likely mistake.
+	Workloads []ServiceBackendWorkload `json:"workloads,omitempty"`
+	// WorkloadsTruncated: more workloads were selected than Workloads lists.
+	WorkloadsTruncated bool `json:"workloadsTruncated,omitempty"`
+	// MixedBackends explains the mixed_backends warning: the workloads,
+	// whether they are different applications, and any targetPort some of
+	// them don't declare.
+	MixedBackends string           `json:"mixedBackends,omitempty"`
+	Warnings      []ServiceWarning `json:"warnings,omitempty"`
+}
+
+type ServiceBackendWorkload struct {
+	ContextRef
+	Pods  int `json:"pods"`
+	Ready int `json:"ready"`
 }
 
 type PodSelectionSummary struct {
@@ -568,6 +617,10 @@ const (
 	ServiceWarningNoSelector     ServiceWarning = "no_selector"
 	ServiceWarningNoSelectedPods ServiceWarning = "no_selected_pods"
 	ServiceWarningNoReadyPods    ServiceWarning = "no_ready_pods"
+	// ServiceWarningMixedBackends: the selected workloads run
+	// different image repositories, or some declare the numeric targetPort
+	// while others declare other ports but not it.
+	ServiceWarningMixedBackends ServiceWarning = "mixed_backends"
 )
 
 type IngressSummary struct {
@@ -703,10 +756,14 @@ type HPAMetricSummary struct {
 // the subject resource. Pre-computed by callers and passed into the
 // generator — this package does not import internal/issues.
 type IssueSummary struct {
-	Count           int            `json:"count"`
-	HighestSeverity string         `json:"highestSeverity,omitempty"`
-	TopReason       string         `json:"topReason,omitempty"`
-	BySource        map[string]int `json:"bySource,omitempty"`
+	Count           int    `json:"count"`
+	HighestSeverity string `json:"highestSeverity,omitempty"`
+	TopReason       string `json:"topReason,omitempty"`
+	// TopSubject names the resource the top issue is about when that isn't
+	// the summarized resource, such as the NetworkPolicy isolating a Service,
+	// so a reader can go to it without another lookup.
+	TopSubject *ContextRef    `json:"topSubject,omitempty"`
+	BySource   map[string]int `json:"bySource,omitempty"`
 }
 
 // AuditSummary is a rollup of static posture findings scoped to the subject

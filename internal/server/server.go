@@ -54,6 +54,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -70,6 +71,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/rbac"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	topology "github.com/skyhook-io/radar/pkg/topology"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 // Server is the Explorer HTTP server
@@ -204,7 +206,7 @@ type Config struct {
 	TrustedOrigins          []string                    // Extra origins allowed to make changes, from ParseTrustedOrigins
 	StaticFS                embed.FS                    // Embedded frontend files
 	StaticRoot              string                      // Path within StaticFS
-	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
+	MCPHandler              http.Handler                // Full MCP server handler (nil = full endpoint disabled)
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
@@ -269,7 +271,7 @@ func New(cfg Config) *Server {
 	if len(cfg.TrustedOrigins) > 0 {
 		s.trustedOrigins = make(map[string]struct{}, len(cfg.TrustedOrigins))
 		for _, origin := range cfg.TrustedOrigins {
-			if normalized, ok := normalizeOrigin(origin); ok {
+			if normalized, ok := urlutil.NormalizeOrigin(origin); ok {
 				s.trustedOrigins[normalized] = struct{}{}
 			}
 		}
@@ -517,7 +519,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
 
-		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
+		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
+		// and, by default, for the evicted pods to finish terminating.
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
 
 		// Cloud Connect prepare/start — outside the 60s timeout group. prepare
@@ -587,10 +590,37 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/rbac/whoami", s.handleRBACWhoami)
 			r.Get("/cnpg/workspace", s.handleCNPGWorkspace)
 			r.Get("/cnpg/operator", s.handleCNPGOperator)
+			r.Get("/cnpg/operator/status", s.handleCNPGOperatorStatus)
 			r.Get("/cnpg/imagecatalogs/{namespace}/{name}/clusters", s.handleCNPGCatalogUsers)
 			r.Get("/cnpg/clusterimagecatalogs/{name}/clusters", s.handleCNPGCatalogUsers)
 			r.Get("/cnpg/clusters/{namespace}/{name}/logs", s.handleCNPGClusterLogs)
 			r.Get("/cnpg/clusters/{namespace}/{name}/activity", s.handleCNPGClusterActivity)
+			r.Get("/cnpg/clusters/{namespace}/{name}/runtime", s.handleCNPGClusterRuntime)
+			r.Get("/cnpg/clusters/{namespace}/{name}/storage", s.handleCNPGClusterStorage)
+			r.Get("/cnpg/clusters/{namespace}/{name}/recovery", s.handleCNPGClusterRecovery)
+			r.Post("/cnpg/clusters/{namespace}/{name}/restore-validation", s.handleCNPGRestoreValidation)
+			r.Get("/cnpg/restore/capability", s.handleCNPGRestoreCapability)
+			r.Get("/cnpg/clusters/{namespace}/{name}/report", s.handleCNPGClusterReport)
+			r.Get("/cnpg/clusters/{namespace}/{name}/history", s.handleCNPGClusterHistory)
+			r.Get("/cnpg/disk", s.handleCNPGFleetDisk)
+			r.Get("/cnpg/clusters/{namespace}/{name}/ha", s.handleCNPGClusterHA)
+			r.Get("/cnpg/fleet-metrics", s.handleCNPGFleetMetrics)
+			r.Get("/cnpg/poolers/{namespace}/{name}/runtime", s.handleCNPGPoolerRuntime)
+			r.Get("/cnpg/clusters/{namespace}/{name}/capabilities", s.handleCNPGClusterCapabilities)
+			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.handleCNPGClusterAction)
+			r.Post("/cnpg/clusters/{namespace}/{name}/protection/preview", s.handleCNPGArchivingPreview)
+			r.Get("/cnpg/clusters/{namespace}/{name}/schedule-preview", s.handleCNPGDraftSchedulePreview)
+			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/capabilities", s.handleCNPGScheduleCapabilities)
+			r.Post("/cnpg/scheduledbackups/{namespace}/{name}/actions/{action}", s.handleCNPGScheduleAction)
+			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/schedule-preview", s.handleCNPGSchedulePreview)
+			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/method-preview", s.handleCNPGScheduleMethodPreview)
+			r.Get("/cnpg/clusters/{namespace}/{name}/sessions", s.handleCNPGClusterSessions)
+			r.Get("/cnpg/clusters/{namespace}/{name}/restore-checks", s.handleCNPGRestoreChecks)
+			r.Get("/cnpg/clusters/{namespace}/{name}/parameters", s.handleCNPGClusterParameters)
+			r.Get("/cnpg/clusters/{namespace}/{name}/instances/{pod}/destroy-plan", s.handleCNPGDestroyPlan)
+			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
+			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
+			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.handleCNPGPoolerAction)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.
@@ -906,12 +936,18 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
 		r.Mount("/mcp", s.mcpHandler)
+	} else {
+		r.Mount("/mcp", http.NotFoundHandler())
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+	} else {
+		r.Mount("/mcp-readonly", http.NotFoundHandler())
 	}
 	if s.mcpInvestigationHandler != nil {
 		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
+	} else {
+		r.Mount("/mcp-investigation", http.NotFoundHandler())
 	}
 
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend
@@ -1349,7 +1385,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	responseCaps := *caps
 	caps = &responseCaps
 
-	caps.MCPEnabled = s.mcpHandler != nil
+	caps.MCPEnabled = s.mcpEnabled()
+	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
@@ -1361,6 +1398,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		PodEnvironment:        true,
 		PolicyResource:        true,
 		WorkloadHistory:       true,
+		CNPGWorkspace:         true,
+		CNPGProtectionSetup:   true,
 		ServiceEndpointSlices: true,
 		TrafficRecords:        true,
 		GitOpsWriteEvidence:   true,
@@ -1472,7 +1511,7 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 // parseNamespacesForUser parses namespace query params and filters by user permissions.
 // Returns nil for "all namespaces" (no filter), a populated slice for specific namespaces,
 // or an empty non-nil slice when the user has no namespace access.
-// Use noNamespaceAccess() to check the no-access case.
+// Use readscope.NoNamespaceAccess() to check the no-access case.
 //
 // If the request omits an explicit namespace filter, falls back to the user's
 // in-app namespace pick (from the namespace switcher). The pick is treated as
@@ -1522,7 +1561,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	// if it's still the live pick, so a stale read can't wipe a concurrent
 	// POST or clear across a context switch. A failed access check is empty
 	// for the wrong reason and must not cost the user their pick.
-	if pickFallback && !discoveryFailed && noNamespaceAccess(filtered) {
+	if pickFallback && !discoveryFailed && readscope.NoNamespaceAccess(filtered) {
 		s.commitPickMutation(r, pickCtx, namespaces, nil, false)
 		filtered = s.getUserNamespaces(r, nil)
 	}
@@ -1587,7 +1626,10 @@ func (s *Server) resolveHelmNamespacesForScope(r *http.Request, namespaces []str
 // so the (cluster-wide) pool only needs to be a superset of what the user can
 // read.
 func allNamespaceNames() []string {
-	cache := k8s.GetResourceCache()
+	return namespaceNamesInCache(k8s.GetResourceCache())
+}
+
+func namespaceNamesInCache(cache *k8s.ResourceCache) []string {
 	if cache == nil {
 		return nil
 	}
@@ -1622,13 +1664,6 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
-// noNamespaceAccess returns true when a namespace filter explicitly grants no access
-// (non-nil empty slice from auth filtering). Handlers with custom namespace logic
-// should check this and return empty results.
-func noNamespaceAccess(namespaces []string) bool {
-	return namespaces != nil && len(namespaces) == 0
-}
-
 // prometheusAuthGate is the per-request read check behind every metrics
 // route. Two checks, both load-bearing:
 //
@@ -1645,7 +1680,7 @@ func (s *Server) prometheusAuthGate(req *http.Request, group, resource, namespac
 	if !s.canRead(req, group, resource, namespace, verb) {
 		return false
 	}
-	if namespace != "" && noNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
+	if namespace != "" && readscope.NoNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
 		return false
 	}
 	return true
@@ -1767,7 +1802,7 @@ func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, res
 // reads within the cache TTL don't re-SAR.
 //
 // nil or empty input is returned unchanged; the caller's namespace-access
-// gate (parseNamespacesForUser / noNamespaceAccess) is the upstream decision.
+// gate (parseNamespacesForUser / readscope.NoNamespaceAccess) is the upstream decision.
 func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, verb string, namespaces []string) []string {
 	if len(namespaces) == 0 {
 		return namespaces
@@ -1922,7 +1957,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, map[string]any{"nodes": []any{}, "edges": []any{}})
 		return
 	}
@@ -2052,7 +2087,7 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 		observation.Namespaces = append([]string(nil), allowed...)
 	case k8score.DynamicObservationScopeExplicitNamespaces:
 		if len(observation.Namespaces) > 0 {
-			observation.Namespaces = intersectNamespaces(allowed, observation.Namespaces)
+			observation.Namespaces = readscope.SelectNamespaces(allowed, observation.Namespaces)
 		}
 	}
 	if len(allowed) == 0 || (observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && len(observation.Namespaces) == 0) {
@@ -2166,7 +2201,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 
 	// Cluster-only kinds (Nodes, PVs, StorageClasses, ClusterRoles, cluster-
 	// scoped CRDs) have no namespace dimension — gate via SAR. Run BEFORE the
-	// noNamespaceAccess check so a user with explicit cluster-scoped RBAC but
+	// readscope.NoNamespaceAccess check so a user with explicit cluster-scoped RBAC but
 	// no namespace access can still read those resources.
 	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
 	if isClusterScoped {
@@ -2180,7 +2215,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 		return nil, 0, "", true
 	}
 
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		return namespaces, http.StatusForbidden, "no namespace access", false
 	}
 
@@ -2455,8 +2490,14 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result, err = listPerNs(
-			func() (any, error) { return lister.List(labels.Everything()) },
-			func(ns string) (any, error) { return lister.Secrets(ns).List(labels.Everything()) },
+			func() (any, error) {
+				items, err := lister.List(labels.Everything())
+				return k8s.ServableSecrets(items), err
+			},
+			func(ns string) (any, error) {
+				items, err := lister.Secrets(ns).List(labels.Everything())
+				return k8s.ServableSecrets(items), err
+			},
 		)
 	case "events":
 		if cache.Events() == nil {
@@ -2885,7 +2926,7 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 	case namespace != "":
 		// Namespaced kind: verify namespace access.
 		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			return http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace), false
 		}
 		// Per-kind RBAC inside the namespace for Secrets — the chart can
@@ -3076,7 +3117,26 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 			notReadyOrForbiddenGet("secrets")
 			return
 		}
-		resource, err = lister.Secrets(namespace).Get(name)
+		var cached *corev1.Secret
+		cached, err = lister.Secrets(namespace).Get(name)
+		if err == nil && k8score.IsHelmReleaseSecret(cached) {
+			// The cache holds digests in place of Helm release Secret values.
+			live, status, liveErr := s.getLiveSecret(r, namespace, name)
+			if liveErr != nil {
+				s.writeError(w, status, liveErr.Error())
+				return
+			}
+			if live.UID != cached.UID {
+				// Not the object the cache answered for: recreated since, or
+				// the cluster context switched mid-request. Retryable.
+				s.writeErrorCode(w, http.StatusServiceUnavailable, "cluster_connecting",
+					fmt.Sprintf("Secret %s/%s changed while it was being read, please retry", namespace, name))
+				return
+			}
+			resource = live
+		} else {
+			resource = cached
+		}
 	case "events", "event":
 		if cache.Events() == nil {
 			notReadyOrForbiddenGet("events")
@@ -3262,12 +3322,36 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, response)
 }
 
+// getLiveSecret reads one Secret from the API server as the caller. It
+// returns the HTTP status to answer with when the read fails.
+func (s *Server) getLiveSecret(r *http.Request, namespace, name string) (*corev1.Secret, int, error) {
+	client := s.getClientForRequest(r)
+	if client == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("cluster client not available")
+	}
+	secret, err := client.CoreV1().Secrets(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		// Same shape the cache serves for every other Secret.
+		secret.ManagedFields = nil
+		delete(secret.Annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		return secret, http.StatusOK, nil
+	case apierrors.IsNotFound(err):
+		return nil, http.StatusNotFound, err
+	case apierrors.IsForbidden(err):
+		return nil, http.StatusForbidden, err
+	default:
+		log.Printf("[resources] Failed to read Secret %s/%s: %v", namespace, name, err)
+		return nil, http.StatusInternalServerError, fmt.Errorf("failed to read Secret %s/%s: %w", namespace, name, err)
+	}
+}
+
 // handlePodMetrics fetches metrics for a specific pod from the metrics.k8s.io API
 func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -3509,7 +3593,7 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -3585,7 +3669,7 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []k8s.TopPodMetrics{})
 		return
 	}
@@ -3798,7 +3882,7 @@ func (s *Server) handleTopResources(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, k8s.BuildTopMetrics(opts))
 		return
 	}
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, k8s.TopMetricsResponse{Kind: opts.Kind, Sort: opts.Sort, Reason: "no namespace access"})
 		return
 	}
@@ -3847,7 +3931,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	var events any
 	var err error
 
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	} else if len(namespaces) == 1 {
@@ -3898,7 +3982,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	}
@@ -4415,14 +4499,14 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCascadeDeletePreview returns a preview of resources that would be garbage-collected
-// if the specified resource is deleted (via Kubernetes owner reference cascade).
+// handleCascadeDeletePreview returns related resources that deletion may affect.
+// Management edges include controller attribution, not only garbage collection.
 func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
 
-	kind := chi.URLParam(r, "kind")
+	kind := normalizeKind(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 	group := r.URL.Query().Get("group")
@@ -4430,7 +4514,14 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		namespace = ""
 	}
 
+	if status, message, ok := s.preflightResourceGet(r, kind, namespace, name, group); !ok {
+		s.writeError(w, status, message)
+		return
+	}
 	cachedTopo := s.broadcaster.GetCachedTopology()
+	if cachedTopo != nil && auth.UserFromContext(r.Context()) != nil {
+		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
+	}
 	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 	preview := topology.GetCascadeDeletePreview(topology.ResourceRef{
 		Kind:      kind,
@@ -5316,7 +5407,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 				s.getUserNamespaces(r, nil)
 			}
 			if perms := s.permCache.Get(user.Username, user.Groups); perms != nil {
-				resp["noNamespaceAccess"] = noNamespaceAccess(auth.FilterNamespacesForUser(nil, user, perms))
+				resp["noNamespaceAccess"] = readscope.NoNamespaceAccess(auth.FilterNamespacesForUser(nil, user, perms))
 			}
 		}
 	}
@@ -5912,6 +6003,10 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var updated config.Config
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := config.ValidateMCPFile(updated); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	normalizedCurrency, err := config.NormalizeOpenCostCurrency(updated.OpenCostCurrency)

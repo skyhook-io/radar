@@ -11,7 +11,7 @@ export const cnpgWorkspaceRoute: WorkspaceRoute = {
     const route = parseCNPGRoute(pathname)
     if (route.detail) return route.detail.name
     const screen = CNPG_SCREENS.find(screen => screen.id === route.screen)
-    return `CloudNativePG ${screen?.label ?? 'Overview'}`
+    return `CloudNativePG ${screen?.label ?? 'Clusters'}`
   },
   contextSwitchSearch(pathname, search) {
     // A detail's context pin prevents loading a same-named object after a switch.

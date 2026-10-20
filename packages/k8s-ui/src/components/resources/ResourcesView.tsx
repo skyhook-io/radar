@@ -3255,6 +3255,7 @@ function filterHostExtras(
 
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
+const CHECKBOX_VISIBILITY_KEY = 'radar-resource-checkboxes'
 
 // Storage identity for a kind's column settings. normalizeKindToPlural falls
 // through to the bare plural for anything outside the curated collision
@@ -3747,7 +3748,6 @@ export function ResourcesView({
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setBulkMode(false)
     setCheckedResources(new Set())
     setShowBulkDeleteConfirm(false)
     setShowBulkRestartConfirm(false)
@@ -3820,13 +3820,10 @@ export function ResourcesView({
   const [ownerKind, setOwnerKind] = useState<string>(initialFilters.ownerKind)
   const [ownerName, setOwnerName] = useState<string>(initialFilters.ownerName)
 
-  // Multi-select state for bulk operations. Checkboxes only render while
-  // bulk mode is active — entered via the toolbar toggle — so mutating
-  // actions stay out of the way during normal browsing. Core Pods are the
-  // exception: their controllers recreate them, so bulk delete is low-risk
-  // and the checkboxes are always shown.
-  const [bulkMode, setBulkMode] = useState(false)
-  const alwaysShowCheckboxes = selectedKind.name.toLowerCase() === 'pods' && !selectedKind.group
+  const [showCheckboxes, setShowCheckboxes] = useState(() => {
+    try { return localStorage.getItem(CHECKBOX_VISIBILITY_KEY) === 'true' }
+    catch { return false }
+  })
   const [checkedResources, setCheckedResources] = useState<Set<string>>(new Set())
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
   const [showBulkRestartConfirm, setShowBulkRestartConfirm] = useState(false)
@@ -3834,8 +3831,7 @@ export function ResourcesView({
   const [bulkForceDelete, setBulkForceDelete] = useState(false)
   const [bulkScaleReplicas, setBulkScaleReplicas] = useState(0)
 
-  const exitBulkMode = useCallback(() => {
-    setBulkMode(false)
+  const clearBulkSelection = useCallback(() => {
     setCheckedResources(new Set())
   }, [])
 
@@ -4555,15 +4551,11 @@ export function ResourcesView({
     {
       id: 'resources-bulk-select',
       keys: 'b',
-      description: 'Toggle bulk select',
+      description: 'Show or hide selection checkboxes',
       category: 'Table',
       scope: 'resources',
       handler: () => {
-        if (alwaysShowCheckboxes) return
-        if (bulkMode) { exitBulkMode(); return }
-        if (!canBulkSelect) return
-        exitCompareMode()
-        setBulkMode(true)
+        if (canBulkSelect) toggleCheckboxVisibility()
       },
     },
     {
@@ -4578,7 +4570,7 @@ export function ResourcesView({
         if (showProblemsDropdown) { setShowProblemsDropdown(false); return }
         if (showLabelsDropdown) { setShowLabelsDropdown(false); return }
         if (compareMode) { exitCompareMode(); return }
-        if (bulkMode || checkedResources.size > 0) { exitBulkMode(); return }
+        if (checkedResources.size > 0) { clearBulkSelection(); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
@@ -5750,17 +5742,25 @@ export function ResourcesView({
     setCheckedResources(allVisibleChecked ? new Set() : new Set(filteredResources.map(getResourceKey)))
   }, [allVisibleChecked, filteredResources, getResourceKey])
 
-  const isCheckboxMode = canBulkSelect && !compareMode && (bulkMode || alwaysShowCheckboxes)
-  const showBulkBar = isCheckboxMode && (bulkMode || checkedItems.length > 0)
+  const toggleCheckboxVisibility = useCallback(() => {
+    const next = compareMode || !showCheckboxes
+    exitCompareMode()
+    clearBulkSelection()
+    setShowCheckboxes(next)
+    try { localStorage.setItem(CHECKBOX_VISIBILITY_KEY, String(next)) }
+    catch { /* Keep the choice for this session when storage is unavailable. */ }
+  }, [compareMode, showCheckboxes, exitCompareMode, clearBulkSelection])
+
+  const isCheckboxMode = canBulkSelect && !compareMode && showCheckboxes
+  const showBulkBar = isCheckboxMode && checkedItems.length > 0
 
   // Stable row handlers so the memoized ResourceRowCells skips re-rendering
   // rows whose data didn't change on a refetch (React Query's structural
   // sharing keeps unchanged resources referentially identical).
   const handleRowClick = useCallback((resource: any, isSelected: boolean) => {
     if (compareMode) toggleComparePick(resource)
-    else if (isCheckboxMode && bulkMode) toggleChecked(resource)
     else selectResource(resource, isSelected)
-  }, [compareMode, isCheckboxMode, bulkMode, toggleComparePick, toggleChecked, selectResource])
+  }, [compareMode, toggleComparePick, selectResource])
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
@@ -6425,7 +6425,7 @@ export function ResourcesView({
               <button
                 onClick={() => {
                   if (compareMode) { exitCompareMode(); return }
-                  exitBulkMode()
+                  clearBulkSelection()
                   setCompareMode(true)
                 }}
                 aria-pressed={compareMode}
@@ -6440,18 +6440,15 @@ export function ResourcesView({
               </button>
             </Tooltip>
           )}
-          {canBulkSelect && !alwaysShowCheckboxes && (
-            <Tooltip content={bulkMode ? 'Exit bulk select mode' : 'Select multiple resources'}>
+          {canBulkSelect && (
+            <Tooltip content={isCheckboxMode ? 'Hide selection checkboxes' : 'Show selection checkboxes'}>
               <button
-                onClick={() => {
-                  if (bulkMode) { exitBulkMode(); return }
-                  exitCompareMode()
-                  setBulkMode(true)
-                }}
-                aria-pressed={bulkMode}
+                onClick={toggleCheckboxVisibility}
+                aria-label={isCheckboxMode ? 'Hide selection checkboxes' : 'Show selection checkboxes'}
+                aria-pressed={isCheckboxMode}
                 className={clsx(
                   'p-2 rounded-lg transition-colors',
-                  bulkMode
+                  isCheckboxMode
                     ? 'bg-skyhook-500/15 text-skyhook-300 border border-skyhook-400/50'
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated',
                 )}
@@ -6511,10 +6508,10 @@ export function ResourcesView({
             )}
             <button
               type="button"
-              onClick={exitBulkMode}
+              onClick={clearBulkSelection}
               className="px-3 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
             >
-              {alwaysShowCheckboxes ? 'Clear selection' : 'Cancel'}
+              Clear selection
             </button>
           </div>
         )}
@@ -6953,7 +6950,7 @@ export function ResourcesView({
         onBulkDelete?.(checkedBulkItems, {
           force: bulkForceDelete,
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkDeleteConfirm(false)
             setBulkForceDelete(false)
           },
@@ -6983,7 +6980,7 @@ export function ResourcesView({
       onConfirm={() => {
         onBulkRestart?.(checkedBulkItems, {
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkRestartConfirm(false)
           },
         })
@@ -7002,7 +6999,7 @@ export function ResourcesView({
       onConfirm={() => {
         onBulkScale?.(checkedBulkItems, bulkScaleReplicas, {
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkScaleDialog(false)
           },
         })

@@ -4,19 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/skyhook-io/radar/internal/argocd"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 func overlayApp(health string) *unstructured.Unstructured {
@@ -369,5 +371,54 @@ func TestOverlayArgoAPIHealth_PendingWithoutConfigurationIsQuiet(t *testing.T) {
 	}
 	if !tree.HealthAPIPending || tree.HealthAPIError != "" {
 		t.Fatalf("tree = pending %v, error %q; want pending and no notice", tree.HealthAPIPending, tree.HealthAPIError)
+	}
+}
+
+// A timed-out read is cached for other viewers. If another app's read clears
+// the shared failure meanwhile, a page served that cached timeout must still
+// be told to ask again, or it would never fetch the recovered health.
+func TestArgoAPIHealth_CachedTimeoutKeepsThePageAsking(t *testing.T) {
+	s := setupArgoCDTest(t)
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Version":"v3.5.2"}`))
+	})
+	mux.HandleFunc("/api/v1/session/userinfo", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"loggedIn":true,"username":"admin"}`))
+	})
+	mux.HandleFunc("/api/v1/applications/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/slow") {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(func() {
+		argocd.SetConfig("", "", false, true)
+		close(release)
+		srv.Close()
+	})
+	connectArgo(t, srv.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := s.argoAPIHealth(ctx, "argocd", "slow"); err == nil {
+		t.Fatal("the slow app's read must fail")
+	}
+	// Another app's server answer clears the shared failure flag.
+	_, _ = s.argoAPIHealth(context.Background(), "argocd", "fast")
+	if argocd.Retrying() {
+		t.Fatal("setup: another app's answer should have cleared the shared failure")
+	}
+
+	_, err := s.argoAPIHealth(context.Background(), "argocd", "slow")
+	var pending *argoHealthPending
+	if !errors.As(err, &pending) || !pending.retrying {
+		t.Fatalf("cached timeout = %v; want the page told to ask again", err)
 	}
 }

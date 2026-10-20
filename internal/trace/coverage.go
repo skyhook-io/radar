@@ -633,6 +633,10 @@ func ApplyInClusterResults(t *Trace, byTarget map[string][]probe.Result) {
 		return
 	}
 	folded := false
+	// livePasses holds the backends this run's in-cluster requests reached,
+	// keyed like passedBackends. A route's earlier outcome can come from a
+	// shared front-door probe, so only these can settle a deny-all issue.
+	livePasses := map[string]map[int32]bool{}
 	for i := range t.Routes {
 		if t.Routes[i].Benign {
 			continue
@@ -658,6 +662,16 @@ func ApplyInClusterResults(t *Trace, byTarget map[string][]probe.Result) {
 		rr.ByVantage = mergeVantages(t.Routes[i].ByVantage, rr.ByVantage)
 		t.Routes[i] = rr
 		folded = true
+		// A sidecar proxy in the probe pod can accept the connection before
+		// the backend does, so a meshed result doesn't settle policy findings.
+		if rr.Confidence == ConfidenceReal && (rr.Outcome == OutcomeVerified || rr.Outcome == OutcomeReached) && !anyMeshed(res) {
+			name, port := splitTargetPort(rr.Target)
+			key := name + "\x00" + rr.TargetNamespace
+			if livePasses[key] == nil {
+				livePasses[key] = map[int32]bool{}
+			}
+			livePasses[key][port] = true
+		}
 	}
 	if !folded {
 		return
@@ -730,7 +744,7 @@ func ApplyInClusterResults(t *Trace, byTarget map[string][]probe.Result) {
 	// reached the backend is ground truth that the rule isn't blocking this path.
 	// Downgrade the surviving would-deny WARNING so computeDiagnosis can't
 	// re-promote a prediction that the confirmed live success contradicts.
-	reconcileInClusterPolicy(t)
+	reconcileInClusterPolicy(t, livePasses)
 	// Same ground-truth principle for the targetPort suspicion: live in-cluster
 	// traffic that reached the suspect Service port proves a listener exists, so
 	// downgrade the surviving svc:targetport-no-listener WARNING before computeDiagnosis
@@ -781,26 +795,35 @@ func ApplyInClusterResults(t *Trace, byTarget map[string][]probe.Result) {
 }
 
 // reconcileInClusterPolicy downgrades a static netpol:would-deny WARNING to the
-// reassuring info note on any Pods hop whose route was confirmed reachable over
-// REAL in-cluster traffic. Without this, ApplyInClusterResults would fold the
-// live success into the route outcome but leave the contradicting prediction on
-// the hop, where primaryProblemFinding could re-promote it as the lead cause.
-func reconcileInClusterPolicy(t *Trace) {
-	passed, anyPass := passedBackends(t)
-	if !anyPass {
+// reassuring info note on any Pods hop whose backend this run's in-cluster
+// request reached. Without this, ApplyInClusterResults would fold the live
+// success into the route outcome but leave the contradicting prediction on the
+// hop, where primaryProblemFinding would promote it as the lead cause. Only
+// this run's requests count: a route's earlier outcome can come from a shared
+// front-door probe that never reached this backend.
+func reconcileInClusterPolicy(t *Trace, livePasses map[string]map[int32]bool) {
+	if len(livePasses) == 0 {
 		return
 	}
-	// downgrade rewrites a would-deny finding ONLY when the real pass actually
-	// covered the port the deny is about (or the deny is all-ports). A pass on
-	// :80 must not clear a :443 prediction. ports==nil means this branch had no
-	// real pass at all.
+	// downgrade rewrites a would-deny finding ONLY when the pass went through
+	// the port the prediction is about. A pass on :80 must not clear a :443
+	// prediction.
 	downgrade := func(start, end int, ports map[int32]bool) {
 		for i := start; i < end && i < len(t.Downstream); i++ {
 			h := &t.Downstream[i]
+			// A deny-all policy issue claims every port is blocked, so this
+			// run's in-cluster request reaching the backend disproves it
+			// whatever the port. The request went through the Service, so it
+			// can't say which pod answered: settle only a lone policy issue,
+			// which isolates every backend (policies that split the pods each
+			// add their own issue).
+			if h.Resource.Kind == "Service" && len(ports) > 0 && countFindings(h.Findings, k8s.NetworkPolicyDenyAllIngressFingerprint) == 1 {
+				downgradeDenyAllIngress(h)
+			}
 			if h.Meta == nil || h.Meta["policyVerdict"] != "would-deny" {
 				continue
 			}
-			if !realPassCoversDenyPort(ports, hopDenyPort(h.Meta)) {
+			if !inClusterPassCoversPrediction(ports, h.Meta) {
 				continue
 			}
 			idx := findingIndexByCode(h.Findings, codePolicyWouldDeny)
@@ -820,14 +843,59 @@ func reconcileInClusterPolicy(t *Trace) {
 	if len(branches) == 0 {
 		// Single chain (Service subject): the one route covers the whole downstream.
 		// Pool every passed port across the single route(s).
-		downgrade(0, len(t.Downstream), anyPassedPorts(passed))
+		downgrade(0, len(t.Downstream), anyPassedPorts(livePasses))
 		return
 	}
 	for _, b := range branches {
-		if ports, ok := branchPassedPorts(passed, t.Downstream[b.start].Resource); ok {
+		if ports, ok := branchPassedPorts(livePasses, t.Downstream[b.start].Resource); ok {
 			downgrade(b.start, b.end, ports)
 		}
 	}
+}
+
+func anyMeshed(results []probe.Result) bool {
+	for _, r := range results {
+		if r.Mesh != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func countFindings(findings []Finding, code string) int {
+	n := 0
+	for _, f := range findings {
+		if f.Code == code {
+			n++
+		}
+	}
+	return n
+}
+
+// inClusterPassCoversPrediction reports whether a real in-cluster pass
+// reached what a Pods hop's would-deny prediction is about. A route's pass is
+// on a Service port, so it's compared with the Service port the prediction was
+// evaluated for, not with the pod port it resolved to. The in-cluster request
+// is TCP, so a prediction about another protocol is never settled, nor one
+// without a recorded Service port.
+func inClusterPassCoversPrediction(ports map[int32]bool, meta map[string]any) bool {
+	if proto, ok := meta["policyProtocol"].(string); ok && !strings.EqualFold(proto, "TCP") {
+		return false
+	}
+	if p := predictionServicePort(meta); p > 0 {
+		return ports[p]
+	}
+	return false
+}
+
+// predictionServicePort is the Service port a Pods hop's policy prediction was
+// evaluated for (its ":80" policyPort label), or 0 when none is recorded.
+func predictionServicePort(meta map[string]any) int32 {
+	label, _ := meta["policyPort"].(string)
+	if p, err := strconv.ParseInt(strings.TrimPrefix(label, ":"), 10, 32); err == nil && p > 0 {
+		return int32(p)
+	}
+	return 0
 }
 
 // reconcileInClusterTargetPort downgrades a static svc:targetport-no-listener
@@ -951,18 +1019,6 @@ func splitTargetPort(target string) (string, int32) {
 		name = name[:i]
 	}
 	return name, port
-}
-
-func hopDenyPort(meta map[string]any) int32 {
-	if meta == nil {
-		return 0
-	}
-	if v, ok := meta["policyDenyPort"]; ok {
-		if p, ok := v.(int32); ok {
-			return p
-		}
-	}
-	return 0
 }
 
 // Diagnosis is the one-finding-that-matters, hoisted from the path so an agent
@@ -1175,34 +1231,6 @@ func computeDiagnosis(t *Trace) *Diagnosis {
 	return nil
 }
 
-// realPassByBranch maps each downstream hop index to whether its branch's route
-// was confirmed reachable over REAL traffic (direct dial / in-cluster data path).
-// Used to demote a contradicted static would-deny prediction from the diagnosis.
-func realPassByBranch(t *Trace) map[int]map[int32]bool {
-	out := map[int]map[int32]bool{}
-	passed, anyPass := passedBackends(t)
-	if !anyPass {
-		return out
-	}
-	branches := downstreamBranches(t.Downstream)
-	if len(branches) == 0 {
-		// Single chain (Service subject): the one route covers the whole downstream.
-		ports := anyPassedPorts(passed)
-		for i := range t.Downstream {
-			out[i] = ports
-		}
-		return out
-	}
-	for _, b := range branches {
-		if ports, ok := branchPassedPorts(passed, t.Downstream[b.start].Resource); ok {
-			for i := b.start; i < b.end && i < len(t.Downstream); i++ {
-				out[i] = ports
-			}
-		}
-	}
-	return out
-}
-
 // primaryProblemFinding returns the worst-severity critical/warning finding on
 // the intended route, with the hop resource it hangs on. Anchors on the break
 // hop (BrokenAt) and its downstream when one is set, else scans the whole
@@ -1215,21 +1243,15 @@ func primaryProblemFinding(t *Trace) (Finding, ResourceRef, bool) {
 		depth int
 	}
 	var cands []cand
-	passed := realPassByBranch(t)
 	gather := func(hops []Hop, base int) {
 		for i, h := range hops {
 			for _, f := range h.Findings {
 				if isScaleZeroFinding(f) {
 					continue
 				}
-				// A static would-deny is a PREDICTION, not ground truth. Once real
-				// traffic actually passed this branch ON THE DENIED PORT (direct dial
-				// or in-cluster data path), the prediction is contradicted and must not
-				// lead the diagnosis - demote it out of the candidates. A pass on a
-				// different port leaves the prediction standing.
-				if f.Code == codePolicyWouldDeny && realPassCoversDenyPort(passed[base+i], hopDenyPort(h.Meta)) {
-					continue
-				}
+				// A would-deny prediction that real traffic contradicted was
+				// already settled to info by the reconcile passes, from
+				// evidence about that backend; one still at warning leads.
 				if f.Severity == SeverityCritical || f.Severity == SeverityWarning {
 					cands = append(cands, cand{f, h.Resource, base + i})
 				}

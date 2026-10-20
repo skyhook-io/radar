@@ -63,6 +63,15 @@ type EventStore interface {
 	Close() error
 }
 
+// EvictionBoundary is implemented by stores that delete recorded events to
+// stay within a size or age limit. EvictedThrough returns a time T such that
+// every recorded event newer than T is still in the store; zero means nothing
+// has been deleted. A store may return a later T than strictly needed, never
+// an earlier one: callers use it to decide when an empty answer is complete.
+type EvictionBoundary interface {
+	EvictedThrough() time.Time
+}
+
 // QueryOptions configures event queries
 type QueryOptions struct {
 	// Filters

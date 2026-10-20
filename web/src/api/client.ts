@@ -1,6 +1,7 @@
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
+import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
 import type {
@@ -22,7 +23,7 @@ import type {
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
-import { showApiError, showApiSuccess } from '../components/ui/Toast'
+import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
@@ -755,14 +756,33 @@ export interface IssuesResponse {
   recent_changes_reason?: string
   recent_changes_guidance?: string
   recent_changes_truncated?: boolean
+  // Present when the recent-changes window starts before the history Radar
+  // holds; complete_since is sent only to callers who can read every namespace.
+  recent_changes_history_coverage?: {
+    incomplete: boolean
+    complete_since?: string
+    reasons: string[]
+  }
   // Present only when RBAC visibility is incomplete (absent = full access).
   // state 'degraded' means core workload reads are denied, so an empty list may
   // mean "can't see" rather than "nothing broken" — the UI must say so.
   visibility?: { state?: string; impact?: string };
   // Issue sources Radar couldn't check, so their issues may be missing: an
-  // empty list is not an all-clear. Today only "helm"; a newer Radar may send
-  // others. Absent when every source was checked, and from older Radars.
-  unchecked_sources?: { source: string; reason: string }[];
+  // empty list is not an all-clear. A newer Radar may send sources and
+  // reasons this version doesn't know. Absent when every source was checked,
+  // and from older Radars.
+  unchecked_sources?: UncheckedSource[];
+}
+
+export interface UncheckedSource {
+  source: string;
+  reason: string;
+  // The kinds within the source that went unchecked; absent means the whole
+  // source, or that Radar couldn't tell which kinds.
+  kinds?: { group?: string; kind: string }[];
+  // The namespaces whose read failed while the others were read; absent
+  // means the gap isn't limited to particular namespaces.
+  namespaces?: string[];
 }
 
 export function useIssues(namespaces: string[] = [], enabled = true) {
@@ -1848,13 +1868,14 @@ export function useRadarFeature(feature: RadarFeature) {
   const currentVersion = versionInfo?.currentVersion || radarVersion
   const latestVersion = versionInfo?.latestVersion
   const support = radarFeatureSupport(feature, capabilities, currentVersion)
+  // Stable across renders, so a callback built on guard keeps its identity.
+  const guard = useCallback(
+    <T,>(request: () => Promise<T>): Promise<T> => guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
+    [feature, support, currentVersion, latestVersion],
+  )
+  const gatedKey = useMemo(() => (support === 'unsupported' ? ['radar-feature-unsupported'] : []), [support])
 
-  return {
-    support,
-    gatedKey: support === 'unsupported' ? ['radar-feature-unsupported'] : [],
-    guard: <T,>(request: () => Promise<T>): Promise<T> =>
-      guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
-  }
+  return { support, gatedKey, guard }
 }
 
 // ============================================================================
@@ -2516,9 +2537,37 @@ export function useApplicationHistory(
 }
 
 // How often a page asks again while Radar is still connecting to argocd-server,
-// and while it retries a connect that failed.
+// and while it retries after a failure. Radar re-checks a failed connection at
+// most every 30s, so asking more often while retrying adds requests without
+// making the server reconnect sooner.
+// A page whose last fetch failed and was waiting on something keeps asking at
+// the slow rate, so a Radar or proxy outage doesn't strand it. It stops when
+// Radar answered that the object is gone or the caller can't read it, since
+// asking again won't change that answer.
 const ARGO_CONNECTING_POLL_MS = 2000;
-const ARGO_RETRYING_POLL_MS = 10_000;
+const ARGO_RETRYING_POLL_MS = 30_000;
+
+type PollState<T> = {
+  state: { status: string; data?: T; error?: unknown };
+};
+
+function afterFailedFetch(error: unknown, wanted: number | false): number | false {
+  if (wanted === false) return false;
+  if (error instanceof ApiError && [401, 403, 404].includes(error.status)) return false;
+  return ARGO_RETRYING_POLL_MS;
+}
+
+export function gitopsTreeRefetchInterval(
+  query: PollState<Pick<GitOpsResourceTree, "healthApiPending" | "healthApiRetrying">>,
+): number | false {
+  const data = query.state.data;
+  const wanted = data?.healthApiPending
+    ? ARGO_CONNECTING_POLL_MS
+    : data?.healthApiRetrying
+      ? ARGO_RETRYING_POLL_MS
+      : false;
+  return query.state.status === "error" ? afterFailedFetch(query.state.error, wanted) : wanted;
+}
 
 export function useGitOpsTree(
   kind: string,
@@ -2544,12 +2593,7 @@ export function useGitOpsTree(
     staleTime: 5000,
     // Radar answers at once while it connects to argocd-server; ask again
     // until Argo's per-resource health is in.
-    refetchInterval: (query) =>
-      query.state.data?.healthApiPending
-        ? ARGO_CONNECTING_POLL_MS
-        : query.state.data?.healthApiRetrying
-          ? ARGO_RETRYING_POLL_MS
-          : false,
+    refetchInterval: gitopsTreeRefetchInterval,
   });
 }
 
@@ -2558,6 +2602,27 @@ export function useGitOpsTree(
 // operationState.phase from Running/Terminating to a terminal phase, so this
 // auto-quiesces on completion.
 const INSIGHTS_RUNNING_POLL_MS = 2000;
+
+export function gitopsInsightsRefetchInterval(
+  query: PollState<{
+    summary?: Partial<
+      Pick<GitOpsInsight["summary"], "operationPhase" | "resourceHealthApiPending" | "resourceHealthApiRetrying">
+    >;
+    capabilities?: Pick<NonNullable<GitOpsInsight["capabilities"]>, "argoConnecting" | "argoRetrying">;
+  }>,
+): number | false {
+  const data = query.state.data;
+  const phase = data?.summary?.operationPhase;
+  let wanted: number | false = false;
+  if (phase === "Running" || phase === "Terminating") {
+    wanted = INSIGHTS_RUNNING_POLL_MS;
+  } else if (data?.summary?.resourceHealthApiPending || data?.capabilities?.argoConnecting) {
+    wanted = ARGO_CONNECTING_POLL_MS;
+  } else if (data?.summary?.resourceHealthApiRetrying || data?.capabilities?.argoRetrying) {
+    wanted = ARGO_RETRYING_POLL_MS;
+  }
+  return query.state.status === "error" ? afterFailedFetch(query.state.error, wanted) : wanted;
+}
 
 export function useGitOpsInsights(
   kind: string,
@@ -2580,19 +2645,7 @@ export function useGitOpsInsights(
       ),
     enabled: Boolean(kind && name),
     staleTime: 5000,
-    refetchInterval: (query) => {
-      const phase = query.state.data?.summary?.operationPhase;
-      if (phase === "Running" || phase === "Terminating") {
-        return INSIGHTS_RUNNING_POLL_MS;
-      }
-      const summary = query.state.data?.summary;
-      if (summary?.resourceHealthApiPending || query.state.data?.capabilities?.argoConnecting) {
-        return ARGO_CONNECTING_POLL_MS;
-      }
-      return summary?.resourceHealthApiRetrying || query.state.data?.capabilities?.argoRetrying
-        ? ARGO_RETRYING_POLL_MS
-        : false;
-    },
+    refetchInterval: gitopsInsightsRefetchInterval,
   });
 }
 
@@ -4349,7 +4402,7 @@ export function useUpdateResource() {
   });
 }
 
-// Cascade delete preview — shows resources that will be garbage-collected
+// Cascade delete preview — visible related resources deletion may affect.
 export interface CascadeDeletePreview {
   root: { kind: string; namespace: string; name: string; group?: string };
   rootResolved: boolean;
@@ -5573,6 +5626,11 @@ export function useDrainNode() {
         evictedPods?: string[];
         skippedPods?: DrainPlanPod[];
         errors?: string[];
+        pendingPods?: string[];
+        waitedForDeletion?: boolean;
+        outcome?: DrainCompletionOutcome;
+        unconfirmedPods?: string[];
+        verificationError?: string;
       },
       variables,
     ) => {
@@ -5582,11 +5640,13 @@ export function useDrainNode() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
 
-      const { title, detail, failed } = describeDrainResult(data);
-      if (failed) {
+      const { title, detail, type } = describeDrainResult(data);
+      if (type === "error") {
         showApiError(title, detail);
-      } else {
+      } else if (type === "success") {
         showApiSuccess(title, detail);
+      } else {
+        showApiNotice(title, detail, type);
       }
     },
   });
@@ -5600,47 +5660,86 @@ function listWithOverflow(items: string[]): string {
   return rest > 0 ? `${shown.join("; ")}; +${rest} more` : shown.join("; ");
 }
 
-/**
- * Turns the drain response into a legible summary: evicted, skipped (with reasons),
- * failed. Lists are capped so the toast stays readable on nodes with many pods.
- */
-export function describeDrainResult(data: {
+export type DrainCompletionOutcome = "complete" | "incomplete" | "unconfirmed" | "started";
+
+interface DrainResultData {
   evictedPods?: string[];
   skippedPods?: DrainPlanPod[];
   errors?: string[];
-}): { title: string; detail: string; failed: boolean } {
-  const evicted = data?.evictedPods?.length ?? 0;
-  const skipped = data?.skippedPods ?? [];
-  const errors = data?.errors ?? [];
-  const parts: string[] = [];
-  if (skipped.length > 0) {
-    parts.push(
-      `Skipped ${skipped.length}: ${listWithOverflow(
-        skipped.map((p) => `${p.namespace}/${p.name} (${p.reason})`),
-      )}`,
-    );
-  }
-  if (errors.length > 0) {
-    parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
-  }
-  parts.push(
-    evicted > 0
-      ? "Evictions were accepted; those pods may still be terminating. The node remains cordoned."
-      : "The node remains cordoned.",
+  pendingPods?: string[];
+  unconfirmedPods?: string[];
+  verificationError?: string;
+  waitedForDeletion?: boolean;
+  outcome?: DrainCompletionOutcome;
+}
+
+export function describeDrainResult(data: DrainResultData): {
+  title: string;
+  detail: string;
+  failed: boolean;
+  type: "success" | "error" | "warning" | "info";
+  outcome: DrainCompletionOutcome;
+} {
+  const evicted = data.evictedPods?.length ?? 0;
+  const skipped = data.skippedPods ?? [];
+  const errors = data.errors ?? [];
+  const pending = data.pendingPods ?? [];
+  const unconfirmed = data.unconfirmedPods ?? [];
+  const blocking = skipped.filter((pod) => pod.expectedSkip === false);
+  const unknownSkips = skipped.filter((pod) => pod.expectedSkip === undefined);
+  const expected = skipped.filter((pod) => pod.expectedSkip);
+  // Older backends have no completion outcome or expected-skip metadata.
+  const outcome = data.outcome ?? (
+    errors.length > 0 || pending.length > 0 || blocking.length > 0 ? "incomplete" :
+    unconfirmed.length > 0 || data.verificationError ? "unconfirmed" :
+    evicted > 0 && !data.waitedForDeletion ? "started" :
+    unknownSkips.length > 0 ? "unconfirmed" : "complete"
   );
-  const detail = parts.join("\n");
+  const parts: string[] = [];
   if (errors.length > 0) {
-    return {
-      title: `Drain finished with ${errors.length} failed eviction(s): ${evicted} evicted, ${skipped.length} skipped`,
-      detail,
-      failed: true,
-    };
+    parts.push(`Failed evictions ${errors.length}: ${listWithOverflow(errors)}`);
   }
-  return {
-    title: `Node drained: ${evicted} evicted, ${skipped.length} skipped`,
-    detail,
-    failed: false,
+  if (pending.length > 0) {
+    parts.push(`Still on the node ${pending.length}: ${listWithOverflow(pending)}`);
+  }
+  const describePod = (pod: DrainPlanPod) => `${pod.namespace}/${pod.name} (${pod.reason})`;
+  if (blocking.length > 0) {
+    parts.push(`Skipped pods requiring attention ${blocking.length}: ${listWithOverflow(blocking.map(describePod))}`);
+  }
+  if (unknownSkips.length > 0) {
+    parts.push(`Skipped pods requiring review ${unknownSkips.length}: ${listWithOverflow(unknownSkips.map(describePod))}`);
+  }
+  if (unconfirmed.length > 0) {
+    parts.push(`Deletion unconfirmed ${unconfirmed.length}: ${listWithOverflow(unconfirmed)}`);
+  }
+  if (data.verificationError) {
+    parts.push(`Could not verify pod deletion: ${data.verificationError}`);
+  }
+  if (outcome === "started") {
+    parts.push("Eviction requests were accepted; pod deletion has not been confirmed.");
+  } else if (data.waitedForDeletion && evicted > 0 && pending.length === 0 && unconfirmed.length === 0 && !data.verificationError) {
+    parts.push("All evicted pods have left the node.");
+  }
+  if (expected.length > 0) {
+    parts.push(`Left in place by design: ${pluralize(expected.length, "pod")}.`);
+  }
+  parts.push("The node remains cordoned.");
+  if (outcome === "incomplete" || outcome === "unconfirmed") {
+    if (blocking.length > 0) parts.push("Review the skipped workloads and drain options before retrying.");
+    if (pending.length > 0) parts.push("Check the remaining pods before retrying.");
+    if (errors.length > 0) parts.push("Resolve the failed evictions before retrying.");
+    if (unconfirmed.length > 0 || data.verificationError || unknownSkips.length > 0) parts.push("Check the node's pods to confirm what remains.");
+    parts.push("Do not take the node down until required workloads are removed.");
+  }
+  const titles: Record<DrainCompletionOutcome, string> = {
+    complete: evicted > 0 ? `Drain complete: ${pluralize(evicted, "pod")} removed` : "Nothing to evict",
+    incomplete: errors.length > 0 ? `Drain incomplete: ${pluralize(errors.length, "failed eviction")}` :
+      `Drain incomplete: ${pluralize(pending.length + blocking.length, "pod")} left on the node`,
+    unconfirmed: "Could not confirm drain completion",
+    started: `Evictions started: ${evicted} accepted`,
   };
+  const type = outcome === "complete" ? "success" : outcome === "started" ? "info" : errors.length > 0 ? "error" : "warning";
+  return { title: titles[outcome], detail: parts.join("\n"), failed: outcome === "incomplete" || outcome === "unconfirmed", type, outcome };
 }
 
 // ============================================================================
@@ -6695,13 +6794,16 @@ export const useFluxResume = createGitOpsMutation<FluxResourceVars>({
 export const useFluxSyncWithSource = createGitOpsMutation<FluxResourceVars>({
   getPath: (v) => `/flux/${v.kind}/${v.namespace}/${v.name}/sync-with-source`,
   errorMessage: "Failed to sync with source",
-  successMessage: "Sync with source triggered",
+  // The server names what it reconciled, and says when a source was skipped.
+  getSuccessMessage: (data) => data.message,
   getInvalidateKeys: (v) => [
     ...fluxInvalidateKeys(v),
     // Also invalidate source resources as they were reconciled too
     ["resources", "gitrepositories"],
     ["resources", "ocirepositories"],
     ["resources", "helmrepositories"],
+    ["resources", "helmcharts"],
+    ["resources", "buckets"],
   ],
 });
 
@@ -7619,6 +7721,7 @@ export interface DiagnosticsSnapshot {
     historyLimit: number;
     debugEvents: boolean;
     mcpEnabled: boolean;
+    mcpReadOnly: boolean;
     hasPrometheusURL: boolean;
     hasPrometheusHeaders: boolean;
   };

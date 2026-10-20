@@ -2,10 +2,7 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,26 +15,48 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// filterRecentChangesByRBAC drops RecentChange rows the ctx user can't read, via
-// the shared per-kind gate (RecentChange.APIVersion disambiguates CRD kind
-// collisions). Auth off → returned unchanged. Used by both the /api/issues
-// recent_changes enrichment and per-issue change correlation.
-func (s *Server) filterRecentChangesByRBAC(ctx context.Context, changes []issuesapi.RecentChange) []issuesapi.RecentChange {
+// callerReadsAllNamespaces reports whether the caller is unrestricted by
+// namespace, from the permissions parseNamespacesForUser already resolved.
+// Store-wide facts, such as when Radar's held history becomes complete, go
+// only to such callers.
+func (s *Server) callerReadsAllNamespaces(r *http.Request) bool {
+	user := auth.UserFromContext(r.Context())
+	if user == nil || s.permCache == nil {
+		return true
+	}
+	perms := s.permCache.Get(user.Username, user.Groups)
+	return perms != nil && perms.AllowedNamespaces == nil
+}
+
+// recentChangeReadFilter admits only RecentChange rows the ctx user can read,
+// via the shared per-kind gate (RecentChange.APIVersion disambiguates CRD kind
+// collisions), for meaningfulchanges.Query.Allow. nil when auth is off.
+func (s *Server) recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bool {
 	if auth.UserFromContext(ctx) == nil {
-		return changes
+		return nil
 	}
 	authz := s.changeAuthorizerForCtx(ctx)
-	out := changes[:0]
-	for _, c := range changes {
-		if k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz) {
-			out = append(out, c)
-		}
+	return func(c issuesapi.RecentChange) bool {
+		return k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz)
 	}
-	return out
+}
+
+// recentChangeViewer gates the Pod and workload names change rows carry.
+// The zero Viewer when auth is off.
+func (s *Server) recentChangeViewer(ctx context.Context) meaningfulchanges.Viewer {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return meaningfulchanges.Viewer{}
+	}
+	return meaningfulchanges.Viewer{
+		CanReadPods:     func(namespace string) bool { return s.canReadUser(ctx, user, "", "pods", namespace, "get") },
+		CanReadConsumer: s.recentChangeReadFilter(ctx),
+	}
 }
 
 // handleIssues serves GET /api/issues — "what's broken right now."
@@ -74,7 +93,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	// is unrestricted); non-nil empty = "user has no access to anything
 	// they asked for".
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		// If the caller EXPLICITLY named namespace(s) they can't access, that's
 		// a denial — surface it as 403, not an empty (reads-as-"nothing broken")
 		// list. Bad trust boundary otherwise, especially for an agent.
@@ -118,13 +137,13 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	helmIssues, helmUnchecked := s.nativeHelmIssuesForRequest(r, namespaces, filters)
+	helmIssues, helmUnchecked, helmIncomplete := s.nativeHelmIssuesForRequest(r, namespaces, filters)
 	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse); surfaces add their
 	// own enrichments after this point.
 	resp := issues.NewListResponse(out, stats)
-	if helmUnchecked {
-		resp.UncheckedSources = []issuesapi.UncheckedSource{{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonReadFailed}}
+	if helmIncomplete {
+		resp.UncheckedSources = append(resp.UncheckedSources, helmUnchecked)
 	}
 	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func(group, resource string) bool {
 		return s.canRead(r, group, resource, "kube-system", "list")
@@ -136,26 +155,18 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 				Since:      meaningfulchanges.DefaultSince,
 				Limit:      meaningfulchanges.IssueChangesFetchLimit(recentChangesReason),
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
+				// Per-kind RBAC: recent_changes is namespace-filtered but not
+				// per-kind — drop changes for kinds the caller can't read before
+				// ranking and the cut, so priority/recap logic operates on the
+				// visible set.
+				Allow:  s.recentChangeReadFilter(r.Context()),
+				Viewer: s.recentChangeViewer(r.Context()),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()
-			} else if len(recentResult.Changes) > 0 {
-				// Per-kind RBAC: recent_changes is namespace-filtered but not
-				// per-kind — drop changes for kinds the caller can't read before
-				// ranking, so priority/recap logic operates on the visible set.
-				recentResult.Changes = s.filterRecentChangesByRBAC(r.Context(), recentResult.Changes)
-				changes, guidance, recapped := meaningfulchanges.PrioritizeIssueChanges(
-					recentResult.Changes, out, meaningfulchanges.IssueChangePriorityOptions{
-						Reason:             recentChangesReason,
-						Limit:              meaningfulchanges.IssueChangesLimit,
-						UnfilteredIssueSet: meaningfulchanges.IssueSeveritySetComplete(severities),
-						FetchSaturated:     recentResult.FetchSaturated,
-					},
-				)
-				resp.RecentChanges = changes
-				resp.RecentChangesReason = recentChangesReason
-				resp.RecentChangesGuidance = guidance
-				resp.RecentChangesTruncated = recentResult.OutputCapped || recentResult.FetchSaturated || recapped
+			} else {
+				meaningfulchanges.ApplyIssueChanges(&resp, recentResult, out, recentChangesReason,
+					meaningfulchanges.IssueSeveritySetComplete(severities), s.callerReadsAllNamespaces(r))
 			}
 		}
 	}
@@ -203,19 +214,18 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 	}
 }
 
-var helmIssuesDeniedLogged sync.Map
-
 // nativeHelmIssuesForRequest reads Helm release storage on the request's
 // context, so the read stops when the caller disconnects instead of running
-// to completion for nobody. unchecked reports a failed read whose answer
-// someone is still waiting for (see helm.IssueReadUnchecked).
-func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked bool) {
+// to completion for nobody. incomplete reports a failed read whose answer
+// someone is still waiting for (see helm.IssueReadUnchecked); the issues
+// returned alongside it come from the namespaces that were read.
+func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
-		return nil, false
+		return nil, unchecked, false
 	}
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return nil, false
+		return nil, unchecked, false
 	}
 	ctx := r.Context()
 	username, groups := "", []string(nil)
@@ -228,27 +238,12 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 		var ok bool
 		helmNamespaces, ok = s.resolveHelmNamespaces(r)
 		if !ok {
-			return nil, false
+			return nil, unchecked, false
 		}
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
-	if err != nil {
-		switch {
-		case errors.Is(ctx.Err(), context.Canceled):
-			// The caller went away; nobody is left to tell.
-		case !helm.IssueReadDenied(err):
-			log.Printf("[issues] Failed to list Helm releases for issue stream: %v", err)
-		default:
-			if _, seen := helmIssuesDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
-				// Logged once per identity (username + groups): the alerts worker
-				// polls this, and a cluster without a Secret-read binding would
-				// otherwise drop Helm alerts with no trace anywhere.
-				log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
-			}
-		}
-		return nil, helm.IssueReadUnchecked(ctx, err)
-	}
-	return issues.NativeHelmReleaseIssues(releases, time.Now()), false
+	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 
 // handleResourceIssues serves GET /api/issues/resource/{kind}/{namespace}/{name}

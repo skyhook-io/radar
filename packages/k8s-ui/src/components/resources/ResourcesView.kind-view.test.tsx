@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ResourcesView } from './ResourcesView'
@@ -72,6 +72,7 @@ it('closes bulk dialogs when the same kind switches to a custom view and keeps t
     renderKindView={() => custom ? <div data-testid="custom">Custom</div> : null}
   /></KeyboardShortcutProvider>))
   render(false)
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', bubbles: true })))
   act(() => host.querySelector<HTMLInputElement>('input[title="Select all"]')!.click())
   expect(host.textContent).toContain('1 selected')
   act(() => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Delete')!.click())
@@ -147,45 +148,149 @@ it('skips hidden-table sort and filter aggregation for a loaded list, then resum
   expect(getFilterValue).toHaveBeenCalled()
 })
 
-const renderBulkTable = (kind: APIResource, item: typeof pod, onResourceClick = vi.fn()) => {
+const deployments: APIResource = { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['get', 'list'] }
+const widgets: APIResource = { group: 'example.com', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: ['get', 'list'] }
+const checkboxKey = 'radar-resource-checkboxes'
+const key = (value: string) => act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true })))
+const required = <T extends Element>(selector: string, parent: ParentNode = host): T => {
+  const element = parent.querySelector<T>(selector)
+  if (!element) throw new Error(`Missing element: ${selector}`)
+  return element
+}
+const clickButton = (label: string, parent: ParentNode = host) => {
+  const button = [...parent.querySelectorAll('button')].find(candidate => candidate.textContent?.trim() === label)
+  if (!button) throw new Error(`Missing button: ${label}`)
+  act(() => button.click())
+}
+const renderBulkTable = (initialKind = pods, bulkEnabled = true) => {
+  const selected = vi.fn()
+  const remove = vi.fn<NonNullable<ComponentProps<typeof ResourcesView>['onBulkDelete']>>()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  act(() => root.render(<KeyboardShortcutProvider><ResourcesView
+  const render = (kind = initialKind, items = [pod]) => act(() => root.render(<KeyboardShortcutProvider><ResourcesView
     namespaces={['test']}
-    apiResources={[kind]}
-    resourceCounts={{ [kind.kind]: 1 }}
-    selectedKindQuery={{ isLoading: false, data: [item], resourceName: kind.name, group: kind.group }}
+    apiResources={[pods, deployments, widgets]}
+    resourceCounts={{ [kind.kind]: items.length }}
+    selectedKindQuery={{ isLoading: false, data: items, resourceName: kind.name, group: kind.group }}
     locationPathname={`/resources/${kind.name}`}
-    locationSearch=""
+    locationSearch={kind.group ? `?apiGroup=${kind.group}` : ''}
     onNavigate={() => {}}
-    onResourceClick={onResourceClick}
-    onBulkDelete={vi.fn()}
+    onResourceClick={selected}
+    onBulkDelete={bulkEnabled ? remove : undefined}
   /></KeyboardShortcutProvider>))
-  return onResourceClick
+  render()
+  return { selected, remove, render }
 }
 
-it('always shows row checkboxes for Pods and keeps row activation for inspection', () => {
-  const selected = renderBulkTable(pods, pod)
+it.each([pods, deployments, widgets])('hides selection by default on $kind and enables it without an empty action bar', kind => {
+  renderBulkTable(kind)
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+  act(() => required<HTMLButtonElement>('button[aria-label="Show selection checkboxes"]').click())
   expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
-  expect(host.querySelector('button .lucide-list-checks')).toBeNull()
-  expect(host.textContent).not.toContain('selected')
-  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true })))
-  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-  expect(selected).toHaveBeenCalledTimes(1)
-  expect(host.textContent).not.toContain('1 selected')
-  act(() => host.querySelector<HTMLInputElement>('input[title="Select all"]')!.click())
+  expect(host.textContent).not.toContain('0 selected')
+  expect(localStorage.getItem(checkboxKey)).toBe('true')
+})
+
+it('remembers both visibility choices across remounts without remembering selected rows', () => {
+  renderBulkTable()
+  key('b')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
   expect(host.textContent).toContain('1 selected')
-  act(() => [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Clear selection')!.click())
+  act(() => root.unmount()); host.remove()
+  renderBulkTable(deployments)
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
   expect(host.textContent).not.toContain('1 selected')
-  act(() => host.querySelector<SVGElement>('button .lucide-git-compare')!.closest<HTMLButtonElement>('button')!.click())
+  key('b')
+  expect(localStorage.getItem(checkboxKey)).toBe('false')
+  act(() => root.unmount()); host.remove()
+  renderBulkTable()
   expect(host.querySelector('input[title="Select all"]')).toBeNull()
 })
 
-it('keeps checkboxes behind the bulk-select toggle for kinds other than Pods', () => {
-  const deployments: APIResource = { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['get', 'list'] }
-  const deployment = { ...pod, apiVersion: 'apps/v1', kind: 'Deployment', metadata: { ...pod.metadata, uid: 'deploy-id' } }
-  renderBulkTable(deployments, deployment)
-  expect(host.querySelector('input[title="Select all"]')).toBeNull()
-  act(() => host.querySelector<SVGElement>('button .lucide-list-checks')!.closest<HTMLButtonElement>('button')!.click())
+it('keeps keyboard activation for inspection while checkboxes select', () => {
+  const { selected } = renderBulkTable()
+  key('b')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
+  expect(selected).not.toHaveBeenCalled()
+  expect(host.textContent).toContain('1 selected')
+  key('j'); key('Enter')
+  expect(selected).toHaveBeenCalledTimes(1)
+  expect(host.textContent).toContain('1 selected')
+  key('Escape')
+  expect(host.textContent).not.toContain('1 selected')
   expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
-  expect(host.textContent).toContain('0 selected')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
+  clickButton('Clear selection')
+  expect(host.textContent).not.toContain('1 selected')
+  expect(localStorage.getItem(checkboxKey)).toBe('true')
+})
+
+it('temporarily hides checkboxes for compare and clears selection on kind changes', () => {
+  const { render } = renderBulkTable()
+  key('b')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
+  act(() => required<HTMLButtonElement>('button:has(.lucide-git-compare)').click())
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+  key('Escape')
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  expect(host.textContent).not.toContain('1 selected')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
+  render(deployments)
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  expect(host.textContent).not.toContain('1 selected')
+  render(widgets)
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  expect(localStorage.getItem(checkboxKey)).toBe('true')
+})
+
+it('can show selection from compare without turning off the saved preference', () => {
+  localStorage.setItem(checkboxKey, 'true')
+  renderBulkTable()
+  act(() => required<HTMLButtonElement>('button:has(.lucide-git-compare)').click())
+  key('b')
+  expect(host.querySelector('[aria-label="Compare resources tray"]')).toBeNull()
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  expect(localStorage.getItem(checkboxKey)).toBe('true')
+})
+
+it('keeps delete confirmation and clears successful selection without hiding checkboxes', () => {
+  const { remove } = renderBulkTable()
+  key('b')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
+  clickButton('Delete')
+  const dialog = required<HTMLElement>('[role="dialog"]', document)
+  expect(dialog.textContent).toContain('Delete 1 Pod?')
+  expect(remove).not.toHaveBeenCalled()
+  clickButton('Delete 1 resource', dialog)
+  expect(remove).toHaveBeenCalledWith([{ kind: 'pods', group: '', namespace: 'test', name: 'example' }], expect.objectContaining({ force: false }))
+  act(() => remove.mock.calls[0]?.[1]?.onSuccess?.())
+  expect(host.textContent).not.toContain('1 selected')
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  expect(localStorage.getItem(checkboxKey)).toBe('true')
+})
+
+it.each(['false', 'garbage', 'null', '1'])('ignores invalid or disabled visibility value %s', value => {
+  localStorage.setItem(checkboxKey, value)
+  renderBulkTable()
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+})
+
+it('keeps toggling usable when browser storage is unavailable', () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Storage unavailable') })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage unavailable') })
+  renderBulkTable()
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+  key('b')
+  expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
+  key('b')
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+})
+
+it('does not offer selection without a bulk action callback even with saved visibility', () => {
+  localStorage.setItem(checkboxKey, 'true')
+  renderBulkTable(pods, false)
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+  expect(host.querySelector('button .lucide-list-checks')).toBeNull()
+  key('b')
+  expect(host.querySelector('input[title="Select all"]')).toBeNull()
+  expect(localStorage.getItem(checkboxKey)).toBe('true')
 })

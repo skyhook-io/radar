@@ -62,12 +62,14 @@ export function ArgoResourceDiff({ diff, loading, error, fallbackDrift }: ArgoRe
   if (!diff) return fallbackPanel
 
   const unchanged = !docsDiffer(diff.desired, diff.live)
+  // Older Radars send null for an empty list.
+  const fieldEntries = diff.fieldEntries ?? []
 
   return (
     <div>
-      {diff.fieldEntries.length > 0 && (
+      {fieldEntries.length > 0 && (
         <div className="mb-3">
-          <DriftPanel drift={{ entries: diff.fieldEntries, source: diff.source }} />
+          <DriftPanel drift={{ entries: fieldEntries, source: diff.source, truncated: diff.fieldEntriesTruncated }} />
         </div>
       )}
       <div className="mb-2 flex items-center justify-between gap-2">

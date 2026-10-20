@@ -8,8 +8,8 @@ describe('workspace route ownership', () => {
     expect(cnpg.navView).toBe('resources')
     expect(cnpg.namespaceScope).toBe('view')
     expect(cnpg.pageTitle('/cnpg/backups/db/backup%2F1')).toBe('backup/1')
-    expect(cnpg.pageTitle('/cnpg/protection')).toBe('CloudNativePG Protection')
-    expect(cnpg.pageTitle('/cnpg/unknown')).toBe('CloudNativePG Overview')
+    expect(cnpg.pageTitle('/cnpg/protection')).toBe('CloudNativePG Backups')
+    expect(cnpg.pageTitle('/cnpg/unknown')).toBe('CloudNativePG Clusters')
     const capacity = workspaceForView('capacity')!
     expect(capacity.navView).toBe('capacity')
     expect(capacity.namespaceScope).toBe('cluster')

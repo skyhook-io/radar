@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -102,16 +103,16 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	const ns = "alpha"
 	selector := map[string]string{"app": "fleet"}
 	isController := true
-	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", Controller: &isController}
-	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "fleet-rs", Controller: &isController}
+	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", UID: "current-fleet", Controller: &isController}
+	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "fleet-rs", UID: "current-fleet-rs", Controller: &isController}
 	objs := []runtime.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
 		&appsv1.ReplicaSet{
-			ObjectMeta: metav1.ObjectMeta{Name: "fleet-rs", Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
+			ObjectMeta: metav1.ObjectMeta{Name: "fleet-rs", Namespace: ns, UID: "current-fleet-rs", Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
 			Spec:       appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: selector}},
 		},
 		&appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: ns, UID: "current-fleet"},
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: selector},
 				Template: corev1.PodTemplateSpec{
@@ -123,7 +124,7 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	}
 	for i := 0; i < n; i++ {
 		objs = append(objs, &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{podOwner}},
+			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, UID: types.UID(fleetPodName(i)), Labels: selector, OwnerReferences: []metav1.OwnerReference{podOwner}},
 			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "fleet"}}},
 			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 		})
@@ -802,5 +803,18 @@ func TestDiagnoseMetricsErrorRedactsTheBackend(t *testing.T) {
 	}
 	if !strings.Contains(got, "/api/v1/query_range") || !strings.Contains(got, "overloaded") {
 		t.Errorf("the error should still say which call failed and why: %q", got)
+	}
+}
+
+func TestDiagnoseMetricsPreservesPodResolutionErrors(t *testing.T) {
+	f := setupFakeProm(t)
+	for _, err := range []error{errPodsNotListable, errPodsCacheWarming} {
+		metrics := diagnoseWorkloadMetrics(t.Context(), "apps", "deployments", "alpha", "fleet", nil, err, time.Hour, time.Now())
+		if metrics == nil || !strings.Contains(metrics.Error, err.Error()) || len(metrics.Series) != 0 {
+			t.Fatalf("pod resolution error lost: %+v", metrics)
+		}
+	}
+	if len(f.rangeParams) != 0 {
+		t.Fatalf("queried unresolved Pod membership: %v", f.rangeParams)
 	}
 }

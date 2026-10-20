@@ -2,6 +2,22 @@
 
 This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
 
+## MCP exposure
+
+MCP is enabled with read and write tools by default. `--no-mcp` disables all
+MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
+`/mcp-investigation` endpoint, while `/mcp` returns 404. Both CLI and Desktop
+support these flags. This controls MCP exposure only; UI and REST writes are
+unchanged.
+
+Use `RADAR_MCP_READ_ONLY=1` or `"mcpReadOnly": true` in
+`~/.radar/config.json` for persistent deployments. CLI overrides environment,
+which overrides file settings. Explicitly selecting disabled or read-only mode
+overrides a competing mode from a lower-priority source. Explicit false clears
+only its own setting. Contradictory flags, or contradictory settings within the
+config file, are errors. See [MCP configuration](mcp.md#enabling--disabling) for
+examples, boolean parsing and alternate entrypoints.
+
 ## HTTP Listener
 
 Radar listens on `127.0.0.1:9280` by default, so an unauthenticated local

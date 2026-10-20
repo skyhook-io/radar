@@ -118,14 +118,25 @@ func debugContainerSecurityContext(pod *corev1.Pod, targetContainer string) *cor
 	}
 }
 
+// targetSecurityContext finds the target among regular containers and init
+// containers, since a native sidecar (an init container with restartPolicy
+// Always) can be a debug target too.
+func targetSecurityContext(pod *corev1.Pod, targetContainer string) *corev1.SecurityContext {
+	for _, list := range [][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
+		for i := range list {
+			if list[i].Name == targetContainer {
+				return list[i].SecurityContext
+			}
+		}
+	}
+	return nil
+}
+
 func debugRunAsUser(pod *corev1.Pod, targetContainer string) *int64 {
 	if pod != nil {
-		for i := range pod.Spec.Containers {
-			c := &pod.Spec.Containers[i]
-			if c.Name == targetContainer && c.SecurityContext != nil && c.SecurityContext.RunAsUser != nil && *c.SecurityContext.RunAsUser != 0 {
-				runAsUser := *c.SecurityContext.RunAsUser
-				return &runAsUser
-			}
+		if sc := targetSecurityContext(pod, targetContainer); sc != nil && sc.RunAsUser != nil && *sc.RunAsUser != 0 {
+			runAsUser := *sc.RunAsUser
+			return &runAsUser
 		}
 		if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsUser != nil && *pod.Spec.SecurityContext.RunAsUser != 0 {
 			runAsUser := *pod.Spec.SecurityContext.RunAsUser
@@ -138,12 +149,9 @@ func debugRunAsUser(pod *corev1.Pod, targetContainer string) *int64 {
 
 func debugRunAsGroup(pod *corev1.Pod, targetContainer string) *int64 {
 	if pod != nil {
-		for i := range pod.Spec.Containers {
-			c := &pod.Spec.Containers[i]
-			if c.Name == targetContainer && c.SecurityContext != nil && c.SecurityContext.RunAsGroup != nil && *c.SecurityContext.RunAsGroup != 0 {
-				runAsGroup := *c.SecurityContext.RunAsGroup
-				return &runAsGroup
-			}
+		if sc := targetSecurityContext(pod, targetContainer); sc != nil && sc.RunAsGroup != nil && *sc.RunAsGroup != 0 {
+			runAsGroup := *sc.RunAsGroup
+			return &runAsGroup
 		}
 		if pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.RunAsGroup != nil && *pod.Spec.SecurityContext.RunAsGroup != 0 {
 			runAsGroup := *pod.Spec.SecurityContext.RunAsGroup

@@ -3,6 +3,8 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -218,8 +220,8 @@ func FindStaleSecretEnvChecksForObject(ctx context.Context, cache *ResourceCache
 }
 
 // FindStaleSecretEnvChecksForPods aggregates the Pod-level facts needed by a
-// workload diagnosis, including the managedFields fallback that is deliberately
-// confined to this diagnostic path.
+// workload diagnosis, including the managedFields fallback, which only diagnose
+// and get_resource's staleEnv (FindStaleEnvForPods) report.
 func FindStaleSecretEnvChecksForPods(ctx context.Context, cache *ResourceCache, pods []*corev1.Pod) []StaleSecretEnvCheck {
 	if cache == nil {
 		return nil
@@ -286,7 +288,7 @@ func secretReads(namespace string) []issuesapi.EvidenceRead {
 // A caller who can't read the Secret still needs to know its containers may
 // run stale values and how to fix that, which takes no Secret access. What it
 // doesn't get is which Secret, which keys, how many, or when they changed.
-const staleSecretEnvDegradedCause = "A Secret these containers read environment variables from changed after they started, and Kubernetes doesn't refresh Secret-backed environment variables in running containers. Which keys changed, and when, is shown only to callers who can read the Secret."
+const staleSecretEnvDegradedCause = "Radar observed a change to a Secret these containers reference for environment variables after they started, and Kubernetes doesn't refresh Secret-backed environment variables in running containers. Which keys changed, and when, is shown only to callers who can read the Secret."
 
 func staleSecretEnvDegraded(message, action string) *issuesapi.DegradedFinding {
 	return &issuesapi.DegradedFinding{Message: message, Cause: staleSecretEnvDegradedCause, Action: action}
@@ -378,7 +380,7 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			Age:               timeutil.FormatAgeShort(now.Sub(pod.CreationTimestamp.Time)),
 			AgeSeconds:        int64(now.Sub(pod.CreationTimestamp.Time).Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
-			Cause:             "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
+			Cause:             "A running container that references a Secret key in its environment started before Radar observed that key change.",
 			Action:            "Restart the pod so its containers re-read Secret-backed environment variables.",
 			RequiredReads:     secretReads(pod.Namespace),
 			Degraded: staleSecretEnvDegraded(
@@ -420,9 +422,9 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			Name:          group.subject.name,
 			Severity:      "warning",
 			Reason:        "StaleSecretEnv",
-			Message:       staleSecretEnvReadyDetectionMessage(group.subject, len(affectedPods), len(currentChecks)),
+			Message:       staleSecretEnvReadyDetectionMessage(group.subject, currentChecks),
 			Fingerprint:   "stale-secret-env",
-			Cause:         "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
+			Cause:         "Radar observed Secret keys referenced by these Ready containers' environment change after the containers started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
 			Action:        staleSecretEnvReadyAction(group.subject),
 			RequiredReads: secretReads(group.subject.namespace),
 			Degraded: staleSecretEnvDegraded(
@@ -754,20 +756,72 @@ func setStaleSecretEnvOnset(detection *Detection, checks []StaleSecretEnvCheck, 
 	setDetectionOnset(detection, now, changedAt)
 }
 
-func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, podCount, checkCount int) string {
-	if podCount == 1 {
-		if checkCount == 1 {
-			if subject.kind != "Pod" {
-				return fmt.Sprintf("%s/%s has a Ready pod whose running container loaded a Secret-backed environment value before Radar observed its consumed Secret key change; it may still hold the pre-change value.", subject.kind, subject.name)
-			}
-			return fmt.Sprintf("%s/%s is Ready, but a running container loaded a Secret-backed environment value before Radar observed its consumed Secret key change; it may still hold the pre-change value.", subject.kind, subject.name)
-		}
-		if subject.kind != "Pod" {
-			return fmt.Sprintf("%s/%s has a Ready pod whose running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, checkCount)
-		}
-		return fmt.Sprintf("%s/%s is Ready, but its running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, checkCount)
+func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, checks []StaleSecretEnvCheck) string {
+	pods := make(map[string]bool)
+	var podName string
+	for _, check := range checks {
+		pods[check.PodName] = true
+		podName = check.PodName
 	}
-	return fmt.Sprintf("%s/%s has %d Ready pods whose running containers loaded %d Secret-backed environment values before Radar observed the consumed Secret keys change; they may still hold pre-change values.", subject.kind, subject.name, podCount, checkCount)
+	facts := staleSecretEnvFacts(checks)
+	switch {
+	case subject.kind == "Pod":
+		return fmt.Sprintf("%s/%s is Ready, and a running container in it started before Radar observed a Secret key it references change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, facts)
+	case len(pods) == 1:
+		return fmt.Sprintf("%s/%s has a Ready pod (%s) with a running container that started before Radar observed a Secret key it references change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, podName, facts)
+	default:
+		return fmt.Sprintf("%s/%s has %d Ready pods with running containers that started before Radar observed Secret keys they reference change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, len(pods), facts)
+	}
+}
+
+const maxStaleSecretEnvMessageFacts = 3
+
+// staleSecretEnvFacts states what Radar observed for each referenced key: when
+// the container started, which Secret key it references as which env var, and
+// when Radar observed that key change. The change time is when Radar saw the
+// update, not when it was written, so the facts don't claim which value the
+// container read.
+func staleSecretEnvFacts(checks []StaleSecretEnvCheck) string {
+	type fact struct {
+		check     StaleSecretEnvCheck
+		pods      map[string]bool
+		startedAt time.Time
+		changedAt time.Time
+	}
+	byKey := make(map[string]*fact)
+	var keys []string
+	for _, check := range checks {
+		key := check.SecretName + "\x00" + check.Key + "\x00" + check.Container + "\x00" + check.EnvName
+		current := byKey[key]
+		if current == nil {
+			current = &fact{check: check, pods: make(map[string]bool)}
+			byKey[key] = current
+			keys = append(keys, key)
+		}
+		current.pods[check.PodName] = true
+		if check.ContainerStartedAt.After(current.startedAt) {
+			current.startedAt = check.ContainerStartedAt
+		}
+		if check.SecretChangedAt.After(current.changedAt) {
+			current.changedAt = check.SecretChangedAt
+		}
+	}
+	sort.Strings(keys)
+	clauses := make([]string, 0, maxStaleSecretEnvMessageFacts+1)
+	for i, key := range keys {
+		if i == maxStaleSecretEnvMessageFacts {
+			clauses = append(clauses, fmt.Sprintf("+%d more", len(keys)-i))
+			break
+		}
+		f := byKey[key]
+		started := fmt.Sprintf("container %s started at %s and references", f.check.Container, f.startedAt.UTC().Format(time.RFC3339))
+		if len(f.pods) > 1 {
+			started = fmt.Sprintf("%d %s containers started at or before %s and reference", len(f.pods), f.check.Container, f.startedAt.UTC().Format(time.RFC3339))
+		}
+		clauses = append(clauses, fmt.Sprintf("%s Secret/%s key %s as env %s; Radar observed that key change at %s",
+			started, f.check.SecretName, f.check.Key, f.check.EnvName, f.changedAt.UTC().Format(time.RFC3339)))
+	}
+	return strings.Join(clauses, "; ")
 }
 
 func staleSecretEnvReadyAction(subject staleSecretEnvSubject) string {
@@ -931,6 +985,16 @@ type secretDataKey struct {
 }
 
 func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent) []StaleSecretEnvCheck {
+	return findStaleSecretEnvChecksUpTo(cache, pods, events, maxStaleSecretEnvChecksPerContainer)
+}
+
+// findStaleSecretEnvChecksUpTo is findStaleSecretEnvChecks with the
+// per-container cap as a parameter; perContainer <= 0 means no cap, for callers
+// that filter to one Secret first and cap only what they present.
+func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent, perContainer int) []StaleSecretEnvCheck {
+	if perContainer <= 0 {
+		perContainer = math.MaxInt
+	}
 	if cache == nil || cache.Secrets() == nil {
 		return nil
 	}
@@ -955,7 +1019,7 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 			startedAt := status.State.Running.StartedAt.Time
 			containerChecks := 0
 			for _, env := range container.Env {
-				if containerChecks >= maxStaleSecretEnvChecksPerContainer {
+				if containerChecks >= perContainer {
 					break
 				}
 				if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
@@ -970,7 +1034,7 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 				containerChecks++
 			}
 			for _, envFrom := range container.EnvFrom {
-				if containerChecks >= maxStaleSecretEnvChecksPerContainer {
+				if containerChecks >= perContainer {
 					break
 				}
 				if envFrom.SecretRef == nil || !secretExists(cache, pod.Namespace, envFrom.SecretRef.Name, exists, checked) {
@@ -978,10 +1042,10 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 				}
 				identity := pod.Namespace + "\x00" + envFrom.SecretRef.Name
 				for _, change := range changesBySecret[identity] {
-					if containerChecks >= maxStaleSecretEnvChecksPerContainer {
+					if containerChecks >= perContainer {
 						break
 					}
-					if !startedAt.Before(change.changedAt) {
+					if !startedAt.Before(change.changedAt) || envFromKeyOverridden(container, envFrom.Prefix+change.key) {
 						continue
 					}
 					out = append(out, newStaleSecretEnvCheck(pod, container.Name, envFrom.Prefix+change.key, "envFrom", envFrom.Prefix, envFrom.SecretRef.Name, change.key, startedAt, change.changedAt))
@@ -995,7 +1059,14 @@ func findStaleSecretEnvChecks(cache *ResourceCache, pods []*corev1.Pod, events [
 }
 
 func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent) []StaleSecretEnvCheck {
-	out := findStaleSecretEnvChecks(cache, pods, events)
+	return findStaleSecretEnvChecksWithManagedFieldsUpTo(cache, pods, events, maxStaleSecretEnvChecksPerContainer)
+}
+
+func findStaleSecretEnvChecksWithManagedFieldsUpTo(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent, perContainer int) []StaleSecretEnvCheck {
+	out := findStaleSecretEnvChecksUpTo(cache, pods, events, perContainer)
+	if perContainer <= 0 {
+		perContainer = math.MaxInt
+	}
 	if cache == nil || cache.Secrets() == nil {
 		return out
 	}
@@ -1021,7 +1092,7 @@ func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*cor
 			containerIdentity := pod.Namespace + "\x00" + pod.Name + "\x00" + container.Name
 			seenSecrets := make(map[string]bool)
 			addFallback := func(referenceKind, prefix, secretName string) {
-				if checksPerContainer[containerIdentity] >= maxStaleSecretEnvChecksPerContainer || secretName == "" {
+				if checksPerContainer[containerIdentity] >= perContainer || secretName == "" {
 					return
 				}
 				secretIdentity := pod.Namespace + "\x00" + secretName
@@ -1032,11 +1103,11 @@ func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*cor
 				if observedSecrets[secretIdentity] || !secretExists(cache, pod.Namespace, secretName, exists, checked) {
 					return
 				}
-				changedAt, ok := secretDataManagerWriteTime(cache, pod.Namespace, secretName)
-				if !ok || !startedAt.Before(changedAt) {
+				write, ok := secretDataManagerLastWrite(cache, pod.Namespace, secretName)
+				if !ok || !startedAt.Before(write.at) {
 					return
 				}
-				out = append(out, newManagedFieldsStaleSecretEnvCheck(pod, container.Name, referenceKind, prefix, secretName, startedAt, changedAt))
+				out = append(out, newManagedFieldsStaleSecretEnvCheck(pod, container.Name, referenceKind, prefix, secretName, startedAt, write))
 				checksPerContainer[containerIdentity]++
 			}
 			for _, env := range container.Env {
@@ -1053,6 +1124,20 @@ func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*cor
 	}
 	sortStaleSecretEnvChecks(out)
 	return out
+}
+
+// envFromKeyOverridden reports whether an explicit env entry sets the env var
+// that an envFrom source supplies; explicit env wins over envFrom unless it
+// expands $(variable) and so still depends on that value. A later envFrom
+// source with the same key also wins, but only its current keys are known, not
+// the ones the container started with, so that case is not checked.
+func envFromKeyOverridden(container corev1.Container, variable string) bool {
+	for _, env := range container.Env {
+		if env.Name == variable {
+			return !strings.Contains(env.Value, "$("+variable+")")
+		}
+	}
+	return false
 }
 
 func sortStaleSecretEnvChecks(out []StaleSecretEnvCheck) {
@@ -1106,11 +1191,39 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 		Key:                key,
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
-		Message:            fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; env %s may hold a stale value until the container restarts.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName),
+		Message:            fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; Kubernetes does not refresh env %s in a running container.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName),
 	}
 }
 
-func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt, changedAt time.Time) StaleSecretEnvCheck {
+// newManagedFieldsStaleSecretEnvCheck names the writer as recorded in the
+// Secret's managedFields, unmapped. A manager's timestamp moves on a write to
+// any field it owns, and the index keeps an earlier data timestamp across a
+// later metadata-only update, so the note claims only that this manager
+// wrote at that time, not that it was the latest write or a data change. When
+// every named writer is a release tool or secret operator, the note says that
+// writer also writes Secret labels or annotations, which can move its
+// timestamp without a data change. The names are Secret
+// metadata: they reach only callers the resource context lets read the
+// Secret, which drops the whole row for anyone else.
+func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt time.Time, write secretDataManagerWrite) StaleSecretEnvCheck {
+	changedAt := write.at
+	writer := "a field manager that owns its data"
+	hedge := "managedFields cannot identify which field changed, so the write may not have touched data at all"
+	names := slices.DeleteFunc(slices.Clone(write.managers), isUnnamedManagedFieldsManager)
+	switch len(names) {
+	case 0:
+	case 1:
+		writer = names[0] + ", a field manager that owns its data"
+	default:
+		writer = strings.Join(names, " and ") + ", field managers that own its data"
+	}
+	if len(names) > 0 && !slices.ContainsFunc(names, func(name string) bool { return !writesSecretMetadata(name) }) {
+		verb := "writes"
+		if len(names) > 1 {
+			verb = "write"
+		}
+		hedge = fmt.Sprintf("%s also %s Secret labels or annotations, so managedFields cannot tell whether this write changed data", strings.Join(names, " and "), verb)
+	}
 	return StaleSecretEnvCheck{
 		Namespace:          pod.Namespace,
 		PodName:            pod.Name,
@@ -1121,8 +1234,36 @@ func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKi
 		SecretName:         secretName,
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
-		Message:            fmt.Sprintf("Secret/%s was modified at %s by a field manager that owns Secret data, after container %s started at %s; managedFields cannot identify which field changed, so if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), container, startedAt.UTC().Format(time.RFC3339)),
+		Message:            fmt.Sprintf("Secret/%s had a write at %s by %s, after container %s started at %s; %s, and if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), writer, container, startedAt.UTC().Format(time.RFC3339), hedge),
 	}
+}
+
+// writesSecretMetadata reports the field managers of release tools and secret
+// operators: Helm, Flux, Argo CD, External Secrets Operator (manager
+// external-secrets, or externalsecrets.external-secrets.io/<name> in newer
+// releases) and cert-manager. Each writes its own labels or annotations onto
+// the Secrets it manages, so a release or a re-sync that leaves data unchanged
+// still moves its managedFields time.
+func writesSecretMetadata(manager string) bool {
+	switch manager {
+	case "helm", "helm-controller", "kustomize-controller":
+		return true
+	}
+	return strings.HasPrefix(manager, "argocd") ||
+		strings.Contains(manager, "external-secrets") ||
+		strings.HasPrefix(manager, "cert-manager")
+}
+
+// isUnnamedManagedFieldsManager reports managedFields entries that name no
+// actual writer: an empty manager, and the buckets the API server creates
+// itself, ancient-changes (older update managers compacted together) and
+// before-first-apply (fields owned before the first server-side apply).
+func isUnnamedManagedFieldsManager(manager string) bool {
+	switch manager {
+	case "", "ancient-changes", "before-first-apply":
+		return true
+	}
+	return false
 }
 
 func secretExists(cache *ResourceCache, namespace, name string, exists, checked map[string]bool) bool {
@@ -1136,19 +1277,19 @@ func secretExists(cache *ResourceCache, namespace, name string, exists, checked 
 	return exists[identity]
 }
 
-func secretDataManagerWriteTime(cache *ResourceCache, namespace, name string) (time.Time, bool) {
+func secretDataManagerLastWrite(cache *ResourceCache, namespace, name string) (secretDataManagerWrite, bool) {
 	if cache == nil || cache.secretWriteTimes == nil || cache.Secrets() == nil {
-		return time.Time{}, false
+		return secretDataManagerWrite{}, false
 	}
 	write, ok := cache.secretWriteTimes.load(namespace, name)
 	if !ok || write.at.IsZero() {
-		return time.Time{}, false
+		return secretDataManagerWrite{}, false
 	}
 	secret, err := cache.Secrets().Secrets(namespace).Get(name)
 	if err != nil || secret == nil || secret.Type == corev1.SecretType("helm.sh/release.v1") || string(secret.UID) != write.uid {
-		return time.Time{}, false
+		return secretDataManagerWrite{}, false
 	}
-	return write.at, true
+	return write, true
 }
 
 func secretsWithObservedDataWrites(events []timeline.TimelineEvent) map[string]bool {
@@ -1271,9 +1412,5 @@ func staleSecretEnvIssueChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) ([
 }
 
 func staleSecretEnvDetectionMessage(checks []StaleSecretEnvCheck) string {
-	if len(checks) == 1 {
-		check := checks[0]
-		return fmt.Sprintf("Container %s is not Ready and may be running a stale env value for Secret/%s key %s; restart the pod to refresh it.", check.Container, check.SecretName, check.Key)
-	}
-	return fmt.Sprintf("A not-Ready container may be running %d stale Secret-backed env values; restart the pod to refresh them.", len(checks))
+	return fmt.Sprintf("The pod is not Ready, and running containers in it started before Radar observed Secret keys they reference change: %s. Restart the pod to refresh them.", staleSecretEnvFacts(checks))
 }

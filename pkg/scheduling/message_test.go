@@ -38,6 +38,8 @@ func TestParseMessageClasses(t *testing.T) {
 		{name: "pod anti-affinity", clause: "3 node(s) didn't match pod anti-affinity rules", class: PodAntiAffinity},
 		{name: "topology spread", clause: "3 node(s) didn't match pod topology spread constraints", class: TopologySpread},
 		{name: "volume node affinity", clause: "3 node(s) had volume node affinity conflict", class: VolumeNodeAffinity},
+		{name: "PersistentVolume node affinity", clause: "3 node(s) didn't match PersistentVolume's node affinity", class: VolumeNodeAffinity},
+		{name: "volume zone", clause: "3 node(s) had no available volume zone", class: VolumeNodeAffinity},
 		{name: "unbound PVC", clause: "pod has unbound immediate PersistentVolumeClaims", class: VolumeBinding},
 		{name: "volume count", clause: "3 node(s) exceed max volume count", class: VolumeCount},
 		{name: "host port", clause: "3 node(s) didn't have free ports for the requested pod ports", class: NoPorts},
@@ -61,6 +63,16 @@ func TestParseMessageClasses(t *testing.T) {
 				t.Errorf("node count = %d, want 3", reason.NodeCount)
 			}
 		})
+	}
+}
+
+// The duplicate_pvc rollout verdict: the PersistentVolume clause must not be
+// read as the Pod's own nodeSelector/affinity.
+func TestParseMessagePersistentVolumeAffinityWithAntiAffinity(t *testing.T) {
+	_, reasons := ParseMessage("0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, " +
+		"2 node(s) didn't match PersistentVolume's node affinity. preemption: 0/3 nodes are available: 1 No preemption victims found for incoming pod, 2 Preemption is not helpful for scheduling.")
+	if len(reasons) != 2 || reasons[0].Class != PodAntiAffinity || reasons[1].Class != VolumeNodeAffinity || reasons[1].NodeCount != 2 {
+		t.Fatalf("reasons = %+v, want pod anti-affinity then volume node affinity on 2 nodes", reasons)
 	}
 }
 

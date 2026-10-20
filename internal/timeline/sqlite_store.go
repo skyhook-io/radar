@@ -56,6 +56,9 @@ type SQLiteStore struct {
 	// amnesia is fine: the activity epoch changes with the process, so stale
 	// cursors already get an epoch-changed gap.
 	evictedRows bool
+	// prunedThrough is the newest event time among rows deleted by Cleanup or
+	// size pruning; see EvictedThrough.
+	prunedThrough time.Time
 
 	// nextSeq is a process-lifetime monotonic arrival counter, seeded from
 	// MAX(seq) at open. It survives retention emptying the table, so a new
@@ -658,8 +661,24 @@ func (s *SQLiteStore) OwnedUIDs(ctx context.Context, clusterContext string, owne
 	return out, rows.Err()
 }
 
+// unmanagedRowsSQL is TimelineEvent.IsManaged negated, for both SQL stores:
+// the scanner sets Owner exactly when owner_kind is non-empty.
+const unmanagedRowsSQL = "COALESCE(owner_kind, '') = '' AND kind NOT IN ('ReplicaSet', 'Pod', 'Event')"
+
 // Query retrieves events matching the given options
 func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error) {
+	// Resolve the preset first: whether it admits managed rows decides the
+	// SQL below.
+	var cf *CompiledFilter
+	if opts.FilterPreset != "" {
+		var filterErr error
+		cf, filterErr = s.getOrCompileFilter(opts.FilterPreset)
+		if filterErr != nil {
+			log.Printf("Warning: failed to compile filter preset %q: %v", opts.FilterPreset, filterErr)
+			// Continue without filtering - caller asked for this preset but we can't apply it
+		}
+	}
+
 	// Build query
 	query := strings.Builder{}
 	query.WriteString("SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type, ")
@@ -763,6 +782,15 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		query.WriteString(" AND event_type != ?")
 		args = append(args, string(EventTypeDelete))
 	}
+	// Same reason for managed rows and K8s Events: filtered after LIMIT, they
+	// would fill the limit and leave the page short with nothing counting them.
+	if !opts.IncludeManaged && !cf.IncludesManaged() {
+		query.WriteString(" AND " + unmanagedRowsSQL)
+	}
+	if !opts.IncludeK8sEvents {
+		query.WriteString(" AND source != ?")
+		args = append(args, string(SourceK8sEvent))
+	}
 
 	if opts.ClusterContext != "" {
 		query.WriteString(" AND cluster_context = ?")
@@ -820,17 +848,6 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	}
 	defer rows.Close()
 
-	// Get compiled filter for post-filtering
-	var cf *CompiledFilter
-	if opts.FilterPreset != "" {
-		var filterErr error
-		cf, filterErr = s.getOrCompileFilter(opts.FilterPreset)
-		if filterErr != nil {
-			log.Printf("Warning: failed to compile filter preset %q: %v", opts.FilterPreset, filterErr)
-			// Continue without filtering - caller asked for this preset but we can't apply it
-		}
-	}
-
 	events := make([]TimelineEvent, 0)
 	for rows.Next() {
 		event, err := s.scanEvent(rows)
@@ -843,13 +860,13 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 			continue
 		}
 
-		// Handle IncludeManaged
+		// IncludeManaged and IncludeK8sEvents are applied in SQL above; these
+		// checks stay as a guard.
 		// opts.IncludeManaged takes precedence; the preset can also allow managed resources.
 		if event.IsManaged() && !opts.IncludeManaged && !cf.IncludesManaged() {
 			continue
 		}
 
-		// Handle IncludeK8sEvents
 		if !opts.IncludeK8sEvents && event.Source == SourceK8sEvent {
 			continue
 		}
@@ -969,6 +986,9 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64,
 	}
 	n, err := result.RowsAffected()
 	s.recordEviction(n)
+	if n > 0 {
+		s.recordPrunedThrough(time.Now().Add(-maxAge))
+	}
 	return n, err
 }
 
@@ -981,6 +1001,30 @@ func (s *SQLiteStore) recordEviction(rows int64) {
 	s.cleanupMu.Lock()
 	s.evictedRows = true
 	s.cleanupMu.Unlock()
+}
+
+func (s *SQLiteStore) recordPrunedThrough(t time.Time) {
+	s.cleanupMu.Lock()
+	if t.After(s.prunedThrough) {
+		s.prunedThrough = t
+	}
+	s.cleanupMu.Unlock()
+}
+
+// EvictedThrough implements EvictionBoundary. With retention configured it is
+// at least the retention cutoff, whether or not a sweep has run yet, since
+// rows older than that may already be gone. Restart gaps are not tracked here:
+// callers also bound history by when this process started observing.
+func (s *SQLiteStore) EvictedThrough() time.Time {
+	s.cleanupMu.RLock()
+	defer s.cleanupMu.RUnlock()
+	through := s.prunedThrough
+	if s.retentionAge > 0 {
+		if cutoff := time.Now().Add(-s.retentionAge); cutoff.After(through) {
+			through = cutoff
+		}
+	}
+	return through
 }
 
 func (s *SQLiteStore) PruneToMaxSize(ctx context.Context, maxBytes int64) (totalDeletedOut int64, errOut error) {
@@ -1213,18 +1257,41 @@ func (s *SQLiteStore) countEvents(ctx context.Context) (int64, error) {
 }
 
 func (s *SQLiteStore) deleteOldestEvents(ctx context.Context, limit int64) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
+	// The boundary comes from the rows this statement deleted. Reading it in
+	// a separate query would race a K8s Event upsert that moves a selected
+	// row forward and pulls a newer row into the batch.
+	rows, err := s.db.QueryContext(ctx, `
 		DELETE FROM events
 		WHERE id IN (
 			SELECT id FROM events
 			ORDER BY timestamp ASC, created_at ASC
 			LIMIT ?
 		)
+		RETURNING timestamp
 	`, limit)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	var n int64
+	var newest time.Time
+	for rows.Next() {
+		var ts string
+		if err := rows.Scan(&ts); err != nil {
+			return n, err
+		}
+		n++
+		if t, parseErr := time.Parse(time.RFC3339Nano, ts); parseErr == nil && t.After(newest) {
+			newest = t
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return n, err
+	}
+	if !newest.IsZero() {
+		s.recordPrunedThrough(newest)
+	}
+	return n, nil
 }
 
 func (s *SQLiteStore) reclaimStorage(ctx context.Context) error {

@@ -24,9 +24,8 @@ type classifyInput struct {
 // exact reason vocabulary emitted by the detector layer in internal/k8s and the
 // CRD-condition source in internal/issues.
 //
-// Coverage is intentionally partial: signals without a clean mapping (and
-// categories whose detectors don't exist yet — network policy, broad DNS)
-// fall to unknown rather than being force-fit.
+// Coverage is intentionally partial: signals without a clean mapping fall to
+// unknown rather than being force-fit.
 func Classify(in classifyInput) issuesapi.Category {
 	switch in.Source {
 	case SourceScheduling:
@@ -149,8 +148,10 @@ func Classify(in classifyInput) issuesapi.Category {
 				return issuesapi.CategoryBackupFailed
 			}
 			switch in.Reason {
-			case "CNPGWALArchivingFailing", "CNPGLastBackupFailed", "CNPGBackupFailed":
+			case "CNPGWALArchivingFailing", "CNPGLastBackupFailed", "CNPGBackupFailed", ReasonCNPGScheduledRunNoBackup:
 				return issuesapi.CategoryBackupFailed
+			case ReasonCNPGCertificateExpiring, ReasonCNPGCertificateExpired:
+				return issuesapi.CategoryCertificateNotReady
 			}
 			// A declared object that never reached PostgreSQL is a
 			// reconciliation failure, not a backup one — the operator tried and
@@ -203,6 +204,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryDNSFailure
 	case "DuplicateEnvVar", "StaleSecretEnv":
 		return issuesapi.CategoryInvalidConfiguration
+	case k8s.NetworkPolicyDenyAllIngressReason:
+		return issuesapi.CategoryNetworkPolicyDenied
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":
@@ -253,6 +256,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		}
 		if in.Kind == "Ingress" {
 			return issuesapi.CategoryUnknown
+		}
+		if in.Reason == k8s.ServiceMixedBackendsReason {
+			return issuesapi.CategoryServiceMixedBackends
 		}
 		// "Selector matches no pods" / "0/N selected pods ready" /
 		// "Unresolved named targetPort" all mean: no healthy endpoints.

@@ -4,15 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
@@ -178,7 +184,7 @@ func TestAttachResourceExtras_EventsTotalGroups(t *testing.T) {
 	var result map[string]any
 	for time.Now().Before(deadline) {
 		result = map[string]any{}
-		attachResourceExtras(context.Background(), cache, result, map[string]bool{"events": true}, "deployment", "apps", "shop", "web")
+		attachResourceExtras(context.Background(), cache, result, map[string]bool{"events": true}, "deployment", "apps", "shop", "web", "", "")
 		if evs, ok := result["events"].([]aicontext.DeduplicatedEvent); ok && len(evs) == 10 {
 			break
 		}
@@ -195,7 +201,7 @@ func TestAttachResourceExtras_EventsTotalGroups(t *testing.T) {
 
 	// Under the cap: no truncation field.
 	few := map[string]any{}
-	attachResourceExtras(context.Background(), cache, few, map[string]bool{"events": true}, "deployment", "apps", "shop", "missing")
+	attachResourceExtras(context.Background(), cache, few, map[string]bool{"events": true}, "deployment", "apps", "shop", "missing", "", "")
 	if _, present := few["eventsTotalGroups"]; present {
 		t.Errorf("eventsTotalGroups present with no truncation: %+v", few)
 	}
@@ -227,7 +233,7 @@ func TestFetchEventsForResource_ReportsPreCapGroupTotal(t *testing.T) {
 		err    error
 	)
 	for time.Now().Before(deadline) {
-		groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "web", nil, 10)
+		groups, total, _, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "web", "", "", nil, 10)
 		if err != nil || total == 12 {
 			break
 		}
@@ -240,7 +246,7 @@ func TestFetchEventsForResource_ReportsPreCapGroupTotal(t *testing.T) {
 		t.Fatalf("groups=%d total=%d, want capped response of 10 from 12 deduplicated groups", len(groups), total)
 	}
 
-	groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "missing", nil, 10)
+	groups, total, _, err = fetchEventsForResource(k8s.GetResourceCache(), "deployments", "apps", "shop", "missing", "", "", nil, 10)
 	if err != nil || len(groups) != 0 || total != 0 {
 		t.Fatalf("missing resource groups=%d total=%d err=%v, want empty successful result", len(groups), total, err)
 	}
@@ -278,7 +284,7 @@ func TestFetchEventsForResource_RolloutWarningSurvivesKindAndGroupFiltering(t *t
 		err    error
 	)
 	for time.Now().Before(deadline) {
-		groups, total, err = fetchEventsForResource(k8s.GetResourceCache(), "rollouts", "argoproj.io", "shop", "checkout", nil, 10)
+		groups, total, _, err = fetchEventsForResource(k8s.GetResourceCache(), "rollouts", "argoproj.io", "shop", "checkout", "", "", nil, 10)
 		if err != nil || total == 1 {
 			break
 		}
@@ -298,12 +304,290 @@ func TestFilterEventsByInvolvedObject_RequiresExactAPIGroup(t *testing.T) {
 		{Type: corev1.EventTypeWarning, Reason: "Knative", InvolvedObject: corev1.ObjectReference{APIVersion: "serving.knative.dev/v1", Kind: "Service", Name: "api"}},
 	}
 
-	core := filterEventsByInvolvedObject(events, "Service", "", "api", nil)
+	core, _ := filterEventsByInvolvedObject(events, "Service", "", "api", "", "", nil)
 	if len(core) != 1 || core[0].Reason != "Core" {
 		t.Fatalf("core Service events = %+v, want only core/v1", core)
 	}
-	knative := filterEventsByInvolvedObject(events, "Service", "serving.knative.dev", "api", nil)
+	knative, _ := filterEventsByInvolvedObject(events, "Service", "serving.knative.dev", "api", "", "", nil)
 	if len(knative) != 1 || knative[0].Reason != "Knative" {
 		t.Fatalf("Knative Service events = %+v, want only serving.knative.dev", knative)
+	}
+}
+
+func TestFilterEventsByInvolvedObject_CurrentIncarnations(t *testing.T) {
+	event := func(reason, kind, group, name, uid string) *corev1.Event {
+		version := "v1"
+		if group != "" {
+			version = group + "/v1"
+		}
+		return &corev1.Event{Type: corev1.EventTypeWarning, Reason: reason, InvolvedObject: corev1.ObjectReference{APIVersion: version, Kind: kind, Name: name, UID: types.UID(uid)}}
+	}
+	events := []*corev1.Event{
+		event("CurrentRoot", "Deployment", "apps", "web", "root-now"),
+		event("ReplacedRoot", "Deployment", "apps", "web", "root-before"),
+		event("UIDlessRoot", "Deployment", "apps", "web", ""),
+		event("CurrentPod", "Pod", "", "worker", "pod-now"),
+		event("ReplacedPod", "Pod", "", "worker", "pod-before"),
+		event("UIDlessPod", "Pod", "", "worker", ""),
+		event("WrongGroup", "Deployment", "custom.example.io", "web", "root-now"),
+		event("WrongPodGroup", "Pod", "custom.example.io", "worker", "pod-now"),
+		event("UnknownPod", "Pod", "", "foreign", "other"),
+	}
+	got, excluded := filterEventsByInvolvedObject(events, "Deployment", "apps", "web", "root-now", "", map[string]types.UID{"worker": "pod-now"})
+	var reasons []string
+	for _, e := range got {
+		reasons = append(reasons, e.Reason)
+	}
+	if strings.Join(reasons, ",") != "CurrentRoot,UIDlessRoot,CurrentPod,UIDlessPod" {
+		t.Fatalf("current evidence = %v", reasons)
+	}
+	// Only the replaced root and replaced Pod count as withheld history; other
+	// groups and names were never this workload's evidence.
+	if excluded != 2 {
+		t.Fatalf("excluded = %d, want 2 (ReplacedRoot, ReplacedPod)", excluded)
+	}
+	// Supplemental includes do not enroll workload Pod events.
+	if got, excluded := filterEventsByInvolvedObject(events, "Deployment", "apps", "web", "root-now", "", nil); len(got) != 2 || excluded != 1 {
+		t.Fatalf("root-only evidence = %v excluded = %d", got, excluded)
+	}
+	// Kubelet Node events identify the name, without proving an incarnation.
+	nodes := []*corev1.Event{event("CurrentNode", "Node", "", "node-a", "node-uid"), event("NameUID", "Node", "", "node-a", "node-a"), event("PreviousNode", "Node", "", "node-a", "old-node-uid"), event("VersionlessNameUID", "Node", "", "node-a", "node-a")}
+	nodes[3].InvolvedObject.APIVersion = ""
+	if got, excluded := filterEventsByInvolvedObject(nodes, "Node", "", "node-a", "node-uid", "", nil); len(got) != 3 || got[0].Reason != "CurrentNode" || got[1].Reason != "NameUID" || got[2].Reason != "VersionlessNameUID" || excluded != 1 {
+		t.Fatalf("Node evidence = %v excluded = %d", got, excluded)
+	}
+}
+
+func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
+	defer k8s.ResetTestState()
+	now := metav1.Now()
+	root := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "root-now"}}
+	events := []runtime.Object{root}
+	for _, uid := range []types.UID{"root-now", "root-before"} {
+		events = append(events, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: string(uid), Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: string(uid), Message: string(uid), LastTimestamp: now, InvolvedObject: corev1.ObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "shop", Name: "web", UID: uid}})
+	}
+	client := fake.NewSimpleClientset(events...)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Events   []aicontext.DeduplicatedEvent `json:"events"`
+		Warnings []string                      `json:"warnings"`
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		result, _, err := handleGetResource(t.Context(), nil, getResourceInput{Kind: "deployment", Namespace: "shop", Name: "web", Include: "events", Context: "none"})
+		if err == nil {
+			if err := json.Unmarshal([]byte(extractText(t, result)), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Events) > 0 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("events never loaded: %+v err=%v", response, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(response.Events) != 1 || response.Events[0].Reason != "root-now" {
+		t.Fatalf("get_resource current evidence = %+v", response.Events)
+	}
+	if len(response.Warnings) != 1 || response.Warnings[0] != earlierIncarnationEventsNote(1, false) {
+		t.Fatalf("get_resource must say earlier-incarnation history was withheld: %+v", response.Warnings)
+	}
+	pods := []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "shop", UID: "pod-now"}}}
+	for _, uid := range []types.UID{"pod-now", "pod-before"} {
+		_, err := client.CoreV1().Events("shop").Create(t.Context(), &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: string(uid), Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: string(uid), Message: string(uid), LastTimestamp: now, InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Namespace: "shop", Name: "worker", UID: uid}}, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		groups, total, excluded, err := fetchEventsForResource(k8s.GetResourceCache(), "deployment", "apps", "shop", "web", root.UID, "", pods, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range groups {
+			if g.Reason != "root-now" && g.Reason != "pod-now" {
+				t.Fatalf("diagnose current evidence = %+v", groups)
+			}
+		}
+		// The two Pod events reach the informer one at a time; wait for both
+		// rather than stopping at the first moment the current one is visible.
+		if total == 2 && excluded == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("diagnose event groups = %+v excluded = %d, want root-now and pod-now with root-before and pod-before excluded", groups, excluded)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// When every retained warning belongs to an earlier incarnation, the
+	// count must still reach the caller even though no evidence remains.
+	replaced := []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "shop", UID: "pod-later"}}}
+	groups, total, excluded, err := fetchEventsForResource(k8s.GetResourceCache(), "deployment", "apps", "shop", "web", "root-later", "", replaced, 10)
+	if err != nil || len(groups) != 0 || total != 0 || excluded != 4 {
+		t.Fatalf("all-historical evidence groups=%v total=%d excluded=%d err=%v, want 0/0/4", groups, total, excluded, err)
+	}
+}
+
+func TestDiagnoseExcludesPodsFromPreviousWorkloadAndIntermediateOwners(t *testing.T) {
+	defer k8s.ResetTestState()
+	controller := true
+	root := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "shop", UID: "current-root"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "fleet"}}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "fleet"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}}}
+	objects := []runtime.Object{root}
+	for _, item := range []struct{ name, childUID, rootUID, podOwnerUID string }{
+		{"current", "current-rs", "current-root", "current-rs"},
+		{"previous-root", "old-rs", "old-root", "old-rs"},
+		{"previous-rs", "replaced-rs", "current-root", "previous-rs"},
+	} {
+		objects = append(objects, &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: item.name, Namespace: "shop", UID: types.UID(item.childUID), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", UID: types.UID(item.rootUID), Controller: &controller}}}})
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: item.name, Namespace: "shop", UID: types.UID(item.name + "-uid"), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: item.name, UID: types.UID(item.podOwnerUID), Controller: &controller}}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
+		event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: item.name, Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: item.name, Message: item.name, LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: pod.Name, Namespace: pod.Namespace, UID: pod.UID}}
+		objects = append(objects, pod, event)
+	}
+	// A same-name Pod replaced earlier left a warning that is history, not
+	// current evidence.
+	objects = append(objects, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "current-before", Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: "current-before", Message: "current-before", LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: "current", Namespace: "shop", UID: "current-before-uid"}})
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("1")
+	var response diagnoseResponse
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		result, _, err := handleDiagnose(t.Context(), nil, testDiagnoseInput("deployment", "shop", "fleet"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(extractText(t, result)), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Pods > 0 && len(response.Events) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fixture did not sync: %+v", response)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if response.Pods != 1 || len(response.PodNames) != 1 || response.PodNames[0] != "current" {
+		t.Fatalf("diagnose current pods=%d names=%v", response.Pods, response.PodNames)
+	}
+	if len(response.Events) != 1 || response.Events[0].Reason != "current" {
+		t.Fatalf("diagnose leaked previous controller warnings: %+v", response.Events)
+	}
+	notes := 0
+	for _, warning := range response.Warnings {
+		if warning == earlierIncarnationEventsNote(1, true) {
+			notes++
+		}
+	}
+	if notes != 1 {
+		t.Fatalf("diagnose must say once that earlier-incarnation history was withheld: %v", response.Warnings)
+	}
+	if response.Metrics == nil || response.Metrics.Pods != 1 || len(response.Metrics.Series) != 3 {
+		t.Fatalf("metrics disagree with current membership: %+v", response.Metrics)
+	}
+	for _, series := range response.Metrics.Series {
+		if !strings.Contains(series.Query, `pod=~'^(current)$'`) || strings.Contains(series.Query, "previous-root") || strings.Contains(series.Query, "previous-rs") {
+			t.Fatalf("metrics query includes a previous controller's Pod: %s", series.Query)
+		}
+	}
+	logServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/namespaces/shop/pods/current/log" {
+			t.Errorf("logs requested for stale Pod: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("current log\n"))
+	}))
+	defer logServer.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: logServer.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousClient := k8s.SetTestClient(client)
+	defer k8s.SetTestClient(previousClient)
+	result, _, err := handleGetWorkloadLogs(t.Context(), nil, getWorkloadLogsInput{Kind: "deployment", Namespace: "shop", Name: "fleet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logResponse struct {
+		Pods int           `json:"pods"`
+		Logs []podLogEntry `json:"logs"`
+	}
+	if err := json.Unmarshal([]byte(extractText(t, result)), &logResponse); err != nil {
+		t.Fatal(err)
+	}
+	if logResponse.Pods != 1 || len(logResponse.Logs) != 1 || logResponse.Logs[0].Pod != "current" {
+		t.Fatalf("follow-up logs disagree with Diagnose: %+v", logResponse)
+	}
+}
+
+func TestCurrentMirrorPodEventsUseBothObservedUIDs(t *testing.T) {
+	defer k8s.ResetTestState()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-node-a", Namespace: "kube-system", UID: "mirror-api-uid", Annotations: map[string]string{"kubernetes.io/config.mirror": "current-static-hash"}}}
+	objects := []runtime.Object{pod}
+	for _, uid := range []types.UID{pod.UID, "current-static-hash", "previous-static-hash", "previous-api-uid"} {
+		objects = append(objects, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: string(uid), Namespace: pod.Namespace}, Type: corev1.EventTypeWarning, Reason: string(uid), Message: string(uid), LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: pod.Name, Namespace: pod.Namespace, UID: uid}})
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		result, _, err := handleGetResource(t.Context(), nil, getResourceInput{Kind: "pod", Namespace: pod.Namespace, Name: pod.Name, Include: "events", Context: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Events []aicontext.DeduplicatedEvent `json:"events"`
+		}
+		if err := json.Unmarshal([]byte(extractText(t, result)), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Events) > 0 {
+			if len(got.Events) != 2 {
+				t.Fatalf("mirror warnings = %+v", got.Events)
+			}
+			for _, event := range got.Events {
+				if event.Reason != string(pod.UID) && event.Reason != "current-static-hash" {
+					t.Fatalf("stale mirror warning = %+v", event)
+				}
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("mirror warnings did not sync")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	result, _, err := handleDiagnose(t.Context(), nil, testDiagnoseInput("pod", pod.Namespace, pod.Name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got diagnoseResponse
+	if err := json.Unmarshal([]byte(extractText(t, result)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 2 {
+		t.Fatalf("mirror diagnosis warnings = %+v", got.Events)
+	}
+}
+
+func TestEarlierIncarnationEventsNoteReadsAsHistory(t *testing.T) {
+	one := earlierIncarnationEventsNote(1, true)
+	many := earlierIncarnationEventsNote(3, false)
+	for _, want := range []string{"Left out 1 Warning event about an earlier incarnation of this resource or of a current Pod's name", "does not describe the current object", "use get_events to read it"} {
+		if !strings.Contains(one, want) {
+			t.Fatalf("singular note %q lacks %q", one, want)
+		}
+	}
+	for _, want := range []string{"Left out 3 Warning events about earlier incarnations of this resource:", "do not describe the current objects", "use get_events to read them"} {
+		if !strings.Contains(many, want) {
+			t.Fatalf("plural note %q lacks %q", many, want)
+		}
 	}
 }

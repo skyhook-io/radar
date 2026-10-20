@@ -65,6 +65,14 @@ type Client struct {
 	// included) for the status endpoint to report it truthfully.
 	flightGen    uint64
 	flightActive bool
+	// flightDone is closed when the most recently started run ends, so the
+	// background rediscovery worker can wait for an in-flight run instead of
+	// joining it: a run that began before a signal says nothing about it.
+	flightDone chan struct{}
+
+	// rediscovery is the event-driven background rediscovery worker's state;
+	// see rediscover.go.
+	rediscovery rediscoveryState
 
 	// lastOutcome is the terminal result of the most recent run under the
 	// current generation, for display only — retry throttling stays on
@@ -347,20 +355,25 @@ func Prewarm() {
 	if client == nil {
 		return
 	}
-	go func() {
-		start := time.Now()
-		ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(context.Background()), discoveryTimeout+5*time.Second)
-		defer cancel()
-		addr, _, err := client.EnsureConnected(ctx)
-		switch {
-		case err == nil:
-			log.Printf("[prometheus] Auto-discovery connected to %s (%s)", addr, took(start))
-		case errors.Is(err, prom.ErrHeadersRequireURL):
-			log.Printf("[prometheus] Auto-discovery skipped: %v", err)
-		default:
-			log.Printf("[prometheus] Auto-discovery failed (%s): %v", took(start), err)
-		}
-	}()
+	go client.connectInBackground("Auto-discovery")
+}
+
+// connectInBackground runs EnsureConnected the way Prewarm does and logs the
+// outcome under label.
+func (c *Client) connectInBackground(label string) error {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(context.Background()), discoveryTimeout+5*time.Second)
+	defer cancel()
+	addr, _, err := c.EnsureConnected(ctx)
+	switch {
+	case err == nil:
+		log.Printf("[prometheus] %s connected to %s (%s)", label, addr, took(start))
+	case errors.Is(err, prom.ErrHeadersRequireURL):
+		log.Printf("[prometheus] %s skipped: %v", label, err)
+	default:
+		log.Printf("[prometheus] %s failed (%s): %v", label, took(start), err)
+	}
+	return err
 }
 
 // Reset clears connection state so the next query triggers rediscovery (used on context switch).
@@ -545,7 +558,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 			if manual {
 				probe = p.ProbeQueryAPI
 			}
-			ok, reason := probe(ctx)
+			ok, reason := probe(withoutFailureReport(ctx))
 			// The probe ran unlocked; a configuration change meanwhile makes
 			// its answer describe a superseded endpoint. Neither return it nor
 			// tear down whatever the new configuration has since connected.
@@ -642,10 +655,16 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 			c.flightGen = gen
 			c.flightActive = true
 			c.lastOutcome = ""
+			done := make(chan struct{})
+			c.flightDone = done
 			c.mu.Unlock()
 			var flightErr error
 			defer func() {
 				c.mu.Lock()
+				close(done)
+				if c.flightDone == done {
+					c.flightDone = nil
+				}
 				if c.discoveryCancelSeq == mySeq {
 					c.discoveryCancel = nil
 				}
@@ -805,9 +824,7 @@ func (c *Client) getPromClient() *prom.Client {
 	if c.baseURL == "" {
 		return nil
 	}
-	tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
-	tr.Headers = copyHeaders(c.headers)
-	c.prom = prom.NewClient(tr)
+	c.prom = c.newConnectedPromClientLocked(c.httpClient)
 	return c.prom
 }
 
@@ -824,9 +841,7 @@ func (c *Client) PromForMCP() *prom.Client {
 	if c.baseURL == "" {
 		return nil
 	}
-	tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.mcpHTTPClient)
-	tr.Headers = copyHeaders(c.headers)
-	return prom.NewClient(tr)
+	return c.newConnectedPromClientLocked(c.mcpHTTPClient)
 }
 
 // probe checks if a Prometheus endpoint at `addr` is reachable and has at

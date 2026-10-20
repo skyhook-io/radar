@@ -6,9 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -83,17 +80,6 @@ func (a mcpPolicyReportLookupAdapter) FindingsFor(group, kind, namespace, name s
 	return out
 }
 
-type mcpServiceBackendLookup struct {
-	cache *k8s.ResourceCache
-}
-
-func (l mcpServiceBackendLookup) PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error) {
-	if l.cache == nil || l.cache.Pods() == nil {
-		return nil, nil
-	}
-	return l.cache.Pods().Pods(namespace).List(selector)
-}
-
 // computeMCPIssueContext rolls up per-resource issue-composer rows
 // (problem + condition) into an IssueSummary. Mirrors the
 // REST handler's computeIssueSummaryForResource — same composer call, same
@@ -145,6 +131,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		Count:           len(matched),
 		HighestSeverity: string(matched[0].Severity),
 		TopReason:       matched[0].Reason,
+		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
 	}, matched
 }

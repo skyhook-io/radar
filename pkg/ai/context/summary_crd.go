@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // summarizeUnstructured produces a Summary for CRDs and dynamic resources.
@@ -912,10 +915,12 @@ func summarizeKedaScaledObject(obj *unstructured.Unstructured) *ResourceSummary 
 	}
 
 	// Target ref
-	targetKind, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "kind")
-	targetName, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "name")
-	if targetKind != "" && targetName != "" {
-		s.Target = fmt.Sprintf("%s/%s", targetKind, targetName)
+	if apiVersion, kind, name, ok := configrefs.KEDAScaleTarget(obj); ok {
+		group := resourceid.GroupFromAPIVersion(apiVersion)
+		if group == "" {
+			group = "core"
+		}
+		s.Target = fmt.Sprintf("%s (%s)/%s", kind, group, name)
 	}
 
 	// Min/max replicas

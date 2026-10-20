@@ -111,6 +111,17 @@ export interface InvestigationResourceContext extends DiagnosisResourceContext {
   };
   policySummary?: unknown;
   podSummary?: unknown;
+  templateDivergence?: {
+    summary: string;
+    podsCompared: number;
+    podsDiffering: number;
+    podsCapped?: boolean;
+    podsNotCompared?: number;
+    examplePod?: string;
+    baseline?: string;
+    differences: string[];
+    sources?: string[];
+  };
 }
 export interface InvestigationGitOpsDiagnosis {
   tool: "argocd" | "flux";

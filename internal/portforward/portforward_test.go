@@ -1,6 +1,15 @@
 package portforward
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+)
 
 // TestOwnerScoping verifies that each owner's forward is independent: stopping
 // one owner never tears down another's, and status/reuse lookups are scoped
@@ -137,5 +146,80 @@ func TestForwardReuseIncludesTargetPort(t *testing.T) {
 	}
 	if forward.matches("kubecost", "kubecost-aggregator", 9008, "ctxA") {
 		t.Fatal("forward to 9004 was reused for a 9008 request")
+	}
+}
+
+// TestForwardLostNotifiesOnlyUnexpectedExit pins the lost-forward signal: a
+// forward whose run ends on its own (the pod went away) is reported with the
+// address it served; one ended by Stop is not.
+func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
+	saved := reg
+	savedRun, savedFind := runPortForward, findPodForService
+	t.Cleanup(func() {
+		reg = saved
+		runPortForward, findPodForService = savedRun, savedFind
+		SetOnForwardLost(nil)
+	})
+	reg = &registry{forwards: map[Owner]*metricsForward{}}
+	findPodForService = func(context.Context, kubernetes.Interface, string, string) (string, error) {
+		return "prometheus-0", nil
+	}
+	podGone := make(chan struct{})
+	runPortForward = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stopCh chan struct{}, readyCh chan struct{}) error {
+		close(readyCh)
+		select {
+		case <-stopCh:
+			return nil
+		case <-podGone:
+			return errors.New("lost connection to pod")
+		}
+	}
+	lost := make(chan string, 2)
+	SetOnForwardLost(func(owner Owner, address string) { lost <- owner + " " + address })
+
+	start := func() *ConnectionInfo {
+		t.Helper()
+		info, err := StartWithClients(OwnerPrometheus, context.Background(), "monitoring", "prometheus", 9090, "ctxA", fake.NewSimpleClientset(), &rest.Config{})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		return info
+	}
+
+	start()
+	Stop(OwnerPrometheus)
+	select {
+	case got := <-lost:
+		t.Fatalf("Stop reported a lost forward: %s", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	info := start()
+	close(podGone)
+	select {
+	case got := <-lost:
+		if want := OwnerPrometheus + " " + info.Address; got != want {
+			t.Fatalf("lost = %q, want %q", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("forward that ended on its own was not reported")
+	}
+	if GetConnectionInfo(OwnerPrometheus).Connected {
+		t.Fatal("lost forward still reported as connected")
+	}
+}
+
+func TestIsActiveAddress(t *testing.T) {
+	saved := reg
+	t.Cleanup(func() { reg = saved })
+	reg = &registry{forwards: map[Owner]*metricsForward{}}
+	reg.forwards[OwnerTraffic] = &metricsForward{active: true, localPort: 4321}
+	reg.forwards[OwnerPrometheus] = &metricsForward{active: false, localPort: 1234}
+
+	if !IsActiveAddress("http://localhost:4321") {
+		t.Fatal("another owner's live forward should count")
+	}
+	if IsActiveAddress("http://localhost:1234") {
+		t.Fatal("an inactive forward should not count")
 	}
 }

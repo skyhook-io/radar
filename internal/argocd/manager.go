@@ -1379,11 +1379,23 @@ func (m *Manager) noteReadLocked(gen uint64, client *argoapi.Client, err error) 
 	}
 }
 
+// ReadMayRecover reports whether a page whose read failed with err should ask
+// again later: the read got no usable HTTP answer, or a retry of the shared
+// connection is under way. A certificate Radar can't verify needs the user to
+// fix the configuration, so it never counts, even while a retry runs.
+func ReadMayRecover(err error) bool {
+	if isTLSError(err) {
+		return false
+	}
+	return isTransportFailure(err) || Retrying()
+}
+
 // isTransportFailure reports a read that got no usable HTTP answer: a
 // timeout, a refused connection, a failed DNS lookup, a certificate Radar
-// can't verify.
+// can't verify, or a gateway in front of argocd-server answering for it.
 func isTransportFailure(err error) bool {
-	if isNoAnswerInTime(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || isTLSError(err) {
+	if isNoAnswerInTime(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || isTLSError(err) ||
+		errors.Is(err, argoapi.ErrGatewayUnavailable) {
 		return true
 	}
 	// Not any *url.Error: a refused redirect is wrapped in one too, and that
@@ -1507,11 +1519,13 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 		return health, err
 	}
 	m.noteReadLocked(gen, client, err)
-	// A deadline or navigation ends this caller's read; it is not the
-	// server's answer for everyone else. Not cached, or every other viewer
-	// would skip Argo's verdicts for the rest of the window. (A timeout still
-	// reaches Settings through noteReadLocked: the server didn't answer.)
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// A navigation ends this caller's read; it is not the server's answer
+	// for everyone else, so it isn't cached. A timeout is cached like any
+	// other failure: every caller gets the same short budget, so another
+	// viewer, or the next poll, would only wait it out again against a
+	// server already too slow to answer. A re-check that finds the server
+	// answering clears it.
+	if errors.Is(err, context.Canceled) {
 		return nil, err
 	}
 	// The read is the only thing that proves whether the install serves

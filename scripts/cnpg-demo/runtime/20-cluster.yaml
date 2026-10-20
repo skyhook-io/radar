@@ -1,0 +1,48 @@
+# A cluster that is actually working: 3 instances, WAL archived by the
+# barman-cloud plugin into MinIO, metrics on :9187 (the instance manager always
+# serves them; enablePodMonitor only controls whether a PodMonitor CR is made,
+# and there is no prometheus-operator here — the Prometheus in `monitoring`
+# discovers pods directly).
+#
+# The plugin reference is present at CREATION, with the operator running, so the
+# operator injects the plugin sidecar into every instance pod. Adding
+# spec.plugins to a cluster while the operator is frozen is the opposite case —
+# see pg-doomed in the frozen fixtures.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-runtime
+  namespace: pgrt
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.5
+  storage:
+    size: 1Gi
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+  monitoring:
+    enablePodMonitor: false
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: minio-store
+---
+# Deliberately NOT named `pg-runtime-rw`: CNPG owns `<cluster>-rw/-ro/-r`
+# Services, and a Pooler that finds a same-named Service it does not own refuses
+# to reconcile forever with nothing surfaced on the CR.
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: pg-runtime-pooler-rw
+  namespace: pgrt
+spec:
+  cluster:
+    name: pg-runtime
+  instances: 2
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "200"
+      default_pool_size: "10"

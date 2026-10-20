@@ -59,6 +59,9 @@ var (
 	// check — refresh just re-reads from Git, while terminate asks Argo to
 	// stop its in-flight operation; both are harmless on a Terminating resource.
 	ErrResourceTerminating = errors.New("resource is pending deletion")
+	// ErrResourceSuspended: a Flux object in a sync-with-source chain has
+	// spec.suspend set, so its controller ignores reconcile requests. HTTP 409.
+	ErrResourceSuspended = errors.New("resource is suspended")
 )
 
 // assertNotTerminating returns ErrResourceTerminating wrapped with a
@@ -114,9 +117,28 @@ var fluxKinds = map[string]FluxKindEntry{
 	"gitrepository":  {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}, Kind: "GitRepository"},
 	"ocirepository":  {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}, Kind: "OCIRepository"},
 	"helmrepository": {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "helmrepositories"}, Kind: "HelmRepository"},
+	"helmchart":      {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "helmcharts"}, Kind: "HelmChart"},
+	"bucket":         {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "buckets"}, Kind: "Bucket"},
 	"kustomization":  {GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization"},
 	"helmrelease":    {GVR: schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}, Kind: "HelmRelease"},
 	"alert":          {GVR: schema.GroupVersionResource{Group: "notification.toolkit.fluxcd.io", Version: "v1beta3", Resource: "alerts"}, Kind: "Alert"},
+}
+
+// FluxGVRResolver returns the version of a Flux kind the cluster serves. Flux
+// promotes its APIs over releases (Bucket reached v1 in Flux 2.4, OCIRepository in
+// 2.6), so the static table names only the newest version.
+type FluxGVRResolver func(group, kind string) (schema.GroupVersionResource, bool)
+
+// Served returns the entry with the version the cluster serves; a nil resolver
+// or an unknown kind keeps the static version.
+func (e FluxKindEntry) Served(resolve FluxGVRResolver) FluxKindEntry {
+	if resolve == nil {
+		return e
+	}
+	if gvr, ok := resolve(e.GVR.Group, e.Kind); ok && gvr.Resource == e.GVR.Resource {
+		e.GVR = gvr
+	}
+	return e
 }
 
 // ResolveFluxKind resolves any form (singular, plural, any case) to FluxKindEntry.
@@ -821,14 +843,25 @@ func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry Flux
 	}, nil
 }
 
-// SyncFluxWithSource reconciles the source first, then the resource itself.
-func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, namespace, name string) (OperationResult, error) {
+// SyncFluxWithSource does what `flux reconcile <kind> --with-source` requests:
+// it reconciles the consumer's source chain upstream-first, then the consumer.
+// For a HelmRelease whose chart is a HelmChart, the chain also includes the
+// chart's own source, because the chart builds from that source's artifact.
+// Every object is checked before anything is written, so a suspended or
+// terminating link fails the request instead of reporting a sync that its
+// controller will ignore. Unlike the CLI, it does not wait for each step.
+// served is optional; without it the static API versions are used.
+func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, namespace, name string, served ...FluxGVRResolver) (OperationResult, error) {
+	var resolve FluxGVRResolver
+	if len(served) > 0 {
+		resolve = served[0]
+	}
 	entry, err := ResolveFluxKind(kind)
 	if err != nil {
 		return OperationResult{}, err
 	}
+	entry = entry.Served(resolve)
 
-	// Get the resource to extract sourceRef
 	resource, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -836,49 +869,19 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		}
 		return OperationResult{}, fmt.Errorf("failed to get %s %s/%s: %w", entry.Kind, namespace, name, err)
 	}
-	if err := assertNotTerminating(resource, "FluxCD "+entry.Kind, namespace, name); err != nil {
+	if err := assertSyncable(resource, entry.Kind, namespace, name); err != nil {
 		return OperationResult{}, err
 	}
 
-	// Extract sourceRef based on kind
-	var sourceKind, sourceName, sourceNamespace string
-	spec, ok := resource.Object["spec"].(map[string]any)
-	if !ok {
-		return OperationResult{}, fmt.Errorf("invalid resource spec for %s %s/%s", entry.Kind, namespace, name)
-	}
-
-	switch entry.Kind {
-	case "Kustomization":
-		if sourceRef, ok := spec["sourceRef"].(map[string]any); ok {
-			sourceKind, _ = sourceRef["kind"].(string)
-			sourceName, _ = sourceRef["name"].(string)
-			sourceNamespace, _ = sourceRef["namespace"].(string)
-		}
-	case "HelmRelease":
-		if chart, ok := spec["chart"].(map[string]any); ok {
-			if chartSpec, ok := chart["spec"].(map[string]any); ok {
-				if sourceRef, ok := chartSpec["sourceRef"].(map[string]any); ok {
-					sourceKind, _ = sourceRef["kind"].(string)
-					sourceName, _ = sourceRef["name"].(string)
-					sourceNamespace, _ = sourceRef["namespace"].(string)
-				}
-			}
-		}
-	default:
+	if entry.Kind != "Kustomization" && entry.Kind != "HelmRelease" {
 		return OperationResult{}, fmt.Errorf("sync-with-source only supported for Kustomization and HelmRelease")
 	}
-
-	if sourceName == "" {
+	if _, ok := resource.Object["spec"].(map[string]any); !ok {
+		return OperationResult{}, fmt.Errorf("invalid resource spec for %s %s/%s", entry.Kind, namespace, name)
+	}
+	source, ok := syncSourceFor(resource)
+	if !ok {
 		return OperationResult{}, fmt.Errorf("no source reference found in %s %s/%s", entry.Kind, namespace, name)
-	}
-
-	if sourceNamespace == "" {
-		sourceNamespace = namespace
-	}
-
-	sourceEntry, err := ResolveFluxKind(sourceKind)
-	if err != nil {
-		return OperationResult{}, fmt.Errorf("unknown source kind: %s", sourceKind)
 	}
 
 	timestamp := time.Now().Format(time.RFC3339Nano)
@@ -889,55 +892,132 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 			},
 		},
 	}
+	// An ExternalArtifact is written by the controller that generates it; it has
+	// no reconcile request to honor, so only the consumer is reconciled.
+	if source.Kind == "ExternalArtifact" {
+		if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, reconcilePatch); err != nil {
+			return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s: %w", entry.Kind, namespace, name, err)
+		}
+		return OperationResult{
+			Message:     fmt.Sprintf("Reconcile triggered for FluxCD %s %s/%s; its ExternalArtifact %s/%s is produced by another controller and was not reconciled", entry.Kind, namespace, name, source.Namespace, source.Name),
+			Operation:   "reconcile",
+			Tool:        "fluxcd",
+			Kind:        entry.Kind,
+			Namespace:   namespace,
+			Name:        name,
+			RequestedAt: timestamp,
+		}, nil
+	}
 
-	// Preflight the source for Terminating: a finalizer-stuck source receives
-	// the reconcile annotation but its controller will never act on it. Without
-	// this check the operator would see a green "Sync triggered" toast and
-	// believe progress is being made when the source is in fact a zombie.
-	sourceObj, err := dynClient.Resource(sourceEntry.GVR).Namespace(sourceNamespace).Get(ctx, sourceName, metav1.GetOptions{})
-	if err == nil {
-		if err := assertNotTerminating(sourceObj, "FluxCD "+sourceEntry.Kind, sourceNamespace, sourceName); err != nil {
+	type link struct {
+		entry           FluxKindEntry
+		namespace, name string
+	}
+	var chain []link
+	for ref := &source; ref != nil; {
+		sourceEntry, err := ResolveFluxKind(ref.Kind)
+		if err != nil {
+			return OperationResult{}, fmt.Errorf("unknown source kind: %s", ref.Kind)
+		}
+		sourceEntry = sourceEntry.Served(resolve)
+		chain = append([]link{{sourceEntry, ref.Namespace, ref.Name}}, chain...)
+		// Every link must be read before anything is written: without the
+		// object there is no suspend or deletion state to check, and no chart
+		// sourceRef to follow.
+		obj, err := dynClient.Resource(sourceEntry.GVR).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return OperationResult{}, sourceNotPatchable(sourceEntry.Kind, ref.Namespace, ref.Name, err)
+			}
+			return OperationResult{}, fmt.Errorf("failed to read source %s %s/%s: %w", sourceEntry.Kind, ref.Namespace, ref.Name, err)
+		}
+		if err := assertSyncable(obj, sourceEntry.Kind, ref.Namespace, ref.Name); err != nil {
 			return OperationResult{}, err
 		}
-	}
-	// (If the source can't be fetched here, fall through to the patch — the
-	// patch will surface the same error with a clearer "could not be patched"
-	// message below.)
-
-	// Source patch: K8s returns 404 for either a missing source resource
-	// (typo'd sourceRef.name, source already deleted) OR a missing source
-	// namespace (sourceRef points to a namespace that no longer exists, common
-	// when the source is a finalizer-stuck zombie). The error message is
-	// intentionally neutral about cause — leading the operator to one of
-	// the two possibilities by guessing wastes their time when it was the
-	// other case. The wrapped err preserves the apierrors chain so handlers
-	// still map this to 404.
-	if err := mergePatch(ctx, dynClient, sourceEntry.GVR, sourceNamespace, sourceName, reconcilePatch); err != nil {
-		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf(
-				"source %s %s/%s could not be patched (verify the resource and its namespace still exist; if the namespace was deleted, this resource may be a finalizer-stuck zombie): %w",
-				sourceEntry.Kind, sourceNamespace, sourceName, err,
-			)
+		ref = nil
+		if sourceEntry.Kind == "HelmChart" {
+			if upstream := FluxSourceReferences(obj); len(upstream) > 0 {
+				ref = &upstream[0]
+			}
 		}
-		return OperationResult{}, fmt.Errorf("failed to reconcile source %s %s/%s: %w", sourceEntry.Kind, sourceNamespace, sourceName, err)
 	}
 
-	// Then, reconcile the resource itself
+	for _, l := range chain {
+		if err := mergePatch(ctx, dynClient, l.entry.GVR, l.namespace, l.name, reconcilePatch); err != nil {
+			if apierrors.IsNotFound(err) {
+				return OperationResult{}, sourceNotPatchable(l.entry.Kind, l.namespace, l.name, err)
+			}
+			return OperationResult{}, fmt.Errorf("failed to reconcile source %s %s/%s: %w", l.entry.Kind, l.namespace, l.name, err)
+		}
+	}
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, reconcilePatch); err != nil {
-		return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s (note: source %s/%s was reconciled): %w",
-			entry.Kind, namespace, name, sourceNamespace, sourceName, err)
+		return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s (note: its sources were reconciled): %w",
+			entry.Kind, namespace, name, err)
 	}
 
+	steps := make([]string, 0, len(chain))
+	for _, l := range chain {
+		steps = append(steps, fmt.Sprintf("%s %s/%s", l.entry.Kind, l.namespace, l.name))
+	}
 	return OperationResult{
-		Message:     fmt.Sprintf("Sync with source triggered for FluxCD %s %s/%s", entry.Kind, namespace, name),
+		Message:     fmt.Sprintf("Sync with source triggered for FluxCD %s %s/%s after %s", entry.Kind, namespace, name, strings.Join(steps, ", then ")),
 		Operation:   "reconcile",
 		Tool:        "fluxcd",
 		Kind:        entry.Kind,
 		Namespace:   namespace,
 		Name:        name,
 		RequestedAt: timestamp,
-		Source:      &SourceRef{Kind: sourceEntry.Kind, Namespace: sourceNamespace, Name: sourceName},
+		Source:      &SourceRef{Kind: source.Kind, Namespace: source.Namespace, Name: source.Name},
 	}, nil
+}
+
+// assertSyncable rejects a chain member its controller won't act on: one being
+// deleted, or one with spec.suspend set.
+func assertSyncable(obj *unstructured.Unstructured, kind, namespace, name string) error {
+	if err := assertNotTerminating(obj, "FluxCD "+kind, namespace, name); err != nil {
+		return err
+	}
+	if suspended, _, _ := unstructured.NestedBool(obj.Object, "spec", "suspend"); suspended {
+		return fmt.Errorf("FluxCD %s %s/%s is suspended; resume it to sync: %w", kind, namespace, name, ErrResourceSuspended)
+	}
+	return nil
+}
+
+// sourceNotPatchable covers both causes of a 404 on a source: the object is
+// gone, or its namespace is (a finalizer-stuck zombie). The wrapped error keeps
+// the apierrors chain so handlers still map it to 404.
+func sourceNotPatchable(kind, namespace, name string, err error) error {
+	return fmt.Errorf(
+		"source %s %s/%s could not be patched (verify the resource and its namespace still exist; if the namespace was deleted, this resource may be a finalizer-stuck zombie): %w",
+		kind, namespace, name, err,
+	)
+}
+
+// syncSourceFor picks the consumer's immediate source the way the Flux CLI
+// does. An inline HelmRelease pulls its chart through the HelmChart Flux
+// generates, named <release namespace>-<release name> in the source's
+// namespace. The name comes from the current spec rather than
+// status.helmChart, which still names the previous chart while the controller
+// replaces it after a source change.
+func syncSourceFor(resource *unstructured.Unstructured) (FluxSourceRef, bool) {
+	refs := FluxSourceReferences(resource)
+	if resource.GetKind() == "HelmRelease" {
+		if _, chartRef, _ := unstructured.NestedMap(resource.Object, "spec", "chartRef"); !chartRef {
+			for _, ref := range refs {
+				if ref.Kind == "HelmRepository" || ref.Kind == "GitRepository" || ref.Kind == "Bucket" {
+					chart := ref
+					chart.Kind = "HelmChart"
+					chart.Name = resource.GetNamespace() + "-" + resource.GetName()
+					return chart, true
+				}
+			}
+			return FluxSourceRef{}, false
+		}
+	}
+	if len(refs) == 0 {
+		return FluxSourceRef{}, false
+	}
+	return refs[0], true
 }
 
 // mergePatch is a helper that applies a merge patch to a resource.

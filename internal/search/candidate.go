@@ -86,6 +86,10 @@ func contentFromMap(obj map[string]any, kind string) []ContentField {
 	walkContent("spec", obj["spec"], &out)
 	walkContent("status", obj["status"], &out)
 	walkContent("data", obj["data"], &out)
+	// Admission webhook configs keep their content in a top-level list.
+	if kind == "MutatingWebhookConfiguration" || kind == "ValidatingWebhookConfiguration" {
+		walkContent("webhooks", obj["webhooks"], &out)
+	}
 	return out
 }
 
@@ -112,6 +116,11 @@ func walkContent(path string, v any, out *[]ContentField) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			// A base64 CA bundle is kilobytes of noise that substring-matches
+			// short tokens like "api" or "ops".
+			if k == "caBundle" {
+				continue
+			}
 			walkContent(path+"."+k, x[k], out)
 		}
 	case []any:

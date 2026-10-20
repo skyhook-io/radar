@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/health"
@@ -284,7 +285,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	dashStart := time.Now()
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, DashboardResponse{AccessRestricted: true})
 		return
 	}
@@ -1267,7 +1268,7 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 	}
 	releases, err := helmClient.ListReleasesAcrossNamespaces(r.Context(), namespaces, username, groups)
 	if err != nil {
-		if helm.IsForbiddenError(err) {
+		if helm.ReleaseReadDeniedForCaller(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
 		}
 		if !errors.Is(r.Context().Err(), context.Canceled) {
@@ -1353,7 +1354,7 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 	// Capacity + scheduled-pod requests via the shared informer-derived
 	// computation (node_metrics.go). Namespace scoping keeps restricted users
 	// from seeing aggregate totals of namespaces they can't read.
-	cr := computeCapacityRequests(nodes, listPodsScoped(cache.Pods(), allowedNamespaces))
+	cr := computeCapacityRequests(nodes, readscope.ListPodsScoped(cache.Pods(), allowedNamespaces))
 	cpuCapacityMillis := cr.cpuCapMillis
 	memCapacityBytes := cr.memCapBytes
 	cpuRequestsMillis := cr.cpuReqMillis
@@ -1854,7 +1855,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				coveredIfStaged[workload.key] = true
 			}
 		}
-		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels)
+		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
 		for _, policy := range calicoPolicies {
 			if policy.definition.Namespaced && policy.policy.GetNamespace() != workload.namespace {
 				continue

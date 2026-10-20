@@ -94,6 +94,7 @@ type AppConfig struct {
 	BeylaJobSelector            string
 	WorkloadMetricsScope        prom.WorkloadMetricsScope
 	Version                     string
+	MCPReadOnly                 bool
 	MCPEnabled                  bool
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
@@ -293,6 +294,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
 	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
 		if err := validateStartupPrometheusURL(cfg.PrometheusURL); err != nil {
@@ -497,6 +499,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		DebugImage:                cfg.DebugImage,
 		ReachabilityImage:         cfg.ReachabilityImage,
 		MCP:                       &cfg.MCPEnabled,
+		MCPReadOnly:               &cfg.MCPReadOnly,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -526,6 +529,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HistoryLimit:         cfg.HistoryLimit,
 			DebugEvents:          cfg.DebugEvents,
 			MCPEnabled:           cfg.MCPEnabled,
+			MCPReadOnly:          cfg.MCPEnabled && cfg.MCPReadOnly,
 			OpenCostCurrency:     cfg.OpenCostCurrency,
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
@@ -557,7 +561,9 @@ func CreateServer(cfg AppConfig) *server.Server {
 		// handler records exactly what Radar returned inside those scopes.
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
-		serverCfg.MCPHandler = mcppkg.NewHandler()
+		if !cfg.MCPReadOnly {
+			serverCfg.MCPHandler = mcppkg.NewHandler()
+		}
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}

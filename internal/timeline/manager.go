@@ -27,14 +27,15 @@ type (
 	FilterPreset  = pkgtimeline.FilterPreset
 
 	// Store types
-	EventStore     = pkgtimeline.EventStore
-	QueryOptions   = pkgtimeline.QueryOptions
-	ResourceScope  = pkgtimeline.ResourceScope
-	IdentityQuery  = pkgtimeline.IdentityQuery
-	Identity       = pkgtimeline.Identity
-	SequenceOrder  = pkgtimeline.SequenceOrder
-	StoreStats     = pkgtimeline.StoreStats
-	CompiledFilter = pkgtimeline.CompiledFilter
+	EventStore       = pkgtimeline.EventStore
+	QueryOptions     = pkgtimeline.QueryOptions
+	ResourceScope    = pkgtimeline.ResourceScope
+	IdentityQuery    = pkgtimeline.IdentityQuery
+	Identity         = pkgtimeline.Identity
+	SequenceOrder    = pkgtimeline.SequenceOrder
+	StoreStats       = pkgtimeline.StoreStats
+	CompiledFilter   = pkgtimeline.CompiledFilter
+	EvictionBoundary = pkgtimeline.EvictionBoundary
 
 	// Config types
 	StoreType   = pkgtimeline.StoreType
@@ -309,6 +310,17 @@ func SetObservationStartForTest(t time.Time) {
 		return
 	}
 	observationStartNanos.Store(t.UnixNano())
+}
+
+// HistoryEvictedThrough returns the store's EvictionBoundary, or zero when the
+// store deletes nothing or none is initialized. With ObservationStart it bounds
+// what the store can answer completely: every event this process recorded
+// after both times is still kept.
+func HistoryEvictedThrough() time.Time {
+	if boundary, ok := GetStore().(EvictionBoundary); ok {
+		return boundary.EvictedThrough()
+	}
+	return time.Time{}
 }
 
 // GetStore returns the global event store instance.

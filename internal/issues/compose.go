@@ -53,6 +53,14 @@ type dynamicScopeProvider interface {
 	NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool)
 }
 
+// dynamicSyncProvider reports whether a dynamic list for gvr in namespace is
+// authoritative. ListDynamic answers from an informer that has not synced yet
+// with an empty list and no error, so a detector that reads absence as
+// evidence must ask.
+type dynamicSyncProvider interface {
+	DynamicNamespaceSynced(gvr schema.GroupVersionResource, namespace string) bool
+}
+
 // ComposeStats reports anything the caller would want to surface
 // alongside the issue list — currently CEL-filter eval-error
 // counters so the caller can distinguish "filter excluded
@@ -67,6 +75,9 @@ type ComposeStats struct {
 	// "this cluster had 200." Equal to len(returned slice) when no
 	// truncation occurred.
 	TotalMatched int
+	// Unchecked lists the sources Compose couldn't fully read for this
+	// caller, so their issues may be missing from the result.
+	Unchecked []issuesapi.UncheckedSource
 }
 
 // ListResponse is the canonical base /api/issues + MCP `issues` response shape.
@@ -88,6 +99,7 @@ func NewListResponse(out []Issue, stats ComposeStats) ListResponse {
 		TotalMatched:      stats.TotalMatched,
 		FilterErrors:      stats.FilterErrors,
 		FilterErrorSample: stats.FilterErrorSample,
+		UncheckedSources:  stats.Unchecked,
 	}
 }
 
@@ -166,6 +178,8 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 			out = append(out, fromProblem(pr, now, source))
 		}
 	}
+	var unchecked uncheckedSet
+	recordUnloadedTypedKinds(p, f, &unchecked)
 	emit(p.DetectProblems(f.Namespaces), SourceProblem) // hardcoded per-kind checks
 	if f.CanReadEvidence != nil {
 		emit(p.DetectDynamicTerminatingProblems(f.Namespaces, canList), SourceProblem)
@@ -174,9 +188,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	emit(p.DetectGitOpsProblems(f.Namespaces), SourceProblem) // Argo/Flux reconciler health
 	emit(p.DetectMissingRefs(f.Namespaces), SourceMissingRef) // dangling by-name refs
 	emit(p.DetectScheduling(f.Namespaces), SourceScheduling)  // placement/admission/post-bind
-	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f)
+	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f, &unchecked)
 	out = append(out, karpenterIssues...)
-	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects)...) // generic CRD .status.conditions
+	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects, &unchecked)...) // generic CRD .status.conditions
 	out = foldDeletingConditions(out)
 	out = elevateAdmissionWebhookBackendSeverity(out, p)
 
@@ -219,7 +233,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		out = enrichPodTemplateContext(out, flatForContext, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated}, f.Grouped, Ref{})
 	}
 
-	return finalizeShapedIssues(out, f, !f.Grouped, uncapped)
+	out, stats := finalizeShapedIssues(out, f, !f.Grouped, uncapped)
+	stats.Unchecked = unchecked.list()
+	return out, stats
 }
 
 // MergeExternalIssues adds already-shaped issue rows from handler-owned data

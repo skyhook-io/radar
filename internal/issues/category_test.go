@@ -31,6 +31,7 @@ func TestClassify(t *testing.T) {
 		{"coredns service rewrite", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS service DNS rewrite"}, issuesapi.CategoryDNSFailure},
 		{"env missing service", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Missing referenced Service"}, issuesapi.CategoryMissingConfigRef},
 		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryMissingConfigRef},
+		{"networkpolicy denies all ingress", classifyInput{Source: SourceProblem, Kind: "NetworkPolicy", APIGroup: "networking.k8s.io", Reason: k8s.NetworkPolicyDenyAllIngressReason}, issuesapi.CategoryNetworkPolicyDenied},
 		{"deployment duplicate env", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
 		{"job duplicate env is not job failure", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
 		{"cronjob duplicate env", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
@@ -91,6 +92,7 @@ func TestClassify(t *testing.T) {
 		// problem / service
 		{"service no pods", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "Selector matches no pods"}, issuesapi.CategoryServiceNoEndpoints},
 		{"service 0 ready", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "0/3 selected pods ready"}, issuesapi.CategoryServiceNoEndpoints},
+		{"service mixed backends", classifyInput{Source: SourceProblem, Kind: "Service", Reason: k8s.ServiceMixedBackendsReason}, issuesapi.CategoryServiceMixedBackends},
 		{"service load balancer pending", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
 		{"ingress load balancer pending", classifyInput{Source: SourceProblem, Kind: "Ingress", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
 

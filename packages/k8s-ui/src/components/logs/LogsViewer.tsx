@@ -77,7 +77,7 @@ export function LogsViewer({
   const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
-  const { entries, append, set, clear } = useLogBuffer()
+  const { entries, isFollowing, pendingLineCount, retainedLineCount, missingLineCount, getRetainedEntries, setFollowing, append, set, clear } = useLogBuffer()
   const { isStreaming, streamError, streamErrorCode, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
@@ -243,6 +243,12 @@ export function LogsViewer({
   return (
     <LogCore
       entries={entries}
+      isFollowing={isFollowing}
+      onFollowingChange={setFollowing}
+      pendingLineCount={pendingLineCount}
+      retainedLineCount={retainedLineCount}
+      missingLineCount={missingLineCount}
+      getRetainedEntries={getRetainedEntries}
       isLoading={isLoading || isConnecting}
       errorMessage={fetchError || (entries.length === 0 && !emptyMessage && !streamAnswer ? streamError : null)}
       isStreaming={isStreaming}

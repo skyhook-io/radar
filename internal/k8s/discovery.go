@@ -2,7 +2,9 @@ package k8s
 
 import (
 	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -15,6 +17,9 @@ import (
 // the package-level GetDiscoveryClient() function.
 type ResourceDiscovery struct {
 	*k8score.ResourceDiscovery
+	// backgroundRefresh is held while ServedGVR's refresh runs, so callers
+	// arriving during a slow refresh don't each park another goroutine.
+	backgroundRefresh atomic.Bool
 }
 
 // Re-export types so existing callers compile without changes.
@@ -155,6 +160,28 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 		return schema.GroupVersionResource{}, false
 	}
 	return d.ResourceDiscovery.GetGVRWithGroup(kindOrName, group)
+}
+
+// ServedGVR resolves a kind in a group to the most stable version the connected
+// cluster serves. It satisfies gitops.FluxGVRResolver. Expired discovery is
+// refreshed in the background rather than on the caller's request: a slow
+// discovery endpoint for an unrelated API would otherwise use up the action's
+// deadline. Callers get the cached version until a refresh succeeds, so after
+// a CRD upgrade retires a version, actions can still use it until then.
+func ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
+	d := GetResourceDiscovery()
+	if d == nil || d.ResourceDiscovery == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	if d.backgroundRefresh.CompareAndSwap(false, true) {
+		go func() {
+			defer d.backgroundRefresh.Store(false)
+			if err := d.RefreshIfStale(); err != nil {
+				log.Printf("[discovery] Background refresh failed: %v", err)
+			}
+		}()
+	}
+	return d.GetGVRWithGroup(kind, group)
 }
 
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.

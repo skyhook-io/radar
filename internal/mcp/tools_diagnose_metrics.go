@@ -13,7 +13,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -118,12 +117,7 @@ func diagnoseMetricsSince(sinceSeconds *int64) time.Duration {
 // The per-kind gate runs inside the budget: a slow SubjectAccessReview counts
 // against the branch, not against the rest of diagnose, and a gate that does
 // not answer in time denies.
-//
-// A workload with no pods right now is not a workload with no metrics: one
-// scaled to zero, or whose pods were all replaced, still has an hour of
-// history if kube-state-metrics recorded who owned them. The resolver
-// decides that, so the pod list is not a precondition here.
-func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, name string, pods []*corev1.Pod, since time.Duration, now time.Time) *diagnoseMetrics {
+func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, name string, pods []*corev1.Pod, podsErr error, since time.Duration, now time.Time) *diagnoseMetrics {
 	if !DiagnoseMetricsEnabled {
 		return nil
 	}
@@ -147,9 +141,8 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 		}
 		return nil
 	}
-	scope, err := prometheus.ResolvePodScope(k8s.GetResourceCache(), resource, namespace, name, diagnoseMetricsMaxPods)
-	if err != nil {
-		log.Printf("[mcp] diagnose: pod scope for %s %s/%s failed: %v", resource, namespace, name, err)
+	if podsErr != nil {
+		log.Printf("[mcp] diagnose: pod scope for %s %s/%s failed: %v", resource, namespace, name, podsErr)
 		// Prometheus is there and the caller may read the resource; the pods
 		// could not be established. Say so rather than omit the field, which
 		// reads as "this workload has no metrics".
@@ -157,9 +150,10 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 			Window: diagnoseMetricsWindow{Start: now.Add(-since).UTC().Format(time.RFC3339), End: now.UTC().Format(time.RFC3339), Step: "0s"},
 			Pods:   len(pods),
 			Series: []diagnoseMetricSeries{},
-			Error:  boundDiagnoseMetricsError(fmt.Sprintf("metrics omitted: the workload's pods could not be established: %v", err)),
+			Error:  boundDiagnoseMetricsError(fmt.Sprintf("metrics omitted: the workload's pods could not be established: %v", podsErr)),
 		}
 	}
+	scope := prometheus.PodScopeFromPods(resource, namespace, name, pods, diagnoseMetricsMaxPods)
 	if scope.Selection.IsEmpty() {
 		// The workload controls no pods right now. Membership is the current
 		// population, so there is nothing to chart and nothing to say about it.

@@ -73,7 +73,10 @@ type switchableArgo struct {
 	// slowUserInfo: only the token check is slow.
 	slowUserInfo atomic.Bool
 	// down: every connection is closed before an answer, as when nothing serves.
-	down     atomic.Bool
+	down atomic.Bool
+	// gateway: an ingress in front of argocd-server answers 502 for it, as
+	// while argocd-server restarts.
+	gateway  atomic.Bool
 	requests atomic.Int64
 	release  chan struct{}
 }
@@ -150,7 +153,16 @@ func newSwitchableArgo(t *testing.T, token string) (*switchableArgo, *httptest.S
 		}
 		_, _ = w.Write([]byte(`{"metadata":{"uid":"u1"},"status":{"resources":[]},"items":[]}`))
 	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.gateway.Load() {
+			a.requests.Add(1)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("<html><body>502 Bad Gateway</body></html>"))
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(func() {
 		close(a.release)
 		srv.Close()
@@ -955,10 +967,50 @@ func TestIsTransportFailure(t *testing.T) {
 		{wrap(context.DeadlineExceeded), true},
 		{wrap(errors.New("argoapi: refusing cross-origin redirect to evil (token would be exposed)")), false},
 		{errors.New("argoapi: /x returned 500"), false},
+		{fmt.Errorf("%w: /x returned 502: (unstructured error body omitted)", argoapi.ErrGatewayUnavailable), true},
 	} {
 		if got := isTransportFailure(tc.err); got != tc.want {
 			t.Errorf("isTransportFailure(%v) = %v, want %v", tc.err, got, tc.want)
 		}
+	}
+}
+
+// A certificate Radar can't verify is a failed read, but asking again won't
+// fix it, so pages don't keep asking.
+func TestReadMayRecover_CertificateFailureNeedsTheUser(t *testing.T) {
+	wrap := func(err error) error {
+		return fmt.Errorf("argoapi: GET /x: %w", &url.Error{Op: "Get", URL: "http://a", Err: err})
+	}
+	if ReadMayRecover(wrap(&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}})) {
+		t.Error("certificate failure: want no retry")
+	}
+	if !ReadMayRecover(wrap(context.DeadlineExceeded)) {
+		t.Error("timeout: want retry")
+	}
+	if !ReadMayRecover(fmt.Errorf("%w: /x returned 503", argoapi.ErrGatewayUnavailable)) {
+		t.Error("gateway 503: want retry")
+	}
+	// While the shared connection is being retried, a page asks again even
+	// for an answer that isn't a transport failure, but never for a
+	// certificate failure.
+	previous := defaultManager
+	defaultManager = newTestManager(config.Config{})
+	t.Cleanup(func() { defaultManager.Reset(); defaultManager = previous })
+	m := defaultManager
+	m.SetConfig("http://127.0.0.1:1", "argo-secret", false, true)
+	m.mu.Lock()
+	m.startBackgroundProbeLocked(true)
+	m.mu.Unlock()
+	waitForBackgroundProbe(t, m)
+	_, _ = m.ApplicationHealthCached(context.Background(), billing)
+	if !m.Retrying() {
+		t.Fatal("setup: want the shared connection retrying")
+	}
+	if !ReadMayRecover(errors.New("argoapi: /x returned 500")) {
+		t.Error("retrying: want the page to ask again")
+	}
+	if ReadMayRecover(wrap(&tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}})) {
+		t.Error("certificate failure while retrying: want no retry")
 	}
 }
 
@@ -1221,5 +1273,107 @@ func TestBackgroundProbe_RedactsTheTokenItProbedWith(t *testing.T) {
 			t.Fatalf("the background probe logged nothing; log: %q", logged)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// An ingress answering 502/503/504 while argocd-server restarts is no answer
+// from Argo CD: the page keeps asking, and the connection comes back on its
+// own once argocd-server does, without a reload.
+func TestFailedRead_GatewayErrorKeepsPagesAskingUntilArgoIsBack(t *testing.T) {
+	a, srv := newSwitchableArgo(t, "argo-secret")
+	m := newTestManager(config.Config{})
+	m.retryInterval = 200 * time.Millisecond
+	m.SetConfig(srv.URL, "argo-secret", false, true)
+	mustConnect(t, m)
+
+	a.gateway.Store(true)
+	if _, err := m.ApplicationHealthCached(context.Background(), billing); !errors.Is(err, argoapi.ErrGatewayUnavailable) {
+		t.Fatalf("read = %v, want a gateway error", err)
+	}
+	if m.LastReadError() == nil || !m.Retrying() {
+		t.Fatalf("LastReadError = %v, Retrying = %v; want the failure shown and pages asking again", m.LastReadError(), m.Retrying())
+	}
+
+	// The re-check meets the gateway too; pages that keep asking keep being
+	// told to.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		m.mu.Lock()
+		m.lastDemand = time.Now()
+		m.mu.Unlock()
+		if !m.Retrying() {
+			t.Fatal("while the gateway answers for argocd-server, pages must keep asking")
+		}
+		m.mu.Lock()
+		dropped := m.client == nil && m.lastProbeErr != nil
+		m.mu.Unlock()
+		if dropped {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	a.gateway.Store(false)
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		connected := m.client != nil
+		m.lastDemand = time.Now()
+		m.mu.Unlock()
+		if connected {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not reconnected once argocd-server was back; last error %v", m.LastProbeError())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := m.ApplicationHealthCached(context.Background(), billing); err != nil {
+		t.Fatalf("read after recovery = %v", err)
+	}
+	if m.Retrying() {
+		t.Fatal("pages must stop asking once a read succeeds")
+	}
+}
+
+// A health read that ran out of time is shared like any other failure: the
+// next viewer, or the next poll, gets it from the cache instead of waiting
+// out the same budget against a server already too slow to answer.
+func TestApplicationHealthCached_TimeoutIsSharedNotRepeated(t *testing.T) {
+	a, srv := newSwitchableArgo(t, "argo-secret")
+	m := newTestManager(config.Config{})
+	m.SetConfig(srv.URL, "argo-secret", false, true)
+	mustConnect(t, m)
+
+	a.slow.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := m.ApplicationHealthCached(ctx, billing); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first read = %v, want a timeout", err)
+	}
+	before := a.requests.Load()
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+	if _, err := m.ApplicationHealthCached(ctx2, billing); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second read = %v, want the cached timeout", err)
+	}
+	if got := a.requests.Load() - before; got != 0 {
+		t.Fatalf("argocd-server saw %d more application requests, want 0", got)
+	}
+
+	// A caller that navigated away is not the server's answer.
+	m.mu.Lock()
+	m.appHealthCache = nil
+	m.mu.Unlock()
+	cctx, ccancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); ccancel() }()
+	if _, err := m.ApplicationHealthCached(cctx, billing); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled read = %v, want context.Canceled", err)
+	}
+	m.mu.Lock()
+	_, cached := m.appHealthCache[billing.AppNamespace+"\x00"+billing.AppName]
+	m.mu.Unlock()
+	if cached {
+		t.Fatal("a canceled read must not be cached")
 	}
 }

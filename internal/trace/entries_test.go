@@ -204,60 +204,43 @@ func TestBuildPodsHop_PNRCountsOnlyPublishedEndpoints(t *testing.T) {
 	}
 }
 
-// The Deployment is not a network object, which is why it was missing from a
-// path view for so long - but it is what an operator calls the thing behind a
-// Service, and every consumer had to hold that link in its head.
-func TestPodsWorkloadResolvesThroughTheReplicaSet(t *testing.T) {
+// The workload behind a Service is what an operator calls the thing it fronts.
+// It comes from the same breakdown and access check as several workloads do, so
+// a caller who may not read the workload doesn't learn its name here either.
+func TestPodsHopNamesTheWorkloadTheCallerMayRead(t *testing.T) {
 	ctrl := true
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "web-abc-1", Namespace: "prod",
-			OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-abc", Controller: &ctrl}},
-		},
+	mk := func(name, kind, owner string) *corev1.Pod {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"}}
+		if owner != "" {
+			p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: kind, Name: owner, Controller: &ctrl}}
+		}
+		return p
 	}
-	// No cache: the ReplicaSet can't be read, so the honest answer is the
-	// ReplicaSet itself rather than "no owner".
-	got := ownerWorkload(Deps{}, pod)
-	if got == nil || got.Kind != "ReplicaSet" || got.Name != "web-abc" {
-		t.Errorf("ownerWorkload = %+v, want the ReplicaSet when its parent is unreadable", got)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "api"}}}
+	allow := Deps{CanReadWorkload: func(_, _, _ string) bool { return true }}
+	deny := Deps{CanReadWorkload: func(_, _, _ string) bool { return false }}
+	cases := []struct {
+		name string
+		deps Deps
+		pods []*corev1.Pod
+		want *ResourceRef
+	}{
+		{"one StatefulSet", allow, []*corev1.Pod{mk("db-0", "StatefulSet", "db"), mk("db-1", "StatefulSet", "db")}, &ResourceRef{Group: "apps", Kind: "StatefulSet", Namespace: "prod", Name: "db"}},
+		{"a ReplicaSet whose parent can't be read stays itself", allow, []*corev1.Pod{mk("web-abc-1", "ReplicaSet", "web-abc")}, &ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "prod", Name: "web-abc"}},
+		{"denied", deny, []*corev1.Pod{mk("db-0", "StatefulSet", "db")}, nil},
+		{"two workloads have no single answer", allow, []*corev1.Pod{mk("a-0", "StatefulSet", "a"), mk("b-0", "StatefulSet", "b")}, nil},
+		{"a bare Pod has nothing to name", allow, []*corev1.Pod{mk("solo", "", "")}, nil},
 	}
-}
-
-// A StatefulSet/DaemonSet owns its Pods directly - there is no intermediate to
-// resolve through.
-func TestPodsWorkloadTakesADirectOwnerAsIs(t *testing.T) {
-	ctrl := true
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "db-0", Namespace: "prod",
-			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db", Controller: &ctrl}},
-		},
-	}
-	got := ownerWorkload(Deps{}, pod)
-	if got == nil || got.Kind != "StatefulSet" || got.Name != "db" {
-		t.Errorf("ownerWorkload = %+v, want the StatefulSet itself", got)
-	}
-}
-
-// Two workloads behind one Service have no single answer, and naming one of
-// them would be a guess in a view whose whole point is not guessing.
-func TestPodsWorkloadDeclinesWhenOwnersDisagree(t *testing.T) {
-	ctrl := true
-	mk := func(name, owner string) *corev1.Pod {
-		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: "prod",
-			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: owner, Controller: &ctrl}},
-		}}
-	}
-	if got := podsWorkload(Deps{}, []*corev1.Pod{mk("a", "one"), mk("b", "two")}); got != nil {
-		t.Errorf("podsWorkload = %+v, want nil when the Pods disagree on their owner", got)
-	}
-}
-
-// A bare Pod has no controller, so there is nothing to name.
-func TestPodsWorkloadIsNilForAnUnownedPod(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "prod"}}
-	if got := podsWorkload(Deps{}, []*corev1.Pod{pod}); got != nil {
-		t.Errorf("podsWorkload = %+v, want nil for a Pod with no controller", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hop := buildPodsHop(tc.deps, svc, tc.pods, false)
+			if hop.Config == nil {
+				t.Fatal("pods hop has no config")
+			}
+			got := hop.Config.Workload
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("Workload = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }

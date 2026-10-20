@@ -1,0 +1,17 @@
+# Applied only after pg-runtime reports ContinuousArchiving=True. A backup
+# started before WAL archiving works is refused (phase walArchivingFailing), and
+# `immediate: true` would spend its one immediate run on that refusal.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: pg-runtime-hourly
+  namespace: pgrt
+spec:
+  schedule: "0 0 * * * *"
+  immediate: true
+  backupOwnerReference: self
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+  cluster:
+    name: pg-runtime

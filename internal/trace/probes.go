@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/probe"
 )
 
@@ -136,6 +138,19 @@ func runProbes(ctx context.Context, t *Trace, opts Options, client kubernetes.In
 	probeHops(t.Downstream)
 	probeHops(t.Upstreams)
 	wg.Wait()
+	// A sidecar proxy in Radar's own pod can accept a connection before the
+	// backend does; record it on the results, as for a probe Job.
+	mesh, known := selfPodMesh()
+	t.radarUnmeshed = known && mesh == ""
+	if mesh != "" {
+		for _, hops := range [][]Hop{t.Downstream, t.Upstreams} {
+			for i := range hops {
+				for j := range hops[i].Probes {
+					hops[i].Probes[j].Mesh = mesh
+				}
+			}
+		}
+	}
 
 	// Dual-path divergence is the most operator-actionable signal the active
 	// layer produces: when an in-cluster probe succeeds via one path and
@@ -163,7 +178,36 @@ func reconcilePolicyFindings(t *Trace) {
 	visit := func(hops []Hop) {
 		for i := range hops {
 			h := &hops[i]
+			// A deny-all policy issue on the Service in front claims every
+			// port of its pods is blocked. Probes reach only a sample of the
+			// pods, and policies can split the pods, each with its own issue,
+			// so a data-path pass settles only a lone issue, whose policy
+			// isolates every backend.
+			// Results that went through a sidecar proxy say nothing about the
+			// policy: the proxy can accept before the backend does.
+			podProbes := unmeshed(h.Probes)
+			var svc *Hop
+			var svcProbes []probe.Result
+			if i > 0 && h.Edge == "Service->Pods" && hops[i-1].Resource.Kind == "Service" {
+				svc = &hops[i-1]
+				// Only when Radar's own pod is known to run without a
+				// sidecar: otherwise its proxy may have answered.
+				if t.radarUnmeshed {
+					svcProbes = unmeshed(svc.Probes)
+				}
+			}
+			// The Service hop's own data probe, through its ClusterIP, counts
+			// too: pods that declare no containerPort get no per-pod probes.
+			if svc != nil && countFindings(svc.Findings, k8s.NetworkPolicyDenyAllIngressFingerprint) == 1 &&
+				(portScopedOutcome(podProbes, 0).dataOK || portScopedOutcome(svcProbes, 0).dataOK) {
+				downgradeDenyAllIngress(svc)
+			}
 			if h.Meta == nil || h.Meta["policyVerdict"] != "would-deny" {
+				continue
+			}
+			// The data-path probes are TCP; they say nothing about a
+			// prediction for another protocol on the same port number.
+			if proto, ok := h.Meta["policyProtocol"].(string); ok && !strings.EqualFold(proto, "TCP") {
 				continue
 			}
 			idx := findingIndexByCode(h.Findings, codePolicyWouldDeny)
@@ -171,10 +215,20 @@ func reconcilePolicyFindings(t *Trace) {
 				continue
 			}
 			port := metaInt32(h.Meta["policyDenyPort"])
-			o := portScopedOutcome(h.Probes, port)
+			o := portScopedOutcome(podProbes, port)
 			names := metaStrings(h.Meta["policyNames"])
+			// Without a per-pod data probe on the denied port (the pods
+			// declare no containerPort), a data probe through the Service on
+			// the Service port the prediction is about is the evidence.
+			viaService := false
+			if !o.dataOK && !o.dataFail && svc != nil {
+				if sp := predictionServicePort(h.Meta); sp > 0 {
+					so := portScopedOutcome(svcProbes, sp)
+					viaService = so.dataOK && !so.dataFail
+				}
+			}
 			switch {
-			case o.dataOK && !o.dataFail && port > 0:
+			case (o.dataOK && !o.dataFail && port > 0) || viaService:
 				// Real in-cluster traffic on the DENIED port got through UNANIMOUSLY.
 				// The apiserver proxy bypasses NetworkPolicy, but the DATA path does
 				// not - a clean data-path success is ground truth the prediction
@@ -211,6 +265,58 @@ func reconcilePolicyFindings(t *Trace) {
 	}
 	visit(t.Downstream)
 	visit(t.Upstreams)
+}
+
+// downgradeDenyAllIngress replaces a Service hop's NetworkPolicy deny-all
+// issues (one per policy) with a single info note once live traffic reached
+// its pods.
+func downgradeDenyAllIngress(h *Hop) {
+	idx := findingIndexByCode(h.Findings, k8s.NetworkPolicyDenyAllIngressFingerprint)
+	if idx < 0 {
+		return
+	}
+	note := Finding{
+		Code:     k8s.NetworkPolicyDenyAllIngressFingerprint,
+		Severity: SeverityInfo,
+		Message:  "Traffic got through. A NetworkPolicy here would block all inbound traffic to these pods - but either this cluster's network plugin doesn't enforce NetworkPolicy, or the static read missed an allow rule.",
+		Command:  h.Findings[idx].Command,
+	}
+	kept := h.Findings[:0]
+	for _, f := range h.Findings {
+		if f.Code != k8s.NetworkPolicyDenyAllIngressFingerprint {
+			kept = append(kept, f)
+		}
+	}
+	h.Findings = append(kept, note)
+	sortFindingsBySeverity(h.Findings)
+}
+
+// unmeshed returns the results that didn't go through a sidecar proxy.
+func unmeshed(results []probe.Result) []probe.Result {
+	out := make([]probe.Result, 0, len(results))
+	for _, r := range results {
+		if r.Mesh == "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// selfPodMesh names the mesh whose sidecar proxy runs in Radar's own pod, found
+// in the cache by the chart's downward-API env. known is false when Radar
+// isn't a pod or its pod isn't in the cache (a namespace-scoped install that
+// doesn't cover its own namespace).
+func selfPodMesh() (mesh string, known bool) {
+	name, namespace := os.Getenv("MY_POD_NAME"), os.Getenv("MY_POD_NAMESPACE")
+	cache := k8s.GetResourceCache()
+	if name == "" || namespace == "" || cache == nil || cache.Pods() == nil {
+		return "", false
+	}
+	pod, err := cache.Pods().Pods(namespace).Get(name)
+	if err != nil {
+		return "", false
+	}
+	return k8s.PodMesh(pod), true
 }
 
 type probeOutcome struct {

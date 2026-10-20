@@ -40,6 +40,7 @@ var recreateStashKinds = map[string]bool{
 	"Rollout":                 true,
 	"Service":                 true,
 	"Ingress":                 true,
+	"NetworkPolicy":           true,
 	"HorizontalPodAutoscaler": true,
 	"CronJob":                 true,
 	"ResourceQuota":           true,
@@ -54,6 +55,15 @@ var recreateStashKinds = map[string]bool{
 	// re-registration); the join reconstructs the cross-recreate spec diff.
 	"MutatingWebhookConfiguration":   true,
 	"ValidatingWebhookConfiguration": true,
+	"PodDisruptionBudget":            true,
+	"Gateway":                        true,
+	"GatewayClass":                   true,
+	"HTTPRoute":                      true,
+	"GRPCRoute":                      true,
+	"TCPRoute":                       true,
+	"UDPRoute":                       true,
+	"TLSRoute":                       true,
+	"ReferenceGrant":                 true,
 }
 
 // RecreateJoinKind reports whether deletes of this kind are stashed for

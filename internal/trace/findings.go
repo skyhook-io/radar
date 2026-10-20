@@ -24,6 +24,7 @@ func hopFindings(deps Deps, ref ResourceRef) []Finding {
 	// rather than widening what a hop can surface.
 	related := issues.RelatedIssues(p, issues.RelatedIssueOptions{
 		SkipPodTemplateContext: true,
+		CanReadRelated:         deps.IssueAccess.CanReadRelated,
 		CanReadClusterScoped:   deps.IssueAccess.CanReadClusterScoped,
 		CanReadSubject:         deps.IssueAccess.CanReadSubject,
 		CanReadEvidence:        deps.IssueAccess.CanReadEvidence,

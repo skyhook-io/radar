@@ -7,6 +7,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/trace"
 )
 
@@ -50,7 +51,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	// Mirror handleAuditResource: when the user has no namespace access
 	// (RBAC trims the set to empty), return an unknown-verdict trace
 	// instead of leaking that the resource even exists.
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, &trace.Trace{
 			Subject:    trace.ResourceRef{Kind: kind, Namespace: namespace, Name: name},
 			Downstream: []trace.Hop{},
@@ -80,9 +81,11 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		Issues:    issues.NewCacheProvider(),
 		IssueAccess: trace.IssueAccess{
 			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadRelated:       s.issueRelatedResourceAccess(r),
 			CanReadSubject:       s.issueSubjectAccess(r),
 			CanReadEvidence:      s.issueEvidenceAccess(r),
 		},
+		CanReadWorkload: s.workloadReadAccess(r),
 		// Probes call services/proxy + pods/proxy on this client. Use the
 		// per-request impersonated identity (or the SA when auth is disabled)
 		// so the apiserver enforces the caller's RBAC on the proxy verbs -
@@ -97,7 +100,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		// leak Service config + pod IPs + findings the handler did not
 		// authorize. A nil list means single-user / auth-disabled, where
 		// every namespace is in scope; the non-nil empty (no access) case
-		// is handled above by noNamespaceAccess before we reach here.
+		// is handled above by readscope.NoNamespaceAccess before we reach here.
 		AllowedNamespaces: namespaces,
 	}
 	opts := trace.Options{

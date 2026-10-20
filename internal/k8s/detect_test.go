@@ -1223,6 +1223,74 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 				}},
 			},
 		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "replaced", Namespace: "prod", UID: "replacement-uid", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "static", Namespace: "prod", UID: "mirror-uid", CreationTimestamp: old, Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "static-uid"}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "static.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "static", UID: "static-uid"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "contested", Namespace: "prod", UID: "contested-now", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "contested.now", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "contested", UID: "contested-now"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: current incarnation",
+			LastTimestamp:  recent,
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "contested.before", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "contested", UID: "contested-before"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: predecessor",
+			LastTimestamp:  metav1.NewTime(now.Add(-10 * time.Second)),
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "replaced.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "replaced", UID: "predecessor-uid"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
 		&corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: "liveness.1", Namespace: "prod"},
 			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "liveness"},
@@ -1264,7 +1332,10 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 		if hasProblem(problems, "Pod", "readiness", "ReadinessProbeFailed") &&
 			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") &&
 			hasProblem(problems, "Pod", "thrash", "CrashLoopBackOff") &&
-			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") {
+			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") &&
+			hasProblem(problems, "Pod", "replaced", "CrashLoopBackOff") &&
+			hasProblem(problems, "Pod", "static", "LivenessProbeFailed") &&
+			hasProblem(problems, "Pod", "contested", "LivenessProbeFailed") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1287,6 +1358,16 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 	}
 	if got, ok := lookupProblem(problems, "Pod", "liveness", "LivenessProbeFailed"); !ok || !strings.Contains(got.Message, "HTTP probe failed") {
 		t.Fatalf("liveness probe problem = %+v, want event message detail", got)
+	}
+	assertProblem(t, problems, "Pod", "replaced", "CrashLoopBackOff", "critical")
+	if hasProblem(problems, "Pod", "replaced", "LivenessProbeFailed") {
+		t.Fatalf("a same-name predecessor's probe failure must not relabel its replacement: %+v", problems)
+	}
+	// Kubelet names a static Pod by its static UID, not its API mirror's.
+	assertProblem(t, problems, "Pod", "static", "LivenessProbeFailed", "critical")
+	// A predecessor stamped later must not displace this pod's own failure.
+	if got, ok := lookupProblem(problems, "Pod", "contested", "LivenessProbeFailed"); !ok || !strings.Contains(got.Message, "current incarnation") {
+		t.Fatalf("contested probe problem = %+v, want the current incarnation's failure", got)
 	}
 }
 

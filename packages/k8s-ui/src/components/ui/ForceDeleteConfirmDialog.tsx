@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { ConfirmDialog } from './ConfirmDialog'
 import { pluralize } from '../../utils/pluralize'
@@ -22,6 +22,7 @@ interface ForceDeleteConfirmDialogProps {
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
   cascadeRootResolved?: boolean
+  cascadePreviewFailed?: boolean
 }
 
 export function ForceDeleteConfirmDialog({
@@ -35,8 +36,10 @@ export function ForceDeleteConfirmDialog({
   cascadeDependents,
   cascadeLoading,
   cascadeRootResolved,
+  cascadePreviewFailed,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
+  const isNamespace = resourceKind.toLowerCase() === 'namespace'
 
   function handleClose() {
     onClose()
@@ -54,7 +57,7 @@ export function ForceDeleteConfirmDialog({
       onConfirm={handleConfirm}
       title="Delete Resource"
       message={`Are you sure you want to delete "${resourceName}"?`}
-      details={`This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`}
+      details={isNamespace ? `This will permanently delete the namespace "${resourceName}" and the resources in it.` : `This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`}
       confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
       variant="danger"
       isLoading={isLoading}
@@ -63,21 +66,30 @@ export function ForceDeleteConfirmDialog({
         {cascadeLoading && (
           <div className="flex items-center gap-2 text-xs text-theme-text-tertiary">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            Checking for dependent resources...
+            Checking related resources...
           </div>
         )}
 
-        {!cascadeLoading && cascadeDependents && cascadeDependents.length > 0 && (
+        {!cascadeLoading && !cascadePreviewFailed && cascadeDependents && cascadeDependents.length > 0 && (
           <CascadeDependentsList dependents={cascadeDependents} />
         )}
 
-        {!cascadeLoading && cascadeRootResolved === false && (
-          <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-warning-text">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              Radar couldn&apos;t verify which dependent resources Kubernetes will also delete. Additional resources may be deleted but aren&apos;t shown here.
-            </span>
-          </div>
+        {!cascadeLoading && cascadePreviewFailed && (
+          <p className="text-xs text-theme-text-tertiary">
+            Related-resource preview unavailable.
+          </p>
+        )}
+
+        {!isNamespace && !cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === false && (
+          <p className="text-xs text-theme-text-tertiary">
+            This resource is not in Radar&apos;s topology, so its related resources cannot be previewed.
+          </p>
+        )}
+
+        {!cascadeLoading && !cascadePreviewFailed && cascadeRootResolved === true && cascadeDependents && cascadeDependents.length > 0 && (
+          <p className="text-xs text-theme-text-secondary">
+            This list shows visible related resources; it does not predict what will be deleted.
+          </p>
         )}
 
         <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
@@ -120,7 +132,7 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
       >
         <CollapseChevron open={expanded} inheritColor className="w-3.5 h-3.5" />
         <span>
-          Will also delete {pluralize(dependents.length, 'dependent resource')}
+          May affect {pluralize(dependents.length, 'related resource')}
         </span>
       </button>
 

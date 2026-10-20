@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -9,7 +10,7 @@ const checkCNPGNoDeclarativeBackup = "cnpgNoDeclarativeBackup"
 // cnpgBarmanPluginName is the barman-cloud CNPG-I plugin. Clusters that have
 // migrated to it keep their backup config in an ObjectStore CR in a different
 // API group, and CNPG stops publishing the in-tree RPO status fields.
-const cnpgBarmanPluginName = "barman-cloud.cloudnative-pg.io"
+const cnpgBarmanPluginName = cnpg.BarmanPluginName
 
 // checkCNPGDeclarativeBackup flags CNPG Clusters with no ScheduledBackup
 // targeting them.
@@ -86,28 +87,10 @@ func cnpgNoScheduleMessage(c *unstructured.Unstructured) string {
 }
 
 func cnpgHasBarmanPlugin(c *unstructured.Unstructured) bool {
-	plugins, found, _ := unstructured.NestedSlice(c.Object, "spec", "plugins")
-	if !found {
-		return false
-	}
-	for _, raw := range plugins {
-		p, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if name, _ := p["name"].(string); name != cnpgBarmanPluginName {
-			continue
-		}
-		// `enabled` is CRD-defaulted to true, so only an explicit false disables.
-		if enabled, present := p["enabled"].(bool); present && !enabled {
-			continue
-		}
-		return true
-	}
-	return false
+	_, present := cnpg.ParseBackupDeclaration(c).BarmanPlugin()
+	return present
 }
 
 func cnpgHasInTreeBackup(c *unstructured.Unstructured) bool {
-	_, found, _ := unstructured.NestedMap(c.Object, "spec", "backup", "barmanObjectStore")
-	return found
+	return cnpg.ParseBackupDeclaration(c).InTreeConfigured
 }

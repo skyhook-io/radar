@@ -283,13 +283,16 @@ export interface ArgoRevisionMetadata {
 // Response of GET /api/argo/applications/{ns}/{name}/resource-diff. `desired`
 // is the Git-rendered manifest, `live` the normalized cluster state — both YAML
 // for the line-by-line view. `fieldEntries` is the same diff structured per
-// path for a compact summary. `redacted` is set when Secret values were masked
+// path for a compact summary; Radars before the list was made non-null send
+// null when it is empty. `fieldEntriesTruncated` is set when the list was cut
+// at the server's entry cap. `redacted` is set when Secret values were masked
 // server-side; `hook` marks Argo sync-hook resources.
 export interface GitOpsResourceDiff {
   source: string
   desired: string
   live: string
-  fieldEntries: GitOpsResourceDiffFieldEntry[]
+  fieldEntries: GitOpsResourceDiffFieldEntry[] | null
+  fieldEntriesTruncated?: boolean
   redacted: boolean
   hook: boolean
 }

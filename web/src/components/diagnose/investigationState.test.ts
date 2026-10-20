@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DiagnoseError } from "../../api/diagnose";
+import { DiagnoseError, type RunSummary } from "../../api/diagnose";
 import {
   canOfferInvestigationApply,
   initialInvestigationPane,
@@ -28,6 +28,7 @@ import {
   investigationHealthSignals,
   investigationSettledAnswerTurnIndexes,
   investigationIsAssessmentTurn,
+  readOnlyNotice,
 } from "./investigationState";
 
 describe("investigation terminal presentation", () => {
@@ -1353,5 +1354,39 @@ describe("investigationFailureShown", () => {
       refusal: quota,
       followUp: null,
     });
+  });
+});
+
+describe("readOnlyNotice", () => {
+  const base: RunSummary = {
+    id: "r1",
+    kind: "Deployment",
+    group: "apps",
+    namespace: "prod",
+    name: "payments",
+    context: "prod-cluster",
+    status: "done",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    canContinue: false,
+  };
+
+  it("shows the host's reason a run can't take a follow-up", () => {
+    expect(
+      readOnlyNotice({
+        ...base,
+        continueBlockedReason:
+          "This conversation can't be continued. Start a new investigation to ask more.",
+      }),
+    ).toBe(
+      "This conversation can't be continued. Start a new investigation to ask more.",
+    );
+  });
+
+  it("falls back to the generic notice without one", () => {
+    expect(readOnlyNotice(base)).toBe("This investigation is read-only.");
+    expect(readOnlyNotice({ ...base, continueBlockedReason: "  " })).toBe(
+      "This investigation is read-only.",
+    );
   });
 });

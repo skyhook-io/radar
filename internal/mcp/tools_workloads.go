@@ -104,7 +104,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 
 	switch strings.ToLower(input.Action) {
 	case "restart":
-		warnings := schedulingBlockerWarnings(kind, input.Namespace, input.Name)
+		warnings := schedulingBlockerWarnings(ctx, kind, input.Namespace, input.Name)
 		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("restart failed: %w", err)
 		}
@@ -255,7 +255,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	// matches a bare debug pod or, during a Rollout workloadRef migration,
 	// the referenced Deployment's pods, and their logs would then read as
 	// this workload's.
-	pods, err := k8s.WorkloadPods(cache, kind, input.Namespace, input.Name)
+	pods, err := k8s.WorkloadPods(ctx, cache, kind, input.Namespace, input.Name)
 	if err != nil {
 		return nil, nil, workloadSelectorMCPError(ctx, err, kind, input.Namespace, input.Name)
 	}
@@ -357,8 +357,11 @@ func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, n
 	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return fmt.Errorf("forbidden: cannot access %s %s/%s: %w", kind, namespace, name, err)
 	}
-	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) || errors.Is(err, k8s.ErrWorkloadNotFound) {
 		return notFoundError(ctx, err, kind, namespace, name)
+	}
+	if errors.Is(err, k8s.ErrUnknownDynamicKind) {
+		return fmt.Errorf("%s (argoproj.io) is not installed or not yet discovered in this cluster", k8s.CanonicalWorkloadKind(kind))
 	}
 	if errors.Is(err, k8s.ErrWorkloadSelectorUnavailable) || errors.Is(err, rollouts.ErrWorkloadRefUnsupported) {
 		return fmt.Errorf("invalid %s %s/%s: %w", kind, namespace, name, err)
@@ -455,22 +458,27 @@ func addMCPWorkloadLogEmptyMetadata(response map[string]any, metadata mcpWorkloa
 	}
 }
 
+const schedulingBlockerReadBudget = 250 * time.Millisecond
+
 // schedulingBlockerWarnings detects when a restart won't accomplish what the
 // agent likely wants: if the workload currently has Pending pods blocked on
 // scheduling or post-bind (CNI/volume) issues, a rolling restart just creates
 // more pods that hit the same wall. The agent should fix the underlying
-// constraint instead (taints/affinity/capacity/CNI/storage). Best-effort —
-// never blocks the restart.
+// constraint instead (taints/affinity/capacity/CNI/storage). Best-effort:
+// membership gets schedulingBlockerReadBudget, so a Rollout inventory that is
+// not watched yet delays the restart by at most that and skips the hint.
 //
 // Admission failures (quota/PSA/webhook) are intentionally out of scope: they
 // block pod creation entirely, so there are no Pending pods to key on, and the
 // FailedCreate event names the controller rather than a Pod.
-func schedulingBlockerWarnings(kind, namespace, name string) []string {
+func schedulingBlockerWarnings(ctx context.Context, kind, namespace, name string) []string {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
 	}
-	pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+	ctx, cancel := context.WithTimeout(ctx, schedulingBlockerReadBudget)
+	defer cancel()
+	pods, err := k8s.WorkloadPods(ctx, cache, kind, namespace, name)
 	if err != nil || len(pods) == 0 {
 		return nil
 	}
@@ -730,7 +738,8 @@ type manageNodeInput struct {
 	Name               string `json:"name" jsonschema:"node name"`
 	DeleteEmptyDirData *bool  `json:"delete_empty_dir_data,omitempty" jsonschema:"evict pods with emptyDir volumes (default true, set false to skip them)"`
 	Force              bool   `json:"force,omitempty" jsonschema:"force evict pods not managed by a controller (default false)"`
-	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain timeout in seconds (default 60)"`
+	WaitForDeletion    *bool  `json:"wait_for_deletion,omitempty" jsonschema:"default true; false returns once evictions are accepted (pods may still be terminating)"`
+	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain deadline in seconds; 0 = server default (2m when waiting)"`
 }
 
 func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manageNodeInput) (*mcp.CallToolResult, any, error) {
@@ -772,8 +781,10 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 			IgnoreDaemonSets:   true,
 			DeleteEmptyDirData: deleteLocal,
 			Force:              input.Force,
-			Timeout:            60 * time.Second,
+			// An accepted eviction does not establish that the workload has left.
+			WaitForDeletion: input.WaitForDeletion == nil || *input.WaitForDeletion,
 		}
+		// Timeout left at 0 lets DrainNode pick a default sized for the operation.
 		if input.Timeout > 0 {
 			opts.Timeout = time.Duration(input.Timeout) * time.Second
 		}
@@ -781,23 +792,98 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 		if err != nil {
 			return nil, nil, fmt.Errorf("drain failed: %w", err)
 		}
-		status := "ok"
-		msg := fmt.Sprintf("Drained node %s: %d pods evicted", input.Name, len(result.EvictedPods))
-		if len(result.Errors) > 0 {
-			status = "partial"
-			msg = fmt.Sprintf("Drain partially completed on node %s: %d evicted, %d failed",
-				input.Name, len(result.EvictedPods), len(result.Errors))
-		}
+		status, msg := describeNodeDrain(input.Name, result)
 		return toJSONResult(map[string]any{
-			"status":      status,
-			"message":     msg,
-			"evictedPods": result.EvictedPods,
-			"errors":      result.Errors,
+			"status":            status,
+			"message":           msg,
+			"evictedPods":       result.EvictedPods,
+			"skippedPods":       skippedPodsForMCP(result.SkippedPods),
+			"pendingPods":       result.PendingPods,
+			"waitedForDeletion": result.WaitedForDeletion,
+			"outcome":           result.CompletionOutcome(),
+			"unconfirmedPods":   result.UnconfirmedPods,
+			"verificationError": result.VerificationError,
+			"errors":            result.Errors,
 		})
 
 	default:
 		return nil, nil, fmt.Errorf("unknown action %q: must be cordon, uncordon, or drain", input.Action)
 	}
+}
+
+type mcpSkippedPod struct {
+	Pod          string `json:"pod"`
+	Reason       string `json:"reason"`
+	ExpectedSkip bool   `json:"expectedSkip"`
+}
+
+func skippedPodsForMCP(skipped []k8score.PodDrainDecision) []mcpSkippedPod {
+	out := make([]mcpSkippedPod, 0, len(skipped))
+	for _, d := range skipped {
+		out = append(out, mcpSkippedPod{Pod: d.Namespace + "/" + d.Name, Reason: d.Reason, ExpectedSkip: d.ExpectedSkip})
+	}
+	return out
+}
+
+func describeNodeDrain(name string, result *k8s.DrainResult) (status, message string) {
+	outcome := result.CompletionOutcome()
+	var details []string
+	blocking, expected := 0, 0
+	for _, pod := range result.SkippedPods {
+		if pod.BlocksDrain() {
+			blocking++
+		} else {
+			expected++
+		}
+	}
+	if len(result.Errors) > 0 {
+		details = append(details, fmt.Sprintf("Failed evictions: %d (see errors)", len(result.Errors)))
+	}
+	if len(result.PendingPods) > 0 {
+		details = append(details, fmt.Sprintf("Evicted pods still on the node: %d (see pendingPods)", len(result.PendingPods)))
+	}
+	if blocking > 0 {
+		details = append(details, fmt.Sprintf("Skipped pods requiring attention: %d (see skippedPods for reasons)", blocking))
+	}
+	if len(result.UnconfirmedPods) > 0 {
+		details = append(details, fmt.Sprintf("Pods with unconfirmed deletion: %d (see unconfirmedPods)", len(result.UnconfirmedPods)))
+	}
+	if result.VerificationError != "" {
+		details = append(details, "could not verify pod deletion: "+result.VerificationError)
+	}
+	if expected > 0 {
+		details = append(details, fmt.Sprintf("Pods left in place by design: %d (see skippedPods)", expected))
+	}
+	status = "ok"
+	switch outcome {
+	case k8score.DrainIncomplete:
+		status, message = "partial", "Drain incomplete on node "+name
+	case k8score.DrainUnconfirmed:
+		status, message = "partial", "Could not confirm drain completion on node "+name
+	case k8score.DrainStarted:
+		message = fmt.Sprintf("Evictions started on node %s: %d accepted; pod deletion has not been confirmed", name, len(result.EvictedPods))
+	default:
+		if len(result.EvictedPods) == 0 {
+			message = "Drain complete on node " + name + ": nothing to evict"
+		} else {
+			podLabel := "pods"
+			if len(result.EvictedPods) == 1 {
+				podLabel = "pod"
+			}
+			message = fmt.Sprintf("Drain complete on node %s: %d %s removed and confirmed gone", name, len(result.EvictedPods), podLabel)
+		}
+	}
+	if len(details) > 0 {
+		message += "; " + strings.Join(details, "; ")
+	}
+	message += ". The node remains cordoned."
+	if status == "partial" {
+		if blocking > 0 {
+			message += " Review skipped workloads and drain options before retrying."
+		}
+		message += " Do not take the node down until required workloads are removed."
+	}
+	return status, message
 }
 
 // normalizeWorkloadKind converts various kind formats to the plural lowercase form.

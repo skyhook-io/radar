@@ -64,6 +64,10 @@ export function routePath(path: string): string {
   return prefix + path;
 }
 
+export function mcpEndpointUrl(readOnly = false): string {
+  return `${window.location.origin}${routePath(readOnly ? '/mcp-readonly' : '/mcp')}`;
+}
+
 /**
  * Inverse of `routePath`: strips the configured basename from a window-level
  * path so it can be handed to React Router's navigate(), which re-applies the

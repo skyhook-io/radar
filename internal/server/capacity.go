@@ -12,6 +12,7 @@ import (
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	internaltimeline "github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"
@@ -449,7 +450,7 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, ident
 	result.meta.Provider = capacityProvider(result.meta.Provider, nodePools, nodeClaims, nodeClasses, result.meta.Coverage)
 	resourceCache := k8s.GetResourceCache()
 	ownerResolutionAllowed, workloadAttributionPartial := capacityOwnerResolutionPermissions(pods, func(group, resource, namespace string) bool {
-		return s.canRead(r, group, resource, namespace, "list") && capacityCacheCoversNamespace(resourceCache, resource, namespace)
+		return resourceCache != nil && s.canRead(r, group, resource, namespace, "list") && resourceCache.AssessKindRead(resource, []string{namespace}).Complete
 	})
 	if workloadAttributionPartial {
 		coverage := result.meta.Coverage[capacityapi.CoverageWorkloads]
@@ -694,6 +695,17 @@ func (s *Server) loadCapacityNodes(r *http.Request, meta *capacityapi.ResponseMe
 		meta.Coverage[capacityapi.CoverageNodes] = unavailableCoverage("node_cache_unavailable", []string{"nodes", "allocatable", "composition", "actualUsage"})
 		return nil
 	}
+	switch cache.AssessKindRead("nodes", nil).Readiness {
+	case k8s.KindPending:
+		meta.Coverage[capacityapi.CoverageNodes] = syncingCoverage("node_cache_syncing", []string{"nodes", "allocatable", "composition", "actualUsage"})
+		return nil
+	case k8s.KindFailed:
+		meta.Coverage[capacityapi.CoverageNodes] = errorCoverage("node_cache_sync_failed", []string{"nodes", "allocatable", "composition", "actualUsage"})
+		return nil
+	case k8s.KindUnavailable:
+		meta.Coverage[capacityapi.CoverageNodes] = unavailableCoverage("node_cache_unavailable", []string{"nodes", "allocatable", "composition", "actualUsage"})
+		return nil
+	}
 	nodes, err := cache.Nodes().List(labels.Everything())
 	if err != nil {
 		log.Printf("[capacity] Failed to list Nodes: %v", err)
@@ -708,7 +720,7 @@ func (s *Server) loadCapacityPods(r *http.Request, meta *capacityapi.ResponseMet
 	baseNamespaces := s.capacityNamespacesForUser(r)
 	namespaces := s.capacityNamespacesForSource(r, baseNamespaces, "", "pods")
 	explicit := parseNamespaces(r.URL.Query()) != nil || k8s.ForceNamespaceScope
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		meta.Coverage[capacityapi.CoveragePods] = deniedCoverage("pods_list_denied", []string{"scheduledRequests", "aggregateDemand", "workloads", "summary.actions", "demand.summary"})
 		meta.Coverage[capacityapi.CoverageWorkloads] = meta.Coverage[capacityapi.CoveragePods]
 		return nil
@@ -720,25 +732,53 @@ func (s *Server) loadCapacityPods(r *http.Request, meta *capacityapi.ResponseMet
 		return nil
 	}
 	sourceNamespaces := namespaces
-	cacheNamespaces := capacityNamespacesWithinCache(cache, "pods", sourceNamespaces)
-	namespaces = cacheNamespaces.namespaces
-	if cacheNamespaces.unavailable {
+	assessment := cache.AssessKindRead("pods", sourceNamespaces)
+	if len(assessment.Uncovered) > 0 && len(assessment.Uncovered) == len(sourceNamespaces) {
 		coverage := unavailableCoverage("pod_cache_scope_unavailable", []string{"scheduledRequests", "aggregateDemand", "workloads", "summary.actions", "demand.summary"})
-		if explicit || cacheNamespaces.limited && sourceNamespaces == nil {
+		coverage.Scope = capacityapi.CoverageScopeAllAuthorizedNamespaces
+		if explicit {
 			coverage.Scope = capacityapi.CoverageScopeExplicitNamespaces
-		} else if sourceNamespaces != nil {
-			coverage.Scope = capacityapi.CoverageScopeAllAuthorizedNamespaces
 		}
-		coverage.Namespaces = append([]string{}, namespaces...)
+		coverage.Namespaces = []string{}
 		meta.Coverage[capacityapi.CoveragePods] = coverage
 		meta.Coverage[capacityapi.CoverageWorkloads] = coverage
 		return nil
 	}
-	pods := listPodsScoped(cache.Pods(), namespaces)
+	if readiness := assessment.TargetReadiness(); readiness != k8s.KindReady {
+		coverage := unavailableCoverage("pod_cache_unavailable", []string{"scheduledRequests", "aggregateDemand", "workloads", "summary.actions", "demand.summary"})
+		switch readiness {
+		case k8s.KindPending:
+			coverage.Status, coverage.ReasonCode = capacityapi.CoverageSyncing, "pod_cache_syncing"
+		case k8s.KindFailed:
+			coverage.Status, coverage.ReasonCode = capacityapi.CoverageError, "pod_cache_sync_failed"
+		}
+		if namespaces != nil {
+			coverage.Scope = capacityapi.CoverageScopeAllAuthorizedNamespaces
+			if explicit {
+				coverage.Scope = capacityapi.CoverageScopeExplicitNamespaces
+			}
+			coverage.Namespaces = append([]string{}, namespaces...)
+			if len(assessment.Uncovered) > 0 {
+				coverage.Namespaces = readscope.SelectNamespaces(cache.KindNamespaces("pods"), namespaces)
+				coverage.ReasonCode = "pod_cache_scope_partial"
+				coverage.Reason = "Pods are still loading; Radar does not cover every requested namespace"
+				if assessment.Readiness == k8s.KindFailed {
+					coverage.Reason = "Pods failed to load; Radar does not cover every requested namespace"
+				}
+			}
+		} else if !assessment.AllNamespaces && assessment.Readiness != k8s.KindUnavailable {
+			coverage.Scope = capacityapi.CoverageScopeExplicitNamespaces
+		}
+		meta.Coverage[capacityapi.CoveragePods] = coverage
+		meta.Coverage[capacityapi.CoverageWorkloads] = coverage
+		return nil
+	}
+	namespaces = assessment.Read
+	pods := readscope.ListPodsScoped(cache.Pods(), namespaces)
 	scope := capacityapi.CoverageScopeCluster
 	status := capacityapi.CoverageAvailable
-	if namespaces != nil || cacheNamespaces.limited {
-		if explicit || cacheNamespaces.limited && sourceNamespaces == nil {
+	if namespaces != nil || !assessment.AllNamespaces {
+		if explicit || !assessment.AllNamespaces && sourceNamespaces == nil {
 			scope = capacityapi.CoverageScopeExplicitNamespaces
 		} else {
 			scope = capacityapi.CoverageScopeAllAuthorizedNamespaces
@@ -747,11 +787,11 @@ func (s *Server) loadCapacityPods(r *http.Request, meta *capacityapi.ResponseMet
 			status = capacityapi.CoveragePartial
 		}
 	}
-	if cacheNamespaces.partial {
+	if !assessment.Complete {
 		status = capacityapi.CoveragePartial
 	}
 	coverage := capacityapi.NewSourceCoverage(status, scope)
-	if cacheNamespaces.partial {
+	if !assessment.Complete {
 		coverage.ReasonCode = "pod_cache_scope_partial"
 	}
 	coverage.Namespaces = append([]string{}, namespaces...)

@@ -30,6 +30,18 @@ command remains pending for the next connection.
 
 Consumers must use a bundler that supports module workers created with `new Worker(new URL(..., import.meta.url), { type: 'module' })`. The source package is compatible with Vite and webpack 5. Monaco and `monaco-yaml` are intentionally pinned as a compatible pair because their worker-factory APIs must move together. The package declares that exact Monaco version as a peer so the host and YAML runtime share one Monaco instance.
 
+The YAML language worker comes from `monaco-yaml`, which imports Monaco's worker entry as `monaco-editor/esm/vs/editor/editor.worker.js`. Monaco's `exports` map does not serve that path, so the host bundler must alias it to the path Monaco does export. In Vite:
+
+```ts
+resolve: {
+  alias: {
+    'monaco-editor/esm/vs/editor/editor.worker.js': 'monaco-editor/editor/editor.worker.js',
+  },
+},
+```
+
+webpack 5 hosts need the same mapping in `resolve.alias`. Without it the build fails to resolve the worker import.
+
 ## Resource kind views and certainty
 
 `ResourcesView.renderKindView(kind)` optionally replaces a kind's table while

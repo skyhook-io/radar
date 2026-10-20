@@ -37,6 +37,14 @@ func (s *Server) newRequestScopedChecker(r *http.Request) *requestScopedChecker 
 	}
 }
 
+// workloadReadAccess adapts the request's checker to trace.Deps.CanReadWorkload.
+func (s *Server) workloadReadAccess(r *http.Request) func(group, kind, namespace string) bool {
+	checker := s.newRequestScopedChecker(r)
+	return func(group, kind, namespace string) bool {
+		return checker.CanRead(r.Context(), group, kind, namespace)
+	}
+}
+
 // CanRead implements resourcecontext.RefAccessChecker.
 //
 // Authorization rules:

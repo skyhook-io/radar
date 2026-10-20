@@ -89,7 +89,7 @@ func TestNodeDrainIncludeReadOnlyBoundedAndCallerScoped(t *testing.T) {
 			defer k8s.SetTestConfig(previousConfig)
 			ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: username})
 			result := map[string]any{}
-			attachResourceExtras(ctx, nil, result, map[string]bool{"drain-plan": true}, "Node", "", "", "worker")
+			attachResourceExtras(ctx, nil, result, map[string]bool{"drain-plan": true}, "Node", "", "", "worker", "", "")
 			if _, unknown := result["includeError"]; unknown {
 				t.Fatalf("drain-plan not registered: %+v", result)
 			}
@@ -145,13 +145,13 @@ func TestNodeDrainIncludeFailsClosedWithoutCallerClient(t *testing.T) {
 	defer k8s.SetTestClient(previousClient)
 	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "drain-impersonation-failure"})
 	result := map[string]any{}
-	attachResourceExtras(ctx, nil, result, map[string]bool{"drain-plan": true}, "Node", "", "", "worker")
+	attachResourceExtras(ctx, nil, result, map[string]bool{"drain-plan": true}, "Node", "", "", "worker", "", "")
 	if result["drainPlan"] != nil || result["drainPlanError"] != "cluster client unavailable" {
 		t.Fatalf("did not fail closed: %+v", result)
 	}
 	for _, kind := range []string{"Pod", "Node"} {
 		result := map[string]any{}
-		attachResourceExtras(context.Background(), nil, result, map[string]bool{"drain-plan": true}, kind, "example.com", "", "worker")
+		attachResourceExtras(context.Background(), nil, result, map[string]bool{"drain-plan": true}, kind, "example.com", "", "worker", "", "")
 		if result["drainPlanError"] != "drain-plan is available only for core Nodes" {
 			t.Fatalf("non-core resource accepted: %+v", result)
 		}

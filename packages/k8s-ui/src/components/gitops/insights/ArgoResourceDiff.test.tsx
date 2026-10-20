@@ -45,6 +45,18 @@ describe('ArgoResourceDiff field list', () => {
     expect(html).not.toContain('Field diff')
   })
 
+  test('treats a null field list (sent by older Radars) as empty instead of crashing', () => {
+    const html = renderToStaticMarkup(<ArgoResourceDiff diff={{ ...argoDiff, fieldEntries: null }} loading={false} fallbackDrift={lastApplied} />)
+    expect(html).not.toContain('Field diff')
+    expect(html).toContain('desired (Git-rendered)')
+  })
+
+  test('says the list was cut short instead of presenting the cap as the count', () => {
+    const html = renderToStaticMarkup(<ArgoResourceDiff diff={{ ...argoDiff, fieldEntriesTruncated: true }} loading={false} />)
+    expect(html).toContain('showing first 50 entries')
+    expect(html).not.toContain('2 fields')
+  })
+
   test("falls back to the last-applied list when Argo's diff fails to load", () => {
     const html = renderToStaticMarkup(<ArgoResourceDiff loading={false} error="Failed to fetch the diff from the Argo CD API server." fallbackDrift={lastApplied} />)
     expect(html).toContain('Field diff')

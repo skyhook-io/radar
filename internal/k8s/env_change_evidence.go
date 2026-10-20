@@ -232,7 +232,7 @@ func latestPodEnvSourceChanges(events []timeline.TimelineEvent, sources map[envr
 			if changeKind == "" && event.Kind == "ConfigMap" {
 				matchedKey := ""
 				for _, key := range sources[envresolve.SourceID{Kind: "ConfigMap", Name: event.Name}].Keys {
-					if (field.Path == "data."+key || strings.HasPrefix(field.Path, "data."+key+".")) && len(key) > len(matchedKey) {
+					if (field.Path == "data."+key || strings.HasPrefix(field.Path, "data."+key+".") || strings.HasPrefix(field.Path, "data."+key+"[")) && len(key) > len(matchedKey) {
 						matchedKey = key
 					}
 				}

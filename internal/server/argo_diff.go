@@ -16,6 +16,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -26,23 +27,29 @@ import (
 // is serialized so redaction can't be bypassed through the annotation.
 const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 
+// Changed values get a different marker on each side so a rotated value still
+// reads as a difference in both the YAML pair and the field list.
 const (
 	redactedUnchanged = "<redacted:unchanged>"
-	redactedChanged   = "<redacted:changed>"
+	redactedDesired   = "<redacted:desired>"
+	redactedLive      = "<redacted:live>"
 )
 
 // argoResourceDiffResponse is the desired-vs-live diff for a single resource
 // managed by an Argo CD Application. Desired/Live are YAML manifest strings
 // (empty when that side doesn't exist); FieldEntries is a scannable per-field
-// summary derived from the same manifests. For Secrets the values are masked
-// and Redacted is true.
+// summary derived from the same manifests, empty when either side is missing
+// (a whole-object add or delete has no useful per-field breakdown), and
+// FieldEntriesTruncated says it was cut at the entry cap. For Secrets the
+// values are masked and Redacted is true.
 type argoResourceDiffResponse struct {
-	Source       string                      `json:"source"`
-	Desired      string                      `json:"desired"`
-	Live         string                      `json:"live"`
-	FieldEntries []gitopsinsights.DriftEntry `json:"fieldEntries"`
-	Redacted     bool                        `json:"redacted"`
-	Hook         bool                        `json:"hook"`
+	Source                string                      `json:"source"`
+	Desired               string                      `json:"desired"`
+	Live                  string                      `json:"live"`
+	FieldEntries          []gitopsinsights.DriftEntry `json:"fieldEntries"`
+	FieldEntriesTruncated bool                        `json:"fieldEntriesTruncated,omitempty"`
+	Redacted              bool                        `json:"redacted"`
+	Hook                  bool                        `json:"hook"`
 }
 
 // handleArgoResourceDiff serves the desired-vs-live manifest diff for one
@@ -96,7 +103,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// Gate 1: the Application root. A caller who can't see the Application's
 	// namespace is denied here, before any upstream fetch. Matches the
 	// namespace-access check parseGitOpsRequest runs for /api/gitops/insights.
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
 		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
 		return
 	}
@@ -186,13 +193,19 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		redacted = true
 	}
 
+	fieldEntries, truncated := []gitopsinsights.DriftEntry{}, false
+	if len(desiredObj) > 0 && len(liveObj) > 0 {
+		fieldEntries, truncated = gitopsinsights.DiffObjectsTruncated(desiredObj, liveObj)
+	}
+
 	s.writeJSON(w, argoResourceDiffResponse{
-		Source:       "argocd-api",
-		Desired:      manifestToYAML(desiredObj),
-		Live:         manifestToYAML(liveObj),
-		FieldEntries: gitopsinsights.DiffObjects(desiredObj, liveObj),
-		Redacted:     redacted,
-		Hook:         item.Hook,
+		Source:                "argocd-api",
+		Desired:               manifestToYAML(desiredObj),
+		Live:                  manifestToYAML(liveObj),
+		FieldEntries:          fieldEntries,
+		FieldEntriesTruncated: truncated,
+		Redacted:              redacted,
+		Hook:                  item.Hook,
 	})
 }
 
@@ -242,7 +255,7 @@ func isInClusterDestination(app *unstructured.Unstructured) bool {
 // material — service-account tokens, bootstrap tokens, the last-applied dump).
 // Key names stay visible so the operator still sees what changed.
 func redactSecretManifest(desired, live map[string]any) {
-	redactSecretManifestWithMarkers(desired, live, redactedChanged, redactedChanged)
+	redactSecretManifestWithMarkers(desired, live, redactedDesired, redactedLive)
 }
 
 func redactSecretManifestWithMarkers(desired, live map[string]any, desiredChanged, liveChanged string) {
@@ -621,7 +634,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 
 	// Gate: the caller must be able to see the Application's namespace, matching
 	// the resource-diff and insights handlers.
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
 		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
 		return
 	}

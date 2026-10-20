@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1854,6 +1856,94 @@ func TestResolveUpgradeChartPath_UsesSourceAffinity(t *testing.T) {
 	}
 	if !strings.Contains(chartPath, "argoproj.github.io") {
 		t.Fatalf("chart path = %q, want argo repo URL", chartPath)
+	}
+}
+
+func TestLoadTargetChart_IgnoresMissingUnrelatedRepositoryIndex(t *testing.T) {
+	targetChart := &chart.Chart{Metadata: &chart.Metadata{
+		APIVersion: "v2",
+		Name:       "kube-prometheus-stack",
+		Version:    "92.9.0",
+	}}
+	archivePath, err := chartutil.Save(targetChart, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var repository *httptest.Server
+	repository = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/index.yaml":
+			_, _ = fmt.Fprintf(w, `apiVersion: v1
+entries:
+  kube-prometheus-stack:
+  - apiVersion: v2
+    name: kube-prometheus-stack
+    version: 92.9.0
+    urls: [%s/kube-prometheus-stack-92.9.0.tgz]
+`, repository.URL)
+		case "/kube-prometheus-stack-92.9.0.tgz":
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(repository.Close)
+
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(fmt.Sprintf(`apiVersion: v1
+generated: "2026-10-16T00:00:00Z"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami
+- name: prometheus-community
+  url: %s
+`, repository.URL)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "prometheus-community-index.yaml"), []byte(fmt.Sprintf(`apiVersion: v1
+entries:
+  kube-prometheus-stack:
+  - apiVersion: v2
+    name: kube-prometheus-stack
+    version: 92.9.0
+    urls: [%s/kube-prometheus-stack-92.9.0.tgz]
+generated: "2026-10-16T00:00:00Z"
+`, repository.URL)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &Client{settings: &cli.EnvSettings{
+		RepositoryConfig: repoFile,
+		RepositoryCache:  cacheDir,
+	}}
+	rel := &release.Release{
+		Name: "monitoring",
+		Chart: &chart.Chart{Metadata: &chart.Metadata{
+			Name:    "kube-prometheus-stack",
+			Version: "77.12.0",
+			Home:    repository.URL,
+		}},
+	}
+
+	loaded, err := client.loadTargetChart(
+		&action.Configuration{}, rel, "92.9.0", "prometheus-community",
+		func(string, string, string) {},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Metadata.Name != "kube-prometheus-stack" || loaded.Metadata.Version != "92.9.0" {
+		t.Fatalf("loaded chart = %s %s", loaded.Metadata.Name, loaded.Metadata.Version)
 	}
 }
 

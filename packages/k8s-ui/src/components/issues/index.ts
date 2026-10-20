@@ -16,7 +16,7 @@ export {
   issueSortAnchor,
   compareIssueSortAnchors,
 } from './types';
-export type { Issue, IssueConditionalCleanup, IssueFinalizerRemoval, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField } from './types';
+export type { Issue, IssueConditionalCleanup, IssueFinalizerRemoval, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticConfidence, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueIncidentParent, IssueChangeContext, IssueRecentChange, IssueRecentChangeField, IssueRunningPreviousValue, IssueWithheld } from './types';
 export {
   ISSUE_SEVERITY_LABEL,
   ISSUE_SEVERITY_BADGE_CLASS,

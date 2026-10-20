@@ -34,3 +34,32 @@ it('keeps streaming available for hosts that wait for Pods to appear', async () 
   expect(host.querySelector('fieldset')?.disabled).toBe(false)
   await act(async () => root.unmount())
 })
+
+
+it('keeps the all-container choice available by default', async () => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const fetchAll = vi.fn(async () => ({ pods: [{ name: 'analytics-1', containers: ['postgres', 'plugin-barman-cloud'], ready: true }], logs: [] }))
+  await act(async () => root.render(<WorkloadLogsViewer name="analytics" fetchAll={fetchAll} />))
+  const select = host.querySelector<HTMLSelectElement>('select')!
+  expect([...select.options].map((option) => option.value)).toEqual(['', 'postgres', 'plugin-barman-cloud'])
+  expect(select.options[0].text).toBe('All containers')
+  expect(fetchAll).toHaveBeenCalledWith(expect.objectContaining({ container: undefined }))
+  await act(async () => root.unmount())
+})
+
+it('offers only named containers when the backend cannot read all containers', async () => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const fetchAll = vi.fn(async (_params: unknown) => ({ pods: [{ name: 'analytics-1', containers: ['postgres', 'plugin-barman-cloud'], ready: true }], logs: [] }))
+  await act(async () => root.render(<WorkloadLogsViewer name="analytics" fetchAll={fetchAll} initialContainer="postgres" allowAllContainers={false} />))
+  const select = host.querySelector<HTMLSelectElement>('select')!
+  expect([...select.options].map((option) => option.value)).toEqual(['postgres', 'plugin-barman-cloud'])
+  expect(host.textContent).not.toContain('All containers')
+  expect(select.value).toBe('postgres')
+  expect(fetchAll).toHaveBeenCalledWith(expect.objectContaining({ container: 'postgres' }))
+  await act(async () => {
+    select.value = 'plugin-barman-cloud'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  expect(fetchAll).toHaveBeenLastCalledWith(expect.objectContaining({ container: 'plugin-barman-cloud' }))
+  await act(async () => root.unmount())
+})

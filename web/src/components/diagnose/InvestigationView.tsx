@@ -41,6 +41,7 @@ import {
   investigationPaneCenteredScrollTop,
   canStopInvestigation,
   canContinueInvestigation,
+  readOnlyNotice,
   canInvestigateFurther,
 } from "./investigationState";
 import type { AssessmentExplanation } from "./parts";
@@ -1761,7 +1762,7 @@ export function InvestigationView({
               )}
             </>
           ) : (
-            "This investigation is read-only."
+            readOnlyNotice(run)
           )}
         </div>
       ) : (
