@@ -73,18 +73,20 @@ func TestExecPodWorkloadListsOnlyCallerVisiblePods(t *testing.T) {
 	}
 }
 
-func TestExecPodTargetsSidecarsAndEphemeralContainers(t *testing.T) {
+func TestExecPodTargetsInitAndEphemeralContainers(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
 	pod := runningPod("web-1", true, "app")
 	pod.Spec.InitContainers = []corev1.Container{{Name: "istio-proxy", RestartPolicy: &always}, {Name: "setup"}}
 	pod.Spec.EphemeralContainers = []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debugger"}}}
 	for _, tc := range []struct{ name, explicit, annotation, want string }{
 		{"native mesh sidecar", "istio-proxy", "", "istio-proxy"},
+		{"ordinary init", "setup", "", "setup"},
 		{"ephemeral", "debugger", "", "debugger"},
 		{"annotated native sidecar", "", "istio-proxy", "istio-proxy"},
+		{"annotated ordinary init", "", "setup", "setup"},
 		{"annotated ephemeral", "", "debugger", "debugger"},
 		{"fallback app only", "", "", "app"},
-		{"invalid annotation falls back", "", "setup", "app"},
+		{"invalid annotation falls back", "", "missing", "app"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := pod.DeepCopy()
@@ -97,9 +99,26 @@ func TestExecPodTargetsSidecarsAndEphemeralContainers(t *testing.T) {
 		})
 	}
 	var calls []execCall
-	_, _, err := execPod(t.Context(), fake.NewClientset(pod), nil, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: pod.Name, Container: "setup", Command: []string{"true"}})
-	if err == nil || !strings.Contains(err.Error(), "containers: app, istio-proxy, debugger") {
-		t.Fatalf("err=%v", err)
+	_, _, err := execPod(t.Context(), fake.NewClientset(pod), nil, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: pod.Name, Container: "missing", Command: []string{"true"}})
+	if err == nil || !strings.Contains(err.Error(), "containers: app, istio-proxy, setup, debugger") || len(calls) != 0 {
+		t.Fatalf("calls=%v err=%v", calls, err)
+	}
+}
+
+func TestExecPodTargetsRunningInitContainerInPendingPod(t *testing.T) {
+	pod := runningPod("web-1", false, "app")
+	pod.Spec.InitContainers = []corev1.Container{{Name: "wait-for-db"}}
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "wait-for-db",
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}
+	var calls []execCall
+	_, _, err := execPod(t.Context(), fake.NewClientset(pod), nil, fakeExec(&calls, "", "", nil), execPodInput{
+		Namespace: "shop", Name: pod.Name, Container: "wait-for-db", Command: []string{"true"},
+	})
+	if err != nil || len(calls) != 1 || calls[0].pod != pod.Name || calls[0].container != "wait-for-db" {
+		t.Fatalf("calls=%v err=%v", calls, err)
 	}
 }
 

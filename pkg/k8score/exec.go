@@ -91,17 +91,15 @@ var MeshProxyContainers = map[string]string{
 	"consul-dataplane": "Consul",
 }
 
-// ExecContainerNames includes regular containers, native sidecars and ephemeral
-// containers. Ordinary init containers finish before app containers start.
+// ExecContainerNames includes regular, init and ephemeral containers.
+// The API server enforces whether a selected container is running.
 func ExecContainerNames(pod *corev1.Pod) []string {
 	names := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers)+len(pod.Spec.EphemeralContainers))
 	for _, c := range pod.Spec.Containers {
 		names = append(names, c.Name)
 	}
 	for _, c := range pod.Spec.InitContainers {
-		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
-			names = append(names, c.Name)
-		}
+		names = append(names, c.Name)
 	}
 	for _, c := range pod.Spec.EphemeralContainers {
 		names = append(names, c.Name)

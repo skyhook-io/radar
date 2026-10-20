@@ -54,20 +54,19 @@ func TestExecContainerNamesAndDefaults(t *testing.T) {
 		InitContainers:      []corev1.Container{{Name: "istio-proxy", RestartPolicy: &always}, {Name: "setup"}},
 		EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debugger"}}},
 	}}
-	if got := ExecContainerNames(pod); !slices.Equal(got, []string{"app", "istio-proxy", "debugger"}) {
+	if got := ExecContainerNames(pod); !slices.Equal(got, []string{"app", "istio-proxy", "setup", "debugger"}) {
 		t.Fatalf("targetable containers=%v", got)
 	}
-	for _, name := range []string{"istio-proxy", "debugger"} {
+	for _, name := range []string{"istio-proxy", "setup", "debugger"} {
 		pod.Annotations = map[string]string{DefaultContainerAnnotation: name}
 		if got := DefaultExecContainer(pod); got != name {
 			t.Fatalf("annotation=%q default=%q", name, got)
 		}
 	}
-	pod.Annotations = map[string]string{DefaultContainerAnnotation: "setup"}
-	if got := DefaultExecContainer(pod); got != "app" {
-		t.Fatalf("ordinary init selected: %q", got)
-	}
 	pod.Annotations = nil
+	if got := DefaultExecContainer(pod); got != "app" {
+		t.Fatalf("automatic fallback selected non-app container: %q", got)
+	}
 	pod.Spec.Containers = nil
 	if got := DefaultExecContainer(pod); got != "" {
 		t.Fatalf("automatic fallback selected non-app container: %q", got)
