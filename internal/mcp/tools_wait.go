@@ -340,7 +340,7 @@ func waitForUntil(ctx context.Context, dyn dynamic.Interface, input waitForInput
 					b, e := waitStep(ctx, func() (waitBlockerResult, error) { return readWaitBlockers(ctx, dyn, gvr, obj), nil })
 					if e != nil {
 						lastErr = e
-						result["blockersUnavailable"] = "permission check failed"
+						result["blockersUnavailable"] = "blocker check did not finish within the call"
 						break
 					}
 					if b.unavailable != "" {
@@ -549,6 +549,16 @@ func waitCheckFor(gvr schema.GroupVersionResource, condition string) (waitCheck,
 	c := condition
 	if strings.HasPrefix(strings.ToLower(c), "condition=") {
 		c = c[len("condition="):]
+	}
+	// Complete=True on a Job and Ready=True on a Pod mean the same as complete
+	// and ready, which also stop on the terminal states those conditions miss.
+	if typ, status, found := strings.Cut(c, "="); !found || strings.EqualFold(status, "True") {
+		switch {
+		case gvr.Group == "batch" && gvr.Resource == "jobs" && strings.EqualFold(typ, "Complete"):
+			return jobComplete, nil
+		case gvr.Group == "" && gvr.Resource == "pods" && strings.EqualFold(typ, "Ready"):
+			return podReadyCheck, nil
+		}
 	}
 	parts := strings.Split(c, "=")
 	if len(parts) > 2 || parts[0] == "" || (len(parts) == 2 && parts[1] == "") || strings.ContainsAny(parts[0], " /{}") {

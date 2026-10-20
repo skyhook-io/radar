@@ -607,3 +607,26 @@ func TestWaitArgoBlockerGate(t *testing.T) {
 		t.Fatalf("unreadable template source must report coverage: apply=%v coverage=%q", apply, coverage)
 	}
 }
+
+func TestWaitExplicitConditionsKeepTerminalStates(t *testing.T) {
+	jobsGVR := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	podsGVR := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	failedJob := waitTestObject("Job", "batch/v1", "migrate", map[string]any{"conditions": []any{map[string]any{"type": "Failed", "status": "True", "message": "BackoffLimitExceeded"}}})
+	finishedPod := waitTestObject("Pod", "v1", "web", map[string]any{"phase": "Succeeded"})
+	for _, tc := range []struct {
+		gvr       schema.GroupVersionResource
+		obj       *unstructured.Unstructured
+		condition string
+	}{
+		{jobsGVR, failedJob, "Complete"}, {jobsGVR, failedJob, "condition=Complete=True"},
+		{podsGVR, finishedPod, "Ready"}, {podsGVR, finishedPod, "Ready=True"},
+	} {
+		check, err := waitCheckFor(tc.gvr, tc.condition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, failure := check(tc.obj); failure == "" {
+			t.Fatalf("%s on %s lost the terminal state", tc.condition, tc.obj.GetKind())
+		}
+	}
+}
