@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"sort"
@@ -34,6 +35,7 @@ var toolNameInCatalog = regexp.MustCompile(`(?m)^\s*name:\s*'([a-z][a-z0-9_]*)'`
 // catalog entry (or vice versa). Keep both in sync; users discover tools
 // through that dialog.
 func TestSetupDialogCoversAllTools(t *testing.T) {
+	enableExecToolsForTest(t)
 	registered := map[string]bool{}
 	for _, tool := range listRegisteredTools(t) {
 		registered[tool.Name] = true
@@ -261,23 +263,36 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		maxToolDescriptionBytes = 3000
 	)
 
-	total := 0
-	for _, tool := range listRegisteredTools(t) {
-		if len(tool.Description) > maxToolDescriptionBytes {
-			t.Errorf("%s description uses %d bytes, per-tool budget is %d; trim field-by-field manuals but preserve routing, uncertainty, and response fields that need interpretation",
-				tool.Name, len(tool.Description), maxToolDescriptionBytes)
-		}
-		schema, err := json.Marshal(tool.InputSchema)
-		if err != nil {
-			t.Fatalf("marshal %s input schema: %v", tool.Name, err)
-		}
-		total += len(tool.Description) + len(schema)
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			previous := execToolsEnabled.Load()
+			SetExecToolsEnabled(enabled)
+			t.Cleanup(func() { SetExecToolsEnabled(previous) })
+			budget := maxCatalogBytes
+			// exec_pod adds 1,938 measured description/schema bytes; the default cap stays fixed.
+			if enabled {
+				budget += 1938
+			}
+			total := 0
+			for _, tool := range listRegisteredTools(t) {
+				if len(tool.Description) > maxToolDescriptionBytes {
+					t.Errorf("%s description uses %d bytes, per-tool budget is %d; trim field-by-field manuals but preserve routing, uncertainty, and response fields that need interpretation",
+						tool.Name, len(tool.Description), maxToolDescriptionBytes)
+				}
+				schema, err := json.Marshal(tool.InputSchema)
+				if err != nil {
+					t.Fatalf("marshal %s input schema: %v", tool.Name, err)
+				}
+				total += len(tool.Description) + len(schema)
+			}
+			if total > budget {
+				t.Fatalf("MCP tool descriptions and schemas use %d bytes, budget is %d; raise deliberately for new tools or load-bearing contracts, and trim response-field manuals rather than routing or uncertainty boundaries",
+					total, budget)
+			}
+			t.Logf("exec=%v catalog=%d bytes cap=%d", enabled, total, budget)
+		})
 	}
-	t.Logf("MCP catalog: %d bytes (budget %d)", total, maxCatalogBytes)
-	if total > maxCatalogBytes {
-		t.Fatalf("MCP tool descriptions and schemas use %d bytes, budget is %d; raise deliberately for new tools or load-bearing contracts, and trim response-field manuals rather than routing or uncertainty boundaries",
-			total, maxCatalogBytes)
-	}
+
 }
 
 func TestToolDescriptionsPreserveCrossSurfaceRouting(t *testing.T) {
@@ -406,6 +421,7 @@ func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
 }
 
 func TestRegisteredToolAnnotations(t *testing.T) {
+	enableExecToolsForTest(t)
 	tools := listRegisteredTools(t)
 	writeTools := map[string]bool{
 		"manage_workload": true,
@@ -416,6 +432,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"patch_resource":  true,
 		"delete_resource": true,
 		"manage_node":     true,
+		"exec_pod":        true,
 	}
 
 	seenWriteTools := map[string]bool{}
@@ -466,13 +483,14 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 // writeToolNames is the mutating tool set the read-only mount must exclude.
 var writeToolNames = []string{
 	"manage_workload", "manage_rollout", "manage_cronjob", "manage_gitops",
-	"apply_resource", "patch_resource", "delete_resource", "manage_node",
+	"apply_resource", "patch_resource", "delete_resource", "manage_node", "exec_pod",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the
 // read-only MCP mount: an investigation pointed at it can't even discover a
 // mutating tool. If a tool is reclassified, this fails until the lists agree.
 func TestReadOnlyServerExcludesWriteTools(t *testing.T) {
+	enableExecToolsForTest(t)
 	ro := map[string]bool{}
 	for _, tool := range listRegisteredToolsWith(t, false) {
 		ro[tool.Name] = true

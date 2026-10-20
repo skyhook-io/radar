@@ -4,6 +4,12 @@ This document covers Radar's cluster connection behavior. For commands and flags
 
 ## MCP exposure
 
+`--mcp-exec-tools` (CLI and Desktop), or `"mcpExecTools": true` in
+`~/.radar/config.json`, opts in to `exec_pod`. It defaults to false and is
+ignored with `--disable-exec`, `--mcp-read-only`, or disabled MCP. The CLI
+flag overrides the config key, including `--mcp-exec-tools=false`. Helm
+operators use `mcp.execTools: true`. See [exec_pod](mcp.md#exec_pod).
+
 MCP is enabled with read and write tools by default. `--no-mcp` disables all
 MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
 `/mcp-investigation` endpoint, while `/mcp` returns 404. Both CLI and Desktop
@@ -229,6 +235,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
 | `argoCdInsecureTls` | Skip TLS verification for argocd-server (self-signed default installs). Scoped to the Argo CD client only. |
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. Same rule as `prometheusHeaders`: requires `prometheusUrl`. |
+| `mcpExecTools` | Opt in to `exec_pod` (`--mcp-exec-tools`, default false) |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
 

@@ -265,3 +265,27 @@ func TestServerInstructionsConditionFixesOnKubernetesWriteTools(t *testing.T) {
 		t.Error("the fixes line is conditioned on write tools in general, which other vendors' tools can satisfy")
 	}
 }
+
+func TestExecServerInstructions(t *testing.T) {
+	previous := execToolsEnabled.Load()
+	SetExecToolsEnabled(false)
+	t.Cleanup(func() { SetExecToolsEnabled(previous) })
+	off := serverInstructions(true)
+	if off != investigation.GeneralGuidanceFull {
+		t.Fatal("flag-off instructions changed")
+	}
+	TestServerInstructionsFitClientLimits(t)
+	t.Logf("exec=false instructions=%d characters", len([]rune(off)))
+	SetExecToolsEnabled(true)
+	on := serverInstructions(true)
+	if !strings.Contains(on, "each only if listed:") || !strings.Contains(on, "exec_pod for in-container checks") {
+		t.Fatal("missing conditional exec routing")
+	}
+	if serverInstructions(false) != investigation.GeneralGuidanceReadOnly {
+		t.Fatal("exec changed read-only instructions")
+	}
+	TestServerInstructionsFitClientLimits(t)
+	TestServerInstructionsNameOnlyRegisteredTools(t)
+	TestServerInstructionsClaimsMatchToolContracts(t)
+	t.Logf("exec=true instructions=%d characters", len([]rune(on)))
+}

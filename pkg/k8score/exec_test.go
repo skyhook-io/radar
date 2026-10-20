@@ -8,7 +8,7 @@ import (
 
 // TestDefaultExecContainer pins the container-selection precedence: a valid
 // kubectl.kubernetes.io/default-container annotation wins, otherwise the first
-// container. This is what keeps mesh-injected pods (sidecar at containers[0])
+// non-mesh app container. This is what keeps mesh-injected pods (sidecar at containers[0])
 // from execing into a shell-less proxy.
 func TestDefaultExecContainer(t *testing.T) {
 	podWith := func(annotation string, containers ...string) *corev1.Pod {
@@ -28,8 +28,12 @@ func TestDefaultExecContainer(t *testing.T) {
 		want string
 	}{
 		{"annotation honored over first container", podWith("app", "istio-proxy", "app"), "app"},
-		{"no annotation falls back to first", podWith("", "istio-proxy", "app"), "istio-proxy"},
-		{"annotation naming missing container ignored", podWith("ghost", "istio-proxy", "app"), "istio-proxy"},
+		{"no annotation falls back to first", podWith("", "istio-proxy", "app"), "app"},
+		{"annotation naming missing container ignored", podWith("ghost", "istio-proxy", "app"), "app"},
+		{"mesh-only pod has no default", podWith("", "istio-proxy", "linkerd-proxy", "consul-dataplane"), ""},
+		{"annotation cannot select mesh by default", podWith("istio-proxy", "istio-proxy", "app"), "app"},
+		{"linkerd skipped", podWith("", "linkerd-proxy", "app"), "app"},
+		{"consul skipped", podWith("", "consul-dataplane", "app"), "app"},
 		{"single container", podWith("", "app"), "app"},
 		{"no containers", podWith(""), ""},
 	}

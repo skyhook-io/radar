@@ -63,24 +63,33 @@ func newPodExecutor(client kubernetes.Interface, config *rest.Config, namespace,
 // DefaultContainerAnnotation is the client-side convention kubectl, k9s, and
 // Lens use to mark the "main" container of a multi-container pod. Service
 // meshes (Istio, Linkerd, ASM) set it during injection to point past their
-// sidecar — without it, an unspecified container defaults to containers[0],
-// which on a mesh pod is the distroless proxy with no shell.
+// sidecar. Clients that simply default to containers[0] can land in a
+// distroless mesh proxy with no shell.
 const DefaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
 
 // DefaultExecContainer picks the container to target when the request doesn't
 // name one. It honors DefaultContainerAnnotation (matching kubectl exec
-// behavior), falling back to the first container. Returns "" only for a pod
-// with no containers.
+// behavior, except mesh proxies are never a default). Falls back to the first
+// non-mesh app container; returns "" when none is available.
 func DefaultExecContainer(pod *corev1.Pod) string {
 	if name := pod.Annotations[DefaultContainerAnnotation]; name != "" {
 		for _, c := range pod.Spec.Containers {
-			if c.Name == name {
+			if c.Name == name && MeshProxyContainers[c.Name] == "" {
 				return name
 			}
 		}
 	}
-	if len(pod.Spec.Containers) > 0 {
-		return pod.Spec.Containers[0].Name
+	for _, c := range pod.Spec.Containers {
+		if MeshProxyContainers[c.Name] == "" {
+			return c.Name
+		}
 	}
 	return ""
+}
+
+// MeshProxyContainers identifies injected infrastructure proxies.
+var MeshProxyContainers = map[string]string{
+	"istio-proxy":      "Istio",
+	"linkerd-proxy":    "Linkerd",
+	"consul-dataplane": "Consul",
 }

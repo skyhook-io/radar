@@ -124,3 +124,39 @@ func TestMCPReadOnlyPersistence(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPFlagsExecTools(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		for _, args := range [][]string{nil, {"--mcp-exec-tools"}, {"--mcp-exec-tools=false"}} {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			flags := RegisterMCPFlags(fs, Config{MCPExecTools: &saved})
+			if err := fs.Parse(args); err != nil {
+				t.Fatal(err)
+			}
+			want := saved
+			if len(args) > 0 {
+				want = args[0] == "--mcp-exec-tools"
+			}
+			if flags.ExecToolsEnabled() != want {
+				t.Fatalf("saved=%v args=%v got=%v", saved, args, flags.ExecToolsEnabled())
+			}
+			help := fs.Lookup("mcp-exec-tools").Usage
+			if strings.Contains(help, "run_pod") || !strings.Contains(help, "exec_pod") {
+				t.Fatal(help)
+			}
+		}
+	}
+}
+
+func TestMCPFlagsExecToolsPersistence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, value := range []bool{true, false} {
+		if err := Save(Config{MCPExecTools: &value}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadForStartup()
+		if err != nil || got.MCPExecTools == nil || *got.MCPExecTools != value {
+			t.Fatalf("round trip: %+v %v", got, err)
+		}
+	}
+}

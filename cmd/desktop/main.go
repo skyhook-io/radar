@@ -225,6 +225,7 @@ func main() {
 		HubAppURL:                 hubAppURL,
 		MCPEnabled:                mcpMode.Enabled,
 		MCPReadOnly:               mcpMode.ReadOnly,
+		MCPExecTools:              mcpFlags.ExecToolsEnabled(),
 		AIHistory:                 fileCfg.AIHistoryOr(true),
 		AIHistoryDBPath:           fileCfg.AIHistoryDBPath,
 	}

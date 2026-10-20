@@ -611,6 +611,8 @@ usageReporting:
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:
+  # Opt in to exec_pod; also requires rbac.podExec for local ServiceAccount access.
+  execTools: false
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 

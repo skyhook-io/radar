@@ -1,0 +1,16 @@
+suite: Opt-in MCP exec tool
+templates:
+  - deployment.yaml
+tests:
+  - it: omits the exec opt-in by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-exec-tools
+  - it: passes the explicit exec opt-in
+    set:
+      mcp.execTools: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-exec-tools

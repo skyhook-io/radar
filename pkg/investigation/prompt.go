@@ -29,7 +29,7 @@ var ReadOnlyTools = []string{
 // Deletion is excluded until built-in approval presents its impact preview.
 var WriteTools = []string{
 	"apply_resource", "patch_resource", "manage_workload",
-	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops",
+	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops", "exec_pod",
 }
 
 // IsReadOnlyTool reports whether tool (bare, or prefixed the way an agent host

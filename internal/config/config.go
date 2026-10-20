@@ -49,6 +49,7 @@ type Config struct {
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
 	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
 	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
+	MCPExecTools             *bool             `json:"mcpExecTools,omitempty"`
 	MCPReadOnly              *bool             `json:"mcpReadOnly,omitempty"`
 	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 	// DebugImage is the image used for ephemeral debug containers and node debug

@@ -175,6 +175,9 @@ spec:
             {{- range $k, $v := .Values.traffic.prometheusHeadersFromEnv }}
             - {{ printf "--prometheus-header-from-env=%s=%s" $k $v | quote }}
             {{- end }}
+            {{- if .Values.mcp.execTools }}
+            - --mcp-exec-tools
+            {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}
