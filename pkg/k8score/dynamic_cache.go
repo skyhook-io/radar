@@ -2095,6 +2095,20 @@ func (d *DynamicResourceCache) WatchedSince(gvr schema.GroupVersionResource) (si
 	return since, true
 }
 
+// AllNamespacesFanoutIncomplete reports that the last all-namespaces walk for
+// gvr across the fallback namespaces ended early (its deadline hit mid-walk),
+// so a read across every namespace can miss some of them even once the
+// informers that did start have synced. The next all-namespaces read resumes
+// the walk.
+func (d *DynamicResourceCache) AllNamespacesFanoutIncomplete(gvr schema.GroupVersionResource) bool {
+	if d == nil || d.config.NamespaceScoped {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.fanoutIncomplete[gvr]
+}
+
 // IsClusterWideSynced reports whether gvr is served by a single cluster-wide
 // informer that has finished syncing. When true, ListWatched(gvr) is
 // authoritative for EVERY namespace — the caller can safely conclude an object

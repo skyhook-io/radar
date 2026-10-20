@@ -1,10 +1,23 @@
+// @vitest-environment jsdom
 import { describe, expect, it, afterEach } from 'vitest'
 
-import { setBasename, stripBasename, routePath } from './config'
+import { setBasename, stripBasename, routePath, mcpEndpointUrl } from './config'
 
 // setBasename mutates module state — restore standalone default after each test.
 afterEach(() => {
   setBasename('')
+})
+
+describe('MCP client endpoint', () => {
+  it('selects the available endpoint for the effective mode', () => {
+    expect(mcpEndpointUrl()).toBe(`${window.location.origin}/mcp`)
+    expect(mcpEndpointUrl(true)).toBe(`${window.location.origin}/mcp-readonly`)
+  })
+
+  it('preserves the configured base path', () => {
+    setBasename('/tools/radar')
+    expect(mcpEndpointUrl(true)).toBe(`${window.location.origin}/tools/radar/mcp-readonly`)
+  })
 })
 
 describe('stripBasename', () => {

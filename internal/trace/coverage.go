@@ -662,7 +662,9 @@ func ApplyInClusterResults(t *Trace, byTarget map[string][]probe.Result) {
 		rr.ByVantage = mergeVantages(t.Routes[i].ByVantage, rr.ByVantage)
 		t.Routes[i] = rr
 		folded = true
-		if rr.Confidence == ConfidenceReal && (rr.Outcome == OutcomeVerified || rr.Outcome == OutcomeReached) {
+		// A sidecar proxy in the probe pod can accept the connection before
+		// the backend does, so a meshed result doesn't settle policy findings.
+		if rr.Confidence == ConfidenceReal && (rr.Outcome == OutcomeVerified || rr.Outcome == OutcomeReached) && !anyMeshed(res) {
 			name, port := splitTargetPort(rr.Target)
 			key := name + "\x00" + rr.TargetNamespace
 			if livePasses[key] == nil {
@@ -851,6 +853,15 @@ func reconcileInClusterPolicy(t *Trace, livePasses map[string]map[int32]bool) {
 	}
 }
 
+func anyMeshed(results []probe.Result) bool {
+	for _, r := range results {
+		if r.Mesh != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func countFindings(findings []Finding, code string) int {
 	n := 0
 	for _, f := range findings {
@@ -865,18 +876,26 @@ func countFindings(findings []Finding, code string) int {
 // reached what a Pods hop's would-deny prediction is about. A route's pass is
 // on a Service port, so it's compared with the Service port the prediction was
 // evaluated for, not with the pod port it resolved to. The in-cluster request
-// is TCP, so a prediction about another protocol is never settled. Without a
-// recorded Service port it falls back to the pod-port rule.
+// is TCP, so a prediction about another protocol is never settled, nor one
+// without a recorded Service port.
 func inClusterPassCoversPrediction(ports map[int32]bool, meta map[string]any) bool {
 	if proto, ok := meta["policyProtocol"].(string); ok && !strings.EqualFold(proto, "TCP") {
 		return false
 	}
-	if label, ok := meta["policyPort"].(string); ok {
-		if p, err := strconv.ParseInt(strings.TrimPrefix(label, ":"), 10, 32); err == nil && p > 0 {
-			return ports[int32(p)]
-		}
+	if p := predictionServicePort(meta); p > 0 {
+		return ports[p]
 	}
-	return realPassCoversDenyPort(ports, hopDenyPort(meta))
+	return false
+}
+
+// predictionServicePort is the Service port a Pods hop's policy prediction was
+// evaluated for (its ":80" policyPort label), or 0 when none is recorded.
+func predictionServicePort(meta map[string]any) int32 {
+	label, _ := meta["policyPort"].(string)
+	if p, err := strconv.ParseInt(strings.TrimPrefix(label, ":"), 10, 32); err == nil && p > 0 {
+		return int32(p)
+	}
+	return 0
 }
 
 // reconcileInClusterTargetPort downgrades a static svc:targetport-no-listener
@@ -1000,18 +1019,6 @@ func splitTargetPort(target string) (string, int32) {
 		name = name[:i]
 	}
 	return name, port
-}
-
-func hopDenyPort(meta map[string]any) int32 {
-	if meta == nil {
-		return 0
-	}
-	if v, ok := meta["policyDenyPort"]; ok {
-		if p, ok := v.(int32); ok {
-			return p
-		}
-	}
-	return 0
 }
 
 // Diagnosis is the one-finding-that-matters, hoisted from the path so an agent

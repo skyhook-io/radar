@@ -351,6 +351,10 @@ type Trace struct {
 	// labels columns, gates the in-cluster button, and words the verdict honestly
 	// per architecture.
 	RunVantage string `json:"runVantage,omitempty"`
+	// radarUnmeshed is set when Radar's own pod was read and carries no
+	// sidecar proxy, so a probe it sends through a Service is answered by the
+	// backend rather than by a local proxy.
+	radarUnmeshed bool
 
 	// Coverage-honest projection of the trace, computed server-side alongside
 	// the verdict (computeCoverage). These describe ONLY what was actually

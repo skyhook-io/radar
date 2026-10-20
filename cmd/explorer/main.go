@@ -95,7 +95,10 @@ func main() {
 
 	// Load persistent config (~/.radar/config.json) for flag defaults.
 	// CLI flags override config file values.
-	fileCfg := config.Load()
+	fileCfg, err := config.LoadForStartup()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
 	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
@@ -157,7 +160,7 @@ func main() {
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
 	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL matcher fragment for Beyla Live Traffic, e.g. 'job=~"my-beyla.*"' (empty = *beyla* or *alloy* jobs). Workload charts use this override only with an explicit Prometheus scope flag and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it.`)
 	// MCP server
-	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
+	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
 	// Auth flags
@@ -298,7 +301,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --opencost-currency %q: %v", *openCostCurrency, err)
 	}
-	noMCPFlagSet := false
 	kubeconfigFlagSet := false
 	kubeconfigDirsFlagSet := false
 	namespaceFlagSet := false
@@ -307,8 +309,6 @@ func main() {
 	prometheusURLFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "no-mcp":
-			noMCPFlagSet = true
 		case "kubeconfig":
 			kubeconfigFlagSet = true
 		case "kubeconfig-dir":
@@ -323,10 +323,21 @@ func main() {
 			prometheusURLFlagSet = true
 		}
 	})
-	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
+	mcpMode, err := mcpFlags.Resolve()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Catalog entrypoints enable MCP even when the saved default disables it.
+	noMCPExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "no-mcp" {
+			noMCPExplicit = f.Value.String() == "true"
+		}
+	})
+	if *mcpCatalogOnly && noMCPExplicit {
 		log.Fatalf("--mcp-catalog-only cannot be combined with --no-mcp")
 	}
-	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
+	if *mcpCatalogStdio && noMCPExplicit {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
 	}
 	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
@@ -346,7 +357,7 @@ func main() {
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
-	mcpEnabled := !*noMCP
+	mcpEnabled := mcpMode.Enabled
 	if *mcpCatalogOnly || *mcpCatalogStdio {
 		mcpEnabled = true
 	}
@@ -408,6 +419,7 @@ func main() {
 		BeylaJobSelector:            *beylaJobSelector,
 		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:                  mcpEnabled,
+		MCPReadOnly:                 mcpMode.ReadOnly,
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,
@@ -447,10 +459,14 @@ func main() {
 	app.SetGlobals(cfg)
 
 	if *mcpCatalogStdio {
-		log.Printf("MCP catalog stdio mode enabled: skipping Kubernetes initialization")
+		mode := "full"
+		if mcpMode.ReadOnly {
+			mode = "read-only"
+		}
+		log.Printf("MCP catalog stdio mode enabled (%s): skipping Kubernetes initialization", mode)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := mcppkg.RunStdio(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := mcppkg.RunStdioMode(ctx, mcpMode.ReadOnly); err != nil && !errors.Is(err, context.Canceled) {
 			log.Fatalf("MCP stdio server failed: %v", err)
 		}
 		return

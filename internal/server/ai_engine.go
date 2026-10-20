@@ -29,7 +29,7 @@ func (s *Server) aiRunManager() *ai.RunManager {
 // can't supply, and investigations are the embedding host's job (e.g. Radar
 // Hub). An operator-managed shared installation is never a user's own machine.
 func (s *Server) aiDeploymentSupported() bool {
-	return s.configManagement() != "operator" && !s.authConfig.Enabled() && s.mcpHandler != nil &&
+	return s.configManagement() != "operator" && !s.authConfig.Enabled() &&
 		s.mcpInvestigationHandler != nil && s.aiInvestigationRefs != nil
 }
 

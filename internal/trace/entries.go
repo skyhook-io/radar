@@ -545,27 +545,8 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 // labels/annotations are the injection request and catch the pre-Running case.
 func detectMesh(pods []*corev1.Pod) string {
 	for _, pod := range pods {
-		if pod == nil {
-			continue
-		}
-		for _, c := range pod.Spec.Containers {
-			if mesh := k8s.MeshProxyContainers[c.Name]; mesh != "" {
-				return mesh
-			}
-		}
-		if pod.Annotations["sidecar.istio.io/status"] != "" ||
-			pod.Labels["istio.io/rev"] != "" ||
-			pod.Labels["sidecar.istio.io/inject"] == "true" ||
-			pod.Annotations["sidecar.istio.io/inject"] == "true" {
-			return "Istio"
-		}
-		if pod.Labels["linkerd.io/inject"] == "enabled" ||
-			pod.Annotations["linkerd.io/inject"] == "enabled" {
-			return "Linkerd"
-		}
-		if pod.Labels["consul.hashicorp.com/connect-inject"] == "true" ||
-			pod.Annotations["consul.hashicorp.com/connect-inject"] == "true" {
-			return "Consul"
+		if mesh := k8s.PodMesh(pod); mesh != "" {
+			return mesh
 		}
 	}
 	return ""

@@ -94,6 +94,7 @@ type AppConfig struct {
 	BeylaJobSelector            string
 	WorkloadMetricsScope        prom.WorkloadMetricsScope
 	Version                     string
+	MCPReadOnly                 bool
 	MCPEnabled                  bool
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
@@ -498,6 +499,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		DebugImage:                cfg.DebugImage,
 		ReachabilityImage:         cfg.ReachabilityImage,
 		MCP:                       &cfg.MCPEnabled,
+		MCPReadOnly:               &cfg.MCPReadOnly,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -527,6 +529,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HistoryLimit:         cfg.HistoryLimit,
 			DebugEvents:          cfg.DebugEvents,
 			MCPEnabled:           cfg.MCPEnabled,
+			MCPReadOnly:          cfg.MCPEnabled && cfg.MCPReadOnly,
 			OpenCostCurrency:     cfg.OpenCostCurrency,
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
@@ -558,7 +561,9 @@ func CreateServer(cfg AppConfig) *server.Server {
 		// handler records exactly what Radar returned inside those scopes.
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
-		serverCfg.MCPHandler = mcppkg.NewHandler()
+		if !cfg.MCPReadOnly {
+			serverCfg.MCPHandler = mcppkg.NewHandler()
+		}
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}

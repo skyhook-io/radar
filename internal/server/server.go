@@ -206,7 +206,7 @@ type Config struct {
 	TrustedOrigins          []string                    // Extra origins allowed to make changes, from ParseTrustedOrigins
 	StaticFS                embed.FS                    // Embedded frontend files
 	StaticRoot              string                      // Path within StaticFS
-	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
+	MCPHandler              http.Handler                // Full MCP server handler (nil = full endpoint disabled)
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
@@ -519,7 +519,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
 
-		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
+		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
+		// and, by default, for the evicted pods to finish terminating.
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
 
 		// Cloud Connect prepare/start — outside the 60s timeout group. prepare
@@ -935,12 +936,18 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
 		r.Mount("/mcp", s.mcpHandler)
+	} else {
+		r.Mount("/mcp", http.NotFoundHandler())
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+	} else {
+		r.Mount("/mcp-readonly", http.NotFoundHandler())
 	}
 	if s.mcpInvestigationHandler != nil {
 		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
+	} else {
+		r.Mount("/mcp-investigation", http.NotFoundHandler())
 	}
 
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend
@@ -1378,7 +1385,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	responseCaps := *caps
 	caps = &responseCaps
 
-	caps.MCPEnabled = s.mcpHandler != nil
+	caps.MCPEnabled = s.mcpEnabled()
+	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
@@ -5965,6 +5973,10 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var updated config.Config
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := config.ValidateMCPFile(updated); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	normalizedCurrency, err := config.NormalizeOpenCostCurrency(updated.OpenCostCurrency)

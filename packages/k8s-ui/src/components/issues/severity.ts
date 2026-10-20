@@ -77,7 +77,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   gateway_not_ready: 'Gateway not ready',
   gateway_route_invalid: 'Gateway route invalid',
   dns_failure: 'DNS failure',
-  network_policy_block: 'Network policy block',
+  network_policy_denied: 'Traffic denied by NetworkPolicy',
   pvc_pending: 'PVC pending',
   pvc_lost: 'PVC lost',
   pv_failed: 'PV failed',

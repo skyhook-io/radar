@@ -31,6 +31,7 @@ import { formatCompactAge } from '@skyhook-io/k8s-ui/utils/format'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { uncheckedSourceLines } from '../issues/uncheckedSources'
+import { UncheckedSourceHelp } from '../issues/UncheckedSourceHelp'
 import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
@@ -68,7 +69,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
     karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
   const { connection } = useConnection()
-  const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
+  const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError, refetch: refetchIssues } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
   const issueCount = issuesData?.total_matched ?? issuesData?.total ?? issues.length
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
@@ -273,6 +274,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
             issueCount={issueCount}
             visibility={issuesData?.visibility}
             uncheckedLines={uncheckedSourceLines(issuesData?.unchecked_sources)}
+            onRetryIssues={() => { void refetchIssues({ cancelRefetch: false }) }}
             hasData={!!issuesData}
             isLoading={issuesLoading && !issuesData}
             isRefreshing={issuesFetching && !!issuesData}
@@ -305,6 +307,7 @@ interface ProblemsPanelProps {
   /** One line per issue source Radar couldn't check. Any line means an
    *  empty list isn't an all-clear. */
   uncheckedLines?: string[]
+  onRetryIssues: () => void
   hasData: boolean
   isLoading: boolean
   isRefreshing: boolean
@@ -319,6 +322,7 @@ export function ProblemsPanel({
   issueCount,
   visibility,
   uncheckedLines = [],
+  onRetryIssues,
   hasData,
   isLoading,
   isRefreshing,
@@ -393,9 +397,12 @@ export function ProblemsPanel({
                 Limited visibility - {visibility.impact} Results may be incomplete.
               </ProblemsPanelNotice>
             )}
-            {(issues.length > 0 || hasLimitedVisibility) && uncheckedLines.map((line) => (
-              <ProblemsPanelNotice key={line} tone="warning">{line}</ProblemsPanelNotice>
-            ))}
+            {(issues.length > 0 || hasLimitedVisibility) && unchecked && (
+              <ProblemsPanelNotice tone="warning">
+                {uncheckedLines.map((line) => <p key={line}>{line}</p>)}
+                <UncheckedSourceHelp onRetry={onRetryIssues} isRefreshing={isRefreshing} />
+              </ProblemsPanelNotice>
+            )}
             {isTruncated && (
               <ProblemsPanelNotice tone="neutral">
                 Showing {totalReturned} of {issueCount} issues. Narrow by namespace to see the rest.
@@ -417,6 +424,7 @@ export function ProblemsPanel({
                       ? uncheckedLines.join(' ')
                       : 'No critical or warning issues across the selected scope.'
                 }
+                action={unchecked && !hasLimitedVisibility ? <UncheckedSourceHelp onRetry={onRetryIssues} isRefreshing={isRefreshing} /> : undefined}
               />
             ) : (
               <div className="divide-y divide-theme-border">
@@ -483,7 +491,7 @@ export function ProblemsPanel({
   )
 }
 
-function ProblemsPanelState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+function ProblemsPanelState({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action?: ReactNode }) {
   return (
     <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 px-6 py-10 text-center">
       <div className="flex h-9 w-9 items-center justify-center rounded-full bg-theme-elevated">
@@ -491,6 +499,7 @@ function ProblemsPanelState({ icon, title, body }: { icon: ReactNode; title: str
       </div>
       <p className="text-sm font-medium text-theme-text-primary">{title}</p>
       <p className="max-w-[280px] text-xs leading-5 text-theme-text-secondary">{body}</p>
+      {action && <div className="w-full max-w-[280px]">{action}</div>}
     </div>
   )
 }

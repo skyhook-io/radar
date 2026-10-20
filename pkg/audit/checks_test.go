@@ -828,6 +828,9 @@ func TestImageTag(t *testing.T) {
 		{"nginx", ""},
 		{"gcr.io/project/image:v2", "v2"},
 		{"image@sha256:abc123", "sha256:abc123"},
+		{"localhost:5000/nginx:1.25", "1.25"},
+		{"localhost:5000/nginx", ""},
+		{"registry.example.com:5000/team/app:v1.2.3", "v1.2.3"},
 	}
 	for _, tt := range tests {
 		got := imageTag(tt.image)

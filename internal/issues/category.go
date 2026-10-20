@@ -205,7 +205,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	case "DuplicateEnvVar", "StaleSecretEnv":
 		return issuesapi.CategoryInvalidConfiguration
 	case k8s.NetworkPolicyDenyAllIngressReason:
-		return issuesapi.CategoryNetworkPolicyBlock
+		return issuesapi.CategoryNetworkPolicyDenied
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":

@@ -540,7 +540,7 @@ describe('IssueRow diagnosis raw messages', () => {
 
   it("doesn't present Radar's own summary as a raw error", () => {
     const base = {
-      category: 'network_policy_block',
+      category: 'network_policy_denied',
       category_group: 'networking',
       severity: 'warning' as const,
       reason: 'NetworkPolicy denies all ingress',

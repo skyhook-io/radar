@@ -90,15 +90,16 @@ type PermissionCheckResult struct {
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	ConfigManagement string                   `json:"configManagement"`
-	Exec             bool                     `json:"exec"`                    // Can create pods/exec (terminal feature)
-	LocalTerminal    bool                     `json:"localTerminal"`           // Local terminal available (not in-cluster, not disabled)
-	Logs             bool                     `json:"logs"`                    // Can get pods/log (log viewer)
-	PortForward      bool                     `json:"portForward"`             // Can create pods/portforward
-	Secrets          bool                     `json:"secrets"`                 // Can list secrets
-	SecretsUpdate    bool                     `json:"secretsUpdate"`           // Can update secrets (inline editing)
-	HelmWrite        bool                     `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite        bool                     `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites   WorkloadWritePermissions `json:"workloadWrites"`          // Can patch workload kinds (restart/scale controls)
+	Exec             bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
+	LocalTerminal    bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
+	Logs             bool                     `json:"logs"`           // Can get pods/log (log viewer)
+	PortForward      bool                     `json:"portForward"`    // Can create pods/portforward
+	Secrets          bool                     `json:"secrets"`        // Can list secrets
+	SecretsUpdate    bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
+	HelmWrite        bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite        bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites   WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	MCPReadOnly      bool                     `json:"mcpReadOnly"`
 	MCPEnabled       bool                     `json:"mcpEnabled"`              // MCP server is running
 	Deployment       DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
 	Features         FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate

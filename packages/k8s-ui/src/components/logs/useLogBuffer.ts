@@ -35,6 +35,12 @@ type RawLogEntry = Omit<LogEntry, 'id' | 'level' | 'levelSource' | 'isJson' | 'i
 
 interface UseLogBufferReturn {
   entries: LogEntry[]
+  isFollowing: boolean
+  retainedLineCount: number
+  missingLineCount: number
+  getRetainedEntries: () => LogEntry[]
+  pendingLineCount: number
+  setFollowing: (following: boolean) => void
   append: (entry: RawLogEntry) => void
   appendBatch: (entries: RawLogEntry[]) => void
   set: (entries: RawLogEntry[]) => void
@@ -42,7 +48,7 @@ interface UseLogBufferReturn {
 }
 
 export function useLogBuffer(): UseLogBufferReturn {
-  const [entries, setEntries] = useState<LogEntry[]>([])
+  const [buffer, setBuffer] = useState<{ latest: LogEntry[]; reading: LogEntry[] | null }>({ latest: [], reading: null })
   const idCounter = useRef(0)
   const pendingRef = useRef<RawLogEntry[]>([])
   const rafRef = useRef<number | null>(null)
@@ -65,30 +71,35 @@ export function useLogBuffer(): UseLogBufferReturn {
     const batch = pendingRef.current
     if (batch.length === 0) return
     pendingRef.current = []
+    const enriched = batch.map(enrichEntry)
 
-    setEntries(prev => {
-      const enriched = batch.map(enrichEntry)
-      const combined = [...prev, ...enriched]
-      if (combined.length > MAX_BUFFER_SIZE) {
-        return combined.slice(combined.length - MAX_BUFFER_SIZE)
-      }
-      return combined
+    setBuffer(prev => {
+      const combined = [...prev.latest, ...enriched]
+      const latest = combined.length > MAX_BUFFER_SIZE ? combined.slice(-MAX_BUFFER_SIZE) : combined
+      // Keep appending while the reader's window fits. Once eviction begins,
+      // retain that window rather than replacing the lines being read.
+      const reading = prev.reading === null ? null
+        : prev.reading === prev.latest && combined.length <= MAX_BUFFER_SIZE ? latest : prev.reading
+      return { latest, reading }
     })
   }, [enrichEntry])
 
   const append = useCallback((entry: RawLogEntry) => {
     pendingRef.current.push(entry)
+    // Hidden tabs can stop delivering animation frames while logs still arrive.
+    if (pendingRef.current.length >= MAX_BUFFER_SIZE) {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      flushPending()
+      return
+    }
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(flushPending)
     }
   }, [flushPending])
 
   const appendBatch = useCallback((batch: RawLogEntry[]) => {
-    pendingRef.current.push(...batch)
-    if (rafRef.current === null) {
-      rafRef.current = requestAnimationFrame(flushPending)
-    }
-  }, [flushPending])
+    for (const entry of batch) append(entry)
+  }, [append])
 
   const set = useCallback((rawEntries: RawLogEntry[]) => {
     // Cancel any pending RAF
@@ -100,9 +111,9 @@ export function useLogBuffer(): UseLogBufferReturn {
 
     const enriched = rawEntries.map(enrichEntry)
     if (enriched.length > MAX_BUFFER_SIZE) {
-      setEntries(enriched.slice(enriched.length - MAX_BUFFER_SIZE))
+      setBuffer({ latest: enriched.slice(enriched.length - MAX_BUFFER_SIZE), reading: null })
     } else {
-      setEntries(enriched)
+      setBuffer({ latest: enriched, reading: null })
     }
   }, [enrichEntry])
 
@@ -112,8 +123,27 @@ export function useLogBuffer(): UseLogBufferReturn {
       rafRef.current = null
     }
     pendingRef.current = []
-    setEntries([])
+    setBuffer({ latest: [], reading: null })
   }, [])
 
-  return { entries, append, appendBatch, set, clear }
+  const setFollowing = useCallback((following: boolean) => {
+    setBuffer(prev => {
+      if (following) return prev.reading === null ? prev : { ...prev, reading: null }
+      return prev.reading === null ? { ...prev, reading: prev.latest } : prev
+    })
+  }, [])
+
+  const entries = buffer.reading ?? buffer.latest
+  const pendingLineCount = (buffer.latest.at(-1)?.id ?? -1) - (entries.at(-1)?.id ?? -1)
+  const readingLastId = entries.at(-1)?.id ?? -1
+  const latestFirstId = buffer.latest[0]?.id ?? 0
+  const overlap = Math.max(0, readingLastId - latestFirstId + 1)
+  const retainedLineCount = buffer.reading === null ? buffer.latest.length : entries.length + buffer.latest.length - overlap
+  const missingLineCount = buffer.reading === null ? 0 : Math.max(0, latestFirstId - readingLastId - 1)
+  const getRetainedEntries = useCallback(() => {
+    if (buffer.reading === null || buffer.reading === buffer.latest) return buffer.latest
+    const lastId = buffer.reading.at(-1)?.id ?? -1
+    return [...buffer.reading, ...buffer.latest.filter(entry => entry.id > lastId)]
+  }, [buffer])
+  return { entries, retainedLineCount, missingLineCount, getRetainedEntries, isFollowing: buffer.reading === null, pendingLineCount, setFollowing, append, appendBatch, set, clear }
 }

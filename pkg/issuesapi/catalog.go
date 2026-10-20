@@ -62,7 +62,7 @@ var catalogOrder = []Category{
 	CategoryMissingConfigRef, CategoryInvalidConfiguration, CategoryPDBBlocksEvictions, CategorySecretSyncFailed,
 	// Networking
 	CategoryServiceNoEndpoints, CategoryServiceMixedBackends, CategoryIngressBackendMissing, CategoryIngressClassMissing, CategoryLoadBalancerPending,
-	CategoryGatewayNotReady, CategoryGatewayRouteInvalid, CategoryDNSFailure, CategoryNetworkPolicyBlock,
+	CategoryGatewayNotReady, CategoryGatewayRouteInvalid, CategoryDNSFailure, CategoryNetworkPolicyDenied,
 	// Storage
 	CategoryPVCPending, CategoryPVCLost, CategoryPVFailed, CategoryPVCResizeFailed,
 	CategoryVolumeMountFailed, CategoryVolumeAccessModeConflict,
@@ -119,7 +119,7 @@ var categoryDescription = map[Category]string{
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",
 	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed — its listeners aren't serving.",
 	CategoryGatewayRouteInvalid:   "An HTTPRoute (or other route) was rejected or not accepted by its parent Gateway.",
-	CategoryNetworkPolicyBlock:    "A NetworkPolicy leaves a Service's pods with no allowed inbound traffic, so new connections to it would be dropped where the network plugin enforces the policy. Existing connections can keep working, so this often shows no symptom at first.",
+	CategoryNetworkPolicyDenied:   "A NetworkPolicy leaves a Service's pods with no allowed inbound traffic, so new connections to it would be dropped where the network plugin enforces the policy. Existing connections can keep working, so this often shows no symptom at first.",
 	CategoryDNSFailure:            "CoreDNS's Corefile has a rule (an NXDOMAIN template or a rewrite) that can override Kubernetes service DNS — a misconfiguration that risks breaking in-cluster name resolution.",
 	// Storage
 	CategoryPVCPending:               "A PersistentVolumeClaim is stuck Pending — no matching volume and provisioning hasn't completed.",

@@ -44,6 +44,7 @@ it.each([
   ['2 node(s) node affinity/selector mismatch (0/2 nodes available)', 'both nodes do not match the Pod’s node affinity or selector'],
   ['unbound PersistentVolumeClaim, 1 node(s) volume node-affinity conflict (0/2 nodes available)', 'a required volume claim is not bound; 1 node does not match the volume’s node affinity'],
   ['0/2 nodes are available: 1 node(s) had volume node affinity conflict, 1 Insufficient memory.', '1 node does not match the volume’s node affinity; 1 node does not have enough memory'],
+  ["0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity.", "1 node(s) didn't satisfy existing pods anti-affinity rules; 2 nodes do not match the volume’s node affinity"],
   ['no node has kubernetes.io/arch=arm64 — 2 node(s) carry kubernetes.io/arch: [amd64]; 1 node(s) insufficient cpu (0/3 nodes available)', 'no node has kubernetes.io/arch=arm64 — 2 node(s) carry kubernetes.io/arch: [amd64]; 1 node does not have enough CPU'],
   ['custom scheduler says 2 Insufficient cpu, 1 Insufficient memory', 'custom scheduler says 2 Insufficient cpu; 1 node does not have enough memory'],
   ['1 node(s) pod anti-affinity conflict, 1 node(s) insufficient memory, no node has zone=west — 2 node(s) carry zone: [east, north]', '1 node(s) pod anti-affinity conflict; 1 node does not have enough memory; no node has zone=west — 2 node(s) carry zone: [east, north]'],

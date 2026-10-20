@@ -20,6 +20,7 @@ function render(props: { issues?: Issue[]; unchecked?: IssuesResponse['unchecked
       issues={issues}
       issueCount={issues.length}
       uncheckedLines={uncheckedSourceLines(props.unchecked)}
+      onRetryIssues={() => {}}
       visibility={props.visibility}
       hasData
       isLoading={false}

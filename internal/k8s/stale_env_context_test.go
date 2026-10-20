@@ -222,3 +222,15 @@ func TestFindStaleEnvConfigMap(t *testing.T) {
 		}
 	})
 }
+
+func TestGroupedStaleEnvFactKeepsEveryPodName(t *testing.T) {
+	changedAt := time.Now().UTC().Truncate(time.Second)
+	facts := groupStaleEnvFacts([]StaleEnvFact{
+		{Pod: "reader-b", Container: "app", Env: "PASSWORD", SourceKind: "Secret", SourceName: "db", Key: "password", EvidenceSource: staleSecretEvidenceObservedChange, ChangedAt: changedAt},
+		{Pod: "reader-a", Container: "app", Env: "PASSWORD", SourceKind: "Secret", SourceName: "db", Key: "password", EvidenceSource: staleSecretEvidenceObservedChange, ChangedAt: changedAt},
+		{Pod: "reader-b", Container: "app", Env: "PASSWORD", SourceKind: "Secret", SourceName: "db", Key: "password", EvidenceSource: staleSecretEvidenceObservedChange, ChangedAt: changedAt},
+	})
+	if len(facts) != 1 || facts[0].AffectedPods != 2 || strings.Join(facts[0].Pods, ",") != "reader-a,reader-b" {
+		t.Fatalf("grouped facts=%+v", facts)
+	}
+}

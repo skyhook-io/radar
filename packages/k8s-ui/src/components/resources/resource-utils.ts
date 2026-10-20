@@ -106,7 +106,7 @@ export function summarizeSchedulerMessage(message?: string, options: { plain?: b
     [/^(\d+) (?:node\(s\) )?Insufficient memory(?: \(0\/\d+ nodes available\))?$/i, 'do not have enough memory'],
     [/^(\d+) node\(s\) (?:didn.t match Pod.s node affinity\/selector|node affinity\/selector mismatch)(?: \(0\/\d+ nodes available\))?$/i, 'do not match the Pod’s node affinity or selector'],
     [/^(\d+) node\(s\) (?:had )?untolerated taint(?:\(s\))?(?: \{[^}]*\}| [^\s]+)?(?: \(0\/\d+ nodes available\))?$/i, 'have taints the Pod does not tolerate'],
-    [/^(\d+) node\(s\) (?:had )?volume node[- ]affinity conflict(?: \(0\/\d+ nodes available\))?$/i, 'do not match the volume’s node affinity'],
+    [/^(\d+) node\(s\) (?:(?:had )?volume node[- ]affinity conflict|didn.t match PersistentVolume.s node affinity)(?: \(0\/\d+ nodes available\))?$/i, 'do not match the volume’s node affinity'],
   ]
   return splitSchedulerClauses(m).filter((part) => part.trim()).map((part) => {
     const clause = part.trim()
@@ -736,6 +736,19 @@ export function getDefaultContainerName(pod: any): string | undefined {
     return annotated
   }
   return containers[0]?.name
+}
+
+/**
+ * The containers a terminal can target: the regular containers, then native
+ * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),
+ * which keep running for the pod's lifetime like regular containers.
+ */
+export function getExecContainerNames(pod: any): string[] {
+  const regular = (pod?.spec?.containers || []).map((c: any) => c.name)
+  const sidecars = (pod?.spec?.initContainers || [])
+    .filter((c: any) => c.restartPolicy === 'Always')
+    .map((c: any) => c.name)
+  return [...regular, ...sidecars].filter(Boolean)
 }
 
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {

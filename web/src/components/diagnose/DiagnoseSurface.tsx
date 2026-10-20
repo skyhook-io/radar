@@ -52,7 +52,7 @@ import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
-import { routePath } from "../../api/config";
+import { mcpEndpointUrl } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useContexts } from "../../api/client";
 import { formatInvestigationTarget } from "./target";
@@ -93,11 +93,11 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { localTerminal } = useCapabilitiesContext();
+  const { localTerminal, mcpReadOnly } = useCapabilitiesContext();
   const label = launchAgentLabel(run);
   const command = buildLaunchCommand(
     run,
-    `${window.location.origin}${routePath("/mcp")}`,
+    mcpEndpointUrl(mcpReadOnly),
   );
 
   // The diagnose root is a CSS container, so a position:fixed click-away layer

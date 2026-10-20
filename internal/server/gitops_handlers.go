@@ -227,7 +227,10 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 	if !argocd.IsConfigured() {
 		return nil, nil
 	}
-	if argocd.Retrying() {
+	// A read that got no answer (possibly served from the failure cache) will
+	// be retried even if another read has since cleared the shared failure
+	// flag, so this page asks again too.
+	if argocd.ReadMayRecover(err) {
 		// Say why it failed, and have the page ask again so it recovers
 		// when the retry connects.
 		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, argocd.TokenSet()), retrying: true}
@@ -426,37 +429,8 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	insight := gitopsinsights.Build(root, tree, resolver)
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight, tree)
-	// The resource-diff / revision-metadata affordances pull manifests from the
-	// Argo CD API server. Offer them only for Argo roots where a diff can
-	// actually be served — gate on the app's managed-resources call (the diff's
-	// own data source, 15s-cached and shared with the diff endpoint), NOT just
-	// IsConfigured() or the userinfo probe. A configured-but-rejected token, or a
-	// scope-limited token that authenticates yet 403s on managed-resources, would
-	// otherwise advertise per-row diffs that all fail — one integration problem
-	// rendered as N dead-ends. ArgoConfigured is surfaced separately so the UI can
-	// offer Connect vs. check Settings. Cost: one managed-resources round-trip per
-	// viewed app per 15s cache window, whose result the per-row diffs then reuse.
 	if insight.Summary.Tool == "argocd" {
-		insight.Capabilities.ArgoConfigured = argocd.IsConfigured()
-		if _, connected := argocd.Get(); connected {
-			if _, err := argocd.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
-				AppNamespace: req.Namespace,
-				AppName:      req.Name,
-			}); err == nil {
-				// Revision metadata is about the Git source, so it's available for
-				// any connected app. The deep diff reads destination-cluster
-				// manifests, which Radar's local SARs can only authorize when the
-				// Application deploys in-cluster — a remote hub-spoke destination is
-				// gated off here (and refused by the diff endpoint) so we never
-				// offer a diff Radar can't authorize.
-				insight.Capabilities.RevisionMetadataAvailable = true
-				insight.Capabilities.ArgoDiffAvailable = isInClusterDestination(root)
-			}
-		}
-		// Read after the managed-resources call: a failure there may just
-		// have started a re-check the page should wait out.
-		insight.Capabilities.ArgoConnecting = argocd.Connecting()
-		insight.Capabilities.ArgoRetrying = insight.Capabilities.ArgoConfigured && argocd.Retrying()
+		setArgoCapabilities(r.Context(), req.Namespace, req.Name, root, &insight.Capabilities)
 		if insight.Capabilities.ArgoConfigured {
 			// Best-effort: surface a broken Git repo connection (a top hidden cause
 			// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.
@@ -464,6 +438,44 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, insight)
+}
+
+// setArgoCapabilities fills the Argo CD API affordances of an Argo root's
+// insight. The resource-diff / revision-metadata affordances pull manifests
+// from the Argo CD API server. Offer them only for Argo roots where a diff can
+// actually be served — gate on the app's managed-resources call (the diff's
+// own data source, 15s-cached and shared with the diff endpoint), NOT just
+// IsConfigured() or the userinfo probe. A configured-but-rejected token, or a
+// scope-limited token that authenticates yet 403s on managed-resources, would
+// otherwise advertise per-row diffs that all fail — one integration problem
+// rendered as N dead-ends. ArgoConfigured is surfaced separately so the UI can
+// offer Connect vs. check Settings. Cost: one managed-resources round-trip per
+// viewed app per 15s cache window, whose result the per-row diffs then reuse.
+func setArgoCapabilities(ctx context.Context, namespace, name string, root *unstructured.Unstructured, caps *gitopsinsights.Capabilities) {
+	caps.ArgoConfigured = argocd.IsConfigured()
+	diffReady := false
+	if _, connected := argocd.Get(); connected {
+		if _, err := argocd.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{
+			AppNamespace: namespace,
+			AppName:      name,
+		}); err == nil {
+			diffReady = true
+			// Revision metadata is about the Git source, so it's available for
+			// any connected app. The deep diff reads destination-cluster
+			// manifests, which Radar's local SARs can only authorize when the
+			// Application deploys in-cluster — a remote hub-spoke destination is
+			// gated off here (and refused by the diff endpoint) so we never
+			// offer a diff Radar can't authorize.
+			caps.RevisionMetadataAvailable = true
+			caps.ArgoDiffAvailable = isInClusterDestination(root)
+		}
+	}
+	// Read after the managed-resources call: a failure there may just have
+	// started a re-check the page should wait out. Retrying is process-wide
+	// (another app's failed read sets it too), so only a page whose own diff
+	// isn't ready is asked to poll for it.
+	caps.ArgoConnecting = argocd.Connecting()
+	caps.ArgoRetrying = caps.ArgoConfigured && !diffReady && argocd.Retrying()
 }
 
 // managedScanKinds is the set of K8s kinds /api/gitops/managed-resources

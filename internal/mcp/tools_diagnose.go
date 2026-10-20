@@ -460,7 +460,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		}
 	}
 	changeSourceAPIVersion := func(sourceKind string) string {
-		if meaningfulchanges.ConfigMapKind(sourceKind) {
+		if meaningfulchanges.ConfigMapKind(sourceKind) || sourceKind == "Secret" {
 			return "v1"
 		}
 		return gvk.GroupVersion().String()
@@ -482,6 +482,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 				mcpChangeAuthorizer(ctx),
 			)
 		},
+		recentChangeViewer(ctx),
 	)
 	resp.RecentChangesCoverageLimited = changesCoverageLimited
 	resp.RecentChangesSaturated = changesResult.OutputCapped || changesResult.FetchSaturated

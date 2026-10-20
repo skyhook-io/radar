@@ -390,7 +390,8 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 			// namespaces.
 			if term := probeContainerTerminated(&pod); term != nil {
 				if term.ExitCode == 0 {
-					return readProbeResults(ctx, client, namespace, pod.Name)
+					results, err := readProbeResults(ctx, client, namespace, pod.Name)
+					return withProbeMesh(results, &pod), err
 				}
 				raw, _ := readPodLogs(ctx, client, namespace, pod.Name)
 				return nil, probeFailedError(raw, term)
@@ -401,6 +402,17 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 			}
 		}
 	}
+}
+
+// withProbeMesh records a sidecar proxy in the probe pod on its results: the
+// proxy can accept a connection before the backend does.
+func withProbeMesh(results []probe.Result, pod *corev1.Pod) []probe.Result {
+	if mesh := k8s.PodMesh(pod); mesh != "" {
+		for i := range results {
+			results[i].Mesh = mesh
+		}
+	}
+	return results
 }
 
 // probeContainerTerminated returns the "probe" container's terminated state, or

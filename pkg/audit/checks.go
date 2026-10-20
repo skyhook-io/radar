@@ -1696,12 +1696,12 @@ func imageTag(image string) string {
 	if strings.Contains(image, "@") {
 		return strings.SplitN(image, "@", 2)[1]
 	}
-	// Handle tag references (image:tag)
-	parts := strings.SplitN(image, ":", 2)
-	if len(parts) == 2 && !strings.Contains(parts[1], "/") {
-		return parts[1]
+	// A colon before the last slash is a registry port, not a tag separator.
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon == -1 || strings.LastIndex(image, "/") > lastColon {
+		return ""
 	}
-	return ""
+	return image[lastColon+1:]
 }
 
 func tagDisplay(tag string) string {

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
+import { useRef, useCallback, useState, useMemo, useEffect, useLayoutEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { Play, Square, Download, FileDown, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, EyeOff, Highlighter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
@@ -42,6 +42,12 @@ export type ToolbarExtraRenderer =
 
 interface LogCoreProps {
   entries: LogEntry[]
+  isFollowing?: boolean
+  onFollowingChange?: (following: boolean) => void
+  pendingLineCount?: number
+  retainedLineCount?: number
+  missingLineCount?: number
+  getRetainedEntries?: () => LogEntry[]
   /**
    * The unfiltered buffer, when the host filters `entries` before passing them
    * (the workload viewer's pod picker), so that export's "All" describes the
@@ -136,6 +142,12 @@ const TIP_DELAY = 150
 
 export function LogCore({
   entries,
+  isFollowing: controlledFollowing,
+  onFollowingChange,
+  pendingLineCount = 0,
+  retainedLineCount,
+  missingLineCount = 0,
+  getRetainedEntries,
   allEntries,
   isLoading,
   isStreaming,
@@ -154,7 +166,33 @@ export function LogCore({
   defaultDark = true,
 }: LogCoreProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
-  const [atBottom, setAtBottom] = useState(true)
+  const [localFollowing, setLocalFollowing] = useState(true)
+  const isFollowing = controlledFollowing ?? localFollowing
+  const followingRef = useRef(isFollowing)
+  const scrollerRef = useRef<HTMLElement | null>(null)
+  const resumeAtBottom = useRef(false)
+  const scrollbarDragging = useRef(false)
+  const scrollPosition = useRef<number | null>(null)
+  const setFollowing = useCallback((following: boolean) => {
+    followingRef.current = following
+    resumeAtBottom.current = false
+    setLocalFollowing(following)
+    onFollowingChange?.(following)
+  }, [onFollowingChange])
+  const touchY = useRef<number | null>(null)
+  const pauseFollowing = useCallback(() => setFollowing(false), [setFollowing])
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = document.getSelection()
+      if (!followingRef.current || !selection || selection.isCollapsed || !selection.anchorNode || !scrollerRef.current?.contains(selection.anchorNode)) return
+      pauseFollowing()
+      const anchor = selection.anchorNode
+      const element = anchor instanceof Element ? anchor : anchor.parentElement
+      element?.closest('[data-index]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+    document.addEventListener('selectionchange', handleSelectionChange)
+    return () => document.removeEventListener('selectionchange', handleSelectionChange)
+  }, [pauseFollowing])
   const themeLocked = typeof forceDark === 'boolean'
   // Seed isDark: forceDark prop wins; else localStorage['radar-logs-dark'];
   // else defaultDark (the host app's theme, dark if not given). See
@@ -284,7 +322,7 @@ export function LogCore({
     (e: LogEntry) => association.headIdById.get(e.id) ?? e.id,
     [association],
   )
-  const search = useLogSearch(levelFilteredEntries, virtuosoRef, recordIdOf)
+  const search = useLogSearch(levelFilteredEntries, virtuosoRef, recordIdOf, pauseFollowing)
 
   const displayEntries = search.isFiltering ? search.filteredEntries : levelFilteredEntries
   const hiddenCount = levelFilteredEntries.length - displayEntries.length
@@ -329,7 +367,14 @@ export function LogCore({
   // express on screen: everything else (timestamps, ANSI, level, search) has a
   // toolbar control, and the popover's preview shows where those land.
   const bufferEntries = allEntries ?? entries
-  const exportEntries = exportScope === 'all' ? bufferEntries : displayEntries
+  const bufferLineCount = retainedLineCount ?? bufferEntries.length
+  const retainedExportEntries = useMemo(
+    () => downloadMenu.shouldRender ? getRetainedEntries?.() ?? bufferEntries : bufferEntries,
+    [downloadMenu.shouldRender, getRetainedEntries, bufferEntries],
+  )
+  const exportHasGap = exportScope === 'all' && missingLineCount > 0
+  const gapNotice = 'Some logs between your saved view and the latest logs are no longer available.'
+  const exportEntries = exportScope === 'all' ? retainedExportEntries : displayEntries
   const exportOptions = useMemo(
     () => ({ format: exportFormat, showTimestamps, showPodName }),
     [exportFormat, showTimestamps, showPodName],
@@ -341,7 +386,7 @@ export function LogCore({
     [downloadMenu.shouldRender, exportEntries, exportOptions],
   )
   // Offering a scope that resolves to the same lines is a choice about nothing.
-  const scopeIsMeaningful = displayEntries.length !== bufferEntries.length
+  const scopeIsMeaningful = displayEntries.length !== bufferLineCount
 
   // Scope describes the filters in play at the moment of asking, not a lasting
   // intent, so it starts over at the narrower option every time rather than
@@ -360,15 +405,16 @@ export function LogCore({
     const count = exportEntries.length
     const failed = () => showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
     copyText(serializeLogEntries(exportEntries, exportOptions).content).then(
-      ok => ok ? showApiSuccess('Copied to clipboard', `${count} log line${count === 1 ? '' : 's'} copied.`) : failed(),
+      ok => ok ? showApiSuccess('Copied to clipboard', `${count} log line${count === 1 ? '' : 's'} copied.${exportHasGap ? ` ${gapNotice}` : ''}`) : failed(),
       failed,
     )
-  }, [closeExportMenu, exportEntries, exportOptions])
+  }, [closeExportMenu, exportEntries, exportOptions, exportHasGap])
 
   const handleExportDownload = useCallback(() => {
     closeExportMenu()
     onDownload(serializeLogEntries(exportEntries, exportOptions))
-  }, [closeExportMenu, onDownload, exportEntries, exportOptions])
+    if (exportHasGap) showApiSuccess('Some logs were unavailable', gapNotice)
+  }, [closeExportMenu, onDownload, exportEntries, exportOptions, exportHasGap])
 
   // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
@@ -436,14 +482,9 @@ export function LogCore({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [search.open, onStartStream, onStopStream, isStreaming, sourceUnavailable])
 
-  const handleFollowOutput = useCallback((isAtBottom: boolean) => {
-    if (isAtBottom) return 'smooth' as const
-    return false as const
-  }, [])
-
   const handleAtBottomStateChange = useCallback((bottom: boolean) => {
-    setAtBottom(bottom)
-  }, [])
+    if (bottom && resumeAtBottom.current && pendingLineCount === 0) setFollowing(true)
+  }, [setFollowing, pendingLineCount])
 
   const toggleWrap = useCallback(() => {
     setWordWrap(prev => {
@@ -532,13 +573,54 @@ export function LogCore({
     return groupContinuations(displayEntries, association.headIdById)
   }, [displayEntries, collapseStacks, highlightQuery, association])
 
-  const scrollToBottom = useCallback(() => {
-    virtuosoRef.current?.scrollToIndex({
-      index: groupedEntries.length - 1,
-      align: 'end',
-      behavior: 'smooth',
+  const pinToBottom = useCallback(() => {
+    const scroller = scrollerRef.current
+    if (!followingRef.current || !scroller || scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1) return
+    scroller.scrollTop = scroller.scrollHeight
+  }, [])
+  useLayoutEffect(() => {
+    followingRef.current = isFollowing
+    pinToBottom()
+  }, [groupedEntries, isFollowing, pinToBottom])
+  const pinFrame = useRef<number | null>(null)
+  const viewportObserver = useRef<ResizeObserver | null>(null)
+  const schedulePinToBottom = useCallback(() => {
+    if (!followingRef.current || !scrollerRef.current || pinFrame.current !== null) return
+    pinFrame.current = requestAnimationFrame(() => {
+      pinFrame.current = null
+      pinToBottom()
     })
-  }, [groupedEntries.length])
+  }, [pinToBottom])
+  const handleScrollerRef = useCallback((element: HTMLElement | Window | null) => {
+    viewportObserver.current?.disconnect()
+    const scroller = element instanceof HTMLElement ? element : null
+    scrollerRef.current = scroller
+    if (scroller && typeof ResizeObserver !== 'undefined') {
+      viewportObserver.current = new ResizeObserver(schedulePinToBottom)
+      viewportObserver.current.observe(scroller)
+      const list = scroller.querySelector('[data-testid="virtuoso-item-list"]')
+      if (list) viewportObserver.current.observe(list, { box: 'border-box' })
+    }
+    schedulePinToBottom()
+  }, [schedulePinToBottom])
+  useEffect(() => () => {
+    if (pinFrame.current !== null) cancelAnimationFrame(pinFrame.current)
+    pinFrame.current = null
+    viewportObserver.current?.disconnect()
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    setFollowing(true)
+  }, [setFollowing])
+
+  const returnToLiveButton = !isFollowing && (
+    <Tooltip content={missingLineCount > 0 ? `${gapNotice} Jump to the live stream.` : pendingLineCount > 0 ? 'Your place is held while new logs arrive across collected sources. Jump to the live stream.' : 'Scroll to bottom'} wrapperClassName="absolute bottom-4 right-14 z-10" position="top">
+      <button onClick={scrollToBottom} aria-label="Scroll to bottom" className="px-3 py-1.5 btn-brand text-xs rounded-full shadow-lg">
+        Scroll to bottom
+        {pendingLineCount > 0 && ` · ${pendingLineCount >= 20_000 ? '20K+' : pendingLineCount.toLocaleString()} new ${pendingLineCount === 1 ? 'line' : 'lines'}`}
+      </button>
+    </Tooltip>
+  )
 
   const toolbarExtraNode = typeof toolbarExtra === 'function'
     ? toolbarExtra({ isDark, palette })
@@ -805,10 +887,10 @@ export function LogCore({
 
         {/* Export */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
-          <Tooltip content={bufferEntries.length === 0 ? 'No logs loaded' : 'Export logs'} delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
+          <Tooltip content={bufferLineCount === 0 ? 'No logs loaded' : 'Export logs'} delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
               ref={exportTriggerRef}
-              disabled={bufferEntries.length === 0}
+              disabled={bufferLineCount === 0}
               onClick={toggleExportMenu}
               aria-label="Export logs"
               aria-haspopup="dialog"
@@ -836,16 +918,17 @@ export function LogCore({
                       Filtered {displayEntries.length.toLocaleString()}
                     </ExportChoice>
                     <ExportChoice active={exportScope === 'all'} onClick={() => setExportScope('all')} palette={palette}>
-                      All {bufferEntries.length.toLocaleString()}
+                      All {bufferLineCount.toLocaleString()}
                     </ExportChoice>
                   </div>
                 ) : (
                   <span className={`text-[11px] ${palette.textSecondary}`}>
-                    {bufferEntries.length.toLocaleString()} line{bufferEntries.length === 1 ? '' : 's'}
+                    {bufferLineCount.toLocaleString()} line{bufferLineCount === 1 ? '' : 's'}
                   </span>
                 )}
               </div>
 
+              {exportHasGap && <p className={`text-xs ${palette.textSecondary}`}>{gapNotice}</p>}
               <div className="flex items-center gap-3">
                 <span id="log-export-format-label" className={exportLabelCls}>Format</span>
                 <div role="radiogroup" aria-labelledby="log-export-format-label" className="flex items-center gap-1">
@@ -889,11 +972,11 @@ export function LogCore({
 
         {/* Clear */}
         {onClear && (
-          <Tooltip content={bufferEntries.length === 0 ? 'No logs loaded' : 'Clear logs'} delay={TIP_DELAY} position="bottom">
+          <Tooltip content={bufferLineCount === 0 ? 'No logs loaded' : 'Clear logs'} delay={TIP_DELAY} position="bottom">
             <button
               onClick={onClear}
               aria-label="Clear logs"
-              disabled={bufferEntries.length === 0}
+              disabled={bufferLineCount === 0}
               className={`${iconBtnInactive} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Trash2 className="w-4 h-4" />
@@ -1013,9 +1096,10 @@ export function LogCore({
           <span>{errorMessage}</span>
         </div>
       ) : groupedEntries.length === 0 ? (
-        <div className={`${EMPTY_STATE_CLASS} ${palette.textTertiary}`}>
+        <div className={`${EMPTY_STATE_CLASS} relative ${palette.textTertiary}`}>
           <Terminal className="w-8 h-8" />
           <div>{entries.length > 0 ? `Filters hide all ${entries.length.toLocaleString()} loaded lines` : emptyMessage}</div>
+          {returnToLiveButton}
           {entries.length === 0 && emptyCommand && (
             <button type="button" onClick={() => { void copyText(emptyCommand) }} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
               <code className="truncate">{emptyCommand}</code>
@@ -1024,12 +1108,54 @@ export function LogCore({
           )}
         </div>
       ) : (
-        <div className="flex-1 relative">
+        <div
+          className="flex-1 relative min-h-0"
+          tabIndex={0}
+          onFocusCapture={event => {
+            const target = event.target
+            if (!(target instanceof HTMLElement) || !target.closest('[data-virtuoso-scroller]')) return
+            if (!target.closest('button, a, input, select, textarea, [role="button"]')) return
+            setFollowing(false)
+            target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+          }}
+          onWheelCapture={event => {
+            if (event.deltaY < 0) setFollowing(false)
+            if (event.deltaY > 0) resumeAtBottom.current = true
+          }}
+          onScrollCapture={event => {
+            const scroller = event.target
+            if (!(scroller instanceof HTMLElement) || !scroller.hasAttribute('data-virtuoso-scroller')) return
+            const previous = scrollPosition.current
+            if (previous !== null && scroller.scrollTop > previous && scrollbarDragging.current && !followingRef.current) resumeAtBottom.current = true
+            scrollPosition.current = scroller.scrollTop
+          }}
+          onKeyDownCapture={event => {
+            if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) setFollowing(false)
+            if (['ArrowDown', 'PageDown', 'End'].includes(event.key) || (event.key === ' ' && !event.shiftKey)) resumeAtBottom.current = true
+          }}
+          onTouchStartCapture={event => { touchY.current = event.touches[0]?.clientY ?? null }}
+          onTouchMoveCapture={event => {
+            const y = event.touches[0]?.clientY
+            if (y !== undefined && touchY.current !== null && y > touchY.current) setFollowing(false)
+            if (y !== undefined && touchY.current !== null && y < touchY.current) resumeAtBottom.current = true
+            touchY.current = y ?? null
+          }}
+          onPointerDownCapture={event => {
+            const scroller = event.currentTarget.querySelector('[data-virtuoso-scroller]')
+            scrollbarDragging.current = !!scroller && event.clientX >= scroller.getBoundingClientRect().right - 20
+            const target = event.target
+            const interactingWithLogs = target instanceof Element && !!target.closest('[data-virtuoso-scroller]')
+            if (scrollbarDragging.current || (interactingWithLogs && (event.button === 0 || event.button === 1))) setFollowing(false)
+          }}
+          onPointerUpCapture={() => { scrollbarDragging.current = false }}
+          onPointerCancelCapture={() => { scrollbarDragging.current = false }}
+        >
           <Virtuoso
             ref={virtuosoRef}
             data={groupedEntries}
-            followOutput={handleFollowOutput}
-            initialTopMostItemIndex={groupedEntries.length - 1}
+            scrollerRef={handleScrollerRef}
+            computeItemKey={(_index, group) => group.head.id}
+            totalListHeightChanged={schedulePinToBottom}
             atBottomStateChange={handleAtBottomStateChange}
             atBottomThreshold={50}
             increaseViewportBy={200}
@@ -1057,14 +1183,7 @@ export function LogCore({
             className="h-full font-mono text-xs"
           />
           {/* Scroll-to-bottom button */}
-          {!atBottom && (
-            <button
-              onClick={scrollToBottom}
-              className="absolute bottom-4 right-14 px-3 py-1.5 btn-brand text-xs rounded-full shadow-lg z-10"
-            >
-              Scroll to bottom
-            </button>
-          )}
+          {returnToLiveButton}
         </div>
       )}
 
@@ -1255,7 +1374,7 @@ function LogLine({
       <span className="flex-1 min-w-0">{contentElement}</span>
       <button
         onClick={handleCopy}
-        className={`opacity-0 group-hover:opacity-100 ml-1 p-0.5 rounded ${palette.textTertiary} ${palette.hoverText} shrink-0 transition-opacity`}
+        className={`opacity-0 group-hover:opacity-100 focus-visible:opacity-100 ml-1 p-0.5 rounded ${palette.textTertiary} ${palette.hoverText} shrink-0 transition-opacity`}
         title="Copy line"
       >
         <Copy className="w-3 h-3" />
