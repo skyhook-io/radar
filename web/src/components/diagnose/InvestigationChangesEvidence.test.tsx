@@ -167,6 +167,45 @@ describe("Secret and ConfigMap change evidence", () => {
     ).toHaveLength(0);
   });
 
+  it("counts names the caller can't view instead of hiding them silently", () => {
+    const withheld = { count: 2, reason: "user_forbidden" };
+    const some = render({
+      ...secretChange,
+      consumed_by: ["Deployment/env-reader"],
+      consumed_by_withheld: withheld,
+      running_previous_value: {
+        ...annotation,
+        workloads: ["Deployment/env-reader"],
+        withheld,
+      },
+    });
+    expect(some.match(/\+2 more you can(&#x27;|')t view/g)).toHaveLength(2);
+    const none = render({
+      ...secretChange,
+      consumed_by: undefined,
+      consumed_by_withheld: withheld,
+      running_previous_value: { ...annotation, workloads: [], withheld },
+    });
+    expect(none).toContain("Referenced by");
+    expect(none).toContain("2 workloads you can&#x27;t view");
+    expect(none).toContain("In 2 workloads you can&#x27;t view");
+    expect(none).not.toContain("hidden by your permissions");
+  });
+
+  it.each([{ count: 0, reason: "user_forbidden" }, { count: 1 }, "two", null])(
+    "drops a malformed withheld marker (%j) and keeps the row",
+    (marker) => {
+      const row = recentChange({
+        ...secretChange,
+        consumed_by_withheld: marker,
+        running_previous_value: { ...annotation, withheld: marker },
+      });
+      expect(row).not.toHaveProperty("consumed_by_withheld");
+      expect(row?.running_previous_value).not.toHaveProperty("withheld");
+      expect(row?.summary).toBe(secretChange.summary);
+    },
+  );
+
   it("renders a reference of a kind with no known group as text, not a link", () => {
     const html = render({
       ...secretChange,

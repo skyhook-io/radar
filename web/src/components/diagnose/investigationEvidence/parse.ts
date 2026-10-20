@@ -2,6 +2,7 @@ import {
   type Issue,
   type IssueRecentChange,
   stripAnsi,
+  type IssueWithheld,
 } from "@skyhook-io/k8s-ui";
 import { type TimeSeries } from "@skyhook-io/k8s-ui/components/charts";
 import {
@@ -191,6 +192,7 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
     updates_in_window,
     first_update_at,
     consumed_by,
+    consumed_by_withheld,
     ...change
   } = candidate;
   const running = record(running_previous_value);
@@ -198,6 +200,8 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
     running?.workloads === null ? [] : stringArray(running?.workloads);
   const keys = stringArray(running?.keys);
   const consumers = stringArray(consumed_by);
+  const runningWithheld = withheld(running?.withheld);
+  const consumersWithheld = withheld(consumed_by_withheld);
   return {
     ...change,
     ...(running &&
@@ -208,6 +212,7 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
       ? {
           running_previous_value: {
             workloads,
+            ...(runningWithheld ? { withheld: runningWithheld } : {}),
             pods: running.pods,
             keys,
             note: running.note,
@@ -222,7 +227,22 @@ export function recentChange(value: unknown): IssueRecentChange | undefined {
       ? { first_update_at }
       : {}),
     ...(consumers ? { consumed_by: consumers } : {}),
+    ...(consumersWithheld ? { consumed_by_withheld: consumersWithheld } : {}),
   } as unknown as IssueRecentChange;
+}
+
+// withheld keeps a well-formed {count, reason} marker; anything else drops it.
+function withheld(value: unknown): IssueWithheld | undefined {
+  const candidate = record(value);
+  if (
+    !candidate ||
+    !nonNegativeInteger(candidate.count) ||
+    candidate.count === 0 ||
+    !nonEmptyString(candidate.reason)
+  ) {
+    return undefined;
+  }
+  return { count: candidate.count, reason: candidate.reason };
 }
 export function diagnosisChangeContext(
   value: unknown,

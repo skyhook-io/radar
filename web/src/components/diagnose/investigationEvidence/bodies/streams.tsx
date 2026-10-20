@@ -283,23 +283,40 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
                     REFERENCE_LIST_CAP ? (
                       <span>(first {REFERENCE_LIST_CAP})</span>
                     ) : null}
+                    {change.running_previous_value.withheld ? (
+                      <span>
+                        +{change.running_previous_value.withheld.count} more
+                        you can&apos;t view
+                      </span>
+                    ) : null}
                   </div>
                 ) : (
-                  <p>workload names hidden by your permissions</p>
+                  <p>
+                    {change.running_previous_value.withheld
+                      ? `In ${pluralize(change.running_previous_value.withheld.count, "workload")} you can't view`
+                      : "workload names hidden by your permissions"}
+                  </p>
                 )}
                 <p>{change.running_previous_value.note}</p>
               </div>
             </AlertBanner>
           ) : null}
-          {change.consumed_by?.length ? (
+          {change.consumed_by?.length || change.consumed_by_withheld ? (
             <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-theme-text-secondary">
               <span>Referenced by</span>
               <ChangeReferences
-                references={change.consumed_by}
+                references={change.consumed_by ?? []}
                 namespace={change.namespace}
               />
-              {change.consumed_by.length >= REFERENCE_LIST_CAP ? (
+              {(change.consumed_by?.length ?? 0) >= REFERENCE_LIST_CAP ? (
                 <span>(first {REFERENCE_LIST_CAP})</span>
+              ) : null}
+              {change.consumed_by_withheld ? (
+                <span>
+                  {change.consumed_by?.length
+                    ? `+${change.consumed_by_withheld.count} more you can't view`
+                    : `${pluralize(change.consumed_by_withheld.count, "workload")} you can't view`}
+                </span>
               ) : null}
             </div>
           ) : null}
