@@ -805,7 +805,7 @@ top-level `warnings`, outside the returned object.
 
 ### Cluster-scoped admission changes in a namespace view
 
-Secret data updates enter the default `get_changes` and issues `recent_changes` feed when referenced by a workload template or current Pod spec at query time; `kind=Secret` lists all updates. `consumed_by` means referenced by, and `running_previous_value` names Pods likely retaining earlier env values after an observed write; its absence means not established, rather than no stale Pods.
+Secret data updates enter the default `get_changes` and issues `recent_changes` feed when referenced by a workload template or current Pod spec at query time; `kind=Secret` lists all updates. `consumed_by` means referenced by, and `running_previous_value` names Pods likely retaining earlier env values after an observed write; its absence means not established, rather than no stale Pods. Both lists name only workloads and Pods the caller may read: `consumed_by_withheld` and `running_previous_value.withheld` count the rest as `{count, reason: "user_forbidden"}`, so a filtered list is not read as complete. `running_previous_value` appears only for callers who may read Pods in the namespace, and its `pods` count covers only those Pods.
 
 Repeated Secret updates collapse into the newest row with merged changed keys, `updates_in_window` and `first_update_at`; rows carrying stale evidence for different keys stay separate. `kind=Secret` and `name=` queries retain every update.
 

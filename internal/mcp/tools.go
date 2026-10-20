@@ -264,7 +264,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"spec/config changes first, including field-level diffs for Deployment env/probes " +
 			"and structured ConfigMap data when available. " +
 			"Secret data updates appear when referenced by a workload template or current Pod spec at query time; kind=Secret lists all. " +
-			"consumed_by means referenced by; running_previous_value names Pods likely retaining earlier env values after an observed write (absence means not established). " +
+			"consumed_by means referenced by; running_previous_value names Pods likely still on the earlier env value (absence means not established); *_withheld counts names you can't read. " +
 			"`application_configuration_change: true` identifies a workload-runtime or " +
 			"referenced-ConfigMap edit or likely stale Secret env readers, a ranking hint, not a causal or " +
 			"universal relevance verdict. Helm operation entries rank by category and recency " +

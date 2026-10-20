@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 const (
@@ -270,6 +271,10 @@ func (v Viewer) canNameConsumer(kind, group, namespace string) bool {
 	if v.CanReadConsumer == nil {
 		return true
 	}
+	// Owner references resolve to a group, not a version. The read check
+	// keys on the group alone (k8s.ChangeReadAllowed reads
+	// GroupFromAPIVersion), so any version names the same resource: an Argo
+	// Rollout (argoproj.io/v1alpha1) checks as argoproj.io/rollouts.
 	apiVersion := "v1"
 	if group != "" {
 		apiVersion = group + "/v1"
@@ -759,6 +764,9 @@ const maxConsumersPerEntry = 5
 type configConsumers struct {
 	referenced bool
 	names      []string
+	// withheld holds the names the caller may not read; only their count
+	// leaves this package.
+	withheld []string
 }
 
 func annotateConfigConsumers(ctx context.Context, changes []issuesapi.RecentChange, q Query) (map[string]configConsumers, map[string][]*corev1.Pod) {
@@ -774,7 +782,9 @@ func annotateConfigConsumers(ctx context.Context, changes []issuesapi.RecentChan
 	}
 	index, pods := configConsumerIndex(ctx, cache, namespaces, q)
 	for i := range changes {
-		changes[i].ConsumedBy = index[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)].names
+		entry := index[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
+		changes[i].ConsumedBy = entry.names
+		changes[i].ConsumedByWithheld = withheldCount(len(entry.withheld))
 	}
 	return index, pods
 }
@@ -799,6 +809,8 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 			entry.referenced = true
 			if showName {
 				entry.names = append(entry.names, kind+"/"+name)
+			} else {
+				entry.withheld = append(entry.withheld, kind+"/"+name)
 			}
 			index[key] = entry
 		}
@@ -874,12 +886,33 @@ func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespac
 	for key, entry := range index {
 		sort.Strings(entry.names)
 		entry.names = slices.Compact(entry.names)
+		entry.withheld = withheldNames(entry.withheld, entry.names)
 		if len(entry.names) > maxConsumersPerEntry {
 			entry.names = entry.names[:maxConsumersPerEntry]
 		}
 		index[key] = entry
 	}
 	return index, pods
+}
+
+// withheldNames returns the distinct hidden names that are not also listed:
+// a workload named through its readable template stays named even when its
+// Pods are not readable.
+func withheldNames(hidden, shown []string) []string {
+	var out []string
+	for _, name := range hidden {
+		if !slices.Contains(shown, name) && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func withheldCount(n int) *issuesapi.Withheld {
+	if n == 0 {
+		return nil
+	}
+	return &issuesapi.Withheld{Count: n, Reason: readreason.UserForbidden}
 }
 
 func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue) {

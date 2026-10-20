@@ -12,6 +12,8 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -306,13 +308,55 @@ func TestSecretAuthorizationAndQueryConstructors(t *testing.T) {
 	// the bare Pod, not the Deployment whose template references the Secret.
 	noDeployments := Viewer{CanReadConsumer: func(c issuesapi.RecentChange) bool { return c.Kind != "Deployment" }}
 	rows = feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: noDeployments})
-	if len(rows) != 1 || !reflect.DeepEqual(rows[0].ConsumedBy, []string{"Pod/hidden"}) || rows[0].RunningPreviousValue == nil || !reflect.DeepEqual(rows[0].RunningPreviousValue.Workloads, []string{"Pod/hidden"}) {
-		t.Fatalf("workload name leaked to a caller without Deployment read: %+v", rows)
+	forbidden := func(n int) *issuesapi.Withheld {
+		return &issuesapi.Withheld{Count: n, Reason: readreason.UserForbidden}
 	}
-	// Without Pod read either, no consumer is named at all.
+	if len(rows) != 1 || !reflect.DeepEqual(rows[0].ConsumedBy, []string{"Pod/hidden"}) || !reflect.DeepEqual(rows[0].ConsumedByWithheld, forbidden(1)) || rows[0].RunningPreviousValue == nil || !reflect.DeepEqual(rows[0].RunningPreviousValue.Workloads, []string{"Pod/hidden"}) || rows[0].RunningPreviousValue.Withheld != nil {
+		t.Fatalf("some names hidden: %+v", rows)
+	}
+	// Without Pod read either, no consumer is named, and both are counted.
 	rows = feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: Viewer{CanReadPods: func(string) bool { return false }, CanReadConsumer: noDeployments.CanReadConsumer}})
-	if len(rows) != 1 || len(rows[0].ConsumedBy) != 0 || rows[0].RunningPreviousValue != nil {
-		t.Fatalf("workload name leaked to a caller without Deployment read: %+v", rows)
+	if len(rows) != 1 || len(rows[0].ConsumedBy) != 0 || !reflect.DeepEqual(rows[0].ConsumedByWithheld, forbidden(2)) || rows[0].RunningPreviousValue != nil {
+		t.Fatalf("all names hidden: %+v", rows)
+	}
+	// Unrestricted callers get no marker.
+	rows = feedRecent(t, Query{Kinds: []string{"Secret"}})
+	if len(rows) != 1 || rows[0].ConsumedByWithheld != nil || rows[0].RunningPreviousValue == nil || rows[0].RunningPreviousValue.Withheld != nil {
+		t.Fatalf("unrestricted caller got a withheld marker: %+v", rows)
+	}
+	// A stale reader whose owner the caller can't read is counted, not named;
+	// the Pod count is unchanged because the caller can read the Pods.
+	noPodOwners := Viewer{CanReadConsumer: func(c issuesapi.RecentChange) bool { return c.Kind != "Pod" }}
+	rows = feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: noPodOwners})
+	if len(rows) != 1 || rows[0].RunningPreviousValue == nil || len(rows[0].RunningPreviousValue.Workloads) != 0 || !reflect.DeepEqual(rows[0].RunningPreviousValue.Withheld, forbidden(1)) || rows[0].RunningPreviousValue.Pods != 1 {
+		t.Fatalf("stale owner hidden: %+v", rows)
+	}
+}
+
+// The read check sees a Rollout owner as argoproj.io/rollouts: the group
+// decides, whatever version the owner reference carries.
+func TestSecretRolloutOwnerReadCheckUsesItsGroup(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	controller := true
+	pod := feedPod("roll-abc", now.Add(-10*time.Minute), feedEnv("Secret", "db", "A"))
+	pod.OwnerReferences = []metav1.OwnerReference{{Kind: "Rollout", APIVersion: "argoproj.io/v1alpha1", Name: "roll", Controller: &controller}}
+	store := secretFeedFixture(t, feedSecret("db"), pod)
+	appendFeedWrite(t, store, "Secret", "db", now.Add(-time.Minute), "A")
+	var checked []string
+	viewer := func(allowRollouts bool) Viewer {
+		return Viewer{CanReadConsumer: func(c issuesapi.RecentChange) bool {
+			group := resourceid.GroupFromAPIVersion(c.APIVersion)
+			checked = append(checked, group+"/"+c.Kind)
+			return group == "argoproj.io" && c.Kind == "Rollout" && allowRollouts
+		}}
+	}
+	rows := feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: viewer(true)})
+	if len(rows) != 1 || !reflect.DeepEqual(rows[0].ConsumedBy, []string{"Rollout/roll"}) || rows[0].RunningPreviousValue == nil || !reflect.DeepEqual(rows[0].RunningPreviousValue.Workloads, []string{"Rollout/roll"}) {
+		t.Fatalf("readable Rollout owner not named: %+v (checked %v)", rows, checked)
+	}
+	rows = feedRecent(t, Query{Kinds: []string{"Secret"}, Viewer: viewer(false)})
+	if len(rows) != 1 || len(rows[0].ConsumedBy) != 0 || rows[0].ConsumedByWithheld == nil || rows[0].RunningPreviousValue.Withheld == nil {
+		t.Fatalf("unreadable Rollout owner not withheld: %+v", rows)
 	}
 }
 

@@ -53,7 +53,7 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 			if err != nil {
 				continue
 			}
-			podNames, keys, workloads := map[string]bool{}, map[string]bool{}, map[string]bool{}
+			podNames, keys, workloads, hidden := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 			for _, fact := range facts {
 				if fact.EvidenceSource != "observed_change" || fact.SourceKind != change.Kind || fact.SourceName != change.Name || fact.ChangedAt.Unix() != changedAt.Unix() {
 					continue
@@ -70,16 +70,19 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 					if !ok {
 						owner = k8s.TopOwnerInfo{Kind: "Pod", Name: name}
 					}
-					// The Pod count stays; only the names the caller may read are listed.
+					// The Pod count stays; only the names the caller may read are
+					// listed, and the rest are counted as withheld.
 					if viewer.canNameConsumer(owner.Kind, owner.Group, namespace) {
 						workloads[owner.Kind+"/"+owner.Name] = true
+					} else {
+						hidden[owner.Kind+"/"+owner.Name] = true
 					}
 				}
 			}
 			if len(podNames) == 0 {
 				continue
 			}
-			annotation := &issuesapi.RunningPreviousValue{Pods: len(podNames), Note: runningPreviousValueNote}
+			annotation := &issuesapi.RunningPreviousValue{Pods: len(podNames), Note: runningPreviousValueNote, Withheld: withheldCount(len(hidden))}
 			for key := range keys {
 				annotation.Keys = append(annotation.Keys, key)
 			}

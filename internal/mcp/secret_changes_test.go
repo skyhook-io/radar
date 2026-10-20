@@ -148,6 +148,17 @@ func TestSecretChangesRBACAcrossMCPSurfaces(t *testing.T) {
 			}
 		})
 	}
+	// Without Deployment read, the referencing Deployment is counted, not named.
+	perms.SetCanI("list", "apps", "deployments", "shop", false)
+	perms.SetCanI("get", "apps", "deployments", "shop", false)
+	result, _, err := handleGetChanges(ctx, nil, getChangesInput{Namespace: "shop", Kind: "Secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := extractText(t, result)
+	if strings.Contains(body, "Deployment/reader") || !strings.Contains(body, `"consumed_by_withheld":{"count":1,"reason":"user_forbidden"}`) {
+		t.Fatalf("hidden Deployment not withheld: %s", body)
+	}
 	perms.SetCanI("list", "", "secrets", "shop", false)
 	filter := configSourceFilter(ctx, "shop")
 	if filter("Secret", "db") || !filter("ConfigMap", "config") {

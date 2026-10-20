@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -79,8 +81,14 @@ func TestIssuesSecretPreviousValueRequiresPodRead(t *testing.T) {
 		if len(response.RecentChanges) != 1 || (response.RecentChanges[0].RunningPreviousValue != nil) != readable {
 			t.Fatalf("pods readable=%v changes=%+v", readable, response.RecentChanges)
 		}
-		if !readable && len(response.RecentChanges[0].ConsumedBy) != 0 {
-			t.Fatalf("Pod-derived name leaked: %+v", response.RecentChanges[0])
+		row := response.RecentChanges[0]
+		// The caller may not list Pods, so the bare Pod is counted, never named.
+		withheld := &issuesapi.Withheld{Count: 1, Reason: readreason.UserForbidden}
+		if len(row.ConsumedBy) != 0 || !reflect.DeepEqual(row.ConsumedByWithheld, withheld) {
+			t.Fatalf("pods readable=%v: consumed_by=%v withheld=%+v", readable, row.ConsumedBy, row.ConsumedByWithheld)
+		}
+		if readable && (len(row.RunningPreviousValue.Workloads) != 0 || !reflect.DeepEqual(row.RunningPreviousValue.Withheld, withheld) || row.RunningPreviousValue.Pods != 1) {
+			t.Fatalf("stale reader not withheld: %+v", row.RunningPreviousValue)
 		}
 	}
 }
