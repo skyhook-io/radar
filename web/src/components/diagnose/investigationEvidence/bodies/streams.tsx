@@ -168,7 +168,7 @@ function ChangeReferences({
           <ResourceLink
             name={name}
             kind={kind}
-            namespace={namespace ?? ""}
+            namespace={namespace}
             group={group}
             label={reference}
             onNavigate={onOpenResource}
