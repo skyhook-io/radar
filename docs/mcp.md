@@ -606,6 +606,7 @@ A fully ready controller for any finalizer keeps a mixed-finalizer finding at
 warning; repair advice for other controllers remains. In-use guards and
 GC-only finalizers can reach critical at 30 minutes. Resolve their dependencies
 rather than removing them; orphaning preserves dependents.
+REST/UI deletes preserve a policy recorded by a `foregroundDeletion` or `orphan` finalizer; otherwise they explicitly request Background propagation, even for terminating resources or when the pre-delete read fails.
 
 The catalog recognizes Argo CD, Flux, VictoriaMetrics and Karpenter through
 known finalizer keys and workload identities. Name-only guesses for uncataloged
