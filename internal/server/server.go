@@ -3318,7 +3318,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.writeJSON(w, response)
+	s.writeJSON(w, resourceDetailResponse{ResourceWithRelationships: response, TemplateDivergence: s.templateDivergenceFor(r, resource)})
 }
 
 // getLiveSecret reads one Secret from the API server as the caller. It

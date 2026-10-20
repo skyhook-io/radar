@@ -133,11 +133,19 @@ type templateCandidate struct {
 	// says where admission calls go, not who installed the webhook or what it
 	// can change.
 	loopback bool
+	// created is when the candidate object was created, shown beside it as a
+	// fact; it does not order the list.
+	created metav1.Time
 }
 
 type templateSourceReport struct {
 	sentences []string
 	refs      []Ref
+	created   []metav1.Time
+	// coverage holds the sentences about sources that could not be inspected;
+	// notNamed counts matching candidates past the naming budget.
+	coverage []string
+	notNamed int
 }
 
 // templateSources describes what could have produced the differences: the
@@ -153,6 +161,7 @@ func (p *CacheProvider) templateSources(pod *corev1.Pod, template *corev1.PodTem
 			break
 		}
 		report.refs = append(report.refs, candidate.ref)
+		report.created = append(report.created, candidate.created)
 		hasWebhook = hasWebhook || candidate.ref.Kind == "MutatingWebhookConfiguration"
 		if idx < maxTemplateCandidateLines {
 			report.sentences = append(report.sentences, candidate.message+".")
@@ -166,7 +175,8 @@ func (p *CacheProvider) templateSources(pod *corev1.Pod, template *corev1.PodTem
 		}
 		sentence := "Also matching: " + strings.Join(names, ", ") + "."
 		if len(candidates) > end {
-			sentence += fmt.Sprintf(" %d more matching candidate objects are not named.", len(candidates)-end)
+			report.notNamed = len(candidates) - end
+			sentence += fmt.Sprintf(" %d more matching candidate objects are not named.", report.notNamed)
 		}
 		report.sentences = append(report.sentences, sentence)
 	}
@@ -175,6 +185,7 @@ func (p *CacheProvider) templateSources(pod *corev1.Pod, template *corev1.PodTem
 	}
 	report.sentences = append(report.sentences, selfReportedMutations(pod, template, differences)...)
 	report.sentences = append(report.sentences, coverage...)
+	report.coverage = coverage
 	report.sentences = append(report.sentences, "Writer and timing are unknown. Candidate inspection is incomplete: current readable configuration only; CEL conditions are not evaluated.")
 	return report
 }
@@ -233,7 +244,7 @@ func (p *CacheProvider) templateCandidates(pod *corev1.Pod, differences []templa
 				continue
 			}
 			if matchingTemplateDefaults(lr, differences) {
-				candidates = append(candidates, templateCandidate{ref: ref, message: fmt.Sprintf("Candidate LimitRange %s has a default matching an omitted template resource", lr.Name)})
+				candidates = append(candidates, templateCandidate{ref: ref, created: lr.CreationTimestamp, message: fmt.Sprintf("Candidate LimitRange %s has a default matching an omitted template resource", lr.Name)})
 			}
 		}
 		if unreadable {
@@ -252,7 +263,7 @@ func (p *CacheProvider) templateCandidates(pod *corev1.Pod, differences []templa
 		}
 		for _, pc := range p.podTemplateSources.priorities {
 			if pc.Name == pod.Spec.PriorityClassName && pc.GlobalDefault {
-				candidates = append(candidates, templateCandidate{ref: priorityRef, message: fmt.Sprintf("Candidate PriorityClass %s is currently the global default", pc.Name)})
+				candidates = append(candidates, templateCandidate{ref: priorityRef, created: pc.CreationTimestamp, message: fmt.Sprintf("Candidate PriorityClass %s is currently the global default", pc.Name)})
 			}
 		}
 	}
@@ -343,7 +354,7 @@ func (p *CacheProvider) templateCandidates(pod *corev1.Pod, differences []templa
 		if !match.created.IsZero() {
 			message += "; configuration created " + match.created.UTC().Format(time.RFC3339)
 		}
-		candidates = append(candidates, templateCandidate{ref: match.ref, message: message, loopback: match.loopback})
+		candidates = append(candidates, templateCandidate{ref: match.ref, message: message, loopback: match.loopback, created: match.created})
 	}
 	if unreadable {
 		coverage = append(coverage, "Some mutating webhook configurations are not readable by the caller and were not inspected.")

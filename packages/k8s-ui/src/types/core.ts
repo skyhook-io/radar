@@ -762,12 +762,30 @@ export interface HPAMetricSummary {
   status: string
 }
 
+// How live Pods differ from their owner's template (Radar >= the version that
+// added it; older servers omit the field).
+export interface TemplateDivergence {
+  summary: string
+  podsCompared: number
+  podsDiffering: number
+  podsCapped?: boolean
+  podsNotCompared?: number
+  examplePod?: string
+  baseline?: string
+  differences: string[]
+  sources?: string[]
+  sourceRefs?: { kind: string; group?: string; namespace?: string; name: string; created?: string }[]
+  sourceGaps?: string[]
+  sourcesNotNamed?: number
+}
+
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
   hpaDiagnosis?: HPADiagnosis
+  templateDivergence?: TemplateDivergence
 }
 
 // API Resource (from discovery endpoint)

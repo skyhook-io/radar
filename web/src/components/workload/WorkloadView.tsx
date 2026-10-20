@@ -609,6 +609,7 @@ export function WorkloadView({
   )
   const certificateInfo = resourceResponse?.certificateInfo
   const hpaDiagnosis = resourceResponse?.hpaDiagnosis
+  const templateDivergence = resourceResponse?.templateDivergence
   const activeImageTargetOwnership = useMemo(
     () =>
       imageTargetOwnership &&
@@ -1125,6 +1126,7 @@ export function WorkloadView({
         onOpenApplication={handleOpenApplication}
         certificateInfo={certificateInfo}
         hpaDiagnosis={hpaDiagnosis}
+        templateDivergence={templateDivergence}
         workloadPods={supportsWorkloadPods ? workloadPodsQuery.data?.pods : undefined}
         onEvaluateCapacity={
           workloadAwaitsCapacity

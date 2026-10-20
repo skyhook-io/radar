@@ -473,10 +473,8 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
 			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
 		),
-		ServiceBackends: k8s.ServiceBackendLookup{Cache: cache},
-		TemplateDivergence: issues.NewCacheProvider().TemplateDivergence(obj, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), func(verb, group, resource, namespace string) bool {
-			return s.canRead(r, group, resource, namespace, verb)
-		}),
+		ServiceBackends:    k8s.ServiceBackendLookup{Cache: cache},
+		TemplateDivergence: s.templateDivergenceFor(r, obj),
 	}
 
 	// Wire the PolicyReport index when Kyverno is installed. Build emits a

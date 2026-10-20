@@ -36,7 +36,8 @@ import {
   Stethoscope,
   Coins,
 } from 'lucide-react'
-import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
+import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, TemplateDivergence, WorkloadPodInfo } from '../../types'
+import { TemplateDivergenceCard } from './TemplateDivergenceCard'
 import type { GitOpsStatus } from '../../types/gitops'
 import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -188,6 +189,9 @@ interface WorkloadViewProps {
   certificateInfo?: any
   /** HPA diagnosis for HorizontalPodAutoscaler detail responses */
   hpaDiagnosis?: HPADiagnosis
+  /** How live Pods differ from their owner template, from the resource
+   *  response. Absent from older servers, which render nothing for it. */
+  templateDivergence?: TemplateDivergence
   /** Compact diagnosis for autoscalers controlling this workload */
   scalerDiagnostics?: ScalerDiagnosis[]
   /** Pod readiness data from the host's workload-pods endpoint. Optional so
@@ -452,6 +456,7 @@ export function WorkloadView({
   relationships,
   certificateInfo,
   hpaDiagnosis,
+  templateDivergence,
   scalerDiagnostics,
   workloadPods,
   workloadPodsLoading = false,
@@ -931,7 +936,24 @@ export function WorkloadView({
     if (shouldCommitFallback && activeTab !== 'overview') onTabChange?.('overview', { replace: true })
   }, [activeTab, onTabChange, shouldCommitFallback])
   const expandedOverview = expanded ? renderExpandedOverview?.({ kind, apiKind, namespace, name, resource }) : null
-  const overviewIntro = renderOverviewIntro?.({ kind, namespace, name })
+  const divergenceKey = `${group ?? ''}/${kind}/${namespace}/${name}`
+  const divergenceCard = templateDivergence ? (
+    // Keyed by resource so navigating within the drawer reads that resource's open state.
+    <TemplateDivergenceCard
+      key={divergenceKey}
+      divergence={templateDivergence}
+      namespace={namespace}
+      resourceKey={divergenceKey}
+      onNavigate={onNavigateToResource ? (ref) => onNavigateToResource(refToSelectedResource(ref)) : undefined}
+    />
+  ) : null
+  const hostOverviewIntro = renderOverviewIntro?.({ kind, namespace, name })
+  const overviewIntro = divergenceCard || hostOverviewIntro ? (
+    <div className="space-y-4">
+      {hostOverviewIntro}
+      {divergenceCard}
+    </div>
+  ) : undefined
 
   // ── Collapsed (drawer) mode ──────────────────────────────────────────────
   if (!expanded) {
@@ -1095,6 +1117,7 @@ export function WorkloadView({
                   {renderOverviewLeadForState({ kind, namespace, name })}
                 </div>
               )}
+              {divergenceCard && <div className="px-4 pt-4">{divergenceCard}</div>}
               <ResourceRendererDispatch
                 resource={selectedResource}
                 data={resource}
@@ -1302,13 +1325,16 @@ export function WorkloadView({
         {effectiveTab === 'overview' && expandedSummary ? (
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
-          <div className="h-full min-h-0">
+          <div className="flex h-full min-h-0 flex-col">
             {hasOperationalIssues && renderOverviewLeadForState && (
-              <div className="px-4 pt-4">
+              <div className="shrink-0 px-4 pt-4">
                 {renderOverviewLeadForState({ kind, namespace, name })}
               </div>
             )}
-            {expandedOverview}
+            {/* The host overview fills the remaining height; the card is capped
+                and scrolls so a long candidate list cannot push it offscreen. */}
+            {divergenceCard && <div className="max-h-[40%] shrink-0 overflow-y-auto px-4 pt-4">{divergenceCard}</div>}
+            <div className="min-h-0 flex-1">{expandedOverview}</div>
           </div>
         ) : effectiveTab === 'spec' && specTab?.render && !resourceGone ? (
           <div className="h-full min-h-0 overflow-y-auto">{specTab.render()}</div>

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
@@ -182,14 +183,17 @@ func (p *CacheProvider) templateDivergenceFor(baselines []podBaseline, access po
 	}
 	sources := p.templateSources(example.pod, example.template, exampleDifferences, access)
 	return &resourcecontext.TemplateDivergence{
-		Summary:       summary,
-		PodsCompared:  len(baselines),
-		PodsDiffering: differing,
-		ExamplePod:    examplePod,
-		PodsCapped:    truncated,
-		Baseline:      baseline,
-		Differences:   messages,
-		Sources:       sources.sentences,
+		Summary:         summary,
+		PodsCompared:    len(baselines),
+		PodsDiffering:   differing,
+		ExamplePod:      examplePod,
+		PodsCapped:      truncated,
+		Baseline:        baseline,
+		Differences:     messages,
+		Sources:         sources.sentences,
+		SourceRefs:      sourceRefs(sources),
+		SourceGaps:      sources.coverage,
+		SourcesNotNamed: sources.notNamed,
 	}
 }
 
@@ -217,4 +221,19 @@ func TemplateDivergenceNote(d *resourcecontext.TemplateDivergence) string {
 		scope += fmt.Sprintf("; Pod %s vs %s", d.ExamplePod, d.Baseline)
 	}
 	return strings.TrimSpace(fmt.Sprintf("%s: %s. Read without context=none for the full comparison and the objects that could have changed it.", scope, first))
+}
+
+func sourceRefs(report templateSourceReport) []resourcecontext.TemplateSourceRef {
+	if len(report.refs) == 0 {
+		return nil
+	}
+	out := make([]resourcecontext.TemplateSourceRef, 0, len(report.refs))
+	for idx, ref := range report.refs {
+		source := resourcecontext.TemplateSourceRef{ContextRef: resourcecontext.ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}}
+		if created := report.created[idx]; !created.IsZero() {
+			source.Created = created.UTC().Format(time.RFC3339)
+		}
+		out = append(out, source)
+	}
+	return out
 }
