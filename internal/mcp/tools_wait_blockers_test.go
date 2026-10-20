@@ -226,3 +226,21 @@ func TestWaitImagePullRetriesKeepOneBlockerClock(t *testing.T) {
 		t.Fatal("image pull reasons must share a persistence key")
 	}
 }
+
+func TestWaitUnschedulableJobPointsAtThePod(t *testing.T) {
+	fastWaitPolling(t)
+	job := waitTestObject("Job", "batch/v1", "migrate", map[string]any{"active": int64(1)})
+	yes := true
+	pod := waitFatalPod("migrate-x", metav1.OwnerReference{APIVersion: "batch/v1", Kind: "Job", Name: "migrate", UID: job.GetUID(), Controller: &yes})
+	pod.Status.ContainerStatuses = nil
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "need more cpu"}}
+	waitInstallPodCache(t, pod)
+	res, _, err := waitFor(t.Context(), waitDynamic(job), waitForInput{Kind: "job", Namespace: "shop", Name: "migrate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeToolResult(t, res)
+	if next, _ := got["next"].(string); got["state"] != "waiting" || !strings.Contains(next, "diagnose Pod migrate-x in shop") {
+		t.Fatal(got)
+	}
+}

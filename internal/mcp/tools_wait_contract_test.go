@@ -585,3 +585,25 @@ func TestWaitDefaultReadyHasNoConditionHint(t *testing.T) {
 		t.Fatalf("%v %v", err, got)
 	}
 }
+
+func TestWaitArgoBlockerGate(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	ro := func(generation int64, observed string) *unstructured.Unstructured {
+		obj := waitTestObject("Rollout", "argoproj.io/v1alpha1", "api", map[string]any{"observedGeneration": observed, "workloadObservedGeneration": "2"})
+		obj.SetGeneration(generation)
+		obj.Object["spec"] = map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "source"}}
+		return obj
+	}
+	source := deploymentObj("source", 2, 2, 1, 1, 1, 1)
+	// The template source is current, but the Rollout's own spec changed after
+	// the controller last looked: old pods must not decide the verdict.
+	if apply, coverage := waitBlockersApply(t.Context(), waitDynamic(source), gvr, ro(2, "1"), waitObjectState{}); apply || coverage != "" {
+		t.Fatalf("stale rollout generation: apply=%v coverage=%q", apply, coverage)
+	}
+	if apply, _ := waitBlockersApply(t.Context(), waitDynamic(source), gvr, ro(2, "2"), waitObjectState{}); !apply {
+		t.Fatal("observed rollout should allow blockers")
+	}
+	if apply, coverage := waitBlockersApply(t.Context(), waitDynamic(), gvr, ro(2, "2"), waitObjectState{}); apply || coverage == "" {
+		t.Fatalf("unreadable template source must report coverage: apply=%v coverage=%q", apply, coverage)
+	}
+}

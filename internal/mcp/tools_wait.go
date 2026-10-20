@@ -328,7 +328,14 @@ func waitForUntil(ctx context.Context, dyn dynamic.Interface, input waitForInput
 				} else if verdict == "waiting" && s.next != "" {
 					next = s.next
 				}
-				if !s.Met && !deleted && checked < 3 && waitBlockersApply(ctx, dyn, gvr, obj, s) {
+				apply, coverage := false, ""
+				if !s.Met && !deleted && checked < 3 {
+					apply, coverage = waitBlockersApply(ctx, dyn, gvr, obj, s)
+				}
+				if coverage != "" {
+					result["blockersUnavailable"] = coverage
+				}
+				if apply {
 					checked++
 					b, e := waitStep(ctx, func() (waitBlockerResult, error) { return readWaitBlockers(ctx, dyn, gvr, obj), nil })
 					if e != nil {
@@ -356,7 +363,12 @@ func waitForUntil(ctx context.Context, dyn dynamic.Interface, input waitForInput
 								states[len(states)-1].state = "blocked"
 							}
 						} else if verdict == "waiting" {
-							next = "pods can't be scheduled; unless nodes are being added, " + waitDiagnoseNext(obj)
+							target := waitDiagnoseNext(obj)
+							if gvr.Group == "batch" {
+								// diagnose doesn't take Jobs; the pod carries the scheduler's reason.
+								target = fmt.Sprintf("diagnose Pod %s in %s", problem.Pod, obj.GetNamespace())
+							}
+							next = "pods can't be scheduled; unless nodes are being added, " + target
 						}
 					}
 				}
@@ -500,16 +512,21 @@ func capWaitBlockers(blockers []waitBlocker) []waitBlocker {
 // waitBlockersApply reports whether pod blockers can describe this object now:
 // a built-in workload or pod that isn't being replaced or deleted. An Argo
 // Rollout also needs its controller to have observed the current template,
-// whichever condition the caller waits on.
-func waitBlockersApply(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, s waitObjectState) bool {
+// whichever condition the caller waits on; when that can't be read, coverage
+// says why instead of the blockers silently going missing.
+func waitBlockersApply(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, s waitObjectState) (apply bool, coverage string) {
 	if !isWaitWorkload(gvr) || obj.GetDeletionTimestamp() != nil || strings.HasPrefix(s.Observed, "replaced by uid ") {
-		return false
+		return false, ""
 	}
 	if gvr.Group != "argoproj.io" || s.controllerObserved {
-		return true
+		return true, ""
 	}
 	observed, err := rollouts.ControllerObservedSpec(ctx, dyn, obj)
-	return err == nil && observed
+	if err != nil {
+		return false, "the rollout's template source is not readable"
+	}
+	gen, present := waitGeneration(obj)
+	return observed && (!present || gen == obj.GetGeneration()), ""
 }
 func waitCheckFor(gvr schema.GroupVersionResource, condition string) (waitCheck, error) {
 	switch strings.ToLower(condition) {
