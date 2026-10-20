@@ -167,11 +167,13 @@ func TestExecPodTimeoutReturnsPartialOutput(t *testing.T) {
 }
 
 func TestExecPodRefusesBadInput(t *testing.T) {
-	pending := runningPod("starting", false, "app")
-	pending.Status.Phase = corev1.PodPending
+	succeeded := runningPod("succeeded", false, "app")
+	succeeded.Status.Phase = corev1.PodSucceeded
+	failed := runningPod("failed", false, "app")
+	failed.Status.Phase = corev1.PodFailed
 	terminating := runningPod("terminating", true, "app")
 	terminating.DeletionTimestamp = &metav1.Time{Time: time.Now()}
-	client := fake.NewClientset(runningPod("web-1", true, "app"), pending, terminating)
+	client := fake.NewClientset(runningPod("web-1", true, "app"), succeeded, failed, terminating)
 	var calls []execCall
 	run := fakeExec(&calls, "", "", nil)
 	for name, tc := range map[string]struct {
@@ -182,7 +184,8 @@ func TestExecPodRefusesBadInput(t *testing.T) {
 		"no command":        {execPodInput{Namespace: "shop", Name: "web-1"}, "command is required"},
 		"timeout above max": {execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"ls"}, TimeoutSeconds: 46}, "at most 45"},
 		"unknown container": {execPodInput{Namespace: "shop", Name: "web-1", Container: "db", Command: []string{"ls"}}, `container "db" not found`},
-		"pod not running":   {execPodInput{Namespace: "shop", Name: "starting", Command: []string{"ls"}}, "not Running"},
+		"succeeded pod":     {execPodInput{Namespace: "shop", Name: "succeeded", Command: []string{"ls"}}, "is Succeeded"},
+		"failed pod":        {execPodInput{Namespace: "shop", Name: "failed", Command: []string{"ls"}}, "is Failed"},
 		"missing pod":       {execPodInput{Namespace: "shop", Name: "ghost", Command: []string{"ls"}}, "failed to read pod"},
 		"unknown kind":      {execPodInput{Namespace: "shop", Name: "web", Kind: "service", Command: []string{"ls"}}, "invalid kind"},
 	} {
@@ -194,6 +197,43 @@ func TestExecPodRefusesBadInput(t *testing.T) {
 	}
 	if len(calls) != 0 {
 		t.Fatalf("refused input still ran: %+v", calls)
+	}
+}
+
+func TestExecPodNamedPendingSidecarReachesExecutor(t *testing.T) {
+	pod := runningPod("starting", false, "app")
+	pod.Status.Phase = corev1.PodPending
+	restartAlways := corev1.ContainerRestartPolicyAlways
+	pod.Spec.InitContainers = []corev1.Container{{Name: "sidecar", RestartPolicy: &restartAlways}}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+		Name: "sidecar", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}
+	client := fake.NewClientset(pod)
+	for _, kind := range []string{"", "pod"} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			var calls []execCall
+			input := execPodInput{Namespace: "shop", Name: "starting", Kind: kind, Container: "sidecar", Command: []string{"true"}}
+			res, _, err := execPod(t.Context(), client, nil, fakeExec(&calls, "ok", "", nil), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(calls) != 1 || calls[0].pod != pod.Name || calls[0].container != "sidecar" {
+				t.Fatalf("exec calls: %+v", calls)
+			}
+			if got := decodeToolResult(t, res); got["exitCode"] != float64(0) || got["stdout"] != "ok" {
+				t.Fatalf("result: %+v", got)
+			}
+
+			containerErr := apierrors.NewBadRequest("container app is not running")
+			input.Container = "app"
+			_, _, err = execPod(t.Context(), client, nil, fakeExec(&calls, "", "", containerErr), input)
+			if !errors.Is(err, containerErr) || !strings.Contains(err.Error(), containerErr.Error()) {
+				t.Fatalf("container state error must pass through: %v", err)
+			}
+			if len(calls) != 2 || calls[1].container != "app" {
+				t.Fatalf("container state must be checked by the API server: %+v", calls)
+			}
+		})
 	}
 }
 
@@ -248,7 +288,7 @@ func TestExecPodPicksReadyWorkloadPod(t *testing.T) {
 func TestPickExecPod(t *testing.T) {
 	terminating := runningPod("going", true, "app")
 	terminating.DeletionTimestamp = &metav1.Time{Time: time.Now()}
-	pending := runningPod("pending", false, "app")
+	pending := runningPod("pending", true, "app")
 	pending.Status.Phase = corev1.PodPending
 	if got := pickExecPod([]*corev1.Pod{terminating, pending}); got != nil {
 		t.Fatalf("picked %s from no running pods", got.Name)

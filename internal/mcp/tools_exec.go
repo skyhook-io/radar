@@ -233,8 +233,8 @@ func resolveExecPod(ctx context.Context, client kubernetes.Interface, dyn dynami
 		if pod.DeletionTimestamp != nil {
 			return nil, "", fmt.Errorf("pod %s/%s is terminating; exec requires a non-terminating pod", namespace, name)
 		}
-		if pod.Status.Phase != corev1.PodRunning {
-			return nil, "", fmt.Errorf("pod %s/%s is %s, not Running; exec needs a running container", namespace, name, pod.Status.Phase)
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			return nil, "", fmt.Errorf("pod %s/%s is %s; exec requires a non-terminal pod", namespace, name, pod.Status.Phase)
 		}
 		return pod, "", nil
 	}

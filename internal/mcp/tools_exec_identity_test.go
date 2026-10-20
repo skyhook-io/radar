@@ -92,11 +92,11 @@ func TestExecPodDoesNotFallbackWhenImpersonationFails(t *testing.T) {
 
 func TestExecPodExcludedFromReadOnlyMounts(t *testing.T) {
 	enableExecToolsForTest(t)
-	if slices.Contains(investigation.ReadOnlyTools, "exec_pod") {
+	if investigation.IsReadOnlyTool("exec_pod") {
 		t.Fatal("exec in read-only allowlist")
 	}
-	if !slices.Contains(investigation.WriteTools, "exec_pod") {
-		t.Fatal("exec missing from write classification")
+	if investigation.IsWriteTool("exec_pod") {
+		t.Fatal("exec in built-in AI apply allowlist")
 	}
 	refs := investigationrefs.NewRegistry()
 	scope := strings.Repeat("a", 26)

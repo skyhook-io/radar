@@ -24,12 +24,13 @@ var ReadOnlyTools = []string{
 	"get_cost", "get_rightsizing", "wait_for", "get_runtime_versions",
 }
 
-// WriteTools are the mutating Radar MCP tools — enabled only on an apply turn
-// the user explicitly confirmed. Never on the read-only investigation path.
-// Deletion is excluded until built-in approval presents its impact preview.
+// WriteTools are the mutating Radar MCP tools supported by the built-in AI —
+// enabled only on an apply turn the user explicitly confirmed. Never on the
+// read-only investigation path. Exec is excluded; deletion is excluded until
+// built-in approval presents its impact preview.
 var WriteTools = []string{
 	"apply_resource", "patch_resource", "manage_workload",
-	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops", "exec_pod",
+	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops",
 }
 
 // IsReadOnlyTool reports whether tool (bare, or prefixed the way an agent host
