@@ -1983,9 +1983,10 @@ type KindSyncState struct {
 	Key      string `json:"key"`
 	Synced   bool   `json:"synced"`
 	Deferred bool   `json:"deferred"`
-	// Failed marks a kind whose sync deadline fired without completing —
-	// terminal for this connection. The shell renders these as errors
-	// instead of promising they will finish loading.
+	// Failed marks a kind whose sync deadline fired before it finished
+	// loading. Its informer keeps retrying and the kind clears once it
+	// syncs; the shell renders these as errors instead of promising they
+	// will finish soon.
 	Failed bool `json:"failed,omitempty"`
 }
 

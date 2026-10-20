@@ -92,8 +92,9 @@ func TestPrimaryPrefersWhatAResolvesFirst(t *testing.T) {
 	}
 }
 
-// actionsFixture is the table the web UI mirrors; its test reads the same
-// file. READREASON_UPDATE=1 rewrites it after a deliberate change.
+// actionsFixture is the action table in a form consumers in other languages,
+// such as the web UI, can mirror and test against. READREASON_UPDATE=1
+// rewrites it after a deliberate change.
 const actionsFixture = "testdata/actions.json"
 
 func TestActionsFixtureMatchesTable(t *testing.T) {

@@ -507,7 +507,7 @@ func TestNarrowedClusterScopeRemediationNamesTheRealCause(t *testing.T) {
 	}
 
 	// The pin is a startup flag, not a permissions problem.
-	pinned := rightsizingRemediation("cluster", ReasonOutsideNamespaceScope)
+	pinned := rightsizingRemediation("cluster", ReasonOutsideNamespacePin)
 	if !strings.Contains(pinned, "--namespace") || !strings.Contains(pinned, "not a permissions problem") {
 		t.Errorf("a pin-excluded scope must be attributed to the flag: %q", pinned)
 	}
@@ -722,7 +722,7 @@ func TestEveryScanReasonCarriesRemediation(t *testing.T) {
 		reasonRowEvidenceIncomplete,
 		reasonNamespaceScopeLimited,
 		reasonNamespacesExcluded,
-		ReasonOutsideNamespaceScope,
+		ReasonOutsideNamespacePin,
 		"access_denied",
 		"scan_deadline_exceeded",
 		"prometheus_unavailable",

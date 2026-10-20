@@ -161,9 +161,32 @@ func kindMatchesProbe(requested, probeKind string) bool {
 }
 
 func notFoundSuggestion(ctx context.Context, kind, namespace, name string) string {
+	parts := notFoundAlternatives(ctx, kind, namespace, name)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "; ") + "; or use search"
+}
+
+// notFoundNext is what get_resource's agent can try after a miss: the same
+// name under another kind or namespace, else a search for it.
+func notFoundNext(ctx context.Context, kind, namespace, name string) string {
+	// Naming the kind lets search reach kinds a broad search skips, such as
+	// deferred ones and Events.
+	search := fmt.Sprintf("call search with query %q to look for it in every namespace you can read", "kind:"+kind+" "+name)
+	if parts := notFoundAlternatives(ctx, kind, namespace, name); len(parts) > 0 {
+		return upperFirst(strings.Join(parts, "; ")) + ". Otherwise, " + search + "."
+	}
+	return upperFirst(search) + "."
+}
+
+// notFoundAlternatives lists objects with the requested name under another
+// kind in the same namespace, or the same kind in another namespace the
+// caller can access, each with the retry that reaches it.
+func notFoundAlternatives(ctx context.Context, kind, namespace, name string) []string {
 	cache := k8s.GetResourceCache()
 	if cache == nil || name == "" {
-		return ""
+		return nil
 	}
 	probes := notFoundProbes(cache)
 	var parts []string
@@ -203,8 +226,5 @@ func notFoundSuggestion(ctx context.Context, kind, namespace, name string) strin
 		}
 	}
 
-	if len(parts) == 0 {
-		return ""
-	}
-	return strings.Join(parts, "; ") + "; or use search"
+	return parts
 }

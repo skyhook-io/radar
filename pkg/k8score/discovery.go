@@ -42,9 +42,12 @@ type ResourceDiscovery struct {
 	lastRefresh time.Time
 	partial     bool
 	failedGroup map[string]bool
-	cacheTTL    time.Duration
-	refreshMu   sync.Mutex
-	mu          sync.RWMutex
+	// refreshFailed: the last refresh returned no resources at all, so the
+	// ones held are from an earlier refresh.
+	refreshFailed bool
+	cacheTTL      time.Duration
+	refreshMu     sync.Mutex
+	mu            sync.RWMutex
 }
 
 // DiscoveryOption is a functional option for NewResourceDiscovery.
@@ -210,6 +213,7 @@ func (d *ResourceDiscovery) refresh() error {
 	if err != nil && !hasResourceData {
 		d.mu.Lock()
 		d.lastRefresh = time.Now()
+		d.refreshFailed = true
 		d.mu.Unlock()
 		return err
 	}
@@ -262,6 +266,7 @@ func (d *ResourceDiscovery) refresh() error {
 	d.lastRefresh = time.Now()
 	d.partial = partial
 	d.failedGroup = failedGroups
+	d.refreshFailed = false
 	log.Printf("Discovered %d API resources (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
 
 	return nil
@@ -276,6 +281,18 @@ func (d *ResourceDiscovery) HasPartialDiscovery() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.partial
+}
+
+// LastRefreshFailed reports whether the last refresh returned no resources at
+// all. The resources held are then from an earlier refresh, so an API
+// installed since is missing from them.
+func (d *ResourceDiscovery) LastRefreshFailed() bool {
+	if d == nil {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.refreshFailed
 }
 
 // GroupHadPartialDiscovery reports whether a group was specifically missing

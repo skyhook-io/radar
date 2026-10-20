@@ -1030,7 +1030,7 @@ func truncateRows[T any](rows []T, limit int) ([]T, bool) {
 
 func costRemediation(reason string) string {
 	switch reason {
-	case ReasonOutsideNamespaceScope:
+	case ReasonOutsideNamespacePin:
 		// The pinned namespace is not named: this caller was denied, and may have
 		// no access to it either.
 		return "radar is pinned to a single namespace with --namespace-scope, so it cannot report on the requested scope. This is a startup flag, not a permissions problem — restart radar without --namespace-scope for cluster-wide cost."

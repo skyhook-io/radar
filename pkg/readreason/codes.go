@@ -180,9 +180,14 @@ func AffectsWholeCluster(c Code) bool {
 }
 
 // precedence orders codes for an error that has to name one, by what the
-// user should do first: fix a request no retry can answer, then wait for
-// what resolves by itself — a retry then returns at least part of the answer —
-// then act on their own access, then on Radar's limits.
+// user should do first: fix a request no retry can answer; restore the
+// connection, without which nothing is read; wait for what resolves by
+// itself, since a retry then returns at least part of the answer; act on
+// their own access and namespace targeting; then Radar's identity and setup,
+// a load that is overdue, and what Radar doesn't collect. A search filter's
+// failure and the unclassified read_error come last among failures, so an
+// error names a specific cause when it has one. object_not_found is an
+// answer, not a failure.
 var precedence = []Code{
 	NamespaceRequired, KindUnknown, KindNotWatchable, ListTooLarge,
 	ClusterDisconnected, ClusterConnecting, ConnectionChanged,

@@ -366,7 +366,7 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 	for _, uid := range []types.UID{"root-now", "root-before"} {
 		events = append(events, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: string(uid), Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: string(uid), Message: string(uid), LastTimestamp: now, InvolvedObject: corev1.ObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "shop", Name: "web", UID: uid}})
 	}
-	client := fake.NewSimpleClientset(events...)
+	client := fake.NewSimpleClientset(fixtureNamespaces(events...)...)
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestDiagnoseExcludesPodsFromPreviousWorkloadAndIntermediateOwners(t *testin
 	// A same-name Pod replaced earlier left a warning that is history, not
 	// current evidence.
 	objects = append(objects, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "current-before", Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: "current-before", Message: "current-before", LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: "current", Namespace: "shop", UID: "current-before-uid"}})
-	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces(objects...)...)); err != nil {
 		t.Fatal(err)
 	}
 	f := setupFakeProm(t)
@@ -533,7 +533,7 @@ func TestCurrentMirrorPodEventsUseBothObservedUIDs(t *testing.T) {
 	for _, uid := range []types.UID{pod.UID, "current-static-hash", "previous-static-hash", "previous-api-uid"} {
 		objects = append(objects, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: string(uid), Namespace: pod.Namespace}, Type: corev1.EventTypeWarning, Reason: string(uid), Message: string(uid), LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: pod.Name, Namespace: pod.Namespace, UID: uid}})
 	}
-	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces(objects...)...)); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)

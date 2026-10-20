@@ -283,7 +283,7 @@ func rightsizingWorkloadScope(ctx context.Context, input getRightsizingInput) (*
 	}
 
 	if !namespaceWithinPin(namespace) {
-		return toJSONResult(rightsizingUnavailable("workload", ReasonOutsideNamespaceScope))
+		return toJSONResult(rightsizingUnavailable("workload", ReasonOutsideNamespacePin))
 	}
 
 	// The informer cache reads under Radar's ServiceAccount, so without this
@@ -684,7 +684,7 @@ func excludedRequestedNamespaces(requested, allowed []string) []excludedNamespac
 		}
 		reason := reasonNamespaceAccessDenied
 		if !namespaceWithinPin(name) {
-			reason = ReasonOutsideNamespaceScope
+			reason = ReasonOutsideNamespacePin
 		}
 		excluded = append(excluded, excludedNamespace{Name: name, Reason: reason})
 	}
@@ -1054,7 +1054,7 @@ func rightsizingRemediation(scope, reason string) string {
 	case "no_usage_samples":
 		return "Prometheus answered but held no workload usage samples for the 7-day window. Check that it is scraping cAdvisor/kubelet metrics and has 7 days of retention."
 	case reasonNamespacesExcluded:
-		return "Some requested namespaces were not scanned. excludedNamespaces names each one: access_denied means this identity cannot list workloads there; outside_namespace_scope means radar is pinned with --namespace-scope; not_cached means radar's informer cache does not hold workloads for that namespace (see coverage.partiallyCachedKinds), which is a limit of radar's own access, not this identity's. The rows cover effectiveNamespaces only."
+		return "Some requested namespaces were not scanned. excludedNamespaces names each one: access_denied means this identity cannot list workloads there; outside_namespace_pin means radar is pinned with --namespace-scope; not_cached means radar's informer cache does not hold workloads for that namespace (see coverage.partiallyCachedKinds), which is a limit of radar's own access, not this identity's. The rows cover effectiveNamespaces only."
 	case reasonNamespaceScopeLimited:
 		if pinned, ok := NamespacePinned(); ok {
 			return fmt.Sprintf("The scan succeeded but reached only namespace %s, which radar is pinned to with --namespace-scope. Report it as that scope; this identity's permissions are not the limit.", pinned)
@@ -1062,7 +1062,7 @@ func rightsizingRemediation(scope, reason string) string {
 		return "The scan succeeded but reached only the namespaces in effectiveNamespaces — scope was resolved from this identity's per-namespace access rather than a cluster-wide grant, so namespaces outside that list were not scanned."
 	case reasonNamespaceAccessDenied:
 		return "This identity cannot list workloads in the requested scope."
-	case ReasonOutsideNamespaceScope:
+	case ReasonOutsideNamespacePin:
 		// The pinned namespace is not named: this caller was denied, and may have
 		// no access to it either.
 		return "radar is pinned to a single namespace with --namespace-scope, so the requested scope is outside what it can see. This is a startup flag, not a permissions problem — restart radar without --namespace-scope to scan cluster-wide."
