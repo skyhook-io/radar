@@ -718,6 +718,9 @@ export function adaptQueryPrometheus(
       ? `Backend warning${warnings.length === 1 ? "" : "s"}: ${warnings.join("; ")}.`
       : "",
     infos.length > 0 ? `Prometheus noted: ${infos.join("; ")}.` : "",
+    typeof value.annotationsOmitted === "number" && value.annotationsOmitted > 0
+      ? `${value.annotationsOmitted} more backend ${value.annotationsOmitted === 1 ? "message" : "messages"} left out.`
+      : "",
   ].filter(Boolean);
   const note =
     [nonEmptyString(value.note) ? value.note : "", ...qualifications]

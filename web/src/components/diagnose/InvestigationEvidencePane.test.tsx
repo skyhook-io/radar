@@ -2993,6 +2993,12 @@ describe("InvestigationEvidencePane metrics cards", () => {
       }
       if (annotated.warnings?.length) expect(html).toContain("Backend warning");
       if (annotated.infos?.length) expect(html).toContain("Prometheus noted:");
+      const omitted = (extra as { annotationsOmitted?: number })
+        .annotationsOmitted;
+      if (omitted)
+        expect(html).toContain(
+          `${omitted} more backend ${omitted === 1 ? "message" : "messages"} left out.`,
+        );
       expect(projection.limitations.map((item) => item.message)).toEqual(
         messages,
       );
