@@ -15,6 +15,7 @@ func TestGeneralGuidanceMatchesGoldens(t *testing.T) {
 		golden string
 	}{
 		{"full", true, GeneralGuidanceFull, "testdata/general_guidance_full.golden"},
+		{"exec", true, GeneralGuidanceExec, "testdata/general_guidance_exec.golden"},
 		{"read-only", false, GeneralGuidanceReadOnly, "testdata/general_guidance_readonly.golden"},
 	}
 	for _, tc := range cases {
@@ -26,7 +27,7 @@ func TestGeneralGuidanceMatchesGoldens(t *testing.T) {
 			if tc.got != string(want) {
 				t.Fatalf("%s guidance changed:\n got %q\nwant %q", tc.name, tc.got, want)
 			}
-			if GeneralGuidance(tc.writes) != tc.got {
+			if tc.name != "exec" && GeneralGuidance(tc.writes) != tc.got {
 				t.Fatalf("GeneralGuidance(%v) does not return the %s constant", tc.writes, tc.name)
 			}
 		})

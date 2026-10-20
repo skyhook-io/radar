@@ -2,6 +2,7 @@ package k8score
 
 import (
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -69,16 +70,12 @@ const DefaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
 
 // DefaultExecContainer picks the container to target when the request doesn't
 // name one. It honors DefaultContainerAnnotation (matching kubectl exec
-// behavior, except mesh proxies are never a default). Falls back to the first
-// non-mesh app container; returns "" when none is available.
+// behavior). Falls back to the first non-mesh app container; returns "" when none is available.
 func DefaultExecContainer(pod *corev1.Pod) string {
-	if name := pod.Annotations[DefaultContainerAnnotation]; name != "" {
-		for _, c := range pod.Spec.Containers {
-			if c.Name == name && MeshProxyContainers[c.Name] == "" {
-				return name
-			}
-		}
+	if name := pod.Annotations[DefaultContainerAnnotation]; name != "" && slices.Contains(ExecContainerNames(pod), name) {
+		return name
 	}
+
 	for _, c := range pod.Spec.Containers {
 		if MeshProxyContainers[c.Name] == "" {
 			return c.Name
@@ -92,4 +89,22 @@ var MeshProxyContainers = map[string]string{
 	"istio-proxy":      "Istio",
 	"linkerd-proxy":    "Linkerd",
 	"consul-dataplane": "Consul",
+}
+
+// ExecContainerNames includes regular containers, native sidecars and ephemeral
+// containers. Ordinary init containers finish before app containers start.
+func ExecContainerNames(pod *corev1.Pod) []string {
+	names := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers)+len(pod.Spec.EphemeralContainers))
+	for _, c := range pod.Spec.Containers {
+		names = append(names, c.Name)
+	}
+	for _, c := range pod.Spec.InitContainers {
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			names = append(names, c.Name)
+		}
+	}
+	for _, c := range pod.Spec.EphemeralContainers {
+		names = append(names, c.Name)
+	}
+	return names
 }

@@ -22,7 +22,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/investigation"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	streamhttp "k8s.io/streaming/pkg/httpstream"
 )
 
 type execRoundTripper func(*http.Request) (*http.Response, error)
@@ -49,7 +51,11 @@ func TestExecPodUsesCallerIdentityAndCodedForbidden(t *testing.T) {
 				if !slices.Equal(q["command"], []string{"printf", "%s", "a b"}) || q.Get("container") != "app" || q.Get("stdin") == "true" || q.Get("tty") == "true" {
 					t.Errorf("exec options: %v", q)
 				}
-				return nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods/exec"}, "web-1", errors.New("denied"))
+				if r.Method == http.MethodGet {
+					return nil, &streamhttp.UpgradeFailureError{Cause: errors.New("WebSocket upgrade refused")}
+				}
+				code = http.StatusForbidden
+				payload = apierrors.NewForbidden(schema.GroupResource{Resource: "pods/exec"}, "web-1", errors.New("denied")).ErrStatus
 			default:
 				t.Fatalf("unexpected request: %s", r.URL)
 				return nil, errors.New("unexpected")
@@ -136,19 +142,23 @@ func TestExecPodRolloutUsesCurrentHash(t *testing.T) {
 			if r.URL.Path != "/apis/argoproj.io/v1alpha1/namespaces/shop/rollouts/web" || r.Header.Get("Impersonate-User") != "alice" {
 				t.Errorf("unexpected request: %s %v", r.URL, r.Header)
 			}
-			payload := `{"apiVersion":"argoproj.io/v1alpha1","kind":"Rollout","metadata":{"name":"web","namespace":"shop","uid":"rollout","generation":2},"status":{"currentPodHash":"current","stableRS":"stable","observedGeneration":"` + observed + `"}}`
+			payload := `{"apiVersion":"argoproj.io/v1alpha1","kind":"Rollout","metadata":{"name":"web","namespace":"shop","uid":"rollout","generation":2},"spec":{"selector":{}},"status":{"currentPodHash":"current","stableRS":"stable","observedGeneration":"` + observed + `"}}`
 			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(payload)), Request: r}, nil
 		})
 	}}
 	previous := k8s.SetTestConfig(cfg)
 	defer k8s.SetTestConfig(previous)
 	ctx := pkgauth.ContextWithUser(t.Context(), &pkgauth.User{Username: "alice"})
-	pods, err := currentExecPods(ctx, client, "rollouts", "shop", "web")
+	dyn, err := dynamic.NewForConfig(k8s.ConfigFromContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pods, err := currentExecPods(ctx, client, dyn, "rollouts", "shop", "web")
 	if err != nil || len(pods) != 1 || pods[0].Name != "current" {
 		t.Fatalf("pods=%v err=%v", pods, err)
 	}
 	observed = "1"
-	if _, err := currentExecPods(ctx, client, "rollouts", "shop", "web"); err == nil {
+	if _, err := currentExecPods(ctx, client, dyn, "rollouts", "shop", "web"); err == nil {
 		t.Fatal("stale current hash accepted")
 	}
 }

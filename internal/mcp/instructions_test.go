@@ -274,12 +274,18 @@ func TestExecServerInstructions(t *testing.T) {
 	if off != investigation.GeneralGuidanceFull {
 		t.Fatal("flag-off instructions changed")
 	}
+	if n := len([]rune(off)); n != 3405 {
+		t.Fatalf("exec=false instructions=%d characters, want 3405", n)
+	}
 	TestServerInstructionsFitClientLimits(t)
 	t.Logf("exec=false instructions=%d characters", len([]rune(off)))
 	SetExecToolsEnabled(true)
 	on := serverInstructions(true)
-	if !strings.Contains(on, "each only if listed:") || !strings.Contains(on, "exec_pod for in-container checks") {
+	if on != investigation.GeneralGuidanceExec || !strings.Contains(on, "each only if listed:") || !strings.Contains(on, "exec_pod for in-container checks") {
 		t.Fatal("missing conditional exec routing")
+	}
+	if n := len([]rune(on)); n != 3439 {
+		t.Fatalf("exec=true instructions=%d characters, want 3439", n)
 	}
 	if serverInstructions(false) != investigation.GeneralGuidanceReadOnly {
 		t.Fatal("exec changed read-only instructions")

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,7 +22,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	k8sexec "k8s.io/client-go/util/exec"
 
@@ -91,23 +94,39 @@ func handleExecPod(ctx context.Context, req *mcp.CallToolRequest, input execPodI
 	if err := requireConnected(); err != nil {
 		return nil, nil, err
 	}
-	client := k8s.ClientFromContext(ctx)
 	config := k8s.ConfigFromContext(ctx)
-	if client == nil || config == nil {
+	if config == nil {
 		return nil, nil, errNotConnected()
 	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
+	dyn, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, nil, err
+	}
 	run := func(ctx context.Context, namespace, pod, container string, command []string, stdout, stderr io.Writer) error {
-		executor, err := k8score.NewPodCommandExecutor(client, config, namespace, pod, container, command)
+		var status atomic.Int32
+		streamConfig := rest.CopyConfig(config)
+		streamConfig.Wrap(func(rt http.RoundTripper) http.RoundTripper {
+			return &execStatusTransport{RoundTripper: rt, status: &status}
+		})
+		executor, err := k8score.NewPodCommandExecutor(client, streamConfig, namespace, pod, container, command)
 		if err != nil {
 			return err
 		}
-		return executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: stdout, Stderr: stderr})
+		err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: stdout, Stderr: stderr})
+		if err != nil && (status.Load() == http.StatusForbidden || status.Load() == http.StatusUnauthorized) {
+			return &execTransportError{error: err, status: int(status.Load())}
+		}
+		return err
 	}
 	delegated = true
-	return execPod(ctx, client, run, input)
+	return execPod(ctx, client, dyn, run, input)
 }
 
-func execPod(ctx context.Context, client kubernetes.Interface, run execStreams, input execPodInput) (*mcp.CallToolResult, any, error) {
+func execPod(ctx context.Context, client kubernetes.Interface, dyn dynamic.Interface, run execStreams, input execPodInput) (*mcp.CallToolResult, any, error) {
 	start := time.Now()
 	namespace, name := strings.TrimSpace(input.Namespace), strings.TrimSpace(input.Name)
 	auditRequest := (&http.Request{Method: http.MethodPost, URL: &url.URL{Path: "/mcp"}}).WithContext(ctx)
@@ -132,7 +151,7 @@ func execPod(ctx context.Context, client kubernetes.Interface, run execStreams, 
 		reason string
 	}
 	selected, err := waitStep(runCtx, func() (selection, error) {
-		pod, reason, err := resolveExecPod(runCtx, client, input.Kind, namespace, name)
+		pod, reason, err := resolveExecPod(runCtx, client, dyn, input.Kind, namespace, name)
 		return selection{pod, reason}, err
 	})
 	pod, picked := selected.pod, selected.reason
@@ -142,12 +161,12 @@ func execPod(ctx context.Context, client kubernetes.Interface, run execStreams, 
 	container := strings.TrimSpace(input.Container)
 	if container == "" {
 		container = k8score.DefaultExecContainer(pod)
-	} else if !podHasContainer(pod, container) {
-		return nil, nil, fmt.Errorf("container %q not found in pod %s/%s; containers: %s", container, namespace, pod.Name, strings.Join(podContainerNames(pod), ", "))
+	} else if !slices.Contains(k8score.ExecContainerNames(pod), container) {
+		return nil, nil, fmt.Errorf("container %q not found in pod %s/%s; containers: %s", container, namespace, pod.Name, strings.Join(k8score.ExecContainerNames(pod), ", "))
 	}
 
 	if container == "" {
-		return nil, nil, fmt.Errorf("pod %s/%s has no non-mesh app container; specify container explicitly", namespace, pod.Name)
+		return nil, nil, fmt.Errorf("pod %s/%s has no non-mesh app container; specify container explicitly; containers: %s", namespace, pod.Name, strings.Join(k8score.ExecContainerNames(pod), ", "))
 	}
 	audit.Name, audit.Container = pod.Name, container
 
@@ -177,7 +196,7 @@ func execPod(ctx context.Context, client kubernetes.Interface, run execStreams, 
 	case runCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil:
 		result["timedOut"] = true
 		result["exitCode"] = nil
-		result["message"] = fmt.Sprintf("deadline exceeded after %ds: Radar stopped the exec stream; command termination is unconfirmed and it may still be running in the container", int(timeout.Seconds()))
+		result["message"] = fmt.Sprintf("deadline exceeded after %ds: Radar stopped waiting; command termination is unconfirmed and it may still be running in the container", int(timeout.Seconds()))
 		audit.Outcome = "timeout"
 	case errors.As(streamErr, &exitErr):
 		result["exitCode"] = exitErr.ExitStatus()
@@ -204,7 +223,7 @@ func execPod(ctx context.Context, client kubernetes.Interface, run execStreams, 
 // resolveExecPod returns the pod to exec into. For kind=pod it is the named
 // pod. For a workload it must be Running and Ready at the current revision;
 // picked explains the choice.
-func resolveExecPod(ctx context.Context, client kubernetes.Interface, kind, namespace, name string) (*corev1.Pod, string, error) {
+func resolveExecPod(ctx context.Context, client kubernetes.Interface, dyn dynamic.Interface, kind, namespace, name string) (*corev1.Pod, string, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "", "pod", "pods", "po":
 		pod, err := client.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -226,11 +245,7 @@ func resolveExecPod(ctx context.Context, client kubernetes.Interface, kind, name
 	if !checkNamespaceAccess(ctx, namespace) {
 		return nil, "", fmt.Errorf("%w: namespace %q", k8s.ErrWorkloadAccessDenied, namespace)
 	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, "", errNotConnected()
-	}
-	pods, err := currentExecPods(ctx, client, workloadKind, namespace, name)
+	pods, err := currentExecPods(ctx, client, dyn, workloadKind, namespace, name)
 	if err != nil {
 		return nil, "", err
 	}
@@ -243,7 +258,7 @@ func resolveExecPod(ctx context.Context, client kubernetes.Interface, kind, name
 		if len(phases) == 0 {
 			return nil, "", fmt.Errorf("%s %s/%s has no pods to exec into", workloadKind, namespace, name)
 		}
-		return nil, "", fmt.Errorf("%s %s/%s has no Running, Ready pod of the current revision to exec into: %s", workloadKind, namespace, name, strings.Join(phases, ", "))
+		return nil, "", fmt.Errorf("%s %s/%s has no Running, Ready pod of the current revision to exec into: %s; target a specific pod by name to exec into a pod that isn't Ready", workloadKind, namespace, name, strings.Join(phases, ", "))
 	}
 	picked := fmt.Sprintf("%s of %d pods of %s %s", pod.Name, len(pods), workloadKind, name)
 	fresh, err := client.CoreV1().Pods(namespace).Get(ctx, pod.Name, metav1.GetOptions{})
@@ -297,23 +312,6 @@ func pickExecPod(pods []*corev1.Pod) *corev1.Pod {
 	return candidates[0]
 }
 
-func podHasContainer(pod *corev1.Pod, name string) bool {
-	for _, c := range pod.Spec.Containers {
-		if c.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func podContainerNames(pod *corev1.Pod) []string {
-	names := make([]string, 0, len(pod.Spec.Containers))
-	for _, c := range pod.Spec.Containers {
-		names = append(names, c.Name)
-	}
-	return names
-}
-
 // cappedBuffer keeps the first limit bytes written and counts the rest. Write
 // never fails, so a chatty command isn't cut off mid-stream by the cap.
 type cappedBuffer struct {
@@ -362,27 +360,31 @@ func truncateRunes(s string, n int) string {
 }
 
 func execPodError(err error) error {
-	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || errors.Is(err, k8s.ErrWorkloadAccessDenied) {
+	var transportErr *execTransportError
+	deniedTransport := errors.As(err, &transportErr) && (transportErr.status == http.StatusForbidden || transportErr.status == http.StatusUnauthorized)
+	if deniedTransport || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || errors.Is(err, k8s.ErrWorkloadAccessDenied) {
 		return fmt.Errorf("rbac_denied: %w. Use get_subject_permissions to inspect the caller's permissions (exec requires create on pods/exec)", err)
 	}
 	return err
 }
 
-// Membership comes from the ownership index; revision evidence is read as the caller.
-func currentExecPods(ctx context.Context, client kubernetes.Interface, kind, namespace, name string) ([]*corev1.Pod, error) {
+// Membership and revision evidence are both read as the caller.
+func currentExecPods(ctx context.Context, client kubernetes.Interface, dyn dynamic.Interface, kind, namespace, name string) ([]*corev1.Pod, error) {
 	var hash, label string
 	var root metav1.Object
+	var selector *metav1.LabelSelector
+	var sets *appsv1.ReplicaSetList
 	switch kind {
 	case "deployments":
 		dep, err := client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
-		root = dep
+		root, selector = dep, dep.Spec.Selector
 		if dep.Status.ObservedGeneration < dep.Generation {
 			return nil, fmt.Errorf("deployment has not observed its current generation; retry")
 		}
-		sets, err := client.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+		sets, err = client.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return nil, err
 		}
@@ -401,7 +403,7 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, kind, nam
 		if err != nil {
 			return nil, err
 		}
-		root = sts
+		root, selector = sts, sts.Spec.Selector
 		if sts.Status.ObservedGeneration < sts.Generation {
 			return nil, fmt.Errorf("statefulset has not observed its current generation; retry")
 		}
@@ -411,7 +413,7 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, kind, nam
 		if err != nil {
 			return nil, err
 		}
-		root = ds
+		root, selector = ds, ds.Spec.Selector
 		if ds.Status.ObservedGeneration < ds.Generation {
 			return nil, fmt.Errorf("daemonset has not observed its current generation; retry")
 		}
@@ -430,7 +432,6 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, kind, nam
 		hash = k8score.CurrentControllerRevisionPodHashes(objects)[ds.UID]
 		label = appsv1.ControllerRevisionHashLabelKey
 	case "rollouts":
-		dyn := k8s.DynamicClientFromContext(ctx)
 		if dyn == nil {
 			return nil, errNotConnected()
 		}
@@ -439,6 +440,18 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, kind, nam
 			return nil, err
 		}
 		root = ro
+		selectorMap, _, err := unstructured.NestedMap(ro.Object, "spec", "selector")
+		if err != nil {
+			return nil, err
+		}
+		selector = &metav1.LabelSelector{}
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, selector); err != nil {
+			return nil, err
+		}
+		sets, err = client.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
 		observed, err := rollouts.ControllerObservedSpec(ctx, dyn, ro)
 		if err != nil {
 			return nil, err
@@ -453,24 +466,49 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, kind, nam
 		if err != nil {
 			return nil, err
 		}
-		root = obj
+		root, selector = obj, obj.Spec.Selector
 	case "replicasets":
 		obj, err := client.AppsV1().ReplicaSets(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
-		root = obj
+		root, selector = obj, obj.Spec.Selector
 	}
-	cache := k8s.GetResourceCache()
-	// Bind cached membership to the incarnation just read, rather than a same-name predecessor.
+	podSelector, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
+		return nil, err
+	}
+	listed, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: podSelector.String()})
+	if err != nil {
+		return nil, err
+	}
 	group := "argoproj.io"
 	if builtin, ok := resourceid.BuiltinForName(kind); ok {
 		group = builtin.Group
 	}
-	pods, err := k8s.WorkloadPodsForUID(cache, k8s.CanonicalWorkloadKind(kind), namespace, name, group, root.GetUID())
-	if err != nil {
-		return nil, err
+	matches := func(owner *metav1.OwnerReference, object metav1.Object, ownerKind, ownerGroup string) bool {
+		return owner != nil && object.GetUID() != "" && owner.UID == object.GetUID() && owner.Name == object.GetName() && owner.Kind == ownerKind && resourceid.GroupFromAPIVersion(owner.APIVersion) == ownerGroup
 	}
+	var pods []*corev1.Pod
+	for i := range listed.Items {
+		pod := &listed.Items[i]
+		owner := metav1.GetControllerOf(pod)
+		owned := matches(owner, root, k8s.CanonicalWorkloadKind(kind), group)
+		if sets != nil {
+			owned = false
+			for j := range sets.Items {
+				rs := &sets.Items[j]
+				if matches(owner, rs, "ReplicaSet", "apps") && matches(metav1.GetControllerOf(rs), root, k8s.CanonicalWorkloadKind(kind), group) {
+					owned = true
+					break
+				}
+			}
+		}
+		if owned {
+			pods = append(pods, pod)
+		}
+	}
+	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
 	if label == "" {
 		return pods, nil
 	}
@@ -485,3 +523,25 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, kind, nam
 	}
 	return current, nil
 }
+
+// SPDY negotiation flattens its response error, discarding the HTTP status.
+type execStatusTransport struct {
+	http.RoundTripper
+	status *atomic.Int32
+}
+
+func (t *execStatusTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.status.Store(0)
+	response, err := t.RoundTripper.RoundTrip(r)
+	if response != nil {
+		t.status.Store(int32(response.StatusCode))
+	}
+	return response, err
+}
+
+type execTransportError struct {
+	error
+	status int
+}
+
+func (e *execTransportError) Unwrap() error { return e.error }

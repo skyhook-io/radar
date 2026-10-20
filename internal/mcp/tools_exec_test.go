@@ -103,7 +103,7 @@ func TestExecPodReturnsOutputAndExitCode(t *testing.T) {
 	client := fake.NewClientset(pod)
 	var calls []execCall
 
-	res, _, err := execPod(t.Context(), client, fakeExec(&calls, "200\n", "warn\n", nil), execPodInput{
+	res, _, err := execPod(t.Context(), client, nil, fakeExec(&calls, "200\n", "warn\n", nil), execPodInput{
 		Namespace: "shop", Name: "web-1", Command: []string{"sh", "-c", "wget -qO- http://api:8080/healthz"},
 	})
 	if err != nil {
@@ -117,7 +117,7 @@ func TestExecPodReturnsOutputAndExitCode(t *testing.T) {
 		t.Fatalf("exec call: %+v", calls)
 	}
 
-	res, _, err = execPod(t.Context(), client, fakeExec(&calls, "", "psql: connection refused\n", k8sexec.CodeExitError{Err: errors.New("command terminated with exit code 2"), Code: 2}), execPodInput{
+	res, _, err = execPod(t.Context(), client, nil, fakeExec(&calls, "", "psql: connection refused\n", k8sexec.CodeExitError{Err: errors.New("command terminated with exit code 2"), Code: 2}), execPodInput{
 		Namespace: "shop", Name: "web-1", Container: "app", Command: []string{"psql", "-c", "select 1"},
 	})
 	if err != nil {
@@ -132,7 +132,7 @@ func TestExecPodCapsOutput(t *testing.T) {
 	client := fake.NewClientset(runningPod("web-1", true, "app"))
 	var calls []execCall
 	big := strings.Repeat("x", execOutputCap+100)
-	res, _, err := execPod(t.Context(), client, fakeExec(&calls, big, "", nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"cat", "/big"}})
+	res, _, err := execPod(t.Context(), client, nil, fakeExec(&calls, big, "", nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"cat", "/big"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestExecPodTimeoutReturnsPartialOutput(t *testing.T) {
 		return ctx.Err()
 	}
 	start := time.Now()
-	res, _, err := execPod(t.Context(), client, run, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"sleep", "100"}, TimeoutSeconds: 1})
+	res, _, err := execPod(t.Context(), client, nil, run, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"sleep", "100"}, TimeoutSeconds: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestExecPodTimeoutReturnsPartialOutput(t *testing.T) {
 		t.Fatal("timeout not enforced")
 	}
 	got := decodeToolResult(t, res)
-	if got["timedOut"] != true || got["stdout"] != "partial" || got["exitCode"] != nil {
+	if got["timedOut"] != true || got["stdout"] != "partial" || got["exitCode"] != nil || !strings.Contains(got["message"].(string), "Radar stopped waiting") {
 		t.Fatalf("timeout result: %+v", got)
 	}
 }
@@ -187,7 +187,7 @@ func TestExecPodRefusesBadInput(t *testing.T) {
 		"unknown kind":      {execPodInput{Namespace: "shop", Name: "web", Kind: "service", Command: []string{"ls"}}, "invalid kind"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := execPod(t.Context(), client, run, tc.input); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, _, err := execPod(t.Context(), client, nil, run, tc.input); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 		})
@@ -200,7 +200,7 @@ func TestExecPodRefusesBadInput(t *testing.T) {
 func TestExecPodStreamFailureIsAToolError(t *testing.T) {
 	client := fake.NewClientset(runningPod("web-1", true, "app"))
 	var calls []execCall
-	_, _, err := execPod(t.Context(), client, fakeExec(&calls, "", "", apierrors.NewForbidden(schema.GroupResource{Resource: "pods/exec"}, "web-1", errors.New("denied"))), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"ls"}})
+	_, _, err := execPod(t.Context(), client, nil, fakeExec(&calls, "", "", apierrors.NewForbidden(schema.GroupResource{Resource: "pods/exec"}, "web-1", errors.New("denied"))), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"ls"}})
 	if err == nil || !strings.Contains(err.Error(), "rbac_denied") || !strings.Contains(err.Error(), "get_subject_permissions") || !apierrors.IsForbidden(err) {
 		t.Fatalf("RBAC denial must surface as a tool error: %v", err)
 	}
@@ -214,11 +214,11 @@ func TestExecPodPicksReadyWorkloadPod(t *testing.T) {
 	owned := func(p *corev1.Pod, created time.Time) *corev1.Pod {
 		p.OwnerReferences = []metav1.OwnerReference{{Kind: "ReplicaSet", APIVersion: "apps/v1", Name: "web-1", UID: "rs", Controller: &controller}}
 		p.CreationTimestamp = metav1.NewTime(created)
-		p.Labels = map[string]string{"pod-template-hash": "new"}
+		p.Labels = map[string]string{"pod-template-hash": "new", "app": "web"}
 		return p
 	}
 	rs.Annotations = map[string]string{"deployment.kubernetes.io/revision": "2"}
-	rs.Labels = map[string]string{"pod-template-hash": "new"}
+	rs.Labels = map[string]string{"pod-template-hash": "new", "app": "web"}
 	now := time.Now()
 	notReady := owned(runningPod("web-1-new", false, "app"), now)
 	ready := owned(runningPod("web-1-old", true, "app"), now.Add(-time.Hour))
@@ -226,7 +226,7 @@ func TestExecPodPicksReadyWorkloadPod(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls []execCall
-	res, _, err := execPod(t.Context(), fake.NewClientset(dep, rs, notReady, ready), fakeExec(&calls, "ok", "", nil), execPodInput{Namespace: "shop", Name: "web", Kind: "deploy", Command: []string{"true"}})
+	res, _, err := execPod(t.Context(), fake.NewClientset(dep, rs, notReady, ready), nil, fakeExec(&calls, "ok", "", nil), execPodInput{Namespace: "shop", Name: "web", Kind: "deploy", Command: []string{"true"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,9 @@ func TestExecPodPicksReadyWorkloadPod(t *testing.T) {
 	changed := ready.DeepCopy()
 	changed.Labels["pod-template-hash"] = "different"
 	before := len(calls)
-	_, _, err = execPod(t.Context(), fake.NewClientset(dep, rs, notReady, changed), fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: "web", Kind: "deploy", Command: []string{"true"}})
+	freshClient := fake.NewClientset(dep, rs, notReady, ready)
+	freshClient.PrependReactor("get", "pods", func(clienttesting.Action) (bool, runtime.Object, error) { return true, changed, nil })
+	_, _, err = execPod(t.Context(), freshClient, nil, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: "web", Kind: "deploy", Command: []string{"true"}})
 	if err == nil || !strings.Contains(err.Error(), "changed") || len(calls) != before {
 		t.Fatalf("stale selection executed: calls=%v error=%v", calls, err)
 	}
@@ -262,7 +264,7 @@ func TestExecPodSkipsMeshDefault(t *testing.T) {
 		t.Run(proxy, func(t *testing.T) {
 			client := fake.NewClientset(runningPod("web-1", true, proxy, "app"))
 			var calls []execCall
-			_, _, err := execPod(t.Context(), client, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
+			_, _, err := execPod(t.Context(), client, nil, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
 			if err != nil || len(calls) != 1 || calls[0].container != "app" {
 				t.Fatalf("calls=%v err=%v", calls, err)
 			}
@@ -287,19 +289,19 @@ func TestExecPodCurrentControllerRevision(t *testing.T) {
 			var objects []runtime.Object
 			switch kind {
 			case "statefulsets":
-				objects = append(objects, &appsv1.StatefulSet{ObjectMeta: meta, Status: appsv1.StatefulSetStatus{ObservedGeneration: 2, CurrentRevision: "old", UpdateRevision: "latest"}})
+				objects = append(objects, &appsv1.StatefulSet{ObjectMeta: meta, Spec: appsv1.StatefulSetSpec{Selector: &metav1.LabelSelector{}}, Status: appsv1.StatefulSetStatus{ObservedGeneration: 2, CurrentRevision: "old", UpdateRevision: "latest"}})
 				old.OwnerReferences = owner("StatefulSet", "web", "root", "apps/v1")
 			case "daemonsets":
-				objects = append(objects, &appsv1.DaemonSet{ObjectMeta: meta, Status: appsv1.DaemonSetStatus{ObservedGeneration: 2}})
+				objects = append(objects, &appsv1.DaemonSet{ObjectMeta: meta, Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{}}, Status: appsv1.DaemonSetStatus{ObservedGeneration: 2}})
 				old.OwnerReferences = owner("DaemonSet", "web", "root", "apps/v1")
 				for i, hash := range []string{"old", "latest"} {
 					objects = append(objects, &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{Name: hash, Namespace: "shop", OwnerReferences: old.OwnerReferences, Labels: map[string]string{appsv1.ControllerRevisionHashLabelKey: hash}}, Revision: int64(i + 1)})
 				}
 			case "jobs":
-				objects = append(objects, &batchv1.Job{ObjectMeta: meta})
+				objects = append(objects, &batchv1.Job{ObjectMeta: meta, Spec: batchv1.JobSpec{Selector: &metav1.LabelSelector{}}})
 				old.OwnerReferences = owner("Job", "web", "previous-root", "batch/v1")
 			case "replicasets":
-				objects = append(objects, &appsv1.ReplicaSet{ObjectMeta: meta})
+				objects = append(objects, &appsv1.ReplicaSet{ObjectMeta: meta, Spec: appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{}}})
 				old.OwnerReferences = owner("ReplicaSet", "web", "previous-root", "apps/v1")
 			}
 			current.OwnerReferences = append([]metav1.OwnerReference(nil), old.OwnerReferences...)
@@ -309,7 +311,7 @@ func TestExecPodCurrentControllerRevision(t *testing.T) {
 			if err := k8s.InitTestResourceCache(client); err != nil {
 				t.Fatal(err)
 			}
-			pod, _, err := resolveExecPod(t.Context(), client, kind, "shop", "web")
+			pod, _, err := resolveExecPod(t.Context(), client, nil, kind, "shop", "web")
 			if err != nil || pod.Name != "current" {
 				t.Fatalf("pod=%v err=%v", pod, err)
 			}
@@ -320,7 +322,7 @@ func TestExecPodCurrentControllerRevision(t *testing.T) {
 func TestExecPodRefusesOldDeploymentRevision(t *testing.T) {
 	defer k8s.ResetTestState()
 	controller := true
-	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "dep", Generation: 2}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "new"}}}}}, Status: appsv1.DeploymentStatus{ObservedGeneration: 2}}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "dep", Generation: 2}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{}, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "new"}}}}}, Status: appsv1.DeploymentStatus{ObservedGeneration: 2}}
 	var objects []runtime.Object
 	objects = append(objects, dep)
 	for i, hash := range []string{"old", "new"} {
@@ -335,8 +337,8 @@ func TestExecPodRefusesOldDeploymentRevision(t *testing.T) {
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := resolveExecPod(t.Context(), client, "deploy", "shop", "web")
-	if err == nil || !strings.Contains(err.Error(), "Ready") {
+	_, _, err := resolveExecPod(t.Context(), client, nil, "deploy", "shop", "web")
+	if err == nil || !strings.Contains(err.Error(), "target a specific pod by name to exec into a pod that isn't Ready") {
 		t.Fatalf("selected old Ready revision: %v", err)
 	}
 	// A paused Deployment can observe a new template without creating a ReplicaSet for it.
@@ -344,7 +346,7 @@ func TestExecPodRefusesOldDeploymentRevision(t *testing.T) {
 	if _, err := client.AppsV1().Deployments("shop").Update(t.Context(), dep, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = resolveExecPod(t.Context(), client, "deploy", "shop", "web")
+	_, _, err = resolveExecPod(t.Context(), client, nil, "deploy", "shop", "web")
 	if err == nil || !strings.Contains(err.Error(), "no observed current revision") {
 		t.Fatalf("accepted mismatched template: %v", err)
 	}
@@ -358,7 +360,7 @@ func TestExecPodAuditIncludesCallerCommandAndOutcome(t *testing.T) {
 	ctx := pkgauth.ContextWithUser(t.Context(), &pkgauth.User{Username: "alice", Groups: []string{"operators"}})
 	client := fake.NewClientset(runningPod("web-1", true, "app"))
 	var calls []execCall
-	_, _, err := execPod(ctx, client, fakeExec(&calls, "", "", k8sexec.CodeExitError{Err: errors.New("exit 2"), Code: 2}), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"printf", "x\ny"}})
+	_, _, err := execPod(ctx, client, nil, fakeExec(&calls, "", "", k8sexec.CodeExitError{Err: errors.New("exit 2"), Code: 2}), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"printf", "x\ny"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +396,7 @@ func TestExecPodDeadlineIncludesResolution(t *testing.T) {
 	})
 	start := time.Now()
 	var calls []execCall
-	_, _, err := execPod(t.Context(), client, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}, TimeoutSeconds: 1})
+	_, _, err := execPod(t.Context(), client, nil, fakeExec(&calls, "", "", nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}, TimeoutSeconds: 1})
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second || len(calls) != 0 {
 		t.Fatalf("elapsed=%s calls=%v error=%v", time.Since(start), calls, err)
 	}
@@ -404,7 +406,7 @@ func TestExecPodTruncatesBothStreamsInBytes(t *testing.T) {
 	client := fake.NewClientset(runningPod("web-1", true, "app"))
 	var calls []execCall
 	output := strings.Repeat("世", execOutputCap)
-	result, _, err := execPod(t.Context(), client, fakeExec(&calls, output, output, nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
+	result, _, err := execPod(t.Context(), client, nil, fakeExec(&calls, output, output, nil), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"true"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +431,7 @@ func TestExecPodDeadlineBoundsUnresponsiveExecutor(t *testing.T) {
 		return nil
 	}
 	start := time.Now()
-	result, _, err := execPod(t.Context(), client, run, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"sleep", "100"}, TimeoutSeconds: 1})
+	result, _, err := execPod(t.Context(), client, nil, run, execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"sleep", "100"}, TimeoutSeconds: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

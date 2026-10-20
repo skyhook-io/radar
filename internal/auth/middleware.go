@@ -2,9 +2,9 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -259,15 +259,17 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 		username = user.Username
 		groups = user.Groups
 	}
-	if details.Action == "exec_pod" {
-		code := "unknown"
-		if details.ExitCode != nil {
-			code = strconv.Itoa(*details.ExitCode)
-		}
-		log.Printf("[audit] user=%q groups=%q action=%q path=%q ns=%q name=%q container=%q source=%q outcome=%q argv=%q exitCode=%s duration=%s", username, groups, details.Action, r.URL.Path, details.Namespace, details.Name, details.Container, details.Source, details.Outcome, details.Command, code, details.Duration)
-		return
-	}
-	log.Printf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
+	line := fmt.Sprintf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
 		username, groups, details.Action, r.URL.Path, details.Kind, details.Group, details.Namespace, details.Name,
 		details.Container, details.Variable, details.Source, details.Outcome)
+	if len(details.Command) > 0 {
+		line += fmt.Sprintf(" argv=%q", details.Command)
+	}
+	if details.ExitCode != nil {
+		line += fmt.Sprintf(" exitCode=%d", *details.ExitCode)
+	}
+	if details.Duration != 0 {
+		line += fmt.Sprintf(" duration=%s", details.Duration)
+	}
+	log.Print(line)
 }
