@@ -343,7 +343,9 @@ describe("Secret and ConfigMap change evidence", () => {
     expect(vi.mocked(DiffViewer).mock.calls[0][0].diff.fields).toEqual(
       secretChange.fields,
     );
-    expect(html.match(/\[&quot;password&quot;\]/g)).toHaveLength(2);
+    // The key list reads as a key change, not a struck-through old→new pair.
+    expect(html).not.toContain("[&quot;password&quot;]");
+    expect(html).toContain("keys changed: ");
     expect(html).toContain(">password</span>");
     expect(html).not.toMatch(/oldValue|newValue|stringData/);
   });
