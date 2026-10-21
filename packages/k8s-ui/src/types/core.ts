@@ -650,10 +650,21 @@ export interface Relationships {
     sourceResourceVersion?: string
     mirrors?: ResourceRef[]
   }
-  owner?: ResourceRef
+  owner?: ResourceRef        // The owner Kubernetes acts through: the controller reference, else the only reference
+  owners?: ResourceRef[]     // Every owner reference that resolves to an existing owner
   deployment?: ResourceRef   // Grandparent Deployment (for Pods owned by ReplicaSets)
   managedBy?: ResourceRef[]  // Topmost meaningful manager(s): GitOps controller (ArgoCD Application / Flux Kustomization / Flux HelmRelease), Helm release, or the topmost K8s owner. Synthesized server-side; replaces client-side detectGitOpsOwner.
-  children?: ResourceRef[]
+  children?: ResourceRef[]   // Objects whose owner references name this one
+  // Children kept apart because they only keep history: ReplicaSets that run
+  // no Pods and aren't their owner's current revision.
+  olderRevisions?: ResourceRef[]
+  // Management without an owner reference: GitOps member lists, class
+  // bindings, spec and status references. Never ownership or garbage collection.
+  managers?: ResourceRef[]
+  manages?: ResourceRef[]
+  /** How complete the owner-reference answers are. Servers that answer
+   * Owner and Children from graph edges omit it. */
+  ownership?: OwnershipCoverage
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
   gateways?: ResourceRef[]
@@ -678,6 +689,45 @@ export interface Relationships {
   serviceAccount?: ResourceRef      // For Pods: derived from pod.spec.serviceAccountName
   node?: ResourceRef                // For scheduled Pods: derived from pod.spec.nodeName
   resourceClaims?: ResourceRef[]    // For Pods: DRA ResourceClaims (direct + template-generated)
+}
+
+/** A kind Radar couldn't read, in namespace or (without one) in several or all of them; reason is a readreason code. */
+export interface OwnershipGap {
+  group?: string
+  kind?: string
+  namespace?: string
+  reason: string
+}
+
+export interface OwnershipCoverage {
+  /** The owner reference's state when no owner is named: gone, replaced, withheld, unknown, unresolvable, excluded (it names an Event) or several. */
+  primaryOwnerState?: string
+  /** The owner the reference names when it is gone, replaced or unknown. */
+  ownerRef?: ResourceRef
+  /** A readreason code saying why an unknown owner couldn't be checked. */
+  ownerReason?: string
+  children: {
+    /** Children are every child the viewer may read. */
+    complete: boolean
+    notChecked?: OwnershipGap[]
+    truncated?: boolean
+    /** The viewer may read only some of the places children could be. */
+    narrowed?: boolean
+  }
+  /** For a GitOps manager whose status lists its members. */
+  manages?: {
+    membership: 'recorded' | 'remote' | 'unreadable'
+    /** A readreason code when the member list couldn't be read, as opposed to the status recording none. */
+    unavailableReason?: string
+    missing?: number
+    withheld?: number
+    unknown?: number
+    truncated?: boolean
+  }
+  /** The object was replaced after it was read, so there are no answers. */
+  subjectReplaced?: boolean
+  /** A readreason code when Radar couldn't answer at all. */
+  unavailableReason?: string
 }
 
 // Parsed X.509 certificate metadata (from backend cert parsing)

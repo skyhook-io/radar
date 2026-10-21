@@ -1,0 +1,4790 @@
+[
+  {
+    "root": "apps|DaemonSet|infra|agent",
+    "relationships": {
+      "children": [
+        {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+        {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "apps|DaemonSet|shop|redis-exporter",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|api",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "pods": [
+        {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"}
+      ]
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|big",
+    "relationships": {
+      "children": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|cart",
+    "relationships": {
+      "children": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"}
+      ],
+      "managers": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "pods": [
+        {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"}
+      ],
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|hello-00001-deployment",
+    "relationships": {
+      "owner": {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"},
+      "owners": [
+        {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ]
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|legacy-helm",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "legacy"}
+      ]
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|redis",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "services": [
+        {"kind": "Service", "namespace": "shop", "name": "redis"}
+      ],
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|redis-legacy",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|Deployment|shop|web",
+    "relationships": {
+      "children": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"},
+        {"kind": "Widget", "namespace": "shop", "name": "web-widget", "group": "example.io"}
+      ],
+      "managers": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "services": [
+        {"kind": "Service", "namespace": "shop", "name": "web"}
+      ],
+      "ingresses": [
+        {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+      ],
+      "routes": [
+        {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+      ],
+      "configRefs": [
+        {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"},
+        {"kind": "Secret", "namespace": "shop", "name": "web-secret"},
+        {"kind": "Secret", "namespace": "shop", "name": "web-tls"}
+      ],
+      "scalers": [
+        {"kind": "HorizontalPodAutoscaler", "namespace": "shop", "name": "web", "group": "autoscaling"}
+      ],
+      "pdbs": [
+        {"kind": "PodDisruptionBudget", "namespace": "shop", "name": "web", "group": "policy"}
+      ],
+      "pods": [
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"}
+      ],
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|ReplicaSet|shop|api-6b7",
+    "relationships": {
+      "children": [
+        {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"}
+      ],
+      "ownership": {
+        "primaryOwnerState": "replaced",
+        "ownerRef": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"},
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "apps|ReplicaSet|shop|big-8f9",
+    "relationships": {
+      "owner": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "owners": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "apps|ReplicaSet|shop|cart-5c6",
+    "relationships": {
+      "owner": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+      "owners": [
+        {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|ReplicaSet|shop|checkout-abc",
+    "relationships": {
+      "owner": {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"},
+      "owners": [
+        {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|ReplicaSet|shop|payments-6d8f",
+    "relationships": {
+      "owner": {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"},
+      "owners": [
+        {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|ReplicaSet|shop|web-7d9f8",
+    "relationships": {
+      "owner": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+      "owners": [
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|StatefulSet|shop|redis-replica",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "apps|StatefulSet|team|db",
+    "relationships": {
+      "children": [
+        {"kind": "Pod", "namespace": "team", "name": "db-0"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "configRefs": [
+        {"kind": "Secret", "namespace": "team", "name": "db-creds"}
+      ]
+    }
+  },
+  {
+    "root": "argoproj.io|Application|argocd|shop",
+    "relationships": {
+      "manages": [
+        {"kind": "Service", "namespace": "shop", "name": "web"},
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "manages": {
+          "membership": "recorded"
+        }
+      }
+    }
+  },
+  {
+    "root": "argoproj.io|CronWorkflow|team|report",
+    "relationships": {
+      "children": [
+        {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "argoproj.io|Rollout|shop|checkout",
+    "relationships": {
+      "children": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "argoproj.io|Rollout|shop|payments",
+    "relationships": {
+      "children": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "argoproj.io|Rollout|shop|redis-proxy",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "argoproj.io|Workflow|team|report-1700",
+    "relationships": {
+      "owner": {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"},
+      "owners": [
+        {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "autoscaling|HorizontalPodAutoscaler|shop|web",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "scaleTarget": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+    }
+  },
+  {
+    "root": "batch|CronJob|shop|redis-backup",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "batch|CronJob|team|nightly",
+    "relationships": {
+      "children": [
+        {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"},
+        {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "batch|Job|shop|redis-migrate",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "batch|Job|team|nightly-28999",
+    "relationships": {
+      "owner": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+      "owners": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ]
+    }
+  },
+  {
+    "root": "batch|Job|team|nightly-29001",
+    "relationships": {
+      "owner": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+      "owners": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ]
+    }
+  },
+  {
+    "root": "batch|Job|team|queue-worker-abc",
+    "relationships": {
+      "owner": {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"},
+      "owners": [
+        {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
+      ],
+      "children": [
+        {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
+      ]
+    }
+  },
+  {
+    "root": "bitnami.com|SealedSecret|team|db-creds",
+    "relationships": {
+      "manages": [
+        {"kind": "Secret", "namespace": "team", "name": "db-creds"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "cert-manager.io|Certificate|shop|web-tls",
+    "relationships": {
+      "manages": [
+        {"kind": "Secret", "namespace": "shop", "name": "web-tls"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "cluster.x-k8s.io|Cluster|capi|prod",
+    "relationships": {
+      "children": [
+        {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
+        {"kind": "MachinePool", "namespace": "capi", "name": "prod-mp", "group": "cluster.x-k8s.io"},
+        {"kind": "KubeadmControlPlane", "namespace": "capi", "name": "prod-cp", "group": "controlplane.cluster.x-k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "cluster.x-k8s.io|MachineDeployment|capi|prod-md",
+    "relationships": {
+      "owner": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+      "owners": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "children": [
+        {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ]
+    }
+  },
+  {
+    "root": "cluster.x-k8s.io|MachinePool|capi|prod-mp",
+    "relationships": {
+      "owner": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+      "owners": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ]
+    }
+  },
+  {
+    "root": "cluster.x-k8s.io|MachineSet|capi|prod-md-abc",
+    "relationships": {
+      "owner": {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
+      "owners": [
+        {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"}
+      ],
+      "children": [
+        {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ]
+    }
+  },
+  {
+    "root": "cluster.x-k8s.io|Machine|capi|prod-md-abc-x",
+    "relationships": {
+      "owner": {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"},
+      "owners": [
+        {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"}
+      ],
+      "manages": [
+        {"kind": "Node", "namespace": "", "name": "node-a"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ]
+    }
+  },
+  {
+    "root": "controlplane.cluster.x-k8s.io|KubeadmControlPlane|capi|prod-cp",
+    "relationships": {
+      "owner": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+      "owners": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ]
+    }
+  },
+  {
+    "root": "demo.example.io|DatabaseClaim|shop|orders-db",
+    "relationships": {
+      "manages": [
+        {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "demo.example.io|XDatabase||orders-db-xr",
+    "relationships": {
+      "children": [
+        {"kind": "Object", "namespace": "", "name": "orders-db-config", "group": "kubernetes.crossplane.io"}
+      ],
+      "managers": [
+        {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"}
+      ]
+    }
+  },
+  {
+    "root": "eventing.knative.dev|Broker|shop|default",
+    "relationships": {
+      "children": [
+        {"kind": "InMemoryChannel", "namespace": "shop", "name": "default-kne-trigger", "group": "messaging.knative.dev"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "example.io|Widget|shop|web-widget",
+    "relationships": {
+      "owner": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+      "owners": [
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "gateway.networking.k8s.io|GatewayClass||envoy",
+    "relationships": {
+      "manages": [
+        {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "gateway.networking.k8s.io|Gateway|shop|public",
+    "relationships": {
+      "managers": [
+        {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "backends": [
+        {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+      ],
+      "managedBy": [
+        {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"}
+      ]
+    }
+  },
+  {
+    "root": "gateway.networking.k8s.io|HTTPRoute|shop|web",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "gateways": [
+        {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
+      ],
+      "backends": [
+        {"kind": "Service", "namespace": "shop", "name": "web"}
+      ]
+    }
+  },
+  {
+    "root": "helm.toolkit.fluxcd.io|HelmRelease|shop|redis",
+    "relationships": {
+      "managers": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "manages": [
+        {"kind": "Service", "namespace": "shop", "name": "redis"},
+        {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
+        {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
+        {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
+        {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
+        {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "manages": {
+          "membership": "unreadable"
+        }
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "karpenter.sh|NodeClaim||default-x1",
+    "relationships": {
+      "owner": {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"},
+      "owners": [
+        {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"}
+      ],
+      "manages": [
+        {"kind": "Node", "namespace": "", "name": "node-b"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"}
+      ]
+    }
+  },
+  {
+    "root": "karpenter.sh|NodePool||default",
+    "relationships": {
+      "children": [
+        {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "keda.sh|ScaledJob|team|queue-worker",
+    "relationships": {
+      "children": [
+        {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "kubernetes.crossplane.io|Object||orders-db-config",
+    "relationships": {
+      "owner": {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"},
+      "owners": [
+        {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"}
+      ]
+    }
+  },
+  {
+    "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|platform",
+    "relationships": {
+      "manages": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "manages": {
+          "membership": "recorded"
+        }
+      },
+      "configRefs": [
+        {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+      ],
+      "dependencies": [
+        {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|shop",
+    "relationships": {
+      "managers": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "manages": [
+        {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "manages": {
+          "membership": "recorded"
+        }
+      },
+      "configRefs": [
+        {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+      ],
+      "dependencies": [
+        {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "messaging.knative.dev|InMemoryChannel|shop|default-kne-trigger",
+    "relationships": {
+      "owner": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"},
+      "owners": [
+        {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"}
+      ]
+    }
+  },
+  {
+    "root": "networking.k8s.io|Ingress|shop|web",
+    "relationships": {
+      "managers": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "configRefs": [
+        {"kind": "Secret", "namespace": "shop", "name": "web-tls"}
+      ],
+      "backends": [
+        {"kind": "Service", "namespace": "shop", "name": "web"}
+      ]
+    }
+  },
+  {
+    "root": "networking.k8s.io|NetworkPolicy|shop|default-deny",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "policy|PodDisruptionBudget|shop|web",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "protects": [
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "serving.knative.dev|Configuration|shop|hello",
+    "relationships": {
+      "owner": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+      "owners": [
+        {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ],
+      "children": [
+        {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ]
+    }
+  },
+  {
+    "root": "serving.knative.dev|Revision|shop|hello-00001",
+    "relationships": {
+      "owner": {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+      "owners": [
+        {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ],
+      "children": [
+        {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ]
+    }
+  },
+  {
+    "root": "serving.knative.dev|Route|shop|hello",
+    "relationships": {
+      "owner": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+      "owners": [
+        {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "managedBy": [
+        {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ]
+    }
+  },
+  {
+    "root": "serving.knative.dev|Service|shop|hello",
+    "relationships": {
+      "children": [
+        {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "root": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "consumers": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "dependents": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "|ConfigMap|shop|web-config",
+    "relationships": {
+      "reflection": {
+        "mirrors": [
+          {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"}
+        ]
+      },
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "consumers": [
+        {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "|ConfigMap|team|web-config-mirror",
+    "relationships": {
+      "reflection": {
+        "source": {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
+      },
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "configRefs": [
+        {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
+      ]
+    }
+  },
+  {
+    "root": "|Node||node-a",
+    "relationships": {
+      "managers": [
+        {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "pods": [
+        {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+        {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"},
+        {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+        {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
+      ],
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Node||node-b",
+    "relationships": {
+      "managers": [
+        {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "pods": [
+        {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"},
+        {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
+        {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
+        {"kind": "Pod", "namespace": "team", "name": "db-0"},
+        {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
+        {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
+      ],
+      "managedBy": [
+        {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"}
+      ]
+    }
+  },
+  {
+    "root": "|PersistentVolumeClaim|team|data-db-0",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "consumers": [
+        {"kind": "Pod", "namespace": "team", "name": "db-0"}
+      ],
+      "storageRefs": [
+        {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"}
+      ]
+    }
+  },
+  {
+    "root": "|PersistentVolume||pv-db-0",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "configRefs": [
+        {"kind": "StorageClass", "namespace": "", "name": "standard", "group": "storage.k8s.io"}
+      ],
+      "consumers": [
+        {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|infra|agent-node-a",
+    "relationships": {
+      "owner": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"},
+      "owners": [
+        {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|infra|agent-node-b",
+    "relationships": {
+      "owner": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"},
+      "owners": [
+        {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+      "managedBy": [
+        {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|shop|api-6b7-a",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|shop|big-8f9-0",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+    }
+  },
+  {
+    "root": "|Pod|shop|big-8f9-1",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+    }
+  },
+  {
+    "root": "|Pod|shop|big-8f9-2",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+    }
+  },
+  {
+    "root": "|Pod|shop|big-8f9-3",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+    }
+  },
+  {
+    "root": "|Pod|shop|big-8f9-4",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+    }
+  },
+  {
+    "root": "|Pod|shop|big-8f9-5",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+    }
+  },
+  {
+    "root": "|Pod|shop|big-8f9-6",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+    }
+  },
+  {
+    "root": "|Pod|shop|cart-5c6-a",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|shop|checkout-abc-a",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|shop|payments-6d8f-a",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|shop|web-7d9f8-0",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "configRefs": [
+        {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"},
+        {"kind": "Secret", "namespace": "shop", "name": "web-secret"},
+        {"kind": "Secret", "namespace": "shop", "name": "web-tls"}
+      ],
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|shop|web-7d9f8-1",
+    "relationships": {
+      "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"},
+      "owners": [
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"}
+      ],
+      "deployment": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "configRefs": [
+        {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"},
+        {"kind": "Secret", "namespace": "shop", "name": "web-secret"},
+        {"kind": "Secret", "namespace": "shop", "name": "web-tls"}
+      ],
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|team|db-0",
+    "relationships": {
+      "owner": {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"},
+      "owners": [
+        {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "configRefs": [
+        {"kind": "Secret", "namespace": "team", "name": "db-creds"}
+      ],
+      "storageRefs": [
+        {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
+      ],
+      "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+      "managedBy": [
+        {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|team|nightly-29001-x",
+    "relationships": {
+      "owner": {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"},
+      "owners": [
+        {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|team|queue-worker-abc-x",
+    "relationships": {
+      "owner": {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"},
+      "owners": [
+        {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+      "managedBy": [
+        {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
+      ]
+    }
+  },
+  {
+    "root": "|Pod|team|report-1700-main",
+    "relationships": {
+      "owner": {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"},
+      "owners": [
+        {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+      "managedBy": [
+        {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Secret|shop|web-secret",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "consumers": [
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+      ]
+    }
+  },
+  {
+    "root": "|Secret|shop|web-tls",
+    "relationships": {
+      "managers": [
+        {"kind": "Certificate", "namespace": "shop", "name": "web-tls", "group": "cert-manager.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "consumers": [
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+      ],
+      "managedBy": [
+        {"kind": "Certificate", "namespace": "shop", "name": "web-tls", "group": "cert-manager.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Secret|team|db-creds",
+    "relationships": {
+      "managers": [
+        {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "consumers": [
+        {"kind": "Pod", "namespace": "team", "name": "db-0"},
+        {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"}
+      ],
+      "managedBy": [
+        {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"}
+      ]
+    }
+  },
+  {
+    "root": "|Service|shop|redis",
+    "relationships": {
+      "managers": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "backends": [
+        {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"}
+      ],
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ]
+    }
+  },
+  {
+    "root": "|Service|shop|web",
+    "relationships": {
+      "managers": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ],
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        }
+      },
+      "ingresses": [
+        {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+      ],
+      "routes": [
+        {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+      ],
+      "backends": [
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+      ],
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ]
+    }
+  }
+]

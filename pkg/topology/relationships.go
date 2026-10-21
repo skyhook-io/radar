@@ -411,6 +411,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case EdgeManages:
 			// This resource manages/owns the target
 			rel.Children = append(rel.Children, *ref)
+			rel.manageTargets = append(rel.manageTargets, *ref)
 		case EdgeExposes, EdgeRoutesTo:
 			if ref.Kind == "Pod" && ref.Group == "" {
 				rel.Pods = append(rel.Pods, *ref)
@@ -468,6 +469,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case EdgeManages:
 			// Something manages/owns this resource
 			rel.Owner = ref
+			rel.manageSources = append(rel.manageSources, *ref)
 		case EdgeExposes:
 			if isServiceEntrypointRoute(ref) {
 				rel.Routes = appendResourceRef(rel.Routes, *ref)
@@ -612,7 +614,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
 					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
+					rel.StorageRefs = append(rel.StorageRefs, pvRef)
 					break
 				}
 			}
@@ -639,7 +641,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				if pv.Spec.StorageClassName == name {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
+					rel.Consumers = append(rel.Consumers, pvRef)
 				}
 			}
 		case "node", "nodes":

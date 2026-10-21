@@ -3138,11 +3138,11 @@
     {
       "root": "|PersistentVolumeClaim|team|data-db-0",
       "relationships": {
-        "children": [
-          {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"}
-        ],
         "consumers": [
           {"kind": "Pod", "namespace": "team", "name": "db-0"}
+        ],
+        "storageRefs": [
+          {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"}
         ]
       },
       "managedBy": null,

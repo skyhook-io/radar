@@ -48,6 +48,7 @@ import (
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/executioninsight"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
@@ -504,6 +505,9 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		// lookup returned nil (no edges): handler call returned nil, Build's
 		// `rel == nil && opts.Topology != nil` fallback re-ran the identical
 		// scan. Leaving opts.Relationships unset is the canonical path.
+	}
+	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
+		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)

@@ -2824,7 +2824,7 @@
     {
       "root": "|PersistentVolumeClaim|team|data-db-0",
       "relationships": {
-        "children": [
+        "storageRefs": [
           {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"}
         ]
       },

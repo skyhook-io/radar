@@ -1,6 +1,7 @@
 package ownership_test
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -538,5 +539,65 @@ func checkNarrows(t *testing.T, where string, full, v *ownership.View, caller ac
 		if hidden := len(allMembers.Members) - len(members.Members); hidden > members.Withheld+members.Unknown {
 			t.Errorf("%s: %d members dropped, %d withheld and %d unknown", where, hidden, members.Withheld, members.Unknown)
 		}
+	}
+}
+
+// managersAtAnotherVersion answers RecordingManagers with each manager one version
+// later than the session's other reads.
+type managersAtAnotherVersion struct{ ownership.ReadSession }
+
+func (s managersAtAnotherVersion) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
+	r := s.ReadSession.RecordingManagers(ref)
+	for i := range r.Managers {
+		r.Managers[i].ResourceVersion += "-later"
+	}
+	return r
+}
+
+// A manager the view captured at one version, found recording an object at
+// another, may not list it as captured: ValidateAnswers says the objects changed.
+func TestRecordingManagersOfAManagerCapturedAtAnotherVersion(t *testing.T) {
+	w := ownershiptest.Fixture()
+	s, err := ownershiptest.Scan(w).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := ownership.NewView(managersAtAnotherVersion{s}, ownership.Unrestricted())
+	app := resourceid.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "web"}
+	if got := v.Members(app); got.Membership != ownership.MembersRecorded {
+		t.Fatalf("members = %+v", got)
+	}
+	v.RecordingManagers(resourceid.Ref{Kind: "ConfigMap", Namespace: "alpha", Name: "cfg"})
+	if err := v.ValidateAnswers(); !errors.Is(err, ownership.ErrObjectsChanged) {
+		t.Fatalf("ValidateAnswers = %v, want ErrObjectsChanged", err)
+	}
+}
+
+// managersWithGaps answers RecordingManagers with the session's answer plus gaps.
+type managersWithGaps struct {
+	ownership.ReadSession
+	gaps []ownership.Gap
+}
+
+func (s managersWithGaps) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
+	r := s.ReadSession.RecordingManagers(ref)
+	r.Gaps = append(r.Gaps, s.gaps...)
+	return r
+}
+
+// A caller learns which manager kinds Radar couldn't search, and where among
+// the namespaces it may read, but nothing of the namespaces it can't.
+func TestRecordingManagersKeepGapsTheCallerMayRead(t *testing.T) {
+	s, err := ownershiptest.Scan(ownershiptest.Fixture()).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	everywhere := ownership.Gap{Kind: ownership.FluxHelmRelease, Reason: readreason.KindSyncPending}
+	alpha := ownership.Gap{Kind: ownership.ArgoApplication, Namespace: "alpha", Reason: readreason.KindSyncPending}
+	beta := ownership.Gap{Kind: ownership.ArgoApplication, Namespace: "beta", Reason: readreason.RadarForbidden}
+	v := ownership.NewView(managersWithGaps{s, []ownership.Gap{everywhere, alpha, beta}}, access{namespaces: []string{"alpha"}})
+	got := v.RecordingManagers(at("", "ConfigMap", "alpha", "cfg"))
+	if !slices.Contains(got.Gaps, everywhere) || !slices.Contains(got.Gaps, alpha) || slices.Contains(got.Gaps, beta) {
+		t.Fatalf("gaps = %v; want %v and %v, not %v", got.Gaps, everywhere, alpha, beta)
 	}
 }

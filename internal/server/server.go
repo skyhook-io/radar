@@ -3031,23 +3031,12 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 		setTypeMeta(resource)
 
-		// Get relationships from cached topology. Pass the already-fetched
-		// resource so ManagedBy synthesis disambiguates by group (avoids
-		// kind/plural collisions like Knative Service vs core Service).
-		var relationships *topology.Relationships
-		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
-			if auth.UserFromContext(r.Context()) != nil {
-				cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
-				relIdx = nil
-			}
-			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
-				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
-		}
-
+		// Pass the already-fetched resource so ManagedBy synthesis
+		// disambiguates by group (avoids kind/plural collisions like Knative
+		// Service vs core Service).
 		s.writeJSON(w, topology.ResourceWithRelationships{
 			Resource:      resource,
-			Relationships: relationships,
+			Relationships: s.relationshipsFor(r, kind, namespace, name, resource),
 			HPADiagnosis:  hpaDiagnosisFor(resource),
 		})
 		return
@@ -3273,31 +3262,11 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// Set APIVersion and Kind for typed resources (informers don't populate these)
 	setTypeMeta(resource)
 
-	// Get relationships from cached topology. Pass the already-fetched
-	// resource so ManagedBy synthesis uses the authoritative object instead
-	// of a group-blind kind/name lookup. Skipped while serving from the
-	// mid-sync handle (ready singleton still nil) — relationships computed
-	// against a partially-synced cache would be silently incomplete.
-	var relationships *topology.Relationships
-	// One Load, reused: readers are lock-free and a context switch mid-request
-	// could otherwise pass the nil check on one handle and hand the provider a
-	// different (or nil) one.
-	if promoted := k8s.GetResourceCache(); promoted != nil {
-		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
-			if auth.UserFromContext(r.Context()) != nil {
-				cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
-				relIdx = nil
-			}
-			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
-				k8s.NewTopologyResourceProvider(promoted),
-				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
-		}
-	}
-
-	// Return resource with relationships
+	// Pass the already-fetched resource so ManagedBy synthesis uses the
+	// authoritative object instead of a group-blind kind/name lookup.
 	response := topology.ResourceWithRelationships{
 		Resource:      resource,
-		Relationships: relationships,
+		Relationships: s.relationshipsFor(r, kind, namespace, name, resource),
 		HPADiagnosis:  hpaDiagnosisFor(resource),
 	}
 
