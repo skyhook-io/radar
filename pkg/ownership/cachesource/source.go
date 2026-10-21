@@ -108,6 +108,12 @@ type session struct {
 	watched map[schema.GroupResource][]schema.GroupVersionResource
 	// versions holds the versions the session reads each resource at.
 	versions map[schema.GroupResource][]schema.GroupVersionResource
+	// byNamespace holds the namespaces each resource version is watched in
+	// when it is watched namespace by namespace (nil otherwise).
+	byNamespace map[schema.GroupVersionResource][]string
+	// unwatched holds why each resource with no watched version is unread
+	// ("" for a watched one).
+	unwatched map[schema.GroupResource]readreason.Code
 }
 
 func (s *session) Catalog() *ownership.Catalog {

@@ -130,7 +130,7 @@ type fixture struct {
 // newFixture starts caches over the fixture objects. cfg selects the typed
 // kinds (default: Pods, ReplicaSets, Deployments, Nodes, Events); prepare runs
 // before any cache starts, for reactors.
-func newFixture(t *testing.T, cfg k8score.CacheConfig, prepare func(*fixture)) *fixture {
+func newFixture(t testing.TB, cfg k8score.CacheConfig, prepare func(*fixture)) *fixture {
 	t.Helper()
 	f := &fixture{
 		typed: fake.NewClientset(typedObjects()...),
@@ -884,6 +884,24 @@ func TestObjectNeedsEveryWatchedVersionToAgree(t *testing.T) {
 			got := s.Object(w1)
 			if got.State != tc.want || got.Object.APIVersion != tc.wantVersion || got.Gap.Reason != tc.wantReason {
 				t.Fatalf("Widget = %v at %q %+v; want %v at %q reason %q", got.State, got.Object.APIVersion, got.Gap, tc.want, tc.wantVersion, tc.wantReason)
+			}
+		})
+	}
+}
+
+// A search over two watched versions needs them to hold each object at the
+// same update, as a read does: one watch holding an adoption the other lacks
+// leaves the namespace loading.
+func TestDependentCandidatesNeedVersionsToAgreeOnTheUpdate(t *testing.T) {
+	for name, domain := range map[string]ownership.SearchScope{"in alpha": ownership.InNamespace("alpha"), "everywhere": ownership.Everywhere()} {
+		t.Run(name, func(t *testing.T) {
+			f := versionsFixture(t, []runtime.Object{atVersion(widget("alpha", "w1", "uid-w1"), "41")}, []runtime.Object{betaWidget(atVersion(widget("alpha", "w1", "uid-w1"), "42"))}, nil)
+			got := begin(t, f.source()).DependentCandidates("uid-deploy", domain, 0)
+			widget := resourceid.GroupKind{Group: "example.io", Kind: "Widget"}
+			listed := slices.ContainsFunc(got.Candidates, func(c ownership.Observation) bool { return c.Ref.GroupKind() == widget })
+			loading := slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widget && g.Reason == readreason.KindSyncPending })
+			if listed || !loading || got.Complete() {
+				t.Fatalf("got %+v; the two versions hold w1 at two updates", got)
 			}
 		})
 	}

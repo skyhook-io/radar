@@ -54,12 +54,40 @@ func TestCatalogMarksAKindServedByTwoResourcesAmbiguous(t *testing.T) {
 		if _, found := c.Kind(widget); found || !c.Ambiguous(widget) || c.Serves(widget, "v1") {
 			t.Fatalf("Widget must be ambiguous, never resolved to one resource: found=%v ambiguous=%v", found, c.Ambiguous(widget))
 		}
+		if got := c.AmbiguousDependentKinds(); !slices.Equal(got, []AmbiguousKind{{GroupKind: widget, Namespaced: true}}) {
+			t.Fatalf("AmbiguousDependentKinds = %+v; want Widget, collected through its namespaced resource", got)
+		}
 		if len(c.DependentKinds()) != 0 {
 			t.Fatal("an ambiguous kind must not join the dependent kinds as one of its resources")
 		}
 	}
 	if NewCatalog([]ServedResource{collected}, true).Ambiguous(widget) {
 		t.Fatal("one resource serving a kind is not ambiguous")
+	}
+}
+
+// Aggregated APIs can serve one kind through several query resources that
+// nothing can list, watch or delete, as Kueue's visibility API serves
+// PendingWorkloadsSummary through clusterqueues and localqueues. The kind is
+// ambiguous, but no object of it can be a dependent.
+func TestCatalogKeepsAnAmbiguousKindNothingCollectsOutOfDependents(t *testing.T) {
+	summary := resourceid.GroupKind{Group: "visibility.kueue.x-k8s.io", Kind: "PendingWorkloadsSummary"}
+	c := NewCatalog([]ServedResource{
+		{Group: summary.Group, Version: "v1beta2", Kind: summary.Kind, Resource: "clusterqueues"},
+		{Group: summary.Group, Version: "v1beta2", Kind: summary.Kind, Resource: "localqueues", Namespaced: true},
+	}, true)
+	if !c.Ambiguous(summary) {
+		t.Fatal("two resources serving the kind must still make it ambiguous")
+	}
+	if got := c.AmbiguousDependentKinds(); len(got) != 0 {
+		t.Fatalf("AmbiguousDependentKinds = %+v; nothing can collect a summary", got)
+	}
+	scoped := NewCatalog([]ServedResource{
+		{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "widgets", Namespaced: true, Verbs: []string{"get"}},
+		{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "clusterwidgets", Verbs: []string{"delete", "list", "watch"}},
+	}, true)
+	if got := scoped.AmbiguousDependentKinds(); !slices.Equal(got, []AmbiguousKind{{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Widget"}, ClusterScoped: true}}) {
+		t.Fatalf("AmbiguousDependentKinds = %+v; want Widget, collected only cluster-wide", got)
 	}
 }
 

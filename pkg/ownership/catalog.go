@@ -3,6 +3,10 @@ package ownership
 import (
 	"cmp"
 	"slices"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -19,7 +23,7 @@ type ServedResource struct {
 	Verbs      []string
 }
 
-// CatalogKind is what a catalog knows about one group and kind across the versions
+// Kind is what a catalog knows about one group and kind across the versions
 // serving it.
 type CatalogKind struct {
 	resourceid.GroupKind
@@ -37,10 +41,29 @@ type CatalogKind struct {
 // Catalog is the served API a session reads against. It is immutable.
 type Catalog struct {
 	kinds map[resourceid.GroupKind]CatalogKind
+	// dependents are DependentKinds, worked out once.
+	dependents []CatalogKind
 	// ambiguous are the kinds two resources of one group serve: a reference
 	// names a kind, not a resource, so it can't say which it means.
-	ambiguous []resourceid.GroupKind
-	complete  bool
+	ambiguous []AmbiguousKind
+	// ambiguousDependents are those of them the garbage collector may act on.
+	ambiguousDependents []AmbiguousKind
+	// lowercase maps a kind's all-lowercase spelling, where it differs, to
+	// the kinds it spells: the garbage collector's discovery RESTMapper maps
+	// it too.
+	lowercase map[resourceid.GroupKind][]resourceid.GroupKind
+	// groupVersions are the group versions discovery listed a resource in.
+	groupVersions map[schema.GroupVersion]bool
+	complete      bool
+}
+
+// AmbiguousKind is a kind two resources of one group serve.
+type AmbiguousKind struct {
+	resourceid.GroupKind
+	// Namespaced and ClusterScoped say whether a resource of that scope serves
+	// the kind with delete, list and watch: the garbage collector acts on the
+	// kind's objects there, so they may be dependents.
+	Namespaced, ClusterScoped bool
 }
 
 // NewCatalog builds a catalog from discovery's resources. complete says
@@ -48,15 +71,30 @@ type Catalog struct {
 // catalog may still be served.
 func NewCatalog(resources []ServedResource, complete bool) *Catalog {
 	byKind := map[resourceid.GroupKind][]ServedResource{}
+	c := &Catalog{lowercase: map[resourceid.GroupKind][]resourceid.GroupKind{}, groupVersions: map[schema.GroupVersion]bool{}, complete: complete}
 	for _, r := range resources {
 		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
+		if byKind[gk] == nil {
+			if lower := strings.ToLower(r.Kind); lower != r.Kind {
+				spelled := resourceid.GroupKind{Group: r.Group, Kind: lower}
+				c.lowercase[spelled] = append(c.lowercase[spelled], gk)
+			}
+		}
 		byKind[gk] = append(byKind[gk], r)
+		c.groupVersions[schema.GroupVersion{Group: r.Group, Version: r.Version}] = true
 	}
-	c := &Catalog{kinds: make(map[resourceid.GroupKind]CatalogKind, len(byKind)), complete: complete}
+	c.kinds = make(map[resourceid.GroupKind]CatalogKind, len(byKind))
 	for gk, served := range byKind {
 		resource := served[0].Resource
 		if slices.ContainsFunc(served, func(r ServedResource) bool { return r.Resource != resource }) {
-			c.ambiguous = append(c.ambiguous, gk)
+			a := AmbiguousKind{GroupKind: gk}
+			for _, r := range served {
+				if hasVerbs(r.Verbs, "delete", "list", "watch") {
+					a.Namespaced = a.Namespaced || r.Namespaced
+					a.ClusterScoped = a.ClusterScoped || !r.Namespaced
+				}
+			}
+			c.ambiguous = append(c.ambiguous, a)
 			continue
 		}
 		kind := CatalogKind{GroupKind: gk, Resource: resource}
@@ -69,7 +107,18 @@ func NewCatalog(resources []ServedResource, complete bool) *Catalog {
 		kind.Versions = slices.Compact(kind.Versions)
 		c.kinds[gk] = kind
 	}
-	slices.SortFunc(c.ambiguous, compareGroupKinds)
+	slices.SortFunc(c.ambiguous, func(a, b AmbiguousKind) int { return compareGroupKinds(a.GroupKind, b.GroupKind) })
+	for _, a := range c.ambiguous {
+		if (a.Namespaced || a.ClusterScoped) && !IsEvent(a.GroupKind) {
+			c.ambiguousDependents = append(c.ambiguousDependents, a)
+		}
+	}
+	for gk, k := range c.kinds {
+		if k.HasGCVerbs && !IsEvent(gk) {
+			c.dependents = append(c.dependents, k)
+		}
+	}
+	slices.SortFunc(c.dependents, func(a, b CatalogKind) int { return compareGroupKinds(a.GroupKind, b.GroupKind) })
 	return c
 }
 
@@ -95,14 +144,86 @@ func (c *Catalog) Kind(gk resourceid.GroupKind) (CatalogKind, bool) {
 
 // Ambiguous reports whether two resources of gk's group serve gk.
 func (c *Catalog) Ambiguous(gk resourceid.GroupKind) bool {
-	_, found := slices.BinarySearchFunc(c.ambiguous, gk, compareGroupKinds)
+	_, found := slices.BinarySearchFunc(c.ambiguous, gk, func(a AmbiguousKind, gk resourceid.GroupKind) int {
+		return compareGroupKinds(a.GroupKind, gk)
+	})
 	return found
+}
+
+// AmbiguousDependentKinds returns the ambiguous kinds whose objects may be
+// dependents the garbage collector acts on, sorted by group and kind, without
+// Events. A search for dependents can't read them as one resource's, so it
+// leaves them unread. An ambiguous kind no resource serves with delete, list
+// and watch has no dependents to miss, as with the kinds aggregated APIs serve
+// only to answer queries. The slice is the catalog's own and must not be
+// modified.
+func (c *Catalog) AmbiguousDependentKinds() []AmbiguousKind {
+	return c.ambiguousDependents
 }
 
 // Serves reports whether version is a version serving gk.
 func (c *Catalog) Serves(gk resourceid.GroupKind, version string) bool {
 	k, ok := c.kinds[gk]
 	return ok && slices.Contains(k.Versions, version)
+}
+
+// referencedKind is the kind an owner reference's group and kind name as the
+// garbage collector's discovery RESTMapper reads them: the kind as spelled,
+// or the kind whose all-lowercase spelling it is. ok is false when that
+// spelling is two kinds'. Two rarer collisions resolve as spelled although
+// the collector's mapping depends on the order discovery lists the kinds in:
+// a served kind that is another's all-lowercase spelling, and a served kind
+// named another served kind of the group plus List.
+func (c *Catalog) referencedKind(gk resourceid.GroupKind) (resourceid.GroupKind, bool) {
+	if _, known := c.kinds[gk]; known || c.Ambiguous(gk) {
+		return gk, true
+	}
+	switch spelled := c.lowercase[gk]; len(spelled) {
+	case 0:
+		return gk, true
+	case 1:
+		return spelled[0], true
+	}
+	return gk, false
+}
+
+// mapsAt reports whether the collector maps gk at version: a version serving
+// it, or no version or the internal one, which it maps to any serving one.
+func (c *Catalog) mapsAt(gk resourceid.GroupKind, version string) bool {
+	if version == "" || version == runtime.APIVersionInternal {
+		_, known := c.kinds[gk]
+		return known
+	}
+	return c.Serves(gk, version)
+}
+
+// listKind reports a kind the collector's discovery RESTMapper makes up: List
+// at a listed group version, or a served kind's name followed by List at a
+// version it maps the kind at. It maps them to resources no API serves, so
+// their owners are never found; namespaced is the scope it gives them, and
+// ambiguous that the kind before List is two resources'.
+func (c *Catalog) listKind(gk resourceid.GroupKind, version string) (namespaced, ambiguous, ok bool) {
+	if gk.Kind == "List" {
+		if version != "" && version != runtime.APIVersionInternal {
+			return false, false, c.groupVersions[schema.GroupVersion{Group: gk.Group, Version: version}]
+		}
+		for gv := range c.groupVersions {
+			if gv.Group == gk.Group {
+				return false, false, true
+			}
+		}
+		return false, false, false
+	}
+	base, isList := strings.CutSuffix(gk.Kind, "List")
+	if !isList || base == "" {
+		return false, false, false
+	}
+	listed := resourceid.GroupKind{Group: gk.Group, Kind: base}
+	if c.Ambiguous(listed) {
+		return false, true, true
+	}
+	k, known := c.kinds[listed]
+	return k.Namespaced, false, known && c.mapsAt(listed, version)
 }
 
 // Complete reports whether the discovery that built the catalog answered for
@@ -115,16 +236,10 @@ func (c *Catalog) Complete() bool {
 // DependentKinds returns the kinds whose objects can be dependents the
 // garbage collector acts on, sorted by group and kind. Events are left out:
 // Radar keeps none of their owner references, so an answer about an object's
-// dependents covers every kind but Events.
+// dependents covers every kind but Events. The slice is the catalog's own and
+// must not be modified.
 func (c *Catalog) DependentKinds() []CatalogKind {
-	var out []CatalogKind
-	for gk, k := range c.kinds {
-		if k.HasGCVerbs && !IsEvent(gk) {
-			out = append(out, k)
-		}
-	}
-	slices.SortFunc(out, func(a, b CatalogKind) int { return compareGroupKinds(a.GroupKind, b.GroupKind) })
-	return out
+	return c.dependents
 }
 
 // IsEvent reports whether gk is either API group's Event.
