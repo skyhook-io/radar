@@ -995,6 +995,34 @@ func waitUntil(t *testing.T, what string, done func() bool) {
 	}
 }
 
+// A connection whose dynamic cache isn't up yet, as during startup, answers
+// every question through a view: typed kinds as usual, dynamic kinds as
+// unavailable.
+func TestViewWithoutTheDynamicCacheAnswers(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{}, nil)
+	s, err := New(func() Caches { return Caches{Typed: f.caches.Typed, Discovery: f.caches.Discovery} }).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := ownership.NewView(s, ownership.Unrestricted())
+	rs, widget := ref("apps", "ReplicaSet", "alpha", "web-1"), ref("example.io", "Widget", "alpha", "w1")
+	for _, r := range []resourceid.Ref{rs, ref("", "Pod", "alpha", "web-1-a"), ref("apps", "Deployment", "alpha", "web"), ref("", "Node", "", "n1"), widget} {
+		v.Owner(r)
+		v.References(r)
+		v.Children(r, 0)
+		v.ControllerChain(r)
+	}
+	if got := v.Owner(rs); got.Subject.Read.State != ownership.Present {
+		t.Errorf("the ReplicaSet without the dynamic cache reads %v", got.Subject.Read.State)
+	}
+	if got := v.Owner(widget); got.Subject.Read.State != ownership.Unavailable {
+		t.Errorf("a Widget without the dynamic cache reads %v", got.Subject.Read.State)
+	}
+	if err := v.ValidateAnswers(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A connection without discovery still reads its typed kinds; kinds that need
 // discovery's catalog can't be read, and none is called unserved.
 func TestBeginWithoutDiscoveryReadsTypedKinds(t *testing.T) {

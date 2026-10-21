@@ -32,6 +32,7 @@ func conform(t *testing.T, w ownershiptest.World) {
 		t.Fatalf("a quiet cache's session failed ValidateCaches: %v", err)
 	}
 	resolveAlike(t, w, want, got)
+	viewsAlike(t, w, want, got)
 	if after := r.storedObjects(); !reflect.DeepEqual(before, after) {
 		t.Fatal("answering changed objects in the cache")
 	}
@@ -54,6 +55,76 @@ func resolveAlike(t *testing.T, w ownershiptest.World, want, got ownership.ReadS
 			}
 		}
 	}
+}
+
+// viewsAlike checks that a View gives every answer about every object in w
+// alike over both sessions, for a caller who may read everything and for one
+// who may read less, and that a quiet cache's view holds.
+func viewsAlike(t *testing.T, w ownershiptest.World, want, got ownership.ReadSession) {
+	t.Helper()
+	for _, caller := range []ownership.Access{ownership.Unrestricted(), alphaOnly{}} {
+		a, b := ownership.NewView(want, caller), ownership.NewView(got, caller)
+		for _, o := range w.Objects {
+			if x, y := fmt.Sprint(viewAnswers(a, o.Ref)), fmt.Sprint(viewAnswers(b, o.Ref)); x != y {
+				t.Errorf("%v for %T:\n scan  %s\n cache %s", o.Ref, caller, x, y)
+			}
+		}
+		if err := b.ValidateAnswers(); err != nil {
+			t.Errorf("a quiet cache's view for %T failed ValidateAnswers: %v", caller, err)
+		}
+	}
+}
+
+// viewAnswers is what a View says about ref, without the resource versions
+// and copies two sources may hold differently.
+func viewAnswers(v *ownership.View, ref resourceid.Ref) []any {
+	ident := func(o ownership.Observation) string { return fmt.Sprintf("%v@%s", o.Ref, o.UID) }
+	resolution := func(r ownership.OwnerResolution) string {
+		return fmt.Sprintf("%v %v %s %+v", r.State, r.Ref, r.Owner.UID, r.Gap)
+	}
+	subject, refs := v.References(ref)
+	out := []any{subject.Access, subject.Read.State, subject.Read.Gap, subject.Read.Object.UID}
+	for _, r := range refs {
+		out = append(out, resolution(r))
+	}
+	owner := v.Owner(ref)
+	out = append(out, owner.Reference != nil, owner.Several, resolution(owner.Resolution))
+	if r := owner.Reference; r != nil {
+		out = append(out, r.APIVersion, r.Kind, r.Name, r.UID, r.Controller != nil && *r.Controller)
+	}
+	children := v.Children(ref, 0)
+	for _, c := range children.Children {
+		out = append(out, ident(c))
+	}
+	out = append(out, children.Gaps, children.Truncated, children.Narrowed)
+	root := v.ControllerChain(ref)
+	out = append(out, root.Chain, root.Cycle, root.Truncated)
+	if root.UnfollowedReference != nil {
+		out = append(out, resolution(*root.UnfollowedReference))
+	}
+	if ownership.IsRecordingManager(ref.GroupKind()) {
+		members := v.Members(ref)
+		for _, m := range members.Members {
+			out = append(out, ident(m))
+		}
+		out = append(out, members.Membership, members.Missing, members.Withheld, members.Unknown, members.Gaps)
+	}
+	return out
+}
+
+// alphaOnly may read namespaced objects only in alpha, and no Nodes.
+type alphaOnly struct{}
+
+func (alphaOnly) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if gk == (resourceid.GroupKind{Kind: "Node"}) || namespace != "" && namespace != "alpha" {
+		return ownership.Denied
+	}
+	return ownership.Allowed
+}
+func (alphaOnly) Namespaces() ([]string, bool) { return []string{"alpha"}, false }
+func (alphaOnly) CanReadEverything() bool      { return false }
+func (alphaOnly) CanReadAllKindsIn(namespace string) bool {
+	return namespace == "alpha"
 }
 
 // storedObjects deep-copies every object Radar's stores hold, by kind.

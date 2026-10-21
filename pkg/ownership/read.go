@@ -61,6 +61,24 @@ type Observation struct {
 	OwnerReferences []metav1.OwnerReference
 }
 
+// Observe copies what ownership needs out of m, the object at ref read at
+// apiVersion, which may be a cached object that must not be kept.
+func Observe(ref resourceid.Ref, apiVersion string, m metav1.Object) Observation {
+	o := Observation{
+		Ref:             ref,
+		APIVersion:      apiVersion,
+		UID:             m.GetUID(),
+		ResourceVersion: m.GetResourceVersion(),
+	}
+	if refs := m.GetOwnerReferences(); len(refs) > 0 {
+		o.OwnerReferences = make([]metav1.OwnerReference, len(refs))
+		for i := range refs {
+			refs[i].DeepCopyInto(&o.OwnerReferences[i])
+		}
+	}
+	return o
+}
+
 // Gap is what a read could not establish: Kind in Namespace, or cluster-wide
 // for a cluster-scoped kind, and why. Reasons describe Radar's caches; a host
 // refines them with what only it knows, such as why its access probe left a

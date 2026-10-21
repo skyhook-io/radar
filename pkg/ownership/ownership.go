@@ -64,4 +64,9 @@ var (
 	// that was missing when the session began and is there now, as while
 	// Radar starts, replaced nothing the session read.
 	ErrCachesReplaced = errors.New("ownership: the caches were replaced during the read")
+	// ErrObjectsChanged: the View's answers disagree, because an object it
+	// first read after searching an owner's dependents names that owner
+	// although the search didn't find it, a seed replaced a read an answer
+	// used, or a manager changed between the View's reads of it.
+	ErrObjectsChanged = errors.New("ownership: an object changed between the view's reads")
 )

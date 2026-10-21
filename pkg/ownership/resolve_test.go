@@ -53,7 +53,7 @@ func TestOwnerStateNames(t *testing.T) {
 	for state, want := range map[ownership.OwnerState]string{
 		ownership.OwnerUnknown: "unknown", ownership.OwnerFound: "found", ownership.OwnerGone: "gone",
 		ownership.OwnerReplaced: "replaced", ownership.OwnerUnresolvable: "unresolvable", ownership.OwnerExcluded: "excluded",
-		ownership.OwnerState(99): "unknown",
+		ownership.OwnerWithheld: "withheld", ownership.OwnerState(99): "unknown",
 	} {
 		if got := state.String(); got != want {
 			t.Errorf("OwnerState(%d) = %q, want %q", state, got, want)

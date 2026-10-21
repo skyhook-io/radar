@@ -348,3 +348,25 @@ func (b *builder) world() World {
 	}
 	return w
 }
+
+// Builder builds a World object by object, with Fixture's UIDs and versions:
+// each object's UID is "uid-" followed by its namespace, if any, and name.
+type Builder struct{ b builder }
+
+// NewBuilder starts an empty World.
+func NewBuilder() *Builder { return &Builder{} }
+
+// Add adds an object of one of Kinds; see Object.OwnerRef for its references.
+func (b *Builder) Add(group, kind, namespace, name string, owners ...metav1.OwnerReference) Object {
+	return b.b.add(group, kind, namespace, name, owners...)
+}
+
+// Manager adds a GitOps manager whose status says state of members, the
+// destination namespace being an Argo CD Application's.
+func (b *Builder) Manager(gk resourceid.GroupKind, namespace, name string, state ownership.MembershipState, destination string, members ...resourceid.Ref) Object {
+	return b.b.manager(gk, namespace, name, state, 0, destination, members...)
+}
+
+// World returns the World built, every kind collected in full except those
+// Radar can't watch.
+func (b *Builder) World() World { return b.b.world() }
