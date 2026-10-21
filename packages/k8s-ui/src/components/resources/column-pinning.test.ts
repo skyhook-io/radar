@@ -51,4 +51,15 @@ describe('resource column layout', () => {
     expect(moveResourceColumn(columns, ['name', 'namespace'], 'namespace', 3)).toBeNull()
     expect(moveResourceColumn(columns, ['name', 'namespace'], 'age', 0)).toEqual(['name', 'namespace', 'age', 'status'])
   })
+
+  it('keeps host context ahead of pinned and scrolling resource columns', () => {
+    const fleet = [{ key: 'cluster', width: 192 }, ...columns]
+    expect(keys(orderResourceColumns(fleet, ['age', 'name', 'cluster', 'status', 'namespace'], ['age'], 1)))
+      .toEqual(['cluster', 'age', 'name', 'status', 'namespace'])
+    const next = toggleResourceColumnPin(fleet, [], 'name', 1)
+    expect(next.order[0]).toBe('cluster')
+    expect(moveResourceColumn(fleet, ['cluster', 'name'], 'name', 0, 1)).toBeNull()
+    expect(moveResourceColumn(fleet, [], 'cluster', 3, 1)).toBeNull()
+    expect(moveResourceColumn(fleet, [], 'age', 0, 1)).toEqual(['cluster', 'age', 'name', 'namespace', 'status'])
+  })
 })

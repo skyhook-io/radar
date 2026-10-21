@@ -16,6 +16,7 @@ interface ColumnPickerListProps {
   onRemoveCustom: (key: string) => void
   /** Receives every column key in display order, including hidden columns. */
   onReorder: (order: string[]) => void
+  fixedLeadingCount?: number
   pinning: {
     pinned: readonly string[]
     paused: readonly string[]
@@ -33,6 +34,7 @@ export function ColumnPickerList({
   onRemoveCustom,
   onReorder,
   pinning,
+  fixedLeadingCount = 0,
 }: ColumnPickerListProps) {
   const [dragKey, setDragKey] = useState<string | null>(null)
   // Insertion point among the movable rows: 0 = before the first one.
@@ -52,7 +54,7 @@ export function ColumnPickerList({
   })
 
   const commitMove = (key: string, toIndex: number) => {
-    const next = moveResourceColumn(columns, pinning.pinned, key, toIndex)
+    const next = moveResourceColumn(columns, pinning.pinned, key, toIndex, fixedLeadingCount)
     if (!next) return false
     onReorder(next)
     const col = columns.find(c => c.key === key)
@@ -92,6 +94,7 @@ export function ColumnPickerList({
       <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
       {columns.map((col, i) => {
         const isCustom = customColumnKeys.has(col.key)
+        const fixed = i < fixedLeadingCount
         const isPinned = pinning.pinned.includes(col.key)
         const isPaused = pinning.paused.includes(col.key)
         const startsGroup = i === 0 || isPinned !== pinning.pinned.includes(columns[i - 1].key)
@@ -113,13 +116,13 @@ export function ColumnPickerList({
                 'group relative flex items-center gap-1.5 pl-1.5 pr-3 py-1.5 hover:bg-theme-elevated',
                 dragKey === col.key && 'opacity-50',
               )}
-              onKeyDown={e => handleKeyDown(e, col.key, i)}
-              onDragOver={dragKey && sameDragGroup ? e => {
+              onKeyDown={fixed ? undefined : e => handleKeyDown(e, col.key, i)}
+              onDragOver={!fixed && dragKey && sameDragGroup ? e => {
                 e.preventDefault()
                 e.dataTransfer.dropEffect = 'move'
                 setDropGap(gapAt(e, i))
               } : undefined}
-              onDrop={dragKey && sameDragGroup ? e => {
+              onDrop={!fixed && dragKey && sameDragGroup ? e => {
                 e.preventDefault()
                 const gap = gapAt(e, i)
                 commitMove(dragKey, gap > fromIndex ? gap - 1 : gap)
@@ -132,7 +135,7 @@ export function ColumnPickerList({
               {showGap(i + 1) && endsGroup && (
                 <span aria-hidden className="pointer-events-none absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-accent" />
               )}
-              <Tooltip content={mac ? 'Drag to reorder, or press ⌥↑ / ⌥↓' : 'Drag to reorder, or press Alt+↑ / Alt+↓'} position="left">
+              {fixed ? <span aria-hidden className="w-3.5 shrink-0" /> : <Tooltip content={mac ? 'Drag to reorder, or press ⌥↑ / ⌥↓' : 'Drag to reorder, or press Alt+↑ / Alt+↓'} position="left">
                 <span
                   aria-hidden
                   draggable
@@ -149,7 +152,7 @@ export function ColumnPickerList({
                 >
                   <GripVertical className="w-3.5 h-3.5" />
                 </span>
-              </Tooltip>
+              </Tooltip>}
               <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
                 <input
                   type="checkbox"
@@ -170,13 +173,13 @@ export function ColumnPickerList({
                 </span>
               </label>
               {isPaused && <span className="text-xs text-theme-text-tertiary">Scrolls</span>}
-              <Tooltip content={isPaused ? 'Scrolls until there is room to keep it pinned. Click to unpin.' : isPinned ? 'Unpin column' : visibleColumns.has(col.key) ? 'Pin column to the left' : 'Show this column before pinning it'} position="left">
+              <Tooltip content={fixed ? 'Context columns stay ahead of resource columns and pin with them' : isPaused ? 'Scrolls until there is room to keep it pinned. Click to unpin.' : isPinned ? 'Unpin column' : visibleColumns.has(col.key) ? 'Pin column to the left' : 'Show this column before pinning it'} position="left">
                 <button
                   type="button"
-                  aria-label={`${isPinned ? 'Unpin' : 'Pin'} ${col.label}`}
+                  aria-label={fixed ? `${col.label} pins with resource columns` : `${isPinned ? 'Unpin' : 'Pin'} ${col.label}`}
                   aria-pressed={isPinned}
                   aria-describedby={hintId}
-                  disabled={!visibleColumns.has(col.key)}
+                  disabled={fixed || !visibleColumns.has(col.key)}
                   onClick={event => {
                     refocus.current = event.currentTarget
                     pinning.onToggle(col.key)

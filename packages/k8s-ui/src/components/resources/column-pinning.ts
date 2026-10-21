@@ -39,35 +39,38 @@ export function resolveColumnPins(
 
 /** One order for both the Columns panel and the table, independent of width. */
 export function orderResourceColumns<T extends { key: string }>(
-  columns: readonly T[], order: readonly string[] | null, pinned: readonly string[],
+  columns: readonly T[], order: readonly string[] | null, pinned: readonly string[], fixedLeadingCount = 0,
 ): T[] {
-  const result = applyColumnOrder(columns, order, 0)
+  const result = applyColumnOrder(columns, order, fixedLeadingCount)
+  const movable = result.slice(fixedLeadingCount)
   const pinRank = new Map(pinned.map((key, index) => [key, index]))
   return [
-    ...result.filter(column => pinRank.has(column.key))
+    ...result.slice(0, fixedLeadingCount),
+    ...movable.filter(column => pinRank.has(column.key))
       .sort((a, b) => (pinRank.get(a.key) ?? 0) - (pinRank.get(b.key) ?? 0)),
-    ...result.filter(column => !pinRank.has(column.key)),
+    ...movable.filter(column => !pinRank.has(column.key)),
   ]
 }
 
 /** Pin appends to the frozen group; unpin joins the start of the scrolling group. */
 export function toggleResourceColumnPin(
-  columns: readonly { key: string }[], pinned: readonly string[], key: string,
+  columns: readonly { key: string }[], pinned: readonly string[], key: string, fixedLeadingCount = 0,
 ): { order: string[]; pinned: string[] } {
   const next = pinned.includes(key) ? pinned.filter(pin => pin !== key) : [...pinned, key]
-  const scrolling = columns.map(column => column.key).filter(column => !next.includes(column) && column !== key)
+  const fixed = columns.slice(0, fixedLeadingCount).map(column => column.key)
+  const scrolling = columns.slice(fixedLeadingCount).map(column => column.key).filter(column => !next.includes(column) && column !== key)
   if (pinned.includes(key)) scrolling.unshift(key)
-  return { order: [...next, ...scrolling], pinned: next }
+  return { order: [...fixed, ...next, ...scrolling], pinned: next }
 }
 
 export function moveResourceColumn(
-  columns: readonly { key: string }[], pinned: readonly string[], key: string, toIndex: number,
+  columns: readonly { key: string }[], pinned: readonly string[], key: string, toIndex: number, fixedLeadingCount = 0,
 ): string[] | null {
   const keys = columns.map(column => column.key)
   const from = keys.indexOf(key)
-  if (from < 0) return null
+  if (from < fixedLeadingCount || from < 0) return null
   const inPinnedGroup = pinned.includes(key)
-  const indices = keys.flatMap((item, index) => pinned.includes(item) === inPinnedGroup ? [index] : [])
+  const indices = keys.flatMap((item, index) => index >= fixedLeadingCount && pinned.includes(item) === inPinnedGroup ? [index] : [])
   const to = Math.max(indices[0], Math.min(indices[indices.length - 1], toIndex))
   if (from === to) return null
   keys.splice(from, 1)
