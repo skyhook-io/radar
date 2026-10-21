@@ -39,6 +39,13 @@ type ReadSession interface {
 	// no limit). The limit caps what it returns, not the search: it gathers
 	// every match first. It does no I/O and waits for nothing.
 	DependentCandidates(uid types.UID, domain SearchScope, limit int) DependentCandidatesRead
+	// Members reads the member list in a manager's status; a manager must
+	// be of a RecordingManagers kind. It does no I/O and waits for nothing.
+	Members(manager resourceid.Ref) MembersRead
+	// RecordingManagers finds the local managers, in every namespace, whose
+	// member lists name ref, whatever namespaces the caller may read. It does no
+	// I/O and waits for nothing.
+	RecordingManagers(ref resourceid.Ref) RecordingManagersRead
 	// ValidateCaches returns ErrCachesReplaced if the caches the session read
 	// were stopped or replaced since it began, as when Radar switches clusters
 	// or rebuilds its cache, and nil otherwise. An answer built in a session

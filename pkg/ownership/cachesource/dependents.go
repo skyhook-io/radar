@@ -160,6 +160,18 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 }
 
 func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
+	s.dynamicIndexed(q, kind, k8score.OwnerUIDIndex, []string{q.uid}, func(gvr schema.GroupVersionResource, u *unstructured.Unstructured) {
+		q.add(kind.GroupKind, gvr.GroupVersion().String(), u, u.GetNamespace(), u.GetName())
+	})
+}
+
+// dynamicIndexed reads the objects index files under any of keys for a
+// dynamic kind across q's domain, each store once for all the keys, handing
+// each object found to found and recording a gap for each part of the domain
+// it can't read. Every watched version the catalog serves is read, and
+// versions that disagree leave their namespace unread: one of their watches
+// hasn't caught up.
+func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index string, keys []string, found func(schema.GroupVersionResource, *unstructured.Unstructured)) {
 	gk := kind.GroupKind
 	if s.caches.Dynamic == nil {
 		q.gapEverywhere(gk, kind.Namespaced, readreason.RadarKindNotCollected)
@@ -181,7 +193,7 @@ func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
 	readVersion := func(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, bool) {
 		cw, seen := clusterWide[gvr]
 		if !seen {
-			if objs, ok := s.caches.Dynamic.ReadableDependents(gvr, "", q.uid); ok {
+			if objs, ok := s.caches.Dynamic.ReadableIndexed(gvr, "", index, keys...); ok {
 				cw = &clusterWideRead{all: objs}
 			}
 			clusterWide[gvr] = cw
@@ -201,21 +213,19 @@ func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
 		if namespace == "" {
 			return nil, false
 		}
-		return s.caches.Dynamic.ReadableDependents(gvr, namespace, q.uid)
+		return s.caches.Dynamic.ReadableIndexed(gvr, namespace, index, keys...)
 	}
 	// read searches the informers serving namespace at every watched version
-	// that can answer, and says which versions answered. Versions that
-	// disagree leave the namespace unread: one of their watches hasn't caught
-	// up.
-	read := func(namespace string) (found []*unstructured.Unstructured, at schema.GroupVersionResource, answered []schema.GroupVersionResource, reason readreason.Code) {
+	// that can answer, and says which versions answered.
+	read := func(namespace string) (objs []*unstructured.Unstructured, at schema.GroupVersionResource, answered []schema.GroupVersionResource, reason readreason.Code) {
 		for _, gvr := range versions {
-			objs, ok := readVersion(gvr, namespace)
+			got, ok := readVersion(gvr, namespace)
 			if !ok {
 				continue
 			}
 			if len(answered) == 0 {
-				found, at = objs, gvr
-			} else if !sameIncarnations(found, objs) {
+				objs, at = got, gvr
+			} else if !sameIncarnations(objs, got) {
 				return nil, at, nil, readreason.KindSyncPending
 			}
 			answered = append(answered, gvr)
@@ -223,12 +233,12 @@ func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
 		if len(answered) == 0 {
 			return nil, at, nil, s.unansweredReason(versions, namespace)
 		}
-		return found, at, answered, ""
+		return objs, at, answered, ""
 	}
-	add := func(objs []*unstructured.Unstructured, at schema.GroupVersionResource, skip map[string]bool) {
+	hand := func(objs []*unstructured.Unstructured, at schema.GroupVersionResource, skip map[string]bool) {
 		for _, u := range objs {
 			if !skip[u.GetNamespace()] {
-				q.add(gk, at.GroupVersion().String(), u, u.GetNamespace(), u.GetName())
+				found(at, u)
 			}
 		}
 	}
@@ -237,7 +247,7 @@ func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
 			if objs, at, _, reason := read(ns); reason != "" {
 				q.gap(gk, ns, reason)
 			} else {
-				add(objs, at, nil)
+				hand(objs, at, nil)
 			}
 		}
 	}
@@ -258,7 +268,7 @@ func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
 		readNamespaces(q.namespaces)
 		return
 	}
-	found, at, answered, reason := read("")
+	objs, at, answered, reason := read("")
 	// A version watched only namespace by namespace holds evidence of its
 	// own about those namespaces.
 	var namespaces []string
@@ -278,7 +288,7 @@ func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
 				q.gap(gk, ns, reason)
 			}
 		}
-		add(found, at, pending)
+		hand(objs, at, pending)
 		return
 	}
 	if !kind.Namespaced || len(namespaces) == 0 {

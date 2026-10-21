@@ -310,3 +310,114 @@ func compareRefs(a, b resourceid.Ref) int {
 func compareGaps(a, b ownership.Gap) int {
 	return cmp.Or(cmp.Compare(a.Kind.Group, b.Kind.Group), cmp.Compare(a.Kind.Kind, b.Kind.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Reason, b.Reason))
 }
+
+// managers are the kinds whose status lists their members, as the contract
+// names them.
+var managers = []resourceid.GroupKind{ownership.ArgoApplication, ownership.FluxHelmRelease, ownership.FluxKustomization}
+
+func (s scanSession) Members(manager resourceid.Ref) ownership.MembersRead {
+	if !slices.Contains(managers, manager.GroupKind()) {
+		return ownership.MembersRead{Manager: unavailable(manager, readreason.ReadError)}
+	}
+	r := ownership.MembersRead{Manager: s.Object(manager)}
+	if r.Manager.State != ownership.Present {
+		return r
+	}
+	o := s.byRef[manager]
+	r.Membership = o.Membership
+	if o.Membership != ownership.MembersUnreadable {
+		r.Members = append([]resourceid.Ref{}, o.Members...)
+		slices.SortFunc(r.Members, compareRefs)
+		r.Members = slices.Compact(r.Members)
+	}
+	return r
+}
+
+// nameable says why no manager can list ref, or "" when one can: a reference
+// must name an object of a kind whose scope Radar can tell, in that scope. A
+// built-in kind's scope is its own, unless discovery serves the kind with the
+// other scope.
+func (s scanSession) nameable(ref resourceid.Ref) readreason.Code {
+	if ref.Kind == "" || ref.Name == "" {
+		return readreason.ReadError
+	}
+	gk := ref.GroupKind()
+	namespaced, served := s.scope(gk)
+	if b, ok := resourceid.BuiltinForKind(gk.Kind); ok && b.Group == gk.Group && !s.ambiguous(gk) {
+		if served && namespaced != b.Namespaced {
+			return readreason.ReadError
+		}
+		namespaced, served = b.Namespaced, true
+	}
+	switch {
+	case s.ambiguous(gk), !served && s.w.Partial:
+		return readreason.ReadError
+	case !served:
+		return ""
+	case namespaced && ref.Namespace == "":
+		return readreason.NamespaceRequired
+	case !namespaced && ref.Namespace != "":
+		return readreason.ReadError
+	}
+	return ""
+}
+
+func (s scanSession) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
+	var r ownership.RecordingManagersRead
+	if reason := s.nameable(ref); reason != "" {
+		r.TargetUnresolvable = true
+		r.Gaps = []ownership.Gap{{Kind: ref.GroupKind(), Namespace: ref.Namespace, Reason: reason}}
+		return r
+	}
+	gap := func(gk resourceid.GroupKind, namespace string, reason readreason.Code) {
+		r.Gaps = append(r.Gaps, ownership.Gap{Kind: gk, Namespace: namespace, Reason: reason})
+	}
+	for _, gk := range managers {
+		namespaced, served := s.scope(gk)
+		if !served || s.ambiguous(gk) {
+			if s.w.Partial || s.ambiguous(gk) {
+				gap(gk, "", readreason.ReadError)
+			}
+			continue
+		}
+		c := s.w.collection(gk)
+		readable := map[string]bool{}
+		all := false
+		if !namespaced || c.Namespaces == nil || c.State != Collected && c.State != Loading {
+			if reason := heldReason(c, namespaced, ""); reason != "" {
+				gap(gk, "", reason)
+				continue
+			}
+			all = true
+		} else {
+			gap(gk, "", readreason.RadarNamespaceNotCollected)
+			for _, ns := range c.Namespaces {
+				if reason := heldReason(c, true, ns); reason != "" {
+					gap(gk, ns, reason)
+				} else {
+					readable[ns] = true
+				}
+			}
+		}
+		for _, o := range s.byKind[gk] {
+			if !all && !readable[o.Ref.Namespace] {
+				continue
+			}
+			switch {
+			case o.Membership == ownership.MembersUnreadable:
+				r.Unreadable = append(r.Unreadable, o.Ref)
+			case !slices.Contains(o.Members, ref):
+			case o.Membership == ownership.MembersRecorded:
+				r.Managers = append(r.Managers, observation(o))
+			case o.Membership == ownership.MembersRemote:
+				r.Remote = append(r.Remote, o.Ref)
+			}
+		}
+	}
+	slices.SortFunc(r.Managers, func(a, b ownership.Observation) int { return compareRefs(a.Ref, b.Ref) })
+	slices.SortFunc(r.Remote, compareRefs)
+	slices.SortFunc(r.Unreadable, compareRefs)
+	slices.SortFunc(r.Gaps, compareGaps)
+	r.Gaps = slices.Compact(r.Gaps)
+	return r
+}

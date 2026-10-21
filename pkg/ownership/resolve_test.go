@@ -61,6 +61,17 @@ func TestOwnerStateNames(t *testing.T) {
 	}
 }
 
+func TestMembershipStateNames(t *testing.T) {
+	for state, want := range map[ownership.MembershipState]string{
+		ownership.MembersUnreadable: "unreadable", ownership.MembersRecorded: "recorded", ownership.MembersRemote: "remote",
+		ownership.MembershipState(99): "unreadable",
+	} {
+		if got := state.String(); got != want {
+			t.Errorf("MembershipState(%d) = %q, want %q", state, got, want)
+		}
+	}
+}
+
 // Each case is how Kubernetes' garbage collector judges the reference.
 func TestResolveOwnerJudgesReferencesAsTheCollectorDoes(t *testing.T) {
 	w := ownershiptest.Fixture()

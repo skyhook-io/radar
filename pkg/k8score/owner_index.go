@@ -21,6 +21,8 @@ var ownerUIDIndexers = cache.Indexers{OwnerUIDIndex: ownerUIDs}
 // UID it names, even when the reference's kind or name is wrong.
 func ownerUIDs(obj any) ([]string, error) {
 	switch o := obj.(type) {
+	case indexQuery:
+		return o, nil
 	case *unstructured.Unstructured:
 		refs, _, _ := unstructured.NestedFieldNoCopy(o.Object, "metadata", "ownerReferences")
 		list, _ := refs.([]any)
@@ -111,18 +113,34 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 	return out, true
 }
 
-// ReadableDependents returns the objects of gvr in namespace whose owner
-// references name uid, from the informers serving namespace now, under
-// ReadableObject's rules. namespace "" reads only a cluster-wide informer,
-// which holds every namespace of a namespaced resource. The objects are the
-// cached ones: callers must not modify or keep them.
-func (d *DynamicResourceCache) ReadableDependents(gvr schema.GroupVersionResource, namespace, uid string) (objs []*unstructured.Unstructured, ok bool) {
+// indexQuery is a read of keys from one of k8score's indexes: their index
+// functions answer it with the keys themselves, so Indexer.Index returns the
+// objects filed under any of them from one hold of the store's lock.
+type indexQuery []string
+
+// ReadableIndexed returns the objects of gvr in namespace that index holds
+// under any of keys — for OwnerUIDIndex, those whose owner references name one
+// of the UIDs — from the informers serving namespace now, under
+// ReadableObject's rules. Each informer's store is read once for all the keys,
+// so an object that moves from one key to another during the read is found
+// under one of them, and an object filed under several is returned once.
+// Several keys need one of k8score's own indexes. namespace "" reads only a
+// cluster-wide informer, which holds every namespace of a namespaced
+// resource. ok is also false when the serving informers lack the index. The
+// objects are the cached ones: callers must not modify or keep them.
+func (d *DynamicResourceCache) ReadableIndexed(gvr schema.GroupVersionResource, namespace, index string, keys ...string) (objs []*unstructured.Unstructured, ok bool) {
 	entries, ok := d.servedEntries(gvr, namespace)
 	if !ok {
 		return nil, false
 	}
 	for _, e := range entries {
-		items, err := e.informer.GetIndexer().ByIndex(OwnerUIDIndex, uid)
+		var items []any
+		var err error
+		if len(keys) == 1 {
+			items, err = e.informer.GetIndexer().ByIndex(index, keys[0])
+		} else {
+			items, err = e.informer.GetIndexer().Index(index, indexQuery(keys))
+		}
 		if err != nil {
 			return nil, false
 		}

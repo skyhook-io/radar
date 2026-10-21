@@ -460,9 +460,11 @@ export function parseFluxInventory(entries: Array<{ id: string; v?: string }>): 
       // Kind is always last, group is second-to-last
       const kind = parts[parts.length - 1]
       const group = parts[parts.length - 2]
-      // Namespace is first, name is everything in between
+      // Namespace is first, name is everything in between. Flux writes a colon
+      // in an RBAC object's name as a double underscore (system:metrics-server
+      // is system__metrics-server) and reads every "__" back as a colon.
       const namespace = parts[0]
-      const name = parts.slice(1, -2).join('_')
+      const name = parts.slice(1, -2).join('_').replaceAll('__', ':')
 
       // Validate required fields
       if (!kind || !name) {

@@ -140,12 +140,21 @@ func TestLiveParity(t *testing.T) {
 	for _, k := range kinds {
 		gvrOf[k.gk] = k.gvr
 	}
+	var servedResources []ownership.ServedResource
+	for _, r := range catalog.Resources {
+		servedResources = append(servedResources, ownership.ServedResource{Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs})
+	}
+	scope := discoveredScope(servedResources)
 	object := func(gk resourceid.GroupKind, gvr schema.GroupVersionResource, u *unstructured.Unstructured) ownershiptest.Object {
-		return ownershiptest.Object{
+		o := ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
 			APIVersion: gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
 			Owners: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
 		}
+		if ownership.IsRecordingManager(gk) {
+			o.Membership, o.Members, o.Destination = liveMembership(gk, u, scope)
+		}
+		return o
 	}
 	api := func(ref resourceid.Ref) (ownershiptest.Object, bool, error) {
 		gvr, ok := gvrOf[ref.GroupKind()]
@@ -165,9 +174,8 @@ func TestLiveParity(t *testing.T) {
 	// world lists the cluster afresh: discovery as served, every object of
 	// every collected kind, each kind collected as the caches collect it.
 	world := func() ownershiptest.World {
-		w := ownershiptest.World{Partial: !catalog.Complete, Collection: map[resourceid.GroupKind]ownershiptest.Collection{}}
+		w := ownershiptest.World{Partial: !catalog.Complete, Resources: servedResources, Collection: map[resourceid.GroupKind]ownershiptest.Collection{}}
 		for _, r := range catalog.Resources {
-			w.Resources = append(w.Resources, ownership.ServedResource{Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs})
 			gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
 			_, isTyped := typedKinds[gk]
 			c := ownershiptest.Collection{State: ownershiptest.NotCollected, OnDemand: !isTyped}
@@ -215,6 +223,17 @@ func TestLiveParity(t *testing.T) {
 				absent.Namespace = "default"
 			}
 			refs[absent] = true
+			if ownership.IsRecordingManager(k.gk) {
+				q.Managers = append(q.Managers, absent)
+			}
+		}
+		for _, o := range w.Objects {
+			if ownership.IsRecordingManager(o.Ref.GroupKind()) {
+				q.Managers = append(q.Managers, o.Ref)
+				for _, m := range o.Members {
+					refs[m] = true
+				}
+			}
 		}
 		for ref := range refs {
 			q.Refs = append(q.Refs, ref)
@@ -287,8 +306,17 @@ func TestLiveParity(t *testing.T) {
 		if err := got.ValidateCaches(); err != nil {
 			t.Errorf("pass %d: ValidateCaches: %v", pass, err)
 		}
-		t.Logf("pass %d: %d objects; %d questions (%d objects, %d UIDs × %d domains) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d wrong or not settled",
-			pass, len(w.Objects), len(q.Refs)+len(q.UIDs)*len(q.Domains), len(q.Refs), len(q.UIDs), len(q.Domains), resolutions,
+		states, members := map[ownership.MembershipState]int{}, 0
+		for _, o := range w.Objects {
+			if ownership.IsRecordingManager(o.Ref.GroupKind()) {
+				states[o.Membership]++
+				members += len(o.Members)
+			}
+		}
+		t.Logf("pass %d: GitOps managers: %d recorded, listing %d members; %d unreadable; %d remote",
+			pass, states[ownership.MembersRecorded], members, states[ownership.MembersUnreadable], states[ownership.MembersRemote])
+		t.Logf("pass %d: %d objects; %d questions (%d objects and their recording managers, %d UIDs × %d domains, %d inventories) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d wrong or not settled",
+			pass, len(w.Objects), 2*len(q.Refs)+len(q.UIDs)*len(q.Domains)+len(q.Managers), len(q.Refs), len(q.UIDs), len(q.Domains), len(q.Managers), resolutions,
 			len(diffs)+resolutionDiffs, counts[confirmed], counts[caughtUp], counts[unresolved])
 		for i, question := range caughtUpQuestions {
 			if i == 10 {
