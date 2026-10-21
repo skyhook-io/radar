@@ -32,9 +32,12 @@ export function sanitizeColumnOrder(raw: unknown): string[] | null {
  * where it sits by default: right before the column that follows it in the
  * definition, or at the end when nothing that follows it is in the saved order.
  */
-export function applyColumnOrder<T extends Keyed>(columns: readonly T[], order: readonly string[] | null | undefined): T[] {
+export function applyColumnOrder<T extends Keyed>(
+  columns: readonly T[], order: readonly string[] | null | undefined,
+  fixedLeadingCount = pinnedColumnCount(columns),
+): T[] {
   if (!order?.length) return [...columns]
-  const pinned = pinnedColumnCount(columns)
+  const pinned = fixedLeadingCount
   const movable = columns.slice(pinned)
   const rank = new Map(order.map((k, i) => [k, i]))
   const result = movable

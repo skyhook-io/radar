@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
+import React, { useState, useMemo, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
+import { createPortal } from 'react-dom'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { PaneLoader } from '../ui/PaneLoader'
@@ -7,6 +8,7 @@ import { FetchResult } from '../ui/FetchResult'
 import { Input } from '../ui/Input'
 import { ColumnPickerList } from './ColumnPickerList'
 import { applyColumnOrder, sanitizeColumnOrder } from './column-order'
+import { orderResourceColumns, resolveColumnPins, sanitizePinnedColumns, toggleResourceColumnPin } from './column-pinning'
 import type { TopPodMetrics, TopNodeMetrics, ContainerResourceMetrics } from '../../types'
 import {
   Search,
@@ -3283,8 +3285,9 @@ interface ColumnSettings {
    *  load tell a column they hid from one that did not exist yet. Absent on
    *  blobs written before this field. */
   known?: string[]
-  /** Optional display order for movable columns, including hidden ones. */
+  /** Full display order, including hidden columns. Older saves omit Name. */
   order?: string[]
+  pinned?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3813,7 +3816,10 @@ export function ResourcesView({
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnOrder, setColumnOrder] = useState<string[] | null>(null)
+  const [pinnedColumns, setPinnedColumns] = useState<string[]>([])
   const [showColumnPicker, setShowColumnPicker] = useState(false)
+  const columnPickerPanelRef = useRef<HTMLDivElement>(null)
+  const [columnPickerPosition, setColumnPickerPosition] = useState<React.CSSProperties>({})
   const [customColumns, setCustomColumns] = useState<CustomColumnDef[]>([])
   const [customColumnDraft, setCustomColumnDraft] = useState<CustomColumnDef>({ source: 'label', path: '' })
   // Per-instance so two ResourcesView tables on one page (e.g. fleet compare)
@@ -3914,6 +3920,24 @@ export function ResourcesView({
   const resizeStartWidth = useRef(0)
   const [resizeLineX, setResizeLineX] = useState<number | null>(null)
   const tableContainerRef = useRef<HTMLDivElement>(null)
+  const [tableScroller, setTableScroller] = useState<HTMLElement | null>(null)
+  const [tableViewportWidth, setTableViewportWidth] = useState(0)
+  const captureTableScroller = useCallback((element: HTMLElement | Window | null) => {
+    setTableScroller(element instanceof HTMLElement ? element : null)
+  }, [])
+  useEffect(() => {
+    const viewport = tableScroller ?? tableContainerRef.current
+    if (!viewport) return
+    const measure = () => setTableViewportWidth(viewport.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => window.removeEventListener('resize', measure)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [tableScroller, tableActive])
 
   // Bulk metrics for table columns — provided via props
   const metricsLookup = useMemo<MetricsLookup>(() => {
@@ -3960,9 +3984,9 @@ export function ResourcesView({
     const filteredExtras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
-  // Display order. Everything downstream reads this, so the picker, the header
-  // and the resize width snapshot (which maps <th> index to key) agree.
-  const allColumns = useMemo(() => applyColumnOrder(definedColumns, columnOrder), [definedColumns, columnOrder])
+  // The picker and table share one order, including pins that temporarily scroll.
+  const fixedLeadingCount = Math.max(0, definedColumns.findIndex(column => column.key === 'name'))
+  const allColumns = useMemo(() => orderResourceColumns(definedColumns, columnOrder, pinnedColumns, fixedLeadingCount), [definedColumns, columnOrder, pinnedColumns, fixedLeadingCount])
 
   // The offered key set, and a stable signature for it. allColumns is a new
   // identity on every printer-column refetch; depending on the array itself
@@ -4098,17 +4122,21 @@ export function ResourcesView({
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
         setColumnOrder(null)
+        setPinnedColumns([])
       } else {
-        setVisibleColumns(mergeSavedVisibleColumns(
-          saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown,
-        ))
+        const restoredVisible = mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown)
+        setVisibleColumns(restoredVisible)
         setColumnWidths(saved.widths || {})
-        setColumnOrder(sanitizeColumnOrder(saved.order))
+        const savedOrder = sanitizeColumnOrder(saved.order)
+        // Older settings reorder only columns after Name. Convert once to a full order.
+        setColumnOrder(Array.isArray(saved.pinned) ? savedOrder : applyColumnOrder(effective, savedOrder).map(column => column.key))
+        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key)))
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setColumnWidths({})
       setColumnOrder(null)
+      setPinnedColumns([])
     }
     // printerColumnsKey, not builtPrinterColumns: the built array is a new
     // identity on every refetch, and re-running this effect would reset the
@@ -4131,23 +4159,52 @@ export function ResourcesView({
       custom: customColumns,
       known: Array.from(knownColumnKeys.current),
       order: columnOrder ?? undefined,
+      pinned: pinnedColumns,
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
     hadSavedColumnSettings.current = true
     // allColumnKeysSig, not allColumnKeys: see the memo above.
-  }, [visibleColumns, columnWidths, customColumns, columnOrder, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
+  }, [visibleColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
 
   // Close column picker on outside click or Escape
+  useLayoutEffect(() => {
+    if (!showColumnPicker) return
+    const position = (event?: Event) => {
+      if (event?.target instanceof Node && columnPickerPanelRef.current?.contains(event.target)) return
+      const anchor = columnPickerRef.current?.getBoundingClientRect()
+      if (!anchor) return
+      const width = Math.min(288, window.innerWidth - 24)
+      const top = anchor.bottom + 4
+      const next = {
+        top, left: Math.max(12, Math.min(anchor.right - width, window.innerWidth - width - 12)),
+        width, maxHeight: Math.max(100, Math.min(520, window.innerHeight - top - 12)),
+      }
+      setColumnPickerPosition(previous => previous.top === next.top && previous.left === next.left && previous.width === next.width && previous.maxHeight === next.maxHeight ? previous : next)
+    }
+    position()
+    columnPickerPanelRef.current?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled])')?.focus({ preventScroll: true })
+    window.addEventListener('resize', position)
+    window.addEventListener('scroll', position, true)
+    return () => {
+      window.removeEventListener('resize', position)
+      window.removeEventListener('scroll', position, true)
+    }
+  }, [showColumnPicker])
+
   useEffect(() => {
     if (!showColumnPicker) return
     const handleClick = (e: MouseEvent) => {
-      if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
+      if (e.target instanceof Node && !columnPickerRef.current?.contains(e.target) && !columnPickerPanelRef.current?.contains(e.target)) {
         setShowColumnPicker(false)
       }
     }
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); setShowColumnPicker(false) }
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setShowColumnPicker(false)
+        columnPickerRef.current?.querySelector('button')?.focus()
+      }
     }
     document.addEventListener('mousedown', handleClick)
     document.addEventListener('keydown', handleKey, true)
@@ -4171,14 +4228,12 @@ export function ResourcesView({
       const hasWidths = Object.keys(prev).length > 0
       if (hasWidths) return prev
       // Snapshot all visible <th> widths
-      const ths = container?.querySelectorAll('thead th')
+      const ths = container?.querySelectorAll<HTMLElement>('thead th[data-column-key]')
       if (!ths) return prev
       const snapped: Record<string, number> = {}
-      const cols = allColumns.filter(c => visibleColumns.has(c.key))
-      ths.forEach((th, i) => {
-        if (cols[i]) {
-          snapped[cols[i].key] = th.getBoundingClientRect().width
-        }
+      ths.forEach(th => {
+        const key = th.dataset.columnKey
+        if (key) snapped[key] = th.getBoundingClientRect().width
       })
       return snapped
     })
@@ -4214,17 +4269,23 @@ export function ResourcesView({
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       // Suppress the click event that fires after mouseup to prevent accidental sort toggle
-      document.addEventListener('click', (e) => e.stopPropagation(), { capture: true, once: true })
+      const suppressResizeClick = (event: MouseEvent) => event.stopPropagation()
+      document.addEventListener('click', suppressResizeClick, { capture: true, once: true })
+      // A resize can remount its original target, so no trailing click fires.
+      // Do not leave that listener around to swallow the next toolbar click.
+      window.setTimeout(() => document.removeEventListener('click', suppressResizeClick, true), 0)
     }
 
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [allColumns, visibleColumns])
+  }, [])
 
   // Toggle column visibility
   const toggleColumnVisibility = useCallback((colKey: string) => {
+    // A hidden column has no pin to surprise the user when it is shown again.
+    setPinnedColumns(prev => prev.filter(key => key !== colKey))
     setVisibleColumns(prev => {
       const next = new Set(prev)
       if (next.has(colKey)) {
@@ -4245,6 +4306,7 @@ export function ResourcesView({
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setColumnWidths({})
     setColumnOrder(null)
+    setPinnedColumns([])
     setSortColumn(null)
     setSortDirection(null)
     saveSavedSort(selectedKind.name, selectedKind.group, null)
@@ -4271,6 +4333,7 @@ export function ResourcesView({
   // Remove a user-defined column entirely (not just hide it).
   const removeCustomColumn = useCallback((key: string) => {
     setCustomColumns(prev => prev.filter(c => customColumnKey(c) !== key))
+    setPinnedColumns(prev => prev.filter(column => column !== key))
     setVisibleColumns(prev => {
       if (!prev.has(key)) return prev
       const next = new Set(prev)
@@ -5777,10 +5840,52 @@ export function ResourcesView({
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
-  const columns = useMemo(() => {
+  const visibleTableColumns = useMemo(() => {
     if (visibleColumns.size === 0) return allColumns.filter(c => c.defaultVisible !== false)
     return allColumns.filter(c => visibleColumns.has(c.key))
   }, [allColumns, visibleColumns])
+
+  // Loaded fonts can change header minima without changing the column definitions.
+  const pinWidths = useMemo(() => visibleTableColumns.map(column => ({
+    key: column.key,
+    width: columnWidths[column.key] || getColumnMinWidth(column, extraColumnsByKey),
+  })), [visibleTableColumns, columnWidths, extraColumnsByKey, headerFontEpoch])
+  const leadingPinWidth = (compareMode ? COMPARE_COLUMN_WIDTH : 0) + (isCheckboxMode ? 40 : 0)
+  const effectivePinnedColumns = useMemo(() => {
+    if (!pinnedColumns.length) return []
+    const visible = new Set(visibleTableColumns.map(column => column.key))
+    const context = allColumns.slice(0, fixedLeadingCount).map(column => column.key)
+    return [...new Set([...context, ...pinnedColumns])].filter(key => visible.has(key))
+  }, [allColumns, fixedLeadingCount, pinnedColumns, visibleTableColumns])
+  const columnPins = useMemo(() => resolveColumnPins(pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth),
+    [pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth])
+  const activePinnedColumns = useMemo(() => effectivePinnedColumns.slice(0, columnPins.offsets.size), [effectivePinnedColumns, columnPins.offsets.size])
+  const columns = visibleTableColumns
+  // Keep requested pins at fixed widths even while their stickiness is paused.
+  const namePinned = pinnedColumns.includes('name')
+  const pinStyles = useMemo(() => {
+    const styles = new Map<string, React.CSSProperties>()
+    const widths = new Map(pinWidths.map(column => [column.key, column.width]))
+    let left = leadingPinWidth
+    const last = activePinnedColumns.at(-1)
+    for (const key of activePinnedColumns) {
+      const width = widths.get(key)
+      if (width === undefined) continue
+      styles.set(key, { position: 'sticky', left, zIndex: 1, boxShadow: key === last ? '2px 0 0 var(--border-default)' : undefined })
+      left += width
+    }
+    return styles
+  }, [activePinnedColumns, pinWidths, leadingPinWidth])
+  const toggleColumnPin = (key: string) => {
+    const next = toggleResourceColumnPin(allColumns, pinnedColumns, key, fixedLeadingCount)
+    setColumnOrder(next.order)
+    setPinnedColumns(next.pinned)
+  }
+  const reorderColumns = (order: string[]) => {
+    setColumnOrder(order)
+    setPinnedColumns(order.filter(key => pinnedColumns.includes(key)))
+  }
+  const hasTableSpacer = hasResizedColumns || namePinned
 
   // Fixed-width columns can consume the table's flexible space and collapse
   // the required name column. Keep a real table minimum and let the container
@@ -5788,11 +5893,11 @@ export function ResourcesView({
   const tableMinWidth = useMemo(() => {
     const compareColumnWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
     const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)), compareColumnWidth)
-    const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key])
+    const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key] && !namePinned)
 
     if (!hasResizedColumns || !flexibleNameColumn) return baseMinWidth
     return baseMinWidth + getColumnMinWidth(flexibleNameColumn, extraColumnsByKey)
-  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch])
+  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch, namePinned])
 
   // Stable virtuoso components — memoized to avoid remounting the table on every render
   const virtuosoComponents = useMemo(() => ({
@@ -5820,18 +5925,18 @@ export function ResourcesView({
                 style={{
                   width: columnWidths[col.key]
                     ? `${columnWidths[col.key]}px`
-                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
+                    : col.key === 'name' && !namePinned ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
                 }}
               />
             ))}
-            {hasResizedColumns && <col />}
+            {hasTableSpacer && <col />}
           </colgroup>
           {props.children}
         </table>
       )
     }),
     TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch])
+  }), [columns, columnWidths, hasTableSpacer, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch, namePinned])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -6309,6 +6414,8 @@ export function ResourcesView({
           <div className="relative flex" ref={columnPickerRef}>
             <Tooltip content="Configure columns">
             <button
+              aria-label="Configure columns"
+              aria-expanded={showColumnPicker}
               onClick={() => setShowColumnPicker(prev => !prev)}
               className={clsx(
                 'p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg',
@@ -6318,8 +6425,8 @@ export function ResourcesView({
               <Columns3 className="w-4 h-4" />
             </button>
             </Tooltip>
-            {showColumnPicker && (
-              <div className="absolute right-0 top-full mt-1 z-50 bg-theme-surface border border-theme-border rounded-lg shadow-lg py-1 min-w-[200px] max-h-[400px] flex flex-col">
+            {showColumnPicker && createPortal(
+              <div ref={columnPickerPanelRef} role="region" aria-label="Columns" style={columnPickerPosition} className="fixed z-50 bg-theme-surface border border-theme-border rounded-lg shadow-theme-lg py-1 flex flex-col">
                 <div className="shrink-0 px-3 py-2 border-b border-theme-border flex items-center justify-between">
                   <span className="text-xs font-medium text-theme-text-secondary uppercase">Columns</span>
                   <button
@@ -6331,6 +6438,9 @@ export function ResourcesView({
                     Reset
                   </button>
                 </div>
+                <p className="shrink-0 px-3 pt-2 pb-1 text-xs text-theme-text-tertiary">
+                  {columnPins.paused.length ? 'Some pins scroll until there is more room.' : 'Pinned columns stay visible as you scroll.'}
+                </p>
                 {/* Column list scrolls; the add-column footer stays pinned so
                     its input isn't pushed below the fold on kinds with many columns. */}
                 <div className="overflow-y-auto flex-1 min-h-0">
@@ -6340,7 +6450,9 @@ export function ResourcesView({
                   customColumnKeys={customColumnKeySet}
                   onToggle={toggleColumnVisibility}
                   onRemoveCustom={removeCustomColumn}
-                  onReorder={setColumnOrder}
+                  onReorder={reorderColumns}
+                  fixedLeadingCount={fixedLeadingCount}
+                  pinning={{ pinned: effectivePinnedColumns, paused: columnPins.paused, onToggle: toggleColumnPin }}
                 />
                 </div>
                 {/* Add a label/annotation column */}
@@ -6392,7 +6504,7 @@ export function ResourcesView({
                     </button>
                   </form>
                 </div>
-              </div>
+              </div>, document.body
             )}
           </div>
           {onCreateResource && (
@@ -6619,6 +6731,7 @@ export function ResourcesView({
             <MetricsContext.Provider value={metricsLookup}>
             <TableVirtuoso
               ref={virtuosoRef}
+              scrollerRef={captureTableScroller}
               data={filteredResources}
               increaseViewportBy={400}
               overscan={200}
@@ -6631,7 +6744,7 @@ export function ResourcesView({
                       // Inline px width — under `table-layout:fixed`,
                       // `w-9` is a hint the browser absorbs into leftover
                       // row width on an icon-only column.
-                      style={COMPARE_COLUMN_STYLE}
+                      style={{ ...COMPARE_COLUMN_STYLE, ...(pinStyles.size ? { position: 'sticky', left: 0, zIndex: 6 } : {}) }}
                       className="px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
                       title="Compare mode"
                     >
@@ -6639,7 +6752,9 @@ export function ResourcesView({
                     </th>
                   )}
                   {isCheckboxMode && (
-                    <th className="bg-theme-surface border-b border-theme-border w-10 text-center px-0 py-3">
+                    <th
+                      style={pinStyles.size ? { position: 'sticky', left: compareMode ? COMPARE_COLUMN_WIDTH : 0, zIndex: 6 } : undefined}
+                      className="bg-theme-surface border-b border-theme-border w-10 text-center px-0 py-3">
                       <input
                         type="checkbox"
                         checked={allVisibleChecked}
@@ -6662,6 +6777,8 @@ export function ResourcesView({
                     return (
                       <th
                         key={col.key}
+                        data-column-key={col.key}
+                        style={{ ...pinStyles.get(col.key), zIndex: isFilterOpen ? 50 : pinStyles.has(col.key) ? 6 : 1 }}
                         className={clsx(
                           'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide relative group/th',
                           'bg-theme-base border-b border-theme-border',
@@ -6852,8 +6969,8 @@ export function ResourcesView({
                         })()}
                         {/* Resize handle with visible divider */}
                         <div
-                          className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center"
-                          style={{ transform: 'translateX(50%)' , zIndex: 10 }}
+                          className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-end"
+                          style={{ zIndex: 10 }}
                           onMouseDown={(e) => {
                             const th = e.currentTarget.parentElement!
                             handleResizeStart(e, col.key, th.getBoundingClientRect().width)
@@ -6864,7 +6981,7 @@ export function ResourcesView({
                       </th>
                     )
                   })}
-                  {hasResizedColumns && <th className="bg-theme-base border-b border-theme-border p-0" />}
+                  {hasTableSpacer && <th className="bg-theme-base border-b border-theme-border p-0" />}
                 </tr>
               )}
               itemContent={(index, resource) => {
@@ -6887,7 +7004,8 @@ export function ResourcesView({
                     group={selectedKind.group}
                     columns={columns}
                     extraColumnsByKey={extraColumnsByKey}
-                    hasSpacerColumn={hasResizedColumns}
+                    hasSpacerColumn={hasTableSpacer}
+                    pinStyles={pinStyles}
                     isSelected={isSelected}
                     isHighlighted={isHighlighted}
                     isChecked={checkedResources.has(resourceKey)}
@@ -7048,6 +7166,7 @@ interface ResourceRowCellsProps {
   columns: Column[]
   extraColumnsByKey?: Map<string, ExtraColumn>
   hasSpacerColumn: boolean
+  pinStyles?: ReadonlyMap<string, React.CSSProperties>
   isSelected?: boolean
   isHighlighted?: boolean
   isChecked?: boolean
@@ -7088,7 +7207,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, pinStyles, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
@@ -7097,14 +7216,25 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
   // columns: the anchor is the only navigation surface. The compare-mode
   // chip column keeps its onClick so pick toggling still works.
   const cellsAreClickable = !rowHref
+  const rowTint = compareMode && pickedSide
+    ? `color-mix(in srgb, var(--color-${pickedSide === 'a' ? 'blue' : 'emerald'}-500) 15%, transparent)`
+    : isSelected ? 'var(--selection-bg-strong)' : isHighlighted || isChecked ? 'var(--selection-bg)' : null
+  const pinnedBackground: React.CSSProperties = {
+    backgroundColor: 'var(--pinned-cell-bg, var(--bg-surface))',
+    backgroundImage: rowTint ? `linear-gradient(${rowTint}, ${rowTint})` : undefined,
+  }
+  const pinnedHover = rowTint ? undefined : 'group-hover/row:[--pinned-cell-bg:var(--bg-elevated)]'
+  const fixedLeading = (left: number): React.CSSProperties | undefined => pinStyles?.size
+    ? { position: 'sticky', left, zIndex: 1, ...pinnedBackground }
+    : undefined
   return (
     <>
       {compareMode && (
         <td
           onClick={onClick}
           onMouseEnter={onMouseEnter}
-          style={COMPARE_COLUMN_STYLE}
-          className={clsx('px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
+          style={{ ...COMPARE_COLUMN_STYLE, ...fixedLeading(0) }}
+          className={clsx('px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight, pinnedHover)}
         >
           {pickedSide ? (
             <span
@@ -7126,7 +7256,8 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
       )}
       {showCheckbox && (
         <td
-          className={clsx('border-b-subtle text-center px-0 py-3 w-10 cursor-pointer transition-colors', rowHighlight)}
+          style={fixedLeading(compareMode ? COMPARE_COLUMN_WIDTH : 0)}
+          className={clsx('border-b-subtle text-center px-0 py-3 w-10 cursor-pointer transition-colors', rowHighlight, pinnedHover)}
           onClick={(e) => { e.stopPropagation(); onRowCheckToggle?.(resource) }}
         >
           <input
@@ -7140,6 +7271,8 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
       {columns.map((col) => (
         <td
           key={col.key}
+          data-column-key={col.key}
+          style={pinStyles?.has(col.key) ? { ...pinStyles.get(col.key), ...pinnedBackground } : undefined}
           onClick={cellsAreClickable ? onClick : undefined}
           onMouseEnter={onMouseEnter}
           className={clsx(
@@ -7147,6 +7280,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
             cellsAreClickable && 'cursor-pointer',
             col.key !== 'status' && 'overflow-hidden truncate',
             rowHighlight,
+            pinnedHover,
           )}
         >
           <CellContent
