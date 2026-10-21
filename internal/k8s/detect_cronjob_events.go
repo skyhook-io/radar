@@ -4,6 +4,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/timeutil"
+
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -43,7 +46,7 @@ func cronJobScheduleEventDetections(cronjobs []*batchv1.CronJob, events []*corev
 	for _, event := range events {
 		obj := event.InvolvedObject
 		if event.Type != corev1.EventTypeWarning || obj.Kind != "CronJob" ||
-			(obj.APIVersion != "" && GroupFromAPIVersion(obj.APIVersion) != "batch") ||
+			(obj.APIVersion != "" && resourceid.GroupFromAPIVersion(obj.APIVersion) != "batch") ||
 			!IsCronJobScheduleFailureReason(event.Reason) || !cronJobControllerEvent(event) {
 			continue
 		}
@@ -96,7 +99,7 @@ func cronJobScheduleEventDetections(cronjobs []*batchv1.CronJob, events []*corev
 			Kind: "CronJob", Group: "batch", Namespace: cj.Namespace, Name: cj.Name,
 			Severity: "medium", Reason: event.Reason, Message: event.Message,
 			Fingerprint: "cronjob-event:" + event.Reason,
-			Age:         FormatAge(age), AgeSeconds: int64(age.Seconds()), ResourceCreatedAt: cj.CreationTimestamp.Time,
+			Age:         timeutil.FormatAgeShort(age), AgeSeconds: int64(age.Seconds()), ResourceCreatedAt: cj.CreationTimestamp.Time,
 		}
 		setDetectionOnset(&detection, now, eventFirstTime(event))
 		detections = append(detections, detection)
