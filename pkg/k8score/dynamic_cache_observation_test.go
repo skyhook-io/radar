@@ -56,8 +56,8 @@ func TestDynamicResourceObservationUnwatchedAndUnsupported(t *testing.T) {
 			}
 		})
 	}
-	if err := cache.EnsureWatching(unsupported); err == nil {
-		t.Fatal("EnsureWatching unsupported GVR succeeded")
+	if err := cache.EnsureWatching(unsupported); !errors.Is(err, ErrCollectionNotSupported) {
+		t.Fatalf("unsupported GVR cause = %v", err)
 	}
 	discovery.AddAPIResource(APIResource{
 		Group: unsupported.Group, Version: unsupported.Version, Kind: "Summary", Name: unsupported.Resource,
@@ -127,7 +127,13 @@ func TestDynamicResourceObservationTracksOnDemandSyncAndExactGVR(t *testing.T) {
 	if watched.State != DynamicObservationSynced || watched.ReasonCode != "informer_synced" {
 		t.Fatalf("watched observation = %+v", watched)
 	}
+	if cache.IsStopped() {
+		t.Fatal("running cache reported stopped")
+	}
 	cache.Stop()
+	if !cache.IsStopped() {
+		t.Fatal("stopped cache reported running")
+	}
 	if got := cache.Observation(observed); got.State != DynamicObservationUnwatched || got.ReasonCode != "cache_stopped" {
 		t.Fatalf("stopped cache retained active observation: %+v", got)
 	}
