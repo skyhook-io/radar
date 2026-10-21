@@ -2,7 +2,7 @@
 import { act, type InputHTMLAttributes, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ChartSourceStatus, HelmRepository, SourceUpgradeSelection } from '../../types'
+import type { ArtifactHubSourceCandidate, ChartSourceStatus, HelmRepository, SourceUpgradeSelection } from '../../types'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
 
 const state = vi.hoisted(() => ({
@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   featureSupported: true,
   associateSource: vi.fn(),
   addRepository: vi.fn(),
+  discoverArtifactHub: vi.fn(),
+  recoverArtifactHub: vi.fn(),
 }))
 
 vi.mock('@skyhook-io/k8s-ui/components/ui/DialogPortal', () => ({
@@ -35,6 +37,8 @@ vi.mock('../../api/client', () => {
     useAddOCISource: () => idle,
     useRemoveOCISource: () => idle,
     useSetHelmSource: () => ({ ...idle, mutate: state.associateSource }),
+    useDiscoverArtifactHubSources: () => ({ mutateAsync: state.discoverArtifactHub, isPending: false }),
+    useRecoverArtifactHubSource: () => ({ mutate: state.recoverArtifactHub, isPending: false }),
   }
 })
 
@@ -56,6 +60,8 @@ beforeEach(() => {
   state.featureSupported = true
   state.associateSource.mockReset()
   state.addRepository.mockReset()
+  state.discoverArtifactHub.mockReset()
+  state.recoverArtifactHub.mockReset()
   const element = document.createElement('div')
   document.body.appendChild(element)
   root = createRoot(element)
@@ -189,4 +195,64 @@ it('shows the no-source hint when the backend omits empty suggestions', async ()
  state.status = { configured: false, available: false, revision: 1 }
  await renderDialog(vi.fn())
  expect(document.body.textContent).toContain('No configured sources found. Add a repository or OCI source.')
+})
+
+const classicArtifactHubCandidate: ArtifactHubSourceCandidate = {
+  source: { type: 'repository', reference: 'community', url: 'https://charts.example.test' },
+  current: false,
+  hasInstalledVersion: false,
+  state: 'unchecked',
+  repositoryName: 'community',
+  publisher: 'Example Org',
+  official: true,
+  verifiedPublisher: true,
+}
+
+describe('ArtifactHub original-source recovery', () => {
+  beforeEach(() => {
+    state.status = { configured: false, available: false, confirmed: false, revision: 1, suggestions: [] }
+  })
+
+  it('shows trust metadata without verifying during search', async () => {
+    state.discoverArtifactHub.mockResolvedValue([classicArtifactHubCandidate])
+    await renderDialog()
+    await act(async () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Search ArtifactHub')?.click())
+
+    expect(state.discoverArtifactHub).toHaveBeenCalledOnce()
+    expect(state.recoverArtifactHub).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Example Org')
+    expect(document.body.textContent).toContain('Official')
+    expect(document.body.textContent).toContain('Verified publisher')
+    expect(document.body.textContent).toContain('https://charts.example.test')
+  })
+
+  it('verifies only the candidate the operator selects', async () => {
+    const ociCandidate: ArtifactHubSourceCandidate = {
+      source: { type: 'oci', reference: 'oci://ghcr.io/example/charts/podinfo' },
+      current: false,
+      hasInstalledVersion: false,
+      state: 'unchecked',
+      repositoryName: 'oci',
+      publisher: 'Other Org',
+      official: false,
+      verifiedPublisher: false,
+    }
+    state.discoverArtifactHub.mockResolvedValue([classicArtifactHubCandidate, ociCandidate])
+    await renderDialog()
+    await act(async () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Search ArtifactHub')?.click())
+
+    const verifyButtons = Array.from(document.querySelectorAll('button')).filter(button => button.textContent === 'Verify and use')
+    expect(verifyButtons).toHaveLength(2)
+    expect(state.recoverArtifactHub).not.toHaveBeenCalled()
+    await act(async () => verifyButtons[1]?.click())
+    expect(state.recoverArtifactHub).toHaveBeenCalledWith(ociCandidate, expect.anything())
+  })
+
+  it('is hidden when a configured suggestion contains the installed version', async () => {
+    state.status = { configured: false, available: false, confirmed: false, revision: 1, suggestions: [{
+      source: { type: 'repository', reference: 'local', url: 'https://local.example.test' }, current: false, hasInstalledVersion: true, state: 'available',
+    }] }
+    await renderDialog()
+    expect(document.querySelector('[data-testid="artifacthub-recovery"]')).toBeNull()
+  })
 })

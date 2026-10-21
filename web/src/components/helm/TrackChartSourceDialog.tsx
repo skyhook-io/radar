@@ -1,10 +1,10 @@
-import { useId, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
-import { AlertTriangle, Link2, Plus, Trash2, X } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, Link2, Plus, Search, Trash2, X } from 'lucide-react'
 import { Input } from '@skyhook-io/k8s-ui'
-import { useAddHelmRepository, useAddOCISource, useCapabilities, useCloudRole, useClusterInfo, useHelmOCISources, useHelmRepositories, useHelmSourceStatus, useRemoveOCISource, useSetHelmSource, useRadarFeature } from '../../api/client'
+import { useAddHelmRepository, useAddOCISource, useCapabilities, useCloudRole, useClusterInfo, useDiscoverArtifactHubSources, useHelmOCISources, useHelmRepositories, useHelmSourceStatus, useRecoverArtifactHubSource, useRemoveOCISource, useSetHelmSource, useRadarFeature } from '../../api/client'
 import { OperatorManagedNotice } from '../settings/OperatorManagedNotice'
-import type { ChartSourceStatus, HelmRepository, UpgradeInfo, SourceUpgradeSelection } from '../../types'
+import type { ArtifactHubSourceCandidate, ChartSourceStatus, HelmRepository, UpgradeInfo, SourceUpgradeSelection } from '../../types'
 
 interface TrackChartSourceDialogProps {
   operationError?: string | null
@@ -99,6 +99,10 @@ export function TrackChartSourceDialog({ operationError, onSelectUpgradeSource, 
   const [ociPrefix, setOCIPrefix] = useState('')
   const [repositoryName, setRepositoryName] = useState('')
   const [repositoryURL, setRepositoryURL] = useState('')
+  const [artifactHubCandidates, setArtifactHubCandidates] = useState<ArtifactHubSourceCandidate[] | null>(null)
+  const [artifactHubError, setArtifactHubError] = useState<string | null>(null)
+  const [artifactHubResultKey, setArtifactHubResultKey] = useState('')
+  const artifactHubAbort = useRef<AbortController | null>(null)
   const { data: status, error: statusError, refetch: refetchStatus, isFetching: statusFetching } = useHelmSourceStatus(namespace, releaseName, open)
   const { data: ociSources } = useHelmOCISources()
   const { data: clusterInfo } = useClusterInfo()
@@ -107,6 +111,8 @@ export function TrackChartSourceDialog({ operationError, onSelectUpgradeSource, 
   const removeOCI = useRemoveOCISource()
   const addRepository = useAddHelmRepository()
   const setSource = useSetHelmSource(namespace, releaseName)
+  const discoverArtifactHub = useDiscoverArtifactHubSources(namespace, releaseName)
+  const recoverArtifactHub = useRecoverArtifactHubSource(namespace, releaseName)
   const issueCopy = getSourceIssueCopy(sourceIssue, sourceError)
   const recorded = status?.recorded
   const configManaged = capabilities?.configManagement === 'operator'
@@ -120,6 +126,38 @@ export function TrackChartSourceDialog({ operationError, onSelectUpgradeSource, 
   const missingRecordedRepository = status && !status.configured && recorded?.type === 'repository' && recorded.url ? recorded : undefined
   const { data: repositories, isLoading: repositoriesLoading } = useHelmRepositories()
   const recordedName = missingRecordedRepository ? recordedRepositoryName(missingRecordedRepository.reference, repositories ?? []) : undefined
+  const artifactHubEligible = Boolean(status && !status.confirmed && !status.changing && !status.sourceChangeRequired && !(status.suggestions ?? []).some(suggestion => suggestion.hasInstalledVersion))
+  const artifactHubKey = `${namespace}\u0000${releaseName}\u0000${open}`
+  const visibleArtifactHubCandidates = artifactHubResultKey === artifactHubKey ? artifactHubCandidates : null
+  const visibleArtifactHubError = artifactHubResultKey === artifactHubKey ? artifactHubError : null
+
+  useEffect(() => () => artifactHubAbort.current?.abort(), [artifactHubKey])
+
+  const searchArtifactHub = async () => {
+    artifactHubAbort.current?.abort()
+    const controller = new AbortController()
+    artifactHubAbort.current = controller
+    setArtifactHubResultKey(artifactHubKey)
+    setArtifactHubCandidates(null)
+    setArtifactHubError(null)
+    try {
+      const candidates = await discoverArtifactHub.mutateAsync(controller.signal)
+      if (!controller.signal.aborted) setArtifactHubCandidates(candidates)
+    } catch (error) {
+      if (!controller.signal.aborted) setArtifactHubError(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (artifactHubAbort.current === controller) artifactHubAbort.current = null
+    }
+  }
+
+  const recoverArtifactHubCandidate = (candidate: ArtifactHubSourceCandidate) => {
+    setArtifactHubResultKey(artifactHubKey)
+    setArtifactHubError(null)
+    recoverArtifactHub.mutate(candidate, {
+      onSuccess: onClose,
+      onError: error => setArtifactHubError(error instanceof Error ? error.message : String(error)),
+    })
+  }
 
   const addRecordedRepository = () => {
     if (!missingRecordedRepository || recordedName === undefined) return
@@ -189,6 +227,36 @@ export function TrackChartSourceDialog({ operationError, onSelectUpgradeSource, 
         <p className="text-xs uppercase tracking-wide text-theme-text-tertiary mb-2">Configured sources that publish {chartName || 'this chart'} at the installed version</p>
         <div className="space-y-2">{status.candidates.filter(candidate => !status.confirmed || !recorded || (candidate.type === recorded.type && (candidate.url ?? candidate.reference) === (recorded.url ?? recorded.reference))).map(candidate => <button key={`${candidate.type}:${candidate.url ?? candidate.reference}`} onClick={() => setSource.mutate(candidate, { onSuccess: onClose })} disabled={setSource.isPending || statusFetching || status.changing} className="w-full text-left rounded-lg border border-theme-border px-3 py-2 hover:border-accent disabled:opacity-50"><span className="text-xs uppercase text-theme-text-tertiary">{candidate.type}</span><span className="block font-mono text-sm break-all">{candidate.url ?? candidate.reference}</span><span className="text-xs text-accent">Record as original source</span></button>)}</div>
         {status.candidates.length > 1 && <p className="text-xs text-amber-600 mt-2">Multiple sources list this chart name and version. Select the original source; Radar compares the stored chart before recording it.</p>}
+      </div>}
+      {artifactHubEligible && <div className="rounded-lg border border-theme-border bg-theme-surface/40 p-3 space-y-3" data-testid="artifacthub-recovery">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-theme-text-tertiary">Optional ArtifactHub recovery</p>
+          <p className="text-xs text-theme-text-secondary mt-1">Search sends only the installed chart name. Results are discovery metadata; Radar downloads and verifies only the source you explicitly choose.</p>
+        </div>
+        <button type="button" onClick={() => void searchArtifactHub()} disabled={!canEditSources || discoverArtifactHub.isPending || recoverArtifactHub.isPending} className="inline-flex items-center gap-1.5 rounded-lg border border-theme-border-light bg-theme-elevated px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-hover disabled:opacity-50">
+          <Search className="w-4 h-4" />
+          {discoverArtifactHub.isPending ? 'Searching ArtifactHub…' : 'Search ArtifactHub'}
+        </button>
+        {visibleArtifactHubError && <p role="alert" className="text-xs text-red-500 break-words">{visibleArtifactHubError}</p>}
+        {visibleArtifactHubCandidates?.length === 0 && <p role="status" className="text-xs text-theme-text-secondary">No exact-name ArtifactHub candidates found.</p>}
+        {visibleArtifactHubCandidates && visibleArtifactHubCandidates.length > 0 && <div className="space-y-2">
+          <p className="text-xs font-medium text-theme-text-secondary">Select one candidate to verify against the complete installed chart.</p>
+          <ul className="space-y-2">{visibleArtifactHubCandidates.map(candidate => <li key={`${candidate.source.type}:${candidate.source.url ?? candidate.source.reference}`} className="rounded-lg border border-theme-border bg-theme-elevated px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  <span className="font-medium text-theme-text-primary">{candidate.publisher}</span>
+                  <span className="text-theme-text-tertiary">· {candidate.repositoryName}</span>
+                  {candidate.official && <span className="inline-flex items-center gap-1 rounded bg-blue-500/10 px-1.5 py-0.5 text-blue-500"><BadgeCheck className="w-3 h-3" />Official</span>}
+                  {candidate.verifiedPublisher && <span className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-500"><BadgeCheck className="w-3 h-3" />Verified publisher</span>}
+                </div>
+                <p className="font-mono text-xs text-theme-text-secondary break-all mt-1">{candidate.source.url ?? candidate.source.reference}</p>
+              </div>
+              <button type="button" onClick={() => recoverArtifactHubCandidate(candidate)} disabled={!canEditSources || recoverArtifactHub.isPending} className="btn-brand shrink-0 px-2 py-1 text-xs disabled:opacity-50">{recoverArtifactHub.isPending ? 'Verifying…' : 'Verify and use'}</button>
+            </div>
+          </li>)}</ul>
+          {visibleArtifactHubCandidates.length > 1 && <p className="text-xs text-amber-600">Multiple publishers use this chart name. Radar will not guess or verify them automatically.</p>}
+        </div>}
       </div>}
       <form onSubmit={addRepositoryAndAssociate} className="space-y-2">
         <p className="text-xs uppercase tracking-wide text-theme-text-tertiary">Add chart repository</p>

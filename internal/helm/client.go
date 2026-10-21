@@ -4050,6 +4050,7 @@ type artifactHubPackage struct {
 	Version               string                     `json:"version"`
 	AppVersion            string                     `json:"app_version,omitempty"`
 	Deprecated            bool                       `json:"deprecated"`
+	Official              bool                       `json:"official"`
 	Signed                bool                       `json:"signed"`
 	HasValuesSchema       bool                       `json:"has_values_schema"`
 	SecurityReportSummary *artifactHubSecurityReport `json:"security_report_summary,omitempty"`
@@ -4060,12 +4061,14 @@ type artifactHubPackage struct {
 }
 
 type artifactHubRepo struct {
-	Name              string `json:"name"`
-	URL               string `json:"url"`
-	Official          bool   `json:"official"`
-	VerifiedPublisher bool   `json:"verified_publisher"`
-	OrganizationName  string `json:"organization_name,omitempty"`
-	DisplayName       string `json:"organization_display_name,omitempty"`
+	Name                    string `json:"name"`
+	URL                     string `json:"url"`
+	Official                bool   `json:"official"`
+	VerifiedPublisher       bool   `json:"verified_publisher"`
+	OrganizationName        string `json:"organization_name,omitempty"`
+	OrganizationDisplayName string `json:"organization_display_name,omitempty"`
+	UserAlias               string `json:"user_alias,omitempty"`
+	DisplayName             string `json:"display_name,omitempty"`
 }
 
 type artifactHubSecurityReport struct {
@@ -4114,6 +4117,7 @@ func convertArtifactHubPackage(pkg artifactHubPackage) ArtifactHubChart {
 		AppVersion:  pkg.AppVersion,
 		Description: pkg.Description,
 		Deprecated:  pkg.Deprecated,
+		Official:    pkg.Official,
 		Stars:       pkg.Stars,
 		License:     pkg.License,
 		UpdatedAt:   pkg.TS,
@@ -4121,11 +4125,14 @@ func convertArtifactHubPackage(pkg artifactHubPackage) ArtifactHubChart {
 		HasSchema:   pkg.HasValuesSchema,
 		OrgCount:    pkg.ProductionOrgsCount,
 		Repository: ArtifactHubRepository{
-			Name:              pkg.Repository.Name,
-			URL:               pkg.Repository.URL,
-			Official:          pkg.Repository.Official,
-			VerifiedPublisher: pkg.Repository.VerifiedPublisher,
-			OrganizationName:  pkg.Repository.OrganizationName,
+			Name:                    pkg.Repository.Name,
+			URL:                     pkg.Repository.URL,
+			Official:                pkg.Repository.Official,
+			VerifiedPublisher:       pkg.Repository.VerifiedPublisher,
+			OrganizationName:        pkg.Repository.OrganizationName,
+			OrganizationDisplayName: pkg.Repository.OrganizationDisplayName,
+			UserAlias:               pkg.Repository.UserAlias,
+			DisplayName:             pkg.Repository.DisplayName,
 		},
 	}
 
