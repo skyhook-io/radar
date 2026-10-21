@@ -401,3 +401,46 @@ func TestOmitemptyFields(t *testing.T) {
 		t.Errorf("zero-value Config should marshal to {}, got %s", data)
 	}
 }
+
+func TestRecordAIConsentPreservesMCPPolicy(t *testing.T) {
+	for _, policy := range []string{`{"mcp":false}`, `{"mcpReadOnly":true}`} {
+		t.Run(policy, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			if err := os.MkdirAll(filepath.Dir(Path()), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(Path(), []byte(policy), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := RecordAIConsent("codex:safeguarded"); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadForStartup()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if policy == `{"mcp":false}` && cfg.MCPEnabledOr(true) {
+				t.Fatal("consent erased disabled MCP policy")
+			}
+			if policy == `{"mcpReadOnly":true}` && (cfg.MCPReadOnly == nil || !*cfg.MCPReadOnly) {
+				t.Fatal("consent erased read-only MCP policy")
+			}
+			malformed := strings.TrimSuffix(policy, "}") + ","
+			if err := os.WriteFile(Path(), []byte(malformed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := RecordAIConsent("codex:safeguarded"); err == nil {
+				t.Fatal("consent must reject malformed config")
+			}
+			after, err := os.ReadFile(Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != malformed {
+				t.Fatalf("consent overwrote malformed policy: %s", after)
+			}
+		})
+	}
+}

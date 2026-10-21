@@ -213,7 +213,10 @@ func Save(c Config) error {
 func Update(mutate func(*Config)) (Config, error) {
 	mu.Lock()
 	defer mu.Unlock()
-	c := Load()
+	c, err := LoadForStartup()
+	if err != nil {
+		return Config{}, err
+	}
 	mutate(&c)
 	return c, Save(c)
 }
