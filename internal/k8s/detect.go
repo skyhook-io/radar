@@ -311,7 +311,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, detection)
 			}
 
-			if d.Status.UnavailableReplicas > 0 && stuck == nil && replicaFailure == nil {
+			if deploymentBelowDesiredAvailable(d) && stuck == nil && replicaFailure == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				var availCondLTT time.Time
 				for _, cond := range d.Status.Conditions {
@@ -2380,6 +2380,19 @@ func failedJobCondition(job *batchv1.Job) *batchv1.JobCondition {
 		}
 	}
 	return nil
+}
+
+// deploymentBelowDesiredAvailable reports whether fewer pods are available than
+// spec.replicas asks for. status.unavailableReplicas alone is not that signal:
+// the controller computes it as the sum of every ReplicaSet's spec.replicas
+// minus available, so a RollingUpdate's surge pod counts as unavailable while
+// it starts even though every desired replica is still serving. A surge pod
+// that never comes up surfaces on its own pod row and, past
+// progressDeadlineSeconds, as a stuck rollout. Requiring both keeps a scale-up
+// the controller has not yet observed (spec raised, status still from the
+// previous generation) quiet until the controller reports the shortfall.
+func deploymentBelowDesiredAvailable(dep *appsv1.Deployment) bool {
+	return dep.Status.UnavailableReplicas > 0 && dep.Status.AvailableReplicas < schedDesiredReplicas(dep.Spec.Replicas)
 }
 
 func deploymentReplicaFailure(dep *appsv1.Deployment) *appsv1.DeploymentCondition {
