@@ -8,6 +8,7 @@ import { clsx } from 'clsx'
 import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
 import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
 import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
+import { toneTextClass } from '../ui/status-tone'
 
 export interface TerminalTabProps {
   namespace: string
@@ -19,6 +20,10 @@ export interface TerminalTabProps {
   createSession: (containerName: string) => Promise<{ wsUrl: string }>
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
+  /** Optional: a short line in the toolbar describing the session. */
+  note?: string
+  /** Executable supplied by the host session callback; pins its target container. */
+  command?: string
 }
 
 export function TerminalTab({
@@ -29,6 +34,8 @@ export function TerminalTab({
   isActive = true,
   createSession,
   createDebugContainer,
+  note,
+  command,
 }: TerminalTabProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
@@ -269,8 +276,9 @@ export function TerminalTab({
           )}
         />
         <span className="text-xs text-theme-text-tertiary">{podName}</span>
+        {note && <span className="truncate text-xs text-theme-text-secondary">{note}</span>}
 
-        {containers.length > 1 && (
+        {!command && containers.length > 1 && (
           <div className="relative">
             <select
               value={selectedContainer}
@@ -300,18 +308,22 @@ export function TerminalTab({
 
       <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       {error && (
-        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-slate-900">
+        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-theme-base">
           {errorType === 'shell_not_found' ? (
             <>
-              <div className="text-amber-400 mb-2 text-sm">Shell not available</div>
-              <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
+              <div className="text-warning-text mb-2 text-sm">{command ? 'Command not available' : 'Shell not available'}</div>
+              {command ? (
+                <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
+                  Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> could not start <span className="font-mono text-theme-text-secondary">{command}</span>. Check that the executable is installed in this container.
+                </div>
+              ) : <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
                 Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> doesn&apos;t
                 have a shell (/bin/sh). This is common with distroless or minimal container images
                 {containers.length > 1 ? ' — try another container above, or' : '. You can'} create a
                 debug container to troubleshoot.
-              </div>
+              </div>}
               <div className="flex gap-2">
-                {createDebugContainerRef.current && (
+                {!command && createDebugContainerRef.current && (
                   <button
                     onClick={handleCreateDebugContainer}
                     disabled={isCreatingDebug}
@@ -335,8 +347,8 @@ export function TerminalTab({
             </>
           ) : (
             <>
-              <div className="text-red-400 mb-2 text-sm">Failed to connect</div>
-              <div className="text-xs text-theme-text-disabled mb-3">{error}</div>
+              <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
+              <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
               <button
                 onClick={connect}
                 className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"

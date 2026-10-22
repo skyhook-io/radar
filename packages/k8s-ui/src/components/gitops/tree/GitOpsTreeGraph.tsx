@@ -28,7 +28,8 @@ import { radarHealthNote } from '../health-provenance'
 import { servicePortsTooltip, type ServicePortEntry } from '../../topology/K8sResourceNode'
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
-import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
+import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, treeNodeHealth, type GitOpsTreeFilters } from './tree-helpers'
+import { rankTree, renderedEdge, shortcutEdges, upstreamClosure, upstreamEdges } from './layout'
 
 export type GitOpsTreePreset = 'full' | 'compact' | 'workloads' | 'app'
 
@@ -123,19 +124,7 @@ function GitOpsTreeGraphInner({
   useEffect(() => {
     if (preset !== 'compact') setExpandedGroups(new Set())
   }, [preset])
-  const causeByRef = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const issue of issues ?? []) {
-      const cause = issue.cause
-      const ref = issue.refs?.[0]
-      if (!cause || !ref) continue
-      const key = refKey(ref)
-      // First match wins — issues arrive ranked by severity, so a node
-      // that's the subject of multiple issues keeps its most severe cause.
-      if (!map.has(key)) map.set(key, cause)
-    }
-    return map
-  }, [issues])
+  const causeByRef = useMemo(() => buildCauseByRef(issues), [issues])
   const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups, causeByRef), [tree, preset, query, filters, expandedGroups, causeByRef])
 
   useEffect(() => {
@@ -231,7 +220,7 @@ function GitOpsTreeGraphInner({
 function EdgeLegend({ edges }: { edges: Edge[] }) {
   const types = new Set(edges.map((e) => e.data?.type as string).filter(Boolean))
   const rows: Array<{ key: string; color: string; label: string }> = []
-  if (types.has('source')) rows.push({ key: 'source', color: getEdgeColor('source'), label: 'Source repo' })
+  if (types.has('source')) rows.push({ key: 'source', color: getEdgeColor('source'), label: 'Source artifact' })
   if (types.has('dependsOn')) rows.push({ key: 'dependsOn', color: getEdgeColor('dependsOn'), label: 'Depends on' })
   // Always show the default ownership color when there are 2+ edge kinds —
   // operators need to compare against it. Hide when "owns" is the only kind.
@@ -329,20 +318,14 @@ function getEdgeColor(type: string): string {
   }
 }
 
-function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, string>): { nodes: Node[]; edges: Edge[] } {
+function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, NodeCause>): { nodes: Node[]; edges: Edge[] } {
   if (!tree) return { nodes: [], edges: [] }
   const visibleTree = applyGraphFilters(applyPreset(tree, preset, expandedGroups), filters)
   const byID = new Map(visibleTree.nodes.map(node => [node.id, node]))
-  const children = new Map<string, string[]>()
-  const incoming = new Map<string, number>()
-  for (const edge of visibleTree.edges) {
-    if (!byID.has(edge.source) || !byID.has(edge.target)) continue
-    children.set(edge.source, [...(children.get(edge.source) ?? []), edge.target])
-    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1)
-  }
-
-  const ranks = assignRanks(visibleTree.root.id, byID, children, incoming)
+  const ranks = groupRanks(rankTree(visibleTree), byID)
   const positioned = positionRanks(ranks, byID)
+  const upstreamTargets = new Set(upstreamEdges(visibleTree).map(edge => edge.target))
+  const shortcuts = shortcutEdges(visibleTree)
   const normalizedQuery = query.trim().toLowerCase()
   const nodes = Array.from(positioned.entries()).map(([id, position]) => {
     const node = byID.get(id)!
@@ -359,11 +342,10 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
   })
 
   const edges = visibleTree.edges
-    .filter(edge => positioned.has(edge.source) && positioned.has(edge.target))
+    .filter(edge => positioned.has(edge.source) && positioned.has(edge.target) && !shortcuts.has(edge))
     .map(edge => ({
       id: `${edge.source}->${edge.target}`,
-      source: edge.source,
-      target: edge.target,
+      ...renderedEdge(edge, upstreamTargets),
       type: 'smoothstep',
       // The legend reads back edge.data?.type to decide which rows to render —
       // ReactFlow doesn't preserve our custom `type` field at the top level
@@ -394,7 +376,9 @@ function applyPreset(tree: GitOpsResourceTree, preset: GitOpsTreePreset, expande
     children.set(edge.source, [...(children.get(edge.source) ?? []), edge.target])
   }
 
-  const keep = new Set<string>([tree.root.id])
+  // Dependencies answer "where does this come from" and are few, so every
+  // preset keeps them.
+  const keep = new Set<string>([tree.root.id, ...upstreamClosure(tree)])
   if (preset === 'app') {
     for (const edge of tree.edges) {
       if (edge.source === tree.root.id) keep.add(edge.target)
@@ -438,7 +422,7 @@ function applyGraphFilters(tree: GitOpsResourceTree, filters?: GitOpsTreeFilters
     if (node.id === tree.root.id) continue
     if (matchesGitOpsTreeFilters(node, filters)) {
       let current: string | undefined = node.id
-      while (current) {
+      while (current && !keep.has(current)) {
         keep.add(current)
         current = parent.get(current)
       }
@@ -506,43 +490,10 @@ function compactInfra(tree: GitOpsResourceTree, expandedGroups?: Set<string>): G
   }
 }
 
-function assignRanks(
-  rootID: string,
-  nodes: Map<string, GitOpsTreeNode>,
-  children: Map<string, string[]>,
-  incoming: Map<string, number>
-): Map<number, string[]> {
-  const rankByID = new Map<string, number>()
-  const queue = [{ id: rootID, rank: 0 }]
-  // Cycle/explosion guard: GitOps trees are owner-ref DAGs in practice, but
-  // the EdgeManages set we feed in could pathologically include a cycle
-  // (e.g. a CRD whose owner ref points back at one of its own children, or
-  // a malformed inventory). Without this cap, the "previous >= rank" skip
-  // never fires for cyclic edges and the loop runs forever, freezing the
-  // UI thread. Cap at a large multiple of node count so legitimate trees
-  // never hit it; cycles bail with the partial layout we have so far.
-  let iterations = 0
-  const maxIterations = nodes.size * 8 + 64
-
-  while (queue.length > 0) {
-    if (++iterations > maxIterations) break
-    const current = queue.shift()!
-    const previous = rankByID.get(current.id)
-    if (previous !== undefined && previous >= current.rank) continue
-    rankByID.set(current.id, current.rank)
-    for (const child of children.get(current.id) ?? []) {
-      queue.push({ id: child, rank: current.rank + 1 })
-    }
-  }
-
-  for (const id of nodes.keys()) {
-    if (!rankByID.has(id)) {
-      rankByID.set(id, incoming.get(id) ? 1 : 0)
-    }
-  }
-
+function groupRanks(rankByID: Map<string, number>, nodes: Map<string, GitOpsTreeNode>): Map<number, string[]> {
   const ranks = new Map<number, string[]>()
   for (const [id, rank] of rankByID.entries()) {
+    if (!nodes.has(id)) continue
     ranks.set(rank, [...(ranks.get(rank) ?? []), id])
   }
   for (const ids of ranks.values()) {
@@ -565,29 +516,38 @@ function positionRanks(ranks: Map<number, string[]>, nodes: Map<string, GitOpsTr
   const rootRank = ranks.get(0) ?? []
   if (rootRank.length === 1) {
     const rootID = rootRank[0]
-    const nextRank = ranks.get(1) ?? []
-    if (nextRank.length > 0) {
-      const maxY = (nextRank.length - 1) * ROW_GAP
-      const rootHeight = getNodeDimensions(nodes.get(rootID)!).height
+    const rootHeight = getNodeDimensions(nodes.get(rootID)!).height
+    const tallest = Math.max((ranks.get(1)?.length ?? 0), (ranks.get(-1)?.length ?? 0))
+    if (tallest > 0) {
+      const maxY = (tallest - 1) * ROW_GAP
       positioned.set(rootID, { x: 0, y: Math.max(0, (maxY - rootHeight) / 2 - ROOT_Y_OFFSET) })
+    }
+    // Dependency columns are short; center them on the root so the chain
+    // reads as one line into it.
+    const rootCenter = positioned.get(rootID)!.y + rootHeight / 2
+    for (const rank of sortedRanks) {
+      if (rank >= 0) continue
+      const ids = ranks.get(rank) ?? []
+      const columnCenter = ((ids.length - 1) * ROW_GAP + rootHeight) / 2
+      ids.forEach((id, row) => {
+        positioned.set(id, { x: rank * RANK_GAP, y: row * ROW_GAP + rootCenter - columnCenter })
+      })
     }
   }
 
   return positioned
 }
 
-const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: string }>>) {
+const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: NodeCause }>>) {
   const node = data.node
   const kind = normalizeDisplayKind(node)
-  const status = normalizeHealth(node.topologyStatus)
+  const status = node.missing ? 'unhealthy' : normalizeHealth(node.topologyStatus)
   const terminating = isNodeTerminating(node)
   const gitopsTool = gitopsToolForNode(node)
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
   const KindIcon = getTopologyIcon(kind)
-  // Only unhealthy nodes carry a cause worth surfacing — a healthy node
-  // matched by a stale/unrelated issue ref shouldn't show a tooltip.
-  const cause = status === 'unhealthy' || status === 'degraded' ? data.cause : undefined
+  const cause = nodeCause(node, data.cause)
   // Only declared resources can carry the controller's verdict, so only
   // there does "this one is Radar's" mean anything. Generated children
   // (ReplicaSets, Pods) are always Radar's read; marking each would be
@@ -767,8 +727,47 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   const relationship = stringData(data.relationship)
   if (relationship) chips.push({ value: relationship })
   if (node.sync === 'OutOfSync') chips.push({ value: 'OutOfSync', tone: 'warning' })
-  if (node.health === 'Degraded' || node.health === 'Missing') chips.push({ value: node.health, tone: 'danger' })
+  const health = treeNodeHealth(node)
+  if (health === 'Degraded' || health === 'Missing') chips.push({ value: health, tone: 'danger' })
   return chips
+}
+
+export interface NodeCause {
+  text: string
+  // An issue that names a resource as a lead without saying it failed: Argo's
+  // Warning-event lead (Go: degradedResourceFromEvents) and the Flux
+  // source/dependency blockers (Go: attachFluxBlocker, fluxSourceWarnings).
+  lead: boolean
+}
+
+const LEAD_REASONS = new Set(['PossibleCause', 'SourceNotReady', 'ArtifactFailed', 'DependencyNotReady'])
+
+export function buildCauseByRef(issues?: GitOpsIssue[]): Map<string, NodeCause> {
+  const map = new Map<string, NodeCause>()
+  for (const issue of issues ?? []) {
+    const cause = issue.cause
+    const ref = issue.refs?.[0]
+    if (!cause || !ref) continue
+    const key = refKey(ref)
+    // First match wins — issues arrive ranked by severity, so a node
+    // that's the subject of multiple issues keeps its most severe cause.
+    if (!map.has(key)) map.set(key, { text: cause, lead: LEAD_REASONS.has(issue.reason) })
+  }
+  return map
+}
+
+// A failing node (topology 'unhealthy') shows any cause as is. A failure
+// verdict on a Progressing node would read as "this is broken" on a rollout
+// in flight, so elsewhere only a lead shows, framed as possible. That is where
+// leads land: the Warning-event lead is only emitted when no resource reads
+// as failing, and a Flux source mid-retry reads Progressing while its fetch
+// error is still the answer. Healthy and Suspended nodes show nothing.
+export function nodeCause(node: GitOpsTreeNode, cause?: NodeCause): string | undefined {
+  if (!cause) return undefined
+  const status = normalizeHealth(node.topologyStatus)
+  if (status === 'unhealthy') return cause.text
+  if (!cause.lead || status === 'healthy' || node.health === 'Suspended') return undefined
+  return `Possible cause: ${cause.text}`
 }
 
 // The subtitle is the node's one line of prose, and sync, health and the
@@ -791,6 +790,7 @@ export function getSubtitle(node: GitOpsTreeNode): string {
     // a state description, not an affordance.
     return 'Click to expand'
   }
+  if (node.missing) return `${node.sync ? `${node.sync} • ` : ''}Not found in cluster`
   if (isNodeTerminating(node)) {
     return 'Pending deletion'
   }
@@ -827,7 +827,7 @@ function matchesQuery(node: GitOpsTreeNode, query: string): boolean {
     node.ref.namespace,
     node.ref.group,
     node.sync,
-    node.health,
+    treeNodeHealth(node),
   ].some(value => String(value ?? '').toLowerCase().includes(query))
 }
 

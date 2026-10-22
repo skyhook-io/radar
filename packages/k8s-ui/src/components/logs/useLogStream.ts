@@ -16,6 +16,17 @@ export interface LogStreamHandlers {
   onEnd?: (data: unknown) => void
 }
 
+function errorCodeOf(event: Event): string | null {
+  if (!(event instanceof MessageEvent) || typeof event.data !== 'string') return null
+  try {
+    const data: unknown = JSON.parse(event.data)
+    if (typeof data === 'object' && data !== null && 'error_code' in data && typeof data.error_code === 'string') return data.error_code
+  } catch {
+    // Not JSON: no code.
+  }
+  return null
+}
+
 /**
  * Manages an SSE log stream: EventSource lifecycle, isStreaming state, cleanup.
  * Callers provide a factory function that creates the EventSource with current params.
@@ -24,6 +35,8 @@ export function useLogStream() {
   const [isStreaming, setIsStreaming] = useState(false)
   // Set when the connection fails (and not on a clean end — see endedRef).
   const [streamError, setStreamError] = useState<string | null>(null)
+  // The server's error_code for that failure, when it sent one.
+  const [streamErrorCode, setStreamErrorCode] = useState<string | null>(null)
   // True from a start attempt until the stream first settles (connected / end /
   // error / stop). Lets callers show a connecting spinner that won't reappear
   // after a clean end. Starts true so an auto-stream viewer paints the spinner
@@ -40,6 +53,7 @@ export function useLogStream() {
     setIsStreaming(false)
     setConnecting(false)
     setStreamError(null)
+    setStreamErrorCode(null)
   }, [])
 
   const startStreaming = useCallback((
@@ -50,6 +64,7 @@ export function useLogStream() {
     eventSourceRef.current?.close()
     endedRef.current = false
     setStreamError(null)
+    setStreamErrorCode(null)
     setConnecting(true)
     const es = create()
     // Ignore events from a superseded source: closing/replacing an EventSource
@@ -124,6 +139,7 @@ export function useLogStream() {
       // 'end'; that's not a failure, so don't log it or surface it.
       if (endedRef.current) return
       setStreamError(handleSSEError(event, errorContext, () => {}))
+      setStreamErrorCode(errorCodeOf(event))
     })
 
     eventSourceRef.current = es
@@ -132,5 +148,5 @@ export function useLogStream() {
   // Cleanup on unmount
   useEffect(() => () => { eventSourceRef.current?.close() }, [])
 
-  return { isStreaming, streamError, connecting, startStreaming, stopStreaming }
+  return { isStreaming, streamError, streamErrorCode, connecting, startStreaming, stopStreaming }
 }

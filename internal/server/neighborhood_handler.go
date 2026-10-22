@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -85,7 +86,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 			return
 		}
@@ -127,16 +128,16 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 			WithDynamic(dp).
 			Build(buildOpts)
 	}
-	topo, err := s.topoMemo.Get(buildOpts, build)
+	topo, err := s.topoMemo.GetScoped(cache.Generation(), buildOpts, build)
 	if err != nil {
 		log.Printf("[neighborhood] Failed to build topology for %s %s/%s: %v", rawKind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// GetIndex piggybacks on the memo entry just populated by Get above —
-	// the index is computed once per topology refresh and reused across
+	// GetIndexScoped piggybacks on the memo entry just populated by GetScoped
+	// above. The index is computed once per topology refresh and reused across
 	// requests, matching the relationships hot path.
-	idx, err := s.topoMemo.GetIndex(buildOpts, build)
+	idx, err := s.topoMemo.GetIndexScoped(cache.Generation(), buildOpts, build)
 	if err != nil {
 		log.Printf("[neighborhood] Failed to fetch topology index for %s %s/%s: %v", rawKind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -267,7 +268,7 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 	if n != nil && n.Data != nil {
 		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
 			allowed := s.getUserNamespaces(r, []string{ns})
-			if noNamespaceAccess(allowed) {
+			if readscope.NoNamespaceAccess(allowed) {
 				return false
 			}
 		}

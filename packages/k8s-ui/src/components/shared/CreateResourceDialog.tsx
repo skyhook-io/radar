@@ -28,12 +28,16 @@ export interface ApplyResult {
   namespace: string
   kind: string
   apiVersion?: string
+  uid?: string
   created: boolean
 }
 
 export interface CreateResourceDialogProps {
   open: boolean
   onClose: () => void
+  /** Return the current draft to a parent flow without closing that flow. */
+  onBack?: (yaml: string) => void
+  backLabel?: string
   initialYaml?: string
   title?: string
   onApply: (params: {
@@ -53,12 +57,19 @@ export interface CreateResourceDialogProps {
   isPreviewing?: boolean
   previewError?: string | null
   schemaLoader?: YamlSchemaLoader
-  onCreated?: (result: ApplyResult) => void
+  /** Receives the first result and the exact submitted manifest, after a successful write. */
+  onCreated?: (result: ApplyResult, submittedYaml: string) => void
+  /** Start in strict create mode (e.g. a prefilled manifest that must not update an existing object). */
+  initialMode?: 'apply' | 'create'
+  /** Stay in `initialMode` with the Apply/Create choice and Force hidden, even after a partial create (e.g. a new object that must only be created). */
+  lockMode?: boolean
 }
 
 export function CreateResourceDialog({
   open,
   onClose,
+  onBack,
+  backLabel = 'Back',
   initialYaml = '',
   title,
   onApply,
@@ -68,15 +79,18 @@ export function CreateResourceDialog({
   previewError,
   schemaLoader,
   onCreated,
+  initialMode = 'apply',
+  lockMode = false,
 }: CreateResourceDialogProps) {
   const titleId = useId()
   const [yaml, setYaml] = useState(initialYaml)
-  const [mode, setMode] = useState<'apply' | 'create'>('apply')
+  const [mode, setMode] = useState<'apply' | 'create'>(initialMode)
   const [dryRun, setDryRun] = useState(false)
   const [force, setForce] = useState(false)
   const [yamlValid, setYamlValid] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [partialCreates, setPartialCreates] = useState<ApplyResult[]>([])
   const [preview, setPreview] = useState<{
     yaml: string
     mode: 'apply' | 'create'
@@ -85,6 +99,7 @@ export function CreateResourceDialog({
     nonAtomic: boolean
     context?: string
   } | null>(null)
+  const closeTimer = useRef<number | undefined>(undefined)
   const [drag, setDrag] = useState<FileDragState>('none')
   const [pendingImport, setPendingImport] = useState<{ fileName: string; yaml: string } | null>(null)
   const [importing, setImporting] = useState<string | null>(null)
@@ -110,7 +125,11 @@ export function CreateResourceDialog({
     scheduledFrames.current.clear()
   }, [])
 
-  useEffect(() => retireDeferredImports, [retireDeferredImports])
+  const cancelScheduledClose = useCallback(() => {
+    window.clearTimeout(closeTimer.current)
+    closeTimer.current = undefined
+  }, [])
+  useEffect(() => () => { retireDeferredImports(); cancelScheduledClose() }, [retireDeferredImports, cancelScheduledClose])
 
   const scheduleFrame = useCallback((generation: number, run: () => void) => {
     const id = requestAnimationFrame(() => {
@@ -123,12 +142,14 @@ export function CreateResourceDialog({
 
   useEffect(() => {
     if (!open) return
+    cancelScheduledClose()
     setYaml(initialYaml)
-    setMode('apply')
+    setMode(initialMode)
     setDryRun(false)
     setForce(false)
     setYamlValid(true)
     setError(null)
+    setPartialCreates([])
     setSuccess(null)
     setPreview(null)
     setDrag('none')
@@ -136,19 +157,21 @@ export function CreateResourceDialog({
     setImporting(null)
     dragDepth.current = 0
     retireDeferredImports()
-  }, [open, initialYaml, retireDeferredImports])
+  }, [open, initialYaml, initialMode, retireDeferredImports, cancelScheduledClose])
 
   const pending = isApplying || isPreviewing
   const closeNow = useCallback(() => {
+    cancelScheduledClose()
     retireDeferredImports()
     setError(null)
+    setPartialCreates([])
     setSuccess(null)
     setPreview(null)
     setPendingImport(null)
     setImporting(null)
     setYaml('')
     onClose()
-  }, [onClose, retireDeferredImports])
+  }, [onClose, retireDeferredImports, cancelScheduledClose])
   const handleClose = useCallback(() => {
     if (!pending) closeNow()
   }, [closeNow, pending])
@@ -158,7 +181,7 @@ export function CreateResourceDialog({
   }, [])
 
   const finishApply = useCallback(
-    (results: ApplyResult[], appliedMode: 'apply' | 'create', wasDryRun: boolean) => {
+    (results: ApplyResult[], appliedMode: 'apply' | 'create', wasDryRun: boolean, submittedYaml: string) => {
       const action = appliedMode === 'create' ? 'Created' : 'Applied'
       const dryRunLabel = wasDryRun ? ' (dry run)' : ''
       if (results.length === 1) {
@@ -170,11 +193,12 @@ export function CreateResourceDialog({
         setSuccess(`${action} ${results.length} resources${dryRunLabel}`)
       }
       if (wasDryRun) return
+      setPartialCreates([])
       if (onCreated && results.length > 0) {
         closeNow()
-        onCreated(results[0])
+        onCreated(results[0], submittedYaml)
       } else {
-        window.setTimeout(closeNow, 1200)
+        closeTimer.current = window.setTimeout(closeNow, 1200)
       }
     },
     [closeNow, onCreated],
@@ -274,6 +298,17 @@ export function CreateResourceDialog({
     [loadFiles],
   )
 
+  const recoverPartialCreate = useCallback((caught: unknown, submittedYaml: string, appliedMode: 'apply' | 'create', wasDryRun: boolean) => {
+    const appliedResults = caught instanceof Error && 'appliedResults' in caught && Array.isArray(caught.appliedResults) ? caught.appliedResults : []
+    const createdResults = appliedMode === 'create' ? appliedResults : appliedResults.filter(result => result.created)
+    if (wasDryRun || createdResults.length === 0) return false
+    setYaml(submittedYaml)
+    if (!lockMode && onPreview) setMode('apply')
+    setPreview(null)
+    setPartialCreates(previous => [...previous, ...createdResults])
+    return true
+  }, [lockMode, onPreview])
+
   const handleSubmit = useCallback(async () => {
     if (!yaml.trim()) {
       setError('YAML content is required')
@@ -301,11 +336,12 @@ export function CreateResourceDialog({
         dryRun,
         force: mode === 'apply' && force,
       })
-      finishApply(results, mode, dryRun)
+      finishApply(results, mode, dryRun, yaml)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unknown error')
+      if (!onPreview) recoverPartialCreate(caught, yaml, mode, dryRun)
     }
-  }, [yaml, mode, dryRun, force, onApply, onPreview, finishApply])
+  }, [yaml, mode, dryRun, force, onApply, onPreview, finishApply, recoverPartialCreate])
 
   const handleApplyReviewed = useCallback(async () => {
     if (!preview) return
@@ -320,25 +356,11 @@ export function CreateResourceDialog({
         reviewedResourceVersions,
         reviewedContext: preview.context,
       })
-      finishApply(results, preview.mode, false)
+      finishApply(results, preview.mode, false, preview.yaml)
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Unknown error'
-      const appliedResults =
-        caught instanceof Error &&
-        'appliedResults' in caught &&
-        Array.isArray(caught.appliedResults)
-          ? caught.appliedResults
-          : []
-      if (preview.mode === 'create' && appliedResults.length > 0) {
-        setYaml(preview.yaml)
-        setMode('apply')
-        setPreview(null)
-        setError(
-          `${message} Radar switched to Apply mode so you can review and continue from the current cluster state.`,
-        )
-        return
-      }
       setError(message)
+      if (recoverPartialCreate(caught, preview.yaml, preview.mode, false)) return
       if (onPreview) {
         try {
           const refreshed = await onPreview({
@@ -357,9 +379,10 @@ export function CreateResourceDialog({
         }
       }
     }
-  }, [preview, onApply, onPreview, finishApply])
+  }, [preview, onApply, onPreview, finishApply, recoverPartialCreate])
 
   const dialogTitle = title || 'Create Resource'
+  const showModeControls = !lockMode
   const submitLabel = onPreview ? 'Review' : mode === 'create' ? 'Create' : 'Apply'
 
   return (
@@ -409,8 +432,8 @@ export function CreateResourceDialog({
             </Tooltip>
           </div>
 
-          <div className="min-h-0 flex-1 px-5 py-3">
-            <div className="mb-2 flex items-center gap-2">
+          <div className="flex min-h-0 flex-1 flex-col px-5 py-3">
+            <div className="mb-2 flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -437,7 +460,7 @@ export function CreateResourceDialog({
             </div>
 
             <div
-              className="relative h-[400px]"
+              className="relative h-[400px] min-h-0"
               onDragEnter={handleDragEnter}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -446,7 +469,7 @@ export function CreateResourceDialog({
               <YamlEditor
                 value={yaml}
                 onChange={setYaml}
-                height="400px"
+                height="100%"
                 onValidate={handleValidate}
                 schemaLoader={schemaLoader}
               />
@@ -470,8 +493,8 @@ export function CreateResourceDialog({
             </div>
           </div>
 
-          {(error || previewError) && (
-            <ApplyErrorBanner error={error || previewError || 'Preview failed'} />
+          {(error || previewError || partialCreates.length > 0) && (
+            <ApplyErrorBanner error={error || previewError || 'Resources were created before the previous attempt stopped.'} partialCreates={partialCreates} strictCreate={lockMode && mode === 'create'} hasPreview={Boolean(onPreview)} />
           )}
           {success && (
             <div className="mx-5 mb-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
@@ -482,33 +505,35 @@ export function CreateResourceDialog({
 
           <div className="flex shrink-0 items-center justify-between border-t border-theme-border px-5 py-3">
             <div className="flex items-center gap-3">
-              <Tooltip
-                content="Apply: create or update (idempotent). Create: fail if exists."
-                position="bottom"
-              >
-                <div
-                  className="flex items-center rounded-md border border-theme-border bg-theme-base p-0.5"
-                  role="radiogroup"
-                  aria-label="Apply mode"
+              {showModeControls && (
+                <Tooltip
+                  content="Apply: create or update (idempotent). Create: fail if exists."
+                  position="bottom"
                 >
-                  {(['apply', 'create'] as const).map((option) => (
-                    <button
-                      type="button"
-                      key={option}
-                      onClick={() => setMode(option)}
-                      role="radio"
-                      aria-checked={mode === option}
-                      className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
-                        mode === option
-                          ? 'bg-theme-elevated text-theme-text-primary shadow-theme-sm'
-                          : 'text-theme-text-tertiary hover:text-theme-text-secondary'
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              </Tooltip>
+                  <div
+                    className="flex items-center rounded-md border border-theme-border bg-theme-base p-0.5"
+                    role="radiogroup"
+                    aria-label="Apply mode"
+                  >
+                    {(['apply', 'create'] as const).map((option) => (
+                      <button
+                        type="button"
+                        key={option}
+                        onClick={() => setMode(option)}
+                        role="radio"
+                        aria-checked={mode === option}
+                        className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
+                          mode === option
+                            ? 'bg-theme-elevated text-theme-text-primary shadow-theme-sm'
+                            : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </Tooltip>
+              )}
 
               {!onPreview && (
                 <Tooltip
@@ -527,26 +552,42 @@ export function CreateResourceDialog({
                 </Tooltip>
               )}
 
-              <Tooltip
-                content="Override field ownership conflicts. An active controller may reconcile those fields back."
-                position="bottom"
-              >
-                <label
-                  className={`flex items-center gap-1.5 text-xs ${mode === 'apply' ? 'cursor-pointer text-theme-text-secondary' : 'cursor-not-allowed text-theme-text-tertiary'}`}
+              {showModeControls && (
+                <Tooltip
+                  content="Override field ownership conflicts. An active controller may reconcile those fields back."
+                  position="bottom"
                 >
-                  <input
-                    type="checkbox"
-                    checked={mode === 'apply' && force}
-                    disabled={mode !== 'apply'}
-                    onChange={(event) => setForce(event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
-                  />
-                  Force
-                </label>
-              </Tooltip>
+                  <label
+                    className={`flex items-center gap-1.5 text-xs ${mode === 'apply' ? 'cursor-pointer text-theme-text-secondary' : 'cursor-not-allowed text-theme-text-tertiary'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={mode === 'apply' && force}
+                      disabled={mode !== 'apply'}
+                      onChange={(event) => setForce(event.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
+                    />
+                    Force
+                  </label>
+                </Tooltip>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
+              {onBack && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    cancelScheduledClose()
+                    retireDeferredImports()
+                    onBack(yamlRef.current)
+                  }}
+                  disabled={pending || importing !== null}
+                  className="btn-secondary rounded-lg px-3 py-1.5 text-xs"
+                >
+                  {backLabel}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleClose}
@@ -591,18 +632,23 @@ export function CreateResourceDialog({
   )
 }
 
-function ApplyErrorBanner({ error }: { error: string }) {
+function ApplyErrorBanner({ error, partialCreates, strictCreate, hasPreview }: { error: string; partialCreates: ApplyResult[]; strictCreate: boolean; hasPreview: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const { panelId, buttonProps } = useDisclosure(expanded)
-  const parsed = formatApplyError(error)
+  const parsed = formatApplyError(error, { allowApply: !strictCreate && partialCreates.length === 0 })
   const hasFriendly = Boolean(parsed.suggestion)
+  const recoveringWithReview = partialCreates.length > 0 && !strictCreate && hasPreview
   return (
-    <div className="mx-5 mb-2 rounded-md border border-red-500/30 bg-red-500/10 text-xs">
+    <div className="mx-5 mb-2 max-h-[30vh] shrink-0 overflow-y-auto rounded-md border border-red-500/30 bg-red-500/10 text-xs">
       <div className="flex items-start gap-2 px-3 py-2 text-red-600 dark:text-red-400">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <div className="min-w-0 flex-1">
           <span className="font-medium">{parsed.summary}</span>
-          {parsed.suggestion && (
+          {partialCreates.length > 0 && <p className="mt-1">
+            Created before it stopped: {partialCreates.map(result => `${result.kind} ${result.namespace ? `${result.namespace}/` : ''}${result.name}`).join(', ')}.
+            {' '}{recoveringWithReview ? 'Radar switched to Apply mode so you can review and continue from the current cluster state.' : `${strictCreate ? 'This dialog only creates. ' : ''}Remove the created objects from the manifest before retrying Create.`}
+          </p>}
+          {parsed.suggestion && !recoveringWithReview && (
             <p className="mt-1 text-red-500/80 dark:text-red-400/80">{parsed.suggestion}</p>
           )}
         </div>

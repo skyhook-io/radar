@@ -1840,3 +1840,60 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 		t.Error("an Application with no destination is invalid, not deploying elsewhere")
 	}
 }
+
+func TestFluxDependencyChangesDoNotClaimInventoryOwnership(t *testing.T) {
+	tree := &gitopstree.ResourceTree{
+		Nodes: []gitopstree.Node{
+			{ID: "source", Dependency: true, Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "OCIRepository", Name: "chart"}},
+			{ID: "ordering", Dependency: true, Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Kustomization", Name: "base"}},
+			{ID: "managed", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Deployment", Name: "app"}},
+		},
+		Edges: []gitopstree.Edge{
+			{Source: "root", Target: "source", Type: gitopstree.EdgeSource},
+			{Source: "root", Target: "ordering", Type: gitopstree.EdgeDependsOn},
+			{Source: "root", Target: "managed", Type: gitopstree.EdgeOwns},
+		},
+	}
+	changes := buildChanges(nil, tree, "fluxcd", nil)
+	if len(changes) != 3 {
+		t.Fatalf("changes = %+v", changes)
+	}
+	for _, change := range changes {
+		if change.Ref.Kind == "Deployment" {
+			if !strings.Contains(change.PartialNote, "inventory confirms") {
+				t.Fatalf("managed note = %s", change.PartialNote)
+			}
+		} else if strings.Contains(change.PartialNote, "inventory confirms") || !strings.Contains(change.PartialNote, "dependency") {
+			t.Fatalf("dependency misrepresented as managed: %+v", change)
+		}
+	}
+}
+
+func TestFluxUnobservedDependenciesDoNotClaimSync(t *testing.T) {
+	tree := &gitopstree.ResourceTree{
+		Nodes: []gitopstree.Node{{ID: "source", Dependency: true, Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "prod", Name: "absent"}}},
+		Edges: []gitopstree.Edge{{Source: "root", Target: "source", Type: gitopstree.EdgeSource}},
+	}
+	changes := buildChanges(nil, tree, "fluxcd", nil)
+	if len(changes) != 1 || changes[0].Category != CategoryUnknown || changes[0].HasLive {
+		t.Fatalf("unobserved source changes = %+v", changes)
+	}
+	tree.Nodes[0].Ref.UID = "observed-source"
+	tree.Nodes[0].Sync, tree.Nodes[0].Health = "Unknown", "Unknown"
+	changes = buildChanges(nil, tree, "fluxcd", nil)
+	if len(changes) != 1 || changes[0].Category != CategoryUnknown || !changes[0].HasLive {
+		t.Fatalf("unknown source status changes = %+v", changes)
+	}
+}
+
+func TestInlineHelmReleaseSummaryKeepsDeclaredSource(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"namespace": "team", "name": "app"},
+		"spec":     map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo"}}}},
+		"status":   map[string]any{"helmChart": "team/team-app"},
+	}}
+	if got := buildSummary(root, "fluxcd").Source; got != "HelmRepository/repo" {
+		t.Fatalf("source summary = %q", got)
+	}
+}

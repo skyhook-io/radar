@@ -35,6 +35,8 @@ type Node struct {
 	Tool   Tool        `json:"tool"`
 	Sync   string      `json:"sync,omitempty"`
 	Health string      `json:"health,omitempty"`
+	// Missing is a confirmed local NotFound, independent of controller health.
+	Missing bool `json:"missing,omitempty"`
 	// HealthSource says who produced Health. The GitOps controller's own
 	// verdict (HealthSourceController) and Radar's own read of the live
 	// object (HealthSourceRadar) are different claims and the UI labels the
@@ -54,6 +56,9 @@ type Node struct {
 	// remote tree. Radar's API reads this cluster, so a same-named object
 	// here is a different resource, not this node.
 	Remote bool `json:"remote,omitempty"`
+	// Dependency marks a node reached only through a Flux source, chart or
+	// dependsOn declaration: the root consumes it but doesn't manage it.
+	Dependency bool `json:"dependency,omitempty"`
 }
 
 // HealthSource identifies who assessed a node's Health.
@@ -121,6 +126,8 @@ type Summary struct {
 	Grouped   int `json:"grouped"`
 	Degraded  int `json:"degraded"`
 	OutOfSync int `json:"outOfSync"`
+	// Dependencies counts dependency nodes, which the other tallies exclude.
+	Dependencies int `json:"dependencies,omitempty"`
 }
 
 // ResourceTree is the API response for a GitOps resource tree.
@@ -144,6 +151,12 @@ type ResourceTree struct {
 	// usable answer, in the user's words ("the token isn't accepted for
 	// this application"). Empty when nothing was configured to ask.
 	HealthAPIError string `json:"healthApiError,omitempty"`
+	// HealthAPIPending: the host is still connecting to the controller's API
+	// server and will have an answer shortly; ask again.
+	HealthAPIPending bool `json:"healthApiPending,omitempty"`
+	// HealthAPIRetrying: the host couldn't reach the controller's API server
+	// (HealthAPIError says why) and is retrying; ask again now and then.
+	HealthAPIRetrying bool `json:"healthApiRetrying,omitempty"`
 	// RemoteDestination is true for an Argo CD Application whose
 	// spec.destination is another cluster, or a Flux object with
 	// spec.kubeConfig. Radar's own reads describe the
@@ -161,7 +174,8 @@ type managedResource struct {
 }
 
 type relatedResource struct {
-	Ref  ResourceRef
-	Type EdgeType
-	Data map[string]any
+	Parent ResourceRef
+	Ref    ResourceRef
+	Type   EdgeType
+	Data   map[string]any
 }

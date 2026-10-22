@@ -9,6 +9,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -123,6 +124,7 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 		"horizontalpodautoscalers": true,
 		"statefulsets":             true, "daemonsets": true,
 		"jobs": true, "cronjobs": true,
+		"persistentvolumeclaims": true, "persistentvolumes": true,
 	}
 	if len(results.MissingInputs) != len(want) {
 		t.Fatalf("MissingInputs = %v, want exactly %v", results.MissingInputs, want)
@@ -134,6 +136,9 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 	}
 
 	// Same scan with the inputs present (but empty) — the checks run and count.
+	input.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+	input.PersistentVolumes = []*corev1.PersistentVolume{}
+	input.StorageClasses = []*storagev1.StorageClass{}
 	input.PodDisruptionBudgets = []*policyv1.PodDisruptionBudget{}
 	input.ConfigMaps = []*corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "prod"}}}
 	input.ServiceAccounts = []*corev1.ServiceAccount{}

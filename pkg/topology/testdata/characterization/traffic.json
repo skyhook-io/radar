@@ -1,0 +1,1731 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "gateway/shop/public",
+        "kind": "Gateway",
+        "name": "public",
+        "status": "unknown",
+        "data": {
+          "addresses": null,
+          "apiVersion": "gateway.networking.k8s.io/v1",
+          "auditKey": "gateway.networking.k8s.io|Gateway|shop|public",
+          "labels": null,
+          "listenerCount": 1,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "httproute/shop/web",
+        "kind": "HTTPRoute",
+        "name": "web",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "gateway.networking.k8s.io/v1",
+          "auditKey": "gateway.networking.k8s.io|HTTPRoute|shop|web",
+          "hostnames": null,
+          "labels": null,
+          "namespace": "shop",
+          "rulesCount": 1
+        }
+      },
+      {
+        "id": "ingress/shop/web",
+        "kind": "Ingress",
+        "name": "web",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "networking.k8s.io/v1",
+          "auditKey": "networking.k8s.io|Ingress|shop|web",
+          "hostname": "shop.example.com",
+          "labels": null,
+          "namespace": "shop",
+          "tls": true
+        }
+      },
+      {
+        "id": "internet",
+        "kind": "Internet",
+        "name": "Internet",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Internet||Internet"
+        }
+      },
+      {
+        "id": "knativeservice/shop/hello",
+        "kind": "KnativeService",
+        "name": "hello",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "serving.knative.dev/v1",
+          "auditKey": "serving.knative.dev|Service|shop|hello",
+          "labels": null,
+          "latestRevision": "hello-00001",
+          "namespace": "shop",
+          "resourceKind": "Service",
+          "trafficSummary": "",
+          "url": ""
+        }
+      },
+      {
+        "id": "pod/shop/web-7d9f8-0",
+        "kind": "Pod",
+        "name": "web-7d9f8-0",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|web-7d9f8-0",
+          "containers": 1,
+          "labels": {
+            "app": "web"
+          },
+          "namespace": "shop",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/shop/web-7d9f8-1",
+        "kind": "Pod",
+        "name": "web-7d9f8-1",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|web-7d9f8-1",
+          "containers": 1,
+          "labels": {
+            "app": "web"
+          },
+          "namespace": "shop",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "service/shop/web",
+        "kind": "Service",
+        "name": "web",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Service|shop|web",
+          "clusterIP": "",
+          "labels": null,
+          "namespace": "shop",
+          "ports": [
+            {
+              "port": 80,
+              "protocol": "",
+              "targetPort": "8080"
+            }
+          ],
+          "type": ""
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "gateway/shop/public-to-httproute/shop/web",
+        "source": "gateway/shop/public",
+        "target": "httproute/shop/web",
+        "type": "routes-to"
+      },
+      {
+        "id": "httproute/shop/web-to-service/shop/web",
+        "source": "httproute/shop/web",
+        "target": "service/shop/web",
+        "type": "routes-to"
+      },
+      {
+        "id": "ingress/shop/web-to-service/shop/web",
+        "source": "ingress/shop/web",
+        "target": "service/shop/web",
+        "type": "routes-to"
+      },
+      {
+        "id": "internet-to-gateway/shop/public",
+        "source": "internet",
+        "target": "gateway/shop/public",
+        "type": "routes-to"
+      },
+      {
+        "id": "internet-to-ingress/shop/web",
+        "source": "internet",
+        "target": "ingress/shop/web",
+        "type": "routes-to"
+      },
+      {
+        "id": "internet-to-knativeservice/shop/hello",
+        "source": "internet",
+        "target": "knativeservice/shop/hello",
+        "type": "routes-to"
+      },
+      {
+        "id": "service/shop/web-to-pod/shop/web-7d9f8-0",
+        "source": "service/shop/web",
+        "target": "pod/shop/web-7d9f8-0",
+        "type": "routes-to"
+      },
+      {
+        "id": "service/shop/web-to-pod/shop/web-7d9f8-1",
+        "source": "service/shop/web",
+        "target": "pod/shop/web-7d9f8-1",
+        "type": "routes-to"
+      }
+    ],
+    "crdDiscoveryStatus": "ready",
+    "estimatedNodes": 28
+  },
+  "roots": [
+    {
+      "root": "apps|DaemonSet|infra|agent",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|DaemonSet|shop|redis-exporter",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|api",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|big",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|cart",
+      "relationships": {
+        "managedBy": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|hello-00001-deployment",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|legacy-helm",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "legacy"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "legacy"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "legacy-helm", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|redis",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|redis-legacy",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|web",
+      "relationships": {
+        "managedBy": [
+          {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|api-6b7",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|big-8f9",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|cart-5c6",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|checkout-abc",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|payments-6d8f",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|web-7d9f8",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|StatefulSet|shop|redis-replica",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|StatefulSet|team|db",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|Application|argocd|shop",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|CronWorkflow|team|report",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|Rollout|shop|checkout",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|Rollout|shop|payments",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|Rollout|shop|redis-proxy",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|Workflow|team|report-1700",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "autoscaling|HorizontalPodAutoscaler|shop|web",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "HorizontalPodAutoscaler", "namespace": "shop", "name": "web", "group": "autoscaling"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|CronJob|shop|redis-backup",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|CronJob|team|nightly",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|Job|shop|redis-migrate",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|Job|team|nightly-28999",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|Job|team|nightly-29001",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|Job|team|queue-worker-abc",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "bitnami.com|SealedSecret|team|db-creds",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cert-manager.io|Certificate|shop|web-tls",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Certificate", "namespace": "shop", "name": "web-tls", "group": "cert-manager.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|Cluster|capi|prod",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|MachineDeployment|capi|prod-md",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|MachinePool|capi|prod-mp",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "MachinePool", "namespace": "capi", "name": "prod-mp", "group": "cluster.x-k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|MachineSet|capi|prod-md-abc",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|Machine|capi|prod-md-abc-x",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "controlplane.cluster.x-k8s.io|KubeadmControlPlane|capi|prod-cp",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "KubeadmControlPlane", "namespace": "capi", "name": "prod-cp", "group": "controlplane.cluster.x-k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "demo.example.io|DatabaseClaim|shop|orders-db",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "demo.example.io|XDatabase||orders-db-xr",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "eventing.knative.dev|Broker|shop|default",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "example.io|Widget|shop|web-widget",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Widget", "namespace": "shop", "name": "web-widget", "group": "example.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|GatewayClass||envoy",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|Gateway|shop|public",
+      "relationships": {
+        "backends": [
+          {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+        ],
+        "routedFrom": [
+          {"kind": "Internet", "namespace": "", "name": "Internet"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|HTTPRoute|shop|web",
+      "relationships": {
+        "gateways": [
+          {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
+        ],
+        "backends": [
+          {"kind": "Service", "namespace": "shop", "name": "web"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "helm.toolkit.fluxcd.io|HelmRelease|shop|redis",
+      "relationships": {
+        "managedBy": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "karpenter.sh|NodeClaim||default-x1",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "karpenter.sh|NodePool||default",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "keda.sh|ScaledJob|team|queue-worker",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "kubernetes.crossplane.io|Object||orders-db-config",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Object", "namespace": "", "name": "orders-db-config", "group": "kubernetes.crossplane.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|platform",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|shop",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "messaging.knative.dev|InMemoryChannel|shop|default-kne-trigger",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "InMemoryChannel", "namespace": "shop", "name": "default-kne-trigger", "group": "messaging.knative.dev"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "networking.k8s.io|Ingress|shop|web",
+      "relationships": {
+        "backends": [
+          {"kind": "Service", "namespace": "shop", "name": "web"}
+        ],
+        "routedFrom": [
+          {"kind": "Internet", "namespace": "", "name": "Internet"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "networking.k8s.io|NetworkPolicy|shop|default-deny",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "policy|PodDisruptionBudget|shop|web",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "PodDisruptionBudget", "namespace": "shop", "name": "web", "group": "policy"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "serving.knative.dev|Configuration|shop|hello",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "serving.knative.dev|Revision|shop|hello-00001",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "serving.knative.dev|Route|shop|hello",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "serving.knative.dev|Service|shop|hello",
+      "relationships": {
+        "routedFrom": [
+          {"kind": "Internet", "namespace": "", "name": "Internet"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|ConfigMap|shop|web-config",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|ConfigMap|team|web-config-mirror",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Node||node-a",
+      "relationships": {
+        "pods": [
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"},
+          {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+          {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Node||node-b",
+      "relationships": {
+        "pods": [
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"},
+          {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
+          {"kind": "Pod", "namespace": "team", "name": "db-0"},
+          {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
+          {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|PersistentVolumeClaim|team|data-db-0",
+      "relationships": {
+        "children": [
+          {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|PersistentVolume||pv-db-0",
+      "relationships": {
+        "configRefs": [
+          {"kind": "StorageClass", "namespace": "", "name": "standard", "group": "storage.k8s.io"}
+        ],
+        "consumers": [
+          {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|infra|agent-node-a",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|infra|agent-node-b",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|api-6b7-a",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-0",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-1",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-2",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-3",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-4",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-5",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-6",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|cart-5c6-a",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "managedBy": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|checkout-abc-a",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|payments-6d8f-a",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|web-7d9f8-0",
+      "relationships": {
+        "services": [
+          {"kind": "Service", "namespace": "shop", "name": "web"}
+        ],
+        "ingresses": [
+          {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+        ],
+        "routes": [
+          {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+        ],
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|web-7d9f8-1",
+      "relationships": {
+        "services": [
+          {"kind": "Service", "namespace": "shop", "name": "web"}
+        ],
+        "ingresses": [
+          {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+        ],
+        "routes": [
+          {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+        ],
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|db-0",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "db-0"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|nightly-29001-x",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|queue-worker-abc-x",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|report-1700-main",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "report-1700-main"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Secret|shop|web-secret",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Secret", "namespace": "shop", "name": "web-secret"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Secret|shop|web-tls",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Secret", "namespace": "shop", "name": "web-tls"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Secret|team|db-creds",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Secret", "namespace": "team", "name": "db-creds"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Service|shop|redis",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Service", "namespace": "shop", "name": "redis"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Service|shop|web",
+      "relationships": {
+        "ingresses": [
+          {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+        ],
+        "routes": [
+          {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+        ],
+        "pods": [
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Service", "namespace": "shop", "name": "web"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    }
+  ],
+  "neighborhoods": [
+    {
+      "root": "apps|Deployment|shop|web",
+      "profile": "auto",
+      "hops": 1,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|web",
+      "profile": "all",
+      "hops": 2,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|web",
+      "profile": "all",
+      "hops": 1,
+      "maxNodes": 2,
+      "subgraph": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "argoproj.io|Application|argocd|shop",
+      "profile": "auto",
+      "hops": 1,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "argoproj.io|Application|argocd|shop",
+      "profile": "all",
+      "hops": 2,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "argoproj.io|Application|argocd|shop",
+      "profile": "all",
+      "hops": 1,
+      "maxNodes": 2,
+      "subgraph": {
+        "root": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|shop",
+      "profile": "auto",
+      "hops": 1,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|shop",
+      "profile": "all",
+      "hops": 2,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|shop",
+      "profile": "all",
+      "hops": 1,
+      "maxNodes": 2,
+      "subgraph": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "|Pod|shop|web-7d9f8-0",
+      "profile": "auto",
+      "hops": 1,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        "nodes": [
+          {
+            "id": "pod/shop/web-7d9f8-0",
+            "kind": "Pod",
+            "name": "web-7d9f8-0",
+            "status": "healthy",
+            "data": {
+              "auditKey": "|Pod|shop|web-7d9f8-0",
+              "containers": 1,
+              "labels": {
+                "app": "web"
+              },
+              "namespace": "shop",
+              "phase": "Running",
+              "restarts": 0,
+              "statusIssue": ""
+            }
+          },
+          {
+            "id": "service/shop/web",
+            "kind": "Service",
+            "name": "web",
+            "status": "healthy",
+            "data": {
+              "auditKey": "|Service|shop|web",
+              "clusterIP": "",
+              "labels": null,
+              "namespace": "shop",
+              "ports": [
+                {
+                  "port": 80,
+                  "protocol": "",
+                  "targetPort": "8080"
+                }
+              ],
+              "type": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "service/shop/web-to-pod/shop/web-7d9f8-0",
+            "source": "service/shop/web",
+            "target": "pod/shop/web-7d9f8-0",
+            "type": "routes-to"
+          }
+        ]
+      }
+    },
+    {
+      "root": "|Pod|shop|web-7d9f8-0",
+      "profile": "all",
+      "hops": 2,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        "nodes": [
+          {
+            "id": "httproute/shop/web",
+            "kind": "HTTPRoute",
+            "name": "web",
+            "status": "unknown",
+            "data": {
+              "apiVersion": "gateway.networking.k8s.io/v1",
+              "auditKey": "gateway.networking.k8s.io|HTTPRoute|shop|web",
+              "hostnames": null,
+              "labels": null,
+              "namespace": "shop",
+              "rulesCount": 1
+            }
+          },
+          {
+            "id": "ingress/shop/web",
+            "kind": "Ingress",
+            "name": "web",
+            "status": "healthy",
+            "data": {
+              "apiVersion": "networking.k8s.io/v1",
+              "auditKey": "networking.k8s.io|Ingress|shop|web",
+              "hostname": "shop.example.com",
+              "labels": null,
+              "namespace": "shop",
+              "tls": true
+            }
+          },
+          {
+            "id": "pod/shop/web-7d9f8-0",
+            "kind": "Pod",
+            "name": "web-7d9f8-0",
+            "status": "healthy",
+            "data": {
+              "auditKey": "|Pod|shop|web-7d9f8-0",
+              "containers": 1,
+              "labels": {
+                "app": "web"
+              },
+              "namespace": "shop",
+              "phase": "Running",
+              "restarts": 0,
+              "statusIssue": ""
+            }
+          },
+          {
+            "id": "pod/shop/web-7d9f8-1",
+            "kind": "Pod",
+            "name": "web-7d9f8-1",
+            "status": "healthy",
+            "data": {
+              "auditKey": "|Pod|shop|web-7d9f8-1",
+              "containers": 1,
+              "labels": {
+                "app": "web"
+              },
+              "namespace": "shop",
+              "phase": "Running",
+              "restarts": 0,
+              "statusIssue": ""
+            }
+          },
+          {
+            "id": "service/shop/web",
+            "kind": "Service",
+            "name": "web",
+            "status": "healthy",
+            "data": {
+              "auditKey": "|Service|shop|web",
+              "clusterIP": "",
+              "labels": null,
+              "namespace": "shop",
+              "ports": [
+                {
+                  "port": 80,
+                  "protocol": "",
+                  "targetPort": "8080"
+                }
+              ],
+              "type": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "httproute/shop/web-to-service/shop/web",
+            "source": "httproute/shop/web",
+            "target": "service/shop/web",
+            "type": "routes-to"
+          },
+          {
+            "id": "ingress/shop/web-to-service/shop/web",
+            "source": "ingress/shop/web",
+            "target": "service/shop/web",
+            "type": "routes-to"
+          },
+          {
+            "id": "service/shop/web-to-pod/shop/web-7d9f8-0",
+            "source": "service/shop/web",
+            "target": "pod/shop/web-7d9f8-0",
+            "type": "routes-to"
+          },
+          {
+            "id": "service/shop/web-to-pod/shop/web-7d9f8-1",
+            "source": "service/shop/web",
+            "target": "pod/shop/web-7d9f8-1",
+            "type": "routes-to"
+          }
+        ]
+      }
+    },
+    {
+      "root": "|Pod|shop|web-7d9f8-0",
+      "profile": "all",
+      "hops": 1,
+      "maxNodes": 2,
+      "subgraph": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        "nodes": [
+          {
+            "id": "pod/shop/web-7d9f8-0",
+            "kind": "Pod",
+            "name": "web-7d9f8-0",
+            "status": "healthy",
+            "data": {
+              "auditKey": "|Pod|shop|web-7d9f8-0",
+              "containers": 1,
+              "labels": {
+                "app": "web"
+              },
+              "namespace": "shop",
+              "phase": "Running",
+              "restarts": 0,
+              "statusIssue": ""
+            }
+          },
+          {
+            "id": "service/shop/web",
+            "kind": "Service",
+            "name": "web",
+            "status": "healthy",
+            "data": {
+              "auditKey": "|Service|shop|web",
+              "clusterIP": "",
+              "labels": null,
+              "namespace": "shop",
+              "ports": [
+                {
+                  "port": 80,
+                  "protocol": "",
+                  "targetPort": "8080"
+                }
+              ],
+              "type": ""
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "service/shop/web-to-pod/shop/web-7d9f8-0",
+            "source": "service/shop/web",
+            "target": "pod/shop/web-7d9f8-0",
+            "type": "routes-to"
+          }
+        ]
+      }
+    },
+    {
+      "root": "|Node||node-a",
+      "profile": "auto",
+      "hops": 1,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "|Node||node-a",
+      "profile": "all",
+      "hops": 2,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "|Node||node-a",
+      "profile": "all",
+      "hops": 1,
+      "maxNodes": 2,
+      "subgraph": {
+        "root": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "batch|CronJob|team|nightly",
+      "profile": "auto",
+      "hops": 1,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "batch|CronJob|team|nightly",
+      "profile": "all",
+      "hops": 2,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "batch|CronJob|team|nightly",
+      "profile": "all",
+      "hops": 1,
+      "maxNodes": 2,
+      "subgraph": {
+        "root": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|GatewayClass||envoy",
+      "profile": "auto",
+      "hops": 1,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|GatewayClass||envoy",
+      "profile": "all",
+      "hops": 2,
+      "maxNodes": 0,
+      "subgraph": {
+        "root": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"},
+        "nodes": null,
+        "edges": null
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|GatewayClass||envoy",
+      "profile": "all",
+      "hops": 1,
+      "maxNodes": 2,
+      "subgraph": {
+        "root": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"},
+        "nodes": null,
+        "edges": null
+      }
+    }
+  ]
+}

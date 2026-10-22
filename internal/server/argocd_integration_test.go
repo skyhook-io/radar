@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
@@ -552,6 +553,9 @@ func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
 		}
 	}
 	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
+	if err := argocd.Probe(context.Background()); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
 	if _, err := argocd.ApplicationHealthCached(context.Background(), q); err == nil {
 		t.Fatal("refused read must fail")
 	}
@@ -561,6 +565,9 @@ func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
 	}
 	allow = true
 	argocd.Reset()
+	if err := argocd.Probe(context.Background()); err != nil {
+		t.Fatalf("reconnect: %v", err)
+	}
 	if _, err := argocd.ApplicationHealthCached(context.Background(), q); err != nil {
 		t.Fatalf("allowed read: %v", err)
 	}
@@ -588,5 +595,95 @@ func TestArgoCDStatus_ReportsWhyAConfiguredServerIsNotReachable(t *testing.T) {
 	}
 	if !out.Configured || out.Connected || !strings.Contains(out.Reason, "the server couldn't be reached") {
 		t.Fatalf("status = %+v, want a plain reason for the failed connection", out)
+	}
+}
+
+// While the first connection is being made, Settings says so instead of
+// "Not connected", and answers without waiting for it.
+func TestArgoCDStatus_ReportsConnecting(t *testing.T) {
+	s := setupArgoCDTest(t)
+	srv := hungArgoServer(t)
+	argocd.SetConfig(srv.URL, "argo-secret", false, true)
+
+	var out struct {
+		Connected  bool `json:"connected"`
+		Connecting bool `json:"connecting"`
+	}
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("status waited %s", elapsed)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Connected || !out.Connecting {
+		t.Fatalf("status = %+v, want connecting", out)
+	}
+}
+
+// A read that gets no answer through a working connection keeps it
+// "Connected", and Settings says what the last read ran into.
+func TestArgoCDStatus_ReportsAFailedReadWhileConnected(t *testing.T) {
+	s := setupArgoCDTest(t)
+	release := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"Version":"v3.5.2"}`)) })
+	mux.HandleFunc("/api/v1/session/userinfo", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"loggedIn":true}`)) })
+	mux.HandleFunc("/api/v1/applications/", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(func() {
+		argocd.SetConfig("", "", false, true) // stop the re-check before the server goes
+		close(release)
+		srv.Close()
+	})
+	argocd.SetConfig(srv.URL, "argo-secret", false, true)
+	if err := argocd.Probe(context.Background()); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := argocd.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{AppName: "billing", AppNamespace: "argocd"}); err == nil {
+		t.Fatal("read must fail")
+	}
+
+	var out struct {
+		Connected bool   `json:"connected"`
+		Reason    string `json:"reason"`
+	}
+	rec := httptest.NewRecorder()
+	s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Connected || out.Reason != "Radar's last read from Argo CD failed: the request timed out." {
+		t.Fatalf("status = %+v, want connected with the failed read", out)
+	}
+}
+
+// A save whose check fails puts the previous settings back and connects them
+// again right away, so the next page read doesn't answer "connecting".
+func TestApplyArgoCDConfig_FailedSaveReconnectsThePreviousSettings(t *testing.T) {
+	s := setupArgoCDTest(t)
+	srv := fakeArgoCDServer(t)
+	if w := putArgoCD(t, s, `{"argoCdUrl": "`+srv.URL+`", "argoCdToken": "good-token"}`); w.Code != http.StatusOK {
+		t.Fatalf("first save: %d %s", w.Code, w.Body.String())
+	}
+	if w := putArgoCD(t, s, `{"argoCdUrl": "http://127.0.0.1:1", "argoCdToken": "new-token"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("failing save: %d %s", w.Code, w.Body.String())
+	}
+	// Address reads state only; it starts nothing.
+	deadline := time.Now().Add(5 * time.Second)
+	for argocd.Address() != srv.URL {
+		if time.Now().After(deadline) {
+			t.Fatal("the previous settings weren't connected again before any read asked")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

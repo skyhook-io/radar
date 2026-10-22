@@ -96,10 +96,10 @@ func TestWorkloadGoldenVectors(t *testing.T) {
 		{"cronjob suspended is neutral", &batchv1.CronJob{
 			Spec: batchv1.CronJobSpec{Suspend: ptrBool(true), Schedule: "0 * * * *"},
 		}, LevelNeutral, "Suspended"},
-		{"cronjob recently run is healthy", &batchv1.CronJob{
+		{"cronjob recent scheduling is neutral configuration evidence", &batchv1.CronJob{
 			Spec:   batchv1.CronJobSpec{Schedule: "*/5 * * * *"},
 			Status: batchv1.CronJobStatus{LastScheduleTime: &metav1.Time{Time: now.Add(-2 * time.Minute)}},
-		}, LevelHealthy, ""},
+		}, LevelNeutral, ""},
 		{"cronjob stale past cadence is degraded", &batchv1.CronJob{
 			Spec:   batchv1.CronJobSpec{Schedule: "*/5 * * * *"},
 			Status: batchv1.CronJobStatus{LastScheduleTime: &metav1.Time{Time: now.Add(-48 * time.Hour)}},

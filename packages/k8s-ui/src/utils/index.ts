@@ -32,4 +32,8 @@ export * from './bulk-workload-actions'
 export * from './inClusterConsent'
 export * from './workflow-execution'
 export * from './network-policy'
+export * from './cnpg-backup'
+export * from './url-path'
 export * from './resource-refs'
+
+export * from './grant'

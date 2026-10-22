@@ -278,6 +278,16 @@ cnpg-demo-status:
 cnpg-demo-live:
 	./scripts/cnpg-demo.sh live
 
+# Runtime fixtures on the EXISTING CNPG demo cluster (operator thawed if frozen):
+# MinIO + real plugin WAL archiving and backups, a restored cluster, a Pooler,
+# pgbench load, a blocked lock chain and a Prometheus Radar auto-discovers.
+# `./scripts/cnpg-demo.sh runtime-lag on|off` induces replica lag.
+cnpg-demo-runtime:
+	./scripts/cnpg-demo.sh runtime
+
+cnpg-demo-runtime-down:
+	./scripts/cnpg-demo.sh runtime-down
+
 # Grafana Beyla on kind: eBPF loaded, a minimal Prometheus scraping it, and two
 # conversations to observe. Which labels Beyla exports depends on configuration —
 # dst_port and transport are off by default, direction is on and doubles every
@@ -523,6 +533,7 @@ help:
 	@echo "  make rollouts-demo    - Argo Rollouts progression fixtures"
 	@echo "  make cnpg-demo        - Frozen CNPG rendering fixtures"
 	@echo "  make cnpg-demo-live   - CNPG fixtures with the operator running"
+	@echo "  make cnpg-demo-runtime - CNPG runtime: backups/restore, load, locks, Prometheus"
 	@echo "  make velero-demo      - Velero fixtures, all 13 backup phases at once"
 	@echo "  make velero-demo-live - Velero with real object storage; states produced by the controller"
 	@echo "  make beyla-demo       - Grafana Beyla eBPF traffic fixtures"

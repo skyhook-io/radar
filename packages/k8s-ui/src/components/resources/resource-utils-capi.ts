@@ -73,7 +73,7 @@ export function getClusterStatus(resource: any): StatusBadge {
 }
 
 export function getClusterClass(resource: any): string {
-  return resource.spec?.topology?.class || '-'
+  return resource.spec?.topology?.classRef?.name || resource.spec?.topology?.class || '-'
 }
 
 export function getClusterVersion(resource: any): string {

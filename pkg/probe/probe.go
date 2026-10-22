@@ -244,7 +244,12 @@ type Result struct {
 	// Without it the two collide - a Job result silently replaces Radar's own
 	// in-cluster observation on merge - and the UI credits Radar's direct dials
 	// to a Job that was never created. Empty means SourceRadar.
-	Source  string        `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Mesh names the service mesh whose sidecar proxy ran in the pod that
+	// issued this probe (a probe Job in an injected namespace). The proxy
+	// can accept a connection before the backend does, so such a result can't
+	// settle a NetworkPolicy prediction. Empty means no sidecar was seen.
+	Mesh    string        `json:"mesh,omitempty"`
 	OK      bool          `json:"ok"`
 	Tone    Tone          `json:"tone,omitempty"`
 	Skipped bool          `json:"skipped,omitempty"`

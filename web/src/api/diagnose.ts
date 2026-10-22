@@ -25,7 +25,7 @@ export interface AgentsResponse {
   agents: AgentInfo[];
   enabled: boolean;
   // eligible: this run mode supports local BYO-agent investigations (no proxy/OIDC
-  // auth, /mcp mounted) — true even when no agent is installed. Lets the UI tell
+  // auth, investigation MCP mounted) - true even when no agent is installed. Lets the UI tell
   // "install an agent to enable this" (eligible && !enabled) apart from "not
   // available here" (auth/cloud/--no-mcp). Absent on older servers / embed hosts.
   eligible?: boolean;
@@ -248,6 +248,9 @@ export interface RunSummary {
   ownedByMe?: boolean;
   canManageVisibility?: boolean;
   canContinue?: boolean;
+  /** Why a run with canContinue false can't take a follow-up, in words for
+   *  the reader, when the host knows. Absent: a generic read-only notice. */
+  continueBlockedReason?: string;
   trigger?: "interactive" | "background";
   radarUrl?: string;
 }

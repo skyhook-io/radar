@@ -139,21 +139,32 @@ func TestMatch_ContentSnippet(t *testing.T) {
 
 func TestKindMatches_Variants(t *testing.T) {
 	cases := []struct {
-		kind, filter string
-		want         bool
+		kind, group, resource, filter string
+		want                          bool
 	}{
-		{"Pod", "pod", true},
-		{"Pod", "Pod", true},
-		{"Pod", "pods", true},
-		{"Service", "svc", false}, // we don't expand short names
-		{"Deployment", "deployment", true},
-		{"Deployment", "deployments", true},
-		{"Pod", "service", false},
+		{"Pod", "", "pods", "pod", true},
+		{"Pod", "", "pods", "Pod", true},
+		{"Pod", "", "pods", "pods", true},
+		{"Service", "", "services", "svc", true}, // kubectl aliases of built-ins resolve
+		{"Service", "serving.knative.dev", "services", "svc", false},
+		{"Service", "serving.knative.dev", "services", "service", true}, // the Kind itself still matches any group
+		{"Deployment", "apps", "deployments", "deployment", true},
+		{"Deployment", "apps", "deployments", "deployments", true},
+		{"Pod", "", "pods", "service", false},
+		{"Ingress", "networking.k8s.io", "ingresses", "ingresses", true},
+		{"NetworkPolicy", "networking.k8s.io", "networkpolicies", "networkpolicies", true},
+		{"NetworkPolicy", "networking.k8s.io", "networkpolicies", "netpol", true},
+		{"NetworkPolicy", "crd.projectcalico.org", "networkpolicies", "netpol", false},
+		{"PersistentVolumeClaim", "", "persistentvolumeclaims", "pvc", true},
+		{"HorizontalPodAutoscaler", "autoscaling", "hpas", "horizontalpodautoscalers", true},
+		{"CiliumNetworkPolicy", "cilium.io", "ciliumnetworkpolicies", "ciliumnetworkpolicies", true},
+		{"ResourceQuota", "", "resourcequotas", "resourcequota", true},
+		{"Role", "rbac.authorization.k8s.io", "", "rolebinding", false},
 	}
 	for _, tc := range cases {
-		got := kindMatches(tc.kind, []string{tc.filter})
+		got := kindMatches(tc.kind, tc.group, tc.resource, []string{tc.filter})
 		if got != tc.want {
-			t.Errorf("kindMatches(%q, %q) = %v, want %v", tc.kind, tc.filter, got, tc.want)
+			t.Errorf("kindMatches(%q, %q, %q, %q) = %v, want %v", tc.kind, tc.group, tc.resource, tc.filter, got, tc.want)
 		}
 	}
 }

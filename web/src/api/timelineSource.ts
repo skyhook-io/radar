@@ -544,6 +544,13 @@ export function needsWindowFetch(
 // refresh.
 const FROZEN_WINDOW_STALE_MS = 10 * 60 * 1000
 
+// A frozen window that failed to load does poll, at the ring's cadence, until
+// it loads: the error page tells the user it recovers on its own once the
+// timeline's database is back, and without a poll only "Try again" would.
+export function frozenWindowRefetchInterval(status: 'pending' | 'error' | 'success'): number | false {
+  return status === 'error' ? RETAINED_POLL_MS : false
+}
+
 // Ring keys whose next fetch must be a full reload (manual refresh). A side
 // flag, not a side cursor: consuming it only switches the PATH of the next
 // fetch — all sync state that must stay consistent with the data lives inside
@@ -750,6 +757,7 @@ function createRingEventsHook(opts: {
       },
       enabled: windowNeeded,
       staleTime: FROZEN_WINDOW_STALE_MS,
+      refetchInterval: (q) => frozenWindowRefetchInterval(q.state.status),
     })
 
     const kindsKey = query.kinds?.join(',')

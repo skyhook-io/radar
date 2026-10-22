@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
@@ -10,7 +10,7 @@ import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
-import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
+import { resetNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -23,7 +23,6 @@ import { HelmView } from './components/helm/HelmView'
 import { HelmCompareRoute } from './components/helm/HelmCompareRoute'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
-import { CapacityView } from './components/capacity/CapacityView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
@@ -38,14 +37,15 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
-import { CNPGView } from './components/cnpg/CNPGView'
-import { CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, parseCNPGRoute } from './components/cnpg/routes'
-import { currentPageLabel } from './components/cnpg/paths'
+import { resourceExpandedPath, resourceKindListTitle } from './integrations/resourceHosts'
+import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
+import { WorkspaceScreen } from './integrations/workspaceScreens'
+import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
-import { ConnectionProvider, useConnection } from './context/ConnectionContext'
+import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
@@ -58,12 +58,12 @@ import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-ne
 import { useUsageData, useUsageRecording } from './api/usage-data'
 import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
-import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
+import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
-import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
+import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
@@ -75,7 +75,9 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams } from './utils/navigation'
+import { createViewMemory } from './utils/viewMemory'
+import { createKindFilterStore } from './utils/kindFilterStore'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams, CROSS_VIEW_PARAMS, namespacesFromSearch } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -141,8 +143,8 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'helm') return 'helm'
   if (path === 'traffic') return 'traffic'
   if (path === 'cost') return 'cost'
-  if (path === 'capacity') return 'capacity'
-  if (path === 'cnpg') return 'cnpg'
+  const workspace = workspaceForPath(pathname)
+  if (workspace) return workspace.id
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -167,13 +169,14 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 
 // The screen a crash is counted under. Fixed names, because release builds
 // shorten component names and the component stack can't say which screen.
-const CRASH_LABELS: Record<ExtendedMainView, string> = {
+const CRASH_LABELS = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
-}
+  ...workspaceLabels,
+} satisfies Record<ExtendedMainView, string>
 
 // The namespace scope filter is meaningful only on namespaced surfaces. On
 // cluster-scoped views it does nothing, so we disable it with an explanation
@@ -203,12 +206,8 @@ function namespaceFilterDisabled(
       tooltip: 'Cost is reported per namespace across the whole cluster — the namespace filter doesn’t apply here.',
     }
   }
-  if (view === 'capacity') {
-    return {
-      disabled: true,
-      tooltip: 'Capacity is reported across the cluster — the namespace filter doesn’t apply here.',
-    }
-  }
+  const workspace = workspaceForView(view)
+  if (workspace?.namespaceScope === 'cluster') return { disabled: true, tooltip: workspace.namespaceFilterTooltip }
   if (view === 'checks' && pathname.startsWith('/checks/upgrade')) {
     return {
       disabled: true,
@@ -263,6 +262,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     const resourceName = decode(pathSegments[1] ?? '')
     if (!resourceName) return 'Resources'
     const group = new URLSearchParams(search).get('apiGroup') || ''
+    const hostTitle = resourceKindListTitle({ name: resourceName, group })
+    if (hostTitle) return hostTitle
     const match = findAPIResourceForRoute(apiResources, resourceName, group)
     return pluralKindTitle(match?.kind ?? pluralToKind(resourceName), resourceName)
   }
@@ -281,18 +282,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
   if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
 
   // The landing view reads "Overview" rather than "Home" in the tab.
-  if (view === 'capacity') {
-    if (pathSegments[1] === 'pools') return decode(pathSegments[2] ?? '') || 'Capacity'
-    if (pathSegments[1] === 'demand') return 'Capacity Demand'
-    if (pathSegments[1] === 'activity') return 'Capacity Activity'
-  }
-
-  if (view === 'cnpg') {
-    const route = parseCNPGRoute(pathname)
-    if (route.detail) return route.detail.name
-    const screen = CNPG_SCREENS.find((s) => s.id === route.screen)
-    return `CloudNativePG ${screen?.label ?? 'Overview'}`
-  }
+  const workspace = workspaceForView(view)
+  if (workspace) return workspace.pageTitle(pathname)
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -351,6 +342,7 @@ interface AppProps {
 }
 
 function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
+  useLayoutEffect(() => () => resetNavigationMap(), [])
   const navigate = useNavigate()
   const location = useLocation()
   const navigationType = useNavigationType()
@@ -424,24 +416,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
   }, [navigate])
 
-  // Parse namespaces from URL (supports both 'namespaces' and legacy 'namespace')
-  const parseNamespacesFromURL = (params: URLSearchParams): string[] => {
-    // Prefer 'namespaces' (plural, comma-separated)
-    const nsParam = params.get('namespaces')
-    if (nsParam) {
-      return nsParam.split(',').map(s => s.trim()).filter(Boolean)
-    }
-    // Fall back to 'namespace' (singular) for backward compatibility
-    const ns = params.get('namespace')
-    if (ns) {
-      return [ns]
-    }
-    return []
-  }
-
   // Initialize state from URL
   const getInitialState = () => {
-    const namespaces = parseNamespacesFromURL(searchParams)
+    const namespaces = namespacesFromSearch(searchParams)
     return {
       namespaces,
       topologyMode: (searchParams.get('mode') as TopologyMode) || 'resources',
@@ -452,6 +429,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
+  const activeWorkspace = workspaceForView(mainView)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
 
   // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
@@ -459,12 +437,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // A status cached by another screen must not start recording inside a host.
   useUsageRecording(usageView(location.pathname, mainView, upgradeReadinessRoute), navCustomization.embedded ? undefined : usageData.data)
 
-  // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
-  // mount) so the omnibar can open a CRD hit with an irregular plural from any
-  // view — kindToPlural would otherwise English-guess the route before a
-  // resources view has run initNavigationMap().
+  // The omnibar needs discovered plurals even before ResourcesView mounts.
   const { data: navApiResources } = useAPIResources()
-  useEffect(() => { if (navApiResources) initNavigationMap(navApiResources) }, [navApiResources])
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
   // chip isn't a dead control next to the cluster switcher.
@@ -482,15 +456,45 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     return slug || 'pods'
   }, [location.pathname])
 
-  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to `/resources/pods`.
+  // Section memory and Resources filters are kept per cluster; inert until the context is known.
+  const { data: clusterInfoData, isLoading: clusterInfoLoading } = useClusterInfo()
+  const clusterContext = clusterInfoData?.context
+  const viewMemory = useMemo(
+    () => (clusterContext ? createViewMemory(`${getApiBase()}|${clusterContext}`) : undefined),
+    [clusterContext],
+  )
+  const kindFilterStore = useMemo(
+    () => (clusterContext ? createKindFilterStore(`${getApiBase()}|${clusterContext}`) : undefined),
+    [clusterContext],
+  )
+  useEffect(() => {
+    viewMemory?.record(mainView, location.pathname, location.search)
+    if (mainView === 'resources') kindFilterStore?.recordLastKind(location.pathname, location.search)
+  }, [viewMemory, kindFilterStore, mainView, location.pathname, location.search])
+  const rememberedKindSearch = useMemo(
+    () => kindFilterStore && ((kind: { name: string; group: string }) => kindFilterStore.get(kind.name, kind.group)),
+    [kindFilterStore],
+  )
+  const saveKindFilters = useMemo(
+    () => kindFilterStore && ((kind: { name: string; group: string }, search: string) => kindFilterStore.set(kind.name, kind.group, search)),
+    [kindFilterStore],
+  )
+
+  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to
+  // the last kind (hosts such as Radar Hub link to bare `/resources`), else Pods.
   useEffect(() => {
     const path = location.pathname.replace(/\/+$/, '') || '/'
-    if (path !== '/resources') return
+    // Wait for the cluster so its last kind can be read; landing on Pods first would overwrite it.
+    if (path !== '/resources' || clusterInfoLoading) return
+    const current = new URLSearchParams(location.search)
+    const onlyCrossView = [...current.keys()].every(key => (CROSS_VIEW_PARAMS as readonly string[]).includes(key))
+    const destination = new URL((onlyCrossView && kindFilterStore?.lastKind()) || '/resources/pods', 'http://radar.invalid')
+    current.forEach((value, key) => destination.searchParams.set(key, value))
     navigate(
-      { pathname: '/resources/pods', search: location.search, hash: location.hash },
+      { pathname: destination.pathname, search: destination.search, hash: location.hash },
       { replace: true },
     )
-  }, [location.pathname, location.search, location.hash, navigate])
+  }, [location.pathname, location.search, location.hash, navigate, kindFilterStore, clusterInfoLoading])
 
   // Set mainView by navigating to the path
   const setMainView = useCallback((view: ExtendedMainView, params?: Record<string, string>) => {
@@ -506,6 +510,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         goHost(href)
         return
       }
+    }
+
+    // Explicit params are a link with its own state; otherwise go back to where the user left this section.
+    const remembered = params
+      ? undefined
+      : viewMemory?.sectionPath(view) ?? (view === 'resources' ? kindFilterStore?.lastKind() : undefined)
+    if (remembered) {
+      navigate(withCrossViewParams(remembered, location.search))
+      return
     }
 
     const path = view === 'home' ? '/' : `/${view}`
@@ -532,7 +545,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [location.search, navigate, takeover, goHost])
+  }, [location.search, navigate, takeover, goHost, viewMemory, kindFilterStore])
 
   const whatsNewStatus = useWhatsNewStatus()
 
@@ -637,6 +650,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Diagnostics overlay state
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [diagnosticsFocus, setDiagnosticsFocus] = useState<DiagnosticsFocus>()
 
   // The peek drawer "expanded" into a fullscreen overlay = ?full=1 with a selected
   // resource, on ANY view (resources list, topology graph, GitOps, Applications…) —
@@ -953,7 +967,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       category: 'General' as const,
       scope: 'global' as const,
       allowInInputs: true,
-      handler: () => setShowDiagnostics(prev => !prev),
+      handler: () => { setDiagnosticsFocus(undefined); setShowDiagnostics(prev => !prev) },
     },
     // Settings exposes local-binary controls that don't apply to embedded hosts.
     // Register the shortcut only when standalone (matching the gear button) —
@@ -1205,11 +1219,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: (context) => {
-      // Clear all React Query caches when cluster context changes
-      // This ensures helm releases, resources, etc. are refetched from the new cluster
-      // removeQueries clears cached data, invalidateQueries triggers refetch
-      queryClient.removeQueries()
-      queryClient.invalidateQueries()
+      resetNavigationMap()
+
+      // Reconnects also emit context_changed. Preserve only this context's drain record.
+      refreshQueriesAfterReconnect(queryClient, connection.context, context)
 
       // Cancel any pending SSE-driven invalidation — old cluster's events are irrelevant
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
@@ -1248,10 +1261,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         const nextParams = new URLSearchParams()
         const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
         if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
-        // A CNPG detail keeps the context it belongs to, so it can say it is
-        // not in the new one instead of loading a same-named object.
-        const pinnedCtx = new URLSearchParams(location.search).get('ctx')
-        if (pinnedCtx && location.pathname.startsWith('/cnpg/')) nextParams.set('ctx', pinnedCtx)
+        for (const [key, value] of workspaceContextSwitchSearch(location.pathname, new URLSearchParams(location.search))) nextParams.set(key, value)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -1414,11 +1424,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const setActiveNamespace = useSetActiveNamespace()
   // Defer the state flip to onSuccess. Setting namespaces to [] before the
   // server-side pref has actually been cleared makes React Query refetch
-  // under the new empty key while the server still returns the previous
-  // pick's scope, caching stale data under the new key with no later
-  // invalidation. onSettled would do the same on errors, leaving the UI
-  // showing "All namespaces" while data is still namespace-scoped — onSuccess
-  // keeps state aligned with the server.
+  // under the new empty key while a Radar that applies the stored pick to
+  // reads naming no namespace (Hub embeds this UI against such Radars) returns
+  // the previous pick's scope, caching stale data under the new key with no
+  // later invalidation.
+  // onSettled would do the same on errors, leaving the UI showing "All
+  // namespaces" while data is still namespace-scoped — onSuccess keeps state
+  // aligned with the server.
   //
   // Don't touch the URL here either: setSearchParams on a still-set state
   // trips the URL→state sync into firing setNamespaces([]) and a duplicate
@@ -1432,6 +1444,17 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       { onSuccess: () => setNamespaces([]) },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
+  // Same write as the header picker, which then mirrors it into `namespaces`.
+  // The flash shows where that scope lives from now on. The picker owns the
+  // namespace scope from then on, so no kind keeps a Namespace column filter.
+  const [namespacePickerFlash, setNamespacePickerFlash] = useState(0)
+  const applyNamespacesToAllSections = useCallback(
+    (picked: string[]) => setActiveNamespace.mutateAsync({ namespaces: picked }).then(() => {
+      kindFilterStore?.clearColumn('namespace')
+      setNamespacePickerFlash(n => n + 1)
+    }),
+    [setActiveNamespace, kindFilterStore],
+  )
   const issuesShowNamespace = useMemo(() => {
     if (namespaceScope?.cacheScoped) {
       if (!namespaceScope.namespaceRescope) return undefined
@@ -1548,7 +1571,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // server while the per-user pick was still narrowed — the picker would
   // show the server scope but lists/dashboard would stay on "all namespaces".
   useEffect(() => {
-    const urlNamespaces = parseNamespacesFromURL(searchParams)
+    const urlNamespaces = namespacesFromSearch(searchParams)
     debugNamespaceLog('app:url-sync', {
       search: searchParams.toString(),
       urlNamespaces,
@@ -1770,7 +1793,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView === 'cnpg' ? 'resources' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : activeWorkspace?.navView ?? mainView
 
   return (
     <PortForwardProvider>
@@ -1813,7 +1836,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             <ScopePill>
               <ContextSwitcher ref={contextSwitcherRef} variant="segment" />
               <NamespaceSwitcher
+                key={namespacePickerFlash}
                 ref={namespaceSwitcherRef}
+                className={namespacePickerFlash ? 'reach-flash' : undefined}
                 variant="segment"
                 disabled={namespaceFilter.disabled}
                 disabledTooltip={namespaceFilter.tooltip}
@@ -2229,7 +2254,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Resources view */}
-        {mainView === 'resources' && (
+        {/* Bare /resources waits for App's redirect to the last kind; mounted, the view would redirect to Pods first. */}
+        {mainView === 'resources' && (location.pathname.replace(/\/+$/, '') || '/') !== '/resources' && (
           <ResourcesView
             namespaces={namespaces}
             selectedResource={routeSelectedResource}
@@ -2237,6 +2263,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
             onClearNamespaces={clearAllNamespaces}
+            rememberedKindSearch={rememberedKindSearch}
+            onKindFiltersChange={saveKindFilters}
+            // Embedded hosts own their namespace picker, and a cache-scoped
+            // Radar can't take an arbitrary set.
+            onApplyNamespacesToAllSections={namespaceScope?.cacheScoped || !kindFilterStore ? undefined : applyNamespacesToAllSections}
           />
         )}
 
@@ -2256,6 +2287,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               setNamespaces([ns])
               setActiveNamespace.mutate({ namespaces: [ns] })
             }}
+            onOpenDiagnostics={() => { setDiagnosticsFocus('timeline'); setShowDiagnostics(true) }}
           />
         )}
 
@@ -2320,12 +2352,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
-        {!viewsSyncGated && mainView === 'capacity' && (
-          <CapacityView onOpenResource={navigateToResource} />
-        )}
-
-        {!viewsSyncGated && mainView === 'cnpg' && (
-          <CNPGView
+        {!viewsSyncGated && activeWorkspace && (
+          <WorkspaceScreen
+            workspace={activeWorkspace}
             namespaces={namespaces}
             selectedResource={routeSelectedResource}
             onOpenResource={navigateToResource}
@@ -2403,10 +2432,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(res, opts) => {
-            const cnpgPlural = cnpgDetailKindFor(res.kind, res.group)
-            if (cnpgPlural) {
+            const detailPath = resourceExpandedPath(res, connection.context || undefined, opts?.yaml ? 'yaml' : undefined)
+            if (detailPath) {
               navigate(
-                cnpgDetailPath({ plural: cnpgPlural, namespace: res.namespace, name: res.name }, connection.context || undefined, opts?.yaml ? 'yaml' : undefined),
+                detailPath,
                 { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } },
               )
               return
@@ -2525,7 +2554,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
 
       {/* Bottom Dock for Terminal/Logs */}
-      <BottomDock />
+      <BottomDock viewNamespaces={namespaces} />
 
       {/* Spacer for dock */}
       <DockSpacer />
@@ -2534,7 +2563,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {helpOverlay.shouldRender && <ShortcutHelpOverlay isOpen={helpOverlay.isOpen} onClose={() => setShowHelp(false)} currentView={mainView} />}
 
       {/* Diagnostics overlay */}
-      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} onClose={() => setShowDiagnostics(false)} />}
+      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
 
       {/* Settings dialog — My permissions is rendered inline in its own section */}
       <SettingsDialog

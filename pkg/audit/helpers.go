@@ -139,10 +139,12 @@ func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []str
 	// Filter the evaluation denominators onto fresh maps — the input is the
 	// server's shared cached scan, so mutating its maps would corrupt every
 	// other consumer for the cache TTL.
-	var evalByNS map[string]map[string]int
-	if results.EvaluatedByNamespace != nil {
-		evalByNS = make(map[string]map[string]int, len(results.EvaluatedByNamespace))
-		for id, byNS := range results.EvaluatedByNamespace {
+	filterByCheckNS := func(m map[string]map[string]int) map[string]map[string]int {
+		if m == nil {
+			return nil
+		}
+		out := make(map[string]map[string]int, len(m))
+		for id, byNS := range m {
 			if disabled[id] {
 				continue
 			}
@@ -154,10 +156,12 @@ func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []str
 				nsCopy[ns] = n
 			}
 			if len(nsCopy) > 0 {
-				evalByNS[id] = nsCopy
+				out[id] = nsCopy
 			}
 		}
+		return out
 	}
+	evalByNS := filterByCheckNS(results.EvaluatedByNamespace)
 	checkCounts, totalPassing := deriveCheckCounts(evalByNS, filtered, categories)
 
 	return &ScanResults{
@@ -167,11 +171,13 @@ func ApplySettings(results *ScanResults, ignoredNamespaces, disabledChecks []str
 			Danger:     totalDanger,
 			Categories: categories,
 		},
-		Findings:             filtered,
-		Groups:               groups,
-		Checks:               results.Checks,
-		CheckCounts:          checkCounts,
-		EvaluatedByNamespace: evalByNS,
-		MissingInputs:        results.MissingInputs,
+		Findings:                     filtered,
+		Groups:                       groups,
+		Checks:                       results.Checks,
+		CheckCounts:                  checkCounts,
+		EvaluatedByNamespace:         evalByNS,
+		MissingInputs:                results.MissingInputs,
+		IgnoreChecksAnnotation:       results.IgnoreChecksAnnotation,
+		AnnotationIgnoredByNamespace: filterByCheckNS(results.AnnotationIgnoredByNamespace),
 	}
 }

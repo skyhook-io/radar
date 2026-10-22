@@ -37,9 +37,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/auditcontext"
@@ -125,17 +123,6 @@ func (a policyReportLookupAdapter) FindingsFor(group, kind, namespace, name stri
 		}
 	}
 	return out
-}
-
-type serviceBackendLookup struct {
-	cache *k8s.ResourceCache
-}
-
-func (l serviceBackendLookup) PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error) {
-	if l.cache == nil || l.cache.Pods() == nil {
-		return nil, nil
-	}
-	return l.cache.Pods().Pods(namespace).List(selector)
 }
 
 // parseVerbosity reads the ?verbosity= query parameter and returns the matching level.
@@ -486,7 +473,10 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		ContainerCompletionSplit: resourcecontextrefs.ContainerCompletionSplitFromShape(
 			k8s.FindContainerCompletionSplitForObject(cache, obj, time.Now()),
 		),
-		ServiceBackends: serviceBackendLookup{cache: cache},
+		ServiceBackends: k8s.ServiceBackendLookup{Cache: cache},
+		TemplateDivergence: issues.NewCacheProvider().TemplateDivergence(obj, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), func(verb, group, resource, namespace string) bool {
+			return s.canRead(r, group, resource, namespace, verb)
+		}),
 	}
 
 	// Wire the PolicyReport index when Kyverno is installed. Build emits a
@@ -503,7 +493,8 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		families: s.readablePolicyReportFamilies(r, namespace),
 	}
 
-	if topo, prov, dyn, ok := s.topologyForContext(namespace); ok {
+	if topo, index, prov, dyn, ok := s.topologyForContext(); ok {
+		opts.RelIndex = index
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn
@@ -518,31 +509,40 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	return resourcecontext.Build(r.Context(), obj, opts)
 }
 
-// topologyForContext builds (or fetches the memoized) topology scoped to the
-// resource's namespace. Cluster-scoped resources get an all-namespaces build.
-// Returns ok=false when the cache isn't ready yet.
-func (s *Server) topologyForContext(namespace string) (*topology.Topology, topology.ResourceProvider, topology.DynamicProvider, bool) {
+// topologyForContext uses the complete relationship graph the broadcaster
+// already keeps for drawer lookups, so resource context never holds a second
+// copy of the cluster. The resource context checker gates each target,
+// including other namespaces. Before that graph exists it builds one through
+// the memo. Returns ok=false when the cache is not available.
+func (s *Server) topologyForContext() (*topology.Topology, *topology.RelationshipsIndex, topology.ResourceProvider, topology.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
-	opts := topology.DefaultBuildOptions()
-	if namespace != "" {
-		opts.Namespaces = []string{namespace}
-	}
-	opts.IncludeReplicaSets = true
-	opts.ForRelationshipCache = true
-
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	if topo, index := s.RelationshipTopology(); topo != nil {
+		return topo, index, provider, dyn, true
+	}
+	opts := topology.RelationshipBuildOptions()
+	opts.IncludeSecrets = true
 
-	topo, err := s.topoMemo.Get(opts, func() (*topology.Topology, error) {
+	topo, index, err := s.topoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
 		return topology.NewBuilder(provider).WithDynamic(dyn).Build(opts)
 	})
 	if err != nil || topo == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
-	return topo, provider, dyn, true
+	return topo, index, provider, dyn, true
+}
+
+// RelationshipTopology returns the broadcaster's full relationship graph and
+// its index, or nil before it has been built.
+func (s *Server) RelationshipTopology() (*topology.Topology, *topology.RelationshipsIndex) {
+	if s == nil || s.broadcaster == nil {
+		return nil, nil
+	}
+	return s.broadcaster.GetCachedTopologyWithIndex()
 }
 
 // computeIssueSummaryForResource rolls up per-resource issue-composer rows
@@ -618,6 +618,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		Count:           count,
 		HighestSeverity: string(topSeverity),
 		TopReason:       topReason,
+		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
 	}, matched
 }

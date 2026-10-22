@@ -106,7 +106,7 @@ func activeOOMLimitDiscrepancy(cache *ResourceCache, pod *corev1.Pod, statuses [
 			return d, true
 		}
 
-		if podHasResizeSignal(pod) || podSpecLimit.IsZero() || podSpecLimit.Cmp(templateLimit) >= 0 {
+		if PodHasResizeSignal(pod) || podSpecLimit.IsZero() || podSpecLimit.Cmp(templateLimit) >= 0 {
 			continue
 		}
 		d.observedLimit = podSpecLimit
@@ -130,7 +130,7 @@ func explicitMemoryLimit(limits corev1.ResourceList) (resource.Quantity, bool) {
 	return limit, ok && limit.Sign() > 0
 }
 
-func podHasResizeSignal(pod *corev1.Pod) bool {
+func PodHasResizeSignal(pod *corev1.Pod) bool {
 	if pod.Status.Resize != "" {
 		return true
 	}

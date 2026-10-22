@@ -67,6 +67,7 @@ func (s *Server) handleGitOpsDestination(w http.ResponseWriter, r *http.Request)
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		entry = entry.Served(k8s.ServedGVR)
 		obj, err := dyn.Resource(entry.GVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
 		if err != nil {
 			s.writeDestinationError(w, err, namespace, name)

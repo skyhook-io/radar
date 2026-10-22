@@ -9,14 +9,49 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
+
+type podLogStreamHandle struct {
+	uid        types.UID
+	cancel     context.CancelFunc
+	follow     int
+	generation int
+	opened     atomic.Bool
+}
+
+type podLogSourceResult struct {
+	key    string
+	uid    types.UID
+	follow int
+	err    error
+}
+
+func stopPodLogStreams(active *sync.Map, cursors map[string]*podlogs.StreamCursor, podName string) {
+	active.Range(func(key, value any) bool {
+		if strings.HasPrefix(key.(string), podName+"/") {
+			value.(*podLogStreamHandle).cancel()
+			active.CompareAndDelete(key, value)
+		}
+		return true
+	})
+	for key := range cursors {
+		if strings.HasPrefix(key, podName+"/") {
+			delete(cursors, key)
+		}
+	}
+}
 
 // LogsResponse is the response for non-streaming logs
 type LogsResponse struct {
@@ -36,7 +71,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	sinceSecondsStr := r.URL.Query().Get("sinceSeconds")
 
 	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -44,8 +79,8 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tailLines := parseTailLines(tailLinesStr, 500)
-	sinceSeconds := parseSinceSeconds(sinceSecondsStr)
+	tailLines := podlogs.ParseTailLines(tailLinesStr, 500)
+	sinceSeconds := podlogs.ParseSinceSeconds(sinceSecondsStr)
 
 	client := s.getClientForRequest(r)
 	if client == nil {
@@ -81,12 +116,20 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
+		// These are answers about the pod, not failures in Radar. The code
+		// lets the viewer show them as such.
 		if errors.Is(err, k8score.ErrLogsUnavailable) {
-			s.writeError(w, http.StatusNotFound, k8score.ErrLogsUnavailable.Error())
+			s.writeErrorCode(w, http.StatusNotFound, "logs_unavailable", k8score.ErrLogsUnavailable.Error())
 			return
 		}
 		if previous && isNoPreviousContainer(err) {
-			s.writeError(w, http.StatusNotFound, "This container has not restarted, so there is no earlier run to show.")
+			// The apiserver gives the same answer when the node has dropped
+			// the earlier run's record, so the restart count tells them apart.
+			if podlogs.ContainerRestartCount(pod, container) > 0 {
+				s.writeErrorCode(w, http.StatusNotFound, "logs_unavailable", "Kubernetes did not return the logs of this container's earlier run.")
+				return
+			}
+			s.writeErrorCode(w, http.StatusNotFound, "no_previous_run", "This container has not restarted, so there is no earlier run to show.")
 			return
 		}
 		if err != nil {
@@ -125,7 +168,7 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 	tailLinesStr := r.URL.Query().Get("tailLines")
 
 	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -135,8 +178,8 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 
 	sinceStr := r.URL.Query().Get("sinceSeconds")
 
-	tailLines := parseTailLines(tailLinesStr, 100)
-	sinceSeconds := parseSinceSeconds(sinceStr)
+	tailLines := podlogs.ParseTailLines(tailLinesStr, 100)
+	sinceSeconds := podlogs.ParseSinceSeconds(sinceStr)
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -203,9 +246,24 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 			line, err := reader.ReadString('\n')
 			// Checked before the EOF branch: the notice is the whole body with
 			// no trailing newline, so it arrives together with EOF.
-			if k8score.IsLogsUnavailableNotice(line) {
-				sendSSEError(w, flusher, k8score.ErrLogsUnavailable.Error())
+			if followErr := k8score.LogFollowError(line); followErr != nil {
+				// Coded like the snapshot answer, so the viewer shows it as an
+				// answer about the pod rather than a Radar failure.
+				sendSSEEvent(w, flusher, "error", map[string]string{"error": followErr.Error(), "error_code": "logs_unavailable"})
 				return
+			}
+
+			line = strings.TrimSuffix(line, "\n")
+
+			if line != "" && (err == nil || err == io.EOF) {
+				// Parse timestamp and content
+				timestamp, content := podlogs.ParseLine(line)
+
+				sendSSEEvent(w, flusher, "log", map[string]string{
+					"timestamp": timestamp,
+					"content":   content,
+					"container": container,
+				})
 			}
 			if err != nil {
 				if err == io.EOF {
@@ -220,20 +278,6 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 				sendSSEError(w, flusher, fmt.Sprintf("Read error: %v", err))
 				return
 			}
-
-			line = strings.TrimSuffix(line, "\n")
-			if line == "" {
-				continue
-			}
-
-			// Parse timestamp and content
-			timestamp, content := parseLogLine(line)
-
-			sendSSEEvent(w, flusher, "log", map[string]string{
-				"timestamp": timestamp,
-				"content":   content,
-				"container": container,
-			})
 		}
 	}
 }
@@ -268,24 +312,12 @@ func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Inter
 	return string(content), nil
 }
 
-// isNoPreviousContainer matches the apiserver's answer when an earlier run is
-// asked for on a container that never restarted. The apiserver sends it as a
-// 400 BadRequest, so any other failure that mentions the phrase is left alone.
+// isNoPreviousContainer matches the apiserver's answer when it has no earlier
+// run to give: the container never restarted, or the node no longer knows the
+// run it had. The apiserver sends it as a 400 BadRequest, so any other failure
+// that mentions the phrase is left alone.
 func isNoPreviousContainer(err error) bool {
 	return apierrors.IsBadRequest(err) && strings.Contains(err.Error(), "previous terminated container")
-}
-
-// parseLogLine extracts timestamp from a log line (format: 2024-01-20T10:30:00.123456789Z content)
-func parseLogLine(line string) (timestamp, content string) {
-	// K8s timestamps are in RFC3339Nano format at the start of the line
-	if len(line) > 30 && line[4] == '-' && line[7] == '-' && line[10] == 'T' {
-		// Find the space after timestamp
-		spaceIdx := strings.Index(line, " ")
-		if spaceIdx > 20 && spaceIdx < 40 {
-			return line[:spaceIdx], line[spaceIdx+1:]
-		}
-	}
-	return "", line
 }
 
 // sendSSEEvent sends an SSE event

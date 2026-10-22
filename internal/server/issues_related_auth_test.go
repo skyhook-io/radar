@@ -301,3 +301,35 @@ func TestRESTIssuesCarryConditionalCleanup(t *testing.T) {
 		t.Fatalf("removal=%+v", removal)
 	}
 }
+
+// A NetworkPolicy issue links the Services, workloads and Pods it isolates.
+// Those links are namespaced, so in auth mode they follow the caller's
+// namespace access: a caller without it neither sees the links nor matches
+// the issue through them.
+func TestRESTRelatedIssuesAuthorizeNetworkPolicyIsolationLinks(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	s.permCache.Set("shop-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
+	s.permCache.Set("other-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"other"}})
+	svc := issues.Ref{Kind: "Service", Namespace: "shop", Name: "recommendation"}
+	links := []issuesapi.Ref{svc, {Kind: "Pod", Namespace: "shop", Name: "rec-a"}}
+	policyIssue := issues.Issue{
+		ID: "netpol", Group: "networking.k8s.io", Kind: "NetworkPolicy", Namespace: "shop", Name: "deny-all",
+		AffectedRefs: links,
+		DiagnosticContext: &issuesapi.DiagnosticContext{Facts: []issuesapi.DiagnosticFact{{
+			Type: "network_policy_isolates",
+			Refs: links,
+		}}},
+	}
+	lookup := func(user string) ([]issues.Issue, issues.Issue) {
+		r := requestWithUser(http.MethodGet, "/api/issues/resource/service/shop/recommendation", &auth.User{Username: user})
+		access := s.issueRelatedResourceAccess(r)
+		shown := issues.RedactIssueRelatedRefs(policyIssue, access)
+		return issues.RelatedIssuesFrom(nil, []issues.Issue{shown}, issues.RelatedIssueOptions{CanReadRelated: access}, svc.Group, svc.Kind, svc.Namespace, svc.Name), shown
+	}
+	if got, shown := lookup("shop-user"); len(got) != 1 || len(shown.DiagnosticContext.Facts[0].Refs) != 2 {
+		t.Fatalf("caller with namespace access: related=%d shown=%+v", len(got), shown.DiagnosticContext)
+	}
+	if got, shown := lookup("other-user"); len(got) != 0 || shown.DiagnosticContext != nil {
+		t.Fatalf("caller without namespace access matched or saw links: related=%d shown=%+v", len(got), shown.DiagnosticContext)
+	}
+}

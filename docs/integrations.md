@@ -136,6 +136,8 @@ All provider-specific NodeClass variants are automatically detected and supporte
 
 **Topology:** Full CAPI ownership chain — ClusterClass → Cluster → KubeadmControlPlane → Machine → Node, and Cluster → MachineDeployment → MachineSet → Machine → Node. MachineHealthCheck → Cluster protection edges. Machine → Node edges use status.nodeRef (semantic, not owner-ref).
 
+ClusterClass links use the namespace declared by the Cluster, defaulting to the Cluster’s namespace when omitted. Both `spec.topology.classRef` and the older supported `class`/`classNamespace` API fields are read. Owner links require the declared API group as well as kind and name; same-named resources from unrelated groups remain distinct.
+
 **Cluster Detail View:**
 - Phase, version, cluster class, control plane endpoint
 - Control plane and worker replica counts (v1beta2-aware)
@@ -243,7 +245,7 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 
 ### What Radar Shows
 
-**Topology:** ScaledObject → target workload (Deployment, StatefulSet, or Rollout). See which workloads are managed by KEDA and trace the scaling relationship.
+**Topology:** ScaledObject → target workload (Deployment, StatefulSet, or Rollout). ScaledObject and ScaledJob triggers also link to observed TriggerAuthentication or ClusterTriggerAuthentication resources. Authentication is a dependency, not an autoscaler target; omitted kind defaults to a same-namespace TriggerAuthentication. Cluster-scoped targets retain per-kind read gating. These declarations do not prove credential validity or trigger readiness. Applications configuration references and counts exclude authentication objects the caller cannot read.
 
 <p align="center">
   <img src="screenshots/integrations/keda-topology.png" alt="KEDA Topology" width="800">
@@ -290,8 +292,8 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 |-----|-------|----------|-------------|------------|
 | ScaledObject | `keda.sh/v1alpha1` | Yes | Yes | Yes |
 | ScaledJob | `keda.sh/v1alpha1` | Yes | Yes | Yes |
-| TriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
-| ClusterTriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
+| TriggerAuthentication | `keda.sh/v1alpha1` | When referenced | Yes | Yes |
+| ClusterTriggerAuthentication | `keda.sh/v1alpha1` | When referenced | Yes | Yes |
 
 ---
 
@@ -304,6 +306,8 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 **Topology:** VPA nodes appear in the Resources view with `EdgeUses` edges to target workloads, grouped in the Scalers section alongside HPA and KEDA.
 
 **Detail View:** Target workload, update mode, per-container resource recommendations (target, lower bound, upper bound, uncapped), resource policy, and conditions.
+
+Target links use the API group in `targetRef.apiVersion`. Built-in targets without an API version use their standard group.
 
 **Problem Detection:** Alerts for unsupported configurations, missing recommendations, and low confidence scores.
 
@@ -418,6 +422,8 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 **Topology:** Full Contour routing path — HTTPProxy (root) → HTTPProxy (child, via delegation) → Service, with TLS secret configuration edges. Root proxies with `spec.virtualhost` appear as entry points; child proxies referenced via `spec.includes` are connected via delegation edges. Both **Resources** and **Traffic** view modes are supported.
 
+TLS references resolve local Secret names and delegated `namespace/name` names consistently, including client CA/CRL and upstream validation bundles. Configuration graphs reuse cached Secret metadata even when general Secret display is disabled; unavailable metadata remains unknown. Declared references do not establish that Contour has accepted or authorized TLS delegation, and topology does not serialize Secret values.
+
 <p align="center">
   <img src="screenshots/integrations/contour-topology.png" alt="Contour Topology" width="800">
   <br><em>Contour in Topology View — HTTPProxy → Service routing with delegation</em>
@@ -447,7 +453,7 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 ### What Radar Shows
 
-**Topology:** Certificate → Issuer/ClusterIssuer edges show which issuer manages each certificate. The full provisioning chain (Certificate → CertificateRequest → Order → Challenge) is connected via owner references.
+**Topology:** Certificate → Issuer/ClusterIssuer edges connect each certificate to its observed built-in issuer, including ownerless issuers. Omitted `issuerRef.kind` and `issuerRef.group` use cert-manager defaults. Only referenced issuers are added; external issuer groups are not inferred. ClusterIssuer visibility uses its exact cluster-scoped read permission. Resource details and MCP context distinguish issuer dependencies from autoscaling. The full provisioning chain (Certificate → CertificateRequest → Order → Challenge) is connected via owner references.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-topology.png" alt="cert-manager Topology" width="800">
@@ -602,11 +608,21 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 | GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | OCIRepository | `source.toolkit.fluxcd.io/v1beta2` | Yes | Yes | — |
 | HelmRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
+| Bucket / HelmChart / ExternalArtifact | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
 | HelmRelease | `helm.toolkit.fluxcd.io/v2` | Yes | Yes | Yes |
 | Alert | `notification.toolkit.fluxcd.io/v1beta3` | — | Yes | — |
 
 **Workflow operations**: Reconcile, Reconcile-with-source (Kustomization/HelmRelease), Suspend/Resume.
+
+**Source relationships**: Topology, Related Resources and REST/MCP context link
+observed Flux sources in both directions within Radar's namespace scope.
+Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
+or `spec.chartRef`. Inline releases also link the generated HelmChart named by
+`status.helmChart`; an observed HelmChart links its source in its own namespace.
+These are dependencies, not owners: topology draws each source upstream, with
+the edge pointing into the object that reads it. A link does not prove that Flux
+permits the reference or has produced an artifact.
 
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 
@@ -687,6 +703,8 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 ### What Radar Shows
 
 **Topology:** Full Istio traffic path — IstioGateway → VirtualService → Service, and DestinationRule → Service configuration edges. See how traffic flows through gateway listeners, virtual service routing rules, and into backend services.
+
+Service links accept short names in the rule's namespace or full `name.namespace.svc.<domain>` names. Radar reads a unique registry domain from standard observed Istiod Deployments' `--domain` argument, using Istio's `cluster.local` default when no override is observed. Conflicting or unresolved control-plane arguments leave FQDN links unresolved. External control planes and nonstandard launch configurations may therefore need additional domain discovery; arbitrary dotted hosts are not treated as local Services.
 
 **VirtualService Detail View:**
 - HTTP/TCP/TLS routing rules with match conditions
@@ -871,7 +889,15 @@ The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.
 
 [CloudNativePG](https://cloudnative-pg.io/) (CNPG) is the Kubernetes operator for PostgreSQL, covering the full lifecycle from bootstrapping to monitoring, with high availability, automated failover, and backup management.
 
-Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) composes them into fleet, protection, declaration, pooling and operator screens — see [cnpg.md](cnpg.md).
+Beyond the per-kind views below, CloudNativePG gets its own views under Resources (`/cnpg`): the fleet, backups and recovery evidence, declarations, pooling and the operator. Each Cluster has a page organized by task (what needs attention, replication, storage, performance, backups) and guarded actions such as switchover, fencing, backup setup and restore, each followed until Radar observes the outcome. Radar does not provision object storage or credentials. Design detail is in [cnpg.md](cnpg.md).
+
+**Fleet:** every Cluster ordered by urgency, each with its top problem.
+
+![CloudNativePG Clusters view: three PostgreSQL clusters, two needing attention, each with its top problem](images/cnpg/cnpg-fleet.png)
+
+**Cluster page:** the cause first, then one line per health dimension.
+
+![A Cluster stuck because its first instance can't be scheduled: the scheduler's reason first, then Serving, Replication, Storage and Backups at a glance](images/cnpg/cnpg-cluster-overview.png)
 
 ### What Radar Shows
 
@@ -906,13 +932,13 @@ Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) compo
 - PgBouncer parameters
 - Degraded state detection (AlertBanner when not all instances are scheduled)
 
-Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar therefore labels the healthy state **Scheduled** rather than Ready; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
+Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar labels the declared `spec.instances` count neutrally as **N instances requested**; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
 
 **Resource Browser:** Smart columns show status, instance counts (with degraded highlighting), primary instance, image tag, storage size, cluster reference, and schedule expressions.
 
 ### Phase classification
 
-Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
+Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. "Terminal" means reconciliation is blocked, not that the operator gave up: it retries every one of them, the plugin phases clear on their own once the plugin loads and answers, and the banner quotes the operator's `status.phaseReason`. An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
 
 Backup phases are lowercase tokens. `walArchivingFailing` is treated as a cluster-level signal, not an ordinary backup failure — archiving is broken upstream of that Backup, so the whole recovery window is affected.
 
@@ -926,7 +952,7 @@ The `ObjectStore` itself is rendered: destination and credential provider (never
 
 Two states carry the weight. A failure newer than the last success means the window has stopped advancing while its oldest point still ages out under retention — shrinking from both ends, so it is called out rather than left to be inferred from two timestamps. An ObjectStore with an empty `serverRecoveryWindow` is reported as holding nothing restorable rather than as healthy: on the plugin path the Cluster publishes no recovery point of its own, so a green badge here would be the only claim on screen and it would be wrong.
 
-`Backup` and `ScheduledBackup` with `spec.method: plugin` name the plugin and link to the ObjectStore they write into, and suppress the in-tree `destinationPath` / `serverName` rows, which are never populated on that path.
+`Backup` and `ScheduledBackup` with `spec.method: plugin` name the plugin and suppress the in-tree `destinationPath` / `serverName` rows, which are never populated on that path. For barman-cloud, their destination comes from the Cluster’s plugin entry; their own plugin parameters are ignored. The standalone renderers explain this without presenting a parameter as a destination link. Workspace destination links are inferred from the current Cluster configuration. Radar does not model third-party plugin destinations.
 
 ### Declarative objects: Database, Publication, Subscription
 
@@ -964,6 +990,7 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 | Database | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Publication | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Subscription | `postgresql.cnpg.io/v1` | — | Yes | — |
+| DatabaseRole | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ClusterImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 
@@ -1154,6 +1181,8 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 ### What Radar Shows
 
 **Topology:** Full Knative Serving chain — Route → KnativeService → Configuration → Revision → Deployment → Pod. Eventing flow — PingSource → Broker → Trigger → subscriber target. See how traffic is split across revisions, which configurations are active, and how events flow from sources through brokers to triggers.
+
+Event destinations retain the reference’s API group, kind, namespace and name. Missing or conflicting identity remains unresolved rather than borrowing a same-named core Service. `Trigger.spec.brokerRef` uses its explicit Broker namespace and name; the older `spec.broker` field remains local to the Trigger. Channel objects and their observed backing channels are separate resources, and cached owner references establish their management links.
 
 <p align="center">
   <img src="screenshots/integrations/knative-topology.png" alt="Knative Topology" width="800">

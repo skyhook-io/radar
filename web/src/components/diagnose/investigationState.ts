@@ -819,6 +819,14 @@ export function canContinueInvestigation(
   );
 }
 
+// readOnlyNotice is what an interactive run that can't take a follow-up shows
+// where the follow-up box would be: the host's reason when it gave one.
+export function readOnlyNotice(run: RunSummary): string {
+  return (
+    run.continueBlockedReason?.trim() || "This investigation is read-only."
+  );
+}
+
 export function canInvestigateFurther(run: RunSummary, gone = false): boolean {
   return (
     !gone &&

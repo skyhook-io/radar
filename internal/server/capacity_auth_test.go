@@ -8,8 +8,10 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestCapacityNamespacesBypassSavedViewPreference(t *testing.T) {
@@ -76,71 +78,28 @@ func TestCapacityNamespacesHonorExplicitAndForcedScope(t *testing.T) {
 	}
 }
 
-type capacityTestInformerScope struct {
-	clusterWide map[string]bool
-	namespaces  map[string][]string
-	notReady    map[string]bool
-}
-
-func (s capacityTestInformerScope) IsKindClusterWide(resource string) bool {
-	return s.clusterWide[resource]
-}
-
-func (s capacityTestInformerScope) KindNamespaces(resource string) []string {
-	return append([]string(nil), s.namespaces[resource]...)
-}
-
-func (s capacityTestInformerScope) IsKindReady(resource string) bool {
-	return !s.notReady[resource]
-}
-
-func TestCapacityNamespacesHonorInformerCoverage(t *testing.T) {
-	clusterWide := capacityTestInformerScope{clusterWide: map[string]bool{"pods": true}}
-	limited := capacityTestInformerScope{namespaces: map[string][]string{"pods": {"team-a", "team-b"}}}
-	tests := []struct {
-		name            string
-		cache           capacityInformerScope
-		requested       []string
-		want            []string
-		wantLimited     bool
-		wantPartial     bool
-		wantUnavailable bool
-	}{
-		{name: "cluster wide", cache: clusterWide},
-		{name: "unfiltered limited cache", cache: limited, want: []string{"team-a", "team-b"}, wantLimited: true, wantPartial: true},
-		{name: "covered explicit subset", cache: limited, requested: []string{"team-b"}, want: []string{"team-b"}, wantLimited: true},
-		{name: "covered explicit order", cache: limited, requested: []string{"team-b", "team-a"}, want: []string{"team-b", "team-a"}, wantLimited: true},
-		{name: "partial overlap", cache: limited, requested: []string{"team-b", "team-c"}, want: []string{"team-b"}, wantLimited: true, wantPartial: true},
-		{name: "zero overlap", cache: limited, requested: []string{"team-c"}, want: []string{}, wantLimited: true, wantUnavailable: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := capacityNamespacesWithinCache(test.cache, "pods", test.requested)
-			if !slices.Equal(got.namespaces, test.want) || got.limited != test.wantLimited || got.partial != test.wantPartial || got.unavailable != test.wantUnavailable {
-				t.Fatalf("cache namespaces = %#v, want namespaces=%v limited=%v partial=%v unavailable=%v", got, test.want, test.wantLimited, test.wantPartial, test.wantUnavailable)
-			}
-		})
-	}
-}
-
 func TestCapacityOwnerResolutionHonorsInformerCoverage(t *testing.T) {
 	controller := true
 	replicaPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-abc", Controller: &controller}}}}
 	jobPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "report", Controller: &controller}}}}
-	cache := capacityTestInformerScope{namespaces: map[string][]string{
-		"replicasets": {"team-a"},
-		"jobs":        {"team-b"},
-	}}
+	cache, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client: fake.NewSimpleClientset(),
+		ResourceScopes: map[string]k8score.ResourceScope{
+			"replicasets": {Enabled: true, Namespace: "team-a"},
+			"jobs":        {Enabled: true, Namespace: "team-b"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Stop()
 	permissions, partial := capacityOwnerResolutionPermissions([]*corev1.Pod{replicaPod, jobPod}, func(_ string, resource, namespace string) bool {
-		return capacityCacheCoversNamespace(cache, resource, namespace)
+		return cache.AssessKindRead(resource, []string{namespace}).Complete
 	})
 	if permissions[replicaPod] || !permissions[jobPod] || !partial {
 		t.Fatalf("owner permissions = %#v partial=%v, want ReplicaSet denied and Job allowed", permissions, partial)
 	}
-	cache.notReady = map[string]bool{"jobs": true}
-	if capacityCacheCoversNamespace(cache, "jobs", "team-b") {
-		t.Fatal("owner resolution used an informer that has not synced")
-	}
+
 }
 
 func TestCapacityWorkloadCoverageIncludesPoolAttributionSources(t *testing.T) {

@@ -16,6 +16,7 @@ import {
   SEVERITY_TEXT_CLASS,
 } from './severity'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { CopyableCommand } from '../trace/TracePanel'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { CORE_RESOURCES } from '../../utils/api-resources'
 
@@ -28,6 +29,9 @@ const AUDIT_INPUT_LABELS = new Map<string, string>([
   ['replicaset-ownership', 'ReplicaSet ownership'],
   ['configmap-references', 'ConfigMap references'],
   ['secret-references', 'Secret references'],
+  ['pvc-consumers', 'PVC consumers'],
+  ['pv-deletion-events', 'PV deletion events'],
+  ['pv-release-time', 'PV release time'],
 ])
 
 // Leading severity glyph, one per tier of the 4-tier ladder: critical = octagon,
@@ -101,6 +105,9 @@ export interface ChecksViewProps {
    *  tab governs hiding there). Operate on the whole check, fleet-wide. */
   onHideCheck?: (checkID: string, title: string) => void
   onHideCategory?: (category: string) => void
+  /** Per-resource opt-out annotation the source Radar honors. Omit when it
+   *  doesn't, so the card never suggests an annotation that does nothing. */
+  ignoreChecksAnnotation?: string
 }
 
 // A check rolled up across every cluster it fires on — one row of the fleet
@@ -122,7 +129,7 @@ const CHECKS_FILTER_SCHEMA = defineFilterSchema({
   q: { param: 'q', type: 'text' },
 })
 
-export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs = [], resourceHref, onResourceClick, clusterLabel, clusterLabelById, clusterFilter: clusterFilterProp, onClusterFilterChange, emptyAction, onHideCheck, onHideCategory }: ChecksViewProps) {
+export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs = [], resourceHref, onResourceClick, clusterLabel, clusterLabelById, clusterFilter: clusterFilterProp, onClusterFilterChange, emptyAction, onHideCheck, onHideCategory, ignoreChecksAnnotation }: ChecksViewProps) {
   // Severity / category / framework / search live in the URL (shareable,
   // bookmarkable audit links) via the shared filter-state contract. The cluster
   // facet is deliberately NOT here — it's a host-controlled seam (see
@@ -430,6 +437,7 @@ export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs 
               onResourceClick={onResourceClick}
               onHideCheck={onHideCheck}
               onHideCategory={onHideCategory}
+              ignoreChecksAnnotation={ignoreChecksAnnotation}
             />
           ))}
         </ol>
@@ -720,6 +728,7 @@ function FleetCheckRow({
   onResourceClick,
   onHideCheck,
   onHideCategory,
+  ignoreChecksAnnotation,
 }: {
   fc: FleetCheck
   meta?: CheckMeta
@@ -730,6 +739,7 @@ function FleetCheckRow({
   onResourceClick?: (ref: CheckResourceRef) => void
   onHideCheck?: (checkID: string, title: string) => void
   onHideCategory?: (category: string) => void
+  ignoreChecksAnnotation?: string
 }) {
   const clusterCount = fc.clusters.length
   const single = clusterCount <= 1
@@ -761,6 +771,13 @@ function FleetCheckRow({
       renderActions={() => (menuItems.length > 0 ? <RowMenu items={menuItems} /> : null)}
     >
       <CheckRemediationBlock description={meta?.description} remediation={meta?.remediation} references={meta?.references} />
+
+      {ignoreChecksAnnotation && (
+        <CardSection icon={EyeOff} label="Skip for one resource">
+          <CardBody>Add this annotation to a resource listed below. Its findings for this check are then hidden.</CardBody>
+          <CopyableCommand command={`${ignoreChecksAnnotation}: ${fc.checkID}`} />
+        </CardSection>
+      )}
 
       <CardSection
         icon={Layers}

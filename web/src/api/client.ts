@@ -1,6 +1,7 @@
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
+import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
 import type {
@@ -22,7 +23,7 @@ import type {
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
-import { showApiError, showApiSuccess } from '../components/ui/Toast'
+import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
@@ -42,6 +43,9 @@ import type {
   ResourceDiff,
   UpgradeInfo,
   BatchUpgradeInfo,
+  ChartSourceCandidate,
+  SourceUpgradeSelection,
+  ChartSourceStatus,
   ValuesDiff,
   ValuesPreviewResponse,
   HelmRepository,
@@ -297,6 +301,20 @@ export function isKindSyncFailed(error: unknown): boolean {
   );
 }
 
+// timelineDatabaseError returns the driver's error when a timeline read failed
+// because Radar can't connect to its PostgreSQL database, and null for any other
+// failure. The server redacts the password before it sends the error.
+export function timelineDatabaseError(error: unknown): string | null {
+  if (
+    !(error instanceof ApiError) ||
+    error.status !== 503 ||
+    error.data?.error_code !== "timeline_database_unreachable"
+  )
+    return null;
+  const detail = error.data.detail;
+  return typeof detail === "string" ? detail : "";
+}
+
 // SyncKindState / SyncStatusSnapshot mirror k8score's SyncSnapshot — attached
 // to the connection-status payload while the initial informer sync is running.
 export interface SyncKindState {
@@ -525,6 +543,10 @@ export type { AuditFinding, ResourceGroup, CheckMeta, Check };
 
 export interface AuditResponse {
   missingInputs?: string[];
+  // Absent on a Radar that predates the per-resource opt-out.
+  ignoreChecksAnnotation?: string;
+  // checkID → namespace → resources whose findings the annotation hid.
+  annotationIgnoredByNamespace?: Record<string, Record<string, number>>;
   summary: DashboardAudit;
   findings: AuditFinding[];
   groups: ResourceGroup[];
@@ -735,18 +757,43 @@ export interface IssuesResponse {
   recent_changes_reason?: string
   recent_changes_guidance?: string
   recent_changes_truncated?: boolean
+  // Present when the recent-changes window starts before the history Radar
+  // holds; complete_since is sent only to callers who can read every namespace.
+  recent_changes_history_coverage?: {
+    incomplete: boolean
+    complete_since?: string
+    reasons: string[]
+  }
   // Present only when RBAC visibility is incomplete (absent = full access).
   // state 'degraded' means core workload reads are denied, so an empty list may
   // mean "can't see" rather than "nothing broken" — the UI must say so.
   visibility?: { state?: string; impact?: string };
+  // Issue sources Radar couldn't check, so their issues may be missing: an
+  // empty list is not an all-clear. A newer Radar may send sources and
+  // reasons this version doesn't know. Absent when every source was checked,
+  // and from older Radars.
+  unchecked_sources?: UncheckedSource[];
 }
 
-export function useIssues(namespaces: string[] = [], enabled = true) {
-  const params =
-    namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
+export interface UncheckedSource {
+  source: string;
+  reason: string;
+  // The kinds within the source that went unchecked; absent means the whole
+  // source, or that Radar couldn't tell which kinds.
+  kinds?: { group?: string; kind: string }[];
+  // The namespaces whose read failed while the others were read; absent
+  // means the gap isn't limited to particular namespaces.
+  namespaces?: string[];
+}
+
+export function useIssues(namespaces: string[] = [], enabled = true, kind?: string) {
+  const params = new URLSearchParams();
+  if (namespaces.length) params.set('namespaces', namespaces.join(','));
+  if (kind) { params.set('kind', kind); params.set('limit', '1000'); }
+  const query = params.toString();
   return useQuery<IssuesResponse>({
-    queryKey: ["issues", namespaces],
-    queryFn: () => fetchJSON(`/issues${params}`),
+    queryKey: kind ? ["issues", namespaces, kind] : ["issues", namespaces],
+    queryFn: () => fetchJSON(`/issues${query ? `?${query}` : ''}`),
     staleTime: 30000,
     refetchInterval: ISSUES_REFRESH_INTERVAL_MS,
     enabled,
@@ -804,7 +851,18 @@ export function useResourceIssues(
 // The Issues page narrowed to one subject: the same per-resource lookup with
 // ?coverage=1, which also says whether Radar reads the subject's kind and what
 // the caller's RBAC withheld. Polls like the page list.
+export interface CronJobSchedulingEvidence {
+  uid: string;
+  state: 'reported' | 'configuration_changed' | 'history_incomplete';
+  reason: string;
+  message: string;
+  last_reported_at: string;
+  configuration_changed_at?: string;
+  history_incomplete?: boolean;
+}
+
 export interface SubjectIssuesResponse {
+  scheduling_report?: CronJobSchedulingEvidence;
   issues: Issue[];
   coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
   withheld?: { issues: number };
@@ -812,7 +870,7 @@ export interface SubjectIssuesResponse {
 }
 
 export function useSubjectIssues(
-  subject: { kind: string; group: string; namespace: string; name: string } | null,
+  subject: { kind: string; group: string; namespace: string; name: string; uid?: string } | null,
   enabled: boolean,
 ) {
   const capabilities = useCapabilities();
@@ -821,7 +879,7 @@ export function useSubjectIssues(
   const params = new URLSearchParams({ coverage: "1" });
   if (subject?.group) params.set("group", subject.group);
   return useQuery<SubjectIssuesResponse>({
-    queryKey: ["issues", "subject", subject?.kind ?? "", subject?.group ?? "", subject?.namespace ?? "", subject?.name ?? "", support, ...gatedKey],
+    queryKey: ["issues", "subject", subject?.kind ?? "", subject?.group ?? "", subject?.namespace ?? "", subject?.name ?? "", subject?.uid ?? "", support, ...gatedKey],
     queryFn: () => {
       if (!capabilities.data && capabilities.error) throw capabilities.error;
       return guard(() => fetchJSON<SubjectIssuesResponse>(`/issues/resource/${encodeURIComponent(subject!.kind)}/${pathNs}/${encodeURIComponent(subject!.name)}?${params}`));
@@ -1077,12 +1135,14 @@ function costRefetchInterval(
   };
 }
 
-export function useOpenCostSummary(enabled = true) {
+export function useOpenCostSummary(enabled = true, namespaces: string[] = []) {
   const clusterInfo = useClusterInfo();
+  const params =
+    namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
   return useQuery<OpenCostSummary>({
-    queryKey: ["opencost-summary"],
+    queryKey: ["opencost-summary", namespaces],
     enabled,
-    queryFn: () => fetchJSON("/opencost/summary"),
+    queryFn: () => fetchJSON(`/opencost/summary${params}`),
     refetchInterval: costRefetchInterval(
       COST_REFRESH_INTERVAL_MS,
       clusterInfo.data?.context,
@@ -1824,13 +1884,14 @@ export function useRadarFeature(feature: RadarFeature) {
   const currentVersion = versionInfo?.currentVersion || radarVersion
   const latestVersion = versionInfo?.latestVersion
   const support = radarFeatureSupport(feature, capabilities, currentVersion)
+  // Stable across renders, so a callback built on guard keeps its identity.
+  const guard = useCallback(
+    <T,>(request: () => Promise<T>): Promise<T> => guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
+    [feature, support, currentVersion, latestVersion],
+  )
+  const gatedKey = useMemo(() => (support === 'unsupported' ? ['radar-feature-unsupported'] : []), [support])
 
-  return {
-    support,
-    gatedKey: support === 'unsupported' ? ['radar-feature-unsupported'] : [],
-    guard: <T,>(request: () => Promise<T>): Promise<T> =>
-      guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
-  }
+  return { support, gatedKey, guard }
 }
 
 // ============================================================================
@@ -2491,6 +2552,39 @@ export function useApplicationHistory(
   });
 }
 
+// How often a page asks again while Radar is still connecting to argocd-server,
+// and while it retries after a failure. Radar re-checks a failed connection at
+// most every 30s, so asking more often while retrying adds requests without
+// making the server reconnect sooner.
+// A page whose last fetch failed and was waiting on something keeps asking at
+// the slow rate, so a Radar or proxy outage doesn't strand it. It stops when
+// Radar answered that the object is gone or the caller can't read it, since
+// asking again won't change that answer.
+const ARGO_CONNECTING_POLL_MS = 2000;
+const ARGO_RETRYING_POLL_MS = 30_000;
+
+type PollState<T> = {
+  state: { status: string; data?: T; error?: unknown };
+};
+
+function afterFailedFetch(error: unknown, wanted: number | false): number | false {
+  if (wanted === false) return false;
+  if (error instanceof ApiError && [401, 403, 404].includes(error.status)) return false;
+  return ARGO_RETRYING_POLL_MS;
+}
+
+export function gitopsTreeRefetchInterval(
+  query: PollState<Pick<GitOpsResourceTree, "healthApiPending" | "healthApiRetrying">>,
+): number | false {
+  const data = query.state.data;
+  const wanted = data?.healthApiPending
+    ? ARGO_CONNECTING_POLL_MS
+    : data?.healthApiRetrying
+      ? ARGO_RETRYING_POLL_MS
+      : false;
+  return query.state.status === "error" ? afterFailedFetch(query.state.error, wanted) : wanted;
+}
+
 export function useGitOpsTree(
   kind: string,
   namespace: string,
@@ -2513,6 +2607,9 @@ export function useGitOpsTree(
       ),
     enabled: Boolean(kind && name) && (options?.enabled ?? true),
     staleTime: 5000,
+    // Radar answers at once while it connects to argocd-server; ask again
+    // until Argo's per-resource health is in.
+    refetchInterval: gitopsTreeRefetchInterval,
   });
 }
 
@@ -2521,6 +2618,27 @@ export function useGitOpsTree(
 // operationState.phase from Running/Terminating to a terminal phase, so this
 // auto-quiesces on completion.
 const INSIGHTS_RUNNING_POLL_MS = 2000;
+
+export function gitopsInsightsRefetchInterval(
+  query: PollState<{
+    summary?: Partial<
+      Pick<GitOpsInsight["summary"], "operationPhase" | "resourceHealthApiPending" | "resourceHealthApiRetrying">
+    >;
+    capabilities?: Pick<NonNullable<GitOpsInsight["capabilities"]>, "argoConnecting" | "argoRetrying">;
+  }>,
+): number | false {
+  const data = query.state.data;
+  const phase = data?.summary?.operationPhase;
+  let wanted: number | false = false;
+  if (phase === "Running" || phase === "Terminating") {
+    wanted = INSIGHTS_RUNNING_POLL_MS;
+  } else if (data?.summary?.resourceHealthApiPending || data?.capabilities?.argoConnecting) {
+    wanted = ARGO_CONNECTING_POLL_MS;
+  } else if (data?.summary?.resourceHealthApiRetrying || data?.capabilities?.argoRetrying) {
+    wanted = ARGO_RETRYING_POLL_MS;
+  }
+  return query.state.status === "error" ? afterFailedFetch(query.state.error, wanted) : wanted;
+}
 
 export function useGitOpsInsights(
   kind: string,
@@ -2543,12 +2661,7 @@ export function useGitOpsInsights(
       ),
     enabled: Boolean(kind && name),
     staleTime: 5000,
-    refetchInterval: (query) => {
-      const phase = query.state.data?.summary?.operationPhase;
-      return phase === "Running" || phase === "Terminating"
-        ? INSIGHTS_RUNNING_POLL_MS
-        : false;
-    },
+    refetchInterval: gitopsInsightsRefetchInterval,
   });
 }
 
@@ -2727,6 +2840,32 @@ export function useResource<T>(
     certificateInfo: query.data?.certificateInfo,
     hpaDiagnosis: query.data?.hpaDiagnosis,
   };
+}
+
+// Availability checks return headers only, without downloading Secret values.
+export async function fetchResourceAvailability(
+  kind: string,
+  namespace: string,
+  name: string,
+): Promise<"present" | "missing" | "unchecked"> {
+  const response = await apiFetch(`${getApiBase()}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(namespace || "_")}/${encodeURIComponent(name)}`, { method: "HEAD" });
+  const resourceLookup = response.headers.get("X-Radar-Resource-Read") === "true";
+  if (resourceLookup && response.ok) return "present";
+  if (resourceLookup && response.status === 404) return "missing";
+  // Older Radar versions do not serve HEAD lookups. Keep their existing
+  // navigation without claiming that availability was verified.
+  if (response.status === 405 || response.ok) return "unchecked";
+  throw new ApiError(httpStatusMessage(response.status, response.statusText), response.status);
+}
+
+export function useResourceAvailability(kind: string, namespace: string, name: string) {
+  return useQuery({
+    queryKey: ["resource", kind, namespace, name, undefined, "availability"],
+    queryFn: () => fetchResourceAvailability(kind, namespace, name),
+    enabled: Boolean(kind && name),
+    refetchInterval: GONE_RECHECK_MS,
+    retry: (failureCount, error) => !isForbiddenError(error) && failureCount < 1,
+  });
 }
 
 // Hook that returns full response with relationships explicitly
@@ -3722,6 +3861,8 @@ export interface ArgoStatus {
   // client is live. The two differ right after a restart (configured, reconnecting).
   configured: boolean;
   connected: boolean;
+  // Not connected yet, and a connection is being made.
+  connecting?: boolean;
   // Connected without a token: the install serves reads to everyone, so
   // there is nothing to add in Settings.
   anonymous?: boolean;
@@ -3734,8 +3875,12 @@ export function useArgoStatus(enabled = true) {
     queryKey: ["argocd-status"],
     queryFn: () => fetchJSON("/integrations/argocd/status"),
     enabled,
-    staleTime: 30000,
-    refetchInterval: 60000,
+    // Cheap to ask (it never waits on Argo CD): reopening Settings asks
+    // afresh, so "Connecting…" shows only while it's true.
+    staleTime: 0,
+    // While Radar connects, ask again soon so "Connecting…" doesn't linger.
+    refetchInterval: (query) =>
+      query.state.data?.connecting ? ARGO_CONNECTING_POLL_MS : 60000,
   });
 }
 
@@ -4299,7 +4444,7 @@ export function useUpdateResource() {
   });
 }
 
-// Cascade delete preview — shows resources that will be garbage-collected
+// Cascade delete preview — visible related resources deletion may affect.
 export interface CascadeDeletePreview {
   root: { kind: string; namespace: string; name: string; group?: string };
   rootResolved: boolean;
@@ -4609,6 +4754,7 @@ export interface ApplyResourceResult {
   namespace: string;
   kind: string;
   apiVersion: string;
+  uid?: string;
   created: boolean;
 }
 
@@ -5491,10 +5637,46 @@ export function useNodeRemovalPlan(name: string | undefined, enabled: boolean) {
   })
 }
 
-export function useDrainNode() {
+export type NodeDrainActivity = {
+  requestId: number;
+  startedAt: number;
+  timeoutSeconds: number;
+  contextName?: string;
+} & ({ status: "pending" } | {
+  status: "finished";
+  finishedAt: number;
+  summary: ReturnType<typeof describeDrainResult>;
+});
+
+export function nodeDrainActivityKey(apiBase: string, name: string, nodeUID: string) {
+  return ["node-drain-activity", apiBase, name, nodeUID] as const;
+}
+
+export function useNodeDrainActivity(name: string, nodeUID: string) {
   const queryClient = useQueryClient();
+  const queryKey = nodeDrainActivityKey(getApiBase(), nodeUID ? name : "", nodeUID);
+  const { data } = useQuery<NodeDrainActivity | null>({
+    queryKey,
+    queryFn: () => null,
+    initialData: null,
+    enabled: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+  return {
+    activity: nodeUID ? data : null,
+    dismiss: () => queryClient.setQueryData(queryKey, null),
+  };
+}
+
+let nextNodeDrainRequestId = 0;
+
+export function useDrainNode(nodeUID = "") {
+  const queryClient = useQueryClient();
+  const apiBase = getApiBase();
 
   return useMutation({
+    retry: false,
     mutationFn: async ({
       name,
       options,
@@ -5502,7 +5684,7 @@ export function useDrainNode() {
       name: string;
       options?: DrainNodeOptions;
     }) => {
-      const response = await apiFetch(`${getApiBase()}/nodes/${name}/drain`, {
+      const response = await apiFetch(apiUrl(`/nodes/${encodeURIComponent(name)}/drain`, apiBase), {
         method: "POST",
         headers: options ? { "Content-Type": "application/json" } : {},
         body: options ? JSON.stringify(options) : undefined,
@@ -5513,6 +5695,37 @@ export function useDrainNode() {
       }
       return response.json();
     },
+    onMutate: ({ name }) => {
+      const contextName = queryClient.getQueryData<ClusterInfo>(["cluster-info"])?.context
+        ?? queryClient.getQueryData<{ context: string }>(["connection-status"])?.context;
+      const activity: NodeDrainActivity = {
+        status: "pending",
+        requestId: ++nextNodeDrainRequestId,
+        startedAt: Date.now(),
+        timeoutSeconds: 120,
+        contextName,
+      };
+      const queryKey = nodeDrainActivityKey(apiBase, name, nodeUID);
+      if (nodeUID) queryClient.setQueryData(queryKey, activity);
+      return { queryKey, activity, tracked: Boolean(nodeUID), contextName };
+    },
+    onError: (error, _variables, context) => {
+      if (!context?.tracked) return;
+      queryClient.setQueryData<NodeDrainActivity | null>(context.queryKey, (previous) =>
+        previous?.requestId === context.activity.requestId ? {
+          ...context.activity,
+          status: "finished",
+          finishedAt: Date.now(),
+          summary: {
+            title: "Could not confirm drain completion",
+            detail: `${error.message}\nCheck the node's pods before retrying or taking it down. A failed request does not confirm whether evictions ran.`,
+            type: "warning",
+            failed: true,
+            outcome: "unconfirmed",
+          },
+        } : previous,
+      );
+    },
     meta: {
       errorMessage: "Failed to drain node",
       // No static successMessage — handled in onSuccess to distinguish partial failures
@@ -5522,20 +5735,41 @@ export function useDrainNode() {
         evictedPods?: string[];
         skippedPods?: DrainPlanPod[];
         errors?: string[];
+        pendingPods?: string[];
+        waitedForDeletion?: boolean;
+        outcome?: DrainCompletionOutcome;
+        unconfirmedPods?: string[];
+        verificationError?: string;
       },
       variables,
+      context,
     ) => {
+      const currentContext = queryClient.getQueryData<ClusterInfo>(["cluster-info"])?.context;
+      if (context?.tracked && queryClient.getQueryData<NodeDrainActivity | null>(context.queryKey)?.requestId !== context.activity.requestId) return;
+      const { title, detail, type } = describeDrainResult(data);
+      if (context?.tracked) {
+        queryClient.setQueryData<NodeDrainActivity | null>(context.queryKey, (previous) =>
+          previous?.requestId === context.activity.requestId ? {
+            ...context.activity,
+            status: "finished",
+            finishedAt: Date.now(),
+            summary: describeDrainResult(data, { recorded: true }),
+          } : previous,
+        );
+      }
+      if (context && (context.queryKey[1] !== getApiBase() ||
+        (context.contextName && currentContext && context.contextName !== currentContext))) return;
       queryClient.invalidateQueries({ queryKey: ["resources", "nodes"] });
       queryClient.invalidateQueries({
         queryKey: ["resource", "nodes", "", variables.name],
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
-
-      const { title, detail, failed } = describeDrainResult(data);
-      if (failed) {
+      if (type === "error") {
         showApiError(title, detail);
-      } else {
+      } else if (type === "success") {
         showApiSuccess(title, detail);
+      } else {
+        showApiNotice(title, detail, type);
       }
     },
   });
@@ -5549,47 +5783,86 @@ function listWithOverflow(items: string[]): string {
   return rest > 0 ? `${shown.join("; ")}; +${rest} more` : shown.join("; ");
 }
 
-/**
- * Turns the drain response into a legible summary: evicted, skipped (with reasons),
- * failed. Lists are capped so the toast stays readable on nodes with many pods.
- */
-export function describeDrainResult(data: {
+export type DrainCompletionOutcome = "complete" | "incomplete" | "unconfirmed" | "started";
+
+interface DrainResultData {
   evictedPods?: string[];
   skippedPods?: DrainPlanPod[];
   errors?: string[];
-}): { title: string; detail: string; failed: boolean } {
-  const evicted = data?.evictedPods?.length ?? 0;
-  const skipped = data?.skippedPods ?? [];
-  const errors = data?.errors ?? [];
-  const parts: string[] = [];
-  if (skipped.length > 0) {
-    parts.push(
-      `Skipped ${skipped.length}: ${listWithOverflow(
-        skipped.map((p) => `${p.namespace}/${p.name} (${p.reason})`),
-      )}`,
-    );
-  }
-  if (errors.length > 0) {
-    parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
-  }
-  parts.push(
-    evicted > 0
-      ? "Evictions were accepted; those pods may still be terminating. The node remains cordoned."
-      : "The node remains cordoned.",
+  pendingPods?: string[];
+  unconfirmedPods?: string[];
+  verificationError?: string;
+  waitedForDeletion?: boolean;
+  outcome?: DrainCompletionOutcome;
+}
+
+export function describeDrainResult(data: DrainResultData, { recorded = false }: { recorded?: boolean } = {}): {
+  title: string;
+  detail: string;
+  failed: boolean;
+  type: "success" | "error" | "warning" | "info";
+  outcome: DrainCompletionOutcome;
+} {
+  const evicted = data.evictedPods?.length ?? 0;
+  const skipped = data.skippedPods ?? [];
+  const errors = data.errors ?? [];
+  const pending = data.pendingPods ?? [];
+  const unconfirmed = data.unconfirmedPods ?? [];
+  const blocking = skipped.filter((pod) => pod.expectedSkip === false);
+  const unknownSkips = skipped.filter((pod) => pod.expectedSkip === undefined);
+  const expected = skipped.filter((pod) => pod.expectedSkip);
+  // Older backends have no completion outcome or expected-skip metadata.
+  const outcome = data.outcome ?? (
+    errors.length > 0 || pending.length > 0 || blocking.length > 0 ? "incomplete" :
+    unconfirmed.length > 0 || data.verificationError ? "unconfirmed" :
+    evicted > 0 && !data.waitedForDeletion ? "started" :
+    unknownSkips.length > 0 ? "unconfirmed" : "complete"
   );
-  const detail = parts.join("\n");
+  const parts: string[] = [];
   if (errors.length > 0) {
-    return {
-      title: `Drain finished with ${errors.length} failed eviction(s): ${evicted} evicted, ${skipped.length} skipped`,
-      detail,
-      failed: true,
-    };
+    parts.push(`Failed evictions ${errors.length}: ${listWithOverflow(errors)}`);
   }
-  return {
-    title: `Node drained: ${evicted} evicted, ${skipped.length} skipped`,
-    detail,
-    failed: false,
+  if (pending.length > 0) {
+    parts.push(`Still on the node ${pending.length}: ${listWithOverflow(pending)}`);
+  }
+  const describePod = (pod: DrainPlanPod) => `${pod.namespace}/${pod.name} (${pod.reason})`;
+  if (blocking.length > 0) {
+    parts.push(`Skipped pods requiring attention ${blocking.length}: ${listWithOverflow(blocking.map(describePod))}`);
+  }
+  if (unknownSkips.length > 0) {
+    parts.push(`Skipped pods requiring review ${unknownSkips.length}: ${listWithOverflow(unknownSkips.map(describePod))}`);
+  }
+  if (unconfirmed.length > 0) {
+    parts.push(`Deletion unconfirmed ${unconfirmed.length}: ${listWithOverflow(unconfirmed)}`);
+  }
+  if (data.verificationError) {
+    parts.push(`Could not verify pod deletion: ${data.verificationError}`);
+  }
+  if (outcome === "started") {
+    parts.push("Eviction requests were accepted; pod deletion has not been confirmed.");
+  } else if (data.waitedForDeletion && evicted > 0 && pending.length === 0 && unconfirmed.length === 0 && !data.verificationError) {
+    parts.push("All evicted pods have left the node.");
+  }
+  if (expected.length > 0) {
+    parts.push(`Left in place by design: ${pluralize(expected.length, "pod")}.`);
+  }
+  parts.push(recorded ? "The node was left cordoned." : "The node remains cordoned.");
+  if (outcome === "incomplete" || outcome === "unconfirmed") {
+    if (blocking.length > 0) parts.push("Review the skipped workloads and drain options before retrying.");
+    if (pending.length > 0) parts.push("Check the remaining pods before retrying.");
+    if (errors.length > 0) parts.push("Resolve the failed evictions before retrying.");
+    if (unconfirmed.length > 0 || data.verificationError || unknownSkips.length > 0) parts.push("Check the node's pods to confirm what remains.");
+    parts.push("Do not take the node down until required workloads are removed.");
+  }
+  const titles: Record<DrainCompletionOutcome, string> = {
+    complete: evicted > 0 ? `Drain complete: ${pluralize(evicted, "pod")} removed` : "Nothing to evict",
+    incomplete: errors.length > 0 ? `Drain incomplete: ${pluralize(errors.length, "failed eviction")}` :
+      `Drain incomplete: ${pluralize(pending.length + blocking.length, "pod")} left on the node`,
+    unconfirmed: "Could not confirm drain completion",
+    started: `Evictions started: ${evicted} accepted`,
   };
+  const type = outcome === "complete" ? "success" : outcome === "started" ? "info" : errors.length > 0 ? "error" : "warning";
+  return { title: titles[outcome], detail: parts.join("\n"), failed: outcome === "incomplete" || outcome === "unconfirmed", type, outcome };
 }
 
 // ============================================================================
@@ -5936,6 +6209,8 @@ export function useHelmUninstall() {
   });
 }
 
+export class HelmSourceSelectionError extends Error {}
+
 // Stream SSE progress events from a Helm operation endpoint.
 // Resolves on 'complete', rejects on 'error'. Returns the complete event data for install (which includes release).
 function streamHelmProgress(
@@ -5985,7 +6260,7 @@ function streamHelmProgress(
                   resolve(data);
                   return;
                 } else if (data.type === "error") {
-                  reject(new Error(data.message || failureLabel));
+                  reject(data.errorCode === 'chart_source_changed' || data.errorCode === 'chart_source_required' ? new HelmSourceSelectionError(data.message || failureLabel) : new Error(data.message || failureLabel));
                   return;
                 }
               } catch (err) {
@@ -6015,18 +6290,19 @@ export function upgradeWithProgress(
   repositoryName: string | undefined,
   onProgress: (event: InstallProgressEvent) => void,
   values?: Record<string, unknown>,
+  sourceUpgrade?: SourceUpgradeSelection,
 ): Promise<void> {
   const params = new URLSearchParams({ version });
   if (repositoryName) params.set("repository", repositoryName);
-  const options: RequestInit = values
+  const options: RequestInit = values || sourceUpgrade
     ? {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify({ values, sourceUpgrade }),
       }
     : { method: "POST" };
   return streamHelmProgress(
-    `${getApiBase()}/helm/releases/${namespace}/${name}/upgrade-stream?${params.toString()}`,
+    `${getApiBase()}/helm/releases/${namespace}/${name}/${sourceUpgrade ? "source/upgrade-stream" : "upgrade-stream"}?${params.toString()}`,
     options,
     onProgress,
     "Upgrade failed",
@@ -6060,20 +6336,21 @@ export function useHelmPreviewValues() {
       values: Record<string, unknown>;
       version?: string;
       repository?: string;
+ sourceUpgrade?: SourceUpgradeSelection;
     }
   >({
-    mutationFn: async ({ namespace, name, values, version, repository }) => {
+    mutationFn: async ({ namespace, name, values, version, repository, sourceUpgrade }) => {
       const response = await apiFetch(
-        `${getApiBase()}/helm/releases/${namespace}/${name}/values/preview`,
+        `${getApiBase()}/helm/releases/${namespace}/${name}/${sourceUpgrade ? "source/preview" : "values/preview"}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ values, version, repository }),
+          body: JSON.stringify({ values, version, repository, sourceUpgrade }),
         },
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw error.errorCode === 'chart_source_changed' || error.errorCode === 'chart_source_required' ? new HelmSourceSelectionError(error.error || 'Source changed; select it again') : new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
     },
@@ -6196,11 +6473,94 @@ export function useHelmOCISources() {
   });
 }
 
+export function useHelmSourceStatus(namespace: string, releaseName: string, enabled = true) {
+  return useQuery<ChartSourceStatus>({
+    queryKey: ["helm-source-status", namespace, releaseName],
+    queryFn: () => fetchJSON(`/helm/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}/source`),
+    enabled: enabled && Boolean(namespace && releaseName),
+  });
+}
+
+export function useHelmSourceVersions(namespace: string, releaseName: string, selection: SourceUpgradeSelection | null, enabled: boolean) {
+ const { support, gatedKey, guard } = useRadarFeature('helmSourceIdentity')
+ return useQuery<string[]>({
+  queryKey: ['helm-source-versions', namespace, releaseName, selection, gatedKey],
+  enabled: enabled && selection !== null && support === 'supported',
+  queryFn: () => guard(() => {
+   if (!selection) throw new Error('Select a chart source')
+   const params = new URLSearchParams({type: selection.source.type, reference: selection.source.reference})
+   if (selection.source.url) params.set('url', selection.source.url)
+   return fetchJSON(`/helm/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}/source/versions?${params}`)
+  }),
+ })
+}
+
+async function mutateHelmSource(namespace: string, releaseName: string, source: ChartSourceCandidate): Promise<void> {
+  const response = await apiFetch(apiUrl(`/helm/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}/source`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(source),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+}
+
+export function useSetHelmSource(namespace: string, releaseName: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (source: ChartSourceCandidate) => mutateHelmSource(namespace, releaseName, source),
+    meta: { errorMessage: "Failed to associate chart source", successMessage: "Chart source associated" },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["helm-source-status", namespace, releaseName] });
+ queryClient.invalidateQueries({ queryKey: ["helm-source-versions", namespace, releaseName] });
+      queryClient.invalidateQueries({ queryKey: ["helm-upgrade-info"] });
+      queryClient.invalidateQueries({ queryKey: ["helm-release-versions"] });
+      queryClient.invalidateQueries({ queryKey: ["helm-batch-upgrade-info"] });
+    },
+  });
+}
+
+interface AddHelmRepositoryRequest {
+  name: string
+  url: string
+  namespace?: string
+  releaseName?: string
+}
+
+export function useAddHelmRepository() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (request: AddHelmRepositoryRequest): Promise<{ status: string; name: string }> => {
+      const response = await apiFetch(apiUrl('/helm/repositories'), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(error.error || `HTTP ${response.status}`);
+      }
+      return response.json();
+    },
+    meta: { errorMessage: "Failed to add Helm repository", successMessage: "Helm repository added" },
+    // Also on error: the repository can be saved before associating it fails.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["helm-repositories"] });
+      queryClient.invalidateQueries({ queryKey: ["helm-source-status"] });
+      queryClient.invalidateQueries({ queryKey: ["helm-upgrade-info"] });
+      queryClient.invalidateQueries({ queryKey: ["helm-release-versions"] });
+      queryClient.invalidateQueries({ queryKey: ["helm-batch-upgrade-info"] });
+    },
+  });
+}
+
 async function mutateOCISource(
   method: "POST" | "DELETE",
   source: string,
 ): Promise<string[]> {
-  const response = await apiFetch(`${getApiBase()}/helm/oci-sources`, {
+  const response = await apiFetch(apiUrl('/helm/oci-sources'), {
     method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source }),
@@ -6212,14 +6572,18 @@ async function mutateOCISource(
   return response.json();
 }
 
-// Invalidate the upgrade-info queries so a newly-registered source is probed
-// immediately and "source not tracked" re-resolves.
-function invalidateHelmAfterSourceChange(
+// Invalidate source inventory/status and upgrade info so an open source dialog
+// and upgrade checks immediately reflect source additions or removals.
+export function invalidateHelmAfterSourceChange(
   queryClient: ReturnType<typeof useQueryClient>,
 ) {
-  queryClient.invalidateQueries({ queryKey: ["helm-oci-sources"] });
-  queryClient.invalidateQueries({ queryKey: ["helm-upgrade-info"] });
-  queryClient.invalidateQueries({ queryKey: ["helm-batch-upgrade-info"] });
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["helm-oci-sources"] }),
+    queryClient.invalidateQueries({ queryKey: ["helm-source-status"] }),
+    queryClient.invalidateQueries({ queryKey: ["helm-upgrade-info"] }),
+    queryClient.invalidateQueries({ queryKey: ["helm-release-versions"] }),
+    queryClient.invalidateQueries({ queryKey: ["helm-batch-upgrade-info"] }),
+  ])
 }
 
 export function useAddOCISource() {
@@ -6312,6 +6676,7 @@ export function useInstallChart() {
 
 // Install progress event types
 export interface InstallProgressEvent {
+  errorCode?: string;
   type: "progress" | "complete" | "error";
   phase?: string;
   message?: string;
@@ -6572,13 +6937,16 @@ export const useFluxResume = createGitOpsMutation<FluxResourceVars>({
 export const useFluxSyncWithSource = createGitOpsMutation<FluxResourceVars>({
   getPath: (v) => `/flux/${v.kind}/${v.namespace}/${v.name}/sync-with-source`,
   errorMessage: "Failed to sync with source",
-  successMessage: "Sync with source triggered",
+  // The server names what it reconciled, and says when a source was skipped.
+  getSuccessMessage: (data) => data.message,
   getInvalidateKeys: (v) => [
     ...fluxInvalidateKeys(v),
     // Also invalidate source resources as they were reconciled too
     ["resources", "gitrepositories"],
     ["resources", "ocirepositories"],
     ["resources", "helmrepositories"],
+    ["resources", "helmcharts"],
+    ["resources", "buckets"],
   ],
 });
 
@@ -6972,7 +7340,7 @@ export function useSetActiveNamespace() {
       });
       if (scope.cacheScoped) {
         queryClient.removeQueries({
-          predicate: (query) => query.queryKey[0] !== "namespace-scope",
+          predicate: (query) => query.queryKey[0] !== "namespace-scope" && query.queryKey[0] !== "node-drain-activity",
         });
       }
       queryClient.setQueryData<NamespaceScope>(["namespace-scope"], scope);
@@ -7170,21 +7538,25 @@ export function useWorkloadRuns(
   namespace: string,
   name: string,
   enabled = true,
-  options?: { refetchActive?: boolean; clusterScoped?: boolean; role?: string; search?: string; state?: string; selected?: string },
+  options?: { refetchActive?: boolean; clusterScoped?: boolean; namespaces?: string[]; role?: string; search?: string; state?: string; selected?: string; ownerUID?: string },
 ) {
   const clusterScoped = options?.clusterScoped ?? false;
   const ns = clusterScoped ? "_" : namespace;
+  // A cluster-scoped template's runs live in many namespaces; the view's
+  // namespace selection narrows them, as it does every other list.
+  const viewNamespaces = clusterScoped ? (options?.namespaces ?? []).join(",") : "";
   const params = new URLSearchParams();
   if (clusterScoped) params.set("clusterScoped", "true");
+  if (viewNamespaces) params.set("namespaces", viewNamespaces);
   for (const key of ["role", "search", "state", "selected"] as const) { if (options?.[key]) params.set(key, options[key]); }
   const queryString = params.toString();
 
   return useQuery<WorkloadRunsResponse>({
-    queryKey: ["workload-runs", kind, namespace, name, clusterScoped, options?.role ?? '', options?.search ?? '', options?.state ?? '', options?.selected ?? ''],
+    queryKey: ["workload-runs", kind, namespace, name, clusterScoped, viewNamespaces, options?.role ?? '', options?.search ?? '', options?.state ?? '', options?.selected ?? '', options?.ownerUID ?? ''],
     placeholderData: (previous, query) => {
       if (previous?.collection !== 'members') return undefined
-      const identity = ["workload-runs", kind, namespace, name, clusterScoped, options?.role ?? '', options?.search ?? '', options?.state ?? '']
-      return identity.every((value, index) => query?.queryKey[index] === value) ? previous : undefined
+      const identity = ["workload-runs", kind, namespace, name, clusterScoped, viewNamespaces, options?.role ?? '', options?.search ?? '', options?.state ?? '']
+      return identity.every((value, index) => query?.queryKey[index] === value) && query?.queryKey[10] === (options?.ownerUID ?? '') ? previous : undefined
     },
     queryFn: () =>
       fetchJSON(
@@ -7420,6 +7792,8 @@ export interface DiagnosticsSnapshot {
   };
   timeline?: {
     storageType: string;
+    degraded?: boolean;
+    degradedReason?: string;
     totalEvents: number;
     oldestEvent?: string;
     newestEvent?: string;
@@ -7494,6 +7868,7 @@ export interface DiagnosticsSnapshot {
     historyLimit: number;
     debugEvents: boolean;
     mcpEnabled: boolean;
+    mcpReadOnly: boolean;
     hasPrometheusURL: boolean;
     hasPrometheusHeaders: boolean;
   };

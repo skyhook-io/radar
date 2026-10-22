@@ -2922,6 +2922,107 @@ describe("InvestigationEvidencePane metrics cards", () => {
     };
   }
 
+  it.each([true, false, "true"])(
+    "validates partial=%s while keeping valid charts",
+    (partial) => {
+      const projection = project(
+        tool("prom", "query_prometheus", {
+          ...rangeResult(targetSelectors),
+          partial,
+        }),
+      );
+      if (typeof partial !== "boolean") {
+        expect(projection.groups).toHaveLength(0);
+        expect(projection.limitations).toHaveLength(1);
+        return;
+      }
+      expect(render(projection)).toContain("Memory working set");
+      expect(projection.limitations).toHaveLength(partial ? 1 : 0);
+      if (partial) {
+        expect(projection.limitations[0]).toMatchObject({
+          kind: "unknown",
+          message:
+            "The metrics backend returned a partial result, so some series may be missing.",
+        });
+      }
+    },
+  );
+
+  it.each([
+    [
+      { infos: ["PromQL info: metric might not be a counter"] },
+      [
+        "Prometheus noted about this query: PromQL info: metric might not be a counter",
+      ],
+    ],
+    [
+      { warnings: ["a", "b"], annotationsOmitted: 2 },
+      [
+        "The metrics backend returned 2 warnings with this result: a; b",
+        "2 more backend messages were left out to keep the result small.",
+      ],
+    ],
+    [
+      { warnings: ["store down"], infos: ["note"] },
+      [
+        "The metrics backend returned a warning with this result: store down",
+        "Prometheus noted about this query: note",
+      ],
+    ],
+    [
+      { annotationsOmitted: 1 },
+      ["1 more backend message was left out to keep the result small."],
+    ],
+  ])(
+    "keeps the chart and surfaces backend annotations %j",
+    (extra, messages) => {
+      const projection = project(
+        tool("prom", "query_prometheus", {
+          ...rangeResult(targetSelectors),
+          ...extra,
+        }),
+      );
+      const html = render(projection);
+      expect(html).toContain("Memory working set");
+      const annotated = extra as { warnings?: string[]; infos?: string[] };
+      for (const text of [
+        ...(annotated.warnings ?? []),
+        ...(annotated.infos ?? []),
+      ]) {
+        expect(html).toContain(text);
+      }
+      if (annotated.warnings?.length) expect(html).toContain("Backend warning");
+      if (annotated.infos?.length) expect(html).toContain("Prometheus noted:");
+      const omitted = (extra as { annotationsOmitted?: number })
+        .annotationsOmitted;
+      if (omitted)
+        expect(html).toContain(
+          `${omitted} more backend ${omitted === 1 ? "message" : "messages"} left out.`,
+        );
+      expect(projection.limitations.map((item) => item.message)).toEqual(
+        messages,
+      );
+      for (const item of projection.limitations)
+        expect(item.kind).toBe("unknown");
+    },
+  );
+
+  it.each([
+    { warnings: "x" },
+    { warnings: [1] },
+    { infos: [true] },
+    { annotationsOmitted: "1" },
+  ])("rejects a malformed annotation field %j", (extra) => {
+    const projection = project(
+      tool("prom", "query_prometheus", {
+        ...rangeResult(targetSelectors),
+        ...extra,
+      }),
+    );
+    expect(projection.groups).toHaveLength(0);
+    expect(projection.limitations).toHaveLength(1);
+  });
+
   it("keeps an uncited target-scoped chart in the workload collection", () => {
     const projection = project(
       tool("prom", "query_prometheus", rangeResult(targetSelectors)),

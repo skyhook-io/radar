@@ -1,0 +1,73 @@
+# Failing Flux sources, the two states that read differently downstream.
+#
+#   podinfo-unreachable / podinfo-no-source
+#       The repository doesn't exist, so the source never stores an artifact
+#       and the Kustomization can't apply anything (Ready=False on both).
+#
+#   podinfo-stale / podinfo-stale-source
+#       The source fetched an artifact, then the script (setup_stale_source)
+#       points it at a branch that doesn't exist. The source goes Ready=False
+#       but keeps its last artifact, so the Kustomization stays Ready on the
+#       old revision. This is the "Ready, but new commits won't land" case.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: podinfo-unreachable
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: https://github.com/skyhook-io/radar-demo-repository-that-does-not-exist
+  ref:
+    branch: main
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo-no-source
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./kustomize
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: podinfo-unreachable
+  targetNamespace: demo-flux
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-flux-stale
+  labels:
+    radar-demo: "true"
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: podinfo-stale
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/stefanprodan/podinfo
+  ref:
+    branch: master
+  ignore: |
+    /*
+    !/kustomize
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo-stale-source
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./kustomize
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: podinfo-stale
+  targetNamespace: demo-flux-stale
+  timeout: 2m
+  wait: true

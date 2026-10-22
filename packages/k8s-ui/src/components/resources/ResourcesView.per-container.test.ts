@@ -1,6 +1,7 @@
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { ContainerResourceMetrics } from '../../types'
-import { podAggregate, readContainer } from './ResourcesView'
+import { buildContainerResourceTooltip, podAggregate, readContainer } from './ResourcesView'
 
 // Build a CPU-only container fixture; memory fields default to 0.
 function cpu(name: string, usage: number, request: number, limit: number): ContainerResourceMetrics {
@@ -107,5 +108,59 @@ describe('podAggregate', () => {
     expect(result.mode).toBe('limit')
     expect(result.totalUsage).toBe(160)
     expect(result.denom).toBe(384) // summed memory limit
+  })
+})
+
+describe('podAggregate with pod-level resources', () => {
+  it("treats a pod-level limit as the ceiling even when containers set none", () => {
+    const containers = [cpu('app', 300, 0, 0), cpu('sidecar', 100, 0, 0)]
+    const result = podAggregate(containers, 'cpu', { request: 500, limit: 1000 })
+    expect(result.mode).toBe('limit')
+    expect(result.denom).toBe(1000)
+    expect(result.markerPct).toBeCloseTo(50)
+  })
+
+  it("uses the pod-level limit over a partial container sum", () => {
+    const containers = [cpu('app', 300, 0, 0), cpu('sidecar', 100, 0, 200)]
+    const result = podAggregate(containers, 'cpu', { limit: 1000 })
+    expect(result.mode).toBe('limit')
+    expect(result.denom).toBe(1000)
+    expect(result.markerPct).toBeUndefined()
+  })
+
+  it("uses the container limits when they are tighter than the pod limit", () => {
+    const single = podAggregate([cpu('app', 450, 100, 500)], 'cpu', { request: 800, limit: 1000 })
+    expect(single.mode).toBe('limit')
+    expect(single.denom).toBe(500)
+    const both = podAggregate([cpu('app', 200, 0, 300), cpu('sidecar', 50, 0, 300)], 'cpu', { limit: 1000 })
+    expect(both.denom).toBe(600)
+  })
+
+  it("uses a pod-level request as the yardstick when nothing is limited", () => {
+    const containers = [cpu('app', 300, 0, 0), cpu('sidecar', 100, 0, 0)]
+    const result = podAggregate(containers, 'cpu', { request: 800 })
+    expect(result.mode).toBe('request')
+    expect(result.denom).toBe(800)
+  })
+})
+
+describe('buildContainerResourceTooltip with a pod-level budget', () => {
+  const fmt = (n: number) => `${n}m`
+  const containers = [cpu('app', 300, 0, 0), cpu('sidecar', 100, 0, 0)]
+
+  it('shows the shared pod budget instead of calling covered containers unlimited', () => {
+    const html = renderToStaticMarkup(
+      buildContainerResourceTooltip('CPU', containers, 'cpu', fmt, undefined, { usage: 400, limit: 1000, request: 500 }),
+    )
+    expect(html).not.toContain('no limit')
+    expect(html).toContain('pod limit')
+    expect(html).toContain('Pod (shared)')
+    expect(html).toContain('400m · 40% · 1000m limit · req 500m')
+  })
+
+  it('keeps "no limit" when there is no pod-level budget', () => {
+    const html = renderToStaticMarkup(buildContainerResourceTooltip('CPU', containers, 'cpu', fmt))
+    expect(html).toContain('no limit')
+    expect(html).not.toContain('Pod (shared)')
   })
 })

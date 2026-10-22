@@ -172,6 +172,10 @@ Use CSS classes from `components.css` for status cells in table rows:
 | `.border-r-subtle` | Right border |
 | `.border-t-subtle` | Top border |
 
+### Unknown, partial and denied values
+
+Keep unavailable values visible and name why they could not be read; never substitute zero, “none” or a healthy tone. Partial totals are bounds (`CertaintyGlyph`), not exact counts. Recorded declarations and observed state need distinct source labels. Use `FactValue` with `FactSource` for values and their provenance, and `worseTone` when combining health readings so an unread part cannot produce a healthy result. Workspace problem presentation maps issue severity to the canonical health tones; it does not classify evidence or authorize reads.
+
 ### Times and Ages
 Every relative time uses the shared tiers — seconds, minutes, hours, days (`45s`, `12m`, `4h`, `212d`) — never months or years, matching kubectl. What the text says depends on what the reader is asking:
 

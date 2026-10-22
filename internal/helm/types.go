@@ -278,9 +278,39 @@ type UpgradeSourceIssue string
 
 const (
 	UpgradeSourceIssueUntracked           UpgradeSourceIssue = "untracked"
+	UpgradeSourceIssueConfirmation        UpgradeSourceIssue = "source_confirmation_required"
+	UpgradeSourceIssueSourceChange        UpgradeSourceIssue = "source_change_required"
+	UpgradeSourceIssueChanging            UpgradeSourceIssue = "release_changing"
 	UpgradeSourceIssueRepoIndexError      UpgradeSourceIssue = "repo_index_error"
 	UpgradeSourceIssueAmbiguousRepository UpgradeSourceIssue = "ambiguous_repository"
+	UpgradeSourceIssueAmbiguousSource     UpgradeSourceIssue = "ambiguous_source"
+	UpgradeSourceIssueUnavailable         UpgradeSourceIssue = "source_unavailable"
 )
+
+// ChartSourceCandidate is a credential-free, exact source association. For a
+// classic repository Reference is the local Helm alias and URL is the
+// canonical repository URL. For OCI Reference is the full chart reference and
+// URL is empty.
+type ChartSourceCandidate struct {
+	Type      string `json:"type"`
+	Reference string `json:"reference"`
+	URL       string `json:"url,omitempty"`
+}
+
+// ChartSourceStatus keeps provenance independent from local configuration and
+// current reachability. Candidates are configured sources verified to publish
+// the release's exact chart name and version.
+type ChartSourceStatus struct {
+	Changing             bool                    `json:"changing"`
+	Revision             int                     `json:"revision"`
+	Confirmed            bool                    `json:"confirmed"`
+	SourceChangeRequired bool                    `json:"sourceChangeRequired"`
+	Suggestions          []ChartSourceSuggestion `json:"suggestions,omitempty"`
+	Recorded             *ChartSourceCandidate   `json:"recorded,omitempty"`
+	Configured           bool                    `json:"configured"`
+	Available            bool                    `json:"available"`
+	Candidates           []ChartSourceCandidate  `json:"candidates,omitempty"`
+}
 
 // UpgradeInfo contains information about available upgrades
 type UpgradeInfo struct {
@@ -316,16 +346,20 @@ type BatchUpgradeInfo struct {
 // used. Apply rejects them — changing the chart version goes through the
 // upgrade endpoints.
 type ApplyValuesRequest struct {
-	Values     map[string]any `json:"values"`
-	Version    string         `json:"version,omitempty"`
-	Repository string         `json:"repository,omitempty"`
+	SourceUpgrade *SourceUpgradeSelection `json:"sourceUpgrade,omitempty"`
+	Values        map[string]any          `json:"values"`
+	Version       string                  `json:"version,omitempty"`
+	Repository    string                  `json:"repository,omitempty"`
 }
 
 // ValuesPreviewResponse contains the preview of a values change
 type ValuesPreviewResponse struct {
-	CurrentValues map[string]any `json:"currentValues"`
-	NewValues     map[string]any `json:"newValues"`
-	ManifestDiff  string         `json:"manifestDiff"`
+	BaselineSource   *ChartSourceCandidate `json:"baselineSource,omitempty"`
+	PreviewDigest    string                `json:"previewDigest,omitempty"`
+	BaselineRevision int                   `json:"baselineRevision,omitempty"`
+	CurrentValues    map[string]any        `json:"currentValues"`
+	NewValues        map[string]any        `json:"newValues"`
+	ManifestDiff     string                `json:"manifestDiff"`
 }
 
 // HelmRepository represents a configured Helm repository
@@ -372,8 +406,27 @@ type InstallRequest struct {
 	ChartName       string         `json:"chartName"`
 	Version         string         `json:"version"`
 	Repository      string         `json:"repository"`
+	RepositoryName  string         `json:"repositoryName,omitempty"`
 	Values          map[string]any `json:"values,omitempty"`
 	CreateNamespace bool           `json:"createNamespace,omitempty"`
+	resolvedSource  *ChartSourceCandidate
+}
+
+// SetChartSourceRequest explicitly associates an existing release with a
+// configured source. The server verifies the exact installed chart/version.
+type SetChartSourceRequest struct {
+	Type      string `json:"type"`
+	Reference string `json:"reference"`
+	URL       string `json:"url,omitempty"`
+}
+
+// AddRepositoryRequest registers a credential-free classic repository. When a
+// release is supplied, the source is associated only after exact verification.
+type AddRepositoryRequest struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Namespace   string `json:"namespace,omitempty"`
+	ReleaseName string `json:"releaseName,omitempty"`
 }
 
 // ChartSearchResult contains search results for charts

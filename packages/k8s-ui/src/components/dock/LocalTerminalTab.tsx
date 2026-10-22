@@ -8,6 +8,7 @@ import { clsx } from 'clsx'
 import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
 import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
 import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
+import { toneTextClass } from '../ui/status-tone'
 
 export interface LocalTerminalSessionInfo {
   context: string
@@ -292,9 +293,9 @@ export function LocalTerminalTab({
       {/* Terminal or error */}
       <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       {error && (
-        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-slate-900">
-          <div className="text-red-400 mb-2 text-sm">Failed to connect</div>
-          <div className="text-xs text-theme-text-disabled mb-3">{error}</div>
+        <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-theme-base">
+          <div className={clsx(toneTextClass('unhealthy'), 'mb-2 text-sm')}>Failed to connect</div>
+          <div className="text-xs text-theme-text-secondary mb-3">{error}</div>
           <button
             onClick={connect}
             disabled={!connectAllowed}

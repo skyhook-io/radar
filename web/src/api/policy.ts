@@ -87,18 +87,18 @@ export function usePolicyCoverage(
   enabled = true,
   limit?: number,
   /**
-   * Whatever identifies the caller's current namespace view. The server applies
-   * that filter from session state, so it changes the response body without
-   * changing the URL — it has to be in the key or the cache serves the previous
-   * scope's answer under the new scope's heading.
+   * The namespaces the listed subjects are narrowed to (the header's filter);
+   * empty lists every namespace. Counts stay cluster-wide either way.
    */
-  viewFilter = '',
+  viewNamespaces: readonly string[] = [],
 ) {
+  const viewFilter = viewNamespaces.join(',')
   return useQuery<PolicyCoverageResponse>({
     queryKey: ['policy', 'coverage', policy, namespace ?? '', limit ?? 0, viewFilter],
     queryFn: () => {
       const params = new URLSearchParams()
       if (namespace) params.set('namespace', namespace)
+      if (viewFilter) params.set('namespaces', viewFilter)
       if (limit) params.set('limit', String(limit))
       const qs = params.toString()
       return fetchJSON<PolicyCoverageResponse>(

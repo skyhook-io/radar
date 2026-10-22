@@ -193,6 +193,7 @@ import {
   CNPGDatabaseRenderer,
   CNPGPublicationRenderer,
   CNPGSubscriptionRenderer,
+  CNPGDatabaseRoleRenderer,
   CNPGImageCatalogRenderer,
   KyvernoGlobalContextRenderer,
   KyvernoUpdateRequestRenderer,
@@ -313,6 +314,7 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
  * When an override is not provided, the base (shared) renderer is used.
  */
 export interface RendererOverrides {
+  FluxHelmReleaseRenderer?: React.ComponentType<React.ComponentProps<typeof FluxHelmReleaseRenderer>>
   JobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   JobSetRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayJobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
@@ -494,7 +496,7 @@ const KNOWN_KINDS = new Set([
   'externalsecrets', 'clusterexternalsecrets', 'secretstores', 'clustersecretstores',
   'clusters', 'scheduledbackups', 'poolers', 'objectstores',
   'globalcontextentries', 'updaterequests', 'ephemeralreports', 'clusterephemeralreports',
-  'databases', 'publications', 'imagecatalogs', 'clusterimagecatalogs',
+  'databases', 'publications', 'imagecatalogs', 'clusterimagecatalogs', 'databaseroles',
   'virtualservices', 'destinationrules', 'serviceentries',
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
@@ -702,7 +704,7 @@ export function ResourceRendererDispatch({
   const isGroupGatedKind =
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
-    || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
+    || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'databaseroles' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
     || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
@@ -713,7 +715,7 @@ export function ResourceRendererDispatch({
     || ((kind === 'scheduledbackups' || kind === 'poolers') && isCNPGApiVersion)
     || (kind === 'objectstores' && isApiGroup(data?.apiVersion, 'barmancloud.cnpg.io'))
     || ((kind === 'databases' || kind === 'publications' || kind === 'imagecatalogs'
-      || kind === 'clusterimagecatalogs') && isCNPGApiVersion)
+      || kind === 'clusterimagecatalogs' || kind === 'databaseroles') && isCNPGApiVersion)
     || (kind === 'subscriptions'
       && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'messaging.knative.dev')))
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
@@ -754,6 +756,7 @@ export function ResourceRendererDispatch({
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const JobComp = rendererOverrides?.JobRenderer ?? JobRenderer
+  const FluxHelmReleaseComp = rendererOverrides?.FluxHelmReleaseRenderer ?? FluxHelmReleaseRenderer
   const JobSetComp = rendererOverrides?.JobSetRenderer ?? JobSetRenderer
   const RayJobComp = rendererOverrides?.RayJobRenderer ?? RayJobRenderer
   const RayClusterComp = rendererOverrides?.RayClusterRenderer ?? RayClusterRenderer
@@ -800,7 +803,7 @@ export function ResourceRendererDispatch({
       {kind !== 'events' && <EventsSection fullscreen={!!renderSidebar} events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
-      <MetadataSection data={data} />
+      <MetadataSection data={data} onNavigate={onNavigate} />
     </>
   )
 
@@ -878,7 +881,7 @@ export function ResourceRendererDispatch({
         {kind === 'ocirepositories' && <OCIRepositoryRenderer data={data} />}
         {kind === 'helmrepositories' && <HelmRepositoryRenderer data={data} />}
         {kind === 'kustomizations' && <KustomizationRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'helmreleases' && <FluxHelmReleaseRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'helmreleases' && <FluxHelmReleaseComp data={data} onNavigate={onNavigate} />}
         {kind === 'alerts' && <AlertRenderer data={data} />}
         {kind === 'applications' && <ArgoApplicationRenderer data={data} />}
         {kind === 'nodepools' && <KarpenterNodePoolComp data={data} onNavigate={onNavigate} />}
@@ -927,6 +930,7 @@ export function ResourceRendererDispatch({
         {kind === 'databases' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGDatabaseComp data={data} onNavigate={onNavigate} />}
         {kind === 'publications' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGPublicationComp data={data} onNavigate={onNavigate} />}
         {kind === 'subscriptions' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGSubscriptionComp data={data} onNavigate={onNavigate} />}
+        {kind === 'databaseroles' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGDatabaseRoleRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'imagecatalogs' || kind === 'clusterimagecatalogs') && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGImageCatalogComp data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && isApiGroup(data.apiVersion, 'velero.io') && <VeleroBackupComp data={data} onNavigate={onNavigate} />}
@@ -972,8 +976,8 @@ export function ResourceRendererDispatch({
         {kind === 'azuremanagedcontrolplanes' && <AzureManagedControlPlaneRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'azuremanagedmachinepools' && <AzureManagedMachinePoolRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'azuremachines' && <AzureMachineRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'virtualservices' && <IstioVirtualServiceRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'destinationrules' && <IstioDestinationRuleRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'virtualservices' && <IstioVirtualServiceRenderer data={data} onNavigate={onNavigate} serviceDomain={relationships?.istioServiceDomain} />}
+        {kind === 'destinationrules' && <IstioDestinationRuleRenderer data={data} onNavigate={onNavigate} serviceDomain={relationships?.istioServiceDomain} />}
         {kind === 'serviceentries' && <IstioServiceEntryRenderer data={data} />}
         {kind === 'peerauthentications' && <IstioPeerAuthenticationRenderer data={data} />}
         {kind === 'authorizationpolicies' && <IstioAuthorizationPolicyRenderer data={data} />}
@@ -1248,7 +1252,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   }
   // Group-guarded for the same reason as the renderers: these plurals are
   // generic enough that another operator can serve them.
-  if ((k === 'databases' || k === 'publications' || k === 'subscriptions') && isApiGroup(data.apiVersion, CNPG_GROUP)) {
+  if ((k === 'databases' || k === 'publications' || k === 'subscriptions' || k === 'databaseroles') && isApiGroup(data.apiVersion, CNPG_GROUP)) {
     return getCNPGDeclarativeStatus(data)
   }
   if (k === 'globalcontextentries') return getKyvernoGlobalContextStatus(data)

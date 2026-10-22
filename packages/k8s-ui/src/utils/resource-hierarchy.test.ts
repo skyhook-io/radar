@@ -1560,3 +1560,40 @@ describe('uses edges in the timeline hierarchy', () => {
     expect(deployment.children?.map(child => child.kind)).toEqual(['HorizontalPodAutoscaler'])
   })
 })
+
+describe('buildResourceHierarchy Flux sources', () => {
+  it('keeps a shared Flux source as its own lane instead of nesting it under one consumer', () => {
+    const event = (kind: string, name: string, apiVersion: string): TimelineEvent => ({
+      id: `${kind}/flux-system/${name}`,
+      timestamp: '2024-01-01T00:00:00.000Z',
+      source: 'informer',
+      kind,
+      apiVersion,
+      namespace: 'flux-system',
+      name,
+      eventType: 'update',
+    } as TimelineEvent)
+    const events = [
+      event('GitRepository', 'podinfo', 'source.toolkit.fluxcd.io/v1'),
+      event('Kustomization', 'base', 'kustomize.toolkit.fluxcd.io/v1'),
+      event('Kustomization', 'overlay', 'kustomize.toolkit.fluxcd.io/v1'),
+    ]
+    const topology = {
+      nodes: [
+        { id: 'gitrepository/flux-system/podinfo', kind: 'GitRepository', name: 'podinfo', status: 'healthy', data: { namespace: 'flux-system', apiVersion: 'source.toolkit.fluxcd.io/v1' } },
+        { id: 'kustomization/flux-system/base', kind: 'Kustomization', name: 'base', status: 'healthy', data: { namespace: 'flux-system', apiVersion: 'kustomize.toolkit.fluxcd.io/v1' } },
+        { id: 'kustomization/flux-system/overlay', kind: 'Kustomization', name: 'overlay', status: 'healthy', data: { namespace: 'flux-system', apiVersion: 'kustomize.toolkit.fluxcd.io/v1' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'gitrepository/flux-system/podinfo', target: 'kustomization/flux-system/base', type: 'configures' },
+        { id: 'e2', source: 'gitrepository/flux-system/podinfo', target: 'kustomization/flux-system/overlay', type: 'configures' },
+      ],
+    } as unknown as Topology
+    const lanes = buildResourceHierarchy({ events, topology, grouping: 'owner' })
+    expect(lanes.map((lane) => `${lane.kind}/${lane.name}`).sort()).toEqual([
+      'GitRepository/podinfo',
+      'Kustomization/base',
+      'Kustomization/overlay',
+    ])
+  })
+})

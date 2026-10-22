@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -144,10 +146,18 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// Layers 3 + 4: Enumerate candidates via the shared pkg/prom discovery
 	// logic. Well-known first, then dynamic fallbacks.
 	enumStart := time.Now()
+	enumSource := "API"
 	candidates, err := prom.Discover(ctx, k8sClient, prom.DiscoverOptions{
 		IncludeDynamic: true,
 		Logger: func(format string, args ...interface{}) {
 			log.Printf("[prometheus] "+format, args...)
+		},
+		Services: func() ([]*corev1.Service, bool) {
+			svcs, ok := c.cachedServices()
+			if ok {
+				enumSource = "informer cache"
+			}
+			return svcs, ok
 		},
 	})
 	if err != nil {
@@ -169,7 +179,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		return "", "", ErrPrometheusNotFound
 	}
 
-	log.Printf("[prometheus] enumerated %d candidate(s) in %s: %s", len(candidates), took(enumStart), summarizeCandidates(candidates))
+	log.Printf("[prometheus] enumerated %d candidate(s) from %s in %s: %s", len(candidates), enumSource, took(enumStart), summarizeCandidates(candidates))
 
 	// Direct pass: probe each candidate at its in-cluster Service address, with
 	// bounded concurrency. This connects immediately when Radar runs in-cluster,

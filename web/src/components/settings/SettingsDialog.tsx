@@ -10,7 +10,7 @@ import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
-import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
+import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, mcpEndpointUrl } from '../../api/config'
 import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
   useOpenCostSummary,
@@ -46,10 +46,6 @@ import { OperatorManagedNotice } from './OperatorManagedNotice'
 import { FormSaveActions } from './FormSaveActions'
 export type { SettingsSectionId } from './settings-state'
 
-function mcpEndpointUrl(): string {
-  return `${window.location.origin}${routePath('/mcp')}`
-}
-
 interface Config {
   kubeconfig?: string
   kubeconfigDirs?: string[]
@@ -68,6 +64,7 @@ interface Config {
   argoCdUrl?: string
   argoCdInsecureTls?: boolean
   mcp?: boolean | null
+  mcpReadOnly?: boolean | null
   restoreLastDesktopContext?: boolean | null
 }
 
@@ -134,6 +131,7 @@ function normalizeStartup(c: Config) {
     timelineDbPath: c.timelineDbPath ?? '',
     historyLimit: c.historyLimit ?? null,
     mcp: c.mcp ?? true,
+    mcpReadOnly: c.mcpReadOnly ?? false,
     restoreLastDesktopContext: c.restoreLastDesktopContext ?? true,
   }
 }
@@ -242,7 +240,7 @@ export function SettingsDialog({
     edN.restoreLastDesktopContext !== svN.restoreLastDesktopContext
   const serverDirty =
     edN.port !== svN.port || edN.noBrowser !== svN.noBrowser || edN.browser !== svN.browser
-  const mcpDirty = edN.mcp !== svN.mcp
+  const mcpDirty = edN.mcp !== svN.mcp || edN.mcpReadOnly !== svN.mcpReadOnly
   const timelineDirty =
     edN.timelineStorage !== svN.timelineStorage ||
     edN.timelineDbPath !== svN.timelineDbPath ||
@@ -856,11 +854,8 @@ export function SettingsDialog({
                 anonymous={argoSectionStatus?.connected && argoSectionStatus.anonymous}
                 connectedAddress={argoSectionStatus?.connected && !argoSectionStatus.anonymous ? argoSectionStatus.address : undefined}
                 active={section === 'argocd'}
-                statusReason={
-                  argoSectionStatus?.configured && !argoSectionStatus.connected
-                    ? argoSectionStatus.reason
-                    : undefined
-                }
+                statusReason={argoSectionStatus?.configured ? argoSectionStatus.reason : undefined}
+                connecting={argoSectionStatus?.connecting}
                 onChangeUrl={(v) => updateConfigField('argoCdUrl', v || undefined)}
                 onChangeInsecureTls={(v) => updateConfigField('argoCdInsecureTls', v || undefined)}
                 onApplied={({ url, insecureTls, tokenSet }) => {
@@ -953,7 +948,9 @@ export function SettingsDialog({
                 <SubHeading>MCP</SubHeading>
                 <MCPSection
                   mcpEnabled={editedConfig.mcp ?? true}
-                  onToggle={(v) => updateConfigField('mcp', v)}
+                  onToggle={(v) => setEditedConfig((c) => ({ ...c, mcp: v, mcpReadOnly: v && (c.mcpReadOnly ?? false) }))}
+                  readOnly={editedConfig.mcpReadOnly ?? false}
+                  onReadOnlyChange={(v) => updateConfigField('mcpReadOnly', v)}
                   isDesktop={isDesktop}
                   portPinned={editedConfig.port != null && editedConfig.port > 0}
                   onPinPort={(port) => updateConfigField('port', port)}
@@ -1218,7 +1215,7 @@ function OperatorSettingsSummary({ section, config }: { section: SettingsSection
       break
     case 'argocd':
       rows = [
-        ['Status', argoError ? 'Status unavailable' : !argo ? 'Checking…' : argo.connected ? 'Connected' : 'Not connected'],
+        ['Status', argoError ? 'Status unavailable' : !argo ? 'Checking…' : argo.connected ? 'Connected' : argo.connecting ? 'Connecting…' : 'Not connected'],
         ['Endpoint', argo?.address || c.argoCdUrl || 'Auto-discovery'],
         ['Token', config.argoCdTokenSet ? 'Configured' : 'None configured'],
         ['TLS verification', c.argoCdInsecureTls ? 'Disabled' : 'Enabled'],
@@ -1238,7 +1235,7 @@ function OperatorSettingsSummary({ section, config }: { section: SettingsSection
       break
     case 'advanced':
       rows = [
-        ['MCP', c.mcp ? 'Enabled' : 'Disabled'],
+        ['MCP', c.mcp ? (c.mcpReadOnly ? 'Read-only' : 'Enabled') : 'Disabled'],
         ['Timeline storage', c.timelineStorage || 'Memory'],
         ['Event history limit', c.historyLimit ?? '—'],
       ]
@@ -1308,7 +1305,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const agentLabel =
     diag.agents.find((a) => a.name === diag.selectedAgent)?.label ?? diag.agents[0]?.label
   const mcpOn = capabilities.mcpEnabled
-  const mcpUrl = mcpEndpointUrl()
+  const mcpUrl = mcpEndpointUrl(capabilities.mcpReadOnly)
   const costMissing = cost?.reason === 'no_prometheus' || cost?.reason === 'no_cost_source' || cost?.reason === 'no_metrics'
   const costUnavailableDetail = cost?.reason === 'no_prometheus'
     ? 'Connect OpenCost metrics in Metrics.'
@@ -1347,14 +1344,14 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'argocd', icon: GitBranch, label: 'Argo CD',
-      tone: argo?.connected ? 'ok' : argo?.configured || argo?.reason ? 'warn' : 'off',
-      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : 'Not connected',
-      detail: argo?.connected ? argo.address : argo?.reason ? 'Open Argo CD for connection details.' : undefined,
+      tone: argo?.connected ? (argo.reason ? 'warn' : 'ok') : argo?.connecting ? 'unknown' : argo?.configured || argo?.reason ? 'warn' : 'off',
+      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : argo?.connecting ? 'Connecting…' : 'Not connected',
+      detail: argo?.reason ? 'Open Argo CD for connection details.' : argo?.connected ? argo.address : undefined,
     },
     {
       id: 'advanced', icon: Zap, label: 'MCP',
       tone: mcpOn ? 'ok' : 'off',
-      value: mcpOn ? 'On' : 'Off',
+      value: mcpOn ? (capabilities.mcpReadOnly ? 'Read-only' : 'On') : 'Off',
       detail: mcpOn ? mcpUrl : undefined,
       copyable: mcpOn,
     },
@@ -2099,12 +2096,16 @@ function CostSection({
 
 function MCPSection({
   mcpEnabled,
+  readOnly,
+  onReadOnlyChange,
   onToggle,
   isDesktop,
   portPinned,
   onPinPort,
 }: {
   mcpEnabled: boolean
+  readOnly: boolean
+  onReadOnlyChange: (value: boolean) => void
   onToggle: (value: boolean) => void
   isDesktop: boolean
   portPinned: boolean
@@ -2113,7 +2114,8 @@ function MCPSection({
   const [copied, setCopied] = useState(false)
 
   const currentPort = Number(window.location.port) || 80
-  const mcpUrl = mcpEndpointUrl()
+  const capabilities = useCapabilitiesContext()
+  const mcpUrl = mcpEndpointUrl(capabilities.mcpReadOnly)
 
   const handleCopy = () => {
     navigator.clipboard.writeText(mcpUrl)
@@ -2128,8 +2130,8 @@ function MCPSection({
   return (
     <div className="space-y-3">
       <p className="text-xs text-theme-text-tertiary">
-        Lets AI tools (Claude Code, Cursor, …) query and act on this cluster through Radar over the
-        Model Context Protocol. Point your agent at the endpoint below.
+        Lets AI tools query this cluster through Radar over the Model Context Protocol.
+        Full mode also allows changes. Settings take effect after restarting Radar.
       </p>
       <ConfigToggle
         label="MCP Server"
@@ -2137,10 +2139,11 @@ function MCPSection({
         onChange={onToggle}
       />
 
-      {mcpEnabled && (
+      {mcpEnabled && <ConfigToggle label="Read-only MCP" value={readOnly} onChange={onReadOnlyChange} />}
+      {mcpEnabled && capabilities.mcpEnabled && (
         <div className="space-y-2 pl-0.5">
           <div>
-            <label className="block text-xs text-theme-text-secondary mb-1">MCP Endpoint</label>
+            <label className="block text-xs text-theme-text-secondary mb-1">Running MCP Endpoint</label>
             <div className="flex items-center gap-2">
               <code className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary truncate">
                 {mcpUrl}
@@ -2228,6 +2231,7 @@ function ArgoCDConfigField({
   envError,
   cliSession,
   statusReason,
+  connecting,
   anonymous,
   connectedAddress,
   active,
@@ -2242,6 +2246,7 @@ function ArgoCDConfigField({
   envError?: string
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  connecting?: boolean
   anonymous?: boolean
   connectedAddress?: string
   active?: boolean
@@ -2250,7 +2255,7 @@ function ArgoCDConfigField({
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
 }) {
   if (envManaged) {
-    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} connectedAddress={connectedAddress} statusReason={statusReason} />
+    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} connectedAddress={connectedAddress} statusReason={statusReason} connecting={connecting} />
   }
   return (
     <ArgoCDEditableField
@@ -2259,6 +2264,7 @@ function ArgoCDConfigField({
       tokenSet={tokenSet}
       cliSession={cliSession}
       statusReason={statusReason}
+      connecting={connecting}
       anonymous={anonymous}
       connectedAddress={connectedAddress}
       active={active}
@@ -2279,6 +2285,7 @@ function ArgoCDEnvManagedField({
   envError,
   connectedAddress,
   statusReason,
+  connecting,
 }: {
   url: string
   insecureTls: boolean
@@ -2288,6 +2295,7 @@ function ArgoCDEnvManagedField({
   // so this is the one thing on it that can change after deploy.
   connectedAddress?: string
   statusReason?: string
+  connecting?: boolean
 }) {
   if (envError) {
     return (
@@ -2344,10 +2352,15 @@ function ArgoCDEnvManagedField({
             <dt className="w-24 shrink-0 text-theme-text-tertiary">Status</dt>
             <dd className="min-w-0 truncate text-theme-text-secondary">
               {connectedAddress ? (
-                <span className="inline-flex items-center gap-1">
-                  <Check className="w-3 h-3 shrink-0 text-green-600 dark:text-green-400/80" />
-                  Connected at {connectedAddress}
-                </span>
+                <>
+                  <span className="inline-flex items-center gap-1">
+                    <Check className="w-3 h-3 shrink-0 text-green-600 dark:text-green-400/80" />
+                    Connected at {connectedAddress}
+                  </span>
+                  {statusReason && <span className="block whitespace-normal text-warning-text">{statusReason}</span>}
+                </>
+              ) : connecting ? (
+                'Connecting…'
               ) : statusReason ? (
                 <span className="text-warning-text">Not connected — {statusReason}</span>
               ) : (
@@ -2377,6 +2390,7 @@ function ArgoCDEditableField({
   tokenSet,
   cliSession,
   statusReason,
+  connecting: serverConnecting,
   anonymous,
   connectedAddress,
   active,
@@ -2389,6 +2403,7 @@ function ArgoCDEditableField({
   tokenSet: boolean
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  connecting?: boolean
   anonymous?: boolean
   connectedAddress?: string
   active?: boolean
@@ -2515,6 +2530,10 @@ function ArgoCDEditableField({
             <>Connected to Argo CD at {connectedAddress}.</>
           )}
         </p>
+      )}
+
+      {serverConnecting && state.status === 'idle' && !anonymous && !connectedAddress && (
+        <p className="mb-3 text-xs text-theme-text-secondary">Connecting to Argo CD…</p>
       )}
 
       {statusReason && state.status !== 'connected' && (

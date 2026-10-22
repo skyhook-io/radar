@@ -57,7 +57,7 @@ func TestGetUpdateCommand(t *testing.T) {
 		goos   string
 		want   string
 	}{
-		{"homebrew", InstallHomebrew, "darwin", "brew upgrade skyhook-io/tap/radar"},
+		{"homebrew tap", InstallHomebrew, "darwin", "brew upgrade skyhook-io/tap/radar"},
 		{"krew", InstallKrew, "linux", "kubectl krew upgrade radar"},
 		{"scoop", InstallScoop, "windows", "scoop update radar"},
 		{"direct linux", InstallDirect, "linux", "curl -fsSL https://get.radarhq.io | sh"},
@@ -71,9 +71,194 @@ func TestGetUpdateCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getUpdateCommandForOS(tt.method, tt.goos)
+			got := getUpdateCommandForOS(tt.method, tt.goos, "/opt/homebrew/Cellar/radar/1.0/bin/kubectl-radar")
 			if got != tt.want {
-				t.Errorf("getUpdateCommandForOS(%q, %q) = %q, want %q", tt.method, tt.goos, got, tt.want)
+				t.Errorf("getUpdateCommandForOS(%q, %q, tap path) = %q, want %q", tt.method, tt.goos, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHomebrewUpgradeCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		exe  string
+		want string
+	}{
+		{"core on Apple Silicon", "/opt/homebrew/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar", "brew upgrade kubectl-radar"},
+		{"core on Intel", "/usr/local/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar", "brew upgrade kubectl-radar"},
+		{"core on Linux", "/home/linuxbrew/.linuxbrew/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar", "brew upgrade kubectl-radar"},
+		{"tap", "/opt/homebrew/Cellar/radar/1.16.0/bin/kubectl-radar", "brew upgrade skyhook-io/tap/radar"},
+		{"unresolved link falls back to tap", "/opt/homebrew/bin/radar", "brew upgrade skyhook-io/tap/radar"},
+		{"unknown path falls back to tap", "", "brew upgrade skyhook-io/tap/radar"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := homebrewUpgradeCommand(tt.exe); got != tt.want {
+				t.Errorf("homebrewUpgradeCommand(%q) = %q, want %q", tt.exe, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestInstallLayouts builds each installer's on-disk layout with real symlinks
+// and checks what a binary launched through the user-facing path reports.
+func TestInstallLayouts(t *testing.T) {
+	link := func(t *testing.T, target, name string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, name); err != nil {
+			// Windows needs Developer Mode or elevation to create symlinks.
+			t.Skipf("cannot create symlinks here: %v", err)
+		}
+	}
+	binary := func(t *testing.T, name string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, root string) string // returns the path the user runs
+		wantMethod  InstallMethod
+		wantCommand string
+	}{
+		{
+			name: "homebrew-core on Apple Silicon",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/opt/homebrew/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar")
+				link(t, "kubectl-radar", root+"/opt/homebrew/Cellar/kubectl-radar/1.16.0/bin/radar")
+				link(t, "../Cellar/kubectl-radar/1.16.0/bin/radar", root+"/opt/homebrew/bin/radar")
+				return root + "/opt/homebrew/bin/radar"
+			},
+			wantMethod:  InstallHomebrew,
+			wantCommand: "brew upgrade kubectl-radar",
+		},
+		{
+			name: "homebrew-core on Intel, previously reported as a direct install",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/usr/local/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar")
+				link(t, "kubectl-radar", root+"/usr/local/Cellar/kubectl-radar/1.16.0/bin/radar")
+				link(t, "../Cellar/kubectl-radar/1.16.0/bin/radar", root+"/usr/local/bin/radar")
+				return root + "/usr/local/bin/radar"
+			},
+			wantMethod:  InstallHomebrew,
+			wantCommand: "brew upgrade kubectl-radar",
+		},
+		{
+			name: "homebrew-core via kubectl plugin name",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/opt/homebrew/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar")
+				link(t, "../Cellar/kubectl-radar/1.16.0/bin/kubectl-radar", root+"/opt/homebrew/bin/kubectl-radar")
+				return root + "/opt/homebrew/bin/kubectl-radar"
+			},
+			wantMethod:  InstallHomebrew,
+			wantCommand: "brew upgrade kubectl-radar",
+		},
+		{
+			name: "homebrew-core via opt link, as brew services runs it",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/opt/homebrew/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar")
+				link(t, "../Cellar/kubectl-radar/1.16.0", root+"/opt/homebrew/opt/kubectl-radar")
+				return root + "/opt/homebrew/opt/kubectl-radar/bin/kubectl-radar"
+			},
+			wantMethod:  InstallHomebrew,
+			wantCommand: "brew upgrade kubectl-radar",
+		},
+		{
+			name: "skyhook-io tap",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/opt/homebrew/Cellar/radar/1.16.0/bin/kubectl-radar")
+				link(t, "kubectl-radar", root+"/opt/homebrew/Cellar/radar/1.16.0/bin/radar")
+				link(t, "../Cellar/radar/1.16.0/bin/radar", root+"/opt/homebrew/bin/radar")
+				return root + "/opt/homebrew/bin/radar"
+			},
+			wantMethod:  InstallHomebrew,
+			wantCommand: "brew upgrade skyhook-io/tap/radar",
+		},
+		{
+			name: "own symlink to a Homebrew install",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/opt/homebrew/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar")
+				link(t, root+"/opt/homebrew/Cellar/kubectl-radar/1.16.0/bin/kubectl-radar", root+"/home/user/bin/radar")
+				return root + "/home/user/bin/radar"
+			},
+			wantMethod:  InstallHomebrew,
+			wantCommand: "brew upgrade kubectl-radar",
+		},
+		{
+			name: "install script shorthand link",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/usr/local/bin/kubectl-radar")
+				link(t, "kubectl-radar", root+"/usr/local/bin/radar")
+				return root + "/usr/local/bin/radar"
+			},
+			wantMethod:  InstallDirect,
+			wantCommand: "curl -fsSL https://get.radarhq.io | sh",
+		},
+		{
+			name: "krew",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/home/user/.krew/store/radar/v1.16.0/kubectl-radar")
+				link(t, "../store/radar/v1.16.0/kubectl-radar", root+"/home/user/.krew/bin/kubectl-radar")
+				return root + "/home/user/.krew/bin/kubectl-radar"
+			},
+			wantMethod:  InstallKrew,
+			wantCommand: "kubectl krew upgrade radar",
+		},
+		{
+			name: "scoop current link",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/home/user/scoop/apps/radar/1.16.0/radar")
+				link(t, "1.16.0", root+"/home/user/scoop/apps/radar/current")
+				return root + "/home/user/scoop/apps/radar/current/radar"
+			},
+			wantMethod:  InstallScoop,
+			wantCommand: "scoop update radar",
+		},
+		{
+			name: "plain binary, no links",
+			setup: func(t *testing.T, root string) string {
+				binary(t, root+"/home/user/bin/radar")
+				return root + "/home/user/bin/radar"
+			},
+			wantMethod:  InstallDirect,
+			wantCommand: "curl -fsSL https://get.radarhq.io | sh",
+		},
+		{
+			name: "dangling link keeps the original path",
+			setup: func(t *testing.T, root string) string {
+				link(t, "missing", root+"/opt/homebrew/bin/radar")
+				return root + "/opt/homebrew/bin/radar"
+			},
+			wantMethod:  InstallHomebrew,
+			wantCommand: "brew upgrade skyhook-io/tap/radar",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Not t.TempDir: its path includes the test name, which can contain
+			// "homebrew" and mask a detection that only worked by accident.
+			root, err := os.MkdirTemp("", "layout")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(root) })
+			exe := resolveSymlinks(tt.setup(t, root))
+			if got := detectInstallMethodFromPath(exe); got != tt.wantMethod {
+				t.Errorf("method = %q, want %q (resolved %s)", got, tt.wantMethod, exe)
+			}
+			if got := getUpdateCommandForOS(detectInstallMethodFromPath(exe), "darwin", exe); got != tt.wantCommand {
+				t.Errorf("command = %q, want %q (resolved %s)", got, tt.wantCommand, exe)
 			}
 		})
 	}

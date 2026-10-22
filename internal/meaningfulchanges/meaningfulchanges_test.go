@@ -192,6 +192,65 @@ func TestRecentSurfacesWebhookConfigUpdate(t *testing.T) {
 	}
 }
 
+// A NetworkPolicy that newly isolates running pods often causes no traffic
+// symptom, so its add and its rule edits must reach the feed — including for
+// an explicit kind=NetworkPolicy query.
+func TestRecentSurfacesNetworkPolicyChanges(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+	for _, e := range []timeline.TimelineEvent{
+		{
+			ID: "np-add", Timestamp: now.Add(-time.Minute), Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1",
+			Namespace: "shop", Name: "deny-all", EventType: timeline.EventTypeAdd,
+		},
+		{
+			ID: "np-update", Timestamp: now, Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: "NetworkPolicy", APIVersion: "networking.k8s.io/v1",
+			Namespace: "shop", Name: "allow-web", EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{
+				Fields:  []timeline.FieldChange{{Path: "spec.ingress", OldValue: []string{"from anywhere ports TCP/80"}, NewValue: []string{}}},
+				Summary: "ingress rules 1→0",
+			},
+		},
+		{
+			// A Calico policy shares the kind name but is not the core object.
+			ID: "calico-add", Timestamp: now, Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: "NetworkPolicy", APIVersion: "projectcalico.org/v3",
+			Namespace: "shop", Name: "calico-policy", EventType: timeline.EventTypeAdd,
+		},
+	} {
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	for _, q := range []Query{
+		{Namespaces: []string{"shop"}, Limit: 5},
+		{Namespaces: []string{"shop"}, Kinds: []string{"networkpolicy"}, Limit: 5},
+	} {
+		result, err := Recent(context.Background(), q)
+		if err != nil {
+			t.Fatalf("Recent(%+v): %v", q, err)
+		}
+		got := map[string]issuesapi.ChangeCategory{}
+		for _, c := range result.Changes {
+			got[c.Name] = c.ChangeCategory
+		}
+		if got["deny-all"] != issuesapi.ChangeCategoryLifecycle || got["allow-web"] != issuesapi.ChangeCategorySpecConfig {
+			t.Errorf("Recent(kinds=%v) = %+v, want deny-all lifecycle and allow-web spec_config", q.Kinds, result.Changes)
+		}
+		if _, ok := got["calico-policy"]; ok {
+			t.Errorf("Recent(kinds=%v) included a Calico policy as a core NetworkPolicy change", q.Kinds)
+		}
+	}
+}
+
 // A Service delete followed by a burst of status-churn updates must still
 // surface: lifecycle events are fetched in a query of their own, so the
 // newest-N candidate window for updates cannot starve them out before
@@ -199,7 +258,7 @@ func TestRecentSurfacesWebhookConfigUpdate(t *testing.T) {
 func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 2000}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
 	store := timeline.GetStore()
@@ -217,13 +276,12 @@ func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append delete: %v", err)
 	}
-	// 120 newer status-churn updates — more than the candidate window
-	// (candidateLimit(20) = 80), so the delete cannot survive a single
-	// newest-first fetch.
-	for i := 0; i < 120; i++ {
+	// More newer status-churn updates than the fetch bound: the delete
+	// must come from the lifecycle query, which update churn cannot fill.
+	for i := 0; i < FetchBound+20; i++ {
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID:             fmt.Sprintf("churn-%d", i),
-			Timestamp:      now.Add(-time.Duration(120-i) * time.Second),
+			Timestamp:      now.Add(-time.Duration(FetchBound+20-i) * time.Second),
 			Source:         timeline.SourceInformer,
 			ClusterContext: k8s.ActiveClusterContext(),
 			Kind:           "Deployment",
@@ -285,9 +343,9 @@ func TestRecentForResourceLifecycleEventSurvivesLifecycleChurn(t *testing.T) {
 		t.Fatalf("append target delete: %v", err)
 	}
 
-	// More than both candidate caps for a named query (100) and lifecycle query
-	// (50). Without a store-level name filter, the target delete is not fetched
-	// and RecentForResource returns no changes.
+	// More than the named fetch bound (100). Without a store-level name
+	// filter, the target delete is not fetched and RecentForResource returns
+	// no changes.
 	for i := 0; i < 120; i++ {
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID:             fmt.Sprintf("other-delete-%d", i),
@@ -303,7 +361,7 @@ func TestRecentForResourceLifecycleEventSurvivesLifecycleChurn(t *testing.T) {
 		}
 	}
 
-	changes, saturated, err := RecentForResource(context.Background(), "Service", "shop", "user-service", time.Hour, ResourceLimit, DefaultFieldLimit)
+	changes, saturated, err := RecentForResource(context.Background(), "Service", "shop", "user-service", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{})
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
 	}
@@ -333,7 +391,8 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 	store := timeline.GetStore()
 	now := time.Now()
 
-	for i := 0; i < maxCandidateLimit; i++ {
+	appendChurn := func(i int) {
+		t.Helper()
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID:             fmt.Sprintf("self-churn-%d", i),
 			Timestamp:      now.Add(-time.Duration(i) * time.Second),
@@ -348,13 +407,26 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 			t.Fatalf("append churn %d: %v", i, err)
 		}
 	}
+	for i := 0; i < NamedFetchBound; i++ {
+		appendChurn(i)
+	}
 
-	_, saturated, err := RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit)
+	// Exactly the bound is a complete read: the extra row decides.
+	_, saturated, err := RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{})
+	if err != nil {
+		t.Fatalf("RecentForResource: %v", err)
+	}
+	if saturated {
+		t.Fatal("a window holding exactly the fetch bound was read in full and must not report saturation")
+	}
+
+	appendChurn(NamedFetchBound)
+	_, saturated, err = RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{})
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
 	}
 	if !saturated {
-		t.Fatal("a candidate fetch at its cap must report saturation")
+		t.Fatal("a window holding more rows than the fetch bound must report saturation")
 	}
 }
 
@@ -386,9 +458,10 @@ func TestRecentForResourceGroupCollisionChurnDoesNotCrowdOrSaturate(t *testing.T
 		t.Fatalf("append unknown-version delete: %v", err)
 	}
 
-	// This is enough newer same-kind/name churn to saturate both bounded
-	// candidate queries if group filtering happens after their limits.
-	for i := 0; i < maxCandidateLimit+20; i++ {
+	// Alternating updates and deletes put more than the named fetch bound
+	// into each of the two queries, enough to saturate both if group
+	// filtering happens after their limits.
+	for i := 0; i < 2*(NamedFetchBound+20); i++ {
 		eventType := timeline.EventTypeUpdate
 		if i%2 == 0 {
 			eventType = timeline.EventTypeDelete
@@ -407,7 +480,7 @@ func TestRecentForResourceGroupCollisionChurnDoesNotCrowdOrSaturate(t *testing.T
 	}
 
 	changes, saturated, err := RecentForResource(
-		context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit,
+		context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
@@ -492,7 +565,7 @@ func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
 	}
 
 	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
-		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit, nil,
+		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit, nil, Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
@@ -507,7 +580,7 @@ func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
 		t.Fatal("four fully fetched changes must not be mislabeled as candidate-fetch saturation")
 	}
 	legacyChanges, fetchSaturated, err := RecentForWorkloadAndConfigMaps(
-		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit,
+		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit, Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMaps: %v", err)
@@ -523,6 +596,7 @@ func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
 			seenSources[kind+"/"+name] = true
 			return kind != "ConfigMap"
 		},
+		Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
@@ -574,6 +648,7 @@ func TestRecentForWorkloadAndConfigMapsIncludesArgoRolloutSource(t *testing.T) {
 			seenSources[kind+"/"+name] = true
 			return true
 		},
+		Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
@@ -602,8 +677,13 @@ func TestRecentSeparatesOutputCapFromFetchSaturation(t *testing.T) {
 			wantOutputCapped: true,
 		},
 		{
-			name:               "candidate query reaches its cap",
-			eventCount:         100,
+			name:             "candidate query holds exactly its fetch bound",
+			eventCount:       FetchBound,
+			wantOutputCapped: true,
+		},
+		{
+			name:               "candidate query exceeds its fetch bound",
+			eventCount:         FetchBound + 1,
 			wantOutputCapped:   true,
 			wantFetchSaturated: true,
 		},
@@ -1420,7 +1500,7 @@ func TestPrioritizeIssueChangesReportsSecondStageCap(t *testing.T) {
 	if len(got) != IssueChangesLimit || !capped {
 		t.Fatalf("second-stage cap = len %d capped %v, want %d/true", len(got), capped, IssueChangesLimit)
 	}
-	if strings.Contains(guidance, "candidate cap") {
+	if strings.Contains(guidance, "fetch bound") {
 		t.Fatalf("output recap must not claim the candidate query saturated: %q", guidance)
 	}
 }
@@ -1562,5 +1642,68 @@ func recentChange(kind, namespace, name string, at time.Time, fieldPath string) 
 		Timestamp:      at.Format(time.RFC3339),
 		ChangeCategory: issuesapi.ChangeCategorySpecConfig,
 		Fields:         []issuesapi.ChangeField{{Path: fieldPath}},
+	}
+}
+
+// With PostgreSQL configured and unreachable, the error reaches the Diagnose
+// evidence panel and MCP clients verbatim. "store not initialized" reads like a
+// Radar bug; it has to name the database.
+func TestRecentNamesTheUnreachableDatabase(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
+			t.Fatalf("re-init global store: %v", err)
+		}
+	})
+	// Port 1 refuses at once, so the first attempt fails without a timeout.
+	if err := timeline.InitStore(timeline.StoreConfig{
+		Type: timeline.StoreTypePostgres,
+		DSN:  "postgres://radar:pw@127.0.0.1:1/radar?connect_timeout=2",
+	}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+
+	_, err := Recent(context.Background(), Query{Since: DefaultSince, Limit: 5})
+	if err == nil || !strings.Contains(err.Error(), "can't connect to its PostgreSQL database") || !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("err = %v, want the database named with the driver's error", err)
+	}
+}
+
+// An unfiltered query must reach the kinds whose spec changes the timeline
+// records, not only the ones it fetched before they gained differs.
+func TestRecentSurfacesNewlyDiffedKindsWithoutKindFilter(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 50}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	kinds := []string{"CronJob", "PodDisruptionBudget", "HTTPRoute", "Gateway", "ReferenceGrant"}
+	for i, kind := range kinds {
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID: fmt.Sprintf("u%d", i), Timestamp: time.Now(), Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: kind, Namespace: "shop", Name: "web",
+			EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{
+				Fields:  []timeline.FieldChange{{Path: "spec.x", OldValue: 1, NewValue: 2}},
+				Summary: "other spec changes: x",
+			},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	result, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Limit: 20})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, c := range result.Changes {
+		seen[c.Kind] = true
+	}
+	for _, kind := range kinds {
+		if !seen[kind] {
+			t.Errorf("%s spec change missing from an unfiltered query: %+v", kind, result.Changes)
+		}
 	}
 }

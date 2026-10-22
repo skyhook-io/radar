@@ -1,0 +1,80 @@
+# Runtime mode: in-cluster S3 so the barman-cloud plugin has somewhere REAL to
+# archive WAL and write base backups. This is what makes ContinuousArchiving=True,
+# a completed Backup and a restorable ObjectStore window real rather than patched.
+#
+# Lives in `pgrt`, not `pg`: the frozen fixtures in `pg` depend on having no
+# reachable object storage (pg-wal-failing's archiver must fail), and nothing in
+# this namespace may leak into their state.
+#
+# Single replica, emptyDir: a pod restart empties the bucket, which is also how
+# the script resets it (see rt_minio). pg-runtime keeps archiving into an
+# emptied bucket fine, whereas a NEW pg-runtime against a bucket that already
+# holds an archive fails its "expected empty archive" check.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pgrt
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-creds
+  namespace: pgrt
+type: Opaque
+stringData:
+  # Consumed by MinIO (root user) and by the ObjectStore's s3Credentials.
+  ACCESS_KEY_ID: minioadmin
+  ACCESS_SECRET_KEY: minioadmin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: pgrt
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio }
+    spec:
+      containers:
+        - name: minio
+          # Not minio/minio: MinIO stopped publishing images, and the Docker Hub
+          # and quay.io tags other demos pin no longer resolve. Bitnami's legacy
+          # build is pinned instead, and it creates the bucket itself from
+          # MINIO_DEFAULT_BUCKETS — no mc image, no bucket Job.
+          image: bitnamilegacy/minio:2025.4.22
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: { secretKeyRef: { name: minio-creds, key: ACCESS_KEY_ID } }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: minio-creds, key: ACCESS_SECRET_KEY } }
+            - { name: MINIO_DEFAULT_BUCKETS, value: cnpg }
+          ports:
+            - { containerPort: 9000, name: s3 }
+            - { containerPort: 9001, name: console }
+          readinessProbe:
+            httpGet: { path: /minio/health/ready, port: 9000 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            # The default 1s flaps on a busy kind node.
+            timeoutSeconds: 5
+          resources:
+            requests: { cpu: 20m, memory: 128Mi }
+          volumeMounts:
+            - { name: data, mountPath: /bitnami/minio/data }
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: pgrt
+spec:
+  selector: { app: minio }
+  ports:
+    - { name: s3, port: 9000, targetPort: 9000 }

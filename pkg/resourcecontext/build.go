@@ -74,6 +74,9 @@ type Options struct {
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
 	ContainerCompletionSplit *ContainerCompletionSplit
+	// TemplateDivergence passes through unchanged; the caller authorizes the
+	// Pods and templates it compared.
+	TemplateDivergence *TemplateDivergence
 
 	// Optional kind-specific lookups. ServiceBackends is used only for
 	// Service resources to attach realized pod-selection state. The raw
@@ -127,6 +130,20 @@ type PolicyReportWithholding interface {
 
 type ServiceBackendLookup interface {
 	PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error)
+}
+
+// ServiceBackendGrouper is optional on a ServiceBackendLookup, so existing
+// implementers keep compiling: it groups a Service's selected Pods by the
+// workload that runs them. Without it a Service gets no workload breakdown.
+type ServiceBackendGrouper interface {
+	GroupServiceBackends(svc *corev1.Service, pods []*corev1.Pod) ServiceBackendGrouping
+}
+
+type ServiceBackendGrouping struct {
+	Workloads []ServiceBackendWorkload
+	// MixedBackends is set when the workloads don't all serve the Service,
+	// and explains why.
+	MixedBackends string
 }
 
 // RefAccessChecker abstracts the RBAC check so this package doesn't import
@@ -324,7 +341,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.ServiceSummary = buildServiceSummary(ctx, svc, opts.ServiceBackends, opts.AccessChecker, omitted)
 	}
 	rc.Reflection = buildReflection(ctx, obj, opts.Reflections, opts.AccessChecker, omitted)
-	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, opts.AccessChecker, omitted)
+	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, rel, opts.AccessChecker, omitted)
 	if uses := buildUsesFromWorkload(ctx, obj, opts.AccessChecker, omitted); uses != nil {
 		rc.Uses = uses
 	}
@@ -351,6 +368,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
 	rc.AppReferences = filterAppReferences(ctx, opts.AppReferences, opts.AccessChecker, omitted)
+	rc.TemplateDivergence = opts.TemplateDivergence
 
 	// 5. PolicyReports — Kyverno findings rolled up. Basic tier emits
 	// counts only (fail/warn/pass); diagnostic tier adds the top[]
@@ -504,10 +522,10 @@ func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
 // buildUsesFromPod extracts ConfigMap/Secret/PVC/ServiceAccount references
 // from pod.Spec. Returns nil when the pod uses no configuration.
 //
-// Sources scanned:
-//   - Volumes: ConfigMap / Secret / PVC / Projected (configMap + secret entries)
-//   - Containers (init + regular): EnvFrom configMapRef/secretRef, Env valueFrom.{configMap,secret}KeyRef
-//   - Spec.ServiceAccountName
+// Reference extraction is shared with audit and reverse context, including
+// init/debug containers, image pull credentials and volume-driver credentials.
+// Only the PodSpec's declared references are used; current ServiceAccount pull
+// secrets are not inferred into an already-admitted Pod.
 func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker, omitted *omittedTracker) *UsesBlock {
 	if pod == nil {
 		return nil
@@ -520,9 +538,16 @@ func buildUsesFromPodSpec(ctx context.Context, namespace string, spec corev1.Pod
 	secretSet := newRefSet()
 	pvcSet := newRefSet()
 
-	scanVolumes(spec.Volumes, namespace, cmSet, secretSet, pvcSet)
-	scanContainers(spec.InitContainers, namespace, cmSet, secretSet)
-	scanContainers(spec.Containers, namespace, cmSet, secretSet)
+	for _, reference := range configrefs.PodSpecReferences(namespace, spec) {
+		switch reference.Kind {
+		case "ConfigMap":
+			cmSet.add(reference.Name, reference.Namespace)
+		case "Secret":
+			secretSet.add(reference.Name, reference.Namespace)
+		case "PersistentVolumeClaim":
+			pvcSet.add(reference.Name, reference.Namespace)
+		}
+	}
 
 	uses := &UsesBlock{
 		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", ""), "uses.configMaps", omitted),
@@ -573,13 +598,45 @@ const (
 	maxReferencedByPathsPerRef = 8
 )
 
-func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
+func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, rel *topology.Relationships, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
+	if node, ok := obj.(*corev1.Node); ok {
+		if rel != nil && rel.PodPlacementObserved {
+			if rel.PodPlacementUnavailable {
+				omitted.add("referencedBy", OmittedUnavailable)
+				return nil
+			}
+			var refs []ReferenceUse
+			for _, pod := range rel.Pods {
+				if pod.Kind == "Pod" && pod.Group == "" {
+					refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
+				}
+			}
+			return filterReferenceUses(ctx, refs, ac, omitted)
+		}
+		if provider == nil {
+			omitted.add("referencedBy", OmittedUnavailable)
+			return nil
+		}
+		pods, err := provider.Pods()
+		if err != nil {
+			omitted.add("referencedBy", OmittedUnavailable)
+			return nil
+		}
+		var refs []ReferenceUse
+		for _, pod := range pods {
+			if pod == nil || pod.Spec.NodeName != node.Name || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
+		}
+		return filterReferenceUses(ctx, refs, ac, omitted)
+	}
 	if provider == nil {
 		return nil
 	}
 
 	ident, ok := identityOf(obj)
-	if !ok || ident.Namespace == "" {
+	if !ok || ident.Group != "" || ident.Namespace == "" {
 		return nil
 	}
 
@@ -587,8 +644,8 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	switch ident.Kind {
 	case "ConfigMap":
 		target = refTarget{kind: "ConfigMap", namespace: ident.Namespace, name: ident.Name}
-	case "Secret":
-		target = refTarget{kind: "Secret", namespace: ident.Namespace, name: ident.Name}
+	case "Secret", "PersistentVolumeClaim", "ServiceAccount":
+		target = refTarget{kind: ident.Kind, namespace: ident.Namespace, name: ident.Name}
 	default:
 		return nil
 	}
@@ -601,7 +658,26 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		refs = append(refs, ref)
 	}
 
-	if deployments, _ := provider.Deployments(); deployments != nil {
+	if target.kind == "Secret" {
+		if ingresses, err := provider.Ingresses(); err != nil {
+			omitted.add("referencedBy", OmittedUnavailable)
+		} else {
+			for _, ing := range ingresses {
+				if ing == nil || ing.Namespace != target.namespace {
+					continue
+				}
+				for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+					if ref.Name == target.name {
+						appendRef(ReferenceUse{Kind: "Ingress", Group: "networking.k8s.io", Namespace: ing.Namespace, Name: ing.Name, Paths: []string{"spec.tls[].secretName"}})
+					}
+				}
+			}
+		}
+	}
+
+	if deployments, err := provider.Deployments(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, d := range deployments {
 			if d == nil || d.Namespace != target.namespace {
 				continue
@@ -609,7 +685,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("Deployment", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if statefulSets, _ := provider.StatefulSets(); statefulSets != nil {
+	if statefulSets, err := provider.StatefulSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, s := range statefulSets {
 			if s == nil || s.Namespace != target.namespace {
 				continue
@@ -617,7 +695,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("StatefulSet", "apps", s.Namespace, s.Name, s.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if daemonSets, _ := provider.DaemonSets(); daemonSets != nil {
+	if daemonSets, err := provider.DaemonSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, d := range daemonSets {
 			if d == nil || d.Namespace != target.namespace {
 				continue
@@ -625,7 +705,19 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("DaemonSet", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if jobs, _ := provider.Jobs(); jobs != nil {
+	if replicaSets, err := provider.ReplicaSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
+		for _, replicaSet := range replicaSets {
+			if replicaSet == nil || replicaSet.Namespace != target.namespace {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("ReplicaSet", "apps", replicaSet.Namespace, replicaSet.Name, replicaSet.Spec.Template.Spec, "spec.template.spec", target))
+		}
+	}
+	if jobs, err := provider.Jobs(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, j := range jobs {
 			if j == nil || j.Namespace != target.namespace {
 				continue
@@ -633,7 +725,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("Job", "batch", j.Namespace, j.Name, j.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if cronJobs, _ := provider.CronJobs(); cronJobs != nil {
+	if cronJobs, err := provider.CronJobs(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, c := range cronJobs {
 			if c == nil || c.Namespace != target.namespace {
 				continue
@@ -641,15 +735,21 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("CronJob", "batch", c.Namespace, c.Name, c.Spec.JobTemplate.Spec.Template.Spec, "spec.jobTemplate.spec.template.spec", target))
 		}
 	}
-	if pods, _ := provider.Pods(); pods != nil {
+	if pods, err := provider.Pods(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, p := range pods {
-			if p == nil || p.Namespace != target.namespace || hasControllerOwner(p.OwnerReferences) {
+			if p == nil || p.Namespace != target.namespace {
 				continue
 			}
 			appendRef(referenceUseForPodSpec("Pod", "", p.Namespace, p.Name, p.Spec, "spec", target))
 		}
 	}
 
+	return filterReferenceUses(ctx, refs, ac, omitted)
+}
+
+func filterReferenceUses(ctx context.Context, refs []ReferenceUse, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -670,7 +770,8 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	// emitted above signals that some refs were filtered without
 	// disclosing how many.
 	visible := 0
-	filtered := make([]ReferenceUse, 0, minInt(len(refs), maxReferencedByItems))
+	groups := make(map[[2]string][]ReferenceUse)
+	var order [][2]string
 	for i := range refs {
 		ref := refs[i]
 		if len(ref.Paths) > maxReferencedByPathsPerRef {
@@ -682,8 +783,29 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			continue
 		}
 		visible++
-		if len(filtered) < maxReferencedByItems {
-			filtered = append(filtered, ref)
+		key := [2]string{ref.Kind, ref.Group}
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], ref)
+	}
+	// Round-robin readable kinds so a large replica population cannot hide
+	// the workload and revision templates that explain those Pods' references.
+	filtered := make([]ReferenceUse, 0, minInt(visible, maxReferencedByItems))
+	for row := 0; len(filtered) < maxReferencedByItems; row++ {
+		added := false
+		for _, key := range order {
+			if row >= len(groups[key]) {
+				continue
+			}
+			filtered = append(filtered, groups[key][row])
+			added = true
+			if len(filtered) == maxReferencedByItems {
+				break
+			}
+		}
+		if !added {
+			break
 		}
 	}
 	if len(filtered) == 0 {
@@ -715,39 +837,11 @@ func referenceUseForPodSpec(kind, group, namespace, name string, spec corev1.Pod
 
 func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTarget) []string {
 	pathSet := map[string]struct{}{}
-	add := func(path string) {
-		pathSet[path] = struct{}{}
-	}
-
-	for _, v := range spec.Volumes {
-		if target.kind == "ConfigMap" && v.ConfigMap != nil && v.ConfigMap.Name == target.name {
-			add(pathPrefix + ".volumes[].configMap.name")
-		}
-		if target.kind == "Secret" && v.Secret != nil && v.Secret.SecretName == target.name {
-			add(pathPrefix + ".volumes[].secret.secretName")
-		}
-		if v.Projected != nil {
-			for _, src := range v.Projected.Sources {
-				if target.kind == "ConfigMap" && src.ConfigMap != nil && src.ConfigMap.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].configMap.name")
-				}
-				if target.kind == "Secret" && src.Secret != nil && src.Secret.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].secret.name")
-				}
-			}
+	for _, ref := range configrefs.PodSpecReferences(target.namespace, spec) {
+		if ref.Kind == target.kind && ref.Name == target.name {
+			pathSet[pathPrefix+"."+ref.Path] = struct{}{}
 		}
 	}
-	if target.kind == "Secret" {
-		for _, pullSecret := range spec.ImagePullSecrets {
-			if pullSecret.Name == target.name {
-				add(pathPrefix + ".imagePullSecrets[].name")
-			}
-		}
-	}
-
-	scanContainerReferencePaths(spec.InitContainers, pathPrefix, target, add)
-	scanContainerReferencePaths(spec.Containers, pathPrefix, target, add)
-
 	paths := make([]string, 0, len(pathSet))
 	for path := range pathSet {
 		paths = append(paths, path)
@@ -756,92 +850,11 @@ func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTar
 	return paths
 }
 
-func scanContainerReferencePaths(containers []corev1.Container, pathPrefix string, target refTarget, add func(string)) {
-	for _, c := range containers {
-		for _, ef := range c.EnvFrom {
-			if target.kind == "ConfigMap" && ef.ConfigMapRef != nil && ef.ConfigMapRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].configMapRef.name")
-			}
-			if target.kind == "Secret" && ef.SecretRef != nil && ef.SecretRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].secretRef.name")
-			}
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom == nil {
-				continue
-			}
-			if target.kind == "ConfigMap" && e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.configMapKeyRef.name")
-			}
-			if target.kind == "Secret" && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.secretKeyRef.name")
-			}
-		}
-	}
-}
-
-func hasControllerOwner(refs []metav1.OwnerReference) bool {
-	for _, ref := range refs {
-		if ref.Controller != nil && *ref.Controller {
-			return true
-		}
-	}
-	return false
-}
-
 func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
-}
-
-func scanVolumes(vols []corev1.Volume, ns string, cm, secret, pvc *refSet) {
-	for _, v := range vols {
-		if v.ConfigMap != nil {
-			cm.add(v.ConfigMap.Name, ns)
-		}
-		if v.Secret != nil {
-			secret.add(v.Secret.SecretName, ns)
-		}
-		if v.PersistentVolumeClaim != nil {
-			pvc.add(v.PersistentVolumeClaim.ClaimName, ns)
-		}
-		if v.Projected != nil {
-			for _, src := range v.Projected.Sources {
-				if src.ConfigMap != nil {
-					cm.add(src.ConfigMap.Name, ns)
-				}
-				if src.Secret != nil {
-					secret.add(src.Secret.Name, ns)
-				}
-			}
-		}
-	}
-}
-
-func scanContainers(containers []corev1.Container, ns string, cm, secret *refSet) {
-	for _, c := range containers {
-		for _, ef := range c.EnvFrom {
-			if ef.ConfigMapRef != nil {
-				cm.add(ef.ConfigMapRef.Name, ns)
-			}
-			if ef.SecretRef != nil {
-				secret.add(ef.SecretRef.Name, ns)
-			}
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom == nil {
-				continue
-			}
-			if e.ValueFrom.ConfigMapKeyRef != nil {
-				cm.add(e.ValueFrom.ConfigMapKeyRef.Name, ns)
-			}
-			if e.ValueFrom.SecretKeyRef != nil {
-				secret.add(e.ValueFrom.SecretKeyRef.Name, ns)
-			}
-		}
-	}
 }
 
 const maxServicePodRefs = 10
@@ -872,12 +885,14 @@ func buildServiceSummary(ctx context.Context, svc *corev1.Service, lookup Servic
 	// caller with Service access infer the pod count even when RBAC
 	// hides the individual Pods. Mirrors ReferencedBy.Total semantics.
 	sel := &PodSelectionSummary{}
+	visible := make([]*corev1.Pod, 0, len(pods))
 	for _, pod := range pods {
 		ref := ContextRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		if !checkRef(ctx, ac, &ref) {
 			omitted.add("serviceSummary.selectedPods", OmittedRBACDenied)
 			continue
 		}
+		visible = append(visible, pod)
 		sel.Total++
 		if isPodReady(pod) {
 			sel.Ready++
@@ -894,7 +909,34 @@ func buildServiceSummary(ctx context.Context, svc *corev1.Service, lookup Servic
 		out.Warnings = append(out.Warnings, ServiceWarningNoReadyPods)
 	}
 	out.SelectedPods = sel
+	if grouper, ok := lookup.(ServiceBackendGrouper); ok && len(visible) > 1 {
+		addServiceBackendWorkloads(ctx, out, grouper.GroupServiceBackends(svc, visible), ac, omitted)
+	}
 	return out
+}
+
+// addServiceBackendWorkloads attaches the workload breakdown only when the
+// caller may read every workload it names: a Pod's visibility doesn't extend
+// to the Deployment or Rollout behind its ReplicaSet.
+func addServiceBackendWorkloads(ctx context.Context, out *ServiceSummary, g ServiceBackendGrouping, ac RefAccessChecker, omitted *omittedTracker) {
+	if len(g.Workloads) < 2 {
+		return
+	}
+	for i := range g.Workloads {
+		if !checkRef(ctx, ac, &g.Workloads[i].ContextRef) {
+			omitted.add("serviceSummary.workloads", OmittedRBACDenied)
+			return
+		}
+	}
+	out.Workloads = g.Workloads
+	if len(out.Workloads) > maxServicePodRefs {
+		out.Workloads = out.Workloads[:maxServicePodRefs]
+		out.WorkloadsTruncated = true
+	}
+	if g.MixedBackends != "" {
+		out.MixedBackends = g.MixedBackends
+		out.Warnings = append(out.Warnings, ServiceWarningMixedBackends)
+	}
 }
 
 func appendBoundedPodRef(dst *[]ContextRef, ref ContextRef, sel *PodSelectionSummary) {
@@ -1047,8 +1089,8 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
 	secretSet := newRefSet()
-	for _, tls := range ing.Spec.TLS {
-		secretSet.add(tls.SecretName, ing.Namespace)
+	for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+		secretSet.add(ref.Name, ref.Namespace)
 	}
 	out.TLSSecrets = filterRefs(ctx, ac, secretSet.refs("Secret", ""), "ingressSummary.tlsSecrets", omitted)
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/imageutil"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
 )
@@ -185,7 +186,7 @@ func selfUpgradeImage(containers []corev1.Container, tag string) (string, error)
 		if container.Name != "radar" {
 			continue
 		}
-		repository := imageRepo(container.Image)
+		repository := imageutil.Repository(container.Image)
 		if repository == "" {
 			return "", errors.New("Radar container image repository is empty")
 		}

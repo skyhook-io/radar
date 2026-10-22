@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -305,17 +306,32 @@ func withProbeEvidence(loop restartLoop, pod *corev1.Pod, probes map[string]prob
 // one is attributed only when the pod has a single container, so it can never
 // pin another container's probe on the looping one.
 func probeFailureFor(probes map[string]probeFailure, pod *corev1.Pod, container, reason string) (probeFailure, bool) {
-	prefix := pod.Namespace + "/" + pod.Name + "/"
-	pf, ok := probes[prefix+container+"/"+reason]
+	pf, ok := newestProbeFailure(probes, pod, "/"+container+"/"+reason)
 	if !ok && len(pod.Spec.Containers)+len(pod.Spec.InitContainers) == 1 {
-		pf, ok = probes[prefix+"/"+reason]
-	}
-	// Events outlive a pod; a recreated pod with the same name (a
-	// StatefulSet replica) must not inherit its predecessor's failures.
-	if ok && pf.podUID != "" && pod.UID != "" && pf.podUID != pod.UID {
-		return probeFailure{}, false
+		pf, ok = newestProbeFailure(probes, pod, "//"+reason)
 	}
 	return pf, ok
+}
+
+// probeFailureKey keys probe failures by pod incarnation. Events outlive a
+// pod; a recreated pod with the same name (a StatefulSet replica) must not
+// inherit its predecessor's failures.
+func probeFailureKey(namespace, name string, uid types.UID) string {
+	return namespace + "/" + name + "@" + string(uid)
+}
+
+// newestProbeFailure returns the newest failure recorded under suffix for an
+// identity that can describe pod: its own UID, the static UID kubelet reports
+// for a static Pod its API mirror stands for, or no UID at all.
+func newestProbeFailure(probes map[string]probeFailure, pod *corev1.Pod, suffix string) (probeFailure, bool) {
+	var newest probeFailure
+	found := false
+	for _, uid := range []types.UID{pod.UID, types.UID(pod.Annotations[corev1.MirrorPodAnnotationKey]), ""} {
+		if pf, ok := probes[probeFailureKey(pod.Namespace, pod.Name, uid)+suffix]; ok && (!found || pf.at.After(newest.at)) {
+			newest, found = pf, true
+		}
+	}
+	return newest, found
 }
 
 // restartLoopMayReplace reports whether the loop's crashloop reason may stand

@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -37,6 +38,22 @@ type CheckInput struct {
 	// ServiceAccounts is non-nil).
 	ServiceAccountsNamespace string
 	LimitRanges              []*corev1.LimitRange
+	PersistentVolumeClaims   []*corev1.PersistentVolumeClaim
+	// PersistentVolumes are releasedPV subjects and claims' reclaim-policy
+	// evidence. Nil means the inventory is unavailable; a caller not
+	// authorized for cluster-scoped PVs passes an empty list, since none are
+	// subjects of its scan.
+	PersistentVolumes []*corev1.PersistentVolume
+	StorageClasses    []*storagev1.StorageClass
+	Events            []*corev1.Event
+	// PVCConsumerNamespaces names namespaces with initially synced Pod and
+	// built-in workload inventories. Omitted namespaces cannot prove absence;
+	// CRD consumers are outside this check's coverage.
+	PVCConsumerNamespaces []string
+	// PVDeletionEventsComplete requires cluster-wide, initially synced Event
+	// coverage. Visible warnings establish failure even with partial coverage;
+	// a Failed volume's phase establishes it without any.
+	PVDeletionEventsComplete bool
 	// ClusterVersion is the K8s server version (e.g. "1.30"). Used for deprecated API checks.
 	ClusterVersion string
 	// ServedAPIs lists API group/versions the cluster still serves (e.g. ["apps/v1", "batch/v1beta1"]).
@@ -139,8 +156,17 @@ type ScanResults struct {
 	EvaluatedByNamespace map[string]map[string]int `json:"evaluatedByNamespace,omitempty"`
 	// MissingInputs lists inputs unavailable to all or part of the scan
 	// (RBAC denied or not loaded), e.g. "poddisruptionbudgets", "configmaps".
-	// Counts describe only the subjects that could be evaluated.
+	// Counts describe only the subjects that could be evaluated. An entry
+	// means some subject was left unevaluated; a gap in supplemental evidence
+	// that still lets a finding fire is stated in that finding's message.
 	MissingInputs []string `json:"missingInputs,omitempty"`
+	// IgnoreChecksAnnotation names the per-resource opt-out annotation this
+	// Radar honors. Its presence is what tells a newer UI the opt-out exists.
+	IgnoreChecksAnnotation string `json:"ignoreChecksAnnotation,omitempty"`
+	// AnnotationIgnoredByNamespace maps checkID → namespace → distinct subjects
+	// whose findings were dropped by IgnoreChecksAnnotation, shaped like
+	// EvaluatedByNamespace so ApplySettings filters both the same way.
+	AnnotationIgnoredByNamespace map[string]map[string]int `json:"annotationIgnoredByNamespace,omitempty"`
 	// GroupedChecks is the per-check remediation-queue rollup (one Check per
 	// failing check). Populated by the HTTP audit handler post local-settings —
 	// not by RunChecks, which doesn't carry the request context BuildChecks

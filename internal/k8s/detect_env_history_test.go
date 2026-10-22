@@ -127,9 +127,19 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 			t.Fatalf("unexpected Ready-pod detection: %+v", detections)
 		}
 		detection := detections[0]
-		if !strings.Contains(detection.Message, "is Ready") || !strings.Contains(detection.Message, "may still hold the pre-change value") ||
+		wantMessage := "Pod/catalog-healthy is Ready, and a running container in it started before Radar observed a Secret key it references change: container app started at " +
+			startedAt.Format(time.RFC3339) + " and references Secret/db-conn key password as env DB_PASSWORD; Radar observed that key change at " +
+			changedAt.Format(time.RFC3339) + ". Kubernetes reads Secret-backed env values only when a container starts."
+		if detection.Message != wantMessage ||
 			!strings.Contains(detection.Cause, "does not refresh") || !strings.Contains(detection.Action, "Confirm no replacement") {
-			t.Fatalf("Ready-pod detection did not preserve evidence and uncertainty: %+v", detection)
+			t.Fatalf("Ready-pod detection did not state its observed evidence:\n got %q\nwant %q", detection.Message, wantMessage)
+		}
+		// The change time is when Radar observed the update, not when it was
+		// written, so the message must not claim which value the container read.
+		for _, overclaim := range []string{"stale", "pre-change", "old value", "still hold"} {
+			if strings.Contains(detection.Message, overclaim) {
+				t.Fatalf("Ready-pod message claims more than Radar observed (%q): %q", overclaim, detection.Message)
+			}
 		}
 	})
 
@@ -159,8 +169,10 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || detections[0].Severity != "warning" || detections[0].Kind != "Pod" || detections[0].Name != pod.Name || detections[0].Fingerprint != "stale-secret-env" {
 			t.Fatalf("unexpected promoted detection: %+v", detections)
 		}
-		if detections[0].Message != "Container app is not Ready and may be running a stale env value for Secret/db-conn key password; restart the pod to refresh it." ||
-			detections[0].Cause != "A running container loaded a Secret-backed environment value before Radar observed that Secret key change." ||
+		if detections[0].Message != "The pod is not Ready, and running containers in it started before Radar observed Secret keys they reference change: container app started at "+
+			startedAt.Format(time.RFC3339)+" and references Secret/db-conn key password as env DB_PASSWORD; Radar observed that key change at "+
+			changedAt.Format(time.RFC3339)+". Restart the pod to refresh them." ||
+			detections[0].Cause != "A running container that references a Secret key in its environment started before Radar observed that key change." ||
 			detections[0].Action != "Restart the pod so its containers re-read Secret-backed environment variables." {
 			t.Fatalf("not-Ready detection contract changed: %+v", detections[0])
 		}
@@ -186,7 +198,7 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		cache := envHistoryTestCache(t, pod, secret)
 		setEnvHistoryEvents(t, change)
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || !strings.Contains(detections[0].Message, "Container app") || strings.Contains(detections[0].Message, "2 stale") {
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "container app started") || strings.Contains(detections[0].Message, "sidecar") {
 			t.Fatalf("promotion should describe only the biting container checks: %+v", detections)
 		}
 	})
@@ -236,8 +248,8 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 		cache := envHistoryTestCache(t, pod, secret)
 		setEnvHistoryEvents(t, change)
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || !strings.Contains(detections[0].Message, "a Secret-backed environment value") ||
-			strings.Contains(detections[0].Message, "2 Secret-backed") {
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "container app started at") ||
+			strings.Contains(detections[0].Message, "sidecar") {
 			t.Fatalf("Ready issue must include only pre-change container instances: %+v", detections)
 		}
 	})
@@ -372,15 +384,17 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 	// Known accepted limitation: the promotion gate corroborates on the same
 	// container being Running-and-not-Ready, but cannot distinguish "not Ready
 	// because of the stale value" from "not Ready for an unrelated reason while
-	// a consumed key happened to change in-window." The hedged message wording
-	// ("may be running a stale env value") is the mitigation.
+	// a referenced key happened to change in-window." The mitigation is that the
+	// message states only observed facts (start time, referenced key, observed
+	// change time) and never says the change caused the not-Ready state.
 	t.Run("unrelated not-Ready with coincidental change still promotes (documented limitation)", func(t *testing.T) {
 		pod := staleSecretEnvPod("coincidental", startedAt, false, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
 		cache := envHistoryTestCache(t, pod, secret)
 		setEnvHistoryEvents(t, change)
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || !strings.Contains(detections[0].Message, "may be running a stale env value") {
-			t.Fatalf("expected one hedged warning for the coincidental case: %+v", detections)
+		if len(detections) != 1 || !strings.Contains(detections[0].Message, "started before Radar observed") ||
+			strings.Contains(detections[0].Message, "because") {
+			t.Fatalf("expected one non-causal warning for the coincidental case: %+v", detections)
 		}
 	})
 
@@ -422,7 +436,7 @@ func TestStaleSecretEnvExposureAndFalsePositiveMatrix(t *testing.T) {
 			t.Fatalf("restartable init sidecar lost its stale env fact: %+v", checks)
 		}
 		detections := detectStaleSecretEnv(cache, "shop", now)
-		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || !strings.Contains(detections[0].Message, "Container vault-agent") {
+		if len(detections) != 1 || detections[0].Reason != "StaleSecretEnv" || !strings.Contains(detections[0].Message, "container vault-agent started") {
 			t.Fatalf("not-Ready restartable init sidecar must promote: %+v", detections)
 		}
 	})
@@ -559,6 +573,11 @@ func TestStaleSecretEnvManagedFieldsFallback(t *testing.T) {
 		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil)
 		if len(checks) != 1 || !checks[0].SecretChangedAt.Equal(changedAt) {
 			t.Fatalf("metadata-only write replaced the real data timestamp in diagnosis: %+v", checks)
+		}
+		// The manager has written since (the metadata update), so the note
+		// must name the retained write without calling it the latest.
+		if want := "had a write at " + changedAt.Format(time.RFC3339) + " by secret-controller, a field manager that owns its data"; !strings.Contains(checks[0].Message, want) || strings.Contains(checks[0].Message, "latest") {
+			t.Fatalf("note after a metadata-only update = %q, want it to contain %q and no recency claim", checks[0].Message, want)
 		}
 	})
 
@@ -896,6 +915,215 @@ func TestSecretDataManagerWriteIndex(t *testing.T) {
 	})
 }
 
+// TestSecretDataManagerWriteIndexSurvivesRepeatedTransform pins the
+// startup path of a watch-list informer: client-go transforms each object
+// present at startup twice (once into its temporary store, again on Replace),
+// and the second pass sees the managedFields the first pass stripped. The
+// write the first pass captured must survive it.
+func TestSecretDataManagerWriteIndexSurvivesRepeatedTransform(t *testing.T) {
+	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
+	managed := func(raw string) []metav1.ManagedFieldsEntry {
+		return []metav1.ManagedFieldsEntry{{
+			Manager: "secret-controller", Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: dataWrite}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(raw)},
+		}}
+	}
+	newSecret := func(secretType corev1.SecretType, raw string) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "credentials", Namespace: "shop", UID: types.UID("secret-uid"),
+				ResourceVersion: "7", ManagedFields: managed(raw),
+			},
+			Type: secretType,
+			Data: map[string][]byte{"password": []byte("value")},
+		}
+	}
+	// The informer transform as the cache wires it: capture, then strip.
+	transformTwice := func(index *secretDataManagerWriteIndex, secret *corev1.Secret) {
+		for range 2 {
+			index.capture(secret)
+			if _, err := k8score.DropManagedFields(secret); err != nil {
+				t.Fatalf("DropManagedFields: %v", err)
+			}
+		}
+	}
+	add := k8score.ResourceChange{Kind: "Secret", Namespace: "shop", Name: "credentials", UID: "secret-uid", Operation: k8score.OpAdd}
+
+	t.Run("data write made before startup is indexed", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		secret := newSecret(corev1.SecretTypeOpaque, `{"f:data":{"f:password":{}}}`)
+		transformTwice(index, secret)
+		index.reconcile(add, secret)
+		write, ok := index.load("shop", "credentials")
+		if !ok || !write.at.Equal(dataWrite) {
+			t.Fatalf("indexed write = (%+v, %v), want the data write at %v", write, ok, dataWrite)
+		}
+	})
+
+	t.Run("Secret never written by a data manager stays unindexed", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		secret := newSecret(corev1.SecretTypeOpaque, `{"f:metadata":{"f:labels":{"f:team":{}}}}`)
+		transformTwice(index, secret)
+		index.reconcile(add, secret)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("metadata-only Secret indexed a data write: %+v", write)
+		}
+	})
+
+	t.Run("Helm release Secret stays unindexed", func(t *testing.T) {
+		index := newSecretDataManagerWriteIndex()
+		secret := newSecret(corev1.SecretType("helm.sh/release.v1"), `{"f:data":{"f:release":{}}}`)
+		transformTwice(index, secret)
+		index.reconcile(add, secret)
+		if write, ok := index.load("shop", "credentials"); ok {
+			t.Fatalf("Helm release Secret indexed a data write: %+v", write)
+		}
+	})
+}
+
+// TestStaleSecretEnvManagedFieldsNamesLastDataWriter pins the writer the
+// fallback names: the manager owning Secret data whose entry supplied the
+// timestamp, shown as the API server recorded it. Because that timestamp moves
+// on a write to any field the manager owns, the note must not claim the write
+// changed data.
+func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	startedAt := now.Add(-time.Hour)
+	entry := func(manager string, at time.Time, raw string) metav1.ManagedFieldsEntry {
+		return metav1.ManagedFieldsEntry{
+			Manager: manager, Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: at}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(raw)},
+		}
+	}
+	const dataOnly = `{"f:data":{"f:password":{}}}`
+	checkFor := func(t *testing.T, fields ...metav1.ManagedFieldsEntry) StaleSecretEnvCheck {
+		t.Helper()
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "db-conn", Namespace: "shop", ManagedFields: fields},
+			Data:       map[string][]byte{"password": []byte("value")},
+		}
+		pod := staleSecretEnvPod("catalog", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		cache := envHistoryTestCache(t, pod, secret)
+		checks := findStaleSecretEnvChecksWithManagedFields(cache, []*corev1.Pod{pod}, nil)
+		if len(checks) != 1 {
+			t.Fatalf("got %d checks, want 1: %+v", len(checks), checks)
+		}
+		msg := checks[0].Message
+		generic := strings.Contains(msg, "managedFields cannot identify which field changed") && strings.Contains(msg, "may not have touched data at all")
+		metadataWriter := strings.Contains(msg, "Secret labels or annotations, so managedFields cannot tell whether this write changed data")
+		if !generic && !metadataWriter {
+			t.Fatalf("named writer dropped the hedge: %q", msg)
+		}
+		if strings.Contains(msg, "data write") || strings.Contains(msg, "changed by") || strings.Contains(msg, "last written") || strings.Contains(msg, "latest") {
+			t.Fatalf("note claims more than managedFields establishes: %q", msg)
+		}
+		return checks[0]
+	}
+	written := func(at time.Time, writers string) string {
+		return "had a write at " + at.Format(time.RFC3339) + " by " + writers
+	}
+
+	t.Run("raw manager name, no mapping", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		check := checkFor(t, entry("kubectl-client-side-apply", at, dataOnly))
+		if want := written(at, "kubectl-client-side-apply, a field manager that owns its data"); !strings.Contains(check.Message, want) {
+			t.Fatalf("message %q does not contain %q", check.Message, want)
+		}
+	})
+
+	t.Run("several data owners name the one whose timestamp is used", func(t *testing.T) {
+		older, newer := now.Add(-30*time.Minute), now.Add(-time.Minute)
+		for _, order := range [][]metav1.ManagedFieldsEntry{
+			{entry("helm", older, dataOnly), entry("Go-http-client", newer, dataOnly)},
+			{entry("Go-http-client", newer, dataOnly), entry("helm", older, dataOnly)},
+		} {
+			check := checkFor(t, order...)
+			if !check.SecretChangedAt.Equal(newer) || !strings.Contains(check.Message, written(newer, "Go-http-client,")) || strings.Contains(check.Message, "helm") {
+				t.Fatalf("want the newest data owner Go-http-client at %v, got %v %q", newer, check.SecretChangedAt, check.Message)
+			}
+		}
+	})
+
+	t.Run("a later metadata-only manager is outside the claim", func(t *testing.T) {
+		dataAt, labelAt := now.Add(-30*time.Minute), now.Add(-time.Minute)
+		check := checkFor(t, entry("helm", dataAt, dataOnly), entry("kubectl-label", labelAt, `{"f:metadata":{"f:labels":{"f:team":{}}}}`))
+		if !check.SecretChangedAt.Equal(dataAt) || !strings.Contains(check.Message, written(dataAt, "helm,")) || strings.Contains(check.Message, "kubectl-label") {
+			t.Fatalf("want helm's write, got %v %q", check.SecretChangedAt, check.Message)
+		}
+	})
+
+	t.Run("a data owner's metadata-only write is not called a data change", func(t *testing.T) {
+		// external-secrets owns data and labels; its entry time is its last
+		// write to either, here a label change.
+		labelAt := now.Add(-time.Minute)
+		check := checkFor(t, entry("external-secrets", labelAt, `{"f:data":{"f:password":{}},"f:metadata":{"f:labels":{"f:synced":{}}}}`))
+		if !strings.Contains(check.Message, written(labelAt, "external-secrets,")) {
+			t.Fatalf("want the manager's last write, hedged: %q", check.Message)
+		}
+	})
+
+	t.Run("API server bookkeeping buckets are not named as writers", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		for _, bucket := range []string{"ancient-changes", "before-first-apply"} {
+			check := checkFor(t, entry(bucket, at, dataOnly))
+			if !strings.Contains(check.Message, written(at, "a field manager that owns its data")) || strings.Contains(check.Message, bucket) {
+				t.Fatalf("%s was named as a writer: %q", bucket, check.Message)
+			}
+		}
+		tied := checkFor(t, entry("ancient-changes", at, dataOnly), entry("helm", at, dataOnly))
+		if !strings.Contains(tied.Message, written(at, "helm, a field manager that owns its data")) {
+			t.Fatalf("a real writer tied with a bucket should be named alone: %q", tied.Message)
+		}
+	})
+
+	t.Run("release tools and secret operators are said to write metadata too", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		const tail = " Secret labels or annotations, so managedFields cannot tell whether this write changed data, and if the write touched a consumed key"
+		for _, manager := range []string{
+			"helm", "helm-controller", "kustomize-controller", "argocd-controller", "argocd-application-controller",
+			"external-secrets", "externalsecrets.external-secrets.io/db-conn", "cert-manager-certificates-issuing",
+		} {
+			check := checkFor(t, entry(manager, at, dataOnly))
+			if want := written(at, manager+", a field manager that owns its data") + ", after container app started at " + startedAt.Format(time.RFC3339) + "; " + manager + " also writes" + tail; !strings.Contains(check.Message, want) {
+				t.Fatalf("%s: message %q does not contain %q", manager, check.Message, want)
+			}
+			if strings.Contains(check.Message, "may not have touched data at all") {
+				t.Fatalf("%s: both hedges in one note: %q", manager, check.Message)
+			}
+		}
+		tied := checkFor(t, entry("helm", at, dataOnly), entry("argocd-controller", at, dataOnly))
+		if !strings.Contains(tied.Message, "; argocd-controller and helm also write"+tail) {
+			t.Fatalf("tied release tools: %q", tied.Message)
+		}
+	})
+
+	t.Run("any other writer keeps the general hedge", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		for _, fields := range [][]metav1.ManagedFieldsEntry{
+			{entry("kubectl-edit", at, dataOnly)},
+			{entry("vault-rotator", at, dataOnly)},
+			{entry("helm", at, dataOnly), entry("kubectl-edit", at, dataOnly)},
+			{entry("ancient-changes", at, dataOnly)},
+		} {
+			check := checkFor(t, fields...)
+			if !strings.Contains(check.Message, "managedFields cannot identify which field changed, so the write may not have touched data at all") || strings.Contains(check.Message, "labels or annotations") {
+				t.Fatalf("%v: %q", fields[0].Manager, check.Message)
+			}
+		}
+	})
+
+	t.Run("tied timestamps name every tied manager", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		a := checkFor(t, entry("operator-b", at, dataOnly), entry("operator-a", at, dataOnly))
+		b := checkFor(t, entry("operator-a", at, dataOnly), entry("operator-b", at, dataOnly))
+		if want := written(at, "operator-a and operator-b, field managers that own its data"); !strings.Contains(a.Message, want) || a.Message != b.Message {
+			t.Fatalf("tie should name both managers in both orders: %q / %q", a.Message, b.Message)
+		}
+	})
+}
+
 func TestSecretDataManagerWriteIndexInformerLifecycle(t *testing.T) {
 	dataWrite := time.Date(2026, time.July, 23, 8, 0, 0, 0, time.UTC)
 	metadataWrite := dataWrite.Add(time.Hour)
@@ -922,9 +1150,7 @@ func TestSecretDataManagerWriteIndexInformerLifecycle(t *testing.T) {
 			OnTransform: func(obj any) {
 				index.capture(obj)
 			},
-			OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
-				index.reconcile(change, obj)
-			},
+			OnObservedChange: observedChangeHandler(client, index.observeChange),
 			IsNoisyResource: func(kind, _ string, _ string) bool {
 				return kind == "Secret"
 			},
@@ -1075,7 +1301,8 @@ func assertStaleSecretEnvDegraded(t *testing.T, d Detection, action string) {
 		t.Fatalf("StaleSecretEnv has no degraded form: %+v", d)
 	}
 	if !strings.Contains(degraded.Message, "stale Secret-backed environment values") || !strings.HasPrefix(degraded.Action, action) ||
-		!strings.Contains(degraded.Cause, "shown only to callers who can read the Secret") {
+		!strings.Contains(degraded.Cause, "shown only to callers who can read the Secret") ||
+		!strings.HasPrefix(degraded.Cause, "Radar observed a change") {
 		t.Fatalf("degraded form isn't actionable: %+v", degraded)
 	}
 	text := degraded.Message + degraded.Cause + degraded.Action
@@ -1178,7 +1405,8 @@ func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.
 			detections[0].Name != "catalog" || detections[0].OwnerKind != "" {
 			t.Fatalf("Ready replicas did not aggregate under the workload: %+v", detections)
 		}
-		if !strings.Contains(detections[0].Message, "2 Ready pods") || !strings.Contains(detections[0].Message, "2 Secret-backed environment values") ||
+		if !strings.Contains(detections[0].Message, "2 Ready pods") || !strings.Contains(detections[0].Message, "2 app containers started at or before "+startedAt.Format(time.RFC3339)) ||
+			!strings.Contains(detections[0].Message, "Secret/db-conn key password as env DB_PASSWORD") ||
 			!strings.Contains(detections[0].Action, "Confirm no rollout") {
 			t.Fatalf("aggregated workload issue is not operationally clear: %+v", detections[0])
 		}
@@ -1377,7 +1605,7 @@ func envHistoryTestCache(t *testing.T, objects ...runtime.Object) *ResourceCache
 		Client: fake.NewClientset(objects...),
 		ResourceTypes: map[string]bool{
 			k8score.Pods: true, k8score.Secrets: true, k8score.Services: true,
-			k8score.Deployments: true, k8score.ReplicaSets: true,
+			k8score.Deployments: true, k8score.ReplicaSets: true, k8score.ConfigMaps: true,
 		},
 		DeferredTypes: map[string]bool{},
 		OnTransform: func(obj any) {
@@ -1454,4 +1682,57 @@ func staleSecretEnvPod(name string, startedAt time.Time, ready bool, env ...core
 			}},
 		},
 	}
+}
+
+func TestStaleSecretEnvMessagesStateObservedFacts(t *testing.T) {
+	changedAt := time.Date(2026, 10, 16, 15, 19, 41, 0, time.UTC)
+	check := func(pod, container, env, secret, key string, startedAt time.Time) StaleSecretEnvCheck {
+		return StaleSecretEnvCheck{PodName: pod, Container: container, EnvName: env, SecretName: secret, Key: key,
+			ContainerStartedAt: startedAt, SecretChangedAt: changedAt, EvidenceSource: staleSecretEvidenceObservedChange}
+	}
+	early := changedAt.Add(-20 * time.Minute)
+	late := changedAt.Add(-16 * time.Second)
+
+	t.Run("one Ready pod of a workload is named", func(t *testing.T) {
+		got := staleSecretEnvReadyDetectionMessage(staleSecretEnvSubject{kind: "Deployment", name: "product-catalog"},
+			[]StaleSecretEnvCheck{check("product-catalog-67666986b8-x2kq9", "product-catalog", "DB_CONNECTION_STRING", "product-catalog-db-conn", "DB_CONNECTION_STRING", late)})
+		want := "Deployment/product-catalog has a Ready pod (product-catalog-67666986b8-x2kq9) with a running container that started before Radar observed a Secret key it references change: " +
+			"container product-catalog started at 2026-10-16T15:19:25Z and references Secret/product-catalog-db-conn key DB_CONNECTION_STRING as env DB_CONNECTION_STRING; " +
+			"Radar observed that key change at 2026-10-16T15:19:41Z. Kubernetes reads Secret-backed env values only when a container starts."
+		if got != want {
+			t.Fatalf("message:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("per-check context names facts without claiming the env value", func(t *testing.T) {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "shop"}}
+		got := newStaleSecretEnvCheck(pod, "app", "DB_PASSWORD", "secretKeyRef", "", "db", "password", early, changedAt).Message
+		want := "Container app started at 2026-10-16T14:59:41Z, before Radar observed Secret/db key password change at 2026-10-16T15:19:41Z; Kubernetes does not refresh env DB_PASSWORD in a running container."
+		if got != want {
+			t.Fatalf("message:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("replicas fold to the latest start and keys are capped", func(t *testing.T) {
+		got := staleSecretEnvReadyDetectionMessage(staleSecretEnvSubject{kind: "Deployment", name: "api"}, []StaleSecretEnvCheck{
+			check("api-1", "app", "A", "s", "a", early),
+			check("api-2", "app", "A", "s", "a", late),
+			check("api-1", "app", "B", "s", "b", early),
+			check("api-1", "app", "C", "s", "c", early),
+			check("api-1", "app", "D", "s", "d", early),
+		})
+		for _, want := range []string{
+			"Deployment/api has 2 Ready pods with running containers that started before Radar observed Secret keys they reference change: ",
+			"2 app containers started at or before 2026-10-16T15:19:25Z and reference Secret/s key a as env A",
+			"container app started at 2026-10-16T14:59:41Z and references Secret/s key b as env B",
+			"; +1 more.",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("message %q does not contain %q", got, want)
+			}
+		}
+		if strings.Contains(got, "key d") {
+			t.Errorf("message lists more than %d keys: %q", maxStaleSecretEnvMessageFacts, got)
+		}
+	})
 }

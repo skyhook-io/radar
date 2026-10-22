@@ -16,6 +16,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -26,23 +27,29 @@ import (
 // is serialized so redaction can't be bypassed through the annotation.
 const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 
+// Changed values get a different marker on each side so a rotated value still
+// reads as a difference in both the YAML pair and the field list.
 const (
 	redactedUnchanged = "<redacted:unchanged>"
-	redactedChanged   = "<redacted:changed>"
+	redactedDesired   = "<redacted:desired>"
+	redactedLive      = "<redacted:live>"
 )
 
 // argoResourceDiffResponse is the desired-vs-live diff for a single resource
 // managed by an Argo CD Application. Desired/Live are YAML manifest strings
 // (empty when that side doesn't exist); FieldEntries is a scannable per-field
-// summary derived from the same manifests. For Secrets the values are masked
-// and Redacted is true.
+// summary derived from the same manifests, empty when either side is missing
+// (a whole-object add or delete has no useful per-field breakdown), and
+// FieldEntriesTruncated says it was cut at the entry cap. For Secrets the
+// values are masked and Redacted is true.
 type argoResourceDiffResponse struct {
-	Source       string                      `json:"source"`
-	Desired      string                      `json:"desired"`
-	Live         string                      `json:"live"`
-	FieldEntries []gitopsinsights.DriftEntry `json:"fieldEntries"`
-	Redacted     bool                        `json:"redacted"`
-	Hook         bool                        `json:"hook"`
+	Source                string                      `json:"source"`
+	Desired               string                      `json:"desired"`
+	Live                  string                      `json:"live"`
+	FieldEntries          []gitopsinsights.DriftEntry `json:"fieldEntries"`
+	FieldEntriesTruncated bool                        `json:"fieldEntriesTruncated,omitempty"`
+	Redacted              bool                        `json:"redacted"`
+	Hook                  bool                        `json:"hook"`
 }
 
 // handleArgoResourceDiff serves the desired-vs-live manifest diff for one
@@ -96,7 +103,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// Gate 1: the Application root. A caller who can't see the Application's
 	// namespace is denied here, before any upstream fetch. Matches the
 	// namespace-access check parseGitOpsRequest runs for /api/gitops/insights.
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
 		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
 		return
 	}
@@ -147,9 +154,9 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// App-level query (no per-resource filter) so it shares the manager's 15s
-	// cache; per-resource filters would bypass the cache. ManagedResourcesCached
-	// connects on demand (synchronous probe) when the background reconnect hasn't
-	// landed yet, so the first diff after a restart works. We filter in-process.
+	// cache; per-resource filters would bypass the cache. Before the first
+	// connection of a configured integration lands it answers ErrConnecting
+	// instead of waiting for it. We filter in-process.
 	items, err := argocd.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
 		AppName:      appName,
 		AppNamespace: appNamespace,
@@ -186,13 +193,19 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		redacted = true
 	}
 
+	fieldEntries, truncated := []gitopsinsights.DriftEntry{}, false
+	if len(desiredObj) > 0 && len(liveObj) > 0 {
+		fieldEntries, truncated = gitopsinsights.DiffObjectsTruncated(desiredObj, liveObj)
+	}
+
 	s.writeJSON(w, argoResourceDiffResponse{
-		Source:       "argocd-api",
-		Desired:      manifestToYAML(desiredObj),
-		Live:         manifestToYAML(liveObj),
-		FieldEntries: gitopsinsights.DiffObjects(desiredObj, liveObj),
-		Redacted:     redacted,
-		Hook:         item.Hook,
+		Source:                "argocd-api",
+		Desired:               manifestToYAML(desiredObj),
+		Live:                  manifestToYAML(liveObj),
+		FieldEntries:          fieldEntries,
+		FieldEntriesTruncated: truncated,
+		Redacted:              redacted,
+		Hook:                  item.Hook,
 	})
 }
 
@@ -242,7 +255,7 @@ func isInClusterDestination(app *unstructured.Unstructured) bool {
 // material — service-account tokens, bootstrap tokens, the last-applied dump).
 // Key names stay visible so the operator still sees what changed.
 func redactSecretManifest(desired, live map[string]any) {
-	redactSecretManifestWithMarkers(desired, live, redactedChanged, redactedChanged)
+	redactSecretManifestWithMarkers(desired, live, redactedDesired, redactedLive)
 }
 
 func redactSecretManifestWithMarkers(desired, live map[string]any, desiredChanged, liveChanged string) {
@@ -398,6 +411,8 @@ func manifestToYAML(obj map[string]any) string {
 	return string(b)
 }
 
+const argoConnectingMessage = "Radar is still connecting to Argo CD. Try again in a few seconds."
+
 // writeArgoDiffError maps managed-resources fetch failures to HTTP status
 // codes. Token problems (either the manager's auth verification or an
 // upstream 401/403) are 403 with a re-auth hint; unreachable is 503;
@@ -408,6 +423,8 @@ func (s *Server) writeArgoDiffError(w http.ResponseWriter, namespace, name strin
 		s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 	case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
 		s.writeError(w, http.StatusForbidden, "Argo CD rejected the configured token; re-authenticate the integration in Settings.")
+	case errors.Is(err, argocd.ErrConnecting):
+		s.writeError(w, http.StatusServiceUnavailable, argoConnectingMessage)
 	case errors.Is(err, argocd.ErrUnreachable):
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD API server is unreachable.")
 	default:
@@ -617,7 +634,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 
 	// Gate: the caller must be able to see the Application's namespace, matching
 	// the resource-diff and insights handlers.
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
 		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
 		return
 	}
@@ -640,6 +657,8 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 			s.writeError(w, http.StatusForbidden, "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source.")
 		case errors.Is(err, argocd.ErrTokenInvalid) || errors.Is(err, argoapi.ErrUnauthorized):
 			s.writeError(w, http.StatusForbidden, "Argo CD rejected the configured token; re-authenticate the integration in Settings.")
+		case errors.Is(err, argocd.ErrConnecting):
+			s.writeError(w, http.StatusServiceUnavailable, argoConnectingMessage)
 		case errors.Is(err, argocd.ErrUnreachable):
 			s.writeError(w, http.StatusServiceUnavailable, "Argo CD API server is unreachable.")
 		case errors.Is(err, argoapi.ErrNotFound):

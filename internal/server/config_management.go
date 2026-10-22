@@ -57,6 +57,7 @@ func (s *Server) handleGetOperatorConfig(w http.ResponseWriter, r *http.Request)
 	if s.effectiveConfig != nil {
 		effective.Port = s.effectiveConfig.Port
 		effective.MCP = s.effectiveConfig.MCP
+		effective.MCPReadOnly = s.effectiveConfig.MCPReadOnly
 		effective.TimelineStorage = s.effectiveConfig.TimelineStorage
 		effective.TimelineRetention = s.effectiveConfig.TimelineRetention
 		effective.TimelineMaxSize = s.effectiveConfig.TimelineMaxSize

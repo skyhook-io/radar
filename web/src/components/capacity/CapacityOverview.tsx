@@ -3,10 +3,13 @@ import { Layers3, X } from "lucide-react";
 import {
   Collapse,
   CollapseChevron,
+  formatDuration,
   StatusDot,
+  Tooltip,
   WithTooltip,
   mapHealthToTone,
   type CapacityAutoscalerBackoff,
+  type CapacityAutoscalerScaleDown,
   type CapacityAutoscalerChildObservation,
   type CapacityBoundedResultMeta,
   type CapacityCertainty,
@@ -25,48 +28,10 @@ import { ClusterSchedulingCard } from "./ClusterSchedulingCard";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import type { useCapacityOverview } from "../../api/client";
 import type { SelectedResource } from "../../types";
-import {
-  actionSeverity,
-  CapacityFreshness,
-  capacityManagerLabel,
-  coverageHasObservations,
-  coverageIsDenied,
-  coverageIsLowerBound,
-  CertaintyGlyph,
-  formatQuantity,
-  coverageMessage,
-  DeniedBadge,
-  EmptyState,
-  errorMessage,
-  formatTimestamp,
-  humanizeCode,
-  identityToSelectedResource,
-  InlineEmpty,
-  integrationBlock,
-  InventoryQuantityCell,
-  KpiTile,
-  LinkButton,
-  managerStatusTone,
-  Notice,
-  pickWorstPressure,
-  PoolReadyBadge,
-  poolReadinessDetail,
-  RefreshError,
-  relativeTime,
-  ROW_HOVER,
-  ScopeBadges,
-  ScrollableContent,
-  SectionCard,
-  shortResourceLabel,
-  sortedResourceEntries,
-  TABLE_HEAD,
-  TABLE_WRAP,
-  TBODY,
-  TD,
-  TH,
-  worstManagerStatus,
-  type CapacityConnectionState,
-} from "./shared";
+import { actionSeverity, CapacityFreshness, capacityManagerLabel, coverageHasObservations, coverageIsDenied, coverageIsLowerBound, formatQuantity, coverageMessage, DeniedBadge, errorMessage, formatTimestamp, humanizeCode, identityToSelectedResource, InlineEmpty, integrationBlock, InventoryQuantityCell, KpiTile, LinkButton, managerStatusTone, pickWorstPressure, PoolReadyBadge, poolReadinessDetail, RefreshError, relativeTime, ScopeBadges, ScrollableContent, SectionCard, shortResourceLabel, sortedResourceEntries, worstManagerStatus, type CapacityConnectionState } from "./shared";
+import { CertaintyGlyph } from "@skyhook-io/k8s-ui";
+import { Notice, ScreenEmptyState } from "../workspace/layout";
+import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from "../workspace/table";
 
 const EXPLAIN_CARDS: { term: string; body: string }[] = [
   {
@@ -337,7 +302,7 @@ export function CapacityOverview({
   // NodePool coverage by definition — that is not an error to block on.
   if (karpenterActive && !coverageHasObservations(data.coverage.nodePools)) {
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={Layers3}
         title="NodePool inventory unavailable"
         detail={coverageMessage(data.coverage.nodePools, "NodePool inventory")}
@@ -345,6 +310,10 @@ export function CapacityOverview({
     );
   }
 
+  const showScaleDown =
+    data.groups.some((group) =>
+      group.children.some((child) => child.scaleDown),
+    ) || data.orphanAutoscalerGroups.some((child) => child.scaleDown);
   const summary = data.summary;
   const coverage = data.coverage;
   const podsDeniedFlag = coverageIsDenied(coverage.pods);
@@ -569,6 +538,7 @@ export function CapacityOverview({
       )}
 
       <NodeGroupsSection
+        showScaleDown={showScaleDown}
         sectionRef={inventoryRef}
         groups={data.groups}
         pools={data.pools}
@@ -580,6 +550,7 @@ export function CapacityOverview({
       />
 
       <OrphanAutoscalerSection
+        showScaleDown={showScaleDown}
         orphans={data.orphanAutoscalerGroups}
         meta={data.orphanAutoscalerGroupsMeta}
       />
@@ -762,6 +733,7 @@ function ManagerLine({
 // ============================================================================
 
 function NodeGroupsSection({
+  showScaleDown,
   sectionRef,
   groups,
   pools,
@@ -771,6 +743,7 @@ function NodeGroupsSection({
   onOpenPool,
   onOpenResource,
 }: {
+  showScaleDown: boolean;
   sectionRef: RefObject<HTMLDivElement | null>;
   groups: CapacityGroupSummary[];
   pools: CapacityPoolSummary[];
@@ -843,6 +816,7 @@ function NodeGroupsSection({
                     <GroupRow
                       key={group.id}
                       group={group}
+                      showScaleDown={showScaleDown}
                       pool={
                         group.manager === "karpenter"
                           ? poolByName.get(group.name)
@@ -980,12 +954,14 @@ function worstChildHealth(
 
 function GroupRow({
   group,
+  showScaleDown,
   pool,
   detectionFailure,
   onOpenPool,
   onOpenResource,
 }: {
   group: CapacityGroupSummary;
+  showScaleDown: boolean;
   pool?: CapacityPoolSummary;
   /** Why manager detection could not run, when it could not. Non-null forbids
    *  the "none detected" conclusion for a group with no attributed manager. */
@@ -1000,8 +976,24 @@ function GroupRow({
     ? pickWorstPressure(pool.ledger.limitPressure)
     : undefined;
   const childHealth = worstChildHealth(group.children);
-  // Server-rendered prose — joined, never sorted or parsed.
-  const scalingText = group.scaling.map((fact) => fact.summary).join(" · ");
+  const noScaleDownCandidates =
+    hasChildren &&
+    !group.childrenMeta.truncated &&
+    !group.scaling.some((fact) => fact.code === "at_min_size") &&
+    group.children.every(
+      (child) =>
+        child.minSize !== undefined &&
+        child.target !== undefined &&
+        child.target >= child.minSize &&
+        child.scaleDown?.status === "NoCandidates" &&
+        child.scaleDown.candidates === 0,
+    ) &&
+    group.children.some(
+      (child) =>
+        child.target !== undefined &&
+        child.minSize !== undefined &&
+        child.target > child.minSize,
+    );
 
   return (
     <>
@@ -1020,7 +1012,7 @@ function GroupRow({
             : undefined
         }
       >
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           <div className="flex items-center gap-1.5">
             {hasChildren ? (
               <button
@@ -1092,7 +1084,7 @@ function GroupRow({
             )}
           </div>
         </td>
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           {group.manager ? (
             <span className="flex flex-wrap items-center gap-1.5">
               <Badge tone="structural" size="sm">
@@ -1119,27 +1111,88 @@ function GroupRow({
         >
           {`${group.readyNodeCount}/${group.nodeCount}`}
         </td>
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           <InventoryQuantityCell
             observation={group.allocatable}
             empty="Not observed"
           />
         </td>
-        <td className={TD}>
+        <td className={`${TD} whitespace-nowrap`}>
           <InventoryQuantityCell
             observation={group.scheduledRequests}
             empty="Not observed"
           />
         </td>
         <td className={`${TD} text-xs text-theme-text-secondary`}>
-          {scalingText || <span className="text-theme-text-tertiary">—</span>}
+          {/* The only wrapping column, so long prose adds lines instead of
+              squeezing names and badges. Inline tooltip triggers let a fact
+              wrap with the text around it rather than as one box. */}
+          <div className="min-w-[10rem]">
+            {group.scaling.map((fact, index) => (
+              <span key={fact.code}>
+                {index > 0 && " · "}
+                {fact.code === "at_min_size" ? (
+                  <Tooltip
+                    content={MIN_SIZE_EXPLANATION}
+                    wrapperClassName="!inline"
+                  >
+                    <span
+                      tabIndex={0}
+                      role="note"
+                      aria-label={`${fact.summary}. ${MIN_SIZE_EXPLANATION}`}
+                      className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                    >
+                      {fact.summary}
+                    </span>
+                  </Tooltip>
+                ) : fact.code === "scale_down_candidates" ? (
+                  <Tooltip
+                    content={SCALE_DOWN_EXPLANATION}
+                    wrapperClassName="!inline"
+                  >
+                    <span
+                      tabIndex={0}
+                      role="note"
+                      aria-label={`${fact.summary}. ${SCALE_DOWN_EXPLANATION}`}
+                      className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                    >
+                      {fact.summary}
+                    </span>
+                  </Tooltip>
+                ) : (
+                  fact.summary
+                )}
+              </span>
+            ))}
+            {noScaleDownCandidates && (
+              <>
+                {group.scaling.length > 0 && " · "}
+                <Tooltip
+                  content={NO_CANDIDATES_EXPLANATION}
+                  wrapperClassName="!inline"
+                >
+                  <span
+                    tabIndex={0}
+                    role="note"
+                    aria-label={`No node can be removed right now. ${NO_CANDIDATES_EXPLANATION}`}
+                    className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                  >
+                    No node can be removed right now
+                  </span>
+                </Tooltip>
+              </>
+            )}
+            {group.scaling.length === 0 && !noScaleDownCandidates && (
+              <span className="text-theme-text-tertiary">—</span>
+            )}
+          </div>
         </td>
       </tr>
       {hasChildren && (
         <tr>
           <td colSpan={7} className="p-0">
             <Collapse open={expanded}>
-              <ChildSubTable group={group} />
+              <ChildSubTable group={group} showScaleDown={showScaleDown} />
             </Collapse>
           </td>
         </tr>
@@ -1148,10 +1201,30 @@ function GroupRow({
   );
 }
 
+const MIN_SIZE_EXPLANATION =
+  "Every observed autoscaler group has its target at its published minimum. Lowering the pool's minimum is required for it to shrink below this size. Unattributed groups are separate; current registered nodes may still exceed the target.";
+
+const SCALE_DOWN_EXPLANATION =
+  "Scale-down candidates are observations, not guaranteed removals. PodDisruptionBudgets, local storage, kube-system pods, or safe-to-evict annotations can block removal. Radar can't tell which nodes the autoscaler picked, but a node's drain plan shows what would block removing it.";
+const NO_CANDIDATES_EXPLANATION =
+  "The autoscaler found no node it can remove. Usually every node is above its utilization threshold, or pods on emptier nodes can't move (PodDisruptionBudgets, local storage, kube-system pods, safe-to-evict annotations). A node's drain plan shows what would block it.";
+const SCALE_DOWN_STATUS_LABELS = new Map([
+  ["NoCandidates", "No scale-down candidates"],
+  ["CandidatesPresent", "Scale-down candidates present"],
+  ["InProgress", "Scale-down in progress"],
+  ["NoActivity", "No scale-down activity"],
+]);
+
 const CHILD_TH = "px-3 py-1.5 text-left font-medium whitespace-nowrap";
 const CHILD_TD = "px-3 py-1.5 align-top text-xs text-theme-text-primary";
 
-function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
+function ChildSubTable({
+  group,
+  showScaleDown,
+}: {
+  group: CapacityGroupSummary;
+  showScaleDown: boolean;
+}) {
   return (
     <div className="border-t border-theme-border-subtle bg-theme-base/40 px-4 py-3">
       <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
@@ -1167,13 +1240,14 @@ function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
               <th className={CHILD_TH}>Ready / total</th>
               <th className={CHILD_TH}>Health</th>
               <th className={CHILD_TH}>Backoff</th>
-              <th className={CHILD_TH}>Observed</th>
+              {showScaleDown && <th className={CHILD_TH}>Scale-down</th>}
+              <th className={CHILD_TH}>Health observed</th>
             </tr>
           </thead>
           <tbody className={TBODY}>
             {group.children.map((child) => (
               <tr key={child.id} className={ROW_HOVER}>
-                <td className={`${CHILD_TD} font-mono`}>
+                <td className={`${CHILD_TD} whitespace-nowrap font-mono`}>
                   <WithTooltip tip={child.name}>
                     <span>{child.id}</span>
                   </WithTooltip>
@@ -1197,6 +1271,11 @@ function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
                 <td className={CHILD_TD}>
                   <ChildBackoff backoff={child.backoff} />
                 </td>
+                {showScaleDown && (
+                  <td className={CHILD_TD}>
+                    <ChildScaleDown scaleDown={child.scaleDown} />
+                  </td>
+                )}
                 <td className={CHILD_TD}>
                   <ChildObserved asOf={child.asOf} />
                 </td>
@@ -1219,9 +1298,11 @@ function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
 // ============================================================================
 
 function OrphanAutoscalerSection({
+  showScaleDown,
   orphans,
   meta,
 }: {
+  showScaleDown: boolean;
   orphans: CapacityAutoscalerChildObservation[];
   meta: CapacityBoundedResultMeta;
 }) {
@@ -1240,13 +1321,14 @@ function OrphanAutoscalerSection({
               <th className={TH}>Min–max</th>
               <th className={TH}>Target</th>
               <th className={TH}>Health</th>
-              <th className={TH}>Observed</th>
+              {showScaleDown && <th className={TH}>Scale-down</th>}
+              <th className={TH}>Health observed</th>
             </tr>
           </thead>
           <tbody className={TBODY}>
             {orphans.map((child) => (
               <tr key={child.id} className={ROW_HOVER}>
-                <td className={`${TD} font-mono text-xs`}>
+                <td className={`${TD} whitespace-nowrap font-mono text-xs`}>
                   <WithTooltip tip={child.name}>
                     <span>{child.id}</span>
                   </WithTooltip>
@@ -1262,6 +1344,11 @@ function OrphanAutoscalerSection({
                 <td className={TD}>
                   <ChildHealth health={child.health} />
                 </td>
+                {showScaleDown && (
+                  <td className={TD}>
+                    <ChildScaleDown scaleDown={child.scaleDown} />
+                  </td>
+                )}
                 <td className={TD}>
                   <ChildObserved asOf={child.asOf} />
                 </td>
@@ -1334,6 +1421,80 @@ function ChildBackoff({ backoff }: { backoff?: CapacityAutoscalerBackoff }) {
         {label ?? "Backoff"}
       </Badge>
     </WithTooltip>
+  );
+}
+
+function ChildScaleDown({
+  scaleDown,
+}: {
+  scaleDown?: CapacityAutoscalerScaleDown;
+}) {
+  if (!scaleDown) {
+    return <span className="text-theme-text-tertiary">Not published</span>;
+  }
+  const candidatesLabel =
+    scaleDown.candidates === undefined
+      ? "Candidates: not published"
+      : `${scaleDown.candidates} scale-down ${scaleDown.candidates === 1 ? "candidate" : "candidates"}`;
+  const statusLabel = scaleDown.status
+    ? (SCALE_DOWN_STATUS_LABELS.get(scaleDown.status) ?? scaleDown.status)
+    : "Status not published";
+  const countIsStatus =
+    scaleDown.status === "CandidatesPresent" &&
+    scaleDown.candidates !== undefined;
+  const noCandidates =
+    scaleDown.status === "NoCandidates" && scaleDown.candidates === 0;
+  const explanation =
+    scaleDown.status === "NoCandidates"
+      ? NO_CANDIDATES_EXPLANATION
+      : SCALE_DOWN_EXPLANATION;
+  const transition = scaleDown.lastTransitionTime
+    ? Date.parse(scaleDown.lastTransitionTime)
+    : NaN;
+  return (
+    <div className="space-y-1 text-theme-text-secondary">
+      <div className="flex items-center gap-1">
+        <WithTooltip tip={`${statusLabel}. ${explanation}`}>
+          <span
+            tabIndex={0}
+            role="note"
+            aria-label={`${countIsStatus ? candidatesLabel : statusLabel}. ${explanation}`}
+            className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+          >
+            {countIsStatus ? candidatesLabel : statusLabel}
+          </span>
+        </WithTooltip>
+        {(countIsStatus || noCandidates) && (
+          <CertaintyGlyph
+            certainty="exact"
+            title={`Candidate count published by the autoscaler: ${scaleDown.candidates}.`}
+          />
+        )}
+      </div>
+      {!countIsStatus && !noCandidates && (
+        <div className="flex items-center gap-1 text-theme-text-tertiary">
+          {candidatesLabel}
+          <CertaintyGlyph
+            certainty={scaleDown.candidates === undefined ? "unknown" : "exact"}
+            title={
+              scaleDown.candidates === undefined
+                ? "Candidate count not published by the autoscaler."
+                : "Candidate count published by the autoscaler."
+            }
+          />
+        </div>
+      )}
+      <div className="text-theme-text-tertiary">
+        Probe: <ChildObserved asOf={scaleDown.asOf} />
+      </div>
+      {scaleDown.lastTransitionTime && (
+        <div className="text-theme-text-tertiary">
+          Status since {formatTimestamp(scaleDown.lastTransitionTime)}
+          {Number.isFinite(transition) &&
+            ` (for ${formatDuration(Math.max(0, Date.now() - transition))})`}
+        </div>
+      )}
+    </div>
   );
 }
 

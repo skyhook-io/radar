@@ -93,6 +93,12 @@ export interface GitOpsInsightSummary {
   // The controller's API server was asked and didn't answer usefully — why,
   // in the user's words. Only set when the integration is configured.
   resourceHealthApiError?: string
+  // The host is still connecting to the controller's API server; ask again
+  // shortly.
+  resourceHealthApiPending?: boolean
+  // The host couldn't reach the controller's API server and is retrying;
+  // ask again now and then.
+  resourceHealthApiRetrying?: boolean
 }
 
 export interface GitOpsIgnoredDifferences {
@@ -164,6 +170,7 @@ export interface GitOpsChange {
   hookPhase?: string
   hasDesired: boolean
   hasLive: boolean
+  missing?: boolean
   // Structured per-field diff between the desired state (parsed from
   // kubectl.kubernetes.io/last-applied-configuration) and the live spec.
   // Undefined when the diff couldn't be computed (no annotation, SSA-applied
@@ -177,6 +184,8 @@ export interface GitOpsChange {
   recentEvents?: GitOpsEventSummary[]
   partial: boolean
   partialNote?: string
+  // A Flux source or dependsOn target the root consumes but doesn't manage.
+  dependency?: boolean
 }
 
 export interface GitOpsDrift {
@@ -247,6 +256,12 @@ export interface GitOpsCapabilities {
   // tell "not set up" (offer Connect) from "set up but disconnected" (offer
   // Reconnect) — instead of advertising a diff that would fail.
   argoConfigured?: boolean
+  // Configured, and the host is still making the first connection; ask
+  // again shortly instead of reporting the diff as down.
+  argoConnecting?: boolean
+  // Configured, the connection failed in a way that may pass on its own, and
+  // the host is retrying; ask again now and then.
+  argoRetrying?: boolean
   // True on an Argo CD Application detail when the integration is connected,
   // meaning the revision-metadata endpoint can resolve Git commit details
   // (author, message, signature) for this app's deployed revisions.
@@ -269,13 +284,16 @@ export interface ArgoRevisionMetadata {
 // Response of GET /api/argo/applications/{ns}/{name}/resource-diff. `desired`
 // is the Git-rendered manifest, `live` the normalized cluster state — both YAML
 // for the line-by-line view. `fieldEntries` is the same diff structured per
-// path for a compact summary. `redacted` is set when Secret values were masked
+// path for a compact summary; Radars before the list was made non-null send
+// null when it is empty. `fieldEntriesTruncated` is set when the list was cut
+// at the server's entry cap. `redacted` is set when Secret values were masked
 // server-side; `hook` marks Argo sync-hook resources.
 export interface GitOpsResourceDiff {
   source: string
   desired: string
   live: string
-  fieldEntries: GitOpsResourceDiffFieldEntry[]
+  fieldEntries: GitOpsResourceDiffFieldEntry[] | null
+  fieldEntriesTruncated?: boolean
   redacted: boolean
   hook: boolean
 }

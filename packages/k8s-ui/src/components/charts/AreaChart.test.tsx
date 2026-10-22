@@ -171,3 +171,28 @@ describe('AreaChart compact layout and count axes', () => {
     expect(compactCount).not.toContain('>10<')
   })
 })
+
+describe('AreaChart gaps and selection', () => {
+  const base = [series([[0, 1], [60, null], [120, 3], [180, 2]])]
+
+  it('hatches shaded ranges and draws the selection band inside the plot', () => {
+    const html = render({
+      series: base,
+      stepSeconds: 60,
+      shadedRanges: [{ start: t0 + 30, end: t0 + 90, label: 'No sample' }],
+      selection: { start: t0 + 120, end: t0 + 180 },
+      onSelectRange: () => {},
+    })
+    expect(html.match(/data-chart-gap/g)).toHaveLength(1)
+    expect(html).toMatch(/fill="url\(#hatch-[^"]+\)"/)
+    expect(html).toContain('data-chart-selection')
+    expect(html).toContain('cursor:col-resize')
+  })
+
+  it('draws nothing extra without the new props', () => {
+    const html = render({ series: base })
+    expect(html).not.toContain('data-chart-gap')
+    expect(html).not.toContain('data-chart-selection')
+    expect(html).toContain('cursor:crosshair')
+  })
+})

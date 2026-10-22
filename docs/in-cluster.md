@@ -469,6 +469,8 @@ rbac:
   additionalRules: []       # Arbitrary extra ClusterRole rules
 ```
 
+Radar's NetworkPolicy check (an issue when a policy leaves every pod behind a Service with no allowed inbound traffic) also reads the policies of other engines that can allow what a core NetworkPolicy denies: Cilium, Calico, Antrea (`rbac.crdGroups.antrea`), EKS VPC CNI (`rbac.crdGroups.awsNetworkPolicy`) and `policy.networking.k8s.io`. If one of those APIs is served but Radar can't read it, the check stays silent for the Services it might cover, so keep these groups enabled.
+
 Calico access is read-only (`get`, `list`, and `watch`) for both API groups and is enabled by default. Set `rbac.crdGroups.calico=false` to disable it. If chart-managed Calico access is disabled, grant only the resources you need through `rbac.additionalRules`; both groups may be required while a cluster exposes modern and legacy Calico APIs.
 
 The chart grants cluster-wide `get/list/watch` on VictoriaMetrics VMAgent, VMCluster and VMSingle whenever it grants cluster-wide Secrets reads: `rbac.secrets: true`, `rbac.helm: true`, auth enabled (`auth.mode != none`), or cloud mode. These objects can carry inline credentials, so they share the same grant decision as Secrets; there is no separate VictoriaMetrics setting. All other VictoriaMetrics kinds are excluded from this rule. See the [chart reference](../deploy/helm/radar/README.md#crd-access) for exclusions and wildcard grants.
@@ -480,6 +482,8 @@ Radar decides what it can read at startup, so RBAC changes take effect when the 
 You see what you have access to — Radar doesn't require cluster-admin. Whatever your ServiceAccount (or the impersonated user, when auth is enabled) can list, Radar shows. Resource types you can't list show an actionable denied-state instead of a misleading "0 / None found": for a core cluster-scoped kind (Node, PV, StorageClass, and the like) your identity can't read, Radar shows a copyable `ClusterRole` + `ClusterRoleBinding` request to hand to a cluster admin (reason `rbac_denied`), and distinguishes that from a kind Radar's own ServiceAccount can't read, where a user-level grant wouldn't help (reason `unavailable`, no snippet). The "Your access on this cluster" dialog lists the core cluster-scoped kinds being hidden alongside your effective rules. Namespaces you can't access don't appear.
 
 A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespace.
+
+**Stalled API requests.** If a read from the Kubernetes API stalls without the connection resetting (for example, a proxy whose upstream dropped silently), Radar ends it after 60 seconds with no data and retries, instead of freezing that resource's data until a restart. Slow transfers that keep making progress are never cut, and log streams, exec and port-forward are unaffected.
 
 **RBAC granularity (auth enabled):**
 
@@ -586,8 +590,9 @@ Cleanup runs hourly + once at startup. Confirm it's keeping up via `/api/diagnos
 - The DSN is read from a Secret; never put it in Helm values or `config.json`.
 - Restart the Radar Deployment after rotating the Secret because Kubernetes does not refresh environment variables in running containers.
 - There is no built-in import path from SQLite to PostgreSQL. Migrating historical events is not supported.
-- Radar treats an unreachable PostgreSQL as fatal rather than falling back to an in-memory timeline, so a pod that cannot reach the database starts in disconnected mode and serves errors instead of cluster data. This is deliberate: silently degrading to memory would hand you a timeline that disappears on the next restart, without saying so. It also means the database is on Radar's startup path — treat its availability accordingly, and prefer one that lives close to the cluster.
-- Recovery after a database outage is not automatic. Once PostgreSQL is reachable again, either use the retry action in the UI or restart the pod. Verified TLS modes: `require` and `verify-full`.
+- An unreachable PostgreSQL costs you the timeline, not the rest of Radar. Cluster views keep working, the Timeline page says the database can't be reached and points to the logs, which have the connection error (so does the diagnostics overlay), and Radar reconnects on its own once the database answers. Radar logs when the database becomes unreachable, how soon it tries again, and when it answers again, naming the database's host, port, name and user (never the password) with the driver's error; search the logs for `[timeline]`. Events that occur while it is down are not recorded and are not recovered later; the dropped count in diagnostics shows how many. Radar never falls back to an in-memory timeline, because that looks healthy and then loses everything on the next restart.
+- Because the rest of Radar keeps working and `/api/health` stays healthy, an outage is easy to miss. Alert on Radar's `/metrics` instead: `radar_timeline_available` is `0` while the database can't be reached (checked at most every 5s, with a 2s limit on each check), and `radar_timeline_dropped_events_total{reason="store_unavailable"}` and `{reason="store_failed"}` count the changes lost to it. For example, `radar_timeline_available == 0` held for 5 minutes. The reason itself is not in the metrics, because it names the database host; it is in the Timeline page and the diagnostics overlay.
+- Verified TLS modes: `require` and `verify-full`.
 
 ## Configuration Reference
 
@@ -650,6 +655,33 @@ kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 
 If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades. If it does and exec still fails, see the next section: the terminal uses the same address check as changes.
 
+### Node drain requests time out
+
+Drain waits for pod deletion by default. The default deadline is two minutes for
+eviction retries and deletion waiting together, followed by a final verification
+read of up to five seconds. Configure every proxy and client on this path to allow
+at least 150 seconds for the default. If you send an explicit drain timeout, allow
+more than that value plus five seconds and network latency.
+
+For ingress-nginx, add these annotations to your Radar Ingress, or set them under
+the Helm chart's `ingress.annotations` values:
+
+```yaml
+nginx.ingress.kubernetes.io/proxy-read-timeout: "150"
+nginx.ingress.kubernetes.io/proxy-send-timeout: "150"
+```
+
+These are the ingress-nginx controller's [timeout annotations](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/#custom-timeouts).
+Other ingress controllers and load balancers have their own request or upstream
+response timeout settings. Set each layer explicitly; extending Radar's deadline
+cannot override a shorter limit in front of it.
+
+A browser, proxy or MCP timeout does not prove the drain failed or that nothing
+changed. Evictions may have been accepted already. Check the node's pods before
+retrying or shutting it down. API callers can use `waitForDeletion: false` and MCP
+callers `wait_for_deletion: false` for admission-only behavior, but must then
+verify deletion separately. See [MCP drain timeouts](mcp.md#node-drain-timeouts).
+
 ### Changes fail with "Radar refused this request"
 
 If you can browse, but every action that changes the cluster (apply, delete, scale, restart, drain, Argo CD or Flux sync) fails with *Radar refused this request because it came from ...*, the proxy in front of Radar is rewriting the `Host` header. The pod terminal does not connect, and a few views that load data with POST, such as application cost, fail the same way. Radar accepts these only from a page served at its own address, so that another website you have open cannot act through your browser, and a rewritten `Host` hides that address. The message names both addresses: where the request came from, and the `Host` Radar received.
@@ -680,7 +712,7 @@ kubectl logs -n radar -l app.kubernetes.io/name=radar | grep '\[origin\] refused
 
 ### Metrics charts show "Prometheus not connected"
 
-Radar discovers Prometheus in the background as soon as it connects to the cluster (and again after every context switch), by listing Services and probing the ones that look like a PromQL backend at their in-cluster address. While that runs the charts show "Discovering Prometheus…"; once it ends without a connection, the charts and **Settings → Overview → Metrics** show why:
+Radar discovers Prometheus in the background as soon as it connects to the cluster (and again after every context switch), by listing Services and probing the ones that look like a PromQL backend at their in-cluster address. When it can watch Services in every namespace it reads them from its own cache instead of listing them from the API. Discovery also runs again in the background, without a timer, when Radar has no connection and a Prometheus-like Service is created or one of its Pods becomes Ready (so a Prometheus installed after Radar connects on its own), and when the connected endpoint stops answering queries or its port-forward closes. While that runs the charts show "Discovering Prometheus…"; once it ends without a connection, the charts and **Settings → Overview → Metrics** show why:
 
 - *no Prometheus service found in cluster* — nothing matched the well-known names or labels. Set `traffic.prometheusUrl`.
 - *No working Prometheus endpoint found. Candidate services could not be reached* — candidates exist but their Service addresses did not answer from Radar's pod. In-cluster Radar does not fall back to port-forwarding. Check endpoint health and network access, or configure a reachable `traffic.prometheusUrl`. This does not mean Prometheus is absent.

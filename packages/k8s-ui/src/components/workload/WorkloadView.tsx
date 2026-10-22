@@ -353,6 +353,8 @@ interface WorkloadViewProps {
     namespace: string
     name: string
     resource: any
+    /** Place resource notices within the replacement layout's content area. */
+    leadContent?: ReactNode
   }) => ReactNode
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
@@ -398,6 +400,8 @@ interface WorkloadViewProps {
    *  live issues for this resource). Avoids showing the same failure twice.
    *  Also gates the `renderOverviewLead` wrapper (see above). */
   hasOperationalIssues?: boolean
+  /** Also show the lead for neutral context without suppressing renderer problems. */
+  hasOverviewLead?: boolean
   /** True while the live-issues fetch is still pending. Renderers suppress their
    *  banners during this window too — a banner whose failure the pipeline covers
    *  would otherwise flash on first paint before the issues arrive and hide it. */
@@ -518,6 +522,7 @@ export function WorkloadView({
   renderOverviewIntro,
   renderOverviewLead,
   hasOperationalIssues,
+  hasOverviewLead,
   operationalIssuesPending,
   // Actions bar
   actionsBarProps,
@@ -930,7 +935,12 @@ export function WorkloadView({
   useEffect(() => {
     if (shouldCommitFallback && activeTab !== 'overview') onTabChange?.('overview', { replace: true })
   }, [activeTab, onTabChange, shouldCommitFallback])
-  const expandedOverview = expanded ? renderExpandedOverview?.({ kind, apiKind, namespace, name, resource }) : null
+  const expandedOverview = expanded ? renderExpandedOverview?.({
+    kind, apiKind, namespace, name, resource,
+    leadContent: (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
+      ? renderOverviewLeadForState({ kind, namespace, name })
+      : undefined,
+  }) : null
   const overviewIntro = renderOverviewIntro?.({ kind, namespace, name })
 
   // ── Collapsed (drawer) mode ──────────────────────────────────────────────
@@ -1090,11 +1100,12 @@ export function WorkloadView({
                 drawerSummary
               ) : (
               <>
-              {renderOverviewLeadForState && hasOperationalIssues && (
+              {renderOverviewLeadForState && (hasOverviewLead ?? hasOperationalIssues) && (
                 <div className="px-4 pt-4">
                   {renderOverviewLeadForState({ kind, namespace, name })}
                 </div>
               )}
+              {overviewIntro && <div className="px-4 pt-4">{overviewIntro}</div>}
               <ResourceRendererDispatch
                 resource={selectedResource}
                 data={resource}
@@ -1303,11 +1314,6 @@ export function WorkloadView({
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
           <div className="h-full min-h-0">
-            {hasOperationalIssues && renderOverviewLeadForState && (
-              <div className="px-4 pt-4">
-                {renderOverviewLeadForState({ kind, namespace, name })}
-              </div>
-            )}
             {expandedOverview}
           </div>
         ) : effectiveTab === 'spec' && specTab?.render && !resourceGone ? (
@@ -1350,7 +1356,7 @@ export function WorkloadView({
                 // A host's spec lead replaces the operational issues there: its Overview already leads with them.
                 effectiveTab === 'spec' && specTab?.lead
                   ? specTab.lead
-                  : hasOperationalIssues && renderOverviewLeadForState
+                  : (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
                     ? renderOverviewLeadForState({ kind, namespace, name })
                     : undefined
               }

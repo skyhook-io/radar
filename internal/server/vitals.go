@@ -12,8 +12,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/health"
-	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // GET /api/vitals — a cluster's vital signs: a compact scale + capacity
@@ -167,7 +167,7 @@ func (s *Server) handleVitals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, VitalsResponse{
 			Completeness: VitalsCompleteness{AccessRestricted: true},
 		})
@@ -195,16 +195,15 @@ func (s *Server) handleVitals(w http.ResponseWriter, r *http.Request) {
 		// numbers as the caller's whole world.
 		podsPartial = len(podNamespaces) < len(namespaces)
 	}
-	// The SA cache itself can be namespace-scoped (startup RBAC fallback);
-	// a cluster-wide caller reading a scoped cache is partial too.
-	if perm := k8s.GetCachedPermissionResult(); perm != nil {
-		if scope, ok := perm.Scopes[k8score.Pods]; ok && scope.Enabled && scope.Namespace != "" {
-			podsPartial = true
-		}
-	}
+	// Which namespaces Radar collects is known from its configuration while
+	// Pods still load, so a namespace-scoped cache marks Pods partial either way.
+	podAssessment := cache.AssessKindRead("pods", podNamespaces)
+	podsPartial = podsPartial || len(podAssessment.Uncovered) > 0 ||
+		(podNamespaces == nil && !podAssessment.AllNamespaces && podAssessment.Readiness != k8s.KindUnavailable)
+
 	var scopedPods []*corev1.Pod
 	if podsReadable {
-		scopedPods = listPodsScoped(cache.Pods(), podNamespaces)
+		scopedPods = readscope.ListPodsScoped(cache.Pods(), podNamespaces)
 	}
 	if podsReadable && cache.Pods() != nil {
 		pods := scopedPods

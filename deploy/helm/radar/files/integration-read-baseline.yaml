@@ -613,7 +613,7 @@ entries:
     reason: "Includes spec.externalClusters[].connectionParameters; inline connection settings (potentially passwords) are intentionally visible, like Helm values."
     source: "https://cloudnative-pg.io/docs/1.28/logical_replication/"
   - group: "postgresql.cnpg.io"
-    resources: ["backups","databases","imagecatalogs","poolers","publications","scheduledbackups","subscriptions"]
+    resources: ["backups","databaseroles","databases","failoverquorums","imagecatalogs","poolers","publications","scheduledbackups","subscriptions"]
     scope: Namespaced
     collection: "cloudnativePg"
     decision: grant
@@ -739,12 +739,12 @@ entries:
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
   - group: "source.toolkit.fluxcd.io"
-    resources: ["gitrepositories","helmrepositories","ocirepositories"]
+    resources: ["gitrepositories","helmrepositories","ocirepositories","helmcharts","buckets","externalartifacts"]
     scope: Namespaced
     collection: "flux"
     decision: grant
-    reason: "Operational configuration and status; full inline configuration is intentionally readable."
-    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+    reason: "Operational configuration and status. Credentials are referenced by Secret name only (secretRef, certSecretRef, proxySecretRef); no inline credential fields in source.toolkit.fluxcd.io/v1."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); source-controller v1.9 CRD schemas"
   - group: "sources.knative.dev"
     resources: ["apiserversources","containersources","pingsources","sinkbindings"]
     scope: Namespaced

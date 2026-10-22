@@ -247,6 +247,61 @@ describe("strict evidence adapters", () => {
       }),
     ]);
 
+    const unreadIssueFeed = project([
+      tool("issues-down", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_error: "timeline history is unavailable",
+      }),
+    ]);
+    expect(unreadIssueFeed.limitations).toEqual([
+      expect.objectContaining({
+        source: "Issue-related changes",
+        kind: "error",
+        message: "timeline history is unavailable",
+      }),
+    ]);
+
+    const evictedIssueFeed = project([
+      tool("issues-evicted", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_history_coverage: {
+          incomplete: true,
+          reasons: ["events_evicted"],
+        },
+      }),
+    ]);
+    expect(evictedIssueFeed.limitations).toEqual([
+      expect.objectContaining({
+        source: "Issue-related changes",
+        kind: "unknown",
+        message: expect.stringContaining("incomplete for part of the window"),
+      }),
+    ]);
+    // Incomplete change history limits the change feed, not the live scan.
+    expect(groupsOf(evictedIssueFeed.groups, "receipt")).toHaveLength(1);
+
+    // So does a saturated change fetch whose rows were all discarded.
+    const saturatedIssueFeed = project([
+      tool("issues-saturated", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_reason: "no_critical_issues",
+        recent_changes_truncated: true,
+      }),
+    ]);
+    expect(saturatedIssueFeed.limitations).toEqual([
+      expect.objectContaining({
+        source: "Issue-related changes",
+        kind: "truncated",
+      }),
+    ]);
+    expect(groupsOf(saturatedIssueFeed.groups, "receipt")).toHaveLength(1);
+
     const filtered = project([
       tool("filtered", "get_resource", {
         resource: deployment,
@@ -1970,6 +2025,74 @@ describe("honest zero and partial-result states", () => {
         },
       },
     });
+  });
+
+  it("shows cluster-scoped admission changes with why each one is listed", () => {
+    const webhook = {
+      kind: "MutatingWebhookConfiguration",
+      apiVersion: "admissionregistration.k8s.io/v1",
+      name: "gatekeeper-mutating-webhook-configuration",
+      changeType: "add",
+      timestamp: "2026-09-02T09:55:00Z",
+      applicability: "applies",
+      applies_because:
+        "webhook mutation.gatekeeper.sh has a namespaceSelector matching namespace shop's labels and its rules cover namespaced resources",
+    };
+    const result = project([
+      tool("changes", "get_changes", {
+        changes: [],
+        clusterScopedChanges: {
+          kinds: ["MutatingWebhookConfiguration"],
+          window_seconds: 3600,
+          changes: [webhook],
+          not_listed: [
+            "ValidatingWebhookConfiguration policy (add at 2026-09-02T09:50:00Z)",
+          ],
+          incomplete: "Current webhook configurations are not cached.",
+        },
+      }),
+      tool("issues", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        cluster_scoped_changes: {
+          changes: [{ ...webhook, applies_because: "" }],
+        },
+      }),
+    ]);
+    const rows = groupsOf(result.groups, "changes").map(
+      (group) => group.latest.data,
+    );
+    expect(rows).toHaveLength(1);
+    const data = rows[0];
+    expect(data.type).toBe("changes");
+    if (data.type === "changes") {
+      expect(data.changes[0].summary).toBe(
+        "Applies: webhook mutation.gatekeeper.sh has a namespaceSelector matching namespace shop's labels and its rules cover namespaced resources",
+      );
+    }
+    expect(result.limitations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "Cluster-scoped admission changes",
+          kind: "truncated",
+        }),
+        expect.objectContaining({
+          source: "Cluster-scoped admission changes",
+          kind: "unknown",
+        }),
+      ]),
+    );
+    // A row without its reason is malformed, not silently shown.
+    expect(result.limitations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "Cluster-scoped admission changes",
+          message:
+            "Radar couldn't summarize this investigation step. Review it in Activity.",
+        }),
+      ]),
+    );
   });
 
   it("creates receipts only for confirmed complete zero-result reads", () => {

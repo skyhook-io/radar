@@ -176,6 +176,7 @@ type PreparedUpgrade struct {
 
 type preparedReleaseIdentity struct {
 	revision     int
+	namespace    string
 	status       release.Status
 	chartName    string
 	chartVersion string
@@ -251,6 +252,12 @@ func (c *Client) prepareCloudUpgradeWith(ctx context.Context, actionConfig *acti
 	if err := validateOfficialRadarRelease(current); err != nil {
 		return nil, err
 	}
+	// The workload, token Secret and permission checks below all assume the
+	// release runs where its history is stored.
+	if current.Namespace != "" && current.Namespace != request.Namespace {
+		return nil, fmt.Errorf("release %q keeps its Helm history in namespace %q but runs in %q; Cloud Connect can only adopt a Radar release kept in one namespace, so upgrade it with the tool that installed it",
+			request.ReleaseName, request.Namespace, current.Namespace)
+	}
 
 	loaded, exactVersion, err := c.resolvePreparedChart(ctx, &request, minimumStableVersion)
 	if err != nil {
@@ -263,6 +270,10 @@ func (c *Client) prepareCloudUpgradeWith(ctx context.Context, actionConfig *acti
 		return nil, err
 	}
 	request.Version = exactVersion
+	request.resolvedSource, err = c.installChartSource(&request)
+	if err != nil {
+		return nil, fmt.Errorf("record chart source: %w", err)
+	}
 	request.Values = cloudUpgradeValues(request.Values)
 
 	currentWorkload, err := preCloudDeploymentRef(current.Manifest, request.Namespace, request.ReleaseName)
@@ -363,13 +374,14 @@ func (p *PreparedUpgrade) Upgrade(ctx context.Context, values map[string]any) (*
 	if _, err := p.validateManifestWith(ctx, actionConfig, values); err != nil {
 		return nil, fmt.Errorf("final upgrade validation: %w", err)
 	}
-	if _, err := p.recheck(actionConfig); err != nil {
+	current, err := p.recheck(actionConfig)
+	if err != nil {
 		return nil, err
 	}
 
 	request := p.request
 	request.Values = cloudUpgradeValues(values)
-	upgrade := preparedUpgradeAction(actionConfig, p.request.Namespace)
+	upgrade := preparedUpgradeAction(actionConfig, &request, p.chart, current.Labels)
 	upgrade.Atomic = true
 	upgrade.CleanupOnFail = true
 	// Run synchronously. RunWithContext returns when ctx is cancelled while the
@@ -412,6 +424,7 @@ func (p *PreparedUpgrade) VerifyRolledBack(ctx context.Context) (bool, error) {
 func (i preparedReleaseIdentity) sameReleaseContent(actual preparedReleaseIdentity) bool {
 	return actual.status == release.StatusDeployed &&
 		i.status == release.StatusDeployed &&
+		actual.namespace == i.namespace &&
 		actual.chartName == i.chartName &&
 		actual.chartVersion == i.chartVersion &&
 		actual.appVersion == i.appVersion &&
@@ -462,8 +475,8 @@ func (p *PreparedUpgrade) recheck(actionConfig *action.Configuration) (*release.
 }
 
 func (i preparedReleaseIdentity) String() string {
-	return fmt.Sprintf("revision %d, status %s, chart %s %s, app %s, manifest %x, values %x",
-		i.revision, i.status, i.chartName, i.chartVersion, i.appVersion, i.manifestHash[:6], i.configHash[:6])
+	return fmt.Sprintf("revision %d, status %s, namespace %s, chart %s %s, app %s, manifest %x, values %x",
+		i.revision, i.status, i.namespace, i.chartName, i.chartVersion, i.appVersion, i.manifestHash[:6], i.configHash[:6])
 }
 
 func releaseIdentity(rel *release.Release) (preparedReleaseIdentity, error) {
@@ -477,6 +490,7 @@ func releaseIdentity(rel *release.Release) (preparedReleaseIdentity, error) {
 	}
 	identity.configHash = sha256.Sum256(configJSON)
 	identity.revision = rel.Version
+	identity.namespace = rel.Namespace
 	if rel.Info != nil {
 		identity.status = rel.Info.Status
 	}
@@ -489,16 +503,17 @@ func releaseIdentity(rel *release.Release) (preparedReleaseIdentity, error) {
 }
 
 func runServerUpgradeDryRun(ctx context.Context, actionConfig *action.Configuration, req *InstallRequest, loaded *chart.Chart) (*release.Release, error) {
-	upgrade := preparedUpgradeAction(actionConfig, req.Namespace)
+	upgrade := preparedUpgradeAction(actionConfig, req, loaded, nil)
 	upgrade.DryRun = true
 	upgrade.DryRunOption = "server"
 	upgrade.HideSecret = true
 	return upgrade.RunWithContext(ctx, req.ReleaseName, loaded, req.Values)
 }
 
-func preparedUpgradeAction(actionConfig *action.Configuration, namespace string) *action.Upgrade {
+func preparedUpgradeAction(actionConfig *action.Configuration, request *InstallRequest, loaded *chart.Chart, currentLabels map[string]string) *action.Upgrade {
 	upgrade := action.NewUpgrade(actionConfig)
-	upgrade.Namespace = namespace
+	upgrade.Namespace = request.Namespace
+	upgrade.Labels = boundChartSourceLabels(currentLabels, request.resolvedSource, loaded)
 	upgrade.Timeout = 120 * time.Second
 	upgrade.ResetThenReuseValues = true
 	return upgrade

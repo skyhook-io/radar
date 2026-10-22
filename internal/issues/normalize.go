@@ -167,6 +167,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		Reason:               reason,
 		Message:              p.Message,
 		RawMessage:           p.RawMessage,
+		MessageSource:        p.MessageSource,
 		Cause:                cause,
 		Action:               action,
 		ConditionalCleanup:   cleanup,
@@ -198,6 +199,12 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 			message += fmt.Sprintf(" Showing %d of %d Pod links.", len(refs), evidence.PodCount)
 		}
 		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleContext, Facts: []issuesapi.DiagnosticFact{{Type: factNodeStartupCorroboration, Message: message, Refs: refs}}}
+	}
+	if reason == p.Reason {
+		if ctx := networkPolicyIsolationContext(p); ctx != nil {
+			iss.DiagnosticContext = ctx
+			iss.AffectedRefs = p.AffectedRefs
+		}
 	}
 	if p.OwnerKind != "" {
 		// Prefer the owner group resolved at detection (carries the real group
@@ -244,3 +251,9 @@ func classifyIssue(i *Issue) {
 // ---------------------------------------------------------------------------
 // Filter + sort helpers
 // ---------------------------------------------------------------------------
+
+// TimingSummary recomputes an issue's timing_summary from its current timing
+// fields, for callers that revise them after compose.
+func TimingSummary(i Issue) string {
+	return timingSummary(i)
+}

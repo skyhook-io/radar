@@ -16,7 +16,9 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
@@ -765,6 +767,10 @@ func (p *CacheProvider) ListDynamic(gvr schema.GroupVersionResource, namespace s
 	return p.dynamic.List(gvr, namespace)
 }
 
+func (p *CacheProvider) DynamicNamespaceSynced(gvr schema.GroupVersionResource, namespace string) bool {
+	return p.dynamic != nil && p.dynamic.IsNamespaceSynced(gvr, namespace)
+}
+
 // ListDynamicAllNamespaces unions the GVR's cached objects across every watched
 // scope. Safe only on the cluster-wide-intent path (the caller has already
 // confirmed no namespace filter, which the handler only leaves empty for
@@ -819,19 +825,55 @@ func (p *CacheProvider) karpenterResourceDiscovery(group, kind string) karpenter
 func (p *CacheProvider) karpenterResources(group, kind string) karpenterResourceInventory {
 	coverage := p.karpenterResourceDiscovery(group, kind)
 	if coverage != karpenterCoverageAuthoritative || p.dynamic == nil {
-		return karpenterResourceInventory{Coverage: coverage}
+		inventory := karpenterResourceInventory{Coverage: coverage}
+		if coverage == karpenterCoverageUnknown && p.discovery != nil && p.discovery.GroupHadPartialDiscovery(group) {
+			inventory.Gap = issuesapi.UncheckedReasonReadFailed
+		}
+		return inventory
 	}
 	apiResource, ok := p.discovery.GetResourceWithGroup(kind, group)
 	if !ok {
 		return karpenterResourceInventory{Coverage: karpenterCoverageUnknown}
 	}
 	gvr := schema.GroupVersionResource{Group: apiResource.Group, Version: apiResource.Version, Resource: apiResource.Name}
-	if err := p.dynamic.EnsureWatching(gvr); err != nil || !p.dynamic.IsSynced(gvr) {
-		return karpenterResourceInventory{GVR: gvr, Coverage: karpenterCoverageUnknown}
+	unknown := karpenterResourceInventory{GVR: gvr, Coverage: karpenterCoverageUnknown}
+	if err := p.dynamic.EnsureWatching(gvr); err != nil {
+		// Radar's own identity being denied the kind is a configuration
+		// choice (the chart's Karpenter collection is off), not a failure.
+		if p.dynamic.Observation(gvr).State != k8score.DynamicObservationDenied {
+			unknown.Gap = issuesapi.UncheckedReasonReadFailed
+		}
+		return unknown
+	}
+	if !p.dynamic.IsSynced(gvr) {
+		unknown.Gap = issuesapi.UncheckedReasonSyncPending
+		if p.dynamic.Observation(gvr).ReasonCode == "sync_stalled" {
+			unknown.Gap = issuesapi.UncheckedReasonSyncFailed
+		}
+		return unknown
 	}
 	items, err := p.dynamic.List(gvr, "")
 	if err != nil {
-		return karpenterResourceInventory{GVR: gvr, Coverage: karpenterCoverageUnknown}
+		unknown.Gap = issuesapi.UncheckedReasonReadFailed
+		return unknown
 	}
 	return karpenterResourceInventory{GVR: gvr, Items: items, Coverage: karpenterCoverageAuthoritative}
+}
+
+func (p *CacheProvider) cnpgInstancePods(cluster *unstructured.Unstructured) ([]*corev1.Pod, bool) {
+	ns := cluster.GetNamespace()
+	if p == nil || p.cache == nil || p.cache.Pods() == nil || !p.cache.IsKindReady("pods") || !p.cache.KindCoversNamespace("pods", ns) {
+		return nil, false
+	}
+	candidates, err := p.cache.Pods().Pods(ns).List(labels.SelectorFromSet(labels.Set{"cnpg.io/cluster": cluster.GetName()}))
+	if err != nil {
+		return nil, false
+	}
+	var pods []*corev1.Pod
+	for _, pod := range candidates {
+		if cnpg.IsInstancePod(pod, ns, cluster.GetName(), cluster.GetUID()) {
+			pods = append(pods, pod)
+		}
+	}
+	return pods, true
 }

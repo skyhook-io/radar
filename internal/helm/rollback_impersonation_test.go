@@ -1,6 +1,7 @@
 package helm
 
 import (
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -27,7 +28,7 @@ func TestRollbackWithProgressAsUser_Impersonates(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{settings: cli.New(), restConfig: &rest.Config{Host: srv.URL}}
-	if err := c.RollbackWithProgressAsUser("team-a", "web", 1, "alice", []string{"radar:idp:team-a"}, nil); err == nil {
+	if err := c.RollbackWithProgressAsUser("team-a", "web", 1, &pkgauth.User{Username: "alice", Groups: []string{"radar:idp:team-a"}}, nil); err == nil {
 		t.Fatal("rollback succeeded against a server that forbids everything")
 	}
 

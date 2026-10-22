@@ -19,11 +19,8 @@ import (
 // returning ("", nil) when no user is present (auth disabled / local binary).
 // The *AsUser Helm methods treat empty username as "use the SA identity",
 // so callers can thread this straight through.
-func userFromContext(ctx context.Context) (string, []string) {
-	if user := pkgauth.UserFromContext(ctx); user != nil {
-		return user.Username, user.Groups
-	}
-	return "", nil
+func userFromContext(ctx context.Context) *pkgauth.User {
+	return pkgauth.UserFromContext(ctx)
 }
 
 // Helm tool input types
@@ -45,15 +42,20 @@ type getHelmReleaseInput struct {
 func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input listHelmReleasesInput) (*mcp.CallToolResult, any, error) {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
+		// The Helm client is set up once the cluster has connected; before
+		// that, "no releases found" would be a false absence.
+		if err := requireConnected(); err != nil {
+			return nil, nil, err
+		}
 		return nil, nil, fmt.Errorf("helm is not available (no releases found or helm not installed)")
 	}
 
-	username, groups := userFromContext(ctx)
+	user := userFromContext(ctx)
 	namespaces := resolveHelmListNamespaces(ctx, input.Namespace)
 	if namespaces != nil && len(namespaces) == 0 {
 		return toJSONResult([]helm.HelmRelease{})
 	}
-	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, username, groups)
+	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, user)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -87,11 +89,16 @@ func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
 func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input getHelmReleaseInput) (*mcp.CallToolResult, any, error) {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
+		// The Helm client is set up once the cluster has connected; before
+		// that, "no releases found" would be a false absence.
+		if err := requireConnected(); err != nil {
+			return nil, nil, err
+		}
 		return nil, nil, fmt.Errorf("helm is not available (no releases found or helm not installed)")
 	}
 
-	username, groups := userFromContext(ctx)
-	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, username, groups)
+	user := userFromContext(ctx)
+	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user)
 	if err != nil {
 		return nil, nil, fmt.Errorf("release %s/%s not found: %w", input.Namespace, input.Name, err)
 	}
@@ -148,7 +155,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	includes := parseIncludes(input.Include)
 
 	if includes["values"] {
-		values, err := helmClient.GetValuesAsUser(input.Namespace, input.Name, false, username, groups)
+		values, err := helmClient.GetValuesAsUser(input.Namespace, input.Name, false, user)
 		if err != nil {
 			log.Printf("[mcp] Failed to get values for %s/%s: %v", input.Namespace, input.Name, err)
 			result["valuesError"] = err.Error()
@@ -171,7 +178,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 			result["diffError"] = errMsg
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
-			diff, err := helmClient.GetManifestDiffAsUserRedacted(input.Namespace, input.Name, rev1, rev2, username, groups)
+			diff, err := helmClient.GetManifestDiffAsUserRedacted(input.Namespace, input.Name, rev1, rev2, user)
 			if err != nil {
 				log.Printf("[mcp] Failed to get manifest diff for %s/%s: %v", input.Namespace, input.Name, err)
 				result["diffError"] = err.Error()
@@ -185,7 +192,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 			result["valuesDiffError"] = errMsg
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
-			diff, err := helmClient.GetValuesDiffAsUserRedacted(input.Namespace, input.Name, rev1, rev2, false, username, groups)
+			diff, err := helmClient.GetValuesDiffAsUserRedacted(input.Namespace, input.Name, rev1, rev2, false, user)
 			if err != nil {
 				log.Printf("[mcp] Failed to get values diff for %s/%s: %v", input.Namespace, input.Name, err)
 				result["valuesDiffError"] = err.Error()
@@ -200,7 +207,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 			result["notesDiffError"] = errMsg
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
-			diff, err := helmClient.GetNotesDiffAsUser(input.Namespace, input.Name, rev1, rev2, username, groups)
+			diff, err := helmClient.GetNotesDiffAsUser(input.Namespace, input.Name, rev1, rev2, user)
 			if err != nil {
 				log.Printf("[mcp] Failed to get notes diff for %s/%s: %v", input.Namespace, input.Name, err)
 				result["notesDiffError"] = err.Error()
@@ -215,7 +222,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 			result["resourceDiffError"] = errMsg
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
-			diff, err := helmClient.GetResourceDiffAsUser(input.Namespace, input.Name, rev1, rev2, username, groups)
+			diff, err := helmClient.GetResourceDiffAsUser(input.Namespace, input.Name, rev1, rev2, user)
 			if err != nil {
 				log.Printf("[mcp] Failed to get resource diff for %s/%s: %v", input.Namespace, input.Name, err)
 				result["resourceDiffError"] = err.Error()

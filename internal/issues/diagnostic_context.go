@@ -231,10 +231,13 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 		var b diagnosticContextBuilder
 		i := &out[idx]
 		if i.DiagnosticContext != nil {
+			// Facts set from the detection itself; the rest is rebuilt here.
 			for _, fact := range i.DiagnosticContext.Facts {
-				if fact.Type == factNodeStartupCorroboration {
+				switch fact.Type {
+				case factNodeStartupCorroboration:
 					b.add(issuesapi.DiagnosticRoleContext, fact)
-					break
+				case factNetworkPolicyIsolates:
+					b.add(issuesapi.DiagnosticRoleCandidate, fact)
 				}
 			}
 		}

@@ -105,6 +105,7 @@ function mergeWorkflowArguments(base: any, overlay: any): any {
 }
 
 interface BatchExecutionProps {
+  leadContent?: ReactNode
   kind: string
   apiKind: string
   namespace: string
@@ -116,9 +117,11 @@ interface BatchExecutionProps {
   onSwitchToLogs?: () => void
   onSwitchToTimeline?: () => void
   onNavigateToResource?: (resource: ResourceNavigationTarget) => void
+  /** The view's namespace selection; narrows a cluster-scoped template's runs. */
+  viewNamespaces?: string[]
 }
 
-export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource }: BatchExecutionProps) {
+export function BatchExecutionFullscreen({ leadContent, kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource, viewNamespaces }: BatchExecutionProps) {
   const scheduled = SCHEDULED_KINDS.has(kind)
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
   const jobSetRoot = isJobSetV1Alpha2(resource)
@@ -127,7 +130,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   const debouncedSearch = useDebouncedValue(runSearch, 250, value => value === '')
   const [roleFilter, setRoleFilter] = useState('')
   const memberOptions = { role: roleFilter, search: debouncedSearch, state: runFilter, selected: selectedRunKey }
-  const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped, ...(jobSetRoot ? memberOptions : {}) })
+  const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped, namespaces: viewNamespaces, ownerUID: kind === 'CronJob' ? resource.metadata?.uid : undefined, ...(jobSetRoot ? memberOptions : {}) })
   const resourcesQuery = useJobSetResources(namespace, name, jobSetRoot ? resource.metadata?.uid : undefined, memberOptions)
   const memberCollection = runsQuery.data?.collection === 'members'
   const memberShell = memberCollection || (!runsQuery.data && jobSetRoot)
@@ -251,12 +254,18 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
       : 'Radar could not load retained runs.'
 
   if (runsQuery.isLoading && !jobSetRoot) {
-    return <FetchResult loading className="h-full" />
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        {leadContent && <div className="p-4">{leadContent}</div>}
+        <FetchResult loading className="min-h-0 flex-1" />
+      </div>
+    )
   }
 
   if (runsQuery.error && !jobSetRoot) {
     return (
-      <div className="p-4">
+      <div className="space-y-4 p-4">
+        {leadContent && <div className="space-y-4">{leadContent}</div>}
         <EmptyState
           tone="neutral"
           variant="card"
@@ -339,6 +348,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
 
       <main className="min-w-0 flex-1 overflow-auto">
         <div className="space-y-4 p-4">
+          {leadContent && <div className="space-y-4">{leadContent}</div>}
           {jobSetRoot && (
             <section className="rounded-lg border border-theme-border bg-theme-surface p-4" aria-label="JobSet overview">
               <JobSetRenderer data={resource} mode="overview" shownMemberCounts={shownMemberCounts} onSelectRole={memberCollection ? selectRole : undefined} />
@@ -560,7 +570,7 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
   const definition = executionDefinitionSummary(kind, resource)
   if (kind === 'CronJob') {
     return {
-      state: spec.suspend ? 'Suspended' : (status.active?.length ?? 0) > 0 ? 'Active' : 'Scheduled',
+      state: spec.suspend ? 'Suspended' : (status.active?.length ?? 0) > 0 ? 'Active' : 'Enabled',
       stateTone: spec.suspend ? 'warning' : 'info',
       schedule: spec.schedule,
       concurrency: spec.concurrencyPolicy || 'Allow',
@@ -570,7 +580,8 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
       facts: [
         ['Last schedule', status.lastScheduleTime ? formatTimeAgo(status.lastScheduleTime) : 'Never'],
         ['Last success', status.lastSuccessfulTime ? formatTimeAgo(status.lastSuccessfulTime) : 'Never'],
-        ['Starting deadline', spec.startingDeadlineSeconds ? `${spec.startingDeadlineSeconds}s` : 'None'],
+        ['Time zone', spec.timeZone ?? 'Controller local time (zone not reported)'],
+        ['Starting deadline', spec.startingDeadlineSeconds != null ? `${spec.startingDeadlineSeconds}s` : 'None'],
       ],
       definition,
     }

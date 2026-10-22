@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/finalizers"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -43,7 +44,7 @@ type gitopsRequest struct {
 // namespace's resources. False means handlers should short-circuit with an
 // empty success response (see the per-handler empty value).
 func (g *gitopsRequest) HasNamespaceAccess() bool {
-	return !noNamespaceAccess(g.AllowedNamespaces)
+	return !readscope.NoNamespaceAccess(g.AllowedNamespaces)
 }
 
 // parseGitOpsRequest pulls the GitOps URL params and runs the namespace
@@ -59,7 +60,7 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 	}
 	if namespace != "" {
 		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
 			return nil, false
 		}
@@ -97,13 +98,13 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 // firing /tree + /insights, or the in-flight 2s polling, all share a single
 // build. Topology is a deterministic projection of the informer cache, so
 // the short TTL has no semantic effect.
-func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, error) {
+func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, error) {
 	opts := topology.DefaultBuildOptions()
 	opts.Namespaces = req.AllowedNamespaces
 	opts.IncludeReplicaSets = true
 	opts.ForRelationshipCache = true
 
-	topo, err := s.topoMemo.Get(opts, func() (*topology.Topology, error) {
+	topo, err := s.topoMemo.GetScoped(req.Cache.Generation(), opts, func() (*topology.Topology, error) {
 		return topology.NewBuilder(k8s.NewTopologyResourceProvider(req.Cache)).
 			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())).
 			Build(opts)
@@ -114,8 +115,11 @@ func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gito
 
 	return gitopstree.NewBuilder(req.Cache, topo).
 		WithAllowedNamespaces(req.AllowedNamespaces).
+		WithReadCheck(func(ref gitopstree.ResourceRef) bool {
+			return s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false)
+		}).
 		WithUnknownKindMatcher(func(err error) bool { return errors.Is(err, k8s.ErrUnknownDynamicKind) }).
-		Build(ctx, req.Kind, req.Namespace, req.Name, req.Group)
+		Build(r.Context(), req.Kind, req.Namespace, req.Name, req.Group)
 }
 
 // writeGitOpsBuildError maps tree-build errors to HTTP status codes.
@@ -166,7 +170,7 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 // it (and its once-per-request issue-engine composition) instead of building
 // a second one.
 func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, *insightsResolver, error) {
-	tree, root, err := s.buildGitOpsTree(r.Context(), req)
+	tree, root, err := s.buildGitOpsTree(r, req)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -193,7 +197,9 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 // Only meaningful in appTree mode. Cached and throttled by the manager. A
 // nil health with a nil error is "no answer and nothing to tell the user":
 // nothing is configured and the install doesn't serve anonymous reads, so
-// the caller falls through to Radar's own read quietly. With the
+// the caller falls through to Radar's own read quietly. While a connection
+// is being made it returns *argoHealthPending (with no notice when nothing
+// is configured), so the page asks again. With the
 // integration configured, the failure comes back in the user's words — they
 // set the connection up for this, and the page should say it isn't
 // delivering rather than silently show Radar's read.
@@ -211,11 +217,38 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 		}
 		return nil, errors.New("this cluster's saved integration settings need review in Settings")
 	}
+	if errors.Is(err, argocd.ErrConnecting) {
+		pending := &argoHealthPending{}
+		if argocd.IsConfigured() {
+			pending.notice = argoAPIHealthFailure(err, argocd.TokenSet())
+		}
+		return nil, pending
+	}
 	if !argocd.IsConfigured() {
 		return nil, nil
 	}
+	// A read that got no answer (possibly served from the failure cache) will
+	// be retried even if another read has since cleared the shared failure
+	// flag, so this page asks again too.
+	if argocd.ReadMayRecover(err) {
+		// Say why it failed, and have the page ask again so it recovers
+		// when the retry connects.
+		return nil, &argoHealthPending{notice: argoAPIHealthFailure(err, argocd.TokenSet()), retrying: true}
+	}
 	return nil, errors.New(argoAPIHealthFailure(err, argocd.TokenSet()))
 }
+
+// argoHealthPending: Radar is connecting to argocd-server in the background,
+// and the page should ask again. notice is what to tell a user who
+// configured the integration (empty when they didn't, since they set
+// nothing up to wait for). retrying: a connect failed and is being retried;
+// notice is that failure, shown as one.
+type argoHealthPending struct {
+	notice   string
+	retrying bool
+}
+
+func (p *argoHealthPending) Error() string { return p.notice }
 
 // argoAPIHealthFailure is the clause the notice appends to "Radar couldn't
 // read Argo's per-resource health from your Argo CD server".
@@ -226,12 +259,16 @@ func argoAPIHealthFailure(err error, tokenSet bool) string {
 			return "the token isn't accepted for this application"
 		}
 		return "it requires a token"
-	case errors.Is(err, argoapi.ErrNotFound):
-		return "it doesn't know this application"
+	case errors.Is(err, argocd.ErrConnecting):
+		return "the connection is still being set up"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "the request timed out"
 	case errors.Is(err, argocd.ErrUnreachable):
+		// Before ErrNotFound: a URL that 404s on /api/version is not an Argo
+		// CD server, which is not the same as Argo not knowing the app.
 		return "the server couldn't be reached"
+	case errors.Is(err, argoapi.ErrNotFound):
+		return "it doesn't know this application"
 	}
 	// Anything else (a 500, a body that didn't parse) is still a configured
 	// connection that didn't deliver; an empty clause would read as nothing
@@ -258,6 +295,16 @@ func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, ro
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	health, err := fetch(ctx, root.GetNamespace(), root.GetName())
+	var pending *argoHealthPending
+	if errors.As(err, &pending) {
+		tree.HealthAPIError = pending.notice
+		if pending.retrying {
+			tree.HealthAPIRetrying = true
+		} else {
+			tree.HealthAPIPending = true
+		}
+		return false
+	}
 	if err != nil {
 		tree.HealthAPIError = err.Error()
 		return false
@@ -381,34 +428,9 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 	}
 	insight := gitopsinsights.Build(root, tree, resolver)
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
-	insight = s.filterGitOpsInsightForUser(r, req, insight)
-	// The resource-diff / revision-metadata affordances pull manifests from the
-	// Argo CD API server. Offer them only for Argo roots where a diff can
-	// actually be served — gate on the app's managed-resources call (the diff's
-	// own data source, 15s-cached and shared with the diff endpoint), NOT just
-	// IsConfigured() or the userinfo probe. A configured-but-rejected token, or a
-	// scope-limited token that authenticates yet 403s on managed-resources, would
-	// otherwise advertise per-row diffs that all fail — one integration problem
-	// rendered as N dead-ends. ArgoConfigured is surfaced separately so the UI can
-	// offer Connect vs. check Settings. Cost: one managed-resources round-trip per
-	// viewed app per 15s cache window, whose result the per-row diffs then reuse.
+	insight = s.filterGitOpsInsightForUser(r, req, insight, tree)
 	if insight.Summary.Tool == "argocd" {
-		insight.Capabilities.ArgoConfigured = argocd.IsConfigured()
-		if _, connected := argocd.Get(); connected {
-			if _, err := argocd.ManagedResourcesCached(r.Context(), argoapi.ManagedResourcesQuery{
-				AppNamespace: req.Namespace,
-				AppName:      req.Name,
-			}); err == nil {
-				// Revision metadata is about the Git source, so it's available for
-				// any connected app. The deep diff reads destination-cluster
-				// manifests, which Radar's local SARs can only authorize when the
-				// Application deploys in-cluster — a remote hub-spoke destination is
-				// gated off here (and refused by the diff endpoint) so we never
-				// offer a diff Radar can't authorize.
-				insight.Capabilities.RevisionMetadataAvailable = true
-				insight.Capabilities.ArgoDiffAvailable = isInClusterDestination(root)
-			}
-		}
+		setArgoCapabilities(r.Context(), req.Namespace, req.Name, root, &insight.Capabilities)
 		if insight.Capabilities.ArgoConfigured {
 			// Best-effort: surface a broken Git repo connection (a top hidden cause
 			// of stuck syncs) as an Issue. Never fails insights if the Argo call errors.
@@ -416,6 +438,44 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, insight)
+}
+
+// setArgoCapabilities fills the Argo CD API affordances of an Argo root's
+// insight. The resource-diff / revision-metadata affordances pull manifests
+// from the Argo CD API server. Offer them only for Argo roots where a diff can
+// actually be served — gate on the app's managed-resources call (the diff's
+// own data source, 15s-cached and shared with the diff endpoint), NOT just
+// IsConfigured() or the userinfo probe. A configured-but-rejected token, or a
+// scope-limited token that authenticates yet 403s on managed-resources, would
+// otherwise advertise per-row diffs that all fail — one integration problem
+// rendered as N dead-ends. ArgoConfigured is surfaced separately so the UI can
+// offer Connect vs. check Settings. Cost: one managed-resources round-trip per
+// viewed app per 15s cache window, whose result the per-row diffs then reuse.
+func setArgoCapabilities(ctx context.Context, namespace, name string, root *unstructured.Unstructured, caps *gitopsinsights.Capabilities) {
+	caps.ArgoConfigured = argocd.IsConfigured()
+	diffReady := false
+	if _, connected := argocd.Get(); connected {
+		if _, err := argocd.ManagedResourcesCached(ctx, argoapi.ManagedResourcesQuery{
+			AppNamespace: namespace,
+			AppName:      name,
+		}); err == nil {
+			diffReady = true
+			// Revision metadata is about the Git source, so it's available for
+			// any connected app. The deep diff reads destination-cluster
+			// manifests, which Radar's local SARs can only authorize when the
+			// Application deploys in-cluster — a remote hub-spoke destination is
+			// gated off here (and refused by the diff endpoint) so we never
+			// offer a diff Radar can't authorize.
+			caps.RevisionMetadataAvailable = true
+			caps.ArgoDiffAvailable = isInClusterDestination(root)
+		}
+	}
+	// Read after the managed-resources call: a failure there may just have
+	// started a re-check the page should wait out. Retrying is process-wide
+	// (another app's failed read sets it too), so only a page whose own diff
+	// isn't ready is asked to poll for it.
+	caps.ArgoConnecting = argocd.Connecting()
+	caps.ArgoRetrying = caps.ArgoConfigured && !diffReady && argocd.Retrying()
 }
 
 // managedScanKinds is the set of K8s kinds /api/gitops/managed-resources
@@ -554,7 +614,7 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 	nsFilter := strings.TrimSpace(r.URL.Query().Get("namespace"))
 
 	allowedNamespaces := s.getUserNamespaces(r, nil)
-	if noNamespaceAccess(allowedNamespaces) {
+	if readscope.NoNamespaceAccess(allowedNamespaces) {
 		// Caller has no namespace access — return a tree with just the
 		// synthetic root + a warning. Mirrors handleGitOpsTree's behavior
 		// rather than 403'ing so the frontend can render an honest empty state.
@@ -672,7 +732,7 @@ func (s *Server) filterGitOpsTreeForUser(r *http.Request, req *gitopsRequest, tr
 	}
 	keep := make(map[string]bool, len(tree.Nodes))
 	for _, node := range tree.Nodes {
-		allowed := node.Role == gitopstree.RoleRoot || s.canAccessGitOpsRef(r, req, node.Ref.Group, node.Ref.Kind, node.Ref.Namespace, node.Ref.Name, false)
+		allowed := node.Role == gitopstree.RoleRoot || node.Remote && node.Role == gitopstree.RoleDeclared || s.canAccessGitOpsRef(r, req, node.Ref.Group, node.Ref.Kind, node.Ref.Namespace, node.Ref.Name, false)
 		keep[node.ID] = allowed
 	}
 	filteredNodes := make([]gitopstree.Node, 0, len(tree.Nodes))
@@ -713,11 +773,22 @@ func (s *Server) filterGitOpsTreeForUser(r *http.Request, req *gitopsRequest, tr
 	return &out
 }
 
-func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest, insight gitopsinsights.Insight) gitopsinsights.Insight {
+func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest, insight gitopsinsights.Insight, tree *gitopstree.ResourceTree) gitopsinsights.Insight {
 	if auth.UserFromContext(r.Context()) == nil {
 		return insight
 	}
 	changed := false
+	remoteDeclarations := make(map[gitopsinsights.Ref]bool)
+	if tree != nil {
+		for _, node := range tree.Nodes {
+			if node.Remote && node.Role == gitopstree.RoleDeclared {
+				remoteDeclarations[gitopsinsights.Ref{Group: node.Ref.Group, Kind: node.Ref.Kind, Namespace: node.Ref.Namespace, Name: node.Ref.Name}] = true
+			}
+		}
+	}
+	canAccess := func(ref gitopsinsights.Ref) bool {
+		return remoteDeclarations[ref] || s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false)
+	}
 
 	// Allocate fresh slices rather than the `[:0]` in-place pattern.
 	// `insight` is value-received, so its slice *headers* are local copies,
@@ -727,7 +798,7 @@ func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest,
 	// cost is negligible compared to the JSON encode that follows.
 	changes := make([]gitopsinsights.Change, 0, len(insight.Changes))
 	for _, change := range insight.Changes {
-		if s.canAccessGitOpsRef(r, req, change.Ref.Group, change.Ref.Kind, change.Ref.Namespace, change.Ref.Name, false) {
+		if canAccess(change.Ref) {
 			changes = append(changes, change)
 		} else {
 			changed = true
@@ -737,13 +808,13 @@ func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest,
 
 	plan := make([]gitopsinsights.PlanItem, 0, len(insight.Plan))
 	for _, item := range insight.Plan {
-		if !s.canAccessGitOpsRef(r, req, item.Ref.Group, item.Ref.Kind, item.Ref.Namespace, item.Ref.Name, false) {
+		if !canAccess(item.Ref) {
 			changed = true
 			continue
 		}
 		blockedBy := make([]gitopsinsights.Ref, 0, len(item.BlockedBy))
 		for _, ref := range item.BlockedBy {
-			if s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false) {
+			if canAccess(ref) {
 				blockedBy = append(blockedBy, ref)
 			} else {
 				changed = true
@@ -762,10 +833,20 @@ func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest,
 		}
 		refs := make([]gitopsinsights.Ref, 0, len(issue.Refs))
 		for _, ref := range issue.Refs {
-			if s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false) {
+			if canAccess(ref) {
 				refs = append(refs, ref)
 			} else {
 				changed = true
+			}
+		}
+		if len(refs) < len(issue.Refs) && gitopsinsights.IsFluxBlockerCondition(issue) {
+			// The root's own condition stays; the cause was quoted from the
+			// object the caller can't read.
+			issue.Cause = ""
+			if len(refs) == 0 {
+				issue.Refs = nil
+				issues = append(issues, issue)
+				continue
 			}
 		}
 		if len(refs) == 0 {
@@ -817,10 +898,20 @@ func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, 
 			return false
 		}
 		allowed := s.getUserNamespaces(r, []string{name})
-		return !noNamespaceAccess(allowed)
+		return !readscope.NoNamespaceAccess(allowed)
 	}
 	if namespace != "" {
-		return namespaceAllowedForGitOps(req.AllowedNamespaces, namespace)
+		if !namespaceAllowedForGitOps(req.AllowedNamespaces, namespace) {
+			return false
+		}
+		if kind == "PodGroup" && group == "" {
+			return s.canRead(r, "", "pods", namespace, "get")
+		}
+		gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
+		// Unknown discovery is not a permission denial. The dynamic getter
+		// returns unknown-kind rather than local metadata for an unserved kind,
+		// and remote inventory declarations must remain available for Hub merge.
+		return resource == "" || s.canRead(r, gvrGroup, resource, namespace, "get")
 	}
 	if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group); clusterScoped {
 		return s.canRead(r, gvrGroup, gvrResource, "", "list")

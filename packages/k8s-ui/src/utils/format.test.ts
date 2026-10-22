@@ -41,6 +41,15 @@ describe('parseMemoryToBytes', () => {
     expect(parseMemoryToBytes('1P')).toBe(1000 ** 5)
     expect(parseMemoryToBytes('1E')).toBe(1000 ** 6)
   })
+
+  // The API server keeps a quoted exponent quantity as written, and defaults a
+  // request from it the same way ("1e9" limit → "500e6" request).
+  it('parses decimal-exponent quantities', () => {
+    expect(parseMemoryToBytes('1e9')).toBe(1e9)
+    expect(parseMemoryToBytes('500e6')).toBe(5e8)
+    expect(parseMemoryToBytes('1E3')).toBe(1000)
+    expect(formatMemoryString('1e9')).toBe('954 MiB')
+  })
 })
 
 describe('parseQuantityToNumber', () => {

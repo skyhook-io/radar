@@ -113,6 +113,9 @@ type podRowSpec struct {
 	NodeName       string            `json:"nodeName,omitempty"`
 	Containers     []podRowContainer `json:"containers,omitempty"`
 	InitContainers []podRowContainer `json:"initContainers,omitempty"`
+	// Pod-level budget (PodLevelResources): the CPU/Mem column checks which
+	// requests/limits it sets.
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 type podRowContainer struct {
@@ -161,6 +164,7 @@ func summarizePodRow(p *corev1.Pod) any {
 			NodeName:       p.Spec.NodeName,
 			Containers:     summaryContainers(p.Spec.Containers, false),
 			InitContainers: summaryContainers(p.Spec.InitContainers, true),
+			Resources:      p.Spec.Resources,
 		},
 		Status: podRowStatus{
 			Phase:                 p.Status.Phase,

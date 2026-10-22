@@ -17,7 +17,7 @@ import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -449,7 +449,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const [l7Protocol, setL7Protocol] = useState<string>('all')
   const [l7Methods, setL7Methods] = useState<Set<string>>(new Set())
   const [l7StatusRanges, setL7StatusRanges] = useState<Set<string>>(new Set())
-  const [l7Verdicts, setL7Verdicts] = useState<Set<string>>(new Set())
+  const [verdicts, setVerdicts] = useState<Set<string>>(new Set())
   const [dnsPattern, setDnsPattern] = useState('')
   const [isConnecting, setIsConnecting] = useState(false)
   const [connectionError, setConnectionError] = useState<string | null>(null)
@@ -576,7 +576,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // all, so offering 2xx or a DNS box would be a dead end.
   const l7Capabilities = useMemo(() => {
     const statuses = new Set<string>()
-    const verdicts = new Set<string>()
+    const seenVerdicts = new Set<string>()
     let hasDNSQueries = false
     const methods = new Set<string>()
     for (const f of flowsData?.aggregated ?? []) {
@@ -586,7 +586,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       // An error rate is a 5xx signal even where no status distribution exists.
       if ((f.errorCount ?? 0) > 0) statuses.add('5xx')
       for (const [verdict, count] of Object.entries(f.verdictCounts ?? {})) {
-        if (count > 0) verdicts.add(verdict)
+        if (count > 0) seenVerdicts.add(verdict)
       }
       if (f.topDNSQueries?.length) hasDNSQueries = true
       for (const path of f.topHTTPPaths ?? []) {
@@ -595,7 +595,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     }
     return {
       availableStatusRanges: ['2xx', '3xx', '4xx', '5xx'].filter(b => statuses.has(b)),
-      availableVerdicts: ['forwarded', 'dropped', 'error'].filter(v => verdicts.has(v)),
+      availableVerdicts: verdictChoices(seenVerdicts),
       hasDNSQueries,
       availableHTTPMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].filter(m => methods.has(m)),
     }
@@ -611,8 +611,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     () => keepAvailable(l7Methods, l7Capabilities.availableHTTPMethods),
     [l7Methods, l7Capabilities.availableHTTPMethods])
   const activeVerdicts = useMemo(
-    () => keepAvailable(l7Verdicts, l7Capabilities.availableVerdicts),
-    [l7Verdicts, l7Capabilities.availableVerdicts])
+    () => keepAvailable(verdicts, l7Capabilities.availableVerdicts),
+    [verdicts, l7Capabilities.availableVerdicts])
   const activeDnsPattern = l7Capabilities.hasDNSQueries ? dnsPattern : ''
   const activeMinConnections = effectiveThreshold(minConnections, minConnectionsUnit, volumeUnit(isRateBased))
 
@@ -777,8 +777,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const toggleL7StatusRange = useCallback((range: string) => {
     setL7StatusRanges(prev => { const next = new Set(prev); if (next.has(range)) next.delete(range); else next.add(range); return next })
   }, [])
-  const toggleL7Verdict = useCallback((verdict: string) => {
-    setL7Verdicts(prev => { const next = new Set(prev); if (next.has(verdict)) next.delete(verdict); else next.add(verdict); return next })
+  const toggleVerdict = useCallback((verdict: string) => {
+    setVerdicts(prev => { const next = new Set(prev); if (next.has(verdict)) next.delete(verdict); else next.add(verdict); return next })
   }, [])
 
   // Toggle namespace visibility
@@ -1287,7 +1287,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     setL7Protocol('all')
     setL7Methods(new Set())
     setL7StatusRanges(new Set())
-    setL7Verdicts(new Set())
+    setVerdicts(new Set())
     setDnsPattern('')
   }, [chooseMinConnections])
 
@@ -1430,8 +1430,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
         onToggleL7Method={toggleL7Method}
         l7StatusRanges={l7StatusRanges}
         onToggleL7StatusRange={toggleL7StatusRange}
-        l7Verdicts={l7Verdicts}
-        onToggleL7Verdict={toggleL7Verdict}
+        verdicts={verdicts}
+        onToggleVerdict={toggleVerdict}
         dnsPattern={dnsPattern}
         setDnsPattern={setDnsPattern}
         namespaces={namespacesWithCounts}

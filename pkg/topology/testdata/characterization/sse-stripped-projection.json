@@ -1,0 +1,3353 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "analysisrun/shop/checkout-bg-1",
+        "kind": "AnalysisRun",
+        "name": "checkout-bg-1",
+        "status": "degraded",
+        "data": {
+          "apiVersion": "argoproj.io/v1alpha1",
+          "auditKey": "argoproj.io|AnalysisRun|shop|checkout-bg-1",
+          "message": "",
+          "namespace": "shop",
+          "phase": "Running",
+          "trigger": "background"
+        }
+      },
+      {
+        "id": "broker/shop/default",
+        "kind": "Broker",
+        "name": "default",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "eventing.knative.dev/v1",
+          "auditKey": "eventing.knative.dev|Broker|shop|default",
+          "labels": null,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "capicluster/capi/prod",
+        "kind": "CAPICluster",
+        "name": "prod",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "cluster.x-k8s.io/v1beta1",
+          "auditKey": "cluster.x-k8s.io|Cluster|capi|prod",
+          "labels": null,
+          "namespace": "capi",
+          "resourceKind": "Cluster"
+        }
+      },
+      {
+        "id": "certificate/shop/web-tls",
+        "kind": "Certificate",
+        "name": "web-tls",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "cert-manager.io/v1",
+          "auditKey": "cert-manager.io|Certificate|shop|web-tls",
+          "labels": null,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "configmap/shop/web-config",
+        "kind": "ConfigMap",
+        "name": "web-config",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|ConfigMap|shop|web-config",
+          "keys": 0,
+          "labels": null,
+          "namespace": "shop",
+          "resourceVersion": ""
+        }
+      },
+      {
+        "id": "configmap/team/web-config-mirror",
+        "kind": "ConfigMap",
+        "name": "web-config-mirror",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|ConfigMap|team|web-config-mirror",
+          "keys": 0,
+          "labels": null,
+          "namespace": "team",
+          "resourceVersion": ""
+        }
+      },
+      {
+        "id": "cronjob/shop/redis-backup",
+        "kind": "CronJob",
+        "name": "redis-backup",
+        "status": "degraded",
+        "data": {
+          "activeJobs": 0,
+          "apiVersion": "batch/v1",
+          "auditKey": "batch|CronJob|shop|redis-backup",
+          "labels": {
+            "helm.toolkit.fluxcd.io/name": "redis",
+            "helm.toolkit.fluxcd.io/namespace": "shop"
+          },
+          "lastScheduleTime": null,
+          "namespace": "shop",
+          "schedule": "0 3 * * *",
+          "suspend": false
+        }
+      },
+      {
+        "id": "cronjob/team/nightly",
+        "kind": "CronJob",
+        "name": "nightly",
+        "status": "degraded",
+        "data": {
+          "activeJobs": 0,
+          "apiVersion": "batch/v1",
+          "auditKey": "batch|CronJob|team|nightly",
+          "labels": null,
+          "lastScheduleTime": null,
+          "namespace": "team",
+          "schedule": "0 1 * * *",
+          "suspend": false
+        }
+      },
+      {
+        "id": "cronworkflow/team/report",
+        "kind": "CronWorkflow",
+        "name": "report",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "argoproj.io/v1alpha1",
+          "auditKey": "argoproj.io|CronWorkflow|team|report",
+          "labels": null,
+          "lastScheduledTime": "",
+          "namespace": "team",
+          "schedule": "0 2 * * *",
+          "suspend": false
+        }
+      },
+      {
+        "id": "daemonset/infra/agent",
+        "kind": "DaemonSet",
+        "name": "agent",
+        "status": "neutral",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|DaemonSet|infra|agent",
+          "labels": null,
+          "namespace": "infra",
+          "readyReplicas": 0,
+          "statusIssue": "",
+          "statusSummary": "",
+          "totalReplicas": 0
+        }
+      },
+      {
+        "id": "daemonset/shop/redis-exporter",
+        "kind": "DaemonSet",
+        "name": "redis-exporter",
+        "status": "neutral",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|DaemonSet|shop|redis-exporter",
+          "labels": {
+            "helm.toolkit.fluxcd.io/name": "redis",
+            "helm.toolkit.fluxcd.io/namespace": "shop"
+          },
+          "namespace": "shop",
+          "readyReplicas": 0,
+          "statusIssue": "",
+          "statusSummary": "",
+          "totalReplicas": 0
+        }
+      },
+      {
+        "id": "databaseclaim/shop/orders-db/demo.example.io",
+        "kind": "DatabaseClaim",
+        "name": "orders-db",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "demo.example.io/v1alpha1",
+          "auditKey": "demo.example.io|DatabaseClaim|shop|orders-db",
+          "labels": null,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "deployment/shop/api",
+        "kind": "Deployment",
+        "name": "api",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|api",
+          "labels": null,
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "deployment/shop/big",
+        "kind": "Deployment",
+        "name": "big",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|big",
+          "labels": null,
+          "namespace": "shop",
+          "readyReplicas": 7,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 7
+        }
+      },
+      {
+        "id": "deployment/shop/cart",
+        "kind": "Deployment",
+        "name": "cart",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|cart",
+          "labels": {
+            "kustomize.toolkit.fluxcd.io/name": "shop",
+            "kustomize.toolkit.fluxcd.io/namespace": "flux-system"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "deployment/shop/hello-00001-deployment",
+        "kind": "Deployment",
+        "name": "hello-00001-deployment",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|hello-00001-deployment",
+          "labels": null,
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "deployment/shop/legacy-helm",
+        "kind": "Deployment",
+        "name": "legacy-helm",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|legacy-helm",
+          "labels": {
+            "app.kubernetes.io/managed-by": "Helm"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "deployment/shop/redis",
+        "kind": "Deployment",
+        "name": "redis",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|redis",
+          "labels": {
+            "helm.toolkit.fluxcd.io/name": "redis",
+            "helm.toolkit.fluxcd.io/namespace": "shop"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "deployment/shop/redis-legacy",
+        "kind": "Deployment",
+        "name": "redis-legacy",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|redis-legacy",
+          "labels": {
+            "app.kubernetes.io/instance": "redis"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "deployment/shop/web",
+        "kind": "Deployment",
+        "name": "web",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|Deployment|shop|web",
+          "labels": {
+            "app.kubernetes.io/instance": "shop",
+            "argocd.argoproj.io/instance": "shop"
+          },
+          "namespace": "shop",
+          "readyReplicas": 2,
+          "statusIssue": "",
+          "statusSummary": "",
+          "strategy": "",
+          "totalReplicas": 2
+        }
+      },
+      {
+        "id": "gateway/shop/public",
+        "kind": "Gateway",
+        "name": "public",
+        "status": "unknown",
+        "data": {
+          "addresses": null,
+          "apiVersion": "gateway.networking.k8s.io/v1",
+          "auditKey": "gateway.networking.k8s.io|Gateway|shop|public",
+          "labels": null,
+          "listenerCount": 1,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "gatewayclass//envoy",
+        "kind": "GatewayClass",
+        "name": "envoy",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "gateway.networking.k8s.io/v1",
+          "auditKey": "gateway.networking.k8s.io|GatewayClass||envoy",
+          "labels": null
+        }
+      },
+      {
+        "id": "gitrepository/flux-system/repo",
+        "kind": "GitRepository",
+        "name": "repo",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "source.toolkit.fluxcd.io/v1",
+          "auditKey": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
+          "branch": "",
+          "labels": null,
+          "namespace": "flux-system",
+          "ready": "Unknown",
+          "url": "https://example.com/repo.git"
+        }
+      },
+      {
+        "id": "helmrelease/shop/redis",
+        "kind": "HelmRelease",
+        "name": "redis",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "helm.toolkit.fluxcd.io/v2",
+          "auditKey": "helm.toolkit.fluxcd.io|HelmRelease|shop|redis",
+          "chartName": "redis",
+          "chartVersion": "",
+          "labels": {
+            "kustomize.toolkit.fluxcd.io/name": "shop",
+            "kustomize.toolkit.fluxcd.io/namespace": "flux-system"
+          },
+          "namespace": "shop",
+          "ready": "Unknown",
+          "revision": 0
+        }
+      },
+      {
+        "id": "horizontalpodautoscaler/shop/web",
+        "kind": "HorizontalPodAutoscaler",
+        "name": "web",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "autoscaling/v2",
+          "auditKey": "autoscaling|HorizontalPodAutoscaler|shop|web",
+          "current": 0,
+          "labels": null,
+          "maxReplicas": 4,
+          "minReplicas": null,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "httproute/shop/web",
+        "kind": "HTTPRoute",
+        "name": "web",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "gateway.networking.k8s.io/v1",
+          "auditKey": "gateway.networking.k8s.io|HTTPRoute|shop|web",
+          "hostnames": null,
+          "labels": null,
+          "namespace": "shop",
+          "rulesCount": 1
+        }
+      },
+      {
+        "id": "ingress/shop/web",
+        "kind": "Ingress",
+        "name": "web",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "networking.k8s.io/v1",
+          "auditKey": "networking.k8s.io|Ingress|shop|web",
+          "hostname": "shop.example.com",
+          "labels": null,
+          "namespace": "shop",
+          "tls": true
+        }
+      },
+      {
+        "id": "inmemorychannel/shop/default-kne-trigger",
+        "kind": "InMemoryChannel",
+        "name": "default-kne-trigger",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "messaging.knative.dev/v1",
+          "auditKey": "messaging.knative.dev|InMemoryChannel|shop|default-kne-trigger",
+          "labels": null,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "job/shop/redis-migrate",
+        "kind": "Job",
+        "name": "redis-migrate",
+        "status": "unknown",
+        "data": {
+          "active": 0,
+          "apiVersion": "batch/v1",
+          "auditKey": "batch|Job|shop|redis-migrate",
+          "completionTime": "",
+          "completions": null,
+          "failed": 0,
+          "labels": {
+            "helm.toolkit.fluxcd.io/name": "redis",
+            "helm.toolkit.fluxcd.io/namespace": "shop"
+          },
+          "namespace": "shop",
+          "parallelism": null,
+          "startTime": "",
+          "succeeded": 0
+        }
+      },
+      {
+        "id": "job/team/nightly-28999",
+        "kind": "Job",
+        "name": "nightly-28999",
+        "status": "unknown",
+        "data": {
+          "active": 0,
+          "apiVersion": "batch/v1",
+          "auditKey": "batch|Job|team|nightly-28999",
+          "completionTime": "",
+          "completions": null,
+          "failed": 0,
+          "labels": {
+            "batch.kubernetes.io/job-name": "nightly-28999"
+          },
+          "namespace": "team",
+          "parallelism": null,
+          "startTime": "",
+          "succeeded": 0
+        }
+      },
+      {
+        "id": "job/team/nightly-29001",
+        "kind": "Job",
+        "name": "nightly-29001",
+        "status": "unknown",
+        "data": {
+          "active": 0,
+          "apiVersion": "batch/v1",
+          "auditKey": "batch|Job|team|nightly-29001",
+          "completionTime": "",
+          "completions": null,
+          "failed": 0,
+          "labels": {
+            "batch.kubernetes.io/job-name": "nightly-29001"
+          },
+          "namespace": "team",
+          "parallelism": null,
+          "startTime": "",
+          "succeeded": 0
+        }
+      },
+      {
+        "id": "job/team/queue-worker-abc",
+        "kind": "Job",
+        "name": "queue-worker-abc",
+        "status": "unknown",
+        "data": {
+          "active": 0,
+          "apiVersion": "batch/v1",
+          "auditKey": "batch|Job|team|queue-worker-abc",
+          "completionTime": "",
+          "completions": null,
+          "failed": 0,
+          "labels": {
+            "batch.kubernetes.io/job-name": "queue-worker-abc"
+          },
+          "namespace": "team",
+          "parallelism": null,
+          "startTime": "",
+          "succeeded": 0
+        }
+      },
+      {
+        "id": "knativeconfiguration/shop/hello",
+        "kind": "KnativeConfiguration",
+        "name": "hello",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "serving.knative.dev/v1",
+          "auditKey": "serving.knative.dev|Configuration|shop|hello",
+          "labels": null,
+          "namespace": "shop",
+          "resourceKind": "Configuration"
+        }
+      },
+      {
+        "id": "knativerevision/shop/hello-00001",
+        "kind": "KnativeRevision",
+        "name": "hello-00001",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "serving.knative.dev/v1",
+          "auditKey": "serving.knative.dev|Revision|shop|hello-00001",
+          "labels": null,
+          "namespace": "shop",
+          "resourceKind": "Revision"
+        }
+      },
+      {
+        "id": "knativeroute/shop/hello",
+        "kind": "KnativeRoute",
+        "name": "hello",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "serving.knative.dev/v1",
+          "auditKey": "serving.knative.dev|Route|shop|hello",
+          "labels": null,
+          "namespace": "shop",
+          "resourceKind": "Route"
+        }
+      },
+      {
+        "id": "knativeservice/shop/hello",
+        "kind": "KnativeService",
+        "name": "hello",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "serving.knative.dev/v1",
+          "auditKey": "serving.knative.dev|Service|shop|hello",
+          "labels": null,
+          "namespace": "shop",
+          "resourceKind": "Service"
+        }
+      },
+      {
+        "id": "kubeadmcontrolplane/capi/prod-cp",
+        "kind": "KubeadmControlPlane",
+        "name": "prod-cp",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "controlplane.cluster.x-k8s.io/v1beta1",
+          "auditKey": "controlplane.cluster.x-k8s.io|KubeadmControlPlane|capi|prod-cp",
+          "labels": null,
+          "namespace": "capi"
+        }
+      },
+      {
+        "id": "kustomization/flux-system/platform",
+        "kind": "Kustomization",
+        "name": "platform",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+          "auditKey": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|platform",
+          "labels": null,
+          "namespace": "flux-system",
+          "ready": "True",
+          "resourceCount": 1,
+          "sourceRef": "GitRepository/repo"
+        }
+      },
+      {
+        "id": "kustomization/flux-system/shop",
+        "kind": "Kustomization",
+        "name": "shop",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+          "auditKey": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|shop",
+          "labels": null,
+          "namespace": "flux-system",
+          "ready": "True",
+          "resourceCount": 2,
+          "sourceRef": "GitRepository/repo"
+        }
+      },
+      {
+        "id": "machine/capi/prod-md-abc-x",
+        "kind": "Machine",
+        "name": "prod-md-abc-x",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "cluster.x-k8s.io/v1beta1",
+          "auditKey": "cluster.x-k8s.io|Machine|capi|prod-md-abc-x",
+          "labels": null,
+          "namespace": "capi"
+        }
+      },
+      {
+        "id": "machinedeployment/capi/prod-md",
+        "kind": "MachineDeployment",
+        "name": "prod-md",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "cluster.x-k8s.io/v1beta1",
+          "auditKey": "cluster.x-k8s.io|MachineDeployment|capi|prod-md",
+          "labels": null,
+          "namespace": "capi"
+        }
+      },
+      {
+        "id": "machinepool/capi/prod-mp",
+        "kind": "MachinePool",
+        "name": "prod-mp",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "cluster.x-k8s.io/v1beta1",
+          "auditKey": "cluster.x-k8s.io|MachinePool|capi|prod-mp",
+          "labels": null,
+          "namespace": "capi"
+        }
+      },
+      {
+        "id": "machineset/capi/prod-md-abc",
+        "kind": "MachineSet",
+        "name": "prod-md-abc",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "cluster.x-k8s.io/v1beta1",
+          "auditKey": "cluster.x-k8s.io|MachineSet|capi|prod-md-abc",
+          "labels": null,
+          "namespace": "capi"
+        }
+      },
+      {
+        "id": "networkpolicy/shop/default-deny",
+        "kind": "NetworkPolicy",
+        "name": "default-deny",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "networking.k8s.io/v1",
+          "auditKey": "networking.k8s.io|NetworkPolicy|shop|default-deny",
+          "labels": null,
+          "matchesAllPods": true,
+          "namespace": "shop",
+          "policyTypes": []
+        }
+      },
+      {
+        "id": "node//node-a",
+        "kind": "Node",
+        "name": "node-a",
+        "status": "unknown",
+        "data": {
+          "auditKey": "|Node||node-a",
+          "instanceType": "",
+          "labels": {
+            "karpenter.sh/nodepool": "default"
+          },
+          "namespace": ""
+        }
+      },
+      {
+        "id": "node//node-b",
+        "kind": "Node",
+        "name": "node-b",
+        "status": "unknown",
+        "data": {
+          "auditKey": "|Node||node-b",
+          "instanceType": "",
+          "labels": {
+            "karpenter.sh/nodepool": "default"
+          },
+          "namespace": ""
+        }
+      },
+      {
+        "id": "nodeclaim//default-x1",
+        "kind": "NodeClaim",
+        "name": "default-x1",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "karpenter.sh/v1",
+          "auditKey": "karpenter.sh|NodeClaim||default-x1",
+          "labels": {
+            "karpenter.sh/nodepool": "default"
+          },
+          "namespace": ""
+        }
+      },
+      {
+        "id": "object//orders-db-config/kubernetes.crossplane.io",
+        "kind": "Object",
+        "name": "orders-db-config",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "kubernetes.crossplane.io/v1alpha2",
+          "auditKey": "kubernetes.crossplane.io|Object||orders-db-config",
+          "clusterScopedGroup": "kubernetes.crossplane.io",
+          "clusterScopedResource": "objects",
+          "labels": null,
+          "namespace": ""
+        }
+      },
+      {
+        "id": "persistentvolumeclaim/team/data-db-0",
+        "kind": "PersistentVolumeClaim",
+        "name": "data-db-0",
+        "status": "unknown",
+        "data": {
+          "accessModes": null,
+          "auditKey": "|PersistentVolumeClaim|team|data-db-0",
+          "labels": null,
+          "namespace": "team",
+          "phase": "",
+          "storage": "",
+          "storageClass": "standard"
+        }
+      },
+      {
+        "id": "pod/infra/agent-node-a",
+        "kind": "Pod",
+        "name": "agent-node-a",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|infra|agent-node-a",
+          "containers": 1,
+          "labels": {
+            "app": "agent"
+          },
+          "namespace": "infra",
+          "nodeName": "node-a",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/infra/agent-node-b",
+        "kind": "Pod",
+        "name": "agent-node-b",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|infra|agent-node-b",
+          "containers": 1,
+          "labels": {
+            "app": "agent"
+          },
+          "namespace": "infra",
+          "nodeName": "node-b",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/shop/api-6b7-a",
+        "kind": "Pod",
+        "name": "api-6b7-a",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|api-6b7-a",
+          "containers": 1,
+          "labels": {
+            "app": "api"
+          },
+          "namespace": "shop",
+          "nodeName": "node-a",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/shop/cart-5c6-a",
+        "kind": "Pod",
+        "name": "cart-5c6-a",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|cart-5c6-a",
+          "containers": 1,
+          "labels": {
+            "app": "cart",
+            "kustomize.toolkit.fluxcd.io/name": "platform",
+            "kustomize.toolkit.fluxcd.io/namespace": "flux-system"
+          },
+          "namespace": "shop",
+          "nodeName": "node-a",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/shop/checkout-abc-a",
+        "kind": "Pod",
+        "name": "checkout-abc-a",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|checkout-abc-a",
+          "containers": 1,
+          "labels": {
+            "app": "checkout"
+          },
+          "namespace": "shop",
+          "nodeName": "node-b",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/shop/payments-6d8f-a",
+        "kind": "Pod",
+        "name": "payments-6d8f-a",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|payments-6d8f-a",
+          "containers": 1,
+          "labels": {
+            "app": "payments",
+            "rollouts-pod-template-hash": "6d8f"
+          },
+          "namespace": "shop",
+          "nodeName": "node-b",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/shop/web-7d9f8-0",
+        "kind": "Pod",
+        "name": "web-7d9f8-0",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|web-7d9f8-0",
+          "containers": 1,
+          "labels": {
+            "app": "web"
+          },
+          "namespace": "shop",
+          "nodeName": "node-a",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/shop/web-7d9f8-1",
+        "kind": "Pod",
+        "name": "web-7d9f8-1",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|shop|web-7d9f8-1",
+          "containers": 1,
+          "labels": {
+            "app": "web"
+          },
+          "namespace": "shop",
+          "nodeName": "node-a",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/team/db-0",
+        "kind": "Pod",
+        "name": "db-0",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|team|db-0",
+          "containers": 1,
+          "labels": {
+            "app": "db"
+          },
+          "namespace": "team",
+          "nodeName": "node-b",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/team/nightly-29001-x",
+        "kind": "Pod",
+        "name": "nightly-29001-x",
+        "status": "neutral",
+        "data": {
+          "auditKey": "|Pod|team|nightly-29001-x",
+          "containers": 1,
+          "labels": {
+            "batch.kubernetes.io/job-name": "nightly-29001"
+          },
+          "namespace": "team",
+          "nodeName": "node-a",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/team/queue-worker-abc-x",
+        "kind": "Pod",
+        "name": "queue-worker-abc-x",
+        "status": "neutral",
+        "data": {
+          "auditKey": "|Pod|team|queue-worker-abc-x",
+          "containers": 1,
+          "labels": {
+            "batch.kubernetes.io/job-name": "queue-worker-abc"
+          },
+          "namespace": "team",
+          "nodeName": "node-b",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "pod/team/report-1700-main",
+        "kind": "Pod",
+        "name": "report-1700-main",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Pod|team|report-1700-main",
+          "containers": 1,
+          "labels": {
+            "workflows.argoproj.io/workflow": "report-1700"
+          },
+          "namespace": "team",
+          "nodeName": "node-b",
+          "phase": "Running",
+          "restarts": 0,
+          "statusIssue": ""
+        }
+      },
+      {
+        "id": "poddisruptionbudget/shop/web",
+        "kind": "PodDisruptionBudget",
+        "name": "web",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "policy/v1",
+          "auditKey": "policy|PodDisruptionBudget|shop|web",
+          "currentHealthy": 0,
+          "desiredHealthy": 0,
+          "disruptionsAllowed": 0,
+          "labels": null,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "podgroup-shop-app-big",
+        "kind": "PodGroup",
+        "name": "big",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|PodGroup|shop|big",
+          "degraded": 0,
+          "healthy": 7,
+          "namespace": "shop",
+          "ownerKind": "app",
+          "podCount": 7,
+          "pods": [
+            {
+              "containers": 1,
+              "name": "big-8f9-0",
+              "namespace": "shop",
+              "ownerIds": [
+                "replicaset/shop/big-8f9"
+              ],
+              "ownerKey": "shop/ReplicaSet/big-8f9",
+              "phase": "Running",
+              "restarts": 0,
+              "status": "healthy",
+              "statusIssue": ""
+            },
+            {
+              "containers": 1,
+              "name": "big-8f9-1",
+              "namespace": "shop",
+              "ownerIds": [
+                "replicaset/shop/big-8f9"
+              ],
+              "ownerKey": "shop/ReplicaSet/big-8f9",
+              "phase": "Running",
+              "restarts": 0,
+              "status": "healthy",
+              "statusIssue": ""
+            },
+            {
+              "containers": 1,
+              "name": "big-8f9-2",
+              "namespace": "shop",
+              "ownerIds": [
+                "replicaset/shop/big-8f9"
+              ],
+              "ownerKey": "shop/ReplicaSet/big-8f9",
+              "phase": "Running",
+              "restarts": 0,
+              "status": "healthy",
+              "statusIssue": ""
+            },
+            {
+              "containers": 1,
+              "name": "big-8f9-3",
+              "namespace": "shop",
+              "ownerIds": [
+                "replicaset/shop/big-8f9"
+              ],
+              "ownerKey": "shop/ReplicaSet/big-8f9",
+              "phase": "Running",
+              "restarts": 0,
+              "status": "healthy",
+              "statusIssue": ""
+            },
+            {
+              "containers": 1,
+              "name": "big-8f9-4",
+              "namespace": "shop",
+              "ownerIds": [
+                "replicaset/shop/big-8f9"
+              ],
+              "ownerKey": "shop/ReplicaSet/big-8f9",
+              "phase": "Running",
+              "restarts": 0,
+              "status": "healthy",
+              "statusIssue": ""
+            },
+            {
+              "containers": 1,
+              "name": "big-8f9-5",
+              "namespace": "shop",
+              "ownerIds": [
+                "replicaset/shop/big-8f9"
+              ],
+              "ownerKey": "shop/ReplicaSet/big-8f9",
+              "phase": "Running",
+              "restarts": 0,
+              "status": "healthy",
+              "statusIssue": ""
+            },
+            {
+              "containers": 1,
+              "name": "big-8f9-6",
+              "namespace": "shop",
+              "ownerIds": [
+                "replicaset/shop/big-8f9"
+              ],
+              "ownerKey": "shop/ReplicaSet/big-8f9",
+              "phase": "Running",
+              "restarts": 0,
+              "status": "healthy",
+              "statusIssue": ""
+            }
+          ],
+          "statusIssue": "",
+          "totalRestarts": 0,
+          "unhealthy": 0
+        }
+      },
+      {
+        "id": "replicaset/shop/api-6b7",
+        "kind": "ReplicaSet",
+        "name": "api-6b7",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|ReplicaSet|shop|api-6b7",
+          "labels": {
+            "app": "api"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "replicaset/shop/big-8f9",
+        "kind": "ReplicaSet",
+        "name": "big-8f9",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|ReplicaSet|shop|big-8f9",
+          "labels": {
+            "app": "big"
+          },
+          "namespace": "shop",
+          "readyReplicas": 7,
+          "totalReplicas": 7
+        }
+      },
+      {
+        "id": "replicaset/shop/cart-5c6",
+        "kind": "ReplicaSet",
+        "name": "cart-5c6",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|ReplicaSet|shop|cart-5c6",
+          "labels": {
+            "app": "cart"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "replicaset/shop/checkout-abc",
+        "kind": "ReplicaSet",
+        "name": "checkout-abc",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|ReplicaSet|shop|checkout-abc",
+          "labels": {
+            "app": "checkout"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "replicaset/shop/payments-6d8f",
+        "kind": "ReplicaSet",
+        "name": "payments-6d8f",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|ReplicaSet|shop|payments-6d8f",
+          "labels": {
+            "app": "payments",
+            "rollouts-pod-template-hash": "6d8f"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "rollout/shop/checkout",
+        "kind": "Rollout",
+        "name": "checkout",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "argoproj.io/v1alpha1",
+          "auditKey": "argoproj.io|Rollout|shop|checkout",
+          "labels": null,
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "strategy": "Canary",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "rollout/shop/payments",
+        "kind": "Rollout",
+        "name": "payments",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "argoproj.io/v1alpha1",
+          "auditKey": "argoproj.io|Rollout|shop|payments",
+          "labels": null,
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "strategy": "Canary",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "rollout/shop/redis-proxy",
+        "kind": "Rollout",
+        "name": "redis-proxy",
+        "status": "healthy",
+        "data": {
+          "apiVersion": "argoproj.io/v1alpha1",
+          "auditKey": "argoproj.io|Rollout|shop|redis-proxy",
+          "labels": {
+            "helm.toolkit.fluxcd.io/name": "redis",
+            "helm.toolkit.fluxcd.io/namespace": "shop"
+          },
+          "namespace": "shop",
+          "readyReplicas": 1,
+          "strategy": "Canary",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "scaledjob/team/queue-worker",
+        "kind": "ScaledJob",
+        "name": "queue-worker",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "keda.sh/v1alpha1",
+          "auditKey": "keda.sh|ScaledJob|team|queue-worker",
+          "labels": null,
+          "namespace": "team"
+        }
+      },
+      {
+        "id": "sealedsecret/team/db-creds",
+        "kind": "SealedSecret",
+        "name": "db-creds",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "bitnami.com/v1alpha1",
+          "auditKey": "bitnami.com|SealedSecret|team|db-creds",
+          "labels": null,
+          "namespace": "team",
+          "targetSecret": "db-creds"
+        }
+      },
+      {
+        "id": "service/shop/redis",
+        "kind": "Service",
+        "name": "redis",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Service|shop|redis",
+          "clusterIP": "",
+          "labels": {
+            "helm.toolkit.fluxcd.io/name": "redis",
+            "helm.toolkit.fluxcd.io/namespace": "shop"
+          },
+          "namespace": "shop",
+          "ports": [],
+          "type": ""
+        }
+      },
+      {
+        "id": "service/shop/web",
+        "kind": "Service",
+        "name": "web",
+        "status": "healthy",
+        "data": {
+          "auditKey": "|Service|shop|web",
+          "clusterIP": "",
+          "labels": null,
+          "namespace": "shop",
+          "ports": [
+            {
+              "port": 80,
+              "protocol": "",
+              "targetPort": "8080"
+            }
+          ],
+          "type": ""
+        }
+      },
+      {
+        "id": "statefulset/shop/redis-replica",
+        "kind": "StatefulSet",
+        "name": "redis-replica",
+        "status": "unhealthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|StatefulSet|shop|redis-replica",
+          "labels": {
+            "helm.toolkit.fluxcd.io/name": "redis",
+            "helm.toolkit.fluxcd.io/namespace": "shop"
+          },
+          "namespace": "shop",
+          "readyReplicas": 0,
+          "statusIssue": "",
+          "statusSummary": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "statefulset/team/db",
+        "kind": "StatefulSet",
+        "name": "db",
+        "status": "unhealthy",
+        "data": {
+          "apiVersion": "apps/v1",
+          "auditKey": "apps|StatefulSet|team|db",
+          "labels": null,
+          "namespace": "team",
+          "readyReplicas": 0,
+          "statusIssue": "",
+          "statusSummary": "",
+          "totalReplicas": 1
+        }
+      },
+      {
+        "id": "widget/shop/web-widget/example.io",
+        "kind": "Widget",
+        "name": "web-widget",
+        "status": "unknown",
+        "data": {
+          "apiVersion": "example.io/v1",
+          "auditKey": "example.io|Widget|shop|web-widget",
+          "labels": null,
+          "namespace": "shop"
+        }
+      },
+      {
+        "id": "workflow/team/report-1700",
+        "kind": "Workflow",
+        "name": "report-1700",
+        "status": "neutral",
+        "data": {
+          "apiVersion": "argoproj.io/v1alpha1",
+          "auditKey": "argoproj.io|Workflow|team|report-1700",
+          "finishedAt": "",
+          "labels": {
+            "workflows.argoproj.io/cron-workflow": "report"
+          },
+          "namespace": "team",
+          "phase": "Running",
+          "progress": "",
+          "startedAt": "",
+          "template": ""
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "broker/shop/default-to-inmemorychannel/shop/default-kne-trigger",
+        "source": "broker/shop/default",
+        "target": "inmemorychannel/shop/default-kne-trigger",
+        "type": "manages"
+      },
+      {
+        "id": "capicluster/capi/prod-to-kubeadmcontrolplane/capi/prod-cp",
+        "source": "capicluster/capi/prod",
+        "target": "kubeadmcontrolplane/capi/prod-cp",
+        "type": "manages"
+      },
+      {
+        "id": "capicluster/capi/prod-to-machinedeployment/capi/prod-md",
+        "source": "capicluster/capi/prod",
+        "target": "machinedeployment/capi/prod-md",
+        "type": "manages"
+      },
+      {
+        "id": "capicluster/capi/prod-to-machinepool/capi/prod-mp",
+        "source": "capicluster/capi/prod",
+        "target": "machinepool/capi/prod-mp",
+        "type": "manages"
+      },
+      {
+        "id": "configmap/shop/web-config-reflects-to-configmap/team/web-config-mirror",
+        "source": "configmap/shop/web-config",
+        "target": "configmap/team/web-config-mirror",
+        "type": "configures",
+        "label": "Reflects to"
+      },
+      {
+        "id": "configmap/shop/web-config-to-deployment/shop/web",
+        "source": "configmap/shop/web-config",
+        "target": "deployment/shop/web",
+        "type": "configures"
+      },
+      {
+        "id": "cronjob/team/nightly-to-job/team/nightly-28999",
+        "source": "cronjob/team/nightly",
+        "target": "job/team/nightly-28999",
+        "type": "manages"
+      },
+      {
+        "id": "cronjob/team/nightly-to-job/team/nightly-28999",
+        "source": "cronjob/team/nightly",
+        "target": "job/team/nightly-28999",
+        "type": "manages"
+      },
+      {
+        "id": "cronjob/team/nightly-to-job/team/nightly-29001",
+        "source": "cronjob/team/nightly",
+        "target": "job/team/nightly-29001",
+        "type": "manages"
+      },
+      {
+        "id": "cronjob/team/nightly-to-pod/team/nightly-29001-x-shortcut",
+        "source": "cronjob/team/nightly",
+        "target": "pod/team/nightly-29001-x",
+        "type": "manages",
+        "skipIfKindVisible": "Job"
+      },
+      {
+        "id": "cronworkflow/team/report-to-pod/team/report-1700-main-shortcut",
+        "source": "cronworkflow/team/report",
+        "target": "pod/team/report-1700-main",
+        "type": "manages",
+        "skipIfKindVisible": "Workflow"
+      },
+      {
+        "id": "cronworkflow/team/report-to-workflow/team/report-1700",
+        "source": "cronworkflow/team/report",
+        "target": "workflow/team/report-1700",
+        "type": "manages"
+      },
+      {
+        "id": "daemonset/infra/agent-to-pod/infra/agent-node-a",
+        "source": "daemonset/infra/agent",
+        "target": "pod/infra/agent-node-a",
+        "type": "manages"
+      },
+      {
+        "id": "daemonset/infra/agent-to-pod/infra/agent-node-b",
+        "source": "daemonset/infra/agent",
+        "target": "pod/infra/agent-node-b",
+        "type": "manages"
+      },
+      {
+        "id": "deployment/shop/api-to-replicaset/shop/api-6b7",
+        "source": "deployment/shop/api",
+        "target": "replicaset/shop/api-6b7",
+        "type": "manages"
+      },
+      {
+        "id": "deployment/shop/big-to-replicaset/shop/big-8f9",
+        "source": "deployment/shop/big",
+        "target": "replicaset/shop/big-8f9",
+        "type": "manages"
+      },
+      {
+        "id": "deployment/shop/cart-to-replicaset/shop/cart-5c6",
+        "source": "deployment/shop/cart",
+        "target": "replicaset/shop/cart-5c6",
+        "type": "manages"
+      },
+      {
+        "id": "deployment/shop/web-to-widget/shop/web-widget/example.io",
+        "source": "deployment/shop/web",
+        "target": "widget/shop/web-widget/example.io",
+        "type": "manages"
+      },
+      {
+        "id": "gateway/shop/public-to-httproute/shop/web",
+        "source": "gateway/shop/public",
+        "target": "httproute/shop/web",
+        "type": "routes-to"
+      },
+      {
+        "id": "gatewayclass//envoy-to-gateway/shop/public",
+        "source": "gatewayclass//envoy",
+        "target": "gateway/shop/public",
+        "type": "manages"
+      },
+      {
+        "id": "gitrepository/flux-system/repo-to-kustomization/flux-system/platform-configures",
+        "source": "gitrepository/flux-system/repo",
+        "target": "kustomization/flux-system/platform",
+        "type": "configures",
+        "label": "source"
+      },
+      {
+        "id": "gitrepository/flux-system/repo-to-kustomization/flux-system/shop-configures",
+        "source": "gitrepository/flux-system/repo",
+        "target": "kustomization/flux-system/shop",
+        "type": "configures",
+        "label": "source"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-cronjob/shop/redis-backup",
+        "source": "helmrelease/shop/redis",
+        "target": "cronjob/shop/redis-backup",
+        "type": "manages"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-daemonset/shop/redis-exporter",
+        "source": "helmrelease/shop/redis",
+        "target": "daemonset/shop/redis-exporter",
+        "type": "manages"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-deployment/shop/redis",
+        "source": "helmrelease/shop/redis",
+        "target": "deployment/shop/redis",
+        "type": "manages"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-deployment/shop/redis-legacy",
+        "source": "helmrelease/shop/redis",
+        "target": "deployment/shop/redis-legacy",
+        "type": "manages"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-job/shop/redis-migrate",
+        "source": "helmrelease/shop/redis",
+        "target": "job/shop/redis-migrate",
+        "type": "manages"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-rollout/shop/redis-proxy",
+        "source": "helmrelease/shop/redis",
+        "target": "rollout/shop/redis-proxy",
+        "type": "manages"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-service/shop/redis",
+        "source": "helmrelease/shop/redis",
+        "target": "service/shop/redis",
+        "type": "manages"
+      },
+      {
+        "id": "helmrelease/shop/redis-to-statefulset/shop/redis-replica",
+        "source": "helmrelease/shop/redis",
+        "target": "statefulset/shop/redis-replica",
+        "type": "manages"
+      },
+      {
+        "id": "horizontalpodautoscaler/shop/web-to-deployment/shop/web",
+        "source": "horizontalpodautoscaler/shop/web",
+        "target": "deployment/shop/web",
+        "type": "uses"
+      },
+      {
+        "id": "httproute/shop/web-to-service/shop/web",
+        "source": "httproute/shop/web",
+        "target": "service/shop/web",
+        "type": "routes-to"
+      },
+      {
+        "id": "ingress/shop/web-to-service/shop/web",
+        "source": "ingress/shop/web",
+        "target": "service/shop/web",
+        "type": "routes-to"
+      },
+      {
+        "id": "job/team/nightly-29001-to-pod/team/nightly-29001-x",
+        "source": "job/team/nightly-29001",
+        "target": "pod/team/nightly-29001-x",
+        "type": "manages"
+      },
+      {
+        "id": "job/team/queue-worker-abc-to-pod/team/queue-worker-abc-x",
+        "source": "job/team/queue-worker-abc",
+        "target": "pod/team/queue-worker-abc-x",
+        "type": "manages"
+      },
+      {
+        "id": "knativeconfiguration/shop/hello-to-knativerevision/shop/hello-00001",
+        "source": "knativeconfiguration/shop/hello",
+        "target": "knativerevision/shop/hello-00001",
+        "type": "manages"
+      },
+      {
+        "id": "knativerevision/shop/hello-00001-to-deployment/shop/hello-00001-deployment",
+        "source": "knativerevision/shop/hello-00001",
+        "target": "deployment/shop/hello-00001-deployment",
+        "type": "manages"
+      },
+      {
+        "id": "knativeservice/shop/hello-to-knativeconfiguration/shop/hello",
+        "source": "knativeservice/shop/hello",
+        "target": "knativeconfiguration/shop/hello",
+        "type": "manages"
+      },
+      {
+        "id": "knativeservice/shop/hello-to-knativeroute/shop/hello",
+        "source": "knativeservice/shop/hello",
+        "target": "knativeroute/shop/hello",
+        "type": "manages"
+      },
+      {
+        "id": "kustomization/flux-system/shop-to-deployment/shop/cart",
+        "source": "kustomization/flux-system/shop",
+        "target": "deployment/shop/cart",
+        "type": "manages"
+      },
+      {
+        "id": "machine/capi/prod-md-abc-x-to-node//node-a",
+        "source": "machine/capi/prod-md-abc-x",
+        "target": "node//node-a",
+        "type": "manages"
+      },
+      {
+        "id": "machinedeployment/capi/prod-md-to-machineset/capi/prod-md-abc",
+        "source": "machinedeployment/capi/prod-md",
+        "target": "machineset/capi/prod-md-abc",
+        "type": "manages"
+      },
+      {
+        "id": "machineset/capi/prod-md-abc-to-machine/capi/prod-md-abc-x",
+        "source": "machineset/capi/prod-md-abc",
+        "target": "machine/capi/prod-md-abc-x",
+        "type": "manages"
+      },
+      {
+        "id": "nodeclaim//default-x1-to-node//node-b",
+        "source": "nodeclaim//default-x1",
+        "target": "node//node-b",
+        "type": "manages"
+      },
+      {
+        "id": "poddisruptionbudget/shop/web-to-deployment/shop/web",
+        "source": "poddisruptionbudget/shop/web",
+        "target": "deployment/shop/web",
+        "type": "protects"
+      },
+      {
+        "id": "replicaset/shop/api-6b7-to-pod/shop/api-6b7-a",
+        "source": "replicaset/shop/api-6b7",
+        "target": "pod/shop/api-6b7-a",
+        "type": "manages"
+      },
+      {
+        "id": "replicaset/shop/big-8f9-to-podgroup-shop-app-big",
+        "source": "replicaset/shop/big-8f9",
+        "target": "podgroup-shop-app-big",
+        "type": "manages"
+      },
+      {
+        "id": "replicaset/shop/cart-5c6-to-pod/shop/cart-5c6-a",
+        "source": "replicaset/shop/cart-5c6",
+        "target": "pod/shop/cart-5c6-a",
+        "type": "manages"
+      },
+      {
+        "id": "replicaset/shop/checkout-abc-to-pod/shop/checkout-abc-a",
+        "source": "replicaset/shop/checkout-abc",
+        "target": "pod/shop/checkout-abc-a",
+        "type": "manages"
+      },
+      {
+        "id": "replicaset/shop/payments-6d8f-to-pod/shop/payments-6d8f-a",
+        "source": "replicaset/shop/payments-6d8f",
+        "target": "pod/shop/payments-6d8f-a",
+        "type": "manages"
+      },
+      {
+        "id": "rollout/shop/checkout-to-analysisrun/shop/checkout-bg-1",
+        "source": "rollout/shop/checkout",
+        "target": "analysisrun/shop/checkout-bg-1",
+        "type": "manages",
+        "label": "background"
+      },
+      {
+        "id": "rollout/shop/checkout-to-pod/shop/checkout-abc-a-shortcut-shop/checkout-abc",
+        "source": "rollout/shop/checkout",
+        "target": "pod/shop/checkout-abc-a",
+        "type": "manages",
+        "skipIfKindVisible": "ReplicaSet"
+      },
+      {
+        "id": "rollout/shop/checkout-to-replicaset/shop/checkout-abc",
+        "source": "rollout/shop/checkout",
+        "target": "replicaset/shop/checkout-abc",
+        "type": "manages"
+      },
+      {
+        "id": "rollout/shop/payments-to-pod/shop/payments-6d8f-a-shortcut-shop/payments-6d8f",
+        "source": "rollout/shop/payments",
+        "target": "pod/shop/payments-6d8f-a",
+        "type": "manages",
+        "skipIfKindVisible": "ReplicaSet"
+      },
+      {
+        "id": "rollout/shop/payments-to-replicaset/shop/payments-6d8f",
+        "source": "rollout/shop/payments",
+        "target": "replicaset/shop/payments-6d8f",
+        "type": "manages"
+      },
+      {
+        "id": "scaledjob/team/queue-worker-to-job/team/queue-worker-abc",
+        "source": "scaledjob/team/queue-worker",
+        "target": "job/team/queue-worker-abc",
+        "type": "manages"
+      },
+      {
+        "id": "scaledjob/team/queue-worker-to-pod/team/queue-worker-abc-x-shortcut",
+        "source": "scaledjob/team/queue-worker",
+        "target": "pod/team/queue-worker-abc-x",
+        "type": "manages",
+        "skipIfKindVisible": "Job"
+      },
+      {
+        "id": "service/shop/redis-to-deployment/shop/redis",
+        "source": "service/shop/redis",
+        "target": "deployment/shop/redis",
+        "type": "exposes"
+      },
+      {
+        "id": "service/shop/web-to-deployment/shop/web",
+        "source": "service/shop/web",
+        "target": "deployment/shop/web",
+        "type": "exposes"
+      },
+      {
+        "id": "statefulset/team/db-to-pod/team/db-0",
+        "source": "statefulset/team/db",
+        "target": "pod/team/db-0",
+        "type": "manages"
+      },
+      {
+        "id": "workflow/team/report-1700-to-pod/team/report-1700-main",
+        "source": "workflow/team/report-1700",
+        "target": "pod/team/report-1700-main",
+        "type": "manages"
+      }
+    ],
+    "crdDiscoveryStatus": "ready",
+    "estimatedNodes": 28
+  },
+  "roots": [
+    {
+      "root": "apps|DaemonSet|infra|agent",
+      "relationships": {
+        "children": [
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"}
+        ]
+      }
+    },
+    {
+      "root": "apps|DaemonSet|shop|redis-exporter",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|api",
+      "relationships": {
+        "children": [
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"}
+        ],
+        "pods": [
+          {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"}
+        ]
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|big",
+      "relationships": {
+        "children": [
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
+        ]
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|cart",
+      "relationships": {
+        "owner": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        "children": [
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"}
+        ],
+        "pods": [
+          {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"}
+        ],
+        "managedBy": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"}
+        ]
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|hello-00001-deployment",
+      "relationships": {
+        "owner": {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"},
+        "managedBy": [
+          {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|legacy-helm",
+      "relationships": {
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "legacy"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "legacy"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "legacy-helm", "group": "apps"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|redis",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "services": [
+          {"kind": "Service", "namespace": "shop", "name": "redis"}
+        ],
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|redis-legacy",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|Deployment|shop|web",
+      "relationships": {
+        "children": [
+          {"kind": "Widget", "namespace": "shop", "name": "web-widget", "group": "example.io"}
+        ],
+        "services": [
+          {"kind": "Service", "namespace": "shop", "name": "web"}
+        ],
+        "ingresses": [
+          {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+        ],
+        "routes": [
+          {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+        ],
+        "configRefs": [
+          {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
+        ],
+        "scalers": [
+          {"kind": "HorizontalPodAutoscaler", "namespace": "shop", "name": "web", "group": "autoscaling"}
+        ],
+        "pdbs": [
+          {"kind": "PodDisruptionBudget", "namespace": "shop", "name": "web", "group": "policy"}
+        ],
+        "managedBy": [
+          {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Widget", "namespace": "shop", "name": "web-widget", "group": "example.io"}
+        ]
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|api-6b7",
+      "relationships": {
+        "owner": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"},
+        "children": [
+          {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"}
+        ],
+        "managedBy": [
+          {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"}
+        ]
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|big-8f9",
+      "relationships": {
+        "owner": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+        "managedBy": [
+          {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|cart-5c6",
+      "relationships": {
+        "owner": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+        "children": [
+          {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"}
+        ],
+        "managedBy": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"}
+        ]
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|checkout-abc",
+      "relationships": {
+        "owner": {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"},
+        "children": [
+          {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"}
+        ],
+        "managedBy": [
+          {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"}
+        ]
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|payments-6d8f",
+      "relationships": {
+        "owner": {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"},
+        "children": [
+          {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"}
+        ],
+        "managedBy": [
+          {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"}
+        ]
+      }
+    },
+    {
+      "root": "apps|ReplicaSet|shop|web-7d9f8",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "web-7d9f8", "group": "apps"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|StatefulSet|shop|redis-replica",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "apps|StatefulSet|team|db",
+      "relationships": {
+        "children": [
+          {"kind": "Pod", "namespace": "team", "name": "db-0"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "team", "name": "db-0"}
+        ]
+      }
+    },
+    {
+      "root": "argoproj.io|Application|argocd|shop",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|CronWorkflow|team|report",
+      "relationships": {
+        "children": [
+          {"kind": "Pod", "namespace": "team", "name": "report-1700-main"},
+          {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "team", "name": "report-1700-main"},
+          {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"}
+        ]
+      }
+    },
+    {
+      "root": "argoproj.io|Rollout|shop|checkout",
+      "relationships": {
+        "children": [
+          {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"},
+          {"kind": "AnalysisRun", "namespace": "shop", "name": "checkout-bg-1", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "checkout-abc", "group": "apps"},
+          {"kind": "AnalysisRun", "namespace": "shop", "name": "checkout-bg-1", "group": "argoproj.io"}
+        ]
+      }
+    },
+    {
+      "root": "argoproj.io|Rollout|shop|payments",
+      "relationships": {
+        "children": [
+          {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "payments-6d8f", "group": "apps"}
+        ]
+      }
+    },
+    {
+      "root": "argoproj.io|Rollout|shop|redis-proxy",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "argoproj.io|Workflow|team|report-1700",
+      "relationships": {
+        "owner": {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"},
+        "children": [
+          {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
+        ],
+        "managedBy": [
+          {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Workflow", "namespace": "team", "name": "report-1700", "group": "argoproj.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
+        ]
+      }
+    },
+    {
+      "root": "autoscaling|HorizontalPodAutoscaler|shop|web",
+      "relationships": {
+        "scaleTarget": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "HorizontalPodAutoscaler", "namespace": "shop", "name": "web", "group": "autoscaling"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|CronJob|shop|redis-backup",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|CronJob|team|nightly",
+      "relationships": {
+        "children": [
+          {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"},
+          {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"},
+          {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"},
+          {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"},
+          {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"},
+          {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"}
+        ]
+      }
+    },
+    {
+      "root": "batch|Job|shop|redis-migrate",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|Job|team|nightly-28999",
+      "relationships": {
+        "owner": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "managedBy": [
+          {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "team", "name": "nightly-28999", "group": "batch"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "batch|Job|team|nightly-29001",
+      "relationships": {
+        "owner": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "children": [
+          {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
+        ],
+        "managedBy": [
+          {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "team", "name": "nightly-29001", "group": "batch"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
+        ]
+      }
+    },
+    {
+      "root": "batch|Job|team|queue-worker-abc",
+      "relationships": {
+        "owner": {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"},
+        "children": [
+          {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"}
+        ],
+        "managedBy": [
+          {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"}
+        ]
+      }
+    },
+    {
+      "root": "bitnami.com|SealedSecret|team|db-creds",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cert-manager.io|Certificate|shop|web-tls",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Certificate", "namespace": "shop", "name": "web-tls", "group": "cert-manager.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|Cluster|capi|prod",
+      "relationships": {
+        "children": [
+          {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
+          {"kind": "MachinePool", "namespace": "capi", "name": "prod-mp", "group": "cluster.x-k8s.io"},
+          {"kind": "KubeadmControlPlane", "namespace": "capi", "name": "prod-cp", "group": "controlplane.cluster.x-k8s.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Node", "namespace": "", "name": "node-a"},
+          {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"},
+          {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
+          {"kind": "MachinePool", "namespace": "capi", "name": "prod-mp", "group": "cluster.x-k8s.io"},
+          {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"},
+          {"kind": "KubeadmControlPlane", "namespace": "capi", "name": "prod-cp", "group": "controlplane.cluster.x-k8s.io"}
+        ]
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|MachineDeployment|capi|prod-md",
+      "relationships": {
+        "owner": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+        "children": [
+          {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"}
+        ],
+        "managedBy": [
+          {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Node", "namespace": "", "name": "node-a"},
+          {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"},
+          {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"}
+        ]
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|MachinePool|capi|prod-mp",
+      "relationships": {
+        "owner": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+        "managedBy": [
+          {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "MachinePool", "namespace": "capi", "name": "prod-mp", "group": "cluster.x-k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|MachineSet|capi|prod-md-abc",
+      "relationships": {
+        "owner": {"kind": "MachineDeployment", "namespace": "capi", "name": "prod-md", "group": "cluster.x-k8s.io"},
+        "children": [
+          {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"}
+        ],
+        "managedBy": [
+          {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Node", "namespace": "", "name": "node-a"},
+          {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"}
+        ]
+      }
+    },
+    {
+      "root": "cluster.x-k8s.io|Machine|capi|prod-md-abc-x",
+      "relationships": {
+        "owner": {"kind": "MachineSet", "namespace": "capi", "name": "prod-md-abc", "group": "cluster.x-k8s.io"},
+        "children": [
+          {"kind": "Node", "namespace": "", "name": "node-a"}
+        ],
+        "managedBy": [
+          {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Node", "namespace": "", "name": "node-a"}
+        ]
+      }
+    },
+    {
+      "root": "controlplane.cluster.x-k8s.io|KubeadmControlPlane|capi|prod-cp",
+      "relationships": {
+        "owner": {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"},
+        "managedBy": [
+          {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "KubeadmControlPlane", "namespace": "capi", "name": "prod-cp", "group": "controlplane.cluster.x-k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "demo.example.io|DatabaseClaim|shop|orders-db",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "demo.example.io|XDatabase||orders-db-xr",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "eventing.knative.dev|Broker|shop|default",
+      "relationships": {
+        "children": [
+          {"kind": "InMemoryChannel", "namespace": "shop", "name": "default-kne-trigger", "group": "messaging.knative.dev"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "InMemoryChannel", "namespace": "shop", "name": "default-kne-trigger", "group": "messaging.knative.dev"}
+        ]
+      }
+    },
+    {
+      "root": "example.io|Widget|shop|web-widget",
+      "relationships": {
+        "owner": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        "managedBy": [
+          {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Widget", "namespace": "shop", "name": "web-widget", "group": "example.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|GatewayClass||envoy",
+      "relationships": {
+        "children": [
+          {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
+        ]
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|Gateway|shop|public",
+      "relationships": {
+        "owner": {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"},
+        "backends": [
+          {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+        ],
+        "managedBy": [
+          {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "gateway.networking.k8s.io|HTTPRoute|shop|web",
+      "relationships": {
+        "gateways": [
+          {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
+        ],
+        "backends": [
+          {"kind": "Service", "namespace": "shop", "name": "web"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "helm.toolkit.fluxcd.io|HelmRelease|shop|redis",
+      "relationships": {
+        "children": [
+          {"kind": "Service", "namespace": "shop", "name": "redis"},
+          {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
+          {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
+          {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
+          {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
+          {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
+          {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
+          {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+        ],
+        "managedBy": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Service", "namespace": "shop", "name": "redis"},
+          {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
+          {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
+          {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
+          {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
+          {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
+          {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
+          {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+        ]
+      }
+    },
+    {
+      "root": "karpenter.sh|NodeClaim||default-x1",
+      "relationships": {
+        "children": [
+          {"kind": "Node", "namespace": "", "name": "node-b"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Node", "namespace": "", "name": "node-b"}
+        ]
+      }
+    },
+    {
+      "root": "karpenter.sh|NodePool||default",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "keda.sh|ScaledJob|team|queue-worker",
+      "relationships": {
+        "children": [
+          {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
+          {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
+          {"kind": "Job", "namespace": "team", "name": "queue-worker-abc", "group": "batch"}
+        ]
+      }
+    },
+    {
+      "root": "kubernetes.crossplane.io|Object||orders-db-config",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Object", "namespace": "", "name": "orders-db-config", "group": "kubernetes.crossplane.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|platform",
+      "relationships": {
+        "configRefs": [
+          {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+        ],
+        "dependencies": [
+          {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "kustomize.toolkit.fluxcd.io|Kustomization|flux-system|shop",
+      "relationships": {
+        "children": [
+          {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"}
+        ],
+        "configRefs": [
+          {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+        ],
+        "dependencies": [
+          {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
+          {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+          {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"}
+        ]
+      }
+    },
+    {
+      "root": "messaging.knative.dev|InMemoryChannel|shop|default-kne-trigger",
+      "relationships": {
+        "owner": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"},
+        "managedBy": [
+          {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "InMemoryChannel", "namespace": "shop", "name": "default-kne-trigger", "group": "messaging.knative.dev"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "networking.k8s.io|Ingress|shop|web",
+      "relationships": {
+        "backends": [
+          {"kind": "Service", "namespace": "shop", "name": "web"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "networking.k8s.io|NetworkPolicy|shop|default-deny",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "policy|PodDisruptionBudget|shop|web",
+      "relationships": {
+        "protects": [
+          {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "PodDisruptionBudget", "namespace": "shop", "name": "web", "group": "policy"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "serving.knative.dev|Configuration|shop|hello",
+      "relationships": {
+        "owner": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "children": [
+          {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"}
+        ],
+        "managedBy": [
+          {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"},
+          {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"}
+        ]
+      }
+    },
+    {
+      "root": "serving.knative.dev|Revision|shop|hello-00001",
+      "relationships": {
+        "owner": {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "children": [
+          {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"}
+        ],
+        "managedBy": [
+          {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"}
+        ]
+      }
+    },
+    {
+      "root": "serving.knative.dev|Route|shop|hello",
+      "relationships": {
+        "owner": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "managedBy": [
+          {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "serving.knative.dev|Service|shop|hello",
+      "relationships": {
+        "children": [
+          {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+          {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+        "rootResolved": true,
+        "dependents": [
+          {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"},
+          {"kind": "Configuration", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"},
+          {"kind": "Revision", "namespace": "shop", "name": "hello-00001", "group": "serving.knative.dev"},
+          {"kind": "Route", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
+        ]
+      }
+    },
+    {
+      "root": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
+      "relationships": {
+        "consumers": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        ],
+        "dependents": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|ConfigMap|shop|web-config",
+      "relationships": {
+        "reflection": {
+          "mirrors": [
+            {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"}
+          ]
+        },
+        "consumers": [
+          {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"},
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+          {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|ConfigMap|team|web-config-mirror",
+      "relationships": {
+        "reflection": {
+          "source": {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
+        },
+        "configRefs": [
+          {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "ConfigMap", "namespace": "team", "name": "web-config-mirror"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Node||node-a",
+      "relationships": {
+        "owner": {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"},
+        "pods": [
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"},
+          {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+          {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
+        ],
+        "managedBy": [
+          {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Node||node-b",
+      "relationships": {
+        "owner": {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"},
+        "pods": [
+          {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"},
+          {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
+          {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
+          {"kind": "Pod", "namespace": "team", "name": "db-0"},
+          {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
+          {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
+        ],
+        "managedBy": [
+          {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|PersistentVolumeClaim|team|data-db-0",
+      "relationships": {
+        "children": [
+          {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"}
+        ],
+        "consumers": [
+          {"kind": "Pod", "namespace": "team", "name": "db-0"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|PersistentVolume||pv-db-0",
+      "relationships": {
+        "configRefs": [
+          {"kind": "StorageClass", "namespace": "", "name": "standard", "group": "storage.k8s.io"}
+        ],
+        "consumers": [
+          {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|infra|agent-node-a",
+      "relationships": {
+        "owner": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "managedBy": [
+          {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "infra", "name": "agent-node-a"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|infra|agent-node-b",
+      "relationships": {
+        "owner": {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "managedBy": [
+          {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "DaemonSet", "namespace": "infra", "name": "agent", "group": "apps"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "infra", "name": "agent-node-b"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|api-6b7-a",
+      "relationships": {
+        "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
+        "deployment": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "managedBy": [
+          {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-0",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-1",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-2",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-3",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-4",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-5",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|big-8f9-6",
+      "relationships": {
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|cart-5c6-a",
+      "relationships": {
+        "owner": {"kind": "ReplicaSet", "namespace": "shop", "name": "cart-5c6", "group": "apps"},
+        "deployment": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "managedBy": [
+          {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|checkout-abc-a",
+      "relationships": {
+        "owner": {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "managedBy": [
+          {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "checkout", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "checkout-abc-a"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|payments-6d8f-a",
+      "relationships": {
+        "owner": {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "managedBy": [
+          {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "Rollout", "namespace": "shop", "name": "payments", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "payments-6d8f-a"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|web-7d9f8-0",
+      "relationships": {
+        "configRefs": [
+          {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
+        ],
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|shop|web-7d9f8-1",
+      "relationships": {
+        "configRefs": [
+          {"kind": "ConfigMap", "namespace": "shop", "name": "web-config"}
+        ],
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-1"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|db-0",
+      "relationships": {
+        "owner": {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"},
+        "storageRefs": [
+          {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
+        ],
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "managedBy": [
+          {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "db-0"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|nightly-29001-x",
+      "relationships": {
+        "owner": {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+        "managedBy": [
+          {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "CronJob", "namespace": "team", "name": "nightly", "group": "batch"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|queue-worker-abc-x",
+      "relationships": {
+        "owner": {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "managedBy": [
+          {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "ScaledJob", "namespace": "team", "name": "queue-worker", "group": "keda.sh"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "queue-worker-abc-x"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Pod|team|report-1700-main",
+      "relationships": {
+        "owner": {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"},
+        "node": {"kind": "Node", "namespace": "", "name": "node-b"},
+        "managedBy": [
+          {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "CronWorkflow", "namespace": "team", "name": "report", "group": "argoproj.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Pod", "namespace": "team", "name": "report-1700-main"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Secret|shop|web-secret",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Secret", "namespace": "shop", "name": "web-secret"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Secret|shop|web-tls",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Secret", "namespace": "shop", "name": "web-tls"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Secret|team|db-creds",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Secret", "namespace": "team", "name": "db-creds"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Service|shop|redis",
+      "relationships": {
+        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
+        "backends": [
+          {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"}
+        ],
+        "managedBy": [
+          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+        ]
+      },
+      "managedBy": [
+        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      ],
+      "deletePreview": {
+        "root": {"kind": "Service", "namespace": "shop", "name": "redis"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|Service|shop|web",
+      "relationships": {
+        "ingresses": [
+          {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+        ],
+        "routes": [
+          {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
+        ],
+        "backends": [
+          {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
+        ]
+      },
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Service", "namespace": "shop", "name": "web"},
+        "rootResolved": true,
+        "dependents": []
+      }
+    }
+  ]
+}

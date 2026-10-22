@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -28,6 +29,7 @@ type Options struct {
 	ManifestParseErrors                  int
 	DeprecatedAPIRequests                []upgradereadiness.DeprecatedAPIRequest
 	DeprecatedAPIMetricsWindow           string
+	DeprecatedAPIMetricsFailure          upgradereadiness.APIMetricsFailure
 	PrometheusRules                      []*unstructured.Unstructured
 	PrometheusRulesInstalled             bool
 	PrometheusRulesDiscoveryAvailable    bool
@@ -77,6 +79,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 		ManifestParseErrors:                  opts.ManifestParseErrors,
 		DeprecatedAPIRequests:                opts.DeprecatedAPIRequests,
 		DeprecatedAPIMetricsWindow:           opts.DeprecatedAPIMetricsWindow,
+		DeprecatedAPIMetricsFailure:          opts.DeprecatedAPIMetricsFailure,
 		PrometheusRules:                      opts.PrometheusRules,
 		PrometheusRulesInstalled:             opts.PrometheusRulesInstalled,
 		PrometheusRulesDiscoveryAvailable:    opts.PrometheusRulesDiscoveryAvailable,
@@ -106,7 +109,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 	var events []*corev1.Event
 	if includesUpgradeEvidenceKind(opts.CurrentVersion, opts.TargetVersion, string(k8score.Events)) {
 		eventNamespaces := cachedEvidenceNamespaceScope(cache, string(k8score.Events), namespaces, opts.EventNamespaces)
-		if !noNamespaceAccess(eventNamespaces) {
+		if !readscope.NoNamespaceAccess(eventNamespaces) {
 			events = audit.ListNamespaced(cache.Events(), eventNamespaces)
 		}
 		input.CacheScopedKinds = recordEvidenceNamespaceScope(input.CacheScopedKinds, string(k8score.Events), eventNamespaces, namespaces)
@@ -122,14 +125,14 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 	input.Services = typed.Services
 	if includesUpgradeEvidenceKind(opts.CurrentVersion, opts.TargetVersion, string(k8score.ConfigMaps)) {
 		configMapNamespaces := cachedEvidenceNamespaceScope(cache, string(k8score.ConfigMaps), namespaces, opts.ConfigMapNamespaces)
-		if !noNamespaceAccess(configMapNamespaces) {
+		if !readscope.NoNamespaceAccess(configMapNamespaces) {
 			input.ConfigMaps = audit.ListNamespaced(cache.ConfigMaps(), configMapNamespaces)
 		}
 		input.CacheScopedKinds = recordEvidenceNamespaceScope(input.CacheScopedKinds, string(k8score.ConfigMaps), configMapNamespaces, namespaces)
 	}
 	if includesUpgradeEvidenceKind(opts.CurrentVersion, opts.TargetVersion, string(k8score.PersistentVolumeClaims)) {
 		persistentVolumeClaimNamespaces := cachedEvidenceNamespaceScope(cache, string(k8score.PersistentVolumeClaims), namespaces, opts.PersistentVolumeClaimNamespaces)
-		if !noNamespaceAccess(persistentVolumeClaimNamespaces) {
+		if !readscope.NoNamespaceAccess(persistentVolumeClaimNamespaces) {
 			input.PersistentVolumeClaims = audit.ListNamespaced(cache.PersistentVolumeClaims(), persistentVolumeClaimNamespaces)
 		}
 		input.CacheScopedKinds = recordEvidenceNamespaceScope(input.CacheScopedKinds, string(k8score.PersistentVolumeClaims), persistentVolumeClaimNamespaces, namespaces)
@@ -192,7 +195,7 @@ func cachedEvidenceNamespaceScope(cache *k8s.ResourceCache, kind string, scanNam
 }
 
 func intersectNamespaceScopes(a, b []string) []string {
-	if noNamespaceAccess(a) || noNamespaceAccess(b) {
+	if readscope.NoNamespaceAccess(a) || readscope.NoNamespaceAccess(b) {
 		return []string{}
 	}
 	if a == nil {
@@ -215,7 +218,7 @@ func intersectNamespaceScopes(a, b []string) []string {
 }
 
 func recordEvidenceNamespaceScope(scopedKinds map[string][]string, kind string, evidenceNamespaces, scanNamespaces []string) map[string][]string {
-	if noNamespaceAccess(evidenceNamespaces) || sameNamespaceSet(evidenceNamespaces, scanNamespaces) {
+	if readscope.NoNamespaceAccess(evidenceNamespaces) || sameNamespaceSet(evidenceNamespaces, scanNamespaces) {
 		return scopedKinds
 	}
 	if scopedKinds == nil {

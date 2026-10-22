@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -151,7 +155,7 @@ func seedFullCNPGOperator(t *testing.T) {
 	)
 }
 
-func readCNPGOperator(t *testing.T, resp *http.Response) (CNPGOperatorResponse, []byte) {
+func readCNPGOperator(t *testing.T, resp *http.Response) (cnpgsvc.CNPGOperatorResponse, []byte) {
 	t.Helper()
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -161,14 +165,14 @@ func readCNPGOperator(t *testing.T, resp *http.Response) (CNPGOperatorResponse, 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, body)
 	}
-	var out CNPGOperatorResponse
+	var out cnpgsvc.CNPGOperatorResponse
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	return out, body
 }
 
-func getCNPGOperatorNoAuth(t *testing.T, query string) (CNPGOperatorResponse, []byte) {
+func getCNPGOperatorNoAuth(t *testing.T, query string) (cnpgsvc.CNPGOperatorResponse, []byte) {
 	t.Helper()
 	resp, err := http.Get(testServer.URL + "/api/cnpg/operator" + query)
 	if err != nil {
@@ -177,7 +181,7 @@ func getCNPGOperatorNoAuth(t *testing.T, query string) (CNPGOperatorResponse, []
 	return readCNPGOperator(t, resp)
 }
 
-func findConfigRef(refs []CNPGOperatorConfigRef, kind, purpose string) *CNPGOperatorConfigRef {
+func findConfigRef(refs []cnpgsvc.CNPGOperatorConfigRef, kind, purpose string) *cnpgsvc.CNPGOperatorConfigRef {
 	for i := range refs {
 		if refs[i].Kind == kind && refs[i].Purpose == purpose {
 			return &refs[i]
@@ -191,7 +195,7 @@ func TestCNPGOperator_DiscoversOperatorPluginAndConfig(t *testing.T) {
 
 	got, body := getCNPGOperatorNoAuth(t, "")
 	for _, key := range []string{"deployments", "services"} {
-		if got.Coverage[key].State != cnpgCoverageFull {
+		if got.Coverage[key].State != integration.KindCoverageFull {
 			t.Errorf("coverage[%s] = %+v, want full", key, got.Coverage[key])
 		}
 	}
@@ -326,6 +330,33 @@ func TestCNPGOperator_ConfigMapDataNeedsGet(t *testing.T) {
 	}
 }
 
+func TestCNPGOperatorComponentPodsDenied(t *testing.T) {
+
+	seedFullCNPGOperator(t)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"cnpg-system"}}
+	allow(perms, "apps", "deployments", "", true)
+	allow(perms, "", "services", "", true)
+	allow(perms, "", "pods", "cnpg-system", false)
+	env.srv.permCache.Set("no-pods", nil, perms)
+	got, body := readCNPGOperator(t, env.authGet(t, "/api/cnpg/operator", "no-pods", ""))
+	if len(got.Components) != 2 {
+		t.Fatalf("components = %+v, want both despite the Pods denial", got.Components)
+	}
+	var raw struct {
+		Components []map[string]any `json:"components"`
+	}
+	_ = json.Unmarshal(body, &raw)
+	for i, c := range got.Components {
+		if c.PodCoverage == nil || c.PodCoverage.State != "denied" || c.PodCoverage.Grant == nil || c.PodCoverage.Grant.Resource != "pods" {
+			t.Errorf("%s podCoverage = %+v", c.Deployment, c.PodCoverage)
+		}
+		if v, ok := raw.Components[i]["pods"]; !ok || v != nil {
+			t.Errorf("%s pods JSON = %v, want null", c.Deployment, v)
+		}
+	}
+}
+
 func TestCNPGOperator_DeniedDeploymentsWithholdComponents(t *testing.T) {
 	seedFullCNPGOperator(t)
 	env := newAuthTestServer(t)
@@ -339,7 +370,7 @@ func TestCNPGOperator_DeniedDeploymentsWithholdComponents(t *testing.T) {
 
 	got, _ := readCNPGOperator(t, env.authGet(t, "/api/cnpg/operator", "partial", ""))
 	cov := got.Coverage["deployments"]
-	if cov.State != cnpgCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "cnpg-system" {
+	if cov.State != integration.KindCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "cnpg-system" {
 		t.Errorf("deployments coverage = %+v, want partial denied [cnpg-system]", cov)
 	}
 	for _, c := range got.Components {
@@ -359,10 +390,54 @@ func TestCNPGOperator_DeniedDeploymentsWithholdComponents(t *testing.T) {
 	env.srv.permCache.Set("none", nil, none)
 
 	got, _ = readCNPGOperator(t, env.authGet(t, "/api/cnpg/operator", "none", ""))
-	if got.Coverage["deployments"].State != cnpgCoverageDenied || got.Coverage["services"].State != cnpgCoverageDenied {
+	if got.Coverage["deployments"].State != integration.KindCoverageDenied || got.Coverage["services"].State != integration.KindCoverageDenied {
 		t.Errorf("coverage = %+v, want both denied", got.Coverage)
 	}
 	if got.Components == nil || len(got.Components) != 0 || got.Config == nil {
 		t.Errorf("components=%v config=%v, want empty arrays", got.Components, got.Config)
+	}
+}
+
+func TestCNPGTypedReadersPreserveReadiness(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		timeout      time.Duration
+		readiness    k8s.KindReadiness
+		state        string
+		configReason string
+	}{
+		{"pending", time.Minute, k8s.KindPending, integration.KindCoverageSyncing, "ConfigMaps are still loading"},
+		{"failed", time.Millisecond, k8s.KindFailed, integration.KindCoverageError, "ConfigMaps failed to load"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			k8s.ResetResourceCache()
+			t.Cleanup(func() {
+				k8s.ResetResourceCache()
+				if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if err := k8s.InitTestPromotedSyncingCache(fake.NewClientset(), 5*time.Second, tt.timeout, map[string]time.Duration{"deployments": time.Hour, "pods": time.Hour, "configmaps": time.Hour}); err != nil {
+				t.Fatal(err)
+			}
+			cache := k8s.GetResourceCache()
+			deadline := time.Now().Add(5 * time.Second)
+			for cache.KindReadinessFor("deployments") != tt.readiness && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if got := cache.KindReadinessFor("deployments"); got != tt.readiness {
+				t.Fatalf("readiness = %v", got)
+			}
+			got, _ := getCNPGOperatorNoAuth(t, "")
+			if got.Coverage["deployments"].State != tt.state || len(got.Components) != 0 {
+				t.Fatalf("operator = %+v", got)
+			}
+			r := httptest.NewRequest(http.MethodGet, "/api/cnpg/workspace", nil)
+			acc, read := testServerSrv.typedKindScope(r, cache, nil, "", "pods")
+			if acc.State != tt.state || read == nil || len(read) != 0 {
+				t.Fatalf("pod evidence = %+v, %v", acc, read)
+			}
+
+		})
 	}
 }

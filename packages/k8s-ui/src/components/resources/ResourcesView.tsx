@@ -1,10 +1,13 @@
 import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { Badge } from '../ui/Badge'
 import { PaneLoader } from '../ui/PaneLoader'
 import { RestrictedState } from '../ui/RestrictedState'
 import { FetchResult } from '../ui/FetchResult'
 import { Input } from '../ui/Input'
+import { ColumnPickerList } from './ColumnPickerList'
+import { applyColumnOrder, sanitizeColumnOrder } from './column-order'
 import type { TopPodMetrics, TopNodeMetrics, ContainerResourceMetrics } from '../../types'
 import {
   Search,
@@ -137,11 +140,16 @@ import {
   parseColumnFilters,
   serializeColumnFilters,
   parseColumnFilterExcludes,
+  kindFiltersFromSearch,
+  kindFiltersToSearch,
+  columnFiltersParam,
+  RESOURCE_LIST_FILTER_PARAMS,
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
   healthColors,
 } from './resource-utils'
 import { getGenericResourceStatus } from './generic-status'
+import { ActiveFilterBar } from './ActiveFilterBar'
 import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
 import {
   type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
@@ -156,6 +164,8 @@ import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
+import type { Issue } from '../issues/types'
+import { issueTitle } from '../issues/severity'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
@@ -203,7 +213,7 @@ import { GCPManagedControlPlaneCell, GCPManagedMachinePoolCell, GCPMachineCell, 
 import { AzureManagedControlPlaneCell, AzureManagedMachinePoolCell, AzureMachineCell, AzureMachineTemplateCell, AzureManagedClusterCell } from './renderers/azure-capi-cells'
 import { CalicoInfraCell, CalicoPolicyCell } from './renderers/calico-cells'
 import { isCalicoPolicyResource, isCoreNetworkPolicyKind } from './resource-utils-calico'
-import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
+import { useRegisterShortcut, useRegisterShortcuts, type KeyboardShortcut } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
 import type { SelectedKindInfo, SidebarCategoryWorkspace } from './ResourcesSidebar'
 import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick, type NamespacedRef } from '../compare'
@@ -3250,6 +3260,7 @@ function filterHostExtras(
 
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
+const CHECKBOX_VISIBILITY_KEY = 'radar-resource-checkboxes'
 
 // Storage identity for a kind's column settings. normalizeKindToPlural falls
 // through to the bare plural for anything outside the curated collision
@@ -3275,6 +3286,8 @@ interface ColumnSettings {
    *  load tell a column they hid from one that did not exist yet. Absent on
    *  blobs written before this field. */
   known?: string[]
+  /** Optional display order for movable columns, including hidden ones. */
+  order?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3337,6 +3350,9 @@ interface ResourcesViewData {
   // cluster-scoped kind. An ExternalSecret names a store; only the store
   // knows which backend it reads from.
   storeProviders?: Record<string, string>
+  /** Current CronJob Issues keyed by "namespace/name", supplied by the host. */
+  operationalIssuesIncomplete?: boolean
+  operationalIssues?: Record<string, Issue>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -3401,6 +3417,9 @@ interface ResourcesViewProps {
   // cluster-scoped kind. An ExternalSecret names a store; only the store
   // knows which backend it reads from.
   storeProviders?: Record<string, string>
+  /** Current CronJob Issues keyed by "namespace/name", supplied by the host. */
+  operationalIssuesIncomplete?: boolean
+  operationalIssues?: Record<string, Issue>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -3425,6 +3444,11 @@ interface ResourcesViewProps {
   sidebarCategoryWorkspaces?: Record<string, SidebarCategoryWorkspace>
   /** Callback when the [+] create button is clicked. Receives the currently selected kind info. */
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
+  /** A kind's own view, rendered in place of the table: the sidebar, kind
+   *  selection and the drawer (`?resource=`) stay; the table, its toolbar and
+   *  its row/search/bulk shortcuts do not run. Sidebar kind navigation stays.
+   *  Return null or false to keep the table. */
+  renderKindView?: (kind: SelectedKindInfo) => React.ReactNode | null
   /** Default kind when the URL does not include one. */
   defaultKind?: SelectedKindInfo
   /** Columns prepended to KNOWN_COLUMNS for every kind. For example, a
@@ -3490,6 +3514,29 @@ interface ResourcesViewProps {
    * the switcher lives outside this component and may persist server-side.
    */
   onClearNamespaces?: () => void
+  /**
+   * A kind's saved filters, as last reported through `onKindFiltersChange`
+   * (host-owned, because this view unmounts on section switches). A user kind
+   * switch, or a URL with no list state of its own (see `hasFilterIntent`),
+   * restores that kind's column and problem filters from it. Pass undefined
+   * until the host can answer: the first defined value is still applied to a
+   * bare URL.
+   */
+  rememberedKindSearch?: (kind: { name: string; group: string }) => string | undefined
+  /**
+   * Called with a kind's serialized `filters` + `problems` query ('' when
+   * none) whenever the filters the kind shows change, including the ones a
+   * link arrives with. A list that arrives with no filters does not report
+   * '', so a link to one resource keeps what was saved.
+   */
+  onKindFiltersChange?: (kind: { name: string; group: string }, search: string) => void
+  /**
+   * Promotes the Namespace column's included values to the global namespace
+   * selection (replacing it). When wired, the column's filter dropdown offers
+   * "Apply to all sections" and clears the column filter once the returned
+   * promise resolves (a rejection keeps it).
+   */
+  onApplyNamespacesToAllSections?: (namespaces: string[]) => Promise<unknown> | void
   // Bulk operations
   onBulkDelete?: (items: BulkResourceItem[], options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
@@ -3613,19 +3660,24 @@ export function deriveSidebarResourceCounts(
   return results
 }
 
+const FILTER_INTENT_PARAMS = [...RESOURCE_LIST_FILTER_PARAMS, 'resource']
+
+/**
+ * Whether a URL states its own list state. Only a URL without any of these
+ * (a bare `/resources/<kind>`) gets the kind's remembered filters.
+ */
+export function hasFilterIntent(search: string): boolean {
+  const params = new URLSearchParams(search)
+  return FILTER_INTENT_PARAMS.some((key) => params.has(key))
+}
+
 // Get initial filters from URL
 function getInitialFiltersFromURL() {
   const params = new URLSearchParams(window.location.search)
-  // Parse generic column filters
-  const filtersParam = params.get('filters')
-  const columnFilters = parseColumnFilters(filtersParam)
-  const columnFilterExcludes = parseColumnFilterExcludes(filtersParam)
   const result = {
     search: params.get('search') || '',
     regex: params.get('regex') === 'true',
-    columnFilters,
-    columnFilterExcludes,
-    problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
+    ...kindFiltersFromSearch(window.location.search),
     showInactive: params.get('showInactive') === 'true',
     labelSelector: params.get('labels') || '', // e.g., "app=caretta,version=v1"
     ownerKind: params.get('ownerKind') || '', // e.g., "DaemonSet"
@@ -3654,6 +3706,8 @@ export function ResourcesView({
   certExpiryError,
   storeProviders,
   auditBadges,
+  operationalIssues,
+  operationalIssuesIncomplete,
   pinned = [],
   togglePin = () => {},
   isPinned = () => false,
@@ -3667,6 +3721,7 @@ export function ResourcesView({
   hideSidebar = false,
   sidebarCategoryWorkspaces,
   onCreateResource,
+  renderKindView,
   defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
   printerTable,
@@ -3675,6 +3730,9 @@ export function ResourcesView({
   onCompareSubmit,
   resolveRowCluster,
   onClearNamespaces,
+  rememberedKindSearch,
+  onKindFiltersChange,
+  onApplyNamespacesToAllSections,
   onBulkDelete,
   isBulkDeleting = false,
   onBulkRestart,
@@ -3695,16 +3753,22 @@ export function ResourcesView({
       kindFromURL.name !== prev.name || kindFromURL.group !== prev.group ? kindFromURL : prev,
     )
   }, [basePath, defaultKind, locationPathname, locationSearch])
+  const contributedKindView = renderKindView?.(selectedKind)
+  const kindView = contributedKindView === false ? null : contributedKindView ?? null
+  const tableActive = kindView === null
+
   // Notify parent of selected kind changes (including initial mount)
   useEffect(() => {
     onSelectedKindChange?.(selectedKind)
-    setBulkMode(false)
+  }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     setCheckedResources(new Set())
     setShowBulkDeleteConfirm(false)
     setShowBulkRestartConfirm(false)
     setShowBulkScaleDialog(false)
     setBulkForceDelete(false)
-  }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedKind.name, selectedKind.group, tableActive])
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
   // Typing must never wait on the list or the router. The input renders raw
   // searchTerm; filtering consumes the deferred copy (React yields to keep
@@ -3722,6 +3786,30 @@ export function ResourcesView({
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
   const [columnFilterExcludes, setColumnFilterExcludes] = useState<Record<string, boolean>>(initialFilters.columnFilterExcludes)
   const [problemFilters, setProblemFilters] = useState<string[]>(initialFilters.problemFilters)
+  // The kind the filter state belongs to. During a kind switch one render
+  // pairs the new kind with the old kind's filters; saving then would file
+  // them under the wrong kind.
+  const [filtersKind, setFiltersKind] = useState(() => selectedKindIdentityOf(selectedKind))
+  // Where the current filter state came from when it wasn't a user edit.
+  const filtersArrivedRef = useRef<'url' | 'restore' | null>('url')
+  // The serialized filters last restored from rememberedKindSearch ('' when none).
+  const [restoredKindSearch, setRestoredKindSearch] = useState('')
+  // A bare URL at mount takes the kind's saved filters. Adjusted during render
+  // (not in an effect) so the unfiltered list never paints, and so it still
+  // applies when the host's lookup arrives after mount.
+  const [mountRestorePending, setMountRestorePending] = useState(() => !hasFilterIntent(locationSearch ?? window.location.search))
+  if (mountRestorePending && rememberedKindSearch) {
+    setMountRestorePending(false)
+    const restored = kindFiltersToSearch(kindFiltersFromSearch(rememberedKindSearch(selectedKind)))
+    if (restored && !hasFilterIntent(locationSearch ?? window.location.search)) {
+      const remembered = kindFiltersFromSearch(restored)
+      setColumnFilters(remembered.columnFilters)
+      setColumnFilterExcludes(remembered.columnFilterExcludes)
+      setProblemFilters(remembered.problemFilters)
+      setRestoredKindSearch(restored)
+      filtersArrivedRef.current = 'restore'
+    }
+  }
   const [openColumnFilter, setOpenColumnFilter] = useState<string | null>(null)
   const [columnFilterSearch, setColumnFilterSearch] = useState('')
   const columnFilterDropdownRef = useRef<HTMLDivElement>(null)
@@ -3735,6 +3823,7 @@ export function ResourcesView({
   // Column visibility and resize state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const [columnOrder, setColumnOrder] = useState<string[] | null>(null)
   const [showColumnPicker, setShowColumnPicker] = useState(false)
   const [customColumns, setCustomColumns] = useState<CustomColumnDef[]>([])
   const [customColumnDraft, setCustomColumnDraft] = useState<CustomColumnDef>({ source: 'label', path: '' })
@@ -3747,10 +3836,10 @@ export function ResourcesView({
   const [ownerKind, setOwnerKind] = useState<string>(initialFilters.ownerKind)
   const [ownerName, setOwnerName] = useState<string>(initialFilters.ownerName)
 
-  // Multi-select state for bulk operations. Checkboxes only render while
-  // bulk mode is active — entered via the toolbar toggle — so mutating
-  // actions stay out of the way during normal browsing.
-  const [bulkMode, setBulkMode] = useState(false)
+  const [showCheckboxes, setShowCheckboxes] = useState(() => {
+    try { return localStorage.getItem(CHECKBOX_VISIBILITY_KEY) === 'true' }
+    catch { return false }
+  })
   const [checkedResources, setCheckedResources] = useState<Set<string>>(new Set())
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
   const [showBulkRestartConfirm, setShowBulkRestartConfirm] = useState(false)
@@ -3758,8 +3847,7 @@ export function ResourcesView({
   const [bulkForceDelete, setBulkForceDelete] = useState(false)
   const [bulkScaleReplicas, setBulkScaleReplicas] = useState(0)
 
-  const exitBulkMode = useCallback(() => {
-    setBulkMode(false)
+  const clearBulkSelection = useCallback(() => {
     setCheckedResources(new Set())
   }, [])
 
@@ -3876,13 +3964,16 @@ export function ResourcesView({
     [printerTable, builtPrinterColumns],
   )
 
-  const allColumns = useMemo(() => {
+  const definedColumns = useMemo(() => {
     const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     if (!extraLeadingColumns?.length && !builtCustomColumns.length) return kindColumns
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const filteredExtras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
+  // Display order. Everything downstream reads this, so the picker, the header
+  // and the resize width snapshot (which maps <th> index to key) agree.
+  const allColumns = useMemo(() => applyColumnOrder(definedColumns, columnOrder), [definedColumns, columnOrder])
 
   // The offered key set, and a stable signature for it. allColumns is a new
   // identity on every printer-column refetch; depending on the array itself
@@ -3945,6 +4036,8 @@ export function ResourcesView({
   // depends on visibleColumns) and instantly reverts the user's hide.
   const gpuAutoShownKinds = useRef<Set<string>>(new Set())
   useEffect(() => {
+    // The table's own settings: nothing to load (or clear) while a kind view replaces it.
+    if (!tableActive) return
     // Re-arm the skip-initial-save guard per kind. This effect repopulates
     // visible/widths/custom for the new kind via async setState, so the save
     // effect (also keyed to selectedKind) that runs in this same commit still
@@ -4015,24 +4108,28 @@ export function ResourcesView({
         hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
+        setColumnOrder(null)
       } else {
         setVisibleColumns(mergeSavedVisibleColumns(
           saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown,
         ))
         setColumnWidths(saved.widths || {})
+        setColumnOrder(sanitizeColumnOrder(saved.order))
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setColumnWidths({})
+      setColumnOrder(null)
     }
     // printerColumnsKey, not builtPrinterColumns: the built array is a new
     // identity on every refetch, and re-running this effect would reset the
     // user's in-session column choices each time the list polls. The key only
     // changes when the kind changes or an operator upgrade changes the CRD.
-  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, printerColumnsKey])
+  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, printerColumnsKey, tableActive])
 
   // Save column settings when they change (skip the initial load of each kind)
   useEffect(() => {
+    if (!tableActive) return
     if (visibleColumns.size === 0) return // not loaded yet
     for (const k of allColumnKeys) knownColumnKeys.current.add(k)
     if (!isColumnSettingsLoaded.current) {
@@ -4044,12 +4141,13 @@ export function ResourcesView({
       widths: columnWidths,
       custom: customColumns,
       known: Array.from(knownColumnKeys.current),
+      order: columnOrder ?? undefined,
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
     hadSavedColumnSettings.current = true
     // allColumnKeysSig, not allColumnKeys: see the memo above.
-  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group, allColumnKeysSig])
+  }, [visibleColumns, columnWidths, customColumns, columnOrder, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
 
   // Close column picker on outside click or Escape
   useEffect(() => {
@@ -4157,6 +4255,7 @@ export function ResourcesView({
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setColumnWidths({})
+    setColumnOrder(null)
     setSortColumn(null)
     setSortDirection(null)
     saveSavedSort(selectedKind.name, selectedKind.group, null)
@@ -4218,6 +4317,7 @@ export function ResourcesView({
     category: 'Search',
     scope: 'resources',
     handler: () => searchInputRef.current?.focus(),
+    enabled: tableActive,
   })
 
   // Keyboard navigation: highlighted row state
@@ -4237,7 +4337,7 @@ export function ResourcesView({
   useEffect(() => {
     setComparePicks([])
     setCompareMode(false)
-  }, [selectedKind.name, selectedKind.group])
+  }, [selectedKind.name, selectedKind.group, tableActive])
 
   const exitCompareMode = useCallback(() => {
     setCompareMode(false)
@@ -4285,6 +4385,15 @@ export function ResourcesView({
     }
   }, [highlightedIndex])
 
+  useEffect(() => {
+    if (tableActive) return
+    setHighlightedIndex(-1)
+    setShowColumnPicker(false)
+    setOpenColumnFilter(null)
+    setShowProblemsDropdown(false)
+    setShowLabelsDropdown(false)
+  }, [tableActive])
+
   // Open logs for pod / workload resources — provided via props
   const openLogs = onOpenLogs
   const openWorkloadLogs = onOpenWorkloadLogs
@@ -4317,8 +4426,7 @@ export function ResourcesView({
     onResourceClick?.(isSelected ? null : stripped)
   }, [onRowSelect, onResourceClick, selectedKind.name, selectedKind.group])
 
-  // Register navigation shortcuts
-  useRegisterShortcuts([
+  useRegisterShortcuts(([
     {
       id: 'resources-nav-down',
       keys: 'j',
@@ -4467,14 +4575,11 @@ export function ResourcesView({
     {
       id: 'resources-bulk-select',
       keys: 'b',
-      description: 'Toggle bulk select',
+      description: 'Show or hide selection checkboxes',
       category: 'Table',
       scope: 'resources',
       handler: () => {
-        if (bulkMode) { exitBulkMode(); return }
-        if (!canBulkSelect) return
-        exitCompareMode()
-        setBulkMode(true)
+        if (canBulkSelect) toggleCheckboxVisibility()
       },
     },
     {
@@ -4489,12 +4594,12 @@ export function ResourcesView({
         if (showProblemsDropdown) { setShowProblemsDropdown(false); return }
         if (showLabelsDropdown) { setShowLabelsDropdown(false); return }
         if (compareMode) { exitCompareMode(); return }
-        if (bulkMode) { exitBulkMode(); return }
+        if (checkedResources.size > 0) { clearBulkSelection(); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
     },
-  ])
+  ] as KeyboardShortcut[]).map((sc) => ({ ...sc, enabled: tableActive && (sc.enabled ?? true) })))
 
   // Refs for accessing filteredResources inside shortcuts (computed later in component)
   const filteredResourceCountRef = useRef(0)
@@ -4574,8 +4679,21 @@ export function ResourcesView({
     const newFilters = getInitialFiltersFromURL()
 
     // Update kind if it changed
-    if (newKind.name !== selectedKind.name || newKind.group !== selectedKind.group) {
+    const kindChanged = newKind.name !== selectedKind.name || newKind.group !== selectedKind.group
+    let restored = ''
+    if (kindChanged) {
       setSelectedKind(newKind)
+      // A bare URL for another kind links to the list, not to a state of it:
+      // take that kind's saved filters and put them in the address bar. Never
+      // for the same kind, where a bare URL is the echo of Clear filters.
+      restored = hasFilterIntent(locationSearch ?? window.location.search)
+        ? ''
+        : kindFiltersToSearch(kindFiltersFromSearch(rememberedKindSearch?.(newKind)))
+      setRestoredKindSearch(restored)
+      if (restored) {
+        Object.assign(newFilters, kindFiltersFromSearch(restored))
+        updateURL(newKind, newFilters.search, newFilters.regex, newFilters.columnFilters, newFilters.columnFilterExcludes, newFilters.problemFilters, newFilters.showInactive)
+      }
     }
 
     // Update owner filter if it changed
@@ -4614,6 +4732,13 @@ export function ResourcesView({
     const excludeKeys = (m: Record<string, boolean>) => Object.keys(m).filter(k => m[k]).sort().join(',')
     if (excludeKeys(newFilters.columnFilterExcludes) !== excludeKeys(columnFilterExcludes)) {
       setColumnFilterExcludes(newFilters.columnFilterExcludes)
+    }
+
+    if (newFilters.problemFilters.join(',') !== problemFilters.join(',')) {
+      setProblemFilters(newFilters.problemFilters)
+    }
+    if (kindChanged || kindFiltersToSearch(newFilters) !== kindFiltersSearch) {
+      filtersArrivedRef.current = restored ? 'restore' : 'url'
     }
 
     // Reset the flag after a tick to allow normal URL updates
@@ -4670,11 +4795,7 @@ export function ResourcesView({
     }
     // Write column filters as `filters` param; the exclude operator is folded
     // into each column entry, so it can never drift from the values it negates.
-    // Guard against a stale exclude flag on a column with no active values.
-    const activeExcludes = Object.fromEntries(
-      Object.entries(colExcludes).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0)
-    )
-    const filtersStr = serializeColumnFilters(colFilters, activeExcludes)
+    const filtersStr = columnFiltersParam(colFilters, colExcludes)
     if (filtersStr) {
       params.set('filters', filtersStr)
     } else {
@@ -4746,12 +4867,18 @@ export function ResourcesView({
     // params are out of scope here; the host's onClearNamespaces (and its
     // own state→URL sync) owns namespace cleanup.
     const params = new URLSearchParams(window.location.search)
-    for (const key of ['search', 'regex', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive']) {
+    for (const key of RESOURCE_LIST_FILTER_PARAMS) {
       params.delete(key)
     }
     navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
     onClearNamespaces?.()
   }, [navigate, onClearNamespaces])
+
+  const clearKindFilters = useCallback(() => {
+    setColumnFilters({})
+    setColumnFilterExcludes({})
+    setProblemFilters([])
+  }, [])
 
   // Update URL when any filter changes
   useEffect(() => {
@@ -4765,6 +4892,8 @@ export function ResourcesView({
       prevSelectedResourceRef.current = selectedResource ?? null
       return
     }
+    // Right after a kind switch the filters are still the previous kind's.
+    if (filtersKind !== selectedKindIdentityOf(selectedKind)) return
     // Skip URL update if selectedResource's kind doesn't match selectedKind (still syncing)
     if (selectedResource) {
       const resourceKindLower = selectedResource.kind.toLowerCase()
@@ -4790,7 +4919,12 @@ export function ResourcesView({
         : typeof window !== 'undefined'
           ? window.location.pathname
           : ''
-    const pathChanged = currentPath !== targetPath
+    // The router commits a navigation as a transition, so the injected path can
+    // still be the previous kind's right after a push to this one (e.g. the
+    // write of filters restored on a kind switch); the address bar is already
+    // there, and pushing again would add a second entry for the same visit.
+    const pathChanged = currentPath !== targetPath &&
+      !(typeof window !== 'undefined' && window.location.pathname.endsWith(targetPath))
     const prev = prevSelectedResourceRef.current
     const current = selectedResource ?? null
     const drawerSwitched =
@@ -4804,7 +4938,7 @@ export function ResourcesView({
     prevSelectedResourceRef.current = current
 
     updateURL(selectedKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, pushHistory)
-  }, [selectedKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
+  }, [selectedKind, filtersKind, debouncedSearchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, selectedResource, updateURL, basePath, locationPathname])
 
   // Handle resource click from URL on mount
   useEffect(() => {
@@ -4824,6 +4958,12 @@ export function ResourcesView({
     }
     // Signal that initial resource param has been processed — URL update effect can now run
     hasProcessedInitialResource.current = true
+
+    // Filters restored at mount go into the address bar (with the kind segment).
+    if (restoredKindSearch) {
+      updateURL(selectedKind, searchTerm, regexMode, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets)
+      return
+    }
 
     // If the URL has no kind segment (e.g., /resources), update to include the default kind.
     // Route through `navigate` so an onNavigate-suppressing host can opt out.
@@ -5093,7 +5233,7 @@ export function ResourcesView({
     isForbiddenError(selectedQueryError) ||
     (!selectedHasRows && !selectedQueryError && forbiddenKinds.has(selectedKindCountKey))
 
-  // Reset filters when kind changes (but not when syncing from URL navigation)
+  // On a kind change, restore that kind's remembered filters, or start empty (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
   // Keyed on group as well as plural: two CRDs can share a plural across API
   // groups, and their printer columns are unrelated. Resetting on the plural
@@ -5107,12 +5247,39 @@ export function ResourcesView({
     }
     prevKindRef.current = selectedKindIdentity
     setOpenColumnFilter(null)
-    if (!isSyncingFromURL.current) {
-      setColumnFilters({})
-      setColumnFilterExcludes({})
-    }
-    setProblemFilters([])
-  }, [selectedKindIdentity])
+    setFiltersKind(selectedKindIdentity)
+    // The URL sync already set this kind's filters (and restoredKindSearch).
+    if (isSyncingFromURL.current) return
+    filtersArrivedRef.current = 'restore'
+    const restored = kindFiltersToSearch(kindFiltersFromSearch(rememberedKindSearch?.(selectedKind)))
+    const remembered = kindFiltersFromSearch(restored)
+    setColumnFilters(remembered.columnFilters)
+    setColumnFilterExcludes(remembered.columnFilterExcludes)
+    setProblemFilters(remembered.problemFilters)
+    setRestoredKindSearch(restored)
+  }, [selectedKindIdentity, selectedKind, rememberedKindSearch])
+
+  const kindFiltersSearch = useMemo(
+    () => kindFiltersToSearch({ columnFilters, columnFilterExcludes, problemFilters }),
+    [columnFilters, columnFilterExcludes, problemFilters],
+  )
+  // Saved filters are the last ones chosen for a kind: by the user, or by a
+  // link that brought its own. A restore only shows what was saved (saving it
+  // again would overwrite another tab's newer choice); a list that arrives
+  // with no filters (a link to one resource, an owner's pods) keeps what was
+  // saved; Clear filters saves none.
+  const lastSeenKindFiltersRef = useRef<{ kind: string; search: string } | null>(null)
+  useEffect(() => {
+    // The host may wire saving after mount; until then nothing counts as seen.
+    if (!onKindFiltersChange || filtersKind !== selectedKindIdentity) return
+    const last = lastSeenKindFiltersRef.current
+    lastSeenKindFiltersRef.current = { kind: filtersKind, search: kindFiltersSearch }
+    const arrived = filtersArrivedRef.current
+    filtersArrivedRef.current = null
+    if (last?.kind === filtersKind && last.search === kindFiltersSearch) return
+    if (arrived === 'restore' || (arrived === 'url' && !kindFiltersSearch)) return
+    onKindFiltersChange(selectedKind, kindFiltersSearch)
+  }, [filtersKind, selectedKindIdentity, kindFiltersSearch, selectedKind, onKindFiltersChange])
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
@@ -5145,6 +5312,15 @@ export function ResourcesView({
     saveSavedSort(selectedKind.name, selectedKind.group, newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
   }, [sortColumn, sortDirection, canSortBy, selectedKind.name, selectedKind.group])
 
+  const getDisplayFilterValue = useCallback((resource: { metadata?: { namespace?: string; name?: string } }, column: string, kind: string): string => {
+    if (column === 'status' && selectedKind.group === 'batch' && kind === 'cronjobs') {
+      const issue = operationalIssues?.[`${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`]
+      if (issue) return issueTitle(issue)
+      if (operationalIssuesIncomplete) return 'Unknown'
+    }
+    return getCellFilterValue(resource, column, kind)
+  }, [operationalIssues, operationalIssuesIncomplete, selectedKind.group])
+
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {
     const meta = resource.metadata || {}
@@ -5173,7 +5349,7 @@ export function ResourcesView({
         if (hasCuratedColumns(selectedKind.name, selectedKind.group) && status.phase) {
           return status.phase
         }
-        return getCellFilterValue(resource, 'status', kindLower)
+        return getDisplayFilterValue(resource, 'status', kindLower)
       case 'servers':
         // Numeric so 10 does not sort before 9.
         if (kindLower === 'istiogateways') return getIstioGatewayServerCount(resource)
@@ -5263,7 +5439,7 @@ export function ResourcesView({
       default:
         return ''
     }
-  }, [metricsLookup, selectedKind.name, selectedKind.group])
+  }, [metricsLookup, selectedKind.name, selectedKind.group, getDisplayFilterValue])
 
   // Helper to check if a pod matches problem filters
   const podMatchesProblemFilter = useCallback((pod: any, filters: string[]): boolean => {
@@ -5288,7 +5464,7 @@ export function ResourcesView({
 
   // Filter resources by search term, status, problems, and sort
   const filteredResources = useMemo(() => {
-    if (!resources) return []
+    if (!tableActive || !resources) return []
 
     let result = resources
 
@@ -5320,7 +5496,7 @@ export function ResourcesView({
       result = result.filter((r: any) =>
         activeColFilters.every(([col, vals]) => {
           const extra = extraColumnsByKey.get(col)
-          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, cellFilterKind)
+          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getDisplayFilterValue(r, col, cellFilterKind)
           const match = vals.includes(cellVal)
           return columnFilterExcludes[col] ? !match : match
         })
@@ -5474,7 +5650,7 @@ export function ResourcesView({
     }
 
     return result
-  }, [resources, deferredSearchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, effectiveSortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
+  }, [tableActive, resources, deferredSearchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, effectiveSortColumn, sortDirection, getSortValue, getDisplayFilterValue, extraColumnsByKey, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -5599,16 +5775,25 @@ export function ResourcesView({
     setCheckedResources(allVisibleChecked ? new Set() : new Set(filteredResources.map(getResourceKey)))
   }, [allVisibleChecked, filteredResources, getResourceKey])
 
-  const isCheckboxMode = canBulkSelect && bulkMode
+  const toggleCheckboxVisibility = useCallback(() => {
+    const next = compareMode || !showCheckboxes
+    exitCompareMode()
+    clearBulkSelection()
+    setShowCheckboxes(next)
+    try { localStorage.setItem(CHECKBOX_VISIBILITY_KEY, String(next)) }
+    catch { /* Keep the choice for this session when storage is unavailable. */ }
+  }, [compareMode, showCheckboxes, exitCompareMode, clearBulkSelection])
+
+  const isCheckboxMode = canBulkSelect && !compareMode && showCheckboxes
+  const showBulkBar = isCheckboxMode && checkedItems.length > 0
 
   // Stable row handlers so the memoized ResourceRowCells skips re-rendering
   // rows whose data didn't change on a refetch (React Query's structural
   // sharing keeps unchanged resources referentially identical).
   const handleRowClick = useCallback((resource: any, isSelected: boolean) => {
     if (compareMode) toggleComparePick(resource)
-    else if (isCheckboxMode) toggleChecked(resource)
     else selectResource(resource, isSelected)
-  }, [compareMode, isCheckboxMode, toggleComparePick, toggleChecked, selectResource])
+  }, [compareMode, toggleComparePick, selectResource])
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
@@ -5670,7 +5855,7 @@ export function ResourcesView({
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
-    if (!resources || resources.length === 0) return null
+    if (!tableActive || !resources || resources.length === 0) return null
 
     const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
     const cellFilterKind = getCellFilterKind(selectedKind.name, selectedKind.group)
@@ -5700,7 +5885,7 @@ export function ResourcesView({
       // Count distinct values for this column
       const valueCounts: Record<string, number> = {}
       for (const r of resources) {
-        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col.key, cellFilterKind)
+        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getDisplayFilterValue(r, col.key, cellFilterKind)
         if (val) {
           valueCounts[val] = (valueCounts[val] || 0) + 1
         }
@@ -5783,7 +5968,7 @@ export function ResourcesView({
 
     if (filterableColumns.length === 0 && !problems && labelValues.length === 0) return null
     return { columns: filterableColumns, problems, labels: labelValues }
-  }, [resources, selectedKind.name, selectedKind.group, allColumns])
+  }, [tableActive, resources, selectedKind.name, selectedKind.group, allColumns, getDisplayFilterValue])
 
   // Map filterable columns by key for O(1) lookup in header rendering
   const filterableColumnMap = useMemo(() => {
@@ -5805,15 +5990,16 @@ export function ResourcesView({
   // Namespace contribution gated on a host-wired clearer: without it the
   // Clear filters button can't drop the namespace, so showing it would be
   // a no-op for that case.
-  const hasAnyFilter =
-    !!searchTerm ||
-    regexMode ||
-    !!labelSelector ||
-    hasOwnerFilter ||
-    problemFilters.length > 0 ||
-    Object.values(columnFilters).some((vals) => vals.length > 0) ||
-    showInactiveReplicaSets ||
-    (!!onClearNamespaces && namespaces.length > 0)
+  const activeFilterCount =
+    Object.values(columnFilters).filter((vals) => vals.length > 0).length +
+    (problemFilters.length > 0 ? 1 : 0) +
+    (labelSelector ? 1 : 0) +
+    (searchTerm || regexMode ? 1 : 0) +
+    (hasOwnerFilter ? 1 : 0) +
+    (showInactiveReplicaSets ? 1 : 0) +
+    (!!onClearNamespaces && namespaces.length > 0 ? 1 : 0)
+  const hasAnyFilter = activeFilterCount > 0
+  const filtersRestored = !!kindFiltersSearch && kindFiltersSearch === restoredKindSearch
 
 
   // Toggle problem filter
@@ -5857,9 +6043,11 @@ export function ResourcesView({
     certExpiry,
     certExpiryError,
     auditBadges,
+    operationalIssues,
+    operationalIssuesIncomplete,
     onOpenLogs,
     onOpenWorkloadLogs,
-  }), [onNavigate, certExpiry, certExpiryError, auditBadges, onOpenLogs, onOpenWorkloadLogs])
+  }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
   return (
     <ResourcesViewDataContext.Provider value={resourcesViewDataContextValue}>
@@ -5889,7 +6077,9 @@ export function ResourcesView({
         />
       )}
 
-      {/* Main Content - Resource Table */}
+      {kindView !== null ? (
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">{kindView}</div>
+      ) : (
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
         {/* Toolbar */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0">
@@ -6129,10 +6319,10 @@ export function ResourcesView({
               <button
                 type="button"
                 onClick={clearAllFilters}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs selection selection-text hover:selection-strong transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Clear filters</span>
+                <span>Clear filters ({activeFilterCount})</span>
               </button>
             </Tooltip>
           )}
@@ -6166,41 +6356,14 @@ export function ResourcesView({
                 {/* Column list scrolls; the add-column footer stays pinned so
                     its input isn't pushed below the fold on kinds with many columns. */}
                 <div className="overflow-y-auto flex-1 min-h-0">
-                {allColumns.map(col => {
-                  const isCustom = customColumnKeySet.has(col.key)
-                  return (
-                    <div
-                      key={col.key}
-                      className="group flex items-center gap-2 px-3 py-1.5 hover:bg-theme-elevated"
-                    >
-                      <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={visibleColumns.has(col.key)}
-                          onChange={() => toggleColumnVisibility(col.key)}
-                          disabled={col.key === 'name'}
-                          className="rounded border-theme-border"
-                        />
-                        <span className={clsx(
-                          'text-sm truncate',
-                          col.key === 'name' ? 'text-theme-text-tertiary' : 'text-theme-text-primary'
-                        )} title={col.tooltip || col.label}>
-                          {col.label}
-                        </span>
-                      </label>
-                      {isCustom && (
-                        <button
-                          type="button"
-                          onClick={() => removeCustomColumn(col.key)}
-                          className="shrink-0 p-0.5 text-theme-text-tertiary hover:text-red-500 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                          title="Remove column"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
+                <ColumnPickerList
+                  columns={allColumns}
+                  visibleColumns={visibleColumns}
+                  customColumnKeys={customColumnKeySet}
+                  onToggle={toggleColumnVisibility}
+                  onRemoveCustom={removeCustomColumn}
+                  onReorder={setColumnOrder}
+                />
                 </div>
                 {/* Add a label/annotation column */}
                 <div className="shrink-0 border-t border-theme-border pt-2 px-3 pb-1">
@@ -6270,7 +6433,7 @@ export function ResourcesView({
               <button
                 onClick={() => {
                   if (compareMode) { exitCompareMode(); return }
-                  exitBulkMode()
+                  clearBulkSelection()
                   setCompareMode(true)
                 }}
                 aria-pressed={compareMode}
@@ -6286,17 +6449,14 @@ export function ResourcesView({
             </Tooltip>
           )}
           {canBulkSelect && (
-            <Tooltip content={bulkMode ? 'Exit bulk select mode' : 'Select multiple resources'}>
+            <Tooltip content={isCheckboxMode ? 'Hide selection checkboxes' : 'Show selection checkboxes'}>
               <button
-                onClick={() => {
-                  if (bulkMode) { exitBulkMode(); return }
-                  exitCompareMode()
-                  setBulkMode(true)
-                }}
-                aria-pressed={bulkMode}
+                onClick={toggleCheckboxVisibility}
+                aria-label={isCheckboxMode ? 'Hide selection checkboxes' : 'Show selection checkboxes'}
+                aria-pressed={isCheckboxMode}
                 className={clsx(
                   'p-2 rounded-lg transition-colors',
-                  bulkMode
+                  isCheckboxMode
                     ? 'bg-skyhook-500/15 text-skyhook-300 border border-skyhook-400/50'
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated',
                 )}
@@ -6316,7 +6476,7 @@ export function ResourcesView({
         </div>
 
         {/* Bulk actions bar */}
-        {isCheckboxMode && (
+        {showBulkBar && (
           <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0">
             <span className="text-sm font-medium text-theme-text-primary">
               {checkedItems.length} selected
@@ -6356,12 +6516,27 @@ export function ResourcesView({
             )}
             <button
               type="button"
-              onClick={exitBulkMode}
+              onClick={clearBulkSelection}
               className="px-3 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
             >
-              Cancel
+              Clear selection
             </button>
           </div>
+        )}
+
+        {!isLoading && !isSelectedForbidden && !largeListGuard && filteredResources.length > 0 && (
+          <ActiveFilterBar
+            columnFilters={columnFilters}
+            columnFilterExcludes={columnFilterExcludes}
+            problemFilters={problemFilters}
+            labelSelector={labelSelector}
+            onClearColumn={clearColumnFilter}
+            onClearProblems={() => setProblemFilters([])}
+            onClearLabels={() => setLabelSelector('')}
+            restored={filtersRestored}
+            onClearAll={clearKindFilters}
+            className="shrink-0 px-4 py-1.5 border-b border-theme-border"
+          />
         )}
 
         {/* Table */}
@@ -6440,46 +6615,17 @@ export function ResourcesView({
                 </button>
               )}
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
-              {/* Show active filters as dismissible badges so user can clear them */}
-              {(() => {
-                const activeColEntries = Object.entries(columnFilters).filter(([, vals]) => vals.length > 0)
-                if (activeColEntries.length === 0 && problemFilters.length === 0 && !labelSelector) return null
-                return (
-                  <div className="flex flex-wrap items-center gap-1.5 mt-3">
-                    {activeColEntries.map(([key, vals]) => (
-                      <button
-                        key={key}
-                        onClick={() => clearColumnFilter(key)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs selection selection-text rounded-md hover:selection-strong transition-colors"
-                      >
-                        <ListFilter className="w-3 h-3" />
-                        <span>{key}: {columnFilterExcludes[key] ? 'not ' : ''}{vals.join(', ')}</span>
-                        <X className="w-3 h-3" />
-                      </button>
-                    ))}
-                    {problemFilters.length > 0 && (
-                      <button
-                        onClick={() => setProblemFilters([])}
-                        className="flex items-center gap-1 px-2 py-1 text-xs bg-red-500/15 text-red-700 dark:text-red-300 rounded-md hover:bg-red-500/25 transition-colors"
-                      >
-                        <AlertTriangle className="w-3 h-3" />
-                        <span>Problems: {problemFilters.join(', ')}</span>
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                    {labelSelector && (
-                      <button
-                        onClick={() => setLabelSelector('')}
-                        className="flex items-center gap-1 px-2 py-1 text-xs bg-green-500/15 text-green-700 dark:text-green-300 rounded-md hover:bg-green-500/25 transition-colors"
-                      >
-                        <Tag className="w-3 h-3" />
-                        <span>{labelSelector}</span>
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-                )
-              })()}
+              <ActiveFilterBar
+                columnFilters={columnFilters}
+                columnFilterExcludes={columnFilterExcludes}
+                problemFilters={problemFilters}
+                labelSelector={labelSelector}
+                onClearColumn={clearColumnFilter}
+                onClearProblems={() => setProblemFilters([])}
+                onClearLabels={() => setLabelSelector('')}
+                restored={filtersRestored}
+                className="mt-3"
+              />
               {hasAnyFilter && (
                 <button
                   type="button"
@@ -6707,6 +6853,22 @@ export function ResourcesView({
                                   <div className="px-3 py-2 text-xs text-theme-text-disabled">No matches</div>
                                 )}
                               </div>
+                              {col.key === 'namespace' && onApplyNamespacesToAllSections && activeFilterValues.length > 0 && !columnFilterExcludes[col.key] && (
+                                <div className="p-1 border-t border-theme-border">
+                                  <button
+                                    onClick={() => {
+                                      setOpenColumnFilter(null)
+                                      // Keep the column filter until the scope change lands; a failed one keeps the user's filter.
+                                      Promise.resolve(onApplyNamespacesToAllSections(activeFilterValues))
+                                        .then(() => clearColumnFilter(col.key), () => {})
+                                    }}
+                                    className="w-full text-left px-2 py-1.5 text-xs rounded text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary transition-colors"
+                                    title="Scope every section to these namespaces in the header namespace picker"
+                                  >
+                                    Apply to all sections
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )
                         })()}
@@ -6785,17 +6947,18 @@ export function ResourcesView({
           />
         )}
       </div>
+      )}
     </div>
 
     {/* Bulk delete confirmation */}
     <ConfirmDialog
-      open={showBulkDeleteConfirm}
+      open={tableActive && showBulkDeleteConfirm}
       onClose={() => { setShowBulkDeleteConfirm(false); setBulkForceDelete(false) }}
       onConfirm={() => {
         onBulkDelete?.(checkedBulkItems, {
           force: bulkForceDelete,
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkDeleteConfirm(false)
             setBulkForceDelete(false)
           },
@@ -6820,12 +6983,12 @@ export function ResourcesView({
       </label>
     </ConfirmDialog>
     <ConfirmDialog
-      open={showBulkRestartConfirm}
+      open={tableActive && showBulkRestartConfirm}
       onClose={() => setShowBulkRestartConfirm(false)}
       onConfirm={() => {
         onBulkRestart?.(checkedBulkItems, {
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkRestartConfirm(false)
           },
         })
@@ -6839,12 +7002,12 @@ export function ResourcesView({
       isClosable
     />
     <ConfirmDialog
-      open={showBulkScaleDialog}
+      open={tableActive && showBulkScaleDialog}
       onClose={() => setShowBulkScaleDialog(false)}
       onConfirm={() => {
         onBulkScale?.(checkedBulkItems, bulkScaleReplicas, {
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkScaleDialog(false)
           },
         })
@@ -7936,9 +8099,9 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const label = isCPU ? 'CPU' : 'Memory'
       const format = isCPU ? formatCPU : formatMemoryShort
 
-      // Multi-container pods carry a per-container breakdown; single-container
-      // pods fall back to the (union-summed) pod-level fields as one synthetic
-      // container so the rest of the logic is uniform.
+      // Multi-container pods (and any pod with a pod-level budget) carry a
+      // per-container breakdown; other single-container pods fall back to the
+      // pod-level fields as one synthetic container so the logic is uniform.
       const list: ContainerResourceMetrics[] = (m.containers && m.containers.length > 0)
         ? m.containers
         : [{
@@ -7947,7 +8110,15 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
             memory: m.memory, memoryRequest: m.memoryRequest, memoryLimit: m.memoryLimit,
           }]
 
-      const { mode, totalUsage, denom, markerPct, unlimitedCount } = podAggregate(list, kind)
+      // The pod totals already carry any pod-level value (overlaid server-side
+      // with exact quantity parsing); spec.resources only says whether one is set.
+      const podLevel = resource.spec?.resources
+      const podRequest = podLevel?.requests?.[kind] ? (isCPU ? m.cpuRequest : m.memoryRequest) : undefined
+      const podLimit = podLevel?.limits?.[kind] ? (isCPU ? m.cpuLimit : m.memoryLimit) : undefined
+      const { mode, totalUsage, denom, markerPct, unlimitedCount } = podAggregate(list, kind, {
+        request: podRequest,
+        limit: podLimit,
+      })
       if (totalUsage === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
 
       // Pod-vs-node context: how full the pod's node is (the risk signal) and
@@ -7967,7 +8138,12 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
           }
         : undefined
 
-      const tip = buildContainerResourceTooltip(label, list, kind, format, nodeCtx)
+      // The synthetic single-container row already carries the pod totals, so
+      // only a real per-container breakdown needs the shared budget spelled out.
+      const podBudget = podLimit && m.containers?.length
+        ? { usage: totalUsage, limit: podLimit, request: podRequest }
+        : undefined
+      const tip = buildContainerResourceTooltip(label, list, kind, format, nodeCtx, podBudget)
 
       // Every container is limited → aggregate bar against the summed limit; a
       // real pod-level ceiling, so it may go red.
@@ -8463,6 +8639,7 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
 }
 
 function CronJobCell({ resource, column }: { resource: any; column: string }) {
+  const { operationalIssues, operationalIssuesIncomplete } = useContext(ResourcesViewDataContext)
   switch (column) {
     case 'schedule': {
       const { cron, readable } = getCronJobSchedule(resource)
@@ -8474,6 +8651,13 @@ function CronJobCell({ resource, column }: { resource: any; column: string }) {
       )
     }
     case 'status': {
+      const issue = operationalIssues?.[`${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`]
+      if (issue) {
+        return <Tooltip content={issue.message}><Badge severity={issue.severity === 'critical' ? 'error' : 'warning'}>{issueTitle(issue)}</Badge></Tooltip>
+      }
+      if (operationalIssuesIncomplete) {
+        return <Tooltip content="The issue list is incomplete. This CronJob's status could not be checked."><Badge severity="neutral">Unknown</Badge></Tooltip>
+      }
       const status = getCronJobStatus(resource)
       return (
         <span className={clsx('badge', status.color)}>
@@ -8592,12 +8776,16 @@ interface PodAggregate {
 // headline renders — total usage measured against a pod-level yardstick. It
 // keeps the dominant consumer visible instead of demoting it behind a small
 // limited container, and stays honest about partial limits (which don't form a
-// real ceiling).
-export function podAggregate(list: ContainerResourceMetrics[], kind: 'cpu' | 'memory'): PodAggregate {
+// real ceiling). A pod-level budget (spec.resources) bounds every container, so
+// its limit is a real ceiling regardless of what the containers set.
+export function podAggregate(
+  list: ContainerResourceMetrics[],
+  kind: 'cpu' | 'memory',
+  podLevel?: { request?: number; limit?: number },
+): PodAggregate {
   const isCPU = kind === 'cpu'
   let totalUsage = 0
   let limitedCount = 0
-  let requestedCount = 0
   let unlimitedCount = 0
   let summedLimit = 0
   let summedRequest = 0
@@ -8612,25 +8800,28 @@ export function podAggregate(list: ContainerResourceMetrics[], kind: 'cpu' | 'me
     } else {
       unlimitedCount++
     }
-    if (request > 0) {
-      requestedCount++
-      summedRequest += request
-    }
+    if (request > 0) summedRequest += request
   }
+  if (podLevel?.request) summedRequest = podLevel.request
   const allLimited = list.length > 0 && limitedCount === list.length
-  if (allLimited) {
+  // Container limits still apply inside a pod-level budget, so when every
+  // container has one the tighter of the two totals is the real ceiling.
+  const ceiling = podLevel?.limit && allLimited
+    ? Math.min(podLevel.limit, summedLimit)
+    : podLevel?.limit || (allLimited ? summedLimit : 0)
+  if (ceiling) {
     return {
       mode: 'limit',
       totalUsage,
-      denom: summedLimit,
-      markerPct: summedRequest > 0 ? (summedRequest / summedLimit) * 100 : undefined,
+      denom: ceiling,
+      markerPct: summedRequest > 0 ? (summedRequest / ceiling) * 100 : undefined,
       unlimitedCount,
     }
   }
   if (limitedCount > 0) {
     return { mode: 'partial', totalUsage, denom: 0, unlimitedCount }
   }
-  if (requestedCount > 0) {
+  if (summedRequest > 0) {
     return { mode: 'request', totalUsage, denom: summedRequest, unlimitedCount }
   }
   return { mode: 'none', totalUsage, denom: 0, unlimitedCount }
@@ -8658,12 +8849,13 @@ function formatSharePct(pct: number): string {
   return `${Math.round(pct)}%`
 }
 
-function buildContainerResourceTooltip(
+export function buildContainerResourceTooltip(
   label: 'CPU' | 'Memory',
   containers: ContainerResourceMetrics[],
   kind: 'cpu' | 'memory',
   formatFn: (n: number) => string,
   nodeCtx?: NodeContext,
+  podBudget?: { usage: number; limit: number; request?: number },
 ) {
   const rows = [...containers].sort((a, b) => {
     const diff = readContainer(b, kind).pct - readContainer(a, kind).pct
@@ -8686,7 +8878,7 @@ function buildContainerResourceTooltip(
             ? `${formatFn(r.usage)} · ${Math.round(r.pct)}% · ${formatFn(r.denom)} limit${r.request > 0 ? ` · req ${formatFn(r.request)}` : ''}`
             : r.yardstick === 'request'
               ? `${formatFn(r.usage)} · ${Math.round(r.pct)}% · ${formatFn(r.denom)} request`
-              : `${formatFn(r.usage)} · no limit`
+              : `${formatFn(r.usage)} · ${podBudget ? 'pod limit' : 'no limit'}`
           return (
             <div key={c.name} className="flex flex-col leading-snug">
               <span className="text-[11px] text-theme-text-tertiary truncate">{c.name}</span>
@@ -8698,6 +8890,14 @@ function buildContainerResourceTooltip(
       {remaining > 0 && (
         <div className="text-[11px] text-theme-text-tertiary border-t border-theme-border/50 pt-1">
           +{remaining} more → open pod
+        </div>
+      )}
+      {podBudget && (
+        <div className="flex flex-col leading-snug border-t border-theme-border/50 pt-1">
+          <span className="text-[11px] text-theme-text-tertiary truncate">Pod (shared)</span>
+          <span className="text-xs font-mono text-theme-text-primary">
+            {`${formatFn(podBudget.usage)} · ${Math.round((podBudget.usage / podBudget.limit) * 100)}% · ${formatFn(podBudget.limit)} limit${podBudget.request ? ` · req ${formatFn(podBudget.request)}` : ''}`}
+          </span>
         </div>
       )}
       {nodeCtx && (

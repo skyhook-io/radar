@@ -16,6 +16,10 @@ export interface DockTab {
   podName?: string
   containerName?: string
   containers?: string[]
+  /** Terminal: run this command instead of a shell (one argv element, e.g. "psql"). */
+  shell?: string
+  /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
+  sessionNote?: string
   // Workload logs props
   workloadKind?: string
   workloadName?: string
@@ -87,10 +91,14 @@ export function DockProvider({ children }: { children: ReactNode }) {
       }
       return t.namespace === tabData.namespace &&
              t.podName === tabData.podName &&
-             t.containerName === tabData.containerName
+             t.containerName === tabData.containerName &&
+             t.shell === tabData.shell
     })
 
     if (existingTab) {
+      if (tabData.type === 'terminal' && tabData.sessionNote !== undefined) {
+        setTabs(prev => prev.map(tab => tab.id === existingTab.id ? { ...tab, sessionNote: tabData.sessionNote } : tab))
+      }
       setActiveTabId(existingTab.id)
       setIsExpanded(true)
       return existingTab.id
@@ -197,7 +205,7 @@ export function useDockReservedHeight(): number {
 // Convenience hooks for adding specific tab types
 
 export function useOpenTerminal() {
-  const { addTab } = useDock()
+  const { addTab, setTabTitle } = useDock()
 
   return (opts: {
     namespace: string
@@ -207,18 +215,24 @@ export function useOpenTerminal() {
     orgId?: string
     clusterId?: string
     clusterName?: string
+    shell?: string
+    sessionNote?: string
+    title?: string
   }) => {
-    addTab({
+    const id = addTab({
       type: 'terminal',
-      title: `${opts.podName}/${opts.containerName}`,
+      title: opts.title ?? `${opts.podName}/${opts.containerName}`,
       namespace: opts.namespace,
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      shell: opts.shell,
+      sessionNote: opts.sessionNote,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,
     })
+    if (opts.title !== undefined) setTabTitle(id, opts.title)
   }
 }
 

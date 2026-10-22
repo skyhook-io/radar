@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  isRolloutEvent,
   buildHealthSpans,
   sweepAggregateHealth,
   formatAggregateHealthTooltip,
@@ -215,5 +216,52 @@ describe('buildLaneMemberSpans (leaf gathering)', () => {
     const dep = leaf('Deployment', 'web', 'healthy')
     const members = buildLaneMemberSpans(dep, win.start, win.now)
     expect(members.map((m) => m.name)).toEqual(['web'])
+  })
+})
+
+describe('isRolloutEvent', () => {
+  type F = { path: string; oldValue?: unknown; newValue?: unknown }
+  const ev = (kind: string, fields: F[], summary = '') => ({
+    id: 'e', source: 'informer', eventType: 'update', kind, namespace: 'shop', name: 'web',
+    timestamp: new Date(0).toISOString(),
+    diff: { summary, fields: fields.map((f) => ({ oldValue: 1, newValue: 2, ...f })) },
+  }) as any
+
+  it('does not treat a pod-template edit alone as a rollout (OnDelete and paused workloads do not roll)', () => {
+    expect(isRolloutEvent(ev('Deployment', [{ path: 'spec.template.metadata.annotations[kubectl.kubernetes.io/restartedAt]' }], 'pod template annotation kubectl.kubernetes.io/restartedAt added (new pod template revision)'))).toBe(false)
+    expect(isRolloutEvent(ev('DaemonSet', [{ path: 'spec.template.metadata.annotations[checksum/config]' }]))).toBe(false)
+    expect(isRolloutEvent(ev('Rollout', [{ path: 'spec.template.spec.containers[].image' }], 'image: web:2'))).toBe(false)
+  })
+
+  it('treats updated-count movement with steady readiness as a rollout', () => {
+    expect(isRolloutEvent(ev('Deployment', [{ path: 'status.updatedReplicas', oldValue: 1, newValue: 2 }]))).toBe(true)
+    expect(isRolloutEvent(ev('DaemonSet', [{ path: 'status.updatedNumberScheduled', oldValue: 1, newValue: 2 }]))).toBe(true)
+  })
+
+  it('keeps degraded health visible when readiness moves in the same update', () => {
+    // A pod swap, a lost pod and a scale-up under failing readiness are
+    // indistinguishable from the counts alone.
+    expect(isRolloutEvent(ev('DaemonSet', [
+      { path: 'status.numberReady', oldValue: 4, newValue: 3 },
+      { path: 'status.updatedNumberScheduled', oldValue: 1, newValue: 2 },
+    ]))).toBe(false)
+    expect(isRolloutEvent(ev('Deployment', [
+      { path: 'status.readyReplicas', oldValue: 3, newValue: 2 },
+      { path: 'status.updatedReplicas', oldValue: 3, newValue: 5 },
+    ]))).toBe(false)
+  })
+
+  it('treats the reset at the start of a rollout as a rollout', () => {
+    expect(isRolloutEvent(ev('Deployment', [{ path: 'status.updatedReplicas', oldValue: 3, newValue: 0 }], 'updated: 3→0'))).toBe(true)
+  })
+
+  it('does not treat a lost pod or unrelated changes as a rollout', () => {
+    expect(isRolloutEvent(ev('Deployment', [
+      { path: 'status.readyReplicas', oldValue: 3, newValue: 2 },
+      { path: 'status.updatedReplicas', oldValue: 3, newValue: 2 },
+    ]))).toBe(false)
+    expect(isRolloutEvent(ev('Deployment', [{ path: 'status.readyReplicas', oldValue: 3, newValue: 1 }]))).toBe(false)
+    expect(isRolloutEvent(ev('Deployment', [{ path: 'spec.strategy.rollingUpdate.maxUnavailable' }], 'updated: wording without the field'))).toBe(false)
+    expect(isRolloutEvent(ev('Service', [{ path: 'status.updatedReplicas', oldValue: 1, newValue: 2 }]))).toBe(false)
   })
 })

@@ -26,6 +26,9 @@ var (
 	dynamicResourceCache *DynamicResourceCache
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
+	// dynamicSyncStallAfter overrides k8score's stall threshold in tests;
+	// zero keeps the default.
+	dynamicSyncStallAfter time.Duration
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache.
@@ -87,6 +90,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceFallbacksTruncated: nsFallbacksTruncated,
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
+			SyncStallAfter:              dynamicSyncStallAfter,
 			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
@@ -198,8 +202,11 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "acme.cert-manager.io", Versions: []string{"v1"}, Resource: "orders", Kind: "Order", Namespaced: true},
 	{Group: "acme.cert-manager.io", Versions: []string{"v1"}, Resource: "challenges", Kind: "Challenge", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "gitrepositories", Kind: "GitRepository", Namespaced: true},
-	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1beta2"}, Resource: "ocirepositories", Kind: "OCIRepository", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "ocirepositories", Kind: "OCIRepository", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmrepositories", Kind: "HelmRepository", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmcharts", Kind: "HelmChart", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "buckets", Kind: "Bucket", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1"}, Resource: "externalartifacts", Kind: "ExternalArtifact", Namespaced: true},
 	{Group: "kustomize.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "kustomizations", Kind: "Kustomization", Namespaced: true},
 	{Group: "helm.toolkit.fluxcd.io", Versions: []string{"v2", "v2beta2", "v2beta1"}, Resource: "helmreleases", Kind: "HelmRelease", Namespaced: true},
 	{Group: "notification.toolkit.fluxcd.io", Versions: []string{"v1beta3", "v1beta2"}, Resource: "alerts", Kind: "Alert", Namespaced: true},
@@ -307,6 +314,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "databases", Kind: "Database", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "publications", Kind: "Publication", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "subscriptions", Kind: "Subscription", Namespaced: true},
+	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "databaseroles", Kind: "DatabaseRole", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "imagecatalogs", Kind: "ImageCatalog", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "clusterimagecatalogs", Kind: "ClusterImageCatalog", Namespaced: false},
 	// The barman-cloud plugin ships its own group; the in-tree backup settings it

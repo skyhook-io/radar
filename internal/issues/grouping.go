@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // RelatedIssues returns the grouped issues whose subject OR an affected member
@@ -41,6 +42,36 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 			Ref{Group: group, Kind: kind, Namespace: namespace, Name: name})
 	}
 	return matched
+}
+
+// OtherSubject returns the issue's own subject when the issue reaches the
+// resource through another subject (a NetworkPolicy issue on the Service it
+// isolates), and nil when the issue is about the resource, its owner, or a
+// group the resource is a member of (a Pod under its Deployment's issue).
+func OtherSubject(i Issue, group, kind, namespace, name string) *Ref {
+	if Concerns(i, group, kind, namespace, name) {
+		return nil
+	}
+	// Members are capped, so a resource beyond the cap may still be one.
+	if i.MembersTruncated {
+		return nil
+	}
+	wantGroup := resolveGroup(group, kind)
+	for _, m := range i.Members {
+		if strings.EqualFold(m.Kind, kind) && m.Namespace == namespace && m.Name == name && resolveGroup(m.Group, m.Kind) == wantGroup {
+			return nil
+		}
+	}
+	return &Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name}
+}
+
+// SummarySubject is OtherSubject shaped for a resource-context issue summary.
+func SummarySubject(i Issue, group, kind, namespace, name string) *resourcecontext.ContextRef {
+	ref := OtherSubject(i, group, kind, namespace, name)
+	if ref == nil {
+		return nil
+	}
+	return &resourcecontext.ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}
 }
 
 // Concerns reports whether an issue is about the resource: its own subject,
@@ -95,6 +126,15 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		if match(g.Group, g.Kind, g.Namespace, g.Name) && canReadSubject(g) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) && canReadEvidence(g) {
 			matched[g.ID] = true
 		}
+		// A finding about another subject matches every resource it affects,
+		// not only the capped links its fact shows. A nil authorizer fails
+		// closed, as for every cross-resource reference.
+		for _, ref := range g.AffectedRefs {
+			if match(ref.Group, ref.Kind, ref.Namespace, ref.Name) && opts.CanReadRelated != nil && opts.CanReadRelated(ref) && canReadSubject(g) && canReadEvidence(g) {
+				matched[g.ID] = true
+				break
+			}
+		}
 		if g.DiagnosticContext != nil {
 			for _, fact := range g.DiagnosticContext.Facts {
 				if fact.Type != karpenterFactReferencedByNodePools {
@@ -122,7 +162,9 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 			continue
 		}
 		if shown, ok := forEvidence(g); ok {
-			out = append(out, shown)
+			// The pair may be user-agnostic (a shared memo), so drop the
+			// links this caller can't read before returning the row.
+			out = append(out, RedactIssueRelatedRefs(shown, opts.CanReadRelated))
 		}
 	}
 	return out
@@ -192,6 +234,7 @@ func foldGroup(members []Issue) Issue {
 		Reason:               rep.Reason,
 		Message:              rep.Message,
 		RawMessage:           rep.RawMessage,
+		MessageSource:        rep.MessageSource,
 		Fingerprint:          rep.Fingerprint,
 		RestartCount:         rep.RestartCount,
 		LastTerminatedReason: rep.LastTerminatedReason,
@@ -205,6 +248,7 @@ func foldGroup(members []Issue) Issue {
 		// so without this the regroup would drop the representative's causal
 		// links / change context.
 		DiagnosticContext: rep.DiagnosticContext,
+		AffectedRefs:      rep.AffectedRefs,
 		ChangeContext:     rep.ChangeContext,
 		Degraded:          rep.Degraded,
 	}

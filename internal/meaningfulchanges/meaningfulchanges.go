@@ -3,20 +3,26 @@ package meaningfulchanges
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 const (
@@ -29,7 +35,17 @@ const (
 	// before the public response is capped.
 	IssueChangesCandidateLimit = 10
 	ResourceLimit              = 3
-	maxCandidateLimit          = 100
+)
+
+// Each candidate query reads at most this many of the newest matching rows;
+// ranking and the output limit apply afterwards. A query that has more rows
+// in the window marks the answer saturated. The bound decides which rows
+// compete for the output, not how many are returned, so it does not depend on
+// the output limit. A name filter reads one object's history, which a smaller
+// bound covers.
+const (
+	FetchBound      = 1000
+	NamedFetchBound = 100
 )
 
 const (
@@ -42,7 +58,7 @@ const (
 	truncatedIssueMembersGuidance = "Radar did not promote changes based on issue linkage because at least one returned grouped issue omitted members; an omitted member may explain a change."
 	// FetchSaturatedGuidance distinguishes an incomplete candidate query from
 	// a complete window whose lower-ranked results were omitted from output.
-	FetchSaturatedGuidance = "Radar's change query hit its candidate cap, so this window may contain changes the query never saw; absence from this feed is not evidence a change did not occur."
+	FetchSaturatedGuidance = "A change query exceeded its fetch bound in this window, so relevant changes may be missing; absence from this feed is not evidence they did not occur."
 )
 
 // issueChangesGuidance returns response-level steering prose for reason tokens
@@ -119,6 +135,40 @@ func PrioritizeIssueChanges(changes []issuesapi.RecentChange, activeIssues []iss
 	return changes, guidance, opts.Limit > 0 && originalLen > len(changes)
 }
 
+// ApplyIssueChanges fills an issues response's recent-changes fields from
+// one Recent answer. A saturated answer, or one whose window starts before the
+// history Radar holds, is reported even when no change survives, so an empty
+// block never reads as a complete one.
+func ApplyIssueChanges(resp *issuesapi.Response, result RecentResult, activeIssues []issuesapi.Issue, reason string, unfilteredIssueSet, readsAllNamespaces bool) {
+	coverage := HistoryCoverageFor(result.History, readsAllNamespaces)
+	if len(result.Changes) == 0 && !result.FetchSaturated && coverage == nil {
+		return
+	}
+	changes := result.Changes
+	var guidance string
+	var recapped bool
+	if len(changes) > 0 {
+		changes, guidance, recapped = PrioritizeIssueChanges(changes, activeIssues, IssueChangePriorityOptions{
+			Reason:             reason,
+			Limit:              IssueChangesLimit,
+			UnfilteredIssueSet: unfilteredIssueSet,
+			FetchSaturated:     result.FetchSaturated,
+		})
+	} else if result.FetchSaturated {
+		// The reason-specific guidance is about listed changes; with none
+		// listed, only the completeness warning applies.
+		guidance = FetchSaturatedGuidance
+	}
+	if coverage != nil {
+		guidance = appendGuidance(guidance, HistoryCoverageGuidance(*coverage))
+	}
+	resp.RecentChanges = changes
+	resp.RecentChangesReason = reason
+	resp.RecentChangesGuidance = guidance
+	resp.RecentChangesTruncated = result.OutputCapped || result.FetchSaturated || recapped
+	resp.RecentChangesHistoryCoverage = coverage
+}
+
 func appendGuidance(current, addition string) string {
 	if current == "" {
 		return addition
@@ -167,14 +217,19 @@ var (
 		"HorizontalPodAutoscaler", "Application", "Kustomization", "HelmRelease",
 		"GitRepository", "OCIRepository", "HelmRepository",
 		"ResourceQuota", "LimitRange",
+		"CronJob", "PodDisruptionBudget",
+		"Gateway", "HTTPRoute", "GRPCRoute", "TCPRoute", "UDPRoute", "TLSRoute", "ReferenceGrant",
+		// A policy that newly isolates running pods often has no traffic
+		// symptom (established connections survive), so the object change is
+		// the only evidence.
+		"NetworkPolicy",
 		// Cluster-scoped (namespace==""), so they surface in a cluster-wide
 		// get_changes, not in a single-namespace query — correct, since one
 		// webhook config gates admission across all namespaces.
-		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration",
+		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration", "GatewayClass",
 	}
-	// lifecycleOnlyKinds surface ONLY their delete events (name-only — never
-	// data). A deleted Secret breaks every consumer with zero K8s symptom on
-	// the Secret itself; its updates stay out of the feed entirely.
+	// lifecycleOnlyKinds contribute deletes; Secret updates have a separate
+	// reference gate in the default feed.
 	lifecycleOnlyKinds = []string{"Secret"}
 )
 
@@ -185,82 +240,197 @@ type Query struct {
 	Since      time.Duration
 	Limit      int
 	FieldLimit int
+	// Allow, when set, drops changes the caller may not read before ranking
+	// and the output limit, so hidden rows cannot take the visible ones'
+	// places.
+	Allow func(issuesapi.RecentChange) bool
+
+	// Viewer gates what rows say about other objects.
+	Viewer Viewer
+
+	// start is the window's lower bound, fixed once per answer so every
+	// candidate query reads the same window.
+	start time.Time
+}
+
+// Viewer gates the Pod and workload names a row carries beyond its own
+// object. Nil fields mean auth is off.
+type Viewer struct {
+	// CanReadPods gates Pod-derived names and stale-env evidence.
+	CanReadPods func(namespace string) bool
+	// CanReadConsumer gates each workload named in consumed_by and
+	// running_previous_value, checked as a change row of that kind.
+	CanReadConsumer func(issuesapi.RecentChange) bool
+}
+
+func (v Viewer) canReadPods(namespace string) bool {
+	return v.CanReadPods == nil || v.CanReadPods(namespace)
+}
+
+func (v Viewer) canNameConsumer(kind, group, namespace string) bool {
+	if v.CanReadConsumer == nil {
+		return true
+	}
+	// Owner references resolve to a group, not a version. The read check
+	// keys on the group alone (k8s.ChangeReadAllowed reads
+	// GroupFromAPIVersion), so any version names the same resource: an Argo
+	// Rollout (argoproj.io/v1alpha1) checks as argoproj.io/rollouts.
+	apiVersion := "v1"
+	if group != "" {
+		apiVersion = group + "/v1"
+	}
+	return v.CanReadConsumer(issuesapi.RecentChange{Kind: kind, APIVersion: apiVersion, Namespace: namespace})
 }
 
 type RecentResult struct {
 	Changes        []issuesapi.RecentChange
 	OutputCapped   bool
 	FetchSaturated bool
+	// History reports whether Radar's held history covers the window; see
+	// HistoryCoverageSince.
+	History issuesapi.HistoryCoverage
 }
 
+// Recent returns ranked changes plus two distinct truncation signals:
+// OutputCapped (more qualifying changes existed than the requested limit) and
+// FetchSaturated (a candidate query had more rows than its fetch bound, so the
+// window may contain older events the fetch never saw). Negative claims ("no
+// recent changes") must key on FetchSaturated and History, never on
+// OutputCapped: output capping still read the full window and ranks
+// spec/config changes above the churn that gets dropped.
 func Recent(ctx context.Context, q Query) (RecentResult, error) {
-	changes, outputCapped, fetchSaturated, err := recent(ctx, q)
-	return RecentResult{
-		Changes:        changes,
-		OutputCapped:   outputCapped,
-		FetchSaturated: fetchSaturated,
-	}, err
-}
-
-// recent returns ranked changes plus two distinct truncation signals:
-// outputCapped (more qualifying changes existed than the requested limit) and
-// fetchSaturated (a candidate query hit its cap, so the window may contain
-// older events the fetch never saw). Negative claims ("no recent changes")
-// must key on fetchSaturated alone — output capping still observes the full
-// window and ranks spec/config changes above the churn that gets dropped.
-func recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, bool, error) {
 	store := timeline.GetStore()
 	if store == nil {
-		return nil, false, false, fmt.Errorf("timeline store not initialized")
+		return RecentResult{}, timeline.StoreMissingError()
 	}
 	q = normalizeQuery(q)
-
-	if len(q.Kinds) > 0 || q.Name != "" {
-		queryLimit := candidateLimit(q.Limit, q.Name != "")
-		events, rawEvents, err := queryCandidates(ctx, store, q, q.Kinds, queryLimit)
-		if err != nil {
-			return nil, false, false, err
-		}
-		// Lifecycle events (add/delete) are fetched separately so a burst of
-		// update churn can't push them out of the newest-N candidate window
-		// before ranking ever sees them. Ranking scores deletes above status
-		// churn, but it can only rank what the fetch returns.
-		lifecycleEvents, rawLifecycle, err := queryLifecycleCandidates(ctx, store, q, q.Kinds)
-		if err != nil {
-			return nil, false, false, err
-		}
-		changes, capped, err := rankedChanges(coalesceRecreatePairs(dedupeEvents(append(events, lifecycleEvents...))), q.Name, q.Limit, q.FieldLimit)
-		saturated := rawEvents >= queryLimit || rawLifecycle >= lifecycleCandidateLimit
-		return changes, capped, saturated, err
+	bound := FetchBound
+	if q.Name != "" {
+		bound = NamedFetchBound
 	}
 
-	perQueryLimit := candidateLimit(q.Limit, false)
-	configEvents, rawConfig, err := queryCandidates(ctx, store, q, configKinds, perQueryLimit)
-	if err != nil {
-		return nil, false, false, err
+	// Updates and lifecycle events (add/delete) are fetched in separate
+	// queries, so a burst of creates can't push an edit out of the bound and
+	// update churn can't push out a delete. Creates and deletes come only from
+	// the lifecycle query.
+	updateKinds := [][]string{q.Kinds}
+	lifecycleKinds := q.Kinds
+	if len(q.Kinds) == 0 && q.Name == "" {
+		updateKinds = [][]string{configKinds, specKinds, {"Secret"}}
+		lifecycleKinds = append(append(append([]string{}, configKinds...), specKinds...), lifecycleOnlyKinds...)
 	}
-	specEvents, rawSpec, err := queryCandidates(ctx, store, q, specKinds, perQueryLimit)
-	if err != nil {
-		return nil, false, false, err
+	var events []timeline.TimelineEvent
+	saturated := false
+	for _, kinds := range updateKinds {
+		got, full, err := queryCandidates(ctx, store, q, kinds, updateEventTypes, bound)
+		if err != nil {
+			return RecentResult{}, err
+		}
+		events = append(events, got...)
+		saturated = saturated || full
 	}
-	lifecycleKinds := append(append([]string{}, configKinds...), specKinds...)
-	lifecycleKinds = append(lifecycleKinds, lifecycleOnlyKinds...)
-	lifecycleEvents, rawLifecycle, err := queryLifecycleCandidates(ctx, store, q, lifecycleKinds)
+	got, full, err := queryCandidates(ctx, store, q, lifecycleKinds, lifecycleEventTypes, bound)
 	if err != nil {
-		return nil, false, false, err
+		return RecentResult{}, err
 	}
-	merged := coalesceRecreatePairs(dedupeEvents(append(append(configEvents, specEvents...), lifecycleEvents...)))
-	changes, capped, err := rankedChanges(merged, "", q.Limit, q.FieldLimit)
-	saturated := rawConfig >= perQueryLimit || rawSpec >= perQueryLimit || rawLifecycle >= lifecycleCandidateLimit
-	return changes, capped, saturated, err
+	events = append(events, got...)
+	saturated = saturated || full
+
+	changes, capped := rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
+	return RecentResult{
+		Changes:        changes,
+		OutputCapped:   capped,
+		FetchSaturated: saturated,
+		History:        historyCoverage(q.start, q.Namespaces),
+	}, nil
+}
+
+// historyCoverage is HistoryCoverageSince for an answer scoped to
+// namespaces. A namespace created after the boundary holds its whole history,
+// since nothing in it can predate it; an answer scoped to such namespaces is
+// complete.
+func historyCoverage(windowStart time.Time, namespaces []string) issuesapi.HistoryCoverage {
+	coverage := HistoryCoverageSince(windowStart)
+	if coverage.Incomplete && namespacesCreatedAfter(namespaces, coverage.CompleteSince) {
+		return issuesapi.HistoryCoverage{}
+	}
+	return coverage
+}
+
+func namespacesCreatedAfter(namespaces []string, t time.Time) bool {
+	cache := k8s.GetResourceCache()
+	if len(namespaces) == 0 || cache == nil || cache.Namespaces() == nil {
+		return false
+	}
+	for _, name := range namespaces {
+		ns, err := cache.Namespaces().Get(name)
+		if err != nil || !ns.CreationTimestamp.After(t) {
+			return false
+		}
+	}
+	return true
+}
+
+// HistoryCoverageFor returns coverage as a response carries it: nil when the
+// history covers the window. CompleteSince is store-wide, so it can date
+// events the caller may not read; it is kept only for callers who can read
+// every namespace.
+func HistoryCoverageFor(coverage issuesapi.HistoryCoverage, readsAllNamespaces bool) *issuesapi.HistoryCoverage {
+	if !coverage.Incomplete {
+		return nil
+	}
+	if !readsAllNamespaces {
+		coverage.CompleteSince = time.Time{}
+	}
+	return &coverage
+}
+
+// HistoryCoverageGuidance is the sentence an answer carries when its window
+// starts before the history Radar holds.
+func HistoryCoverageGuidance(coverage issuesapi.HistoryCoverage) string {
+	const rest = "; changes before then may be missing, so an empty or short result does not establish that nothing changed. " +
+		"For older changes to one object, check it directly (get_resource, its ReplicaSet revisions)."
+	if coverage.CompleteSince.IsZero() {
+		return "Radar's change history is incomplete for part of this window" + rest
+	}
+	return "Radar's change history is complete only from " + coverage.CompleteSince.Format(time.RFC3339) + rest
+}
+
+// HistoryCoverageSince reports whether the history Radar holds covers
+// everything from windowStart on. It is incomplete when this process started
+// observing after windowStart, or when the store has deleted events newer than
+// windowStart; CompleteSince is then the later of those two times, rounded up
+// to the second. Rows Radar never saw for other reasons (a missed watch event)
+// are not covered by this.
+func HistoryCoverageSince(windowStart time.Time) issuesapi.HistoryCoverage {
+	var coverage issuesapi.HistoryCoverage
+	if started := timeline.ObservationStart(); started.After(windowStart) {
+		coverage.Reasons = append(coverage.Reasons, issuesapi.HistoryObservationStartedLate)
+		coverage.CompleteSince = started
+	}
+	if evicted := timeline.HistoryEvictedThrough(); evicted.After(windowStart) {
+		coverage.Reasons = append(coverage.Reasons, issuesapi.HistoryEventsEvicted)
+		if evicted.After(coverage.CompleteSince) {
+			coverage.CompleteSince = evicted
+		}
+	}
+	if len(coverage.Reasons) == 0 {
+		return issuesapi.HistoryCoverage{}
+	}
+	coverage.Incomplete = true
+	if rounded := coverage.CompleteSince.Truncate(time.Second); !rounded.Equal(coverage.CompleteSince) {
+		coverage.CompleteSince = rounded.Add(time.Second)
+	}
+	coverage.CompleteSince = coverage.CompleteSince.UTC()
+	return coverage
 }
 
 // RecentForResource returns the subject's ranked changes plus a saturation
 // flag: true when a candidate fetch hit its cap and the window may contain
 // changes the query never saw. Callers asserting "no recent changes" must
 // treat saturation as unknown, never as evidence of absence.
-func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
-	result, err := RecentForResourceDetailed(ctx, kind, namespace, name, since, limit, fieldLimit)
+func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) ([]issuesapi.RecentChange, bool, error) {
+	result, err := RecentForResourceDetailed(ctx, kind, namespace, name, since, limit, fieldLimit, viewer)
 	return result.Changes, result.FetchSaturated, err
 }
 
@@ -268,32 +438,29 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 // that display source coverage. The historical wrapper above intentionally
 // exposes only fetch saturation because issue-correlation uses that bool for
 // negative-claim gating.
-func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) (RecentResult, error) {
-	changes, outputCapped, fetchSaturated, err := recent(ctx, Query{
+func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) (RecentResult, error) {
+	return Recent(ctx, Query{
 		Namespaces: []string{namespace},
 		Kinds:      []string{canonicalKind(kind)},
 		Name:       name,
 		Since:      since,
 		Limit:      limit,
 		FieldLimit: fieldLimit,
+		Viewer:     viewer,
 	})
-	return RecentResult{
-		Changes:        changes,
-		OutputCapped:   outputCapped,
-		FetchSaturated: fetchSaturated,
-	}, err
 }
 
-func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
+// RecentForWorkloadAndConfigMaps includes directly referenced ConfigMaps and Secrets.
+func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) ([]issuesapi.RecentChange, bool, error) {
 	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
-		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil,
+		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil, viewer,
 	)
 	return result.Changes, result.FetchSaturated, err
 }
 
 // RecentForWorkloadAndConfigMapsAuthorizedDetailed is the authorization-aware
-// form used by cached-data surfaces. includeSource is evaluated for every
-// resource whose timeline would be queried, before the query runs. A false
+// form used by cached-data surfaces, including directly referenced Secrets.
+// includeSource is evaluated for every resource whose timeline would be queried, before the query runs. A false
 // result skips that source and makes coverageLimited true even when the source
 // has no matching rows; callers can therefore avoid both leaking hidden-row
 // counts and presenting a filtered empty result as complete coverage.
@@ -306,27 +473,31 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 	since time.Duration,
 	limit, fieldLimit int,
 	includeSource func(kind, name string) bool,
+	viewer Viewer,
 ) (result RecentResult, coverageLimited bool, err error) {
+	store := timeline.GetStore()
+	if store == nil {
+		return RecentResult{}, false, timeline.StoreMissingError()
+	}
+	q := normalizeQuery(Query{Namespaces: []string{namespace}, Since: since, Limit: limit, FieldLimit: fieldLimit, Viewer: viewer})
+	var events []timeline.TimelineEvent
 	fetch := func(resourceKind, resourceName string) error {
 		canonicalResourceKind := canonicalKind(resourceKind)
 		if includeSource != nil && !includeSource(canonicalResourceKind, resourceName) {
 			coverageLimited = true
 			return nil
 		}
-		resourceResult, err := Recent(ctx, Query{
-			Namespaces: []string{namespace},
-			Kinds:      []string{canonicalResourceKind},
-			Name:       resourceName,
-			Since:      since,
-			Limit:      limit,
-			FieldLimit: fieldLimit,
-		})
-		if err != nil {
-			return err
+		sourceQuery := q
+		sourceQuery.Kinds = []string{canonicalResourceKind}
+		sourceQuery.Name = resourceName
+		for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
+			got, saturated, err := queryCandidates(ctx, store, sourceQuery, sourceQuery.Kinds, eventTypes, NamedFetchBound)
+			if err != nil {
+				return err
+			}
+			events = append(events, got...)
+			result.FetchSaturated = result.FetchSaturated || saturated
 		}
-		result.Changes = append(result.Changes, resourceResult.Changes...)
-		result.OutputCapped = result.OutputCapped || resourceResult.OutputCapped
-		result.FetchSaturated = result.FetchSaturated || resourceResult.FetchSaturated
 		return nil
 	}
 
@@ -335,14 +506,15 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			return RecentResult{}, coverageLimited, err
 		}
 	}
-	for _, cm := range DirectConfigMapNames(obj) {
-		if err := fetch("ConfigMap", cm); err != nil {
+	for _, ref := range DirectConfigReferences(obj) {
+		if err := fetch(ref.Kind, ref.Name); err != nil {
 			return RecentResult{}, coverageLimited, err
 		}
 	}
-	preCapCount := len(result.Changes)
-	RankAndCap(&result.Changes, limit)
-	result.OutputCapped = result.OutputCapped || len(result.Changes) < preCapCount
+	result.History = historyCoverage(q.start, q.Namespaces)
+	// These are explicitly scoped sources: retain every update, as for a name query.
+	q.Kinds = []string{canonicalKind(kind)}
+	result.Changes, result.OutputCapped = rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
 	return result, coverageLimited, nil
 }
 
@@ -394,46 +566,40 @@ func ConfigMapKind(kind string) bool {
 
 func WorkloadKind(kind string) bool { return isWorkloadKind(kind) }
 
-func DirectConfigMapNames(obj any) []string {
+// DirectConfigReferences returns env and native volume references, excluding
+// image-pull and volume-driver credentials.
+func DirectConfigReferences(obj any) []configrefs.Ref {
 	spec, ok := podSpecForObject(obj)
 	if !ok {
 		return nil
 	}
-	seen := map[string]bool{}
-	add := func(name string) {
-		if name != "" {
-			seen[name] = true
+	seen := map[configrefs.Ref]bool{}
+	configrefs.VisitPodSpecReferences("", spec, func(ref configrefs.PodSpecReference) {
+		if ref.Kind != "Secret" && ref.Kind != "ConfigMap" {
+			return
 		}
+		if strings.HasPrefix(ref.Path, "volumes[].") &&
+			!strings.HasPrefix(ref.Path, "volumes[].secret.") &&
+			!strings.HasPrefix(ref.Path, "volumes[].configMap.") &&
+			!strings.HasPrefix(ref.Path, "volumes[].projected.sources[].secret.") &&
+			!strings.HasPrefix(ref.Path, "volumes[].projected.sources[].configMap.") {
+			return
+		}
+		if strings.HasPrefix(ref.Path, "imagePullSecrets") {
+			return
+		}
+		seen[ref.Ref] = true
+	})
+	out := make([]configrefs.Ref, 0, len(seen))
+	for ref := range seen {
+		out = append(out, ref)
 	}
-	for _, v := range spec.Volumes {
-		if v.ConfigMap != nil {
-			add(v.ConfigMap.Name)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
 		}
-		if v.Projected != nil {
-			for _, source := range v.Projected.Sources {
-				if source.ConfigMap != nil {
-					add(source.ConfigMap.Name)
-				}
-			}
-		}
-	}
-	for _, c := range allContainers(spec) {
-		for _, from := range c.EnvFrom {
-			if from.ConfigMapRef != nil {
-				add(from.ConfigMapRef.Name)
-			}
-		}
-		for _, env := range c.Env {
-			if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil {
-				add(env.ValueFrom.ConfigMapKeyRef.Name)
-			}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	sort.Strings(out)
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -456,73 +622,49 @@ func normalizeQuery(q Query) Query {
 	for i, kind := range q.Kinds {
 		q.Kinds[i] = canonicalKind(kind)
 	}
+	if q.start.IsZero() {
+		q.start = time.Now().Add(-q.Since)
+	}
 	return q
 }
 
-func candidateLimit(finalLimit int, nameFiltered bool) int {
-	limit := finalLimit * 4
-	if limit < 50 {
-		limit = 50
-	}
-	if nameFiltered && limit < 100 {
-		limit = 100
-	}
-	if limit > maxCandidateLimit {
-		limit = maxCandidateLimit
-	}
-	return limit
-}
+var (
+	updateEventTypes    = []timeline.EventType{timeline.EventTypeUpdate}
+	lifecycleEventTypes = []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete}
+)
 
-// lifecycleCandidateLimit bounds the dedicated add/delete query. Lifecycle
-// events are rare relative to updates, so a modest window covers the lookback
-// without re-importing the churn the separate query exists to escape.
-const lifecycleCandidateLimit = 50
-
-// queryLifecycleCandidates fetches add/delete events for the given kinds in a
-// query of their own, immune to crowding by update events.
-// queryLifecycleCandidates returns group-filtered events plus the bounded
-// query's count. When all kinds share one known group, the store applies that
-// group before its limit; heterogeneous queries retain the row-level guard.
-func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string) ([]timeline.TimelineEvent, int, error) {
-	queryKinds := compactKinds(kinds)
-	opts := timeline.QueryOptions{
-		Namespaces:       q.Namespaces,
-		Kinds:            queryKinds,
-		Names:            compactNames(q.Name),
-		APIGroups:        commonTrackedAPIGroups(queryKinds),
-		Since:            time.Now().Add(-q.Since),
-		Sources:          []timeline.EventSource{timeline.SourceInformer},
-		EventTypes:       []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete},
-		ClusterContext:   k8s.ActiveClusterContext(),
-		Limit:            lifecycleCandidateLimit,
-		IncludeManaged:   false,
-		IncludeK8sEvents: false,
-	}
-	events, err := store.Query(ctx, opts)
-	return filterTrackedGroupEvents(events), len(events), err
-}
-
-// queryCandidates returns group-filtered events plus the bounded query's
-// count (see queryLifecycleCandidates for group-filter placement).
-func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, int, error) {
+// queryCandidates reads up to bound of the newest matching rows and reports
+// whether the window held more: it asks for one extra row, which it drops.
+// The returned events are group-filtered; when all kinds share one known
+// group, the store applies that group before its limit, and heterogeneous
+// queries keep the row-level guard.
+func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
 		Kinds:      queryKinds,
 		Names:      compactNames(q.Name),
 		APIGroups:  commonTrackedAPIGroups(queryKinds),
-		Since:      time.Now().Add(-q.Since),
+		Since:      q.start,
 		Sources:    []timeline.EventSource{timeline.SourceInformer},
+		EventTypes: eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the
 		// persistent store retains other contexts' events across switches,
 		// and serving those here hands agents phantom changes.
 		ClusterContext:   k8s.ActiveClusterContext(),
-		Limit:            limit,
+		Limit:            bound + 1,
 		IncludeManaged:   false,
 		IncludeK8sEvents: false,
 	}
 	events, err := store.Query(ctx, opts)
-	return filterTrackedGroupEvents(events), len(events), err
+	if err != nil {
+		return nil, false, err
+	}
+	saturated := len(events) > bound
+	if saturated {
+		events = events[:bound]
+	}
+	return filterTrackedGroupEvents(events), saturated, nil
 }
 
 // commonTrackedAPIGroups returns a store-level filter only when every queried
@@ -536,6 +678,9 @@ func commonTrackedAPIGroups(kinds []string) []string {
 	var common string
 	for i, kind := range kinds {
 		group, ok := trackedKindGroups[canonicalKind(kind)]
+		if canonicalKind(kind) == "Secret" {
+			group, ok = "", true
+		}
 		if !ok {
 			return nil
 		}
@@ -570,80 +715,111 @@ func eventGroupMatchesTracked(kind, apiVersion string) bool {
 		return true // emitter did not record it — unknown, not mismatched
 	}
 	expected, ok := trackedKindGroups[canonicalKind(kind)]
+	if canonicalKind(kind) == "Secret" {
+		expected, ok = "", true
+	}
 	if !ok {
 		return true
 	}
 	return resourceid.GroupFromAPIVersion(apiVersion) == expected
 }
 
-func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
+func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query) ([]issuesapi.RecentChange, bool) {
 	out := make([]issuesapi.RecentChange, 0, len(events))
 	for _, e := range events {
-		if name != "" && e.Name != name {
+		if q.Name != "" && e.Name != q.Name {
 			continue
 		}
-		change := fromEvent(e, fieldLimit)
+		change := fromEvent(e, q.FieldLimit)
 		if change.ChangeCategory == "" {
+			continue
+		}
+		if q.Allow != nil && !q.Allow(change) {
 			continue
 		}
 		out = append(out, change)
 	}
-	capped := len(out) > limit
-	annotateConfigMapConsumers(out)
-	RankAndCap(&out, limit)
-	return out, capped, nil
+	index, pods := annotateConfigConsumers(ctx, out, q)
+	if len(q.Kinds) == 0 && q.Name == "" {
+		visible := out[:0]
+		for _, change := range out {
+			if change.Kind == "Secret" && change.ChangeType == "update" && !index[resourceKey(change.Kind, change.Namespace, change.Name)].referenced {
+				continue
+			}
+			visible = append(visible, change)
+		}
+		out = visible
+	}
+	annotateRunningPreviousValue(ctx, out, pods, q.Viewer)
+	if len(q.Kinds) == 0 && q.Name == "" {
+		out = collapseSecretUpdates(out)
+	}
+	capped := len(out) > q.Limit
+	RankAndCap(&out, q.Limit)
+	return out, capped
 }
 
-// maxConsumersPerEntry bounds the consumed_by list on a ConfigMap entry.
 const maxConsumersPerEntry = 5
 
-// annotateConfigMapConsumers fills ConsumedBy on ConfigMap change entries from
-// a single workload-cache pass. Direct references only: a workload that reads
-// this ConfigMap's data through an intermediary service is invisible here, and
-// ConsumedBy deliberately makes no claim about it.
-func annotateConfigMapConsumers(changes []issuesapi.RecentChange) {
+type configConsumers struct {
+	referenced bool
+	names      []string
+	// withheld holds the names the caller may not read; only their count
+	// leaves this package.
+	withheld []string
+}
+
+func annotateConfigConsumers(ctx context.Context, changes []issuesapi.RecentChange, q Query) (map[string]configConsumers, map[string][]*corev1.Pod) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return
-	}
-	needsIndex := false
-	for i := range changes {
-		if changes[i].Kind == "ConfigMap" && changes[i].Namespace != "" {
-			needsIndex = true
-			break
-		}
-	}
-	if !needsIndex {
-		return
+		return nil, nil
 	}
 	namespaces := map[string]bool{}
 	for _, change := range changes {
-		if change.Kind == "ConfigMap" && change.Namespace != "" {
+		if (change.Kind == "ConfigMap" || change.Kind == "Secret") && change.Namespace != "" {
 			namespaces[change.Namespace] = true
 		}
 	}
-	index := configMapConsumerIndex(cache, namespaces)
+	index, pods := configConsumerIndex(ctx, cache, namespaces, q)
 	for i := range changes {
-		if changes[i].Kind != "ConfigMap" || changes[i].Namespace == "" {
-			continue
-		}
-		changes[i].ConsumedBy = index[configMapKey(changes[i].Namespace, changes[i].Name)]
+		entry := index[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
+		changes[i].ConsumedBy = entry.names
+		changes[i].ConsumedByWithheld = withheldCount(len(entry.withheld))
 	}
+	return index, pods
 }
 
-func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool) map[string][]string {
-	index := map[string][]string{}
-	add := func(namespace, kind, name string, obj any) {
-		for _, cm := range DirectConfigMapNames(obj) {
-			key := configMapKey(namespace, cm)
-			index[key] = append(index[key], kind+"/"+name)
+func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespaces map[string]bool, q Query) (map[string]configConsumers, map[string][]*corev1.Pod) {
+	index := map[string]configConsumers{}
+	pods := map[string][]*corev1.Pod{}
+	nameable := map[string]bool{}
+	canName := func(kind, group, namespace string) bool {
+		key := group + "/" + kind + "/" + namespace
+		allowed, checked := nameable[key]
+		if !checked {
+			allowed = q.Viewer.canNameConsumer(kind, group, namespace)
+			nameable[key] = allowed
+		}
+		return allowed
+	}
+	add := func(namespace, kind, name string, obj any, showName bool) {
+		for _, ref := range DirectConfigReferences(obj) {
+			key := resourceKey(ref.Kind, namespace, ref.Name)
+			entry := index[key]
+			entry.referenced = true
+			if showName {
+				entry.names = append(entry.names, kind+"/"+name)
+			} else {
+				entry.withheld = append(entry.withheld, kind+"/"+name)
+			}
+			index[key] = entry
 		}
 	}
 	if lister := cache.Deployments(); lister != nil {
 		for namespace := range namespaces {
 			if items, err := lister.Deployments(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "Deployment", item.Name, item)
+					add(namespace, "Deployment", item.Name, item, canName("Deployment", "apps", namespace))
 				}
 			}
 		}
@@ -652,7 +828,7 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.StatefulSets(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "StatefulSet", item.Name, item)
+					add(namespace, "StatefulSet", item.Name, item, canName("StatefulSet", "apps", namespace))
 				}
 			}
 		}
@@ -661,7 +837,7 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.DaemonSets(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "DaemonSet", item.Name, item)
+					add(namespace, "DaemonSet", item.Name, item, canName("DaemonSet", "apps", namespace))
 				}
 			}
 		}
@@ -670,7 +846,7 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.Jobs(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "Job", item.Name, item)
+					add(namespace, "Job", item.Name, item, canName("Job", "batch", namespace))
 				}
 			}
 		}
@@ -679,24 +855,64 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.CronJobs(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "CronJob", item.Name, item)
+					add(namespace, "CronJob", item.Name, item, canName("CronJob", "batch", namespace))
 				}
 			}
 		}
 	}
-	for key, consumers := range index {
-		sort.Strings(consumers)
-		if len(consumers) > maxConsumersPerEntry {
-			index[key] = consumers[:maxConsumersPerEntry]
-		} else {
-			index[key] = consumers
+	// Rollouts are indexed through their current Pods below, which resolve to
+	// the Rollout owner: listing the dynamic kind here could start an informer
+	// or probe access on every feed read.
+	for namespace := range namespaces {
+		if cache.Pods() == nil {
+			continue
+		}
+		items, err := cache.Pods().Pods(namespace).List(labels.Everything())
+		if err != nil {
+			continue
+		}
+		readable := q.Viewer.canReadPods(namespace)
+		for _, pod := range items {
+			kind, group, name := "Pod", "", pod.Name
+			if owner, ok := k8s.PodWorkload(cache, pod); ok {
+				kind, group, name = owner.Kind, owner.Group, owner.Name
+			}
+			add(namespace, kind, name, pod, readable && canName(kind, group, namespace))
+		}
+		if readable {
+			pods[namespace] = items
 		}
 	}
-	return index
+	for key, entry := range index {
+		sort.Strings(entry.names)
+		entry.names = slices.Compact(entry.names)
+		entry.withheld = withheldNames(entry.withheld, entry.names)
+		if len(entry.names) > maxConsumersPerEntry {
+			entry.names = entry.names[:maxConsumersPerEntry]
+		}
+		index[key] = entry
+	}
+	return index, pods
 }
 
-func configMapKey(namespace, name string) string {
-	return namespace + "\x00" + name
+// withheldNames returns the distinct hidden names that are not also listed:
+// a workload named through its readable template stays named even when its
+// Pods are not readable.
+func withheldNames(hidden, shown []string) []string {
+	var out []string
+	for _, name := range hidden {
+		if !slices.Contains(shown, name) && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func withheldCount(n int) *issuesapi.Withheld {
+	if n == 0 {
+		return nil
+	}
+	return &issuesapi.Withheld{Count: n, Reason: readreason.UserForbidden}
 }
 
 func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue) {
@@ -718,10 +934,11 @@ func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, acti
 			continue
 		}
 		isExplained := explained[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
-		if changes[i].Kind == "ConfigMap" {
-			// consumed_by is capped. At the cap, an omitted consumer may carry
-			// the issue, so absence is not strong enough to promote this entry.
-			if len(changes[i].ConsumedBy) >= maxConsumersPerEntry {
+		if changes[i].Kind == "ConfigMap" || changes[i].Kind == "Secret" {
+			// consumed_by is capped and filtered by access. At the cap, or with
+			// any consumer withheld, an omitted consumer may carry the issue,
+			// so absence is not strong enough to promote this entry.
+			if len(changes[i].ConsumedBy) >= maxConsumersPerEntry || changes[i].ConsumedByWithheld != nil {
 				continue
 			}
 			for _, consumer := range changes[i].ConsumedBy {
@@ -734,6 +951,9 @@ func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, acti
 		}
 		if !isExplained {
 			changes[i].NotLinkedToReturnedIssues = true
+			if changes[i].Kind == "Secret" {
+				continue
+			}
 			if changes[i].ChangeType == string(timeline.EventTypeAdd) {
 				changes[i].RankReason = "recreated with application configuration changes not linked to any returned issue"
 			} else {
@@ -770,15 +990,14 @@ func TrackedKind(kind string) bool {
 // Knative Service (serving.knative.dev) is not the core Service whose
 // changes the feed tracks.
 // NOTE: this map must cover exactly TrackedKind's set (configKinds +
-// specKinds) — no lifecycleOnlyKinds. Secret is delete-only in the feed
-// (updates are never recorded), so making Secret issues marker-eligible
-// would emit a false no_recent_changes after a data rotation the feed
-// cannot see. The drift-guard test pins both directions.
+// specKinds). Secret issues stay ineligible: API-only consumers are outside
+// the reference-gated default feed, so absence cannot establish no changes.
 var trackedKindGroups = map[string]string{
 	"ConfigMap": "", "Service": "", "ResourceQuota": "", "LimitRange": "",
 	"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps",
 	"Rollout":                        "argoproj.io",
 	"Ingress":                        "networking.k8s.io",
+	"NetworkPolicy":                  "networking.k8s.io",
 	"HorizontalPodAutoscaler":        "autoscaling",
 	"Application":                    "argoproj.io",
 	"Kustomization":                  "kustomize.toolkit.fluxcd.io",
@@ -788,6 +1007,16 @@ var trackedKindGroups = map[string]string{
 	"HelmRepository":                 "source.toolkit.fluxcd.io",
 	"MutatingWebhookConfiguration":   "admissionregistration.k8s.io",
 	"ValidatingWebhookConfiguration": "admissionregistration.k8s.io",
+	"CronJob":                        "batch",
+	"PodDisruptionBudget":            "policy",
+	"Gateway":                        "gateway.networking.k8s.io",
+	"GatewayClass":                   "gateway.networking.k8s.io",
+	"HTTPRoute":                      "gateway.networking.k8s.io",
+	"GRPCRoute":                      "gateway.networking.k8s.io",
+	"TCPRoute":                       "gateway.networking.k8s.io",
+	"UDPRoute":                       "gateway.networking.k8s.io",
+	"TLSRoute":                       "gateway.networking.k8s.io",
+	"ReferenceGrant":                 "gateway.networking.k8s.io",
 }
 
 // TrackedKindForGroup is TrackedKind with kind-collision protection: when
@@ -816,6 +1045,11 @@ func RankAndCap(changes *[]issuesapi.RecentChange, limit int) {
 		a, b := (*changes)[i], (*changes)[j]
 		if score(a) != score(b) {
 			return score(a) > score(b)
+		}
+		aStaleSecret := a.Kind == "Secret" && a.RunningPreviousValue != nil
+		bStaleSecret := b.Kind == "Secret" && b.RunningPreviousValue != nil
+		if score(a) == 105 && aStaleSecret != bStaleSecret {
+			return aStaleSecret
 		}
 		at, _ := time.Parse(time.RFC3339, a.Timestamp)
 		bt, _ := time.Parse(time.RFC3339, b.Timestamp)
@@ -903,7 +1137,7 @@ func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {
 			if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated && e.Diff != nil && len(e.Diff.Fields) > 0 {
 				return issuesapi.ChangeCategorySpecConfig, "recreated with desired-state or configuration changes"
 			}
-			return issuesapi.ChangeCategoryLifecycle, "resource create/delete for config or desired state"
+			return issuesapi.ChangeCategoryLifecycle, lifecycleRankReason
 		}
 		return "", ""
 	}
@@ -968,8 +1202,34 @@ func score(c issuesapi.RecentChange) int {
 
 const generationOnlyRankReason = "generation changed; specific fields were not tracked"
 
+// secretRankReason states only what the row establishes: a data change when
+// keys changed, references when consumed_by names them, and stale env readers
+// when running_previous_value is set.
+func secretRankReason(change issuesapi.RecentChange) string {
+	reason := "Secret changed"
+	if len(secretChangedKeys(change.Fields)) > 0 {
+		reason = "Secret data changed"
+	}
+	switch {
+	case change.RunningPreviousValue != nil:
+		if change.RunningPreviousValue.Pods == 1 {
+			return reason + "; 1 Pod likely still holds the earlier value"
+		}
+		return fmt.Sprintf("%s; %d Pods likely still hold the earlier value", reason, change.RunningPreviousValue.Pods)
+	case len(change.ConsumedBy) > 0:
+		return reason + "; referenced by a workload template or current Pod spec"
+	default:
+		return reason
+	}
+}
+
 func classifyApplicationConfigurationChange(change *issuesapi.RecentChange) {
 	if change == nil || change.NotLinkedToReturnedIssues {
+		return
+	}
+	if change.Kind == "Secret" && change.ChangeCategory == issuesapi.ChangeCategorySpecConfig {
+		change.ApplicationConfigurationChange = change.RunningPreviousValue != nil
+		change.RankReason = secretRankReason(*change)
 		return
 	}
 	if change.ApplicationConfigurationChange {
@@ -1261,6 +1521,16 @@ func canonicalKind(kind string) string {
 		return "GitRepository"
 	case "ocirepository", "ocirepositories":
 		return "OCIRepository"
+	case "tcproute", "tcproutes":
+		return "TCPRoute"
+	case "udproute", "udproutes":
+		return "UDPRoute"
+	case "tlsroute", "tlsroutes":
+		return "TLSRoute"
+	case "referencegrant", "referencegrants":
+		return "ReferenceGrant"
+	case "gatewayclass", "gatewayclasses":
+		return "GatewayClass"
 	case "helmrepository", "helmrepositories":
 		return "HelmRepository"
 	case "cronjob", "cronjobs":
@@ -1324,16 +1594,51 @@ func podSpecForObject(obj any) (corev1.PodSpec, bool) {
 		return o.Spec.Template.Spec, true
 	case *batchv1.CronJob:
 		return o.Spec.JobTemplate.Spec.Template.Spec, true
-	default:
-		return corev1.PodSpec{}, false
+	case *unstructured.Unstructured:
+		if o.GetKind() == "Rollout" && resourceid.GroupFromAPIVersion(o.GetAPIVersion()) == "argoproj.io" {
+			template, found, err := unstructured.NestedMap(o.Object, "spec", "template", "spec")
+			if err == nil && found {
+				var spec corev1.PodSpec
+				if runtime.DefaultUnstructuredConverter.FromUnstructured(template, &spec) == nil {
+					return spec, true
+				}
+			}
+			return rolloutWorkloadRefPodSpec(o)
+		}
 	}
+	return corev1.PodSpec{}, false
 }
 
-func allContainers(spec corev1.PodSpec) []corev1.Container {
-	out := make([]corev1.Container, 0, len(spec.InitContainers)+len(spec.Containers))
-	out = append(out, spec.InitContainers...)
-	out = append(out, spec.Containers...)
-	return out
+// rolloutWorkloadRefPodSpec reads the pod template of the Deployment or
+// ReplicaSet a Rollout's spec.workloadRef names, from the informer cache.
+func rolloutWorkloadRefPodSpec(rollout *unstructured.Unstructured) (corev1.PodSpec, bool) {
+	target, err := rollouts.ResolveTemplateTarget(rollout)
+	cache := k8s.GetResourceCache()
+	if err != nil || target.GVR == rollouts.GVR || cache == nil {
+		return corev1.PodSpec{}, false
+	}
+	switch target.GVR.Resource {
+	case "deployments":
+		if lister := cache.Deployments(); lister != nil {
+			if deployment, err := lister.Deployments(rollout.GetNamespace()).Get(target.Name); err == nil {
+				return deployment.Spec.Template.Spec, true
+			}
+		}
+	case "replicasets":
+		if lister := cache.ReplicaSets(); lister != nil {
+			if replicaSet, err := lister.ReplicaSets(rollout.GetNamespace()).Get(target.Name); err == nil {
+				return replicaSet.Spec.Template.Spec, true
+			}
+		}
+	}
+	return corev1.PodSpec{}, false
+}
+
+// ConfigReferencesKnown reports whether obj's pod template could be read, so
+// its referenced ConfigMaps and Secrets are known.
+func ConfigReferencesKnown(obj any) bool {
+	_, ok := podSpecForObject(obj)
+	return ok
 }
 
 func changeKey(c issuesapi.RecentChange) string {

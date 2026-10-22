@@ -126,6 +126,7 @@ export interface Capabilities {
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
   // Karpenter discovery and NodePool read state. Optional on the wire for the
   // same newer-frontend/older-backend reason as `deployment` below — consumers
@@ -160,6 +161,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+ helmSourceIdentity?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
@@ -168,9 +170,11 @@ export interface FeatureCapabilities {
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean
+  cnpgWorkspace?: boolean
+  cnpgProtectionSetup?: boolean
+  gitopsWriteEvidence?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
-  gitopsWriteEvidence?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -641,6 +645,8 @@ export interface ResourceRef {
 
 // Computed relationships for a resource
 export interface Relationships {
+  /** Istio registry domain supplied by the producer; omitted when unknown. */
+  istioServiceDomain?: string
   reflection?: {
     source?: ResourceRef
     sourceResourceVersion?: string
@@ -737,6 +743,7 @@ export interface HPADiagnosis extends HPADiagnosisView {
     name?: string
   }
   bounds: HPABounds
+  /** Spec order keeps source references paired with values; unmatched status entries follow. */
   metrics?: HPAMetricSummary[]
 }
 
@@ -794,6 +801,8 @@ export interface APIResource {
   name: string // Plural name (e.g., "deployments")
   namespaced: boolean
   isCrd: boolean
+  /** Confirmed, readable cached CRD identity; never inferred from isCrd. */
+  definitionName?: string
   featured?: boolean
   verbs: string[]
   observation?: DynamicResourceObservation
@@ -1082,10 +1091,40 @@ export interface UpgradeInfo {
   error?: string
   // Machine-readable source-resolution failure, used to make the Helm drawer
   // explain whether tracking an OCI source can help.
-  sourceIssue?: 'untracked' | 'repo_index_error' | 'ambiguous_repository'
+  sourceIssue?: 'source_confirmation_required' | 'source_change_required' | 'release_changing' | 'untracked' | 'repo_index_error' | 'ambiguous_repository' | 'ambiguous_source' | 'source_unavailable'
   // True only when the error is a genuinely untracked source (registering a
   // chart source could fix it). Kept for compatibility; prefer sourceIssue.
   untracked?: boolean
+}
+
+export type ChartSourceCandidate =
+  | { type: 'repository'; reference: string; url: string }
+  | { type: 'oci'; reference: string; url?: never }
+
+export interface SourceUpgradeSelection {
+ source: ChartSourceCandidate
+ expectedRevision: number
+ expectedSource: ChartSourceCandidate | null
+ previewDigest?: string
+}
+
+export interface ChartSourceSuggestion {
+ source: ChartSourceCandidate
+ current: boolean
+ hasInstalledVersion: boolean
+ state: 'available' | 'index_unavailable' | 'unchecked'
+}
+
+export interface ChartSourceStatus {
+ changing?: boolean
+ revision?: number
+ confirmed?: boolean
+ sourceChangeRequired?: boolean
+ suggestions?: ChartSourceSuggestion[]
+  recorded?: ChartSourceCandidate
+  configured: boolean
+  available: boolean
+  candidates?: ChartSourceCandidate[]
 }
 
 // Batch upgrade info keyed by "storageNamespace/name".
@@ -1102,6 +1141,9 @@ export interface ApplyValuesRequest {
 
 // Response for previewing values changes
 export interface ValuesPreviewResponse {
+	baselineSource?: ChartSourceCandidate
+ previewDigest?: string
+ baselineRevision?: number
   currentValues: Record<string, unknown>
   newValues: Record<string, unknown>
   manifestDiff: string

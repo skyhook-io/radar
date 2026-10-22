@@ -182,6 +182,11 @@ func TestDetectMissingRefs(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc-ok-sc", Namespace: "prod", CreationTimestamp: now},
 		Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: &scName},
 	}
+	pvcBoundMissingSC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-bound-bad-sc", Namespace: "prod", CreationTimestamp: now},
+		Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: &scMissing, VolumeName: "static-pv"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
 	pvcDefaultSC := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "pvc-default", Namespace: "prod", CreationTimestamp: now},
 		// StorageClassName=nil → cluster default; must NOT be flagged.
@@ -212,7 +217,7 @@ func TestDetectMissingRefs(t *testing.T) {
 		hpaMissingTarget, hpaExistingTarget, hpaUnknownKind,
 		ingMixed, ingMissingDefault,
 		stsMissingSvc, stsExistingSvc,
-		pvcExplicitMissingSC, pvcExistingSC, pvcDefaultSC,
+		pvcExplicitMissingSC, pvcExistingSC, pvcBoundMissingSC, pvcDefaultSC,
 		rbMissing, rbExisting, crbMissing, crbExisting,
 	)
 	if err := InitTestResourceCache(client); err != nil {
@@ -270,7 +275,8 @@ func TestDetectMissingRefs(t *testing.T) {
 		{"HorizontalPodAutoscaler", "hpa-ok", "Missing"},
 		{"HorizontalPodAutoscaler", "hpa-crd", "Missing"}, // unknown kind → not verifiable → not flagged
 		{"PersistentVolumeClaim", "pvc-ok-sc", "Missing"},
-		{"PersistentVolumeClaim", "pvc-default", "Missing"}, // nil storageClassName uses default
+		{"PersistentVolumeClaim", "pvc-default", "Missing"},      // nil storageClassName uses default
+		{"PersistentVolumeClaim", "pvc-bound-bad-sc", "Missing"}, // already bound; class no longer consulted
 		{"RoleBinding", "rb-ok", "Missing"},
 		{"ClusterRoleBinding", "crb-ok", "Missing"},
 		{"StatefulSet", "sts-ok", "Missing"},

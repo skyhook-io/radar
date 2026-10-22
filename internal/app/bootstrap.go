@@ -94,6 +94,7 @@ type AppConfig struct {
 	BeylaJobSelector            string
 	WorkloadMetricsScope        prom.WorkloadMetricsScope
 	Version                     string
+	MCPReadOnly                 bool
 	MCPEnabled                  bool
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
@@ -286,15 +287,6 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		timeline.ResetMetricsForContextSwitch()
 	}, func() error {
 		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
-			// PostgreSQL deliberately does not degrade to memory: an operator who
-			// pointed Radar at an external database must not silently get an
-			// in-memory timeline that vanishes on restart. Every other backend
-			// keeps the historical behaviour — warn and continue degraded rather
-			// than fail the whole subsystem bring-up, which would also take down
-			// cluster browsing.
-			if timelineStoreCfg.Type == timeline.StoreTypePostgres {
-				return err
-			}
 			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
 		}
 		return nil
@@ -302,6 +294,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
 	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
 		if err := validateStartupPrometheusURL(cfg.PrometheusURL); err != nil {
@@ -417,6 +410,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				}
 			}
 			prometheuspkg.Prewarm()
+			argocd.Prewarm()
 		}
 	})
 	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
@@ -505,6 +499,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		DebugImage:                cfg.DebugImage,
 		ReachabilityImage:         cfg.ReachabilityImage,
 		MCP:                       &cfg.MCPEnabled,
+		MCPReadOnly:               &cfg.MCPReadOnly,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -534,6 +529,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HistoryLimit:         cfg.HistoryLimit,
 			DebugEvents:          cfg.DebugEvents,
 			MCPEnabled:           cfg.MCPEnabled,
+			MCPReadOnly:          cfg.MCPEnabled && cfg.MCPReadOnly,
 			OpenCostCurrency:     cfg.OpenCostCurrency,
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
@@ -565,12 +561,18 @@ func CreateServer(cfg AppConfig) *server.Server {
 		// handler records exactly what Radar returned inside those scopes.
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
-		serverCfg.MCPHandler = mcppkg.NewHandler()
+		if !cfg.MCPReadOnly {
+			serverCfg.MCPHandler = mcppkg.NewHandler()
+		}
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}
 
-	return server.New(serverCfg)
+	srv := server.New(serverCfg)
+	if cfg.MCPEnabled {
+		mcppkg.SetRelationshipTopologySource(srv.RelationshipTopology)
+	}
+	return srv
 }
 
 // InitializeCluster connects to the cluster and initializes all subsystems.

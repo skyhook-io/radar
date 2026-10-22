@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"maps"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -318,10 +319,19 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	sub.Nodes = make([]Node, 0, len(order))
 	for _, id := range order {
 		if n, ok := nodeByID[id]; ok {
-			sub.Nodes = append(sub.Nodes, *n)
+			node := *n
+			_, hasPolicyStatus := node.Data["policyStatus"]
+			if opts.Allow != nil && (node.Data["policyCoverageWorkloads"] != nil || hasPolicyStatus) {
+				// These annotations were computed against the full graph. BFS
+				// authorization does not validate policy evidence outside its
+				// bounded neighborhood, so do not serialize them here.
+				node.Data = maps.Clone(node.Data)
+				delete(node.Data, "policyCoverageWorkloads")
+				delete(node.Data, "policyStatus")
+			}
+			sub.Nodes = append(sub.Nodes, node)
 		}
 	}
-
 	// Edges: include only edges whose type is allowed AND both endpoints
 	// are in the included set. Walking t.Edges once here keeps the output
 	// edge order stable regardless of whether we used the index or not —
@@ -599,10 +609,10 @@ func nodeMatchesAPIGroup(n *Node, group string) bool {
 	return false
 }
 
-// nodeReference is what a topology node records about the object it draws.
+// NodeReference is what a topology node records about the object it draws.
 // Nodes built from typed informers carry no apiVersion, so their group is
 // missing rather than known to be core.
-func nodeReference(n *Node) resourceid.Reference {
+func NodeReference(n *Node) resourceid.Reference {
 	apiVersion, _ := n.Data["apiVersion"].(string)
 	return resourceid.ReferenceFromAPIVersion(apiVersion, KubernetesKindForNode(n), nodeNamespaceFromData(n), n.Name)
 }
@@ -610,7 +620,7 @@ func nodeReference(n *Node) resourceid.Reference {
 // nodeGroup is a node's API group resolved against the current cluster; it is
 // "" for the core group and for groups that cannot be established.
 func nodeGroup(n *Node) string {
-	return resourceid.ResolveCurrent(nodeReference(n), nil).Ref.Group
+	return resourceid.ResolveCurrent(NodeReference(n), nil).Ref.Group
 }
 
 // nodeAPIGroupFromData extracts the API group from a Node's Data map.

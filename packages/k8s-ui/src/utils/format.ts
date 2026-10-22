@@ -120,6 +120,10 @@ export function parseMemoryToBytes(memString: string): number {
   if (!memString) return 0
 
   const str = memString.trim()
+  // Decimal-exponent form ("1e9") is decided before the suffix table, as in
+  // parseQuantityToNumber, so "1E3" reads as 1000 and not as exa.
+  if (/^[+-]?\d+(?:\.\d+)?[eE][+-]?\d+$/.test(str)) return Number(str)
+
   const match = str.match(/^(-?\d+(?:\.\d+)?)\s*([A-Za-z]*)$/)
   if (!match) return 0
 

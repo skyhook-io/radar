@@ -951,3 +951,462 @@ func TestRequestOnlyVerbsDoNotClaimAnOutcome(t *testing.T) {
 		})
 	}
 }
+
+// scriptedRollouts answers every get from reads, in order (the last one repeats), and
+// answers each patch with the next object from writes. It stands in for a controller
+// whose status writes the test decides.
+func scriptedRollouts(t *testing.T, reads, writes []*unstructured.Unstructured, others ...runtime.Object) *fake.FakeDynamicClient {
+	t.Helper()
+	client := newFakeRollouts(append([]runtime.Object{reads[0]}, others...)...)
+	var gets, patches int
+	client.PrependReactor("get", "rollouts", func(clienttesting.Action) (bool, runtime.Object, error) {
+		ro := reads[min(gets, len(reads)-1)]
+		gets++
+		return true, ro.DeepCopy(), nil
+	})
+	client.PrependReactor("patch", "rollouts", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if patches >= len(writes) {
+			t.Fatalf("unexpected patch %d", patches+1)
+		}
+		ro := writes[patches].DeepCopy()
+		patches++
+		return true, ro, nil
+	})
+	return client
+}
+
+// The test canary has 3 steps; step 1 is its manual pause.
+type canaryState struct {
+	promoteFull bool
+	// Held at the manual pause, as the controller leaves it until it acts.
+	held       bool
+	specPaused bool
+	aborted    bool
+	invalid    bool
+	// When the controller last flipped the Paused condition to False; "" while held.
+	resumedAt string
+	// A Progressing condition update, which the controller makes on many reconciles.
+	progressedAt string
+	stepIndex    int64
+	// Our unpause landed and the controller reconciled it (generation 4).
+	unpaused bool
+	// A spec change the controller has not reconciled yet.
+	unobservedSpec bool
+	// Someone else's spec change, which the controller has published as observed on a
+	// condition write but not yet reconciled in full.
+	respecced bool
+	// Overrides status.observedGeneration ("3"); "absent" removes it.
+	observed string
+}
+
+// A canary mid-revision: hash-v2 is rolling out over hash-v1.
+func midCanary(st canaryState) *unstructured.Unstructured {
+	return rolloutForTest("prod", "web", func(o map[string]any) {
+		meta := o["metadata"].(map[string]any)
+		generation, observed := int64(3), "3"
+		if st.unpaused || st.respecced {
+			generation, observed = generation+1, "4"
+		}
+		if st.unobservedSpec {
+			generation++
+		}
+		meta["generation"] = generation
+		if st.specPaused {
+			o["spec"].(map[string]any)["paused"] = true
+		}
+		status := map[string]any{
+			"currentPodHash":     "hash-v2",
+			"stableRS":           "hash-v1",
+			"phase":              "Progressing",
+			"observedGeneration": observed,
+			"currentStepIndex":   st.stepIndex,
+		}
+		if st.held {
+			status["phase"] = "Paused"
+			status["controllerPause"] = true
+			status["pauseConditions"] = []any{map[string]any{"reason": "CanaryPauseStep"}}
+		}
+		if st.promoteFull {
+			status["promoteFull"] = true
+		}
+		if st.aborted {
+			status["abort"] = true
+			status["phase"] = "Degraded"
+		}
+		switch st.observed {
+		case "":
+		case "absent":
+			delete(status, "observedGeneration")
+		default:
+			status["observedGeneration"] = st.observed
+		}
+		conds := []any{pausedCondition(st.resumedAt)}
+		if st.progressedAt != "" {
+			conds = append(conds, map[string]any{"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated", "lastUpdateTime": st.progressedAt})
+		}
+		if st.invalid {
+			conds = append(conds, map[string]any{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec"})
+		}
+		status["conditions"] = conds
+		o["status"] = status
+	})
+}
+
+func pausedCondition(resumedAt string) map[string]any {
+	if resumedAt == "" {
+		return map[string]any{"type": "Paused", "status": "True", "reason": "RolloutPaused", "lastUpdateTime": "2026-10-13T10:00:00Z"}
+	}
+	return map[string]any{"type": "Paused", "status": "False", "reason": "RolloutPaused", "lastUpdateTime": resumedAt}
+}
+
+const resumed = "2026-10-13T10:05:00Z"
+
+func promoteFullWithin(t *testing.T, client *fake.FakeDynamicClient, timeout time.Duration) (OperationResult, time.Duration) {
+	t.Helper()
+	prevTimeout, prevInterval := promoteFullSettleTimeout, promoteFullSettleInterval
+	promoteFullSettleTimeout, promoteFullSettleInterval = timeout, 5*time.Millisecond
+	t.Cleanup(func() { promoteFullSettleTimeout, promoteFullSettleInterval = prevTimeout, prevInterval })
+
+	start := time.Now()
+	res, err := PromoteFull(context.Background(), client, "prod", "web")
+	if err != nil {
+		t.Fatalf("PromoteFull: %v", err)
+	}
+	return res, time.Since(start)
+}
+
+func assertUnderWayFast(t *testing.T, res OperationResult, elapsed time.Duration) {
+	t.Helper()
+	if elapsed > time.Second {
+		t.Errorf("PromoteFull took %v, want it to return once the controller took the flag", elapsed)
+	}
+	if !strings.Contains(res.Message, "under way") {
+		t.Errorf("message = %q, want it to say the promotion is under way", res.Message)
+	}
+}
+
+// New pods can take minutes to become ready. Once the controller has acted on the flag
+// and kept it, the promotion is under way and the caller has nothing left to wait for.
+func TestPromoteFullReturnsOnceTheControllerTakesIt(t *testing.T) {
+	cases := map[string]struct{ before, after canaryState }{
+		// The manual pause: the controller resumes it and jumps to the last step.
+		"held at a pause": {
+			before: canaryState{held: true, stepIndex: 1},
+			after:  canaryState{promoteFull: true, resumedAt: resumed, stepIndex: 3},
+		},
+		// Mid-step with nothing paused, which is also where a rollback starts over.
+		"mid-step, nothing paused": {
+			before: canaryState{resumedAt: "2026-10-13T09:00:00Z", stepIndex: 0},
+			after:  canaryState{promoteFull: true, resumedAt: "2026-10-13T09:00:00Z", stepIndex: 3},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			written := tc.before
+			written.promoteFull = true
+			client := scriptedRollouts(t,
+				[]*unstructured.Unstructured{midCanary(tc.before), midCanary(tc.after)},
+				[]*unstructured.Unstructured{midCanary(written)})
+
+			res, elapsed := promoteFullWithin(t, client, 2*time.Second)
+
+			assertUnderWayFast(t, res, elapsed)
+			if bodies := statusPatchBodies(t, client); len(bodies) != 1 {
+				t.Errorf("want only the initial patch, got %d: %v", len(bodies), bodies)
+			}
+		})
+	}
+}
+
+// A dropped flag is re-applied, and only the controller taking the re-applied flag counts.
+func TestPromoteFullWaitsForTheControllerToTakeTheReappliedFlag(t *testing.T) {
+	client := scriptedRollouts(t,
+		[]*unstructured.Unstructured{
+			midCanary(canaryState{held: true, stepIndex: 1}),
+			midCanary(canaryState{held: true, stepIndex: 1}),                    // the controller dropped the flag
+			midCanary(canaryState{held: true, stepIndex: 1, promoteFull: true}), // our re-apply
+			midCanary(canaryState{promoteFull: true, resumedAt: resumed, stepIndex: 3}),
+		},
+		[]*unstructured.Unstructured{
+			midCanary(canaryState{held: true, stepIndex: 1, promoteFull: true}),
+			midCanary(canaryState{held: true, stepIndex: 1, promoteFull: true}),
+		})
+
+	res, elapsed := promoteFullWithin(t, client, 2*time.Second)
+
+	assertUnderWayFast(t, res, elapsed)
+	if bodies := statusPatchBodies(t, client); len(bodies) != 2 {
+		t.Errorf("want the initial patch and one re-apply, got %d: %v", len(bodies), bodies)
+	}
+}
+
+// Blue-green parks the new revision in preview behind a pause; taking the flag clears it.
+func TestPromoteFullReturnsOnceTheControllerTakesItOnBlueGreen(t *testing.T) {
+	blueGreen := func(held, promoteFull bool) *unstructured.Unstructured {
+		return blueGreenRolloutForTest(func(o map[string]any) {
+			status := map[string]any{"currentPodHash": "hash-v2", "stableRS": "hash-v1", "phase": "Progressing", "observedGeneration": "1"}
+			o["metadata"].(map[string]any)["generation"] = int64(1)
+			resumedAt := resumed
+			if held {
+				status["phase"] = "Paused"
+				status["controllerPause"] = true
+				status["pauseConditions"] = []any{map[string]any{"reason": "BlueGreenPause"}}
+				resumedAt = ""
+			}
+			if promoteFull {
+				status["promoteFull"] = true
+			}
+			status["conditions"] = []any{pausedCondition(resumedAt)}
+			o["status"] = status
+		})
+	}
+	client := scriptedRollouts(t,
+		[]*unstructured.Unstructured{blueGreen(true, false), blueGreen(false, true)},
+		[]*unstructured.Unstructured{blueGreen(true, true)})
+
+	res, elapsed := promoteFullWithin(t, client, 2*time.Second)
+
+	assertUnderWayFast(t, res, elapsed)
+}
+
+// A Rollout paused through spec.paused is unpaused by our spec write after the status
+// write; the controller then resumes it.
+func TestPromoteFullReturnsOnceTheControllerResumesASpecPausedRollout(t *testing.T) {
+	client := scriptedRollouts(t,
+		[]*unstructured.Unstructured{
+			midCanary(canaryState{held: true, specPaused: true, stepIndex: 1}),
+			midCanary(canaryState{promoteFull: true, resumedAt: resumed, stepIndex: 3, unpaused: true}),
+		},
+		[]*unstructured.Unstructured{
+			midCanary(canaryState{held: true, specPaused: true, promoteFull: true, stepIndex: 1}),
+			midCanary(canaryState{held: true, promoteFull: true, stepIndex: 1}),
+		})
+
+	res, elapsed := promoteFullWithin(t, client, 2*time.Second)
+
+	assertUnderWayFast(t, res, elapsed)
+}
+
+// Only the controller acting on the flag counts. Each case has the flag still set but
+// lacks that evidence, or has it alongside something that undoes it.
+func TestPromoteFullStaysUnconfirmedUntilTheControllerActs(t *testing.T) {
+	held := canaryState{held: true, stepIndex: 1}
+	taken := canaryState{promoteFull: true, resumedAt: resumed, stepIndex: 3}
+	with := func(st canaryState, change func(*canaryState)) canaryState {
+		change(&st)
+		return st
+	}
+	cases := map[string]struct {
+		before, after canaryState
+		specPaused    bool
+	}{
+		"someone else retries it": {
+			before: canaryState{aborted: true, resumedAt: "2026-10-13T09:00:00Z", stepIndex: 1},
+			after:  canaryState{promoteFull: true, resumedAt: "2026-10-13T09:00:00Z", stepIndex: 1},
+		},
+		"the controller writes but still holds it": {
+			before: held,
+			after:  with(held, func(s *canaryState) { s.promoteFull, s.progressedAt = true, resumed }),
+		},
+		"the controller rejects the spec": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.invalid = true }),
+		},
+		"a spec change the controller has not seen yet": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.unobservedSpec = true }),
+		},
+		"the controller's generation counter is missing": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.observed = "absent" }),
+		},
+		"the controller's generation counter is a legacy hash": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.observed = "5d4c799df8" }),
+		},
+		"already on its last step, waiting for the new pods": {
+			before: canaryState{resumedAt: "2026-10-13T09:00:00Z", stepIndex: 3},
+			after:  canaryState{promoteFull: true, resumedAt: "2026-10-13T09:00:00Z", stepIndex: 3},
+		},
+		"someone else's Promote clears the pause, no controller write since": {
+			before: held,
+			after:  canaryState{promoteFull: true, stepIndex: 1},
+		},
+		"our unpause not reconciled yet": {
+			before: canaryState{held: true, specPaused: true, stepIndex: 1},
+			after:  with(taken, func(s *canaryState) { s.unpaused, s.observed = true, "3" }),
+		},
+		"a newer spec the controller has published but not reconciled": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.respecced = true }),
+		},
+		"someone else aborts it": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.aborted = true }),
+		},
+		"someone else pauses it after the controller resumed it": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.specPaused = true }),
+		},
+		"a pause comes back after the controller resumed it": {
+			before: held,
+			after:  with(taken, func(s *canaryState) { s.held = true }),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			written := tc.before
+			written.promoteFull = true
+			writes := []*unstructured.Unstructured{midCanary(written)}
+			if tc.before.specPaused {
+				writes = append(writes, midCanary(written)) // the unpause
+			}
+			client := scriptedRollouts(t,
+				[]*unstructured.Unstructured{midCanary(tc.before), midCanary(tc.after)}, writes)
+
+			res, _ := promoteFullWithin(t, client, 50*time.Millisecond)
+
+			if !strings.Contains(res.Message, "not confirmed") {
+				t.Errorf("message = %q, want it unconfirmed when the controller never acted", res.Message)
+			}
+		})
+	}
+}
+
+// A workloadRef Rollout keeps its steps on the Rollout, so a steps edit moves the
+// Rollout's generation even though the referenced workload's is current.
+func TestPromoteFullChecksBothGenerationsOnAWorkloadRefRollout(t *testing.T) {
+	workloadRef := func(st canaryState) *unstructured.Unstructured {
+		ro := midCanary(st)
+		spec := ro.Object["spec"].(map[string]any)
+		delete(spec, "template")
+		spec["workloadRef"] = map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web-deploy"}
+		_ = unstructured.SetNestedField(ro.Object, "2", "status", "workloadObservedGeneration")
+		return ro
+	}
+	deploy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata":   map[string]any{"namespace": "prod", "name": "web-deploy", "generation": int64(2)},
+		"spec":       map[string]any{"template": map[string]any{}},
+	}}
+	held := canaryState{held: true, stepIndex: 1}
+	written := canaryState{held: true, stepIndex: 1, promoteFull: true}
+	taken := canaryState{promoteFull: true, resumedAt: resumed, stepIndex: 3}
+	stepsEdited := taken
+	stepsEdited.unobservedSpec = true
+
+	t.Run("both observed", func(t *testing.T) {
+		client := scriptedRollouts(t,
+			[]*unstructured.Unstructured{workloadRef(held), workloadRef(taken)},
+			[]*unstructured.Unstructured{workloadRef(written)}, deploy)
+
+		res, elapsed := promoteFullWithin(t, client, 2*time.Second)
+
+		assertUnderWayFast(t, res, elapsed)
+	})
+	t.Run("template edited on the workload since the promotion", func(t *testing.T) {
+		edited := deploy.DeepCopy()
+		edited.SetGeneration(3)
+		after := workloadRef(taken)
+		_ = unstructured.SetNestedField(after.Object, "3", "status", "workloadObservedGeneration")
+		client := scriptedRollouts(t,
+			[]*unstructured.Unstructured{workloadRef(held), after},
+			[]*unstructured.Unstructured{workloadRef(written)}, edited)
+
+		res, _ := promoteFullWithin(t, client, 50*time.Millisecond)
+
+		if !strings.Contains(res.Message, "not confirmed") {
+			t.Errorf("message = %q, want it unconfirmed after the workload's template changed", res.Message)
+		}
+	})
+	t.Run("workload counter missing when we wrote", func(t *testing.T) {
+		before := workloadRef(written)
+		unstructured.RemoveNestedField(before.Object, "status", "workloadObservedGeneration")
+		client := scriptedRollouts(t,
+			[]*unstructured.Unstructured{workloadRef(held), workloadRef(taken)},
+			[]*unstructured.Unstructured{before}, deploy)
+
+		res, _ := promoteFullWithin(t, client, 50*time.Millisecond)
+
+		if !strings.Contains(res.Message, "not confirmed") {
+			t.Errorf("message = %q, want it unconfirmed without the workload counter to compare against", res.Message)
+		}
+	})
+	t.Run("steps edit not observed yet", func(t *testing.T) {
+		client := scriptedRollouts(t,
+			[]*unstructured.Unstructured{workloadRef(held), workloadRef(stepsEdited)},
+			[]*unstructured.Unstructured{workloadRef(written)}, deploy)
+
+		res, _ := promoteFullWithin(t, client, 50*time.Millisecond)
+
+		if !strings.Contains(res.Message, "not confirmed") {
+			t.Errorf("message = %q, want it unconfirmed while the controller has not seen the steps edit", res.Message)
+		}
+	})
+}
+
+// Paused only through spec.paused there are no pause conditions. The controller flips
+// the Paused condition as soon as our unpause lands, before it checks the template and
+// steps, so that alone is not evidence; moving the canary to its last step is.
+func TestPromoteFullOnASpecOnlyPauseWaitsForTheStrategySync(t *testing.T) {
+	specPaused := canaryState{specPaused: true, stepIndex: 1}
+	flipped := canaryState{promoteFull: true, resumedAt: resumed, stepIndex: 1, unpaused: true}
+	t.Run("Paused condition flipped, steps untouched", func(t *testing.T) {
+		client := scriptedRollouts(t,
+			[]*unstructured.Unstructured{midCanary(specPaused), midCanary(flipped)},
+			[]*unstructured.Unstructured{
+				midCanary(canaryState{specPaused: true, stepIndex: 1, promoteFull: true}),
+				midCanary(canaryState{stepIndex: 1, promoteFull: true}),
+			})
+
+		res, _ := promoteFullWithin(t, client, 50*time.Millisecond)
+
+		if !strings.Contains(res.Message, "not confirmed") {
+			t.Errorf("message = %q, want the Paused flip alone not to count on a spec-only pause", res.Message)
+		}
+	})
+	t.Run("sent to the last step", func(t *testing.T) {
+		client := scriptedRollouts(t,
+			[]*unstructured.Unstructured{
+				midCanary(specPaused),
+				midCanary(canaryState{promoteFull: true, resumedAt: resumed, stepIndex: 3, unpaused: true}),
+			},
+			[]*unstructured.Unstructured{
+				midCanary(canaryState{specPaused: true, stepIndex: 1, promoteFull: true}),
+				midCanary(canaryState{stepIndex: 1, promoteFull: true}),
+			})
+
+		res, elapsed := promoteFullWithin(t, client, 2*time.Second)
+
+		assertUnderWayFast(t, res, elapsed)
+	})
+}
+
+// After a re-apply the evidence is judged against the re-apply's own write. Here the
+// controller dropped the flag and restarted the steps, so the Rollout was already
+// resumed before the re-apply; that is not the controller taking the new flag.
+func TestPromoteFullJudgesTheReappliedFlagFromItsOwnWrite(t *testing.T) {
+	restarted := canaryState{resumedAt: resumed, stepIndex: 0}
+	reapplied := restarted
+	reapplied.promoteFull = true
+	client := scriptedRollouts(t,
+		[]*unstructured.Unstructured{
+			midCanary(canaryState{held: true, stepIndex: 1}),
+			midCanary(restarted),
+			midCanary(reapplied),
+		},
+		[]*unstructured.Unstructured{
+			midCanary(canaryState{held: true, stepIndex: 1, promoteFull: true}),
+			midCanary(reapplied),
+		})
+
+	res, _ := promoteFullWithin(t, client, 100*time.Millisecond)
+
+	if !strings.Contains(res.Message, "not confirmed") {
+		t.Errorf("message = %q, want it unconfirmed until the controller acts on the re-applied flag", res.Message)
+	}
+	if bodies := statusPatchBodies(t, client); len(bodies) != 2 {
+		t.Errorf("want the initial patch and one re-apply, got %d: %v", len(bodies), bodies)
+	}
+}

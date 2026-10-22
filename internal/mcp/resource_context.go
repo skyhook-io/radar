@@ -6,9 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -83,17 +80,6 @@ func (a mcpPolicyReportLookupAdapter) FindingsFor(group, kind, namespace, name s
 	return out
 }
 
-type mcpServiceBackendLookup struct {
-	cache *k8s.ResourceCache
-}
-
-func (l mcpServiceBackendLookup) PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error) {
-	if l.cache == nil || l.cache.Pods() == nil {
-		return nil, nil
-	}
-	return l.cache.Pods().Pods(namespace).List(selector)
-}
-
 // computeMCPIssueContext rolls up per-resource issue-composer rows
 // (problem + condition) into an IssueSummary. Mirrors the
 // REST handler's computeIssueSummaryForResource — same composer call, same
@@ -145,6 +131,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		Count:           len(matched),
 		HighestSeverity: string(matched[0].Severity),
 		TopReason:       matched[0].Reason,
+		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
 	}, matched
 }
@@ -211,38 +198,52 @@ func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group
 	return summary
 }
 
-// mcpTopologyForContext returns a per-call topology snapshot scoped to the
-// resource's namespace (cluster-scoped resources get an all-namespaces
-// build). Reuses the package-level summaryCtxTopoMemo cache to amortize
-// build cost across get_resource and list_resources / search calls. nil
-// return is fine — Build then skips topology-derived fields and the
-// remaining sidecar still populates.
-func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvider, topo.DynamicProvider, bool) {
+// RelationshipTopologySource returns the host's maintained full relationship
+// graph and its index, or nil while none has been built.
+type RelationshipTopologySource func() (*topo.Topology, *topo.RelationshipsIndex)
+
+var relationshipTopology struct {
+	sync.RWMutex
+	source RelationshipTopologySource
+}
+
+// SetRelationshipTopologySource lets resource context reuse the graph the host
+// already keeps for relationship lookups, instead of holding a second copy of
+// the whole cluster.
+func SetRelationshipTopologySource(source RelationshipTopologySource) {
+	relationshipTopology.Lock()
+	relationshipTopology.source = source
+	relationshipTopology.Unlock()
+}
+
+// mcpTopologyForContext uses a complete relationship graph. Resource context
+// authorizes every emitted reference through its request-scoped checker; a
+// namespace-scoped build would erase explicit cross-namespace dependencies.
+func mcpTopologyForContext() (*topo.Topology, *topo.RelationshipsIndex, topo.ResourceProvider, topo.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, nil, false
-	}
-	opts := topo.DefaultBuildOptions()
-	// Match the REST handler's build options (see ai_handlers.go) so MCP
-	// get_resource produces the same relationship context as REST. Without
-	// these the topology drops the RS layer for Pod→Deployment chains and
-	// the relationship cache uses a thinner shape — silently weakening
-	// resourceContext for MCP callers.
-	opts.IncludeReplicaSets = true
-	opts.ForRelationshipCache = true
-	if namespace != "" {
-		opts.Namespaces = []string{namespace}
+		return nil, nil, nil, nil, false
 	}
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	relationshipTopology.RLock()
+	source := relationshipTopology.source
+	relationshipTopology.RUnlock()
+	if source != nil {
+		if topology, index := source(); topology != nil {
+			return topology, index, provider, dyn, true
+		}
+	}
+	opts := topo.RelationshipBuildOptions()
+	opts.IncludeSecrets = true
 
-	topology, err := summaryCtxTopoMemo.Get(opts, func() (*topo.Topology, error) {
+	topology, index, err := summaryCtxTopoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topo.Topology, error) {
 		return topo.NewBuilder(provider).WithDynamic(dyn).Build(opts)
 	})
 	if err != nil || topology == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
-	return topology, provider, dyn, true
+	return topology, index, provider, dyn, true
 }
 
 // issueSubjectAccess mirrors the REST drawer gate for an issue's own

@@ -61,6 +61,18 @@ Create the name of the service account to use
 {{- end }}
 {{- end }}
 
+{{/*
+The URL path prefix Radar serves under: "" for root, otherwise "/<prefix>"
+with no trailing slash. Shared by the Deployment (--base-path, probes) and
+NOTES.txt (the URL printed after install).
+*/}}
+{{- define "radar.basePath" -}}
+{{- $trimmed := trimAll "/" (default "" .Values.basePath) -}}
+{{- if $trimmed -}}
+{{- printf "/%s" $trimmed -}}
+{{- end -}}
+{{- end }}
+
 {{- define "radar.operatorSettings" -}}
 {{- $settings := dict "version" 1 -}}
 {{- if .Values.audit -}}
@@ -96,6 +108,18 @@ new reader without someone choosing it.
 */}}
 {{- define "radar.cloudAiRbac" -}}
 {{- if and .Values.cloud.enabled (eq (toString .Values.cloud.aiRbac) "true") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether Radar calls Kubernetes with each person's own token instead of
+impersonating them (auth.kubernetesCredentials=user-token).
+*/}}
+{{- define "radar.userTokenMode" -}}
+{{- if eq (.Values.auth.kubernetesCredentials | default "impersonate") "user-token" -}}
 true
 {{- else -}}
 false

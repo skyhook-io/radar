@@ -74,8 +74,10 @@
           "additionalProperties": { "type": "boolean" },
           "properties": {
             "all": { "type": "boolean", "description": "Grant get/list/watch on all API groups and resources, including core Secrets and credential-bearing CRDs (overrides individual flags and exclusions)." },
+            "antrea": { "type": "boolean" },
             "apiRegistration": { "type": "boolean" },
             "argo": { "type": "boolean" },
+            "awsNetworkPolicy": { "type": "boolean" },
             "awx": { "type": "boolean" },
             "calico": { "type": "boolean" },
             "certManager": { "type": "boolean" },
@@ -250,6 +252,7 @@
         "existingSecret": { "type": "string" },
         "existingSecretKey": { "type": "string" },
         "cookieTTL": { "type": "string", "description": "Go duration string, e.g. \"4h\"." },
+        "kubernetesCredentials": { "type": "string", "enum": ["impersonate", "user-token"] },
         "proxy": {
           "type": "object",
           "additionalProperties": false,

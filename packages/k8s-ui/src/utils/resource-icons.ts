@@ -220,6 +220,7 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   // pseudo-kinds (cnpgcluster/…) belong here only once pkg/topology's
   // KindForGVK emits them — it has no CNPG case today.
   pooler: Waypoints,
+  databaserole: UserCog,
 
   // Cluster API
   capicluster: Server,

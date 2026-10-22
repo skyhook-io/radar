@@ -42,11 +42,23 @@ func NewMemoizer(ttl time.Duration) *Memoizer {
 // Get returns a cached Topology if a fresh entry exists for opts, otherwise
 // invokes build, stores the result, and returns it. Errors from build are
 // not cached. Concurrent callers with the same key share a single build call.
+// Get is GetScoped with scope 0, so it shares entries with GetScoped(0, ...).
 func (m *Memoizer) Get(opts BuildOptions, build func() (*Topology, error)) (*Topology, error) {
+	return m.GetScoped(0, opts, build)
+}
+
+// GetScoped is Get for callers whose build reads a source that can be
+// replaced, such as an informer cache that is rebuilt when the cluster
+// changes. scope identifies the source instance: cached entries and
+// in-flight builds are shared only between callers passing the same scope.
+// A build from a replaced source can still finish and be stored, but only
+// under its own scope, so a caller holding the replacement never receives
+// it, whether from the cache or by joining that build.
+func (m *Memoizer) GetScoped(scope uint64, opts BuildOptions, build func() (*Topology, error)) (*Topology, error) {
 	if m == nil || m.ttl <= 0 {
 		return build()
 	}
-	key := memoKey(opts)
+	key := scopedKey(scope, opts)
 	if topo, ok := m.lookup(key); ok {
 		return topo, nil
 	}
@@ -86,26 +98,40 @@ func (m *Memoizer) lookup(key string) (*Topology, bool) {
 // been evicted between the topology fetch and the index fetch, or when the
 // Memoizer is disabled (ttl ≤ 0).
 func (m *Memoizer) GetIndex(opts BuildOptions, build func() (*Topology, error)) (*RelationshipsIndex, error) {
-	topo, err := m.Get(opts, build)
+	return m.GetIndexScoped(0, opts, build)
+}
+
+// GetIndexScoped is GetIndex with the scope semantics of GetScoped.
+func (m *Memoizer) GetIndexScoped(scope uint64, opts BuildOptions, build func() (*Topology, error)) (*RelationshipsIndex, error) {
+	_, index, err := m.GetWithIndexScoped(scope, opts, build)
+	return index, err
+}
+
+// GetWithIndexScoped returns one coherent topology snapshot and its lazy cached
+// index, with the scope semantics of GetScoped. It preserves the entry identity
+// check even if another caller refreshes or evicts the entry; callers never
+// pair nodes with an index from another build.
+func (m *Memoizer) GetWithIndexScoped(scope uint64, opts BuildOptions, build func() (*Topology, error)) (*Topology, *RelationshipsIndex, error) {
+	topo, err := m.GetScoped(scope, opts, build)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if m == nil || m.ttl <= 0 {
-		return IndexByResource(topo), nil
+		return topo, IndexByResource(topo), nil
 	}
-	key := memoKey(opts)
+	key := scopedKey(scope, opts)
 	m.mu.Lock()
 	entry := m.entries[key]
 	m.mu.Unlock()
 	// Entry evicted between Get() and GetIndex() — build inline and return.
 	// Costs one extra walk but keeps the API correct under aggressive eviction.
 	if entry == nil || entry.topo != topo {
-		return IndexByResource(topo), nil
+		return topo, IndexByResource(topo), nil
 	}
 	entry.indexOnce.Do(func() {
 		entry.index = IndexByResource(entry.topo)
 	})
-	return entry.index, nil
+	return topo, entry.index, nil
 }
 
 func (m *Memoizer) store(key string, topo *Topology) {
@@ -121,6 +147,10 @@ func (m *Memoizer) store(key string, topo *Topology) {
 			delete(m.entries, k)
 		}
 	}
+}
+
+func scopedKey(scope uint64, opts BuildOptions) string {
+	return strconv.FormatUint(scope, 10) + "#" + memoKey(opts)
 }
 
 // memoKey is the cache key. Includes every BuildOptions field that changes

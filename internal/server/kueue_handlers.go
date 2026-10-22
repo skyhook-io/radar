@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -56,7 +57,7 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports batch Jobs, jobset.x-k8s.io JobSets and ray.io RayJobs")
 		return
 	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, group, kind, namespace, "get") {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, group, kind, namespace, "get") {
 		s.writeError(w, http.StatusForbidden, "no access to this workload")
 		return
 	}
@@ -237,7 +238,7 @@ func (s *Server) handleKueueProvisioning(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, kueueGroup, "workloads", namespace, "get") {
+	if readscope.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, kueueGroup, "workloads", namespace, "get") {
 		s.writeError(w, http.StatusForbidden, "no access to this Kueue Workload")
 		return
 	}

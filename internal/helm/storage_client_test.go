@@ -54,7 +54,7 @@ func TestStandaloneClientReadsReleaseStorageOnItsOwnCluster(t *testing.T) {
 	if _, err := c.BatchCheckUpgrades(ctx, "shop"); err != nil {
 		t.Fatalf("BatchCheckUpgrades: %v", err)
 	}
-	if _, err := c.ListReleasesAcrossNamespaces(ctx, []string{"shop"}, "", nil); err != nil {
+	if _, err := c.ListReleasesAcrossNamespaces(ctx, []string{"shop"}, nil); err != nil {
 		t.Fatalf("ListReleasesAcrossNamespaces: %v", err)
 	}
 	if _, err := c.ListReleases(ctx, "shop"); err != nil {
@@ -71,7 +71,7 @@ func TestReleaseStorageReadWithoutAClusterClientFails(t *testing.T) {
 	previous := k8s.SetTestClient(nil)
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 	c := &Client{}
-	if _, err := c.ListReleasesAcrossNamespaces(context.Background(), []string{"shop"}, "", nil); err == nil {
+	if _, err := c.ListReleasesAcrossNamespaces(context.Background(), []string{"shop"}, nil); err == nil {
 		t.Fatal("want an error with no cluster client")
 	}
 }

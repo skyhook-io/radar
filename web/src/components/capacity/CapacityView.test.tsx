@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { renderToString } from "react-dom/server";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -1334,6 +1337,326 @@ describe("CapacityView overview", () => {
       }),
     );
     expect(html).toContain("unvalidated");
+  });
+});
+
+describe("Capacity scale-down observations", () => {
+  const noCandidatesExplanation =
+    "The autoscaler found no node it can remove. Usually every node is above its utilization threshold, or pods on emptier nodes can't move (PodDisruptionBudgets, local storage, kube-system pods, safe-to-evict annotations). A node's drain plan shows what would block it.";
+  const candidateExplanation =
+    "Scale-down candidates are observations, not guaranteed removals. PodDisruptionBudgets, local storage, kube-system pods, or safe-to-evict annotations can block removal. Radar can't tell which nodes the autoscaler picked, but a node's drain plan shows what would block removing it.";
+
+  function renderScaleDown(child: CapacityAutoscalerChildObservation) {
+    return renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [
+          {
+            ...gkeGroup,
+            scaling: [
+              {
+                code: "at_min_size",
+                summary: "at minimum size — can't scale down",
+              },
+            ],
+            children: [child],
+            childrenMeta: boundedMeta(1),
+          },
+        ],
+        orphanAutoscalerGroups: [child],
+      }),
+    );
+  }
+
+  it("explains the floor and keeps published zero candidates", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(generatedAt) + 6 * 60 * 1000);
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: {
+        status: "NoCandidates",
+        candidates: 0,
+        lastTransitionTime: generatedAt,
+        asOf: generatedAt,
+      },
+    });
+    clock.mockRestore();
+    expect(html).toContain("at minimum size");
+    expect(html).toContain(
+      "Every observed autoscaler group has its target at its published minimum.",
+    );
+    expect(html).toContain(
+      "Lowering the pool&#x27;s minimum is required for it to shrink below this size.",
+    );
+    expect(html).not.toContain("No node can be removed right now");
+    expect(html).toContain(noCandidatesExplanation.replaceAll("'", "&#x27;"));
+    expect(html).not.toContain("autoscaler child");
+    expect(html).toContain("No scale-down candidates");
+    expect(html).toContain("Candidate count published by the autoscaler: 0.");
+    expect(html).not.toContain("Candidates:");
+    expect(html).toContain("Status since");
+    expect(html).toContain("(for 6m)");
+    expect(html).not.toContain("As of");
+    expect(html).toContain("PodDisruptionBudgets");
+    expect(html).not.toContain("ETA");
+  });
+
+  it("explains no candidates above the minimum on the collapsed pool and both child tables", () => {
+    const child: CapacityAutoscalerChildObservation = {
+      ...gkeChild,
+      scaleDown: { status: "NoCandidates", candidates: 0 },
+    };
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [{ ...gkeGroup, children: [child], childrenMeta: boundedMeta(1) }],
+        orphanAutoscalerGroups: [child],
+      }),
+    );
+    expect(html).toContain('aria-expanded="false"');
+    const explanation = noCandidatesExplanation.replaceAll("'", "&#x27;");
+    expect(html).toContain(
+      `tabindex="0" role="note" aria-label="No node can be removed right now. ${explanation}"`,
+    );
+    expect(html.split(`No scale-down candidates. ${explanation}`)).toHaveLength(3);
+    expect(html).not.toContain("Scale-down candidates are observations");
+  });
+
+  it.each([
+    ["missing count", { scaleDown: { status: "NoCandidates" } }, false],
+    ["missing observation", { scaleDown: undefined }, false],
+    ["candidates present", { scaleDown: { status: "CandidatesPresent", candidates: 1 } }, false],
+    ["missing minimum", { minSize: undefined }, false],
+    ["missing target", { target: undefined }, false],
+    ["below the minimum", { target: -1 }, false],
+    ["truncated children", {}, true],
+  ])("does not assert no removable nodes with %s", (_label, override, truncated) => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [{
+          ...gkeGroup,
+          children: [
+            { ...gkeChild, scaleDown: { status: "NoCandidates", candidates: 0 } },
+            { ...gkeChildBackoff, scaleDown: { status: "NoCandidates", candidates: 0 }, ...override },
+          ],
+          childrenMeta: { total: truncated ? 3 : 2, returned: 2, truncated },
+        }],
+      }),
+    );
+    expect(html).not.toContain("No node can be removed right now");
+  });
+
+  it("keeps scale-down probe freshness separate from health in both tables", () => {
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse(generatedAt) + 6 * 60 * 1000);
+    try {
+      const html = renderScaleDown({
+        ...gkeChild,
+        scaleDown: {
+          status: "InProgress",
+          asOf: "2026-07-13T07:06:00Z",
+        },
+      });
+      expect(html.match(/Health observed<\/th>/g)).toHaveLength(2);
+      expect(html.match(/Probe: <span[^>]*>1h ago<\/span>/g)).toHaveLength(2);
+      expect(html.match(/>6m ago<\/span><\/td>/g)).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("shows an absent scale-down probe independently of published health", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "InProgress" },
+    });
+    expect(html.match(/Probe: <span[^>]*>not probed<\/span>/g)).toHaveLength(2);
+  });
+
+  it.each([
+    "InProgress",
+    "CandidatesPresent",
+    "NoCandidates",
+    "NewControllerStatus",
+  ])(
+    "makes the %s removal caveat keyboard reachable without a count glyph",
+    (status) => {
+      const html = renderScaleDown({
+        ...gkeChild,
+        scaleDown: { status },
+      });
+      expect(
+        html.match(
+          /tabindex="0" role="note" aria-label="[^"]*PodDisruptionBudgets[^"]*"/g,
+        ),
+      ).toHaveLength(2);
+    },
+  );
+
+  it("never invents a zero count from NoCandidates or missing observations", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "NoCandidates" },
+    });
+    expect(html).toMatch(/Candidates:(?:<!-- -->|\s)*not published/);
+    expect(html).toContain("Candidate count not published by the autoscaler.");
+    expect(html).not.toContain("Probe time not published");
+    expect(html).not.toContain("Status since");
+    expect(html).not.toMatch(/Candidates:(?:<!-- -->|\s)*0/);
+    const older = renderScaleDown(gkeChild);
+    expect(older).not.toContain("Scale-down</th>");
+    expect(older).not.toContain("Not published");
+    expect(older).not.toContain("PodDisruptionBudgets");
+  });
+
+  it("keeps a status-only CandidatesPresent count unknown", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "CandidatesPresent" },
+    });
+    expect(html).toContain("Scale-down candidates present");
+    expect(html).toContain("Candidates: not published");
+    expect(html).not.toContain("0 scale-down candidates");
+  });
+
+  it.each(["joined", "orphan"])(
+    "shows both tables when only a %s child has scale-down data",
+    (source) => {
+      const withScaleDown = {
+        ...gkeChild,
+        scaleDown: { status: "NoCandidates", candidates: 0 },
+      };
+      const html = renderCapacity("/capacity", (client) =>
+        client.setQueryData(["capacity", "overview"], {
+          ...comprehensiveOverview(),
+          groups: [
+            {
+              ...gkeGroup,
+              children: [source === "joined" ? withScaleDown : gkeChild],
+            },
+          ],
+          orphanAutoscalerGroups: [
+            source === "orphan" ? withScaleDown : gkeChild,
+          ],
+        }),
+      );
+      expect(html.match(/Scale-down<\/th>/g)).toHaveLength(2);
+      expect(html).toContain("Not published");
+      expect(html).toContain("No scale-down candidates");
+    },
+  );
+
+  it("opens the removal caveat on status focus and dismisses it on blur", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    client.setQueryData(["capacity", "overview"], {
+      ...comprehensiveOverview(),
+      groups: [],
+      orphanAutoscalerGroups: [
+        {
+          ...gkeChild,
+          scaleDown: { status: "InProgress", candidates: 2 },
+        },
+      ],
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter initialEntries={["/capacity"]}>
+            <QueryClientProvider client={client}>
+              <CapacityView onOpenResource={() => {}} />
+            </QueryClientProvider>
+          </MemoryRouter>,
+        );
+      });
+      const trigger = container.querySelector<HTMLElement>(
+        '[role="note"][aria-label^="Scale-down in progress."]',
+      );
+      expect(trigger).not.toBeNull();
+      expect(trigger!.textContent).toBe("Scale-down in progress");
+      expect(trigger!.querySelector('[tabindex="0"]')).toBeNull();
+      await act(async () => {
+        trigger!.focus();
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(document.activeElement).toBe(trigger);
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+        "PodDisruptionBudgets",
+      );
+      await act(async () => {
+        trigger!.blur();
+      });
+      expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      client.clear();
+      container.remove();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("renders the server candidate fact on the collapsed pool", () => {
+    const html = renderCapacity("/capacity", (client) =>
+      client.setQueryData(["capacity", "overview"], {
+        ...comprehensiveOverview(),
+        groups: [
+          {
+            ...gkeGroup,
+            scaling: [
+              {
+                code: "scale_down_candidates",
+                summary: "3 scale-down candidates",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("3 scale-down candidates");
+    expect(html).toMatch(/tabindex="0" role="note" aria-label="3 scale-down candidates\. [^"]*PodDisruptionBudgets/);
+    expect(html).toContain(candidateExplanation.replaceAll("'", "&#x27;"));
+    expect(html).not.toContain("scale-down delay");
+    expect(html).not.toContain("Radar can&#x27;t see those blockers");
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it.each([
+    ["CandidatesPresent", "2 scale-down candidates"],
+    ["InProgress", "Scale-down in progress"],
+    ["NewControllerStatus", "NewControllerStatus"],
+    ["constructor", "constructor"],
+  ])("renders %s without promising a removal time", (status, label) => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status, candidates: 2 },
+    });
+    expect(html).toContain(label);
+    expect(html).toContain("2 scale-down candidates");
+    expect(html).not.toContain("unneeded");
+    expect(html).not.toContain("Candidates:");
+    expect(html).not.toContain("Status since");
+  });
+
+  it("names a single published candidate the same way the pool row does", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "CandidatesPresent", candidates: 1 },
+    });
+    expect(html).toMatch(
+      /role="note" aria-label="1 scale-down candidate\. Scale-down candidates are observations/,
+    );
+    expect(html).toContain(candidateExplanation.replaceAll("'", "&#x27;"));
+    expect(html).not.toContain("1 scale-down candidates");
   });
 });
 

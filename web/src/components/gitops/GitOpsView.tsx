@@ -25,7 +25,6 @@ import {
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
-  initNavigationMap,
   kindToPluralWithGroup,
   normalizeArgoApplication,
   normalizeArgoApplicationSet,
@@ -72,7 +71,7 @@ import {
   useGitOpsTree,
   useResource,
 } from '../../api/client'
-import { useAPIResources } from '../../api/apiResources'
+import { useAPIResources, GITOPS_KINDS } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
@@ -84,17 +83,6 @@ import { RemoteDestinationCloudHint } from './RemoteDestinationCloudHint'
 const GITOPS_HEALTH_DOCS_URL = 'https://radarhq.io/docs/features/gitops#per-resource-health'
 import type { GitOpsHistoryItem } from '@skyhook-io/k8s-ui'
 
-const GITOPS_KINDS: APIResource[] = [
-  { name: 'applications', kind: 'Application', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'applicationsets', kind: 'ApplicationSet', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'appprojects', kind: 'AppProject', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'kustomizations', kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'helmreleases', kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', version: 'v2', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'gitrepositories', kind: 'GitRepository', group: 'source.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'ocirepositories', kind: 'OCIRepository', group: 'source.toolkit.fluxcd.io', version: 'v1beta2', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'helmrepositories', kind: 'HelmRepository', group: 'source.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'alerts', kind: 'Alert', group: 'notification.toolkit.fluxcd.io', version: 'v1beta3', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-]
 
 type ArgoSyncDialogTarget =
   | { scope: 'application' }
@@ -164,9 +152,6 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
     })
   }
 
-  useEffect(() => {
-    initNavigationMap([...(apiResources ?? []), ...GITOPS_KINDS])
-  }, [apiResources])
 
   const hasGitOpsRowResource = useMemo(() => (
     hasAPIResource(apiResources, 'applications', 'argoproj.io') ||
@@ -505,6 +490,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       })
       return
     }
+    if (node?.missing) {
+      const nextStep = node.sync === 'Synced'
+        ? 'Argo reports it as synced. Refresh the application to check its status.'
+        : 'Sync the application to create it.'
+      showToast(`${ref.kind} ${ref.name} is not present in this cluster. ${nextStep}`, { type: 'info' })
+      return
+    }
     if (isGitOpsDetailRef(ref) && isValidKubernetesName(ref.name)) {
       const detailKind = kindToPluralWithGroup(ref.kind, ref.group ?? '')
       // The tree's root node is this page's own subject — clicking it must not
@@ -816,8 +808,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
               ) : undefined}
               focusKey={changesFocusKey}
               tree={tree}
-              renderResourceDiff={isArgoApp ? (ref) => (
-                <ArgoResourceDiffLoader appNamespace={namespace} appName={name} resourceRef={ref} />
+              renderResourceDiff={isArgoApp ? (ref, fallbackDrift) => (
+                <ArgoResourceDiffLoader appNamespace={namespace} appName={name} resourceRef={ref} fallbackDrift={fallbackDrift} />
               ) : undefined}
               onOpenSettings={onOpenSettings}
               settingsNote={settingsNote}
@@ -1097,18 +1089,26 @@ function newestConditionTime(resource: any): string {
 // many of them are healthy / drifted" at a glance, without making the user
 // count facets in the filter rail.
 function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
-  const nodes = (tree.nodes ?? []).filter((n) => n.role !== 'group' && n.role !== 'root')
+  const counted = (tree.nodes ?? []).filter((n) => n.role !== 'group' && n.role !== 'root')
+  // Dependencies (Flux sources, charts, dependsOn targets) are consumed, not
+  // managed: they get their own count and never inflate the managed totals.
+  const nodes = counted.filter((n) => !n.dependency)
+  const dependencies = counted.length - nodes.length
   const total = nodes.length
-  if (total === 0) return null
-  const healthy = nodes.filter((n) => (n.health || '').toLowerCase() === 'healthy').length
-  const degraded = nodes.filter((n) => {
+  if (counted.length === 0) return null
+  const isDegraded = (n: GitOpsTreeNode) => {
     const h = (n.health || '').toLowerCase()
     return h === 'degraded' || h === 'missing' || h === 'unhealthy'
-  }).length
+  }
+  const healthy = nodes.filter((n) => (n.health || '').toLowerCase() === 'healthy').length
+  const degraded = nodes.filter(isDegraded).length
+  const failingDependencies = counted.filter((n) => n.dependency && isDegraded(n)).length
   const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
   return (
     <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary sm:flex">
       <span><span className="text-theme-text-primary">{total}</span> resources</span>
+      {dependencies > 0 && <span><span className="text-theme-text-primary">{dependencies}</span> {dependencies === 1 ? 'dependency' : 'dependencies'}</span>}
+      {failingDependencies > 0 && <span className="flex items-center gap-1 font-medium text-red-600 dark:text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {failingDependencies} {failingDependencies === 1 ? 'dependency' : 'dependencies'} failing</span>}
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}
       {/* Bad-news counts use status colors on the number itself so the worst
           fact in the row visually pops, not just the dot next to it. */}

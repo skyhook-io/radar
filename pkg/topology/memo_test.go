@@ -252,3 +252,151 @@ func TestMemoizer_DoesNotCacheErrors(t *testing.T) {
 		t.Errorf("expected 2 build calls, got %d", got)
 	}
 }
+
+// The scopes below stand for two resource-cache instances: the cluster the
+// user switched away from (oldScope) and the one they switched to.
+const (
+	oldScope uint64 = 1
+	newScope uint64 = 2
+)
+
+func TestMemoizer_ScopedEntriesAreNotShared(t *testing.T) {
+	m := NewMemoizer(5 * time.Second)
+	opts := DefaultBuildOptions()
+	old := &Topology{Nodes: []Node{{ID: "deployment/demo/old"}}}
+	fresh := &Topology{Nodes: []Node{{ID: "deployment/demo/fresh"}}}
+
+	if _, err := m.GetScoped(oldScope, opts, func() (*Topology, error) { return old, nil }); err != nil {
+		t.Fatalf("old-scope Get: %v", err)
+	}
+	got, err := m.GetScoped(newScope, opts, func() (*Topology, error) { return fresh, nil })
+	if err != nil {
+		t.Fatalf("new-scope Get: %v", err)
+	}
+	if got != fresh {
+		t.Errorf("new-scope Get was served the old scope's entry (%+v)", got.Nodes)
+	}
+}
+
+// A topology walk takes seconds on a large cluster, so a build that started
+// before a context switch routinely finishes after it. Its result must not
+// reach a caller holding the new cache: neither by joining the build while
+// it runs, nor from the cache once it is stored.
+func TestMemoizer_StraddlingBuildNeverReachesNewScope(t *testing.T) {
+	m := NewMemoizer(5 * time.Second)
+	opts := DefaultBuildOptions()
+	old := &Topology{Nodes: []Node{{ID: "deployment/demo/old"}}}
+	fresh := &Topology{Nodes: []Node{{ID: "deployment/demo/fresh"}}}
+
+	building := make(chan struct{})
+	release := make(chan struct{})
+	oldDone := make(chan struct{})
+	go func() {
+		defer close(oldDone)
+		if _, err := m.GetScoped(oldScope, opts, func() (*Topology, error) {
+			close(building)
+			<-release
+			return old, nil
+		}); err != nil {
+			t.Errorf("old-scope Get: %v", err)
+		}
+	}()
+	<-building
+
+	var joined *Topology
+	newDone := make(chan struct{})
+	go func() {
+		defer close(newDone)
+		var err error
+		joined, err = m.GetScoped(newScope, opts, func() (*Topology, error) { return fresh, nil })
+		if err != nil {
+			t.Errorf("new-scope Get during old build: %v", err)
+		}
+	}()
+	select {
+	case <-newDone:
+	case <-time.After(5 * time.Second):
+		// Unblock both goroutines and wait for them, so neither reports
+		// after the test has returned.
+		close(release)
+		<-oldDone
+		<-newDone
+		t.Fatal("new-scope Get waited on the old scope's build instead of running its own")
+	}
+	close(release)
+	<-oldDone
+
+	if joined != fresh {
+		t.Errorf("new-scope Get during the old build got %+v", joined.Nodes)
+	}
+	got, err := m.GetScoped(newScope, opts, func() (*Topology, error) {
+		t.Error("new-scope entry was evicted by the old scope's late store")
+		return fresh, nil
+	})
+	if err != nil {
+		t.Fatalf("new-scope Get after old build stored: %v", err)
+	}
+	if got != fresh {
+		t.Errorf("new-scope Get after the old build stored got %+v", got.Nodes)
+	}
+}
+
+func TestMemoizer_ScopedIndexFollowsScope(t *testing.T) {
+	m := NewMemoizer(5 * time.Second)
+	opts := DefaultBuildOptions()
+	old := &Topology{Nodes: []Node{{ID: "deployment/demo/old"}}}
+	fresh := &Topology{Nodes: []Node{{ID: "deployment/demo/fresh"}}}
+
+	oldIdx, err := m.GetIndexScoped(oldScope, opts, func() (*Topology, error) { return old, nil })
+	if err != nil {
+		t.Fatalf("old-scope GetIndex: %v", err)
+	}
+	newIdx, err := m.GetIndexScoped(newScope, opts, func() (*Topology, error) { return fresh, nil })
+	if err != nil {
+		t.Fatalf("new-scope GetIndex: %v", err)
+	}
+	if oldIdx == newIdx {
+		t.Error("new-scope GetIndex returned the old scope's index")
+	}
+	again, err := m.GetIndexScoped(newScope, opts, func() (*Topology, error) { return fresh, nil })
+	if err != nil {
+		t.Fatalf("second new-scope GetIndex: %v", err)
+	}
+	if again != newIdx {
+		t.Error("second new-scope GetIndex rebuilt the index instead of reusing the memoized one")
+	}
+}
+
+func TestMemoizer_GetWithIndexKeepsSnapshotPairAndReusesIndex(t *testing.T) {
+	m := NewMemoizer(time.Hour)
+	opts := DefaultBuildOptions()
+	var count int
+	build := func() (*Topology, error) {
+		count++
+		name := "first"
+		if count > 1 {
+			name = "replacement"
+		}
+		return &Topology{Nodes: []Node{{ID: "deployment/team/" + name, Kind: KindDeployment, Name: name, Data: map[string]any{"namespace": "team"}}}}, nil
+	}
+	first, idx, err := m.GetWithIndexScoped(0, opts, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, same, err := m.GetWithIndexScoped(0, opts, build)
+	if err != nil || first != again || idx != same || count != 1 {
+		t.Fatalf("snapshot/index rebuilt on cache hit: %v %d", err, count)
+	}
+	// Force a genuine refresh without timing a sleep; old readers keep their
+	// coherent snapshot while the next call receives the replacement index.
+	m.mu.Lock()
+	m.entries[scopedKey(0, opts)].builtAt = time.Now().Add(-2 * time.Hour)
+	m.mu.Unlock()
+	next, nextIdx, err := m.GetWithIndexScoped(0, opts, build)
+	if err != nil || next == first || nextIdx == idx || count != 2 {
+		t.Fatalf("refresh = %v %d", err, count)
+	}
+	if idx.nodesByID[first.Nodes[0].ID] != &first.Nodes[0] || nextIdx.nodesByID[next.Nodes[0].ID] != &next.Nodes[0] || nextIdx.nodesByID[first.Nodes[0].ID] != nil {
+		t.Fatal("index paired with another snapshot")
+	}
+}

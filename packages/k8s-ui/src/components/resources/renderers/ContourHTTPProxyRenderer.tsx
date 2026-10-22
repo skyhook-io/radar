@@ -1,11 +1,11 @@
 import { Globe, Route, Layers, Lock } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ConditionsSection, ResourceLink } from '../../ui/drawer-components'
 import {
+  getContourSecretReference,
   getHTTPProxyFQDN,
   getHTTPProxyRouteCount,
   getHTTPProxyServiceCount,
   getHTTPProxyStatus,
-  getHTTPProxyTLSSecret,
   hasHTTPProxyTLS,
 } from '../resource-utils-contour'
 
@@ -20,7 +20,6 @@ export function ContourHTTPProxyRenderer({ data, onNavigate }: ContourHTTPProxyR
   const routes = spec.routes || []
   const includes = spec.includes || []
   const tls = spec.virtualhost?.tls
-  const tlsSecret = getHTTPProxyTLSSecret(data)
   const tcpproxy = spec.tcpproxy
   const ns = data.metadata?.namespace || ''
   const conditions = status.conditions
@@ -176,17 +175,16 @@ export function ContourHTTPProxyRenderer({ data, onNavigate }: ContourHTTPProxyR
       {tls && (
         <Section title="TLS" icon={Lock} defaultExpanded>
           <PropertyList>
-            {tlsSecret && (
-              <Property label="Secret" value={
-                <ResourceLink
-                  name={tlsSecret.name}
-                  kind="secrets"
-                  namespace={tlsSecret.namespace}
-                  label={tlsSecret.namespace !== ns ? `${tlsSecret.namespace}/${tlsSecret.name}` : undefined}
-                  onNavigate={onNavigate}
-                />
-              } />
-            )}
+            {[
+              { label: 'Secret', name: tls.secretName },
+              { label: 'Client CA Secret', name: tls.clientValidation?.caSecret },
+              { label: 'Client CRL Secret', name: tls.clientValidation?.crlSecret },
+            ].filter(item => item.name).map(item => {
+              const ref = getContourSecretReference(item.name, ns)
+              return <Property key={item.label} label={item.label} value={ref
+                ? <ResourceLink {...ref} kind="secrets" group="" label={item.name} onNavigate={onNavigate} />
+                : item.name} />
+            })}
             {tls.minimumProtocolVersion && (
               <Property label="Min Protocol" value={tls.minimumProtocolVersion} />
             )}

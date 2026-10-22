@@ -1,8 +1,4 @@
-import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
-import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
-import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
-import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
-import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
+import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
@@ -11,13 +7,11 @@ import { clsx } from 'clsx'
 import { Terminal, Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
-  isApiGroup,
   EditableYamlView,
   FetchResult,
   Section,
   type WorkloadTabType,
   type WorkloadExtraTab,
-  type RendererOverrides,
   type GitOpsOwnerRef,
   type HelmOwnerRef,
   type AppRow,
@@ -42,6 +36,7 @@ import {
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
+import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
 import { useHistoryPaging } from './historyPaging'
 import { findInheritedGitOpsLookupRef, useResolvedGitOpsOwner } from '../../hooks/useResolvedGitOpsOwner'
 import { useGitOpsWriteGuard } from '../../hooks/useGitOpsWriteGuard'
@@ -52,6 +47,7 @@ import {
   pluralToKind,
   relatedResourcePath,
   buildWorkloadPath,
+  namespacesFromSearch,
   type NavigateToResource,
 } from '../../utils/navigation'
 import {
@@ -87,6 +83,7 @@ import {
   useCordonNode,
   useUncordonNode,
   useDrainNode,
+  useNodeDrainActivity,
   useDrainPlan,
   useCascadeDeletePreview,
   useResourceEvents,
@@ -104,7 +101,7 @@ import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
-import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
+import { useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
@@ -128,42 +125,12 @@ import {
   defaultPathForPort,
 } from '../curl/ServiceCurlButton'
 import { useToast } from '../ui/Toast'
-import { Tooltip } from '../ui/Tooltip'
-import { PodRenderer } from '../resources/renderers/PodRenderer'
-import { KarpenterNodePoolRenderer } from '../resources/renderers/KarpenterNodePoolRenderer'
-import { NodeRenderer } from '../resources/renderers/NodeRenderer'
-import { ServiceRenderer } from '../resources/renderers/ServiceRenderer'
-import { WorkloadRenderer } from '../resources/renderers/WorkloadRenderer'
-import { CompositeRenderer } from '../resources/CompositeRenderer'
-import { ServiceAccountRenderer } from '../resources/renderers/ServiceAccountRenderer'
-import { RoleRenderer } from '../resources/renderers/RoleRenderer'
-import { RoleBindingRenderer } from '../resources/renderers/RoleBindingRenderer'
-import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
-import { CAPIClusterRenderer } from '../resources/renderers/CAPIClusterRenderer'
-import { HPARenderer } from '../resources/renderers/HPARenderer'
-import { PVCRenderer } from '../resources/renderers/PVCRenderer'
-import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
-import { KyvernoPolicyCoverage } from '../resources/renderers/KyvernoPolicyCoverage'
-import { KyvernoPolicyQueued } from '../resources/renderers/KyvernoPolicyQueued'
-import { CNPGObjectStoreRenderer } from '../resources/renderers/CNPGObjectStoreRenderer'
-import { VeleroBSLRenderer } from '../resources/renderers/VeleroBSLRenderer'
-import { VeleroBackupRenderer } from '../resources/renderers/VeleroBackupRenderer'
-import { VeleroRestoreRenderer } from '../resources/renderers/VeleroRestoreRenderer'
-import { CNPGClusterRenderer } from '../resources/renderers/CNPGClusterRenderer'
-import { CNPGImageCatalogRenderer } from '../resources/renderers/CNPGImageCatalogRenderer'
-import {
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-} from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
-import { renderCNPGSummary } from '../cnpg/CNPGSummaryHost'
-import { CNPGClusterLogs } from '../cnpg/CNPGClusterLogs'
-import { cnpgDetailKindFor, cnpgDetailPath } from '../cnpg/routes'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
+import { NodeDrainStatus } from './NodeDrainStatus'
 
 type TabType = WorkloadTabType
 const BATCH_EXECUTION_KINDS = new Set([
@@ -184,41 +151,6 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
     return group === 'jobset.x-k8s.io' && isJobSetV1Alpha2({ kind, apiVersion })
   }
   return true
-}
-
-// Stable reference — web renderer wrappers inject platform hooks internally
-const rendererOverrides: RendererOverrides = {
-  RayJobRenderer,
-  JobRenderer,
-  JobSetRenderer,
-  RayServiceRenderer,
-  RayClusterRenderer,
-  KueueWorkloadRenderer,
-  CAPIClusterRenderer,
-  PodRenderer,
-  KarpenterNodePoolRenderer,
-  NodeRenderer,
-  ServiceRenderer,
-  WorkloadRenderer,
-  CompositeRenderer,
-  ServiceAccountRenderer,
-  RoleRenderer,
-  RoleBindingRenderer,
-  NamespaceRenderer,
-  HPARenderer,
-  PVCRenderer,
-  RolloutRenderer,
-  KyvernoPolicyCoverage,
-  KyvernoPolicyQueued,
-  CNPGObjectStoreRenderer,
-  VeleroBSLRenderer,
-  VeleroBackupRenderer,
-  VeleroRestoreRenderer,
-  CNPGClusterRenderer,
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-  CNPGImageCatalogRenderer,
 }
 
 // ============================================================================
@@ -289,16 +221,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     )
   }
 
-  const cnpgPlural = cnpgDetailKindFor(kind, group)
-  if (cnpgPlural) {
-    const params = new URLSearchParams(searchParams)
-    params.delete('apiGroup')
-    const tab = params.get('tab')
-    if (cnpgPlural === 'clusters' && (tab === 'timeline' || tab === 'events')) params.set('tab', 'activity')
-    const base = cnpgDetailPath({ plural: cnpgPlural, namespace, name })
-    const qs = params.toString()
-    return <Navigate replace to={qs ? `${base}?${qs}` : base} state={location.state} />
-  }
+  const detailPath = resourceDetailRedirect({ kind, group, namespace, name }, searchParams)
+  if (detailPath) return <Navigate replace to={detailPath} state={location.state} />
 
   return (
     <WorkloadView
@@ -341,6 +265,16 @@ interface WorkloadViewProps {
   pushTabHistory?: boolean
   breadcrumb?: ReactNode
   extraTabs?: WorkloadExtraTab[]
+  tabOrder?: string[]
+  subheader?: ReactNode
+  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
+  titlePrefix?: ReactNode
+  inlineBadges?: boolean
+  namespaceNote?: ReactNode
+  renderStatusBadge?: (resource: any) => ReactNode
+  statusNote?: ReactNode
+  onRefresh?: () => Promise<unknown>
+  hideKindBadge?: boolean
 }
 
 interface ImageTargetOwnershipContext {
@@ -359,6 +293,7 @@ function useActionsBarProps(
   name: string,
   group: string | undefined,
   cascadeEnabled: boolean,
+  nodeUID: string,
 ) {
   const { showCopied } = useToast()
   const { features } = useCapabilitiesContext()
@@ -437,7 +372,8 @@ function useActionsBarProps(
   const canNodeWrite = useCanNodeWrite()
   const cordonMutation = useCordonNode()
   const uncordonMutation = useUncordonNode()
-  const drainMutation = useDrainNode()
+  const drainMutation = useDrainNode(nodeUID)
+  const { activity: drainActivity } = useNodeDrainActivity(name, nodeUID)
   const drainPlanMutation = useDrainPlan()
 
   const { renderAction: renderDiagnose } = useDiagnoseCustomization()
@@ -463,7 +399,7 @@ function useActionsBarProps(
       name: string
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
-    renderDiagnose,
+    renderDiagnose: decorateResourceDiagnose(renderDiagnose),
     onDelete: (
       params: Parameters<typeof deleteMutation.mutate>[0],
       callbacks?: { onSuccess?: () => void },
@@ -471,7 +407,8 @@ function useActionsBarProps(
     isDeleting: deleteMutation.isPending,
     cascadeDependents: cascadePreview?.dependents,
     cascadeLoading,
-    cascadeRootResolved: cascadeError ? false : cascadePreview?.rootResolved,
+    cascadeRootResolved: cascadePreview?.rootResolved,
+    cascadePreviewFailed: Boolean(cascadeError),
     onRestart: rolloutAllows('restart')
       ? (params: Parameters<typeof restartWorkloadMutation.mutate>[0]) =>
           restartWorkloadMutation.mutate(params)
@@ -542,7 +479,7 @@ function useActionsBarProps(
     isUncordoningNode: uncordonMutation.isPending,
     onDrainNode: (params: Parameters<typeof drainMutation.mutate>[0]) =>
       drainMutation.mutate(params),
-    isDrainingNode: drainMutation.isPending,
+    isDrainingNode: nodeUID ? drainActivity?.status === 'pending' : drainMutation.isPending,
     onPlanDrain: (params: Parameters<typeof drainPlanMutation.mutate>[0]) =>
       drainPlanMutation.mutate(params),
     onPlanDrainReset: () => drainPlanMutation.reset(),
@@ -565,6 +502,8 @@ export function WorkloadView({
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
+  const viewNamespacesKey = namespacesFromSearch(searchParams).join(',')
+  const viewNamespaces = useMemo(() => (viewNamespacesKey ? viewNamespacesKey.split(',') : []), [viewNamespacesKey])
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
@@ -632,6 +571,8 @@ export function WorkloadView({
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
     refetchActive: true,
     clusterScoped: batchKind === 'ClusterWorkflowTemplate',
+    namespaces: viewNamespaces,
+    ownerUID: batchKind === 'CronJob' ? resource?.metadata?.uid : undefined,
   })
   const relatedTimelineEvents = useMemo(
     () => batchKind === 'JobSet' ? [] : workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
@@ -645,9 +586,11 @@ export function WorkloadView({
     () => (isDiagnoseKind(apiKind, effectiveGroup) ? [] : (relationships?.services ?? [])),
     [apiKind, effectiveGroup, relationships],
   )
+  const onRefresh = rest.onRefresh
   const refetchResourceAndRuns = useCallback(async () => {
     await Promise.all([
       refetchResource(),
+      onRefresh?.(),
       ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
         queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
         ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
@@ -661,7 +604,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, onRefresh])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],
@@ -853,6 +796,7 @@ export function WorkloadView({
     name,
     effectiveGroup,
     !resourceLoading && Boolean(resource),
+    apiKind === 'nodes' && !effectiveGroup ? resource?.metadata?.uid ?? '' : '',
   )
   const desktopDownload = useDesktopDownload()
 
@@ -864,7 +808,14 @@ export function WorkloadView({
   // would flip the query key when the manifest arrives, drop liveIssues, and flash
   // the renderer banners. The backend canonicalizes a plural kind via discovery,
   // so using the normalized API kind resolves direct links and app navigation alike.
-  const { data: liveIssues, isPending: issuesPending } = useResourceIssues(apiKind, rest.group, namespace, name)
+  const isCronJob = apiKind === 'cronjobs' && (!effectiveGroup || effectiveGroup === 'batch')
+  const { support: coverageSupport } = useRadarFeature('resourceIssueCoverage')
+  const useCronJobCoverage = isCronJob && coverageSupport === 'supported'
+  const ordinaryIssues = useResourceIssues(apiKind, rest.group, namespace, name, !useCronJobCoverage)
+  const cronJobIssues = useSubjectIssues(useCronJobCoverage ? { kind: 'CronJob', group: 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useCronJobCoverage && Boolean(resource))
+  const liveIssues = useCronJobCoverage ? cronJobIssues.data?.issues : ordinaryIssues.data
+  const issuesPending = useCronJobCoverage ? cronJobIssues.isPending : ordinaryIssues.isPending
+  const schedulingEvidence = cronJobIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? cronJobIssues.data?.scheduling_report : undefined
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
   const {
@@ -1247,12 +1198,11 @@ export function WorkloadView({
             group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
+            viewNamespaces={viewNamespaces}
           />
         )}
-        renderSummary={({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
-          renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
-        }
-        renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
+        {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
+        renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
             <BatchExecutionFullscreen
@@ -1262,11 +1212,13 @@ export function WorkloadView({
               name={n}
               resource={res}
               selectedRunKey={selectedRunKey}
+              leadContent={leadContent}
               canViewLogs={baseActionsBarProps.canViewLogs}
               onSelectRun={handleSelectedRunChange}
               onSwitchToLogs={() => handleTabChange('logs')}
               onSwitchToTimeline={() => handleTabChange('timeline')}
               onNavigateToResource={rest.onNavigateToResource}
+              viewNamespaces={viewNamespaces}
             />
           ) : null
         }
@@ -1316,7 +1268,10 @@ export function WorkloadView({
         onDuplicate={handleDuplicate}
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
-        rendererOverrides={rendererOverrides}
+        rendererOverrides={resourceRendererOverrides}
+        renderOverviewIntro={apiKind === 'nodes' && !effectiveGroup && resource?.metadata?.uid
+          ? () => <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
+          : undefined}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1334,7 +1289,6 @@ export function WorkloadView({
           <>
             {diagnoseInline}
             {diagnoseHint}
-            <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
             <AuditOverviewSection
               findings={auditFindings ?? []}
               onViewAll={() => navigateRouter('/checks')}
@@ -1343,8 +1297,11 @@ export function WorkloadView({
           )
         }}
         renderOverviewLead={() => (
+          <div className="flex flex-col gap-4">
+          <CronJobSchedulingContext evidence={schedulingEvidence} onViewTimeline={() => handleTabChange('timeline')} />
           <ResourceIssuesSection
             issues={liveIssues}
+            renderDetailSection={schedulingEvidence?.state === 'reported' ? ({ issue }) => issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason ? <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={() => handleTabChange('timeline')} /> : null : undefined}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
             onResourceClick={
@@ -1359,7 +1316,9 @@ export function WorkloadView({
                 : undefined
             }
           />
+          </div>
         )}
+        hasOverviewLead={hasOperationalIssues || Boolean(schedulingEvidence && schedulingEvidence.state !== 'reported')}
         hasOperationalIssues={hasOperationalIssues}
         operationalIssuesPending={issuesPending}
         onOpenGitOpsResource={gitopsOwnerObject ? handleOpenGitOpsResource : undefined}
@@ -1512,6 +1471,7 @@ function LogsTabContent({
   onConsumeInitialContainer,
   selectedRunKey,
   onSelectRun,
+  viewNamespaces,
 }: {
   kind: string
   apiKind: string
@@ -1526,6 +1486,7 @@ function LogsTabContent({
   onConsumeInitialContainer: () => void
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
+  viewNamespaces: string[]
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1536,14 +1497,14 @@ function LogsTabContent({
           name={name}
           selectedRunKey={selectedRunKey}
           onSelectRun={onSelectRun}
+          viewNamespaces={viewNamespaces}
         />
       </div>
     )
   }
 
-  if (kind === 'Cluster' && isApiGroup(resource?.apiVersion, 'postgresql.cnpg.io')) {
-    return <CNPGClusterLogs namespace={namespace} name={name} />
-  }
+  const integrationLogs = resourceLogs({ kind, group, namespace, name }, resource)
+  if (integrationLogs) return integrationLogs
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
@@ -2219,137 +2180,6 @@ function DiagnoseInlineSection({ kind, namespace, name, group, onOpenReachabilit
   )
 }
 
-// FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)
-// that reference this Flux source CR — the inverse of `spec.sourceRef`. Renders
-// only when the focused resource is a Flux source kind; otherwise null. Sources
-// can have many consumers (one repo feeding multiple apps), so this answers
-// "if I edit this source, what gets affected on the next reconcile?".
-//
-// Filtering happens client-side off the namespaced reconciler lists — these
-// are typically small (tens, not thousands) and the dynamic informer cache
-// makes the request cheap. If a cluster ever has thousands of HelmReleases,
-// a dedicated /api/gitops/consumers endpoint would be the right move; today
-// it'd be premature.
-// Outer component is cheap — it does only the kind check and decides whether
-// to mount the data-fetching child. Without this split, useResources would
-// fire two API calls on EVERY workload drawer open (Pod, Deployment, Service,
-// …), since the hook has no `enabled` flag and can't be conditionally called
-// (Rules of Hooks). The hooks only need to run when the focused resource is
-// actually a Flux source CR.
-function FluxSourceConsumersSection({
-  kind,
-  namespace,
-  name,
-}: {
-  kind: string
-  namespace: string
-  name: string
-}) {
-  // The inner WorkloadView de-pluralizes the URL's plural form, which gives
-  // "Gitrepository" (single-uppercase) rather than the wire-correct
-  // "GitRepository" — so we match lowercase. spec.sourceRef.kind on consumers
-  // is always wire-correct, so we look that up separately.
-  const sourceKind = FLUX_SOURCE_KIND_BY_LOWER.get(kind.toLowerCase()) ?? null
-  if (!sourceKind) return null
-  return <FluxSourceConsumersInner sourceKind={sourceKind} namespace={namespace} name={name} />
-}
-
-function FluxSourceConsumersInner({
-  sourceKind,
-  namespace,
-  name,
-}: {
-  sourceKind: string
-  namespace: string
-  name: string
-}) {
-  const navigate = useNavigate()
-  const { data: kustomizations } = useResources<any>(
-    'kustomizations',
-    undefined,
-    'kustomize.toolkit.fluxcd.io',
-  )
-  const { data: helmReleases } = useResources<any>(
-    'helmreleases',
-    undefined,
-    'helm.toolkit.fluxcd.io',
-  )
-
-  const consumers: Array<{
-    kind: 'Kustomization' | 'HelmRelease'
-    namespace: string
-    name: string
-    plural: string
-  }> = []
-  for (const k of kustomizations ?? []) {
-    const ref = k?.spec?.sourceRef ?? {}
-    const refNs = ref.namespace || k?.metadata?.namespace
-    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
-      consumers.push({
-        kind: 'Kustomization',
-        namespace: k.metadata.namespace,
-        name: k.metadata.name,
-        plural: 'kustomizations',
-      })
-    }
-  }
-  for (const h of helmReleases ?? []) {
-    const ref = h?.spec?.chart?.spec?.sourceRef ?? {}
-    const refNs = ref.namespace || h?.metadata?.namespace
-    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
-      consumers.push({
-        kind: 'HelmRelease',
-        namespace: h.metadata.namespace,
-        name: h.metadata.name,
-        plural: 'helmreleases',
-      })
-    }
-  }
-
-  if (consumers.length === 0) {
-    return (
-      <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
-        <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Consumed by</h3>
-        <p className="text-xs text-theme-text-tertiary">
-          No Kustomization or HelmRelease references this source.
-        </p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
-      <h3 className="mb-3 text-sm font-semibold text-theme-text-primary">
-        Consumed by ({consumers.length})
-      </h3>
-      <div className="flex flex-wrap gap-1.5">
-        {consumers.map((c) => (
-          <Tooltip
-            key={`${c.kind}/${c.namespace}/${c.name}`}
-            content={`${c.kind} ${c.namespace}/${c.name}`}
-          >
-            <button
-              onClick={() =>
-                navigate(
-                  `/gitops/detail/${c.plural}/${encodeURIComponent(c.namespace)}/${encodeURIComponent(c.name)}`,
-                )
-              }
-              className="inline-flex items-center gap-1.5 rounded border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[11px] text-theme-text-secondary hover:border-skyhook-500/60 hover:text-skyhook-500 transition-colors"
-            >
-              <span className="text-theme-text-tertiary">
-                {c.kind === 'HelmRelease' ? 'HR' : 'K'}
-              </span>
-              <span>
-                {c.namespace}/{c.name}
-              </span>
-            </button>
-          </Tooltip>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 // Drawer mode: single chart + category tabs (compact for ~500px width).
 // Full-screen mode: multi-chart grid so CPU + Memory + Network can be
 // compared side-by-side without tab switching.
@@ -2423,18 +2253,6 @@ function DrawerMetricsContent({
     </div>
   )
 }
-
-// FLUX_SOURCE_KIND_BY_LOWER maps lowercase kind (what the inner WorkloadView
-// produces via its plural-to-singular fallback) to the wire-correct
-// PascalCase form that consumers carry in spec.sourceRef.kind. HelmChart is
-// intentionally absent — it's an auto-generated internal CR, not something
-// users create or point reconcilers at directly.
-const FLUX_SOURCE_KIND_BY_LOWER = new Map<string, string>([
-  ['gitrepository', 'GitRepository'],
-  ['helmrepository', 'HelmRepository'],
-  ['ocirepository', 'OCIRepository'],
-  ['bucket', 'Bucket'],
-])
 
 // Read-only manifest view for an object in the workload's neighborhood (the
 // YAML tab's object rail). Read-only by design — editing an arbitrary related

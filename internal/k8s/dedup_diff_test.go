@@ -3,12 +3,14 @@ package k8s
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // The cache layer computes the update diff once and hands it to
@@ -99,7 +101,7 @@ func TestRecordToTimelineStore_DeploymentGenerationFallbackRequiresSpecChange(t 
 			},
 		},
 		{
-			name: "untracked spec field",
+			name: "spec field",
 			mutate: func(deployment *appsv1.Deployment) {
 				deployment.Spec.MinReadySeconds = 5
 			},
@@ -130,8 +132,75 @@ func TestRecordToTimelineStore_DeploymentGenerationFallbackRequiresSpecChange(t 
 			if len(events) != tt.wantEvents {
 				t.Fatalf("recorded %d events, want %d: %+v", len(events), tt.wantEvents, events)
 			}
-			if tt.wantEvents == 1 && (events[0].Diff == nil || len(events[0].Diff.Fields) != 1 || events[0].Diff.Fields[0].Path != "metadata.generation") {
-				t.Fatalf("expected generation fallback for untracked spec change, got %+v", events[0].Diff)
+			if tt.wantEvents == 1 && (events[0].Diff == nil || len(events[0].Diff.Fields) != 1 || events[0].Diff.Fields[0].Path != "spec.minReadySeconds") {
+				t.Fatalf("expected the spec field change, got %+v", events[0].Diff)
+			}
+		})
+	}
+}
+
+// From Kubernetes 1.33 the API server bumps a Pod's generation when graceful
+// deletion sets deletionTimestamp. That is not a spec change.
+func TestRecordToTimelineStore_DeletionStartIsNotSpecChange(t *testing.T) {
+	deleting := metav1.NewTime(time.Now().Add(30 * time.Second))
+	deadline := int64(60)
+	tests := []struct {
+		name       string
+		oldGen     int64
+		newGen     int64
+		oldDeleted bool
+		mutate     func(*corev1.Pod)
+		wantEvents int
+	}{
+		{name: "graceful deletion", oldGen: 1, newGen: 2},
+		{
+			// A relist can fold a spec edit and the deletion into one update.
+			name: "spec edit folded into the deletion", oldGen: 1, newGen: 3,
+			mutate:     func(pod *corev1.Pod) { pod.Spec.ActiveDeadlineSeconds = &deadline },
+			wantEvents: 1,
+		},
+		{
+			name: "spec edit while terminating", oldGen: 2, newGen: 3, oldDeleted: true,
+			mutate:     func(pod *corev1.Pod) { pod.Spec.ActiveDeadlineSeconds = &deadline },
+			wantEvents: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "shop", UID: "uid-1", Generation: tt.oldGen},
+				Spec:       corev1.PodSpec{NodeName: "node-1", Containers: []corev1.Container{{Name: "web", Image: "nginx"}}},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
+			}
+			if tt.oldDeleted {
+				oldPod.DeletionTimestamp = &deleting
+			}
+			newPod := oldPod.DeepCopy()
+			newPod.Generation = tt.newGen
+			newPod.DeletionTimestamp = &deleting
+			grace := int64(30)
+			newPod.DeletionGracePeriodSeconds = &grace
+			if tt.mutate != nil {
+				tt.mutate(newPod)
+			}
+
+			timeline.ResetStore()
+			if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+				t.Fatalf("InitStore: %v", err)
+			}
+			t.Cleanup(timeline.ResetStore)
+
+			recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-1", "uid-1", "update", oldPod, newPod, nil, false)
+			events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{Kinds: []string{"Pod"}, IncludeManaged: true})
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			if len(events) != tt.wantEvents {
+				t.Fatalf("recorded %d events, want %d: %+v", len(events), tt.wantEvents, events)
+			}
+			if tt.wantEvents == 1 && (events[0].Diff == nil || !strings.HasPrefix(events[0].Diff.Summary, "spec changed")) {
+				t.Fatalf("expected a spec change, got %+v", events[0].Diff)
 			}
 		})
 	}

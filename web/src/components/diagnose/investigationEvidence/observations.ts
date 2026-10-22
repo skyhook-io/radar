@@ -182,6 +182,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_neighborhood: "Relationships",
   get_topology: "Topology",
   get_workload_logs: "Workload logs",
+  wait_for: "Wait",
   get_prometheus_rules: "Alert rules",
   get_helm_release: "Helm release",
   get_subject_permissions: "Permissions",
@@ -700,6 +701,11 @@ export function addResourceObservation(
       : warnings.length > 0
         ? "warning"
         : "neutral";
+  // A Pod/template difference is listed with the warnings but does not set
+  // the tone: admission defaults (LimitRange, injected sidecars) produce it on
+  // healthy Pods.
+  const divergence = templateDivergenceWarning(context);
+  if (divergence) warnings = [...warnings, divergence];
   const namespace = resource.metadata.namespace;
   const identity = `${resource.apiVersion}:${resource.kind}:${namespace ?? ""}:${resource.metadata.name}`;
   builder.observe(identity, "resource", source, {
@@ -723,6 +729,20 @@ export function addResourceObservation(
     },
   });
   addResourceContextLimitations(builder, source, context);
+}
+// The live Pod spec differing from its template is context, not a fault, so
+// it reads as a line on the resource card rather than a finding of its own.
+function templateDivergenceWarning(
+  context: InvestigationResourceContext | undefined,
+): string | undefined {
+  const divergence = context?.templateDivergence;
+  const first = divergence?.differences?.[0];
+  if (!divergence || !nonEmptyString(first)) return undefined;
+  const scope = divergence.examplePod
+    ? `${divergence.podsDiffering} of ${divergence.podsCompared} compared Pods${divergence.podsCapped ? " (the most recent)" : ""} differ from their template${divergence.podsNotCompared ? `, ${divergence.podsNotCompared} more not compared` : ""}`
+    : "Live Pod spec differs from its template";
+  const more = divergence.differences.length > 1 ? " (and more)" : "";
+  return `${scope}: ${first}${more}`;
 }
 export function addIssueObservation(
   builder: ProjectionBuilder,

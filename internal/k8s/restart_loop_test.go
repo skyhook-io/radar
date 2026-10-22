@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -134,8 +135,8 @@ func TestActiveRestartLoop_ProbeEvidenceIsPerContainer(t *testing.T) {
 	now := time.Now()
 	pod := restartLoopPod(now, corev1.ContainerStatus{Name: "app", RestartCount: 4, LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Completed", 0)}})
 	probes := map[string]probeFailure{
-		"ns/p/other/" + livenessProbeFailedReason: {reason: livenessProbeFailedReason, at: now},
-		"ns/p//" + readinessProbeFailedReason:     {reason: readinessProbeFailedReason, at: now, message: "Readiness probe failed"},
+		probeFailureKey("ns", "p", pod.UID) + "/other/" + livenessProbeFailedReason: {reason: livenessProbeFailedReason, at: now},
+		probeFailureKey("ns", "p", pod.UID) + "//" + readinessProbeFailedReason:     {reason: readinessProbeFailedReason, at: now, message: "Readiness probe failed"},
 	}
 	loop, ok := activeRestartLoop(pod, probes, now)
 	if !ok {
@@ -168,7 +169,7 @@ func TestRestartLoopDiagnosis_StableAcrossPollsAndReplicas(t *testing.T) {
 func TestActiveRestartLoop_UnattributedProbeEventNeedsSingleContainer(t *testing.T) {
 	now := time.Now()
 	cs := corev1.ContainerStatus{Name: "app", RestartCount: 4, LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Completed", 0)}}
-	probes := map[string]probeFailure{"ns/p//" + livenessProbeFailedReason: {reason: livenessProbeFailedReason, at: now}}
+	probes := map[string]probeFailure{probeFailureKey("ns", "p", "") + "//" + livenessProbeFailedReason: {reason: livenessProbeFailedReason, at: now}}
 	single := restartLoopPod(now, cs)
 	if loop, _ := activeRestartLoop(single, probes, now); loop.liveness == nil {
 		t.Fatal("single-container pod: unattributed liveness event should count")
@@ -184,12 +185,19 @@ func TestActiveRestartLoop_IgnoresProbeEventsOfAPredecessorPod(t *testing.T) {
 	now := time.Now()
 	pod := restartLoopPod(now, corev1.ContainerStatus{Name: "app", RestartCount: 4, LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Completed", 0)}})
 	pod.UID = "new"
-	key := "ns/p/app/" + livenessProbeFailedReason
-	if loop, _ := activeRestartLoop(pod, map[string]probeFailure{key: {at: now, podUID: "old"}}, now); loop.liveness != nil {
+	key := func(uid types.UID) string {
+		return probeFailureKey("ns", "p", uid) + "/app/" + livenessProbeFailedReason
+	}
+	if loop, _ := activeRestartLoop(pod, map[string]probeFailure{key("old"): {at: now}}, now); loop.liveness != nil {
 		t.Fatal("probe event from a previous pod with the same name was attributed")
 	}
-	if loop, _ := activeRestartLoop(pod, map[string]probeFailure{key: {at: now, podUID: "new"}}, now); loop.liveness == nil {
+	if loop, _ := activeRestartLoop(pod, map[string]probeFailure{key("new"): {at: now}}, now); loop.liveness == nil {
 		t.Fatal("probe event of this pod should be attributed")
+	}
+	// A predecessor stamped later must not hide this pod's own failure.
+	both := map[string]probeFailure{key("new"): {at: now.Add(-time.Minute), message: "current"}, key("old"): {at: now, message: "predecessor"}}
+	if loop, _ := activeRestartLoop(pod, both, now); loop.liveness == nil || loop.liveness.message != "current" {
+		t.Fatalf("liveness = %+v, want this pod's own failure", loop.liveness)
 	}
 }
 
@@ -325,7 +333,7 @@ func TestActiveRestartLoop_UsesContainerRestartPolicy(t *testing.T) {
 func TestActiveRestartLoop_StartupProbeEvidence(t *testing.T) {
 	now := time.Now()
 	pod := restartLoopPod(now, corev1.ContainerStatus{Name: "app", RestartCount: 4, LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Error", 143)}})
-	probes := map[string]probeFailure{"ns/p/app/" + startupProbeFailedReason: {reason: startupProbeFailedReason, at: now, message: "Startup probe failed: connection refused"}}
+	probes := map[string]probeFailure{probeFailureKey("ns", "p", pod.UID) + "/app/" + startupProbeFailedReason: {reason: startupProbeFailedReason, at: now, message: "Startup probe failed: connection refused"}}
 	loop, ok := activeRestartLoop(pod, probes, now)
 	if !ok || loop.startup == nil || loop.evidence().StartupProbeFailure == nil || !strings.Contains(loop.message(), "startup probe failures observed") {
 		t.Fatalf("loop = %+v, want startup probe evidence", loop)

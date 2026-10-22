@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // summarizeUnstructured produces a Summary for CRDs and dynamic resources.
@@ -380,7 +383,12 @@ func summarizeArgoAnalysisRun(obj *unstructured.Unstructured) *ResourceSummary {
 	switch {
 	case len(failing) > 0:
 		s.Issue = strings.Join(failing, "; ")
-	default:
+	// Argo writes status.message only when a run finishes, and a finished run
+	// can be fine: Argo stops a run once the Rollout no longer needs it (a
+	// canary completing with background analysis, a newer revision, an abort,
+	// a promote-full, a fast rollback), and that run ends Successful with
+	// "Run Terminated". So the message is an issue only on a bad verdict.
+	case s.Status == "Failed", s.Status == "Error", s.Status == "Inconclusive":
 		s.Issue, _, _ = unstructured.NestedString(obj.Object, "status", "message")
 	}
 
@@ -907,10 +915,12 @@ func summarizeKedaScaledObject(obj *unstructured.Unstructured) *ResourceSummary 
 	}
 
 	// Target ref
-	targetKind, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "kind")
-	targetName, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "name")
-	if targetKind != "" && targetName != "" {
-		s.Target = fmt.Sprintf("%s/%s", targetKind, targetName)
+	if apiVersion, kind, name, ok := configrefs.KEDAScaleTarget(obj); ok {
+		group := resourceid.GroupFromAPIVersion(apiVersion)
+		if group == "" {
+			group = "core"
+		}
+		s.Target = fmt.Sprintf("%s (%s)/%s", kind, group, name)
 	}
 
 	// Min/max replicas

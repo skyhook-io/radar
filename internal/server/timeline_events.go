@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/timelineapi"
 )
@@ -49,7 +50,7 @@ func (s *Server) handleTimelineEvents(w http.ResponseWriter, r *http.Request) {
 	// another's epoch (or dereference nil).
 	store := timeline.GetStore()
 	if store == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Timeline store not available")
+		s.writeTimelineStoreUnavailable(w)
 		return
 	}
 	epoch := timeline.ObservationStart().UnixNano()
@@ -108,7 +109,7 @@ func (s *Server) serveTimelineEventsDelta(w http.ResponseWriter, r *http.Request
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		writeTimelineStream(w, nil, timelineEndRecord{Type: "end", Cursor: cursor})
 		return
 	}
@@ -119,7 +120,7 @@ func (s *Server) serveTimelineEventsDelta(w http.ResponseWriter, r *http.Request
 
 	events, err := store.Query(r.Context(), opts)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeTimelineQueryError(w, err)
 		return
 	}
 	// Cursor progress is derived BEFORE the RBAC filter: rows the user can't
@@ -163,7 +164,7 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		writeTimelineStream(w, nil, timelineEndRecord{Type: "end", Cursor: timelineCursor(epoch, 0)})
 		return
 	}
@@ -175,7 +176,7 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 
 	events, err := store.Query(r.Context(), opts)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeTimelineQueryError(w, err)
 		return
 	}
 	maxSeq := int64(0)

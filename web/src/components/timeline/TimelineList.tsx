@@ -1,6 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
 import {
-  SEVERITY_TEXT,
   TimelineList as TimelineListUI,
   eventsForApplication,
   isTimelineProblem,
@@ -16,7 +15,9 @@ import { isManagedTimelineEvent } from '../../api/timelineSource'
 import { TimelineRetentionBanner } from './TimelineRetentionNote'
 import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { NavigateToResource } from '../../utils/navigation'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { TimelineLoadError, TimelineStaleNote } from './TimelineLoadError'
+import { useStickyError } from './useStickyError'
+import { ViewModeToggle } from './ViewModeToggle'
 
 export type { ActivityTypeFilter, ActivityFilterKey }
 
@@ -93,9 +94,10 @@ interface TimelineListProps {
   appScoped?: boolean
   topology?: Topology
   appScopeLoading?: boolean
+  onOpenDiagnostics?: () => void
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, showRoutine, onShowRoutineChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, onVisibleWindowChange, scrollToMs, focusedAppIndex, appScoped = false, topology, appScopeLoading = false }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, showRoutine, onShowRoutineChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, onVisibleWindowChange, scrollToMs, focusedAppIndex, appScoped = false, topology, appScopeLoading = false, onOpenDiagnostics }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const timelineSource = useTimelineSource()
   const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kinds: string[] }>({
@@ -112,7 +114,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
   const splitRows = !appScoped
   // Uncapped when splitting: each part gets its own cap below. The rows come
   // from the loaded ring, so this costs no extra fetch.
-  const { data: fetchedEvents, isLoading, isError, error, refetch } = timelineSource.useEvents({
+  const { data: fetchedEvents, isLoading, isFetching, isError, error, refetch } = timelineSource.useEvents({
     namespaces,
     kinds: queryParams.kinds,
     timeRange: queryParams.timeRange,
@@ -123,6 +125,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     fromMs: selectionWindow?.fromMs,
     toMs: selectionWindow?.toMs,
   })
+  const loadError = useStickyError(error, fetchedEvents != null)
   const split = useMemo(
     () => (splitRows && fetchedEvents ? splitRoutineActivity(fetchedEvents, fetchLimit) : undefined),
     [splitRows, fetchedEvents, fetchLimit],
@@ -141,21 +144,22 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
 
   // Full-screen error only when nothing is loaded; a failing background poll
   // with data on screen keeps rendering (data before error).
-  if (isError && !fetchedEvents) {
+  if (loadError && !fetchedEvents) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-3">
-        <AlertTriangle className="w-10 h-10 text-amber-400/70" />
-        <p className="text-base">Failed to load timeline data</p>
-        {error?.message?.trim() && (
-          <p className="max-w-md px-6 text-center text-sm text-theme-text-tertiary">{error.message.trim()}</p>
+      <div className="flex flex-col h-full">
+        {currentView && onViewChange && (
+          <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border">
+            <div />
+            <ViewModeToggle viewMode={currentView} onViewModeChange={onViewChange} />
+          </div>
         )}
-        <button
-          onClick={() => refetch()}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg hover:bg-theme-hover transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Try again
-        </button>
+        <TimelineLoadError
+          className="flex-1"
+          error={loadError}
+          retrying={isFetching}
+          onRetry={() => refetch()}
+          onOpenDiagnostics={onOpenDiagnostics}
+        />
       </div>
     )
   }
@@ -165,13 +169,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
   // view-level banner already reports the shared failure, and a second note
   // would double up.
   const staleNote = isError && fetchedEvents && !selectionWindow ? (
-    <div className="flex items-center gap-1.5 border-b border-theme-border px-4 py-1.5 text-xs text-theme-text-tertiary">
-      <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${SEVERITY_TEXT.warning}`} />
-      Live updates are failing — the list may be stale.
-      <button type="button" onClick={() => refetch()} className="underline hover:text-theme-text-primary">
-        Retry now
-      </button>
-    </div>
+    <TimelineStaleNote error={error} subject="list" onRetry={() => refetch()} />
   ) : null
 
   return (

@@ -223,19 +223,8 @@ func comparePodTemplate(pod *corev1.Pod, template *corev1.PodSpec, symptom strin
 				differences = append(differences, templateDifference{path: path, message: path + " differs from the template"})
 			}
 		}
-		for _, original := range template.Tolerations {
-			if !slices.ContainsFunc(pod.Spec.Tolerations, func(live corev1.Toleration) bool {
-				if original.Operator == "" {
-					original.Operator = corev1.TolerationOpEqual
-				}
-				if live.Operator == "" {
-					live.Operator = corev1.TolerationOpEqual
-				}
-				return original.Key == live.Key && original.Operator == live.Operator && original.Value == live.Value && original.Effect == live.Effect
-			}) {
-				differences = append(differences, templateDifference{path: "tolerations", message: "a template toleration is missing or changed in the live pod spec"})
-				break
-			}
+		if templateTolerationMissing(pod.Spec.Tolerations, template.Tolerations, false) {
+			differences = append(differences, templateDifference{path: "tolerations", message: "a template toleration is missing or changed in the live pod spec"})
 		}
 	}
 	sort.SliceStable(differences, func(a, b int) bool {
@@ -247,14 +236,171 @@ func comparePodTemplate(pod *corev1.Pod, template *corev1.PodSpec, symptom strin
 	return differences
 }
 
+// templateContextResources are always compared, so defaults admission adds to
+// a template that omits them (LimitRange, mutating webhooks) show up. Other
+// resources are compared only when the template names them: admission adds
+// extended resources (vpc.amazonaws.com/pod-eni and the like) routinely.
+var templateContextResources = []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourceEphemeralStorage}
+
+// comparePodTemplateContext compares a Pod with its owner template without a
+// symptom to focus on. It keeps the documented quiet set quiet: injected
+// containers, added tolerations, preferred affinity, limit-to-request
+// defaulting, equivalent quantities and image spellings, and a priority class
+// supplied where the template leaves it unset (ordinary global-default
+// admission). Resource values are skipped while the Pod reports a resize.
+func comparePodTemplateContext(pod *corev1.Pod, template *corev1.PodSpec, resized bool) []templateDifference {
+	var differences []templateDifference
+	if template.PriorityClassName != "" && pod.Spec.PriorityClassName != template.PriorityClassName {
+		differences = append(differences, templateDifference{path: "priorityClassName",
+			message: fmt.Sprintf("priorityClassName is %q; template specifies %q", pod.Spec.PriorityClassName, template.PriorityClassName)})
+	}
+	if runtimeClass(pod.Spec.RuntimeClassName) != runtimeClass(template.RuntimeClassName) {
+		differences = append(differences, templateDifference{path: "runtimeClassName",
+			message: fmt.Sprintf("runtimeClassName is %q; template specifies %q", runtimeClass(pod.Spec.RuntimeClassName), runtimeClass(template.RuntimeClassName))})
+	}
+	for _, set := range []struct {
+		path     string
+		live     []corev1.Container
+		template []corev1.Container
+	}{
+		{"containers", pod.Spec.Containers, template.Containers},
+		{"initContainers", pod.Spec.InitContainers, template.InitContainers},
+	} {
+		original := make(map[string]corev1.Container, len(set.template))
+		for _, c := range set.template {
+			original[c.Name] = c
+		}
+		containers := slices.Clone(set.live)
+		sort.Slice(containers, func(a, b int) bool { return containers[a].Name < containers[b].Name })
+		for _, live := range containers {
+			before, shared := original[live.Name]
+			if !shared {
+				continue
+			}
+			path := fmt.Sprintf("%s[%s]", set.path, live.Name)
+			if before.Image != "" && !sameContextImage(before.Image, live.Image) {
+				differences = append(differences, templateDifference{path: path + ".image", message: fmt.Sprintf("%s.image is %q; template specifies %q", path, live.Image, before.Image)})
+			}
+			if !resized {
+				differences = append(differences, contextResourceDifferences(path, live.Resources, before.Resources)...)
+			}
+		}
+	}
+	if !maps.Equal(pod.Spec.NodeSelector, template.NodeSelector) {
+		differences = append(differences, templateDifference{path: "nodeSelector", message: "nodeSelector differs from the template"})
+	}
+	for path, original := range requiredAffinities(template.Affinity) {
+		if canonicalSchedulingValue(original) != canonicalSchedulingValue(requiredAffinities(pod.Spec.Affinity)[path]) {
+			differences = append(differences, templateDifference{path: path, message: path + " differs from the template"})
+		}
+	}
+	if templateTolerationMissing(pod.Spec.Tolerations, template.Tolerations, true) {
+		differences = append(differences, templateDifference{path: "tolerations", message: "a template toleration is missing or changed in the live pod spec"})
+	}
+	sort.SliceStable(differences, func(a, b int) bool { return differences[a].path < differences[b].path })
+	return differences
+}
+
+func runtimeClass(name *string) string {
+	if name == nil {
+		return ""
+	}
+	return *name
+}
+
+func contextResourceDifferences(container string, live, template corev1.ResourceRequirements) []templateDifference {
+	names := slices.Clone(templateContextResources)
+	for _, list := range []corev1.ResourceList{template.Requests, template.Limits} {
+		for key := range list {
+			if !slices.Contains(names, key) {
+				names = append(names, key)
+			}
+		}
+	}
+	sort.Slice(names, func(a, b int) bool { return names[a] < names[b] })
+	var differences []templateDifference
+	for _, kind := range []string{"limits", "requests"} {
+		liveList, templateList := live.Limits, template.Limits
+		if kind == "requests" {
+			liveList, templateList = live.Requests, template.Requests
+		}
+		for _, key := range names {
+			value, hasLive := liveList[key]
+			old, hasTemplate := templateList[key]
+			switch {
+			case !hasLive && !hasTemplate:
+				continue
+			case hasLive && hasTemplate && value.Cmp(old) == 0:
+				continue
+			case !hasLive:
+				path := fmt.Sprintf("%s.resources.%s.%s", container, kind, key)
+				differences = append(differences, templateDifference{path: path, resource: key, resourceKind: kind,
+					message: fmt.Sprintf("%s is unset; template specifies %s", path, old.String())})
+				continue
+			}
+			if kind == "requests" && !hasTemplate {
+				limit, hasLimit := template.Limits[key]
+				liveLimit, hasLiveLimit := live.Limits[key]
+				if hasLimit && hasLiveLimit && limit.Cmp(value) == 0 && liveLimit.Cmp(limit) == 0 {
+					continue
+				}
+			}
+			differences = append(differences, resourceDifference(container, kind, key, old, value, hasTemplate))
+		}
+	}
+	return differences
+}
+
+// templateTolerationMissing reports a template toleration absent or changed
+// in the live spec. With seconds, a template-set tolerationSeconds must match
+// too, including whether it is set: it decides how long a Pod survives a
+// NoExecute taint, and admission's DefaultTolerationSeconds only adds
+// tolerations, never rewrites one.
+func templateTolerationMissing(live, template []corev1.Toleration, seconds bool) bool {
+	for _, original := range template {
+		if !slices.ContainsFunc(live, func(candidate corev1.Toleration) bool {
+			if original.Operator == "" {
+				original.Operator = corev1.TolerationOpEqual
+			}
+			if candidate.Operator == "" {
+				candidate.Operator = corev1.TolerationOpEqual
+			}
+			same := original.Key == candidate.Key && original.Operator == candidate.Operator && original.Value == candidate.Value && original.Effect == candidate.Effect
+			if same && seconds {
+				// nil is "tolerate forever", so presence matters as much as value.
+				left, right := original.TolerationSeconds, candidate.TolerationSeconds
+				same = (left == nil) == (right == nil) && (left == nil || *left == *right)
+			}
+			return same
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
 func resourceDifference(container, kind string, key corev1.ResourceName, before, live resource.Quantity, present bool) templateDifference {
 	path := fmt.Sprintf("%s.resources.%s.%s", container, kind, key)
-	original := "omitted"
+	message := fmt.Sprintf("%s is %s; the template leaves it unset", path, live.String())
 	if present {
-		original = before.String()
+		message = fmt.Sprintf("%s is %s; template specifies %s", path, live.String(), before.String())
 	}
-	return templateDifference{path: path, resource: key, resourceKind: kind, value: live, templateMissing: !present,
-		message: fmt.Sprintf("%s is %s; template specifies %s", path, live.String(), original)}
+	return templateDifference{path: path, resource: key, resourceKind: kind, value: live, templateMissing: !present, message: message}
+}
+
+// sameContextImage is sameTemplateImage plus two admission rewrites that
+// keep the image the template asked for: a digest pinned onto the same
+// repository and tag (Kyverno verifyImages, repo:v1 → repo:v1@sha256:…), and
+// Istio's "auto" placeholder, which its injector replaces with the proxy
+// image.
+func sameContextImage(template, live string) bool {
+	if template == "auto" || sameTemplateImage(template, live) {
+		return true
+	}
+	if pinned, _, ok := strings.Cut(live, "@sha256:"); ok {
+		return sameTemplateImage(template, pinned)
+	}
+	return false
 }
 
 func sameTemplateImage(a, b string) bool {

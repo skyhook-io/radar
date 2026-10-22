@@ -263,6 +263,8 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 		// — both signal "request is well-formed but the resource isn't
 		// in a state where this verb can run".
 		status = http.StatusConflict
+	case errors.Is(err, gitops.ErrResourceSuspended):
+		status = http.StatusConflict
 	case errors.Is(err, gitops.ErrNoOperationInProgress):
 		status = http.StatusBadRequest
 	case errors.Is(err, gitops.ErrInvalidResourceSelection):

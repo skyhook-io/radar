@@ -188,6 +188,12 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		s.connectionError(w, err)
 		return
 	}
+	if !metadata {
+		// A save can change Argo CD settings whatever its kind (a reconfirm
+		// covers several). Connect now rather than on the first page that
+		// asks; a no-op when the connection is in place.
+		argocd.Prewarm()
+	}
 	response.Profiles = s.readLocalConnectionViews()
 	if err := s.fillConnectionCatalog(&response); err != nil {
 		s.connectionError(w, err)

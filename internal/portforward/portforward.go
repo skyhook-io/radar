@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -113,6 +114,25 @@ func forwardFor(owner Owner) *metricsForward {
 	return f
 }
 
+// onForwardLost is notified when a published forward ends without being
+// stopped. See SetOnForwardLost.
+var onForwardLost atomic.Pointer[func(owner Owner, address string)]
+
+// SetOnForwardLost registers fn to run when any owner's published forward
+// ends on its own — the pod it pointed at went away or the stream broke —
+// rather than through Stop or a replacing Start. address is the local address
+// the forward served, so a subscriber can tell whether the loss is a
+// connection it uses (it may be reusing another owner's forward). fn runs on
+// the forward's goroutine after the registry lock is released. Pass nil to
+// unregister.
+func SetOnForwardLost(fn func(owner Owner, address string)) {
+	if fn == nil {
+		onForwardLost.Store(nil)
+		return
+	}
+	onForwardLost.Store(&fn)
+}
+
 // SetK8sClients sets the K8s client and config for port-forwarding.
 // Must be called before using port-forward features.
 func SetK8sClients(client kubernetes.Interface, config *rest.Config) {
@@ -190,11 +210,24 @@ func StartWithClients(owner Owner, ctx context.Context, namespace, serviceName s
 		}
 		close(errCh)
 
+		// A forward still published when its run ends was not stopped by us
+		// (Stop and a replacing Start clear podName first): the tunnel died
+		// under its users, typically because the pod went away.
 		reg.mu.Lock()
+		lost := ""
 		if f.podName == podName && f.localPort == localPort {
+			if f.active {
+				lost = f.info().Address
+			}
 			f.active = false
 		}
 		reg.mu.Unlock()
+		if lost != "" {
+			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", lost, namespace, serviceName, owner, err)
+			if hook := onForwardLost.Load(); hook != nil {
+				(*hook)(owner, lost)
+			}
+		}
 	}()
 
 	// teardown stops the just-launched forward when establishment fails. The
@@ -358,6 +391,19 @@ func GetConnectionInfo(owner Owner) *ConnectionInfo {
 	}
 }
 
+// IsActiveAddress reports whether any owner's published forward currently
+// serves address.
+func IsActiveAddress(address string) bool {
+	reg.mu.RLock()
+	defer reg.mu.RUnlock()
+	for _, f := range reg.forwards {
+		if f.active && f.info().Address == address {
+			return true
+		}
+	}
+	return false
+}
+
 // IsConnectedForContext reports whether any owner has an active forward for the context.
 func IsConnectedForContext(contextName string) bool {
 	reg.mu.RLock()
@@ -370,13 +416,15 @@ func IsConnectedForContext(contextName string) bool {
 	return false
 }
 
-func runPortForward(ctx context.Context, client kubernetes.Interface, config *rest.Config,
+// runPortForward and findPodForService are variables so tests can stand in
+// for a real cluster.
+var runPortForward = func(ctx context.Context, client kubernetes.Interface, config *rest.Config,
 	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{},
 ) error {
 	return pfpkg.RunPortForward(ctx, client, config, namespace, podName, localPort, targetPort, stopCh, readyCh)
 }
 
-func findPodForService(ctx context.Context, client kubernetes.Interface, namespace, serviceName string) (string, error) {
+var findPodForService = func(ctx context.Context, client kubernetes.Interface, namespace, serviceName string) (string, error) {
 	return pfpkg.FindPodForService(ctx, client, namespace, serviceName)
 }
 

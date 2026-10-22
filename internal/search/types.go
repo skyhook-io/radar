@@ -93,7 +93,38 @@ type Result struct {
 	// FilterErrorSample is the first eval error message verbatim so
 	// the caller has an actionable hint. Empty when FilterErrors=0.
 	FilterErrorSample string `json:"filter_error_sample,omitempty"`
+	// UnsearchedKinds lists kind: filter terms the search could not answer
+	// for, so an empty result for them reads as "not looked at", not "none
+	// exist". Kinds the caller may not list are left out.
+	UnsearchedKinds []UnsearchedKind `json:"unsearched_kinds,omitempty"`
 }
+
+// UnsearchedKind is one kind a kind: filter asked for that the search did not
+// fully scan.
+type UnsearchedKind struct {
+	Kind  string `json:"kind"`
+	Group string `json:"group,omitempty"`
+	// Reason is UnsearchedNotIndexed, UnsearchedUnreadable or
+	// UnsearchedClusterScoped.
+	Reason string `json:"reason"`
+	// Namespaces are the namespaces whose read failed, when only some did.
+	Namespaces []string `json:"namespaces,omitempty"`
+}
+
+const (
+	// UnsearchedNotIndexed: the term matched no kind search scans: none of
+	// its typed kinds, and no CRD Radar is watching yet.
+	UnsearchedNotIndexed = "not_indexed"
+	// UnsearchedUnreadable: reading the kind from Radar's cache failed. The
+	// cache may still be loading, or Radar itself may not be allowed to list
+	// the kind; the error doesn't say which. An informer that serves an empty
+	// store while it loads is not detected.
+	UnsearchedUnreadable = "unreadable"
+	// UnsearchedClusterScoped: the kind is cluster-scoped and the search was
+	// limited to namespaces (by the request or the caller's namespace scope),
+	// so none of its objects could match.
+	UnsearchedClusterScoped = "cluster_scoped"
+)
 
 // IncludeMode controls per-hit verbosity.
 type IncludeMode int

@@ -106,7 +106,7 @@ export function summarizeSchedulerMessage(message?: string, options: { plain?: b
     [/^(\d+) (?:node\(s\) )?Insufficient memory(?: \(0\/\d+ nodes available\))?$/i, 'do not have enough memory'],
     [/^(\d+) node\(s\) (?:didn.t match Pod.s node affinity\/selector|node affinity\/selector mismatch)(?: \(0\/\d+ nodes available\))?$/i, 'do not match the Pod’s node affinity or selector'],
     [/^(\d+) node\(s\) (?:had )?untolerated taint(?:\(s\))?(?: \{[^}]*\}| [^\s]+)?(?: \(0\/\d+ nodes available\))?$/i, 'have taints the Pod does not tolerate'],
-    [/^(\d+) node\(s\) (?:had )?volume node[- ]affinity conflict(?: \(0\/\d+ nodes available\))?$/i, 'do not match the volume’s node affinity'],
+    [/^(\d+) node\(s\) (?:(?:had )?volume node[- ]affinity conflict|didn.t match PersistentVolume.s node affinity)(?: \(0\/\d+ nodes available\))?$/i, 'do not match the volume’s node affinity'],
   ]
   return splitSchedulerClauses(m).filter((part) => part.trim()).map((part) => {
     const clause = part.trim()
@@ -738,6 +738,19 @@ export function getDefaultContainerName(pod: any): string | undefined {
   return containers[0]?.name
 }
 
+/**
+ * The containers a terminal can target: the regular containers, then native
+ * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),
+ * which keep running for the pod's lifetime like regular containers.
+ */
+export function getExecContainerNames(pod: any): string[] {
+  const regular = (pod?.spec?.containers || []).map((c: any) => c.name)
+  const sidecars = (pod?.spec?.initContainers || [])
+    .filter((c: any) => c.restartPolicy === 'Always')
+    .map((c: any) => c.name)
+  return [...regular, ...sidecars].filter(Boolean)
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []
@@ -1314,7 +1327,7 @@ export function getCronJobStatus(cj: any): StatusBadge {
   if (activeJobs > 0) {
     return { text: `Active (${activeJobs})`, color: healthColors.neutral, level: 'neutral' }
   }
-  return { text: 'Scheduled', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Enabled', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getCronJobSchedule(cj: any): { cron: string; readable: string } {
@@ -2307,6 +2320,37 @@ export function parseColumnFilterExcludes(filtersParam: string | null): Record<s
     }
   }
   return excludes
+}
+
+/** The Resources list's own filter params in the URL (the kind is in the path, `apiGroup` beside it). */
+export const RESOURCE_LIST_FILTER_PARAMS = ['search', 'regex', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive'] as const
+
+/** The per-kind filters in a query string: what a kind switch resets or restores. */
+export function kindFiltersFromSearch(search: string | undefined) {
+  const params = new URLSearchParams(search ?? '')
+  const filtersParam = params.get('filters')
+  return {
+    columnFilters: parseColumnFilters(filtersParam),
+    columnFilterExcludes: parseColumnFilterExcludes(filtersParam),
+    problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
+  }
+}
+
+/** The `filters` param value. Drops an exclude flag on a column with no active values. */
+export function columnFiltersParam(colFilters: Record<string, string[]>, colExcludes: Record<string, boolean>): string {
+  const activeExcludes = Object.fromEntries(
+    Object.entries(colExcludes).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0)
+  )
+  return serializeColumnFilters(colFilters, activeExcludes)
+}
+
+/** Inverse of kindFiltersFromSearch: the `filters` + `problems` query, '' when none. */
+export function kindFiltersToSearch(f: ReturnType<typeof kindFiltersFromSearch>): string {
+  const params = new URLSearchParams()
+  const filters = columnFiltersParam(f.columnFilters, f.columnFilterExcludes)
+  if (filters) params.set('filters', filters)
+  if (f.problemFilters.length > 0) params.set('problems', f.problemFilters.join(','))
+  return params.toString()
 }
 
 // Split a single "col[:operator]:values" pair into its decoded key, values, and

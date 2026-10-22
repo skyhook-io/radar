@@ -1,8 +1,27 @@
-import { getCNPGPoolerDeploymentName, getCNPGPoolerMode, getCNPGPoolerStatus, isCNPGPoolerPaused } from '../resources/resource-utils-cnpg'
+import { Tooltip } from '../ui/Tooltip'
+import type { ReactNode } from 'react'
+import { getCNPGPoolerDeploymentName, getCNPGPoolerMode, isCNPGPoolerPaused } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
-import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, Note, ObjectProblems, PhaseBadge, SummaryShell } from './CNPGSharedSummary'
 import { refOf } from './relations'
+import {
+  POOLER_LIMIT_PARAMETERS,
+  aggregatePoolerPools,
+  poolerPodPressure,
+  poolerPressureCoverage,
+  poolerPressureFact,
+  observedPause,
+  poolerBackendService,
+  poolerReadiness,
+  type CNPGPoolerLive,
+  type CNPGPoolerPoolRow,
+} from './pooler'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactValue } from '../facts'
+import { Badge } from '../ui/Badge'
+import { summarizeSchedulerMessage } from '../resources/resource-utils'
+import { SectionHeading, FoldSection } from '../ui/FoldSection'
 
 const TYPE_LABEL: Record<string, string> = {
   rw: 'rw · routes to the primary',
@@ -14,36 +33,53 @@ export function CNPGPoolerSummary({
   resource,
   workspace,
   onNavigate,
+  live,
+  actions,
+  lead,
 }: {
   resource: any
   workspace: CNPGWorkspaceResponse | null
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
+  /** Live reads a host adds (Deployment readiness, PgBouncer metrics and state). */
+  live?: CNPGPoolerLive
+  /** Operations rendered beside the paused state (pause / resume). */
+  actions?: ReactNode
+  /** Rendered first, e.g. a host's notice that a live read is stale. */
+  lead?: ReactNode
 }) {
   const ns = resource?.metadata?.namespace ?? ''
   const type = resource?.spec?.type
   const desired = resource?.spec?.instances
-  const scheduled = resource?.status?.instances
+  const reported = resource?.status?.instances
   const deployment = getCNPGPoolerDeploymentName(resource)
+  const paused = isCNPGPoolerPaused(resource)
+  const readiness = poolerReadiness(live?.deployment)
+  const observed = observedPause(live?.observed)
 
   return (
     <SummaryShell>
+      {lead}
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Pooler')} onNavigate={onNavigate} />
 
-      <SummaryHeading>State</SummaryHeading>
+      <SectionHeading>State</SectionHeading>
       <FactGrid>
         <FactRow label="Status">
-          <PhaseBadge status={getCNPGPoolerStatus(resource)} />
-          {isCNPGPoolerPaused(resource) && <Note>PgBouncer is paused: it holds client connections instead of serving them.</Note>}
+          <div className="flex flex-wrap items-center gap-1">
+            <PhaseBadge status={{ text: readiness.text, color: '', level: readiness.level }} />
+            {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
+          </div>
+          {readiness.detail && <Note>{readiness.detail}</Note>}
+          <CNPGPoolerScheduling namespace={ns} pods={live?.pressure?.pods ?? []} onNavigate={onNavigate} />
         </FactRow>
         <FactRow label="Instances">
           <span>
-            {typeof scheduled === 'number' ? `${scheduled} scheduled` : <NotReported text="Scheduled count not reported" />}
+            {typeof reported === 'number' ? `Pooler status reports ${reported} ${reported === 1 ? 'instance' : 'instances'}` : <NotReported text="Pooler instance count not reported" />}
             <span className="text-theme-text-secondary">
               {' · '}
-              {typeof desired === 'number' ? `${desired} desired` : 'desired not set'}
+              {typeof desired === 'number' ? `${desired} requested` : 'requested count not set'}
             </span>
           </span>
-          <Note>The Pooler counts scheduled pods, not ready ones; readiness is on its Deployment.</Note>
+          <Note>status.instances is the operator’s count; observed readiness is on its Deployment and Pods.</Note>
         </FactRow>
         <FactRow label="Deployment">
           {deployment ? (
@@ -52,19 +88,210 @@ export function CNPGPoolerSummary({
             <NotReported />
           )}
         </FactRow>
-        <FactRow label="Connection pressure">
-          <FactValue fact={{ text: 'Not measured — needs PgBouncer metrics, which Radar does not read yet', tone: 'unknown' }} />
+        <FactRow label="Pause state">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span>{paused ? 'Pause requested' : 'Serving requested (not paused)'}</span>
+            {actions}
+          </div>
+          <Note>spec.pgbouncer.paused is what was asked for; each PgBouncer applies it with PAUSE / RESUME.</Note>
+          {paused && <Note>When PgBouncer applies the pause, it holds client connections instead of serving them.</Note>}
+          {observed && (
+            <div className="mt-1">
+              <FactValue fact={{ text: `Observed: ${observed.text}`, tone: observed.level, source: 'Each PgBouncer’s SHOW STATE' }} />
+            </div>
+          )}
         </FactRow>
       </FactGrid>
 
-      <SummaryHeading>Routing</SummaryHeading>
+      <SectionHeading hint={live?.pressure ? 'live from each PgBouncer' : undefined}>Connections</SectionHeading>
+      {live?.pressure ? (
+        <PoolerPressure pressure={live.pressure} />
+      ) : (
+        <FactGrid>
+          <FactRow label="Connection pressure">
+            <FactValue fact={{ text: 'Not measured — needs PgBouncer metrics, which Radar does not read yet', tone: 'unknown' }} />
+          </FactRow>
+        </FactGrid>
+      )}
+
+      <SectionHeading>Limits</SectionHeading>
+      <FactGrid>
+        <FactRow label="Pool mode">
+          {getCNPGPoolerMode(resource) === 'transaction' ? 'A client uses a server connection only for each transaction.' : getCNPGPoolerMode(resource) === 'session' ? 'A client keeps one server connection for its whole session.' : 'A client uses a server connection for each statement.'}
+          <Note>{getCNPGPoolerMode(resource)}{!resource?.spec?.pgbouncer?.poolMode ? ' (default)' : ''}</Note>
+        </FactRow>
+        {POOLER_LIMIT_PARAMETERS.map((p) => {
+          const v = resource?.spec?.pgbouncer?.parameters?.[p.key]
+          return (
+            <FactRow key={p.key} label={p.label}>
+              {v !== undefined ? (
+                <span className="font-mono">{String(v)}</span>
+              ) : (
+                <span className="text-theme-text-secondary">
+                  default{p.pgbouncerDefault ? <span className="text-theme-text-tertiary"> · PgBouncer uses {p.pgbouncerDefault}</span> : null}
+                </span>
+              )}
+              <Note>
+                <span className="font-mono">{p.key}</span>
+              </Note>
+            </FactRow>
+          )
+        })}
+      </FactGrid>
+
+      <SectionHeading>Routing</SectionHeading>
       <FactGrid>
         <FactRow label="Cluster">
           <ClusterLink resource={resource} workspace={workspace} onNavigate={onNavigate} />
         </FactRow>
         <FactRow label="Type">{type ? TYPE_LABEL[type] ?? type : <NotReported text="Not set" />}</FactRow>
-        <FactRow label="Pool mode">{getCNPGPoolerMode(resource)}</FactRow>
+        {live?.service && (
+          <FactRow label="Path">
+            <PoolerPath resource={resource} live={live} onNavigate={onNavigate} />
+          </FactRow>
+        )}
       </FactGrid>
     </SummaryShell>
   )
+}
+
+function PoolerPath({ resource, live, onNavigate }: { resource: any; live: CNPGPoolerLive; onNavigate?: NavigateToRef }) {
+  const ns = resource?.metadata?.namespace ?? ''
+  const svc = live.service!
+  const backend = poolerBackendService(resource?.spec?.cluster?.name, resource?.spec?.type)
+  const svcState: Record<string, string> = { missing: 'does not exist', unreadable: 'no access', foreign: 'not controlled by this Pooler' }
+  return (
+    <div className="space-y-0.5">
+      <div>
+        Service <RefLink refTo={{ kind: 'Service', namespace: ns, name: svc.name }} onNavigate={onNavigate} mono />
+        {svc.state === 'ok' ? (
+          <span className="text-theme-text-secondary">{svc.port ? ` :${svc.port}` : ''}{svc.type ? ` · ${svc.type}` : ''}</span>
+        ) : (
+          <span className={toneTextClass('unknown')}> · {svcState[svc.state]}</span>
+        )}
+      </div>
+      <div className="text-theme-text-secondary">→ PgBouncer ({resource?.metadata?.name})</div>
+      <div className="text-theme-text-secondary">
+        → {backend ? <RefLink refTo={{ kind: 'Service', namespace: ns, name: backend }} onNavigate={onNavigate} mono /> : 'the cluster'}
+        {' '}of Cluster {resource?.spec?.cluster?.name ?? '—'}
+      </div>
+    </div>
+  )
+}
+
+// Pods take their client connections independently, so one can queue while
+// the sum still looks calm.
+function PoolerPodPressure({ pods }: { pods: NonNullable<CNPGPoolerLive['pressure']>['pods'] }) {
+  return (
+    <table className="mt-3 w-full text-sm">
+      <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
+        <tr>
+          <th className="py-1 pr-3">PgBouncer Pod</th>
+          <th className="pr-3 text-right">Clients active</th>
+          <th className="pr-3 text-right">Waiting</th>
+          <th className="pr-3 text-right">Servers active</th>
+          <th className="text-right">Max wait</th>
+        </tr>
+      </thead>
+      <tbody className="table-divide-subtle">
+        {poolerPodPressure(pods).map((r) =>
+          r.state === 'ok' || r.state === 'partial' ? (
+            <tr key={r.pod}>
+              <td className="py-1 pr-3 font-mono text-xs">
+                {r.pod}
+                {r.state === 'partial' && <span className="ml-1 font-sans text-theme-text-tertiary">partial</span>}
+              </td>
+              <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'clActive')} /></td>
+              <td className={`pr-3 text-right font-mono ${r.clWaiting ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'clWaiting')} /></td>
+              <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'svActive')} /></td>
+              <td className={`text-right font-mono ${r.maxwaitSeconds ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'maxwaitSeconds')} /></td>
+            </tr>
+          ) : (
+            <tr key={r.pod}>
+              <td className="py-1 pr-3 font-mono text-xs">{r.pod}</td>
+              <td colSpan={4} className="text-right text-xs text-theme-text-tertiary">
+                Not read: {r.error ?? r.state}
+              </td>
+            </tr>
+          ),
+        )}
+      </tbody>
+    </table>
+  )
+}
+
+function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pressure']> }) {
+  if (pressure.state === 'loading') return <div className="text-sm text-theme-text-tertiary">Reading PgBouncer metrics…</div>
+  if (pressure.state === 'denied' || pressure.state === 'error') {
+    return <FactValue fact={{ text: `Not measured — ${pressure.reason ?? (pressure.state === 'denied' ? 'needs get pods/proxy' : 'read failed')}`, tone: 'unknown' }} />
+  }
+  const { reporting, limitation, empty } = poolerPressureCoverage(pressure.pods)
+  const rows = aggregatePoolerPools(reporting)
+  if (reporting.length === 0) {
+    return <CNPGPoolerUnmeasured pods={pressure.pods} />
+  }
+  return (
+    <div>
+      {rows.length === 0 ? (
+        <div className="text-sm text-theme-text-secondary">{empty}</div>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
+            <tr>
+              <th className="py-1 pr-3">Pool</th>
+              <th className="pr-3">Mode</th>
+              <th className="pr-3 text-right">Clients active</th>
+              <th className="pr-3 text-right">Waiting</th>
+              <th className="pr-3 text-right">Servers active / idle / used</th>
+              <th className="text-right">Max wait</th>
+            </tr>
+          </thead>
+          <tbody className="table-divide-subtle">
+            {rows.map((r: CNPGPoolerPoolRow) => (
+              <tr key={`${r.database}/${r.user}`}>
+                <td className="py-1 pr-3 font-mono text-xs">{r.database}/{r.user}</td>
+                <td className="pr-3 text-xs">{r.poolModes.join(', ') || '—'}</td>
+                <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pressure.pods, 'clActive', r)} /></td>
+                <td className={`pr-3 text-right font-mono ${r.clWaiting ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pressure.pods, 'clWaiting', r)} /></td>
+                <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pressure.pods, 'svActive', r)} /> / <FactValue fact={poolerPressureFact(pressure.pods, 'svIdle', r)} /> / <FactValue fact={poolerPressureFact(pressure.pods, 'svUsed', r)} /></td>
+                <td className={`text-right font-mono ${r.maxwaitSeconds ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pressure.pods, 'maxwaitSeconds', r)} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <Note>
+        Summed over {reporting.length} of {pressure.pods.length} PgBouncer Pods{limitation ? ` · ${limitation}` : ''}. PgBouncer’s admin and
+        authentication pools are excluded.
+      </Note>
+      {pressure.pods.length > 1 && <PoolerPodPressure pods={pressure.pods} />}
+    </div>
+  )
+}
+
+export function CNPGPoolerScheduling({ namespace, pods, onNavigate }: { namespace: string; pods: NonNullable<CNPGPoolerLive['pressure']>['pods']; onNavigate?: NavigateToRef }) {
+  const byCause = new Map<string, typeof pods>()
+  for (const pod of pods) {
+    if (!pod.schedulingReason) continue
+    const cause = summarizeSchedulerMessage(pod.schedulingReason, { plain: true })
+    const group = byCause.get(cause) ?? []
+    group.push(pod)
+    byCause.set(cause, group)
+  }
+  return <>{[...byCause].map(([cause, blocked]) => <div key={cause} className={`mt-1 text-xs ${toneTextClass('degraded')}`}>
+    <div>Cannot be scheduled: {cause}.</div>
+    {blocked.map((p) => <div key={p.pod}>
+      <div className="mt-0.5 text-theme-text-secondary"><Tooltip content={p.pod} wrapperClassName="block max-w-full [&_button]:block [&_button]:max-w-full [&_button]:truncate [&_span.font-mono]:block [&_span.font-mono]:truncate"><RefLink refTo={{ kind: 'Pod', group: '', namespace, name: p.pod }} onNavigate={onNavigate} mono /></Tooltip></div>
+      <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-theme-text-secondary">{p.schedulingReason}</div></FoldSection>
+    </div>)}
+  </div>)}</>
+}
+
+export function CNPGPoolerUnmeasured({ pods }: { pods: NonNullable<CNPGPoolerLive['pressure']>['pods'] }) {
+  if (pods.length === 0) return <div className="text-theme-text-tertiary">Not measured: no PgBouncer answered</div>
+  return <>{pods.map((p) => <div key={p.pod} className="text-theme-text-tertiary">
+    Not measured: {p.state === 'denied' ? 'needs get pods/proxy' : p.reason ?? 'PgBouncer did not answer'}
+    <Note>{p.pod}</Note>
+    {p.error && <FoldSection title="Measurement details" summary="" attention={false}><div className="break-words text-xs">{p.error}</div></FoldSection>}
+  </div>)}</>
 }

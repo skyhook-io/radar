@@ -29,20 +29,26 @@ type FluxState struct {
 //   - suspend                                   → Suspended (sync from Ready, unless drifted)
 //   - Stalled=True                              → OutOfSync / Degraded
 //   - Ready=True and no generation drift        → Synced / Healthy
+//   - Ready=False with a failure reason about
+//     the current generation                    → OutOfSync / Degraded
 //   - drift, or Reconciling with Ready not True → Reconciling / Progressing
-//   - Ready=False                               → OutOfSync / Degraded
+//   - Ready=False                               → OutOfSync / Degraded, or
+//     Progressing for a retry/wait reason
 //
 // Shared by the insights and tree packages, which previously carried
 // near-duplicate copies that had already drifted apart on suspend handling.
 func FluxStatus(root *unstructured.Unstructured) FluxState {
 	var ready, readyReason, healthy string
 	var reconciling, stalled bool
+	var readyGeneration int64
+	var readyGenerationKnown bool
 
 	for _, c := range fluxConditions(root) {
 		switch c.typ {
 		case "Ready":
 			ready = c.status
 			readyReason = c.reason
+			readyGeneration, readyGenerationKnown = c.observedGeneration, c.observedGenerationKnown
 		case "Healthy":
 			healthy = c.status
 		case "Reconciling":
@@ -81,6 +87,17 @@ func FluxStatus(root *unstructured.Unstructured) FluxState {
 			health = "Degraded"
 		}
 		return FluxState{Sync: "Synced", Health: health, Reconciling: reconciling}
+	}
+
+	// A failure the controller reported outranks activity too. A source that
+	// can't clone, or a release whose chart can't resolve, keeps Reconciling=True
+	// and never records observedGeneration while it retries; reading that as
+	// "in progress" hid failures that never resolve on their own.
+	// Only a failure about the current spec counts: after a fix, the old
+	// Ready=False describes an older generation until the controller looks again.
+	generation, _, _ := unstructured.NestedInt64(root.Object, "metadata", "generation")
+	if ready == "False" && !isTransientFluxReason(readyReason) && readyGenerationKnown && readyGeneration == generation {
+		return FluxState{Sync: "OutOfSync", Health: "Degraded", Reconciling: reconciling}
 	}
 
 	// Genuinely not applied: the controller has not observed the current spec,
@@ -133,9 +150,11 @@ func isTransientFluxReason(reason string) bool {
 }
 
 type fluxCondition struct {
-	typ    string
-	status string
-	reason string
+	typ                     string
+	status                  string
+	reason                  string
+	observedGeneration      int64
+	observedGenerationKnown bool
 }
 
 func fluxConditions(root *unstructured.Unstructured) []fluxCondition {
@@ -149,11 +168,20 @@ func fluxConditions(root *unstructured.Unstructured) []fluxCondition {
 		if !ok {
 			continue
 		}
-		out = append(out, fluxCondition{
+		c := fluxCondition{
 			typ:    StringValue(m["type"]),
 			status: StringValue(m["status"]),
 			reason: StringValue(m["reason"]),
-		})
+		}
+		switch g := m["observedGeneration"].(type) {
+		case int64:
+			c.observedGeneration, c.observedGenerationKnown = g, true
+		case int:
+			c.observedGeneration, c.observedGenerationKnown = int64(g), true
+		case float64:
+			c.observedGeneration, c.observedGenerationKnown = int64(g), true
+		}
+		out = append(out, c)
 	}
 	return out
 }

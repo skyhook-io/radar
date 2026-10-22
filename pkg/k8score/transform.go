@@ -1,6 +1,10 @@
 package k8score
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -14,12 +18,35 @@ import (
 
 const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 
+// HelmReleaseSecretType is the type Helm gives the Secrets that store
+// releases, one Secret per revision.
+const HelmReleaseSecretType corev1.SecretType = "helm.sh/release.v1"
+
 // DropManagedFields is a SharedInformer transform that reduces memory usage
 // by removing managedFields and heavy annotations from cached objects.
 // This is the union of transforms used by both Radar and skyhook-connector.
+//
+// It also replaces each value of a Helm release Secret (see
+// IsHelmReleaseSecret) with a digest of it. Each value is a full encoded
+// release, typically 30-400KB, and Helm keeps up to 10 revisions per release
+// by default, so on a Helm-heavy cluster they are most of the cache. Keys stay,
+// so key counts and key names are unchanged, and a changed value still
+// compares as changed. The digests are not Secret data: anything that serves
+// a cached Helm release Secret must use WithoutHelmReleaseValues, and
+// anything that needs a value must read the Secret from the API server.
 func DropManagedFields(obj any) (any, error) {
 	if meta, ok := obj.(metav1.Object); ok {
 		meta.SetManagedFields(nil)
+	}
+
+	if secret, ok := obj.(*corev1.Secret); ok && IsHelmReleaseSecret(secret) {
+		for key, value := range secret.Data {
+			// Watch-list informers run the transform twice on objects present
+			// at startup, so a value may already be a digest.
+			if !isHelmReleaseValueDigest(value) {
+				secret.Data[key] = helmReleaseValueDigest(value)
+			}
+		}
 	}
 
 	// Special handling for Events — aggressively strip to essentials
@@ -62,6 +89,39 @@ func DropManagedFields(obj any) (any, error) {
 	}
 
 	return obj, nil
+}
+
+// IsHelmReleaseSecret reports whether secret is a Helm release Secret. The
+// informer cache holds these with digests in place of their values (see
+// DropManagedFields).
+func IsHelmReleaseSecret(secret *corev1.Secret) bool {
+	return secret != nil && secret.Type == HelmReleaseSecretType
+}
+
+// WithoutHelmReleaseValues returns secret as it may be served from the
+// cache: for a Helm release Secret, a copy whose keys have no values; any
+// other Secret unchanged. It never modifies secret.
+func WithoutHelmReleaseValues(secret *corev1.Secret) *corev1.Secret {
+	if !IsHelmReleaseSecret(secret) || len(secret.Data) == 0 {
+		return secret
+	}
+	out := *secret
+	out.Data = make(map[string][]byte, len(secret.Data))
+	for key := range secret.Data {
+		out.Data[key] = nil
+	}
+	return &out
+}
+
+const helmReleaseDigestPrefix = "radar-cache-digest:sha256:"
+
+func helmReleaseValueDigest(value []byte) []byte {
+	sum := sha256.Sum256(value)
+	return []byte(helmReleaseDigestPrefix + hex.EncodeToString(sum[:]))
+}
+
+func isHelmReleaseValueDigest(value []byte) bool {
+	return len(value) == len(helmReleaseDigestPrefix)+2*sha256.Size && bytes.HasPrefix(value, []byte(helmReleaseDigestPrefix))
 }
 
 // DropUnstructuredManagedFields is the dynamic-cache counterpart of

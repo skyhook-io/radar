@@ -94,6 +94,9 @@ func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface,
 		return out
 	}
 	if rollout := summarizeWorkloadRollout(post); len(rollout) > 0 {
+		if rollout["complete"] == false {
+			rollout["next"] = fmt.Sprintf("wait_for %s %s in %s to see it finish", post.GetKind(), post.GetName(), post.GetNamespace())
+		}
 		out["rollout"] = rollout
 	}
 	cacheSnapshot := false

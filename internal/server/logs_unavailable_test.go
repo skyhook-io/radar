@@ -2,15 +2,16 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -58,43 +59,6 @@ func TestIsNoPreviousContainer(t *testing.T) {
 	}
 }
 
-// The CNPG live view emits a stream's last line even when it arrives with the
-// end of the stream, so the kubelet's notice used to show up as a Postgres line,
-// again every time the view reopened the stream.
-func TestFollowCNPGContainerLogs_DropsLogsUnavailableNotice(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		body    string
-		want    []string
-		wantErr error
-	}{
-		{"kubelet notice", "unable to retrieve container logs for containerd://6e2396b58f81ea5e", nil, k8score.ErrLogsUnavailable},
-		{"last line without a newline", "2026-09-28T14:19:58.5Z database system is ready\n2026-09-28T14:19:59.5Z received fast shutdown request", []string{"database system is ready", "received fast shutdown request"}, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := logAPIServer(t, http.StatusOK, "", tc.body)
-			logCh := make(chan workloadLogEntry, 10)
-			err := followCNPGContainerLogs(context.Background(), client, "db", "pg-orders-2", corev1.PodLogOptions{Container: "postgres", Timestamps: true, Follow: true}, 1, logCh)
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("err = %v, want %v", err, tc.wantErr)
-			}
-			close(logCh)
-			var got []string
-			for entry := range logCh {
-				got = append(got, entry.Content)
-			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("got %q, want %q", got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Fatalf("got %q, want %q", got, tc.want)
-				}
-			}
-		})
-	}
-}
-
 func readSSEFor(t *testing.T, path string, window time.Duration) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), window)
@@ -116,6 +80,71 @@ func useLogsUnavailableServer(t *testing.T) {
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 }
 
+func TestPodLogsStream_NodeWatcherFailureAfterOutput(t *testing.T) {
+	for _, ending := range []string{"", "\n"} {
+		t.Run("ending="+ending, func(t *testing.T) {
+			client := logAPIServer(t, http.StatusOK, "text/plain", "2026-10-20T10:00:00Z before\nfailed to create fsnotify watcher: too many open files"+ending)
+			previous := k8s.SetTestClient(client)
+			defer k8s.SetTestClient(previous)
+			stream := readSSEFor(t, "/api/pods/default/nginx-abc-xyz/logs/stream?container=nginx", 5*time.Second)
+			if strings.Count(stream, `"content":"before"`) != 1 || strings.Count(stream, "event: log") != 1 {
+				t.Fatalf("expected only the application record: %s", stream)
+			}
+			if !strings.Contains(stream, `"error_code":"logs_unavailable"`) || strings.Contains(stream, "event: end") {
+				t.Fatalf("expected cluster failure instead of clean end: %s", stream)
+			}
+		})
+	}
+}
+
+func TestPodLogsStream_NodeWatcherFailureBeforeOutput(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		_, _ = io.WriteString(w, "failed to create fsnotify watcher: too many open files\n")
+	}))
+	t.Cleanup(api.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	defer k8s.SetTestClient(previous)
+	stream := readSSEFor(t, "/api/pods/default/nginx-abc-xyz/logs/stream?container=nginx", 5*time.Second)
+	if !strings.Contains(stream, `"error_code":"logs_unavailable"`) {
+		t.Fatalf("expected cluster failure: %s", stream)
+	}
+}
+
+func TestWorkloadLogsStream_NodeWatcherFailureRecovers(t *testing.T) {
+	var requests atomic.Int32
+	var resumed atomic.Bool
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			_, _ = io.WriteString(w, "2026-10-20T10:00:00Z before\nfailed to create fsnotify watcher: too many open files\n")
+			return
+		}
+		resumed.Store(r.URL.Query().Get("sinceTime") == "2026-10-20T10:00:00Z")
+		_, _ = io.WriteString(w, "2026-10-20T10:00:00Z before\n2026-10-20T10:00:01Z recovered\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(api.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 12*time.Second)
+	if !resumed.Load() || strings.Count(stream, `"content":"before"`) != 1 || strings.Count(stream, `"content":"recovered"`) != 1 {
+		t.Fatalf("expected resumed output without replay: %s", stream)
+	}
+	if strings.Contains(stream, "fsnotify") || !strings.Contains(stream, "1 source could not be read") || !strings.Contains(stream, `"notice":""`) {
+		t.Fatalf("expected source notice followed by recovery: %s", stream)
+	}
+}
+
 // The notice arrives together with EOF, so it has to be checked before the
 // read error ends the stream.
 func TestPodLogsStream_ReportsLogsUnavailable(t *testing.T) {
@@ -123,6 +152,9 @@ func TestPodLogsStream_ReportsLogsUnavailable(t *testing.T) {
 	stream := readSSEFor(t, "/api/pods/default/nginx-abc-xyz/logs/stream?container=nginx", 5*time.Second)
 	if !strings.Contains(stream, "event: error") || !strings.Contains(stream, k8score.ErrLogsUnavailable.Error()) {
 		t.Fatalf("expected an error event naming the reason:\n%s", stream)
+	}
+	if !strings.Contains(stream, `"error_code":"logs_unavailable"`) {
+		t.Fatalf("the error event must carry the code the viewer shows it by:\n%s", stream)
 	}
 	if strings.Contains(stream, "event: log") || strings.Contains(stream, "event: end") {
 		t.Fatalf("the notice must not arrive as a log line or a clean end:\n%s", stream)
@@ -163,5 +195,59 @@ func TestCNPGClusterLogsStream_ReportsLogsUnavailableOnce(t *testing.T) {
 	}
 	if strings.Contains(stream, "event: log") {
 		t.Fatalf("the notice must not arrive as a log line:\n%s", stream)
+	}
+}
+
+func getPodLogsError(t *testing.T, path string) (int, map[string]string) {
+	t.Helper()
+	resp, err := http.Get(testServer.URL + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return resp.StatusCode, body
+}
+
+// The apiserver answers "previous terminated container not found" both for a
+// container that never restarted and for one whose earlier run the node no
+// longer has. Telling a reader whose pod shows restarts that it never
+// restarted is false, so the restart count picks the answer.
+func TestPodLogs_PreviousRunAnswerFollowsRestartCount(t *testing.T) {
+	never := cnpgPod("prevlogs", "never-restarted", "x")
+	never.Status.ContainerStatuses[0].RestartCount = 0
+	restarted := cnpgPod("prevlogs", "restarted", "x")
+	restarted.Status.ContainerStatuses[0].RestartCount = 1
+	seedCNPGPods(t, never, restarted)
+	client := logAPIServer(t, http.StatusBadRequest, "application/json",
+		`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"previous terminated container \"postgres\" in pod \"p\" not found","reason":"BadRequest","code":400}`)
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+
+	for _, tc := range []struct {
+		pod, code, message string
+	}{
+		{"never-restarted", "no_previous_run", "This container has not restarted, so there is no earlier run to show."},
+		{"restarted", "logs_unavailable", "Kubernetes did not return the logs of this container's earlier run."},
+	} {
+		t.Run(tc.pod, func(t *testing.T) {
+			status, body := getPodLogsError(t, "/api/pods/prevlogs/"+tc.pod+"/logs?container=postgres&previous=true")
+			if status != http.StatusNotFound || body["error_code"] != tc.code || body["error"] != tc.message {
+				t.Fatalf("got %d %v, want 404 %s %q", status, body, tc.code, tc.message)
+			}
+		})
+	}
+}
+
+// The node's "could not read logs" answer is about the cluster, not a Radar
+// failure, so it carries a code the viewer can show it by.
+func TestPodLogs_LogsUnavailableCarriesCode(t *testing.T) {
+	useLogsUnavailableServer(t)
+	status, body := getPodLogsError(t, "/api/pods/default/nginx-abc-xyz/logs?container=nginx")
+	if status != http.StatusNotFound || body["error_code"] != "logs_unavailable" || body["error"] != k8score.ErrLogsUnavailable.Error() {
+		t.Fatalf("got %d %v", status, body)
 	}
 }

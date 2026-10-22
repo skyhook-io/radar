@@ -12,7 +12,7 @@ import {
   getCNPGBackupServerName,
   getCNPGBackupError,
   getCNPGBackupTarget,
-  CNPG_BARMAN_OBJECTSTORE_GROUP,
+  CNPG_BARMAN_PLUGIN_NAME,
 } from '../resource-utils-cnpg'
 
 interface CNPGBackupRendererProps {
@@ -51,23 +51,15 @@ export function CNPGBackupRenderer({ data, onNavigate }: CNPGBackupRendererProps
         <PropertyList>
           <Property label="Phase" value={phase} />
           <Property label="Method" value={getCNPGBackupMethod(data)} />
-          {/* A plugin-taken backup lands in an ObjectStore rather than in the
-              Cluster's own barmanObjectStore, so naming the plugin is what
-              tells an operator where to go looking. */}
           {backupPlugin && <Property label="Plugin" value={backupPlugin.name} />}
-          {backupPlugin?.parameters?.barmanObjectName && (
+          {backupPlugin && (
             <Property
-              label="Object Store"
-              value={
-                <ResourceLink
-                  name={backupPlugin.parameters.barmanObjectName}
-                  kind="objectstores"
-                  group={CNPG_BARMAN_OBJECTSTORE_GROUP}
-                  namespace={data.metadata?.namespace || ''}
-                  onNavigate={onNavigate}
-                />
-              }
+              label="Destination"
+              value={backupPlugin.name === CNPG_BARMAN_PLUGIN_NAME ? "From the Cluster's barman-cloud plugin" : 'Unknown: Radar does not model this plugin’s destination'}
             />
+          )}
+          {backupPlugin?.name === CNPG_BARMAN_PLUGIN_NAME && backupPlugin.parameters && Object.keys(backupPlugin.parameters).length > 0 && (
+            <Property label="Plugin parameters" value="Ignored by the barman-cloud plugin; the destination comes from the Cluster" />
           )}
           <Property label="Duration" value={getCNPGBackupDuration(data)} />
           <Property label="Backup Name" value={getCNPGBackupName(data)} />
@@ -102,10 +94,7 @@ export function CNPGBackupRenderer({ data, onNavigate }: CNPGBackupRendererProps
             }
             return clusterName
           })()} />
-          {/* Destination and server name are in-tree barmanObjectStore fields.
-              Under the plugin method they are never populated because both live
-              on the ObjectStore, and rendering them as "-" reads as "not
-              configured" rather than "recorded elsewhere". */}
+          {/* Plugin backups do not report the in-tree destination fields. */}
           {!backupPlugin && (
             <>
               <Property label="Destination" value={getCNPGBackupDestinationPath(data)} />

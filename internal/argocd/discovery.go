@@ -8,9 +8,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -18,6 +20,11 @@ import (
 )
 
 const serverLabelSelector = "app.kubernetes.io/name=argocd-server"
+
+// errNoArgoServer: discovery found nothing to connect to, because the
+// cluster has no argocd-server Service or Radar may not list Services.
+// Waiting won't change that, so it is not retried on its own.
+var errNoArgoServer = errors.New("no Argo CD server to connect to")
 
 type candidate struct {
 	namespace  string
@@ -120,39 +127,46 @@ func resolveTargetPort(p *corev1.ServicePort) int {
 // that package manages a single shared forward for the metrics stack
 // (Prometheus/traffic), and starting an argocd-server forward through it
 // would tear down the active metrics forward.
-func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, error) {
+func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, *activeForward, error) {
 	// The client is captured in the snapshot, NOT read live — so a context
 	// switch that swaps the live client mid-probe can't redirect this token's
 	// discovery at a different cluster's argocd-server.
 	k8sc := snap.k8sClient
 	if k8sc == nil {
-		return "", fmt.Errorf("%w: no Kubernetes client available for discovery", ErrUnreachable)
+		return "", nil, fmt.Errorf("%w: no Kubernetes client available for discovery", ErrUnreachable)
 	}
 
 	cands, err := discoverCandidates(ctx, k8sc)
 	if err != nil {
-		return "", fmt.Errorf("%w: listing argocd-server services: %v", ErrUnreachable, err)
+		if apierrors.IsForbidden(err) {
+			return "", nil, fmt.Errorf("%w: %w: listing argocd-server services: %v", ErrUnreachable, errNoArgoServer, err)
+		}
+		return "", nil, fmt.Errorf("%w: listing argocd-server services: %v", ErrUnreachable, err)
 	}
 	if len(cands) == 0 {
-		return "", fmt.Errorf("%w: no Service labeled %s found in cluster — set an explicit Argo CD URL", ErrUnreachable, serverLabelSelector)
+		return "", nil, fmt.Errorf("%w: %w: no Service labeled %s found in cluster — set an explicit Argo CD URL", ErrUnreachable, errNoArgoServer, serverLabelSelector)
 	}
 
 	for _, cand := range cands {
 		addr := cand.clusterURL()
 		if m.probeEndpoint(ctx, addr, snap) == nil {
 			log.Printf("[argocd] Discovered Argo CD at %s (service %s/%s)", addr, cand.namespace, cand.name)
-			return addr, nil
+			return addr, nil, nil
 		}
 	}
 
 	if m.inCluster() {
-		return "", fmt.Errorf("%w: argocd-server service found but not reachable in-cluster (if it serves a self-signed certificate, set argoCdInsecureTls)", ErrUnreachable)
+		return "", nil, fmt.Errorf("%w: argocd-server service found but not reachable in-cluster (if it serves a self-signed certificate, set argoCdInsecureTls)", ErrUnreachable)
 	}
 
 	var lastErr error
 	for _, cand := range cands {
 		log.Printf("[argocd] No candidate reachable in-cluster, starting port-forward to %s/%s...", cand.namespace, cand.name)
-		fwd, pfErr := m.startPortForward(ctx, snap, cand.namespace, cand.name, cand.targetPort)
+		start := m.startPortForward
+		if m.portForward != nil {
+			start = m.portForward
+		}
+		fwd, pfErr := start(ctx, snap, cand.namespace, cand.name, cand.targetPort)
 		if pfErr != nil {
 			lastErr = fmt.Errorf("port-forward to %s/%s failed: %w", cand.namespace, cand.name, pfErr)
 			continue
@@ -167,31 +181,18 @@ func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, err
 			}
 		}
 		if connected != "" {
-			m.mu.Lock()
-			if m.staleLocked(snap) {
-				// A config change (SetConfig/Reset) superseded this probe while
-				// we were forwarding. Don't install the forward — the caller
-				// will discard the whole result; leaving it would dangle a
-				// forward to a target the user has moved away from.
-				m.mu.Unlock()
-				fwd.stop()
-				return "", errStaleProbe
-			}
-			old := m.forward
-			m.forward = fwd
-			m.mu.Unlock()
-			if old != nil {
-				old.stop()
-			}
-			log.Printf("[argocd] Connected to %s/%s via port-forward at %s", cand.namespace, cand.name, connected)
-			return connected, nil
+			// Not installed here: the probe installs it with the client
+			// once the token is verified, so a connection in use keeps its
+			// own forward until then.
+			log.Printf("[argocd] Reached %s/%s via port-forward at %s", cand.namespace, cand.name, connected)
+			return connected, fwd, nil
 		}
 
 		fwd.stop()
 		lastErr = fmt.Errorf("argocd-server at %s/%s not responding after port-forward (if it serves a self-signed certificate, set argoCdInsecureTls)", cand.namespace, cand.name)
 	}
 
-	return "", fmt.Errorf("%w: %v", ErrUnreachable, lastErr)
+	return "", nil, fmt.Errorf("%w: %v", ErrUnreachable, lastErr)
 }
 
 type activeForward struct {
@@ -199,6 +200,9 @@ type activeForward struct {
 	stopCh    chan struct{}
 	cancel    context.CancelFunc
 	stopOnce  sync.Once
+	// exited is set once the tunnel has stopped, before mu is taken, so a
+	// probe never installs a forward that died while it was verified.
+	exited atomic.Bool
 }
 
 func (f *activeForward) stop() {
@@ -213,11 +217,12 @@ func (f *activeForward) stop() {
 // this forward is still the installed one. A deliberate stop() (reconnect,
 // context switch) already replaced m.forward, so the != guard makes those exits
 // a no-op; only an UNEXPECTED death of the current forward drops the connection,
-// which flips Get() to not-connected and lets maybeProbeInBackgroundLocked
+// which flips Get() to not-connected and lets startBackgroundProbeLocked
 // re-discover and re-establish it instead of every call failing against a dead
 // local port.
 func (m *Manager) watchForwardExit(fwd *activeForward, errCh <-chan error) {
 	err := <-errCh
+	fwd.exited.Store(true)
 	m.mu.Lock()
 	if m.forward != fwd {
 		m.mu.Unlock()

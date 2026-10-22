@@ -373,13 +373,29 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'manage_node',
     write: true,
-    desc: 'Operate on a node: cordon marks it unschedulable, uncordon reverses that, drain cordons then evicts all non-DaemonSet pods.',
+    desc: 'Cordon, uncordon, or drain a node. Drain waits for required pod deletions by default and reports complete, incomplete, unconfirmed or started. Expected exclusions do not prevent completion. Completion does not certify shutdown safety.',
     params: [
       { arg: 'action', required: true, desc: 'cordon, uncordon, or drain' },
       { arg: 'name', required: true, desc: 'node name' },
       { arg: 'delete_empty_dir_data', desc: 'evict pods with emptyDir volumes (default true)' },
       { arg: 'force', desc: 'evict pods not managed by a controller (default false)' },
-      { arg: 'timeout', desc: 'drain timeout in seconds (default 60)' },
+      { arg: 'wait_for_deletion', desc: 'wait for pod deletion (default true); false returns after eviction acceptance' },
+      { arg: 'timeout', desc: 'shared eviction and deletion deadline in seconds (default 120 when waiting, 60 otherwise)' },
+    ],
+  },
+  {
+    name: 'wait_for',
+    desc: 'Wait after a fix for a rollout, readiness, completion, deletion, or a status condition. Each call waits at most 45s and returns met, waiting, blocked, or failed; call again within your own time limit.',
+    params: [
+      { arg: 'kind', required: true, desc: 'resource kind, including CRDs' },
+      { arg: 'name', desc: 'object name; or set label_selector or all' },
+      { arg: 'uid', desc: 'with name: pin to the uid returned by a previous call' },
+      { arg: 'label_selector', desc: "every current match; to wait for replacements, wait on their controller's rollout" },
+      { arg: 'all', desc: 'every object of the kind in the namespace' },
+      { arg: 'namespace', desc: 'namespace for namespaced kinds' },
+      { arg: 'group', desc: 'API group when the kind is ambiguous' },
+      { arg: 'condition', desc: 'rollout, complete, ready, deleted, Type[=Status], or jsonpath={.status.path}=value; defaults by kind' },
+      { arg: 'timeout_seconds', desc: '1-45 seconds (default 45); larger values wait 45' },
     ],
   },
 ]

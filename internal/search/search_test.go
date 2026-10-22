@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -15,18 +16,26 @@ import (
 
 type fakeProvider struct {
 	typed                 map[string][]runtime.Object
+	typedErr              map[string]error
 	dynamic               map[schema.GroupVersionResource][]*unstructured.Unstructured
+	dynamicErrNamespaces  map[string]bool
 	kinds                 map[schema.GroupVersionResource]string
 	namespaced            map[schema.GroupVersionResource]bool
 	dynamicListNamespaces []string
 }
 
 func (f *fakeProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
+	if err := f.typedErr[kind]; err != nil {
+		return nil, err
+	}
 	return f.typed[kind], nil
 }
 
 func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	f.dynamicListNamespaces = append(f.dynamicListNamespaces, namespace)
+	if f.dynamicErrNamespaces[namespace] {
+		return nil, fmt.Errorf("list %s in %s: forbidden", gvr.Resource, namespace)
+	}
 	return f.dynamic[gvr], nil
 }
 
@@ -101,6 +110,18 @@ func TestSearch_KindFilter(t *testing.T) {
 	res, _ := Search(context.Background(), p, Parse("kind:Deployment redis"), Options{Include: IncludeNone})
 	if len(res.Hits) != 1 || res.Hits[0].Kind != "Deployment" {
 		t.Fatalf("expected single Deployment hit, got %+v", res.Hits)
+	}
+}
+
+func TestSearch_NetworkPolicyKindFilter(t *testing.T) {
+	p := &fakeProvider{
+		typed: map[string][]runtime.Object{
+			"networkpolicies": {&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "deny-all"}}},
+		},
+	}
+	res, _ := Search(context.Background(), p, Parse("ns:shop kind:NetworkPolicy"), Options{Include: IncludeNone})
+	if res.Searched != 1 || len(res.Hits) != 1 || res.Hits[0].Kind != "NetworkPolicy" || res.Hits[0].Name != "deny-all" {
+		t.Fatalf("expected the NetworkPolicy to be scanned and returned, got searched=%d hits=%+v", res.Searched, res.Hits)
 	}
 }
 

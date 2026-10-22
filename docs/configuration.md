@@ -2,6 +2,22 @@
 
 This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
 
+## MCP exposure
+
+MCP is enabled with read and write tools by default. `--no-mcp` disables all
+MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
+`/mcp-investigation` endpoint, while `/mcp` returns 404. Both CLI and Desktop
+support these flags. This controls MCP exposure only; UI and REST writes are
+unchanged.
+
+Use `RADAR_MCP_READ_ONLY=1` or `"mcpReadOnly": true` in
+`~/.radar/config.json` for persistent deployments. CLI overrides environment,
+which overrides file settings. Explicitly selecting disabled or read-only mode
+overrides a competing mode from a lower-priority source. Explicit false clears
+only its own setting. Contradictory flags, or contradictory settings within the
+config file, are errors. See [MCP configuration](mcp.md#enabling--disabling) for
+examples, boolean parsing and alternate entrypoints.
+
 ## HTTP Listener
 
 Radar listens on `127.0.0.1:9280` by default, so an unauthenticated local
@@ -678,6 +694,8 @@ The header has a namespace picker on the right. Pick a single namespace to focus
 
 The pick is a per-user view filter — it doesn't change anything for other users sharing the same Radar instance. Locally, your pick is remembered per kubeconfig context across restarts. In shared (auth-enabled) deployments the pick lives for the session.
 
+The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
+
 Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice sticks for the context and the kubeconfig value is no longer consulted.
 
 When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
@@ -698,7 +716,7 @@ Radar Desktop doesn't take command-line flags, so set the same list in `~/.radar
 { "namespaces": ["ns1", "ns2", "ns3"] }
 ```
 
-Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default seeded on first read. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
+Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default the UI picks up when it loads. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
 
 This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
 
@@ -725,6 +743,64 @@ behavior. Cache readiness records initial synchronization, not continuous watch
 freshness; the existing scan memo can lag evidence changes by up to five seconds.
 The per-resource audit endpoint remains a findings array and has no completeness
 metadata. Use the scan response or AI resource context when that distinction matters.
+
+### Storage review checks
+
+Three snapshot checks in **Efficiency**, at **Medium** posture priority
+(`warning` in the raw scan):
+
+| Check ID | Flags | Threshold |
+|---|---|---|
+| `pvcNoConsumer` | Bound PVC with no consumer observed | More than 24 h since `Unused=True` when its transition time is known; otherwise PVC older than 24 h |
+| `pvcLongPending` | Pending PVC with no consumer observed, including WaitForFirstConsumer claims | PVC older than 24 h |
+| `releasedPV` | Released PV kept with Retain, or not yet deleted with Delete; Failed PV (reclaim failed after its claim was deleted) | Retain: 24 h after release, or release time unknown. Delete: 1 h grace when release time is known, or immediately on a `VolumeFailedDelete` warning from the last 24 h. Failed: immediately |
+
+A consumer is any Pod (completed ones included) or a Deployment, ReplicaSet,
+StatefulSet, DaemonSet, Job or CronJob template. Templates count at zero
+replicas, and every StatefulSet claim-template ordinal counts, including those
+left after a scale-down. Generic ephemeral Pod volumes also count. A Pending
+PVC clone counts as a consumer of its source claim when `dataSource` or
+`dataSourceRef` names a core PersistentVolumeClaim. `dataSource` uses the
+destination's namespace; `dataSourceRef` uses its explicit namespace when set,
+otherwise the destination's namespace. A Bound clone does not count.
+Clone destinations count even if owned, young or deleting.
+Claims with a controller owner reference are excluded from audit subjects.
+CRD consumers (such as virtual machines), snapshot operations and external consumers
+may not be seen:
+**no consumer observed is not a statement that storage is safe to delete**.
+
+On Kubernetes 1.37+, the PVC protection controller sets an `Unused` condition on
+Bound claims (feature gate `PersistentVolumeClaimUnusedSinceTime`, beta, on by
+default). Radar uses it when present:
+
+- `Unused=False` (a running Pod uses the claim) counts as a consumer, even if
+  Radar did not observe the Pod.
+- With `Unused=True`, the 24 h floor counts from when the claim became unused
+  rather than from its creation, and the finding reports the condition's time.
+  That time is approximate: Kubernetes notes it can be off in either direction
+  because of controller delays. Right after the feature is
+  enabled (for example, after an upgrade to 1.37), every unused claim's
+  timestamp is the enable time, so long-unused claims are held back for 24 h
+  and then reported with that shorter age.
+- Observed Pods and templates still count as consumers, including a
+  zero-replica StatefulSet.
+- No condition, or status `Unknown`, keeps the creation-age behavior. Absence
+  never means a claim is unused. `pvcLongPending` doesn't use the condition.
+
+The namespace picker selects PVC subjects. PVs and StorageClasses need the
+caller's cluster-scoped list grant; without the PV grant, PVs are not subjects
+of that caller's scan. `pvc-consumers`, `persistentvolumeclaims`,
+`persistentvolumes`, `pv-deletion-events` and `pv-release-time` appear in `missingInputs` only
+when that input's absence left a subject unevaluated. A gap that still lets a
+finding fire is stated in the finding instead, such as **reclaim policy not
+visible**, **StorageClass binding mode not visible** or **Deletion warning
+events not fully visible**.
+
+- Bound PVs count as passing `releasedPV` subjects; Available and Pending PVs are not counted.
+- Deleting claims and volumes (`metadata.deletionTimestamp` set) are `stuckTerminating` subjects, not storage-check subjects: that check flags them after 5 minutes. When the blocking finalizer is `kubernetes.io/pvc-protection` or `kubernetes.io/pv-protection`, the finding explains what holds the deletion and what happens when it is released, and warns against removing the finalizer by hand. A deletion can't be cancelled, so it doesn't tell you to complete it either.
+- In a namespace whose consumer inventories are unreadable or unsynced, an eligible claim with an observed consumer or a Bound claim with `Unused=False` still passes; any other eligible claim is neither a finding nor a pass (`pvc-consumers`).
+- A Released Delete PV within its 1 h grace, with incomplete event coverage (complete only when the caller can see all namespaces) and no observed current warning, is unknown: neither evaluated nor passed (`pv-deletion-events`).
+- PV thresholds use time since `status.lastPhaseTransitionTime`, which also excludes warnings from before the current phase. Without a nonzero transition time, release duration is unknown: a Released Delete PV without a recent deletion warning is neither evaluated nor passed (`pv-release-time`); a recent warning still establishes failure. A Released Retain PV is flagged with **release time unknown** and **PV age**, without implying the 24 h grace elapsed.
 
 ## Radar Cloud
 

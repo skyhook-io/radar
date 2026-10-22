@@ -53,6 +53,15 @@ type DiscoverOptions struct {
 
 	// Logger is optional; if set, Discover emits verbose progress messages.
 	Logger func(format string, args ...interface{})
+
+	// Services, when set, supplies every Service in the cluster from a
+	// caller-held cache (an informer lister), replacing both the well-known
+	// Gets and the cluster-wide List with in-memory lookups. It must return
+	// ok=false unless the slice is the complete cluster-wide set: a partial
+	// view (a namespace-scoped watch, an unsynced cache) would silently drop
+	// candidates, so Discover falls back to the API instead. The returned
+	// objects are read, never modified.
+	Services func() (services []*corev1.Service, ok bool)
 }
 
 // wellKnownLoc is a namespace + service name where a Prometheus-compatible
@@ -216,13 +225,38 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 		logf = func(string, ...interface{}) {}
 	}
 
+	// cached is the caller's complete cluster-wide Service set, when it has
+	// one; every lookup below then reads it instead of the API.
+	var cached []*corev1.Service
+	fromCache := false
+	if opts.Services != nil {
+		cached, fromCache = opts.Services()
+	}
+	var byName map[string]*corev1.Service
+	if fromCache {
+		byName = make(map[string]*corev1.Service, len(cached))
+		for _, svc := range cached {
+			byName[svc.Namespace+"/"+svc.Name] = svc
+		}
+	}
+	collect := func(locs []wellKnownLoc, seen map[string]bool) []Candidate {
+		if fromCache {
+			found := make([]*corev1.Service, len(locs))
+			for i, loc := range locs {
+				found[i] = byName[loc.Namespace+"/"+loc.Name]
+			}
+			return assembleWellKnownLocations(locs, found, nil, seen, logf)
+		}
+		return collectWellKnownLocations(ctx, k8sClient, locs, seen, logf)
+	}
+
 	// seen de-duplicates candidates by namespace/name/port/basePath so a
 	// service reachable via more than one layer is probed and port-forwarded only
 	// once. Earlier layers win ties because they populate seen first.
 	seen := map[string]bool{}
 
 	// Layer 1: primary well-known locations, ranked ahead of everything else.
-	out := collectWellKnownLocations(ctx, k8sClient, WellKnownLocations, seen, logf)
+	out := collect(WellKnownLocations, seen)
 
 	// Fallback locations (caretta-vm) are fetched now — so their keys enter `seen`
 	// and the dynamic scan below can't re-surface them as ordinary scored
@@ -230,7 +264,7 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 	// traffic source's link metrics and commonly lacks cluster workload metrics, so
 	// a real Prometheus (well-known or dynamically discovered) must always outrank
 	// it; it stays a candidate only so a caretta-vm-only cluster keeps working.
-	fallback := collectWellKnownLocations(ctx, k8sClient, fallbackWellKnownLocations, seen, logf)
+	fallback := collect(fallbackWellKnownLocations, seen)
 
 	if !opts.IncludeDynamic {
 		return append(out, fallback...), nil
@@ -242,13 +276,20 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 	// probe is the authoritative check — so a weak but positive score is kept
 	// and ranked low rather than dropped, which would silently miss a real but
 	// lightly-labeled Prometheus. MaxDynamic still bounds how many are returned.
-	svcs, err := k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		// The cluster-wide list failed, but the well-known + fallback Gets above
-		// still succeeded — return them (including the caretta-vm fallback) rather
-		// than dropping the fallback tier. This is the get-but-not-list RBAC case.
-		logf("prom.Discover: failed to list services: %v", err)
-		return append(out, fallback...), nil
+	svcs := cached
+	if !fromCache {
+		list, err := k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			// The cluster-wide list failed, but the well-known + fallback Gets above
+			// still succeeded — return them (including the caretta-vm fallback) rather
+			// than dropping the fallback tier. This is the get-but-not-list RBAC case.
+			logf("prom.Discover: failed to list services: %v", err)
+			return append(out, fallback...), nil
+		}
+		svcs = make([]*corev1.Service, len(list.Items))
+		for i := range list.Items {
+			svcs[i] = &list.Items[i]
+		}
 	}
 
 	// Services already claimed by the fallback tier must never resurface among the
@@ -261,18 +302,18 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 	}
 
 	var scored []Candidate
-	for _, svc := range svcs.Items {
+	for _, svc := range svcs {
 		if fallbackNames[svc.Namespace+"/"+svc.Name] {
 			continue
 		}
-		score, bp, identity := ScoreService(svc)
+		score, bp, identity := ScoreService(*svc)
 		// Admit on a Prometheus-family identity signal, not on score alone: a
 		// namespace-only match (score without identity) would send the operator's
 		// configured Prometheus headers to an unrelated neighbor when probed.
 		if !identity {
 			continue
 		}
-		port := resolvePort(svc, 0)
+		port := resolvePort(*svc, 0)
 		if seen[candidateKey(svc.Namespace, svc.Name, port, bp)] {
 			continue
 		}
@@ -280,7 +321,7 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 			Namespace:   svc.Namespace,
 			Name:        svc.Name,
 			Port:        port,
-			TargetPort:  resolveTargetPort(svc, port),
+			TargetPort:  resolveTargetPort(*svc, port),
 			ClusterAddr: buildClusterAddr(svc.Name, svc.Namespace, port),
 			BasePath:    bp,
 			Score:       score,
@@ -288,8 +329,17 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 		})
 	}
 
+	// Equal scores order by namespace/name so the MaxDynamic cut keeps the same
+	// candidates whatever order the Services arrived in (an API list is sorted,
+	// an informer lister is not).
 	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].Score > scored[j].Score
+		if scored[i].Score != scored[j].Score {
+			return scored[i].Score > scored[j].Score
+		}
+		if scored[i].Namespace != scored[j].Namespace {
+			return scored[i].Namespace < scored[j].Namespace
+		}
+		return scored[i].Name < scored[j].Name
 	})
 
 	if len(scored) > opts.MaxDynamic {
@@ -301,6 +351,25 @@ func Discover(ctx context.Context, k8sClient kubernetes.Interface, opts Discover
 	// scan, so a real Prometheus always wins over caretta-vm when one exists.
 	out = append(out, fallback...)
 	return out, nil
+}
+
+// IsCandidateService reports whether Discover would return svc as a
+// candidate: it sits at a well-known location, or carries a Prometheus-family
+// identity signal. Callers watching Services use it to tell when a newly
+// created one is worth a discovery run.
+func IsCandidateService(svc *corev1.Service) bool {
+	if svc == nil {
+		return false
+	}
+	for _, locs := range [][]wellKnownLoc{WellKnownLocations, fallbackWellKnownLocations} {
+		for _, loc := range locs {
+			if loc.Namespace == svc.Namespace && loc.Name == svc.Name {
+				return true
+			}
+		}
+	}
+	_, _, identity := ScoreService(*svc)
+	return identity
 }
 
 // collectWellKnownLocations fetches the given well-known locations concurrently
@@ -326,15 +395,22 @@ func collectWellKnownLocations(ctx context.Context, k8sClient kubernetes.Interfa
 		})
 	}
 	wg.Wait()
+	return assembleWellKnownLocations(locs, found, getErrs, seen, logf)
+}
 
-	// Assemble in declared order, logging serially — DiscoverOptions.Logger has
-	// no concurrency contract, so it must not be called from the workers above.
+// assembleWellKnownLocations turns the Services found at each location (nil
+// when absent) into candidates in declared order. Logging happens here,
+// serially — DiscoverOptions.Logger has no concurrency contract. getErrs may
+// be nil when the lookups could not fail.
+func assembleWellKnownLocations(locs []wellKnownLoc, found []*corev1.Service, getErrs []error, seen map[string]bool, logf func(string, ...interface{})) []Candidate {
 	var out []Candidate
 	for i, loc := range locs {
 		svc := found[i]
 		if svc == nil {
-			if err := getErrs[i]; err != nil && !apierrors.IsNotFound(err) {
-				logf("prom.Discover: error checking %s/%s: %v", loc.Namespace, loc.Name, err)
+			if getErrs != nil {
+				if err := getErrs[i]; err != nil && !apierrors.IsNotFound(err) {
+					logf("prom.Discover: error checking %s/%s: %v", loc.Namespace, loc.Name, err)
+				}
 			}
 			continue
 		}

@@ -18,6 +18,8 @@ export function Variants() {
       />
       <AlertBanner variant="info" title="Suspended" message="Reconciliation is paused; changes in Git will not be applied until resumed." />
       <AlertBanner variant="success" title="Workflow Completed Successfully" />
+      <AlertBanner variant="alert" title="Resource pressure" message="Node memory pressure needs attention." />
+      <AlertBanner variant="unknown" title="Controller state unavailable" message="The controller's status has not loaded." />
     </div>
   )
 }
@@ -46,6 +48,14 @@ export function CustomIcon() {
         title="Policy violations in payments"
         message="3 resources fail require-requests-limits. Admission is set to Audit, so they were not blocked."
       />
+    </div>
+  )
+}
+
+export function WithAction() {
+  return (
+    <div style={wrap}>
+      <AlertBanner variant="warning" title="Metrics are unavailable" message="Check the connection to resume charts." action={<button type="button" className="text-xs font-medium text-accent-text hover:underline">Open Metrics settings →</button>} />
     </div>
   )
 }

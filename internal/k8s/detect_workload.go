@@ -199,7 +199,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 					Name:      cj.Name,
 					Namespace: cj.Namespace,
 					Problem:   "stale",
-					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
+					Reason:    fmt.Sprintf("last scheduled %dh ago", int(sinceLast.Hours())),
 					OnsetAt:   cj.Status.LastScheduleTime.Add(threshold),
 				})
 				continue
@@ -221,7 +221,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 				Name:      cj.Name,
 				Namespace: cj.Namespace,
 				Problem:   "never-scheduled",
-				Reason:    "created but never ran",
+				Reason:    "no scheduled run recorded",
 				OnsetAt:   cj.CreationTimestamp.Add(threshold),
 			})
 		}

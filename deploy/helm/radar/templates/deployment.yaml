@@ -4,11 +4,7 @@
 {{- if and (eq .Values.timeline.storage "postgres") (not .Values.timeline.postgres.existingSecret) }}
 {{- fail "timeline.postgres.existingSecret is required when timeline.storage=postgres" }}
 {{- end }}
-{{- $basePath := "" -}}
-{{- $trimmedBasePath := trimAll "/" (default "" .Values.basePath) -}}
-{{- if $trimmedBasePath -}}
-{{- $basePath = printf "/%s" $trimmedBasePath -}}
-{{- end -}}
+{{- $basePath := include "radar.basePath" . -}}
 {{- if and $basePath .Values.cloud.enabled }}
 {{- fail "basePath is not supported with cloud.enabled=true: Radar Cloud owns the URL path, and the binary refuses the combination at startup — unset one of them" }}
 {{- end }}
@@ -282,6 +278,10 @@ spec:
             # startup-config fields that don't apply under hosted Radar Cloud.
             - name: RADAR_CLOUD_MODE
               value: "true"
+            {{- if include "radar.userTokenMode" . | eq "true" }}
+            - name: RADAR_AUTH_K8S_CREDENTIALS
+              value: "user-token"
+            {{- end }}
             {{- if or .Values.cloud.token .Values.cloud.existingSecret }}
             - name: RADAR_CLOUD_TOKEN
               {{- if .Values.cloud.existingSecret }}

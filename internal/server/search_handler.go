@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/search"
 )
 
@@ -39,23 +40,26 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// (so listers don't read namespaces outside the user's RBAC) and
 	// constrains the post-hoc match() filter.
 	//
-	// globalNs=1 makes search ignore the per-user namespace-switcher pick and
-	// scan the user's full RBAC ceiling — a "global" search whose only scope is
-	// the query's own `ns:` tokens. The omnibar sets it so a deliberately broad
-	// ⌘K lookup isn't silently narrowed to whatever namespace the view filter
-	// happens to be on. Still RBAC-bounded (getUserNamespaces filters by the
-	// caller's identity); it only drops the cosmetic pick, never the ceiling.
+	// globalNs=1 scans the user's full RBAC ceiling, scoped only by the query's
+	// own `ns:` tokens — the omnibar (⌘K) and Radar Hub's fleet search set it
+	// for a deliberately broad lookup.
+	// It skips parseNamespacesForUser's --namespace-scope clamp: the scope
+	// becomes a hard namespace filter below, so clamping it to the pinned
+	// namespace would drop every cluster-scoped hit (Nodes, PVs, ...) that the
+	// per-kind checks allow; namespaced kinds still come only from the pinned
+	// cache. Still RBAC-bounded (getUserNamespaces filters by the caller's
+	// identity). A plain search never inherits the stored namespace pick either.
 	var allowed []string
 	if r.URL.Query().Get("globalNs") == "1" {
 		allowed = s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
 	} else {
 		allowed = s.parseNamespacesForUser(r)
 	}
-	if noNamespaceAccess(allowed) {
+	if readscope.NoNamespaceAccess(allowed) {
 		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
 		return
 	}
-	scanNamespaces := intersectNamespaces(allowed, parsed.NSFilter)
+	scanNamespaces := readscope.SelectNamespaces(allowed, parsed.NSFilter)
 	if allowed != nil && len(scanNamespaces) == 0 {
 		// User is namespace-restricted but their `ns:` filter doesn't
 		// intersect — empty result without scanning.
@@ -151,31 +155,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, result)
-}
-
-// intersectNamespaces returns the namespaces to actually scan. nil `allowed`
-// means the user is unrestricted; preserve `requested` (which may also be nil
-// for cluster-wide). When the user is restricted, keep only the requested
-// namespaces they're allowed to see; if `requested` is empty, fall back to
-// the full allowed set.
-func intersectNamespaces(allowed, requested []string) []string {
-	if allowed == nil {
-		return requested
-	}
-	if len(requested) == 0 {
-		return allowed
-	}
-	allowSet := make(map[string]struct{}, len(allowed))
-	for _, ns := range allowed {
-		allowSet[ns] = struct{}{}
-	}
-	out := make([]string, 0, len(requested))
-	for _, ns := range requested {
-		if _, ok := allowSet[ns]; ok {
-			out = append(out, ns)
-		}
-	}
-	return out
 }
 
 func parseLimit(v string) int {

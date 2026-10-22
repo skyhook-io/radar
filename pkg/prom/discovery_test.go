@@ -3,6 +3,7 @@ package prom
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -807,6 +808,110 @@ func TestBuildClusterAddrUsesPlainServiceDNS(t *testing.T) {
 	for _, tc := range tests {
 		if got := buildClusterAddr(tc.name, tc.namespace, tc.port); got != tc.want {
 			t.Errorf("buildClusterAddr(%s/%s) = %q, want %q", tc.namespace, tc.name, got, tc.want)
+		}
+	}
+}
+
+// discoverFixture is a cluster with every candidate tier: a well-known
+// Prometheus, the caretta-vm fallback, more equal-score dynamic candidates
+// than MaxDynamic keeps, and unrelated Services.
+func discoverFixture() []*corev1.Service {
+	svc := func(ns, name string, lbls map[string]string, port int32) *corev1.Service {
+		return &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: lbls},
+			Spec:       corev1.ServiceSpec{ClusterIP: "10.0.0.1", Ports: []corev1.ServicePort{{Port: port}}},
+		}
+	}
+	promLabels := map[string]string{"app.kubernetes.io/name": "prometheus"}
+	out := []*corev1.Service{
+		svc("monitoring", "prometheus-server", nil, 9090),
+		svc("caretta", "caretta-vm", nil, 8428),
+		svc("default", "redis", nil, 6379),
+		svc("kube-system", "kube-dns", nil, 53),
+	}
+	for _, ns := range []string{"team-g", "team-c", "team-a", "team-f", "team-e", "team-b", "team-d"} {
+		out = append(out, svc(ns, "prom", promLabels, 9090))
+	}
+	return out
+}
+
+// TestDiscover_ServicesSourceMatchesAPI pins that enumerating from a cached
+// Service set returns exactly what the API path returns, whatever order the
+// cache hands Services back in, and makes no API calls.
+func TestDiscover_ServicesSourceMatchesAPI(t *testing.T) {
+	fixture := discoverFixture()
+	objs := make([]runtime.Object, len(fixture))
+	for i, s := range fixture {
+		objs[i] = s
+	}
+	want, err := Discover(context.Background(), fake.NewSimpleClientset(objs...), DiscoverOptions{IncludeDynamic: true})
+	if err != nil {
+		t.Fatalf("API Discover: %v", err)
+	}
+	if len(want) != 7 {
+		t.Fatalf("fixture should yield 1 well-known + 5 dynamic + caretta, got %d: %+v", len(want), want)
+	}
+
+	for _, order := range [][]int{{10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}, {3, 7, 0, 9, 1, 10, 5, 2, 8, 4, 6}} {
+		shuffled := make([]*corev1.Service, len(order))
+		for i, j := range order {
+			shuffled[i] = fixture[j]
+		}
+		api := fake.NewSimpleClientset()
+		got, err := Discover(context.Background(), api, DiscoverOptions{
+			IncludeDynamic: true,
+			Services:       func() ([]*corev1.Service, bool) { return shuffled, true },
+		})
+		if err != nil {
+			t.Fatalf("cached Discover: %v", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("cached enumeration differs from API enumeration\n got: %+v\nwant: %+v", got, want)
+		}
+		if actions := api.Actions(); len(actions) != 0 {
+			t.Fatalf("cached enumeration made %d API calls: %v", len(actions), actions)
+		}
+	}
+}
+
+// TestDiscover_ServicesSourceDeclinedUsesAPI pins the fallback: a source that
+// cannot vouch for a complete view (ok=false) leaves enumeration to the API.
+func TestDiscover_ServicesSourceDeclinedUsesAPI(t *testing.T) {
+	api := fake.NewSimpleClientset(discoverFixture()[0])
+	got, err := Discover(context.Background(), api, DiscoverOptions{
+		IncludeDynamic: true,
+		Services:       func() ([]*corev1.Service, bool) { return nil, false },
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "prometheus-server" {
+		t.Fatalf("want the API's monitoring/prometheus-server, got %+v", got)
+	}
+	if len(api.Actions()) == 0 {
+		t.Fatal("declined source should fall back to API calls")
+	}
+}
+
+func TestIsCandidateService(t *testing.T) {
+	fixture := discoverFixture()
+	for _, tc := range []struct {
+		svc  *corev1.Service
+		want bool
+	}{
+		{fixture[0], true}, // well-known location, no labels
+		{fixture[1], true}, // caretta-vm fallback location
+		{fixture[2], false},
+		{fixture[3], false},
+		{fixture[4], true}, // identity label
+		{nil, false},
+	} {
+		name := "nil"
+		if tc.svc != nil {
+			name = tc.svc.Namespace + "/" + tc.svc.Name
+		}
+		if got := IsCandidateService(tc.svc); got != tc.want {
+			t.Errorf("IsCandidateService(%s) = %v, want %v", name, got, tc.want)
 		}
 	}
 }

@@ -3,13 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"github.com/go-chi/chi/v5"
-	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
+	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 

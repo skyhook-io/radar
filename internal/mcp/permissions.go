@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -38,17 +39,63 @@ func mcpChangeAuthorizer(ctx context.Context) func(group, resource, namespace st
 // fail-closed on an unresolvable kind (preserves the pre-existing behavior — the
 // prior cluster-scoped-only filter also let them through). Auth off → unchanged.
 func filterRecentChangesRBAC(ctx context.Context, changes []issuesapi.RecentChange) []issuesapi.RecentChange {
-	if pkgauth.UserFromContext(ctx) == nil {
+	allow := recentChangeReadFilter(ctx)
+	if allow == nil {
 		return changes
 	}
-	authz := mcpChangeAuthorizer(ctx)
 	out := changes[:0]
 	for _, c := range changes {
-		if c.Source == helmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz) {
+		if allow(c) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// recentChangeReadFilter is filterRecentChangesRBAC's per-row predicate, for
+// change queries that must drop unreadable rows before their own cut
+// (meaningfulchanges.Query.Allow). nil when auth is off. The predicate keeps
+// per-call state and is not safe for concurrent use.
+func recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bool {
+	if pkgauth.UserFromContext(ctx) == nil {
+		return nil
+	}
+	authz := mcpChangeAuthorizer(ctx)
+	// A cluster-wide query can hold hundreds of kind/namespace pairs, each a
+	// permission check on first use. One cluster-wide check per kind answers
+	// every namespace for callers who can read that kind everywhere.
+	everywhere := map[string]bool{}
+	authorize := func(group, resource, namespace string) bool {
+		key := group + "/" + resource
+		all, checked := everywhere[key]
+		if !checked {
+			all = authz(group, resource, "")
+			everywhere[key] = all
+		}
+		return all || authz(group, resource, namespace)
+	}
+	return func(c issuesapi.RecentChange) bool {
+		return c.Source == helmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authorize)
+	}
+}
+
+// recentChangeViewer gates the Pod and workload names change rows carry.
+// The zero Viewer when auth is off.
+func recentChangeViewer(ctx context.Context) meaningfulchanges.Viewer {
+	if pkgauth.UserFromContext(ctx) == nil {
+		return meaningfulchanges.Viewer{}
+	}
+	return meaningfulchanges.Viewer{
+		CanReadPods:     func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "get") },
+		CanReadConsumer: recentChangeReadFilter(ctx),
+	}
+}
+
+// callerReadsAllNamespaces reports whether the caller is unrestricted by
+// namespace. Store-wide facts, such as when Radar's held history becomes
+// complete, go only to such callers.
+func callerReadsAllNamespaces(ctx context.Context) bool {
+	return filterNamespacesForUser(ctx, nil) == nil
 }
 
 // filterTimelineEventsRBAC is filterRecentChangesRBAC's twin for raw timeline

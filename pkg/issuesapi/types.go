@@ -6,6 +6,8 @@ package issuesapi
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 type Severity string
@@ -58,13 +60,14 @@ const (
 	CategoryPDBBlocksEvictions       Category = "pdb_blocks_evictions"
 	CategorySecretSyncFailed         Category = "secret_sync_failed"
 	CategoryServiceNoEndpoints       Category = "service_no_endpoints"
+	CategoryServiceMixedBackends     Category = "service_mixed_backends"
 	CategoryIngressBackendMissing    Category = "ingress_backend_missing"
 	CategoryIngressClassMissing      Category = "ingress_class_missing"
 	CategoryLoadBalancerPending      Category = "load_balancer_pending"
 	CategoryGatewayNotReady          Category = "gateway_not_ready"
 	CategoryGatewayRouteInvalid      Category = "gateway_route_invalid"
 	CategoryDNSFailure               Category = "dns_failure"
-	CategoryNetworkPolicyBlock       Category = "network_policy_block"
+	CategoryNetworkPolicyDenied      Category = "network_policy_denied"
 	CategoryPVCPending               Category = "pvc_pending"
 	CategoryPVCLost                  Category = "pvc_lost"
 	CategoryPVFailed                 Category = "pv_failed"
@@ -137,13 +140,14 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPDBBlocksEvictions:       GroupConfiguration,
 	CategorySecretSyncFailed:         GroupConfiguration,
 	CategoryServiceNoEndpoints:       GroupNetworking,
+	CategoryServiceMixedBackends:     GroupNetworking,
 	CategoryIngressBackendMissing:    GroupNetworking,
 	CategoryIngressClassMissing:      GroupNetworking,
 	CategoryLoadBalancerPending:      GroupNetworking,
 	CategoryGatewayNotReady:          GroupNetworking,
 	CategoryGatewayRouteInvalid:      GroupNetworking,
 	CategoryDNSFailure:               GroupNetworking,
-	CategoryNetworkPolicyBlock:       GroupNetworking,
+	CategoryNetworkPolicyDenied:      GroupNetworking,
 	CategoryPVCPending:               GroupStorage,
 	CategoryPVCLost:                  GroupStorage,
 	CategoryPVFailed:                 GroupStorage,
@@ -183,6 +187,9 @@ func GroupOf(c Category) CategoryGroup {
 	}
 	return GroupUnknown
 }
+
+// MessageSourceRadar marks an issue Message that Radar wrote.
+const MessageSourceRadar = "radar"
 
 type Scope string
 
@@ -322,17 +329,63 @@ type RecentChange struct {
 	RankReason     string         `json:"rank_reason,omitempty"`
 	// ApplicationConfigurationChange is a ranking hint for workload runtime
 	// configuration (including the image) or data changes on a directly
-	// consumed ConfigMap, not a causal claim.
+	// referenced ConfigMap, or an observed write with likely stale Secret env
+	// readers, not a causal claim.
 	ApplicationConfigurationChange bool `json:"application_configuration_change,omitempty"`
 	// NotLinkedToReturnedIssues is set only on top-level recent_changes in an
 	// eligible, unfiltered issues response with complete linkage evidence.
 	NotLinkedToReturnedIssues bool          `json:"not_linked_to_returned_issues,omitempty"`
 	Fields                    []ChangeField `json:"fields,omitempty"`
-	// ConsumedBy lists workloads that mount or reference this ConfigMap via
-	// their pod spec (volumes, envFrom, env valueFrom). Direct references
-	// only — runtime consumers reading through an intermediary service are
-	// not captured.
+	// ConsumedBy lists workloads or Pods whose specs reference this ConfigMap
+	// or Secret, capped at five. References do not establish runtime use.
+	// Only names the caller may read are listed; ConsumedByWithheld counts
+	// the rest.
 	ConsumedBy []string `json:"consumed_by,omitempty"`
+	// ConsumedByWithheld counts referencing workloads or Pods left out of
+	// ConsumedBy because the caller may not read them. Absent when none were.
+	ConsumedByWithheld *Withheld `json:"consumed_by_withheld,omitempty"`
+	// RunningPreviousValue reports observed writes with likely stale env readers.
+	// Absence means not established, rather than no stale readers.
+	RunningPreviousValue *RunningPreviousValue `json:"running_previous_value,omitempty"`
+	UpdatesInWindow      int                   `json:"updates_in_window,omitempty"`
+	FirstUpdateAt        string                `json:"first_update_at,omitempty"`
+}
+
+// RunningPreviousValue describes Pods that likely retain an earlier env value.
+// It is set only for callers who may read Pods in the namespace, so Pods
+// counts Pods the caller can read. Workloads lists the owners the caller may
+// read, capped at five; Withheld counts the owners left out for access.
+type RunningPreviousValue struct {
+	Workloads []string  `json:"workloads"`
+	Withheld  *Withheld `json:"withheld,omitempty"`
+	Pods      int       `json:"pods"`
+	Keys      []string  `json:"keys"`
+	Note      string    `json:"note"`
+}
+
+// Withheld counts names the caller's access kept out of a list, without
+// naming them, so a filtered list is not read as complete. Reason is always
+// readreason.UserForbidden: the caller's own RBAC denies reading them.
+type Withheld struct {
+	Count  int             `json:"count"`
+	Reason readreason.Code `json:"reason"`
+}
+
+// CreatedObjects is one run of plain creates in a namespace, listed compactly
+// instead of one RecentChange row each. A plain create row carries only the
+// object, its creation time and, for a ConfigMap, its consumers; its other
+// fields are constant (changeType and summary "add", change_category
+// lifecycle, rank_reason "resource create/delete for config or desired
+// state"). Each Objects line is "+<seconds after First>s Kind/name", with
+// " (used by Kind/name, ...)" appended when the row had consumed_by. A member's
+// timestamp is First plus its offset, in First's zone; its apiVersion is
+// APIVersions[Kind] (absent when the row had none).
+type CreatedObjects struct {
+	Namespace   string            `json:"namespace"`
+	First       string            `json:"first"`
+	Count       int               `json:"count"`
+	APIVersions map[string]string `json:"apiVersions,omitempty"`
+	Objects     []string          `json:"objects"`
 }
 
 type ClusterContext struct {
@@ -463,19 +516,28 @@ type Issue struct {
 	// RequiredReads describe the inventories behind a cross-resource finding.
 	// They are retained internally so cached and grouped projections can authorize it.
 	RequiredReads []EvidenceRead `json:"-"`
-	Severity      Severity       `json:"severity"`
-	Source        Source         `json:"source"`
-	Category      Category       `json:"category"`
-	CategoryGroup CategoryGroup  `json:"category_group"`
-	ID            string         `json:"id"`
-	GroupingScope Scope          `json:"grouping_scope"`
-	Kind          string         `json:"kind"`
-	Group         string         `json:"group,omitempty"`
-	Namespace     string         `json:"namespace,omitempty"`
-	Name          string         `json:"name"`
-	Reason        string         `json:"reason"`
-	Message       string         `json:"message,omitempty"`
-	RawMessage    string         `json:"raw_message,omitempty"`
+	// AffectedRefs are the resources a finding about another subject affects,
+	// all of them rather than the capped links a diagnostic fact shows.
+	// Related-issue lookup matches them; they are never serialized.
+	AffectedRefs  []Ref         `json:"-"`
+	Severity      Severity      `json:"severity"`
+	Source        Source        `json:"source"`
+	Category      Category      `json:"category"`
+	CategoryGroup CategoryGroup `json:"category_group"`
+	ID            string        `json:"id"`
+	GroupingScope Scope         `json:"grouping_scope"`
+	Kind          string        `json:"kind"`
+	Group         string        `json:"group,omitempty"`
+	Namespace     string        `json:"namespace,omitempty"`
+	Name          string        `json:"name"`
+	Reason        string        `json:"reason"`
+	Message       string        `json:"message,omitempty"`
+	RawMessage    string        `json:"raw_message,omitempty"`
+	// MessageSource is MessageSourceRadar when Message is Radar's own summary
+	// rather than text from Kubernetes or a controller, so a UI doesn't present
+	// it as raw output. A detector that sets it writes a Cause that stands on
+	// its own without Message.
+	MessageSource string `json:"message_source,omitempty"`
 	// Cause / Action / Remediation* carry parsed domain diagnosis. They give the
 	// Issues page + MCP a plain-English cause + next step when a detector has
 	// enough evidence. All optional — empty for issues without a parser.
@@ -565,6 +627,10 @@ type Issue struct {
 	// CorrelatedChanges lists recent non-status changes (spec/config and
 	// lifecycle) on this issue's subject (and, for workload subjects, its
 	// directly referenced ConfigMaps) within the correlation lookback window.
+	// For an admission rejection whose message names its blocking object (a
+	// ResourceQuota, the namespace's LimitRanges, a webhook's configuration),
+	// that object's changes are listed first, and TimingSummary says which
+	// side changed last.
 	// Deterministic evidence, not a causal claim — the consumer weighs
 	// whether the change explains the issue.
 	CorrelatedChanges []RecentChange `json:"correlated_changes,omitempty"`
@@ -577,6 +643,35 @@ type Issue struct {
 	// or when the candidate fetch saturated and may have missed changes;
 	// absence must never be read as "no changes".
 	NoRecentChanges *NoRecentChangesMarker `json:"no_recent_changes,omitempty"`
+	// CorrelatedChangesIncomplete is set when CorrelatedChanges is non-empty
+	// but the subject's change history in the window was larger than Radar's
+	// fetch bound, so older changes were not read. The listed changes are
+	// leads, not the subject's full history.
+	CorrelatedChangesIncomplete bool `json:"correlated_changes_incomplete,omitempty"`
+}
+
+// HistoryGapReason names why Radar's recorded change history does not cover a
+// requested window. Wire contract: clients branch on the values.
+type HistoryGapReason string
+
+const (
+	// HistoryObservationStartedLate: this Radar process started observing
+	// after the window began, so earlier changes were never recorded by it.
+	HistoryObservationStartedLate HistoryGapReason = "observation_started_late"
+	// HistoryEventsEvicted: Radar deleted recorded events from the window to
+	// stay within its history size or retention limit.
+	HistoryEventsEvicted HistoryGapReason = "events_evicted"
+)
+
+// HistoryCoverage reports that a change answer's window starts before the
+// history Radar holds, so an empty or short answer does not establish that
+// nothing changed. Present only when Incomplete. CompleteSince is when the
+// held history becomes complete; it is store-wide, so it is sent only to
+// callers who can read the whole cluster.
+type HistoryCoverage struct {
+	Incomplete    bool               `json:"incomplete"`
+	CompleteSince time.Time          `json:"complete_since,omitzero"`
+	Reasons       []HistoryGapReason `json:"reasons"`
 }
 
 // NoRecentChangesMarker carries the window so the "no changes" claim is
@@ -606,12 +701,132 @@ type Response struct {
 	// the lookback window itself: changes older than the window are out of
 	// scope either way, not implied absent.
 	RecentChangesTruncated bool `json:"recent_changes_truncated,omitempty"`
+	// RecentChangesHistoryCoverage is set when the recent-changes window starts
+	// before the history Radar holds, including when no change was returned.
+	RecentChangesHistoryCoverage *HistoryCoverage `json:"recent_changes_history_coverage,omitempty"`
+	// RecentChangesError is set when the recent-changes feed was due but could
+	// not be read, such as while the timeline database is unreachable. Without
+	// it, a missing recent_changes would read the same as no changes.
+	RecentChangesError string `json:"recent_changes_error,omitempty"`
 	// CorrelationTruncated is set when per-issue change correlation skipped
 	// some critical or warning issues (shared cap reached; criticals are
 	// checked first). Under truncation, an issue without correlation markers
 	// means "not checked", not "no changes".
 	CorrelationTruncated bool `json:"correlation_truncated,omitempty"`
+	// UncheckedSources lists the issue sources Radar couldn't check for this
+	// answer, so their issues may be missing. Omitted when every source was
+	// checked. A source the caller may not read, or a read cut short because
+	// the caller left, is not listed. Consumers must treat an unknown source
+	// value as unchecked too.
+	UncheckedSources []UncheckedSource `json:"unchecked_sources,omitempty"`
+	// ClusterScopedChanges lists changes to cluster-scoped objects that can
+	// change how this namespace's workloads are admitted. Set by the MCP
+	// issues tool for a single-namespace answer, and only when it has rows or
+	// is incomplete.
+	ClusterScopedChanges *ClusterScopedChanges `json:"cluster_scoped_changes,omitempty"`
 }
+
+// ClusterScopedApplicability says how a cluster-scoped change relates to the
+// namespace it is listed under.
+type ClusterScopedApplicability string
+
+const (
+	// ClusterScopedApplies: the object's current scope selects the namespace.
+	ClusterScopedApplies ClusterScopedApplicability = "applies"
+	// ClusterScopedMayApply: whether it reaches the namespace's objects is not
+	// established (object selectors and CEL conditions are not evaluated, the
+	// namespace labels are unreadable, or the change removed or re-scoped it
+	// and its earlier scope is not recorded).
+	ClusterScopedMayApply ClusterScopedApplicability = "may_apply"
+)
+
+type ClusterScopedChange struct {
+	RecentChange
+	Applicability  ClusterScopedApplicability `json:"applicability"`
+	AppliesBecause string                     `json:"applies_because"`
+}
+
+// ClusterScopedChanges is a namespace's view of cluster-scoped changes in the
+// lookback window. It covers MutatingWebhookConfiguration and
+// ValidatingWebhookConfiguration only. Objects that existed unchanged
+// throughout the window never appear, however much they affect the
+// namespace. An empty Changes list is a complete negative only when
+// Truncated, Error and Incomplete are all unset.
+type ClusterScopedChanges struct {
+	Kinds         []string              `json:"kinds"`
+	WindowSeconds int                   `json:"window_seconds"`
+	Changes       []ClusterScopedChange `json:"changes"`
+	// NotListed names further applicable changes beyond the row budget.
+	NotListed []string `json:"not_listed,omitempty"`
+	// Truncated is set when the window held more changes than were read or
+	// named.
+	Truncated  bool   `json:"truncated,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Incomplete string `json:"incomplete,omitempty"`
+}
+
+// Informative reports whether the section says anything beyond "checked, none":
+// rows, or a reason the check was incomplete.
+func (c *ClusterScopedChanges) Informative() bool {
+	return c != nil && (len(c.Changes) > 0 || len(c.NotListed) > 0 || c.Truncated || c.Error != "" || c.Incomplete != "")
+}
+
+// UncheckedSource is one issue source Radar couldn't check. A source can
+// appear more than once, once per reason.
+type UncheckedSource struct {
+	Source UncheckedSourceName `json:"source"`
+	Reason UncheckedReason     `json:"reason"`
+	// Kinds names the kinds within the source that went unchecked. Absent
+	// means the whole source, or that Radar can't tell which kinds.
+	Kinds []UncheckedKind `json:"kinds,omitempty"`
+	// Namespaces names the namespaces whose read failed when the source was
+	// read in the others, so issues outside them are complete. Absent means
+	// the gap is not limited to particular namespaces.
+	Namespaces []string `json:"namespaces,omitempty"`
+}
+
+// UncheckedKind is a resource kind whose issues went unchecked.
+type UncheckedKind struct {
+	Group string `json:"group,omitempty"`
+	Kind  string `json:"kind"`
+}
+
+// UncheckedSourceName names an issue source that can go unchecked. It is not
+// Issue.Source, which says how an issue was detected.
+type UncheckedSourceName string
+
+const (
+	// UncheckedSourceHelm is Radar's native Helm release read (release
+	// Secrets). Flux HelmReleases are not part of it.
+	UncheckedSourceHelm UncheckedSourceName = "helm"
+	// UncheckedSourceResources is Radar's checks on built-in Kubernetes kinds
+	// (Pods, workloads, Services, PVCs, HPAs, Nodes and the like), read from
+	// its resource cache.
+	UncheckedSourceResources UncheckedSourceName = "resources"
+	// UncheckedSourceCustomResources is the check for failing status
+	// conditions on custom resources.
+	UncheckedSourceCustomResources UncheckedSourceName = "custom_resources"
+	// UncheckedSourceKarpenter is the Karpenter NodePool, NodeClass and
+	// NodeClaim checks.
+	UncheckedSourceKarpenter UncheckedSourceName = "karpenter"
+)
+
+type UncheckedReason string
+
+const (
+	// UncheckedReasonReadFailed: the read failed, for example an API server
+	// error, rejected credentials, or Radar's own request deadline.
+	UncheckedReasonReadFailed UncheckedReason = "read_failed"
+	// UncheckedReasonSyncPending: Radar is still loading these kinds, for
+	// example right after it starts. A later request can succeed.
+	UncheckedReasonSyncPending UncheckedReason = "kind_sync_pending"
+	// UncheckedReasonSyncFailed: loading these kinds stalled or gave up.
+	UncheckedReasonSyncFailed UncheckedReason = "kind_sync_failed"
+	// UncheckedReasonCollectorAccessDenied: Kubernetes refused Radar's own
+	// identity, such as a ServiceAccount that may not impersonate the
+	// caller. Granting the caller more access does not help.
+	UncheckedReasonCollectorAccessDenied UncheckedReason = "collector_access_denied"
+)
 
 type BindingType string
 

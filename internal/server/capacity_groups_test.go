@@ -10,9 +10,13 @@ import (
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/karpenter"
+	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -20,16 +24,26 @@ import (
 // capacityConfigMapCache is a capacityConfigMapSource over an in-memory
 // indexer, so each coverage verdict can be driven without an informer.
 type capacityConfigMapCache struct {
-	clusterWide bool
-	namespaces  []string
-	ready       bool
-	lister      corelisters.ConfigMapLister
+	assessment k8score.KindReadAssessment
+	lister     corelisters.ConfigMapLister
 }
 
-func (c capacityConfigMapCache) IsKindClusterWide(string) bool           { return c.clusterWide }
-func (c capacityConfigMapCache) KindNamespaces(string) []string          { return c.namespaces }
-func (c capacityConfigMapCache) IsKindReady(string) bool                 { return c.ready }
-func (c capacityConfigMapCache) ConfigMaps() corelisters.ConfigMapLister { return c.lister }
+func (c capacityConfigMapCache) AssessKindRead(string, []string) k8score.KindReadAssessment {
+	return c.assessment
+}
+
+// ReadableObject serves the lister only when the assessment says kube-system
+// is readable, as the cache's own store read does.
+func (c capacityConfigMapCache) ReadableObject(_, namespace, name string) (runtime.Object, bool, bool) {
+	if !c.assessment.Complete || c.lister == nil {
+		return nil, false, false
+	}
+	configMap, err := c.lister.ConfigMaps(namespace).Get(name)
+	if err != nil {
+		return nil, false, apierrors.IsNotFound(err)
+	}
+	return configMap, true, true
+}
 
 func capacityConfigMapLister(t *testing.T, payload *string) corelisters.ConfigMapLister {
 	t.Helper()
@@ -51,7 +65,7 @@ func capacityConfigMapLister(t *testing.T, payload *string) corelisters.ConfigMa
 // from a genuinely absent ConfigMap — and rendering any of them as "no capacity
 // manager detected" would state a cluster fact from a read that never happened.
 func TestCapacityAutoscalerStatusCoverageVerdictsMatchDetection(t *testing.T) {
-	readable := capacityConfigMapCache{clusterWide: true, ready: true}
+	readable := capacityConfigMapCache{assessment: k8score.KindReadAssessment{Readiness: k8score.KindReady, AllNamespaces: true, Complete: true}}
 	garbage := "not a cluster-autoscaler status payload"
 
 	tests := []struct {
@@ -72,9 +86,17 @@ func TestCapacityAutoscalerStatusCoverageVerdictsMatchDetection(t *testing.T) {
 		{
 			name:          "cache scope",
 			allowed:       true,
-			cache:         withLister(capacityConfigMapCache{ready: true, namespaces: []string{"default"}}, capacityConfigMapLister(t, nil)),
+			cache:         withLister(capacityConfigMapCache{assessment: k8score.KindReadAssessment{Readiness: k8score.KindReady, Uncovered: []string{autoscalerStatusNamespace}}}, capacityConfigMapLister(t, nil)),
 			wantStatus:    capacityapi.CoverageUnavailable,
 			wantReason:    "autoscaler_status_cache_scope",
+			wantDetection: capacitymodel.AutoscalerUnavailable,
+		},
+		{
+			name:          "loading",
+			allowed:       true,
+			cache:         withLister(capacityConfigMapCache{assessment: k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Loading: []string{autoscalerStatusNamespace}}}, capacityConfigMapLister(t, nil)),
+			wantStatus:    capacityapi.CoverageUnavailable,
+			wantReason:    "autoscaler_status_cache_unavailable",
 			wantDetection: capacitymodel.AutoscalerUnavailable,
 		},
 		{
@@ -119,7 +141,7 @@ func TestCapacityAutoscalerStatusObservedPayload(t *testing.T) {
 	payload := "Cluster-autoscaler status at 2026-07-18 22:01:54.093779908 +0000 UTC:\n" +
 		"Cluster-wide:\n  Health:      Healthy (ready=1 registered=1)\n"
 	status, coverage, detection := capacityAutoscalerStatus(true, withLister(
-		capacityConfigMapCache{clusterWide: true, ready: true},
+		capacityConfigMapCache{assessment: k8score.KindReadAssessment{Readiness: k8score.KindReady, AllNamespaces: true, Complete: true}},
 		capacityConfigMapLister(t, &payload),
 	))
 	if status == nil {
@@ -280,5 +302,31 @@ func assertCapacityContextSwitchFailsClosed(t *testing.T, resp *http.Response) {
 	}
 	if message, _ := decoded["error"].(string); message != "Cluster context changed while the capacity response was being assembled" {
 		t.Fatalf("error = %q, want the context-change message", message)
+	}
+}
+
+// A timeline store that comes up after startup is installed without a reset.
+// A capacity response captured before it appeared still describes the same
+// cluster and must not be refused as a context switch. Any other store change
+// still is.
+func TestCapacityClusterIdentityToleratesTimelineStoreAppearing(t *testing.T) {
+	previous := capacityClusterIdentityNow
+	t.Cleanup(func() { capacityClusterIdentityNow = previous })
+
+	base := previous()
+	base.timeline = nil
+	live := base
+	capacityClusterIdentityNow = func() capacityClusterIdentity { return live }
+	captured := currentCapacityClusterIdentity()
+
+	live.timeline = pkgtimeline.NewMemoryStore(10)
+	if !captured.stillCurrent() {
+		t.Fatal("the timeline store appearing was treated as a context switch")
+	}
+
+	captured = currentCapacityClusterIdentity()
+	live.timeline = pkgtimeline.NewMemoryStore(10)
+	if captured.stillCurrent() {
+		t.Fatal("a replaced timeline store went undetected")
 	}
 }

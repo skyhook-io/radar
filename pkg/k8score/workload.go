@@ -87,6 +87,7 @@ type ApplyResourceResult struct {
 	Namespace  string                     `json:"namespace"`
 	Kind       string                     `json:"kind"`
 	APIVersion string                     `json:"apiVersion"`
+	UID        types.UID                  `json:"uid,omitempty"`
 	Created    bool                       `json:"created"` // true if newly created, false if updated
 	Action     string                     `json:"action,omitempty"`
 	Object     *unstructured.Unstructured `json:"-"`
@@ -400,6 +401,9 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		result.Created = true
 		result.Action = "create"
 		result.Object = created
+		if !opts.DryRun {
+			result.UID = created.GetUID()
+		}
 		m.populateApplyWarnings(ctx, result, obj, pre, created, ns, kind, name, opts.DryRun)
 		return result, nil
 	}
@@ -419,6 +423,9 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		result.Created = true
 		result.Action = "create"
 		result.Object = created
+		if !opts.DryRun {
+			result.UID = created.GetUID()
+		}
 		m.populateApplyWarnings(ctx, result, obj, pre, created, ns, kind, name, opts.DryRun)
 		return result, nil
 	}
@@ -442,6 +449,9 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	// SSA results report "applied"; Action carries create/update classification.
 	result.Created = false
 	result.Object = applied
+	if !opts.DryRun {
+		result.UID = applied.GetUID()
+	}
 
 	// Post-apply GET feeds the state-derived warnings (run against what
 	// actually landed) and the field-removal diff. Fetch it for creates too,
@@ -589,6 +599,24 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}
 
+	// Background propagation avoids legacy defaults that orphan a Job's Pods.
+	background := metav1.DeletePropagationBackground
+	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &background}
+	var client dynamic.ResourceInterface = m.dynClient.Resource(gvr)
+	if opts.Namespace != "" {
+		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	}
+	if obj, err := client.Get(ctx, opts.Name, metav1.GetOptions{}); err == nil {
+		// Only GC finalizers record a policy to preserve; Background has no finalizer.
+		// Omitting the policy otherwise can orphan a terminating Job's Pods.
+		for _, finalizer := range obj.GetFinalizers() {
+			if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
+				deleteOpts.PropagationPolicy = nil
+				break
+			}
+		}
+	}
+
 	if opts.Force {
 		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
 		var patchErr error
@@ -605,7 +633,6 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		}
 	}
 
-	deleteOpts := metav1.DeleteOptions{}
 	if opts.Force {
 		gracePeriod := int64(0)
 		deleteOpts.GracePeriodSeconds = &gracePeriod

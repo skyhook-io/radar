@@ -1,3 +1,19 @@
+{{- if and (include "radar.userTokenMode" . | eq "true") (not .Values.cloud.enabled) }}
+{{- fail "auth.kubernetesCredentials=user-token requires cloud.enabled=true: the user's token reaches Radar only through the Radar Cloud tunnel" }}
+{{- end }}
+{{- if and (include "radar.userTokenMode" . | eq "true") (or .Values.cloud.insecureSkipVerify (hasPrefix "ws://" (toString .Values.cloud.url))) }}
+{{- fail "auth.kubernetesCredentials=user-token needs a verified tunnel: people's tokens travel over it, so cloud.insecureSkipVerify must be false and cloud.url must be wss://. Give the control plane a certificate the cluster trusts." }}
+{{- end }}
+{{- if and (include "radar.userTokenMode" . | eq "true") .Values.cloud.defaultRbac.create }}
+{{- fail "auth.kubernetesCredentials=user-token requires cloud.defaultRbac.create=false: the Hub-role bindings (radar:owner/member/viewer) would grant cluster access to any token whose IdP groups include one of those names. People's access comes from your own RBAC in this mode." }}
+{{- end }}
+{{- /* A pinned image older than the mode would ignore it and keep impersonating,
+       while this chart drops the impersonate grant: every call would 403.
+       Only release-style tags are checked; others can't be compared. */}}
+{{- $tag := toString .Values.image.tag }}
+{{- if and (include "radar.userTokenMode" . | eq "true") (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+" $tag) (semverCompare "<1.18.0-0" $tag) }}
+{{- fail (printf "auth.kubernetesCredentials=user-token requires Radar 1.18.0 or later, but image.tag pins %s. Unset image.tag to use the chart's version, or pin 1.18.0 or later." $tag) }}
+{{- end }}
 {{- if .Values.rbac.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -193,7 +209,7 @@ rules:
     verbs: ["get"]
   {{- end }}
 
-  {{- if .Values.rbac.podExec }}
+  {{- if and .Values.rbac.podExec (include "radar.userTokenMode" . | eq "false") }}
   # Pod exec (opt-in - enables terminal feature)
   - apiGroups: [""]
     resources:
@@ -201,7 +217,7 @@ rules:
     verbs: ["create"]
   {{- end }}
 
-  {{- if .Values.rbac.portForward }}
+  {{- if and .Values.rbac.portForward (include "radar.userTokenMode" . | eq "false") }}
   # Port forwarding (opt-in - enables port forward feature)
   - apiGroups: [""]
     resources:
@@ -243,6 +259,14 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- else }}
   # Per-group CRD access
+  {{- if .Values.rbac.crdGroups.antrea }}
+  # Antrea policies can allow traffic a core NetworkPolicy denies; the
+  # NetworkPolicy deny-all check treats an unreadable kind as "may allow" and
+  # stays silent, so it needs these reads.
+  - apiGroups: ["crd.antrea.io"]
+    resources: ["networkpolicies", "clusternetworkpolicies"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.apiRegistration }}
   - apiGroups: ["apiregistration.k8s.io"]
     resources: ["*"]
@@ -251,6 +275,14 @@ rules:
   {{- if .Values.rbac.crdGroups.argo }}
   - apiGroups: ["argoproj.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.awsNetworkPolicy }}
+  # EKS VPC CNI policies, served on EKS clusters by default. Same reason as
+  # antrea: unreadable, they silence the NetworkPolicy deny-all check
+  # cluster-wide.
+  - apiGroups: ["networking.k8s.aws"]
+    resources: ["applicationnetworkpolicies", "clusternetworkpolicies"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.awx }}
@@ -551,12 +583,14 @@ rules:
   {{- end }}
 
   {{- if or (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  {{- if include "radar.userTokenMode" . | eq "false" }}
   # Auth: Impersonation permissions for user-scoped operations.
   # Required under cloud-mode too — the binary forces --auth-mode=proxy there
   # and impersonates Cloud-injected identities to the K8s API.
   - apiGroups: [""]
     resources: ["users", "groups"]
     verbs: ["impersonate"]
+  {{- end }}
   # Auth: SubjectAccessReview for per-user permission checks
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]
