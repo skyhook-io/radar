@@ -350,3 +350,9 @@ func TestDisableExecDeniesExecGrant(t *testing.T) {
 		}
 	}
 }
+
+func TestErrExecDisabledReadsAsForbidden(t *testing.T) {
+	if !strings.Contains(strings.ToLower(errExecDisabled.Error()), "forbidden") {
+		t.Fatalf("%q must classify as a permission denial", errExecDisabled)
+	}
+}

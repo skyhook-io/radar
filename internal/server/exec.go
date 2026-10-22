@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -275,6 +276,10 @@ func (t *terminalSizeQueue) Next() *remotecommand.TerminalSize {
 	}
 	return &size
 }
+
+// errExecDisabled reads as a Kubernetes "forbidden" so callers that classify
+// exec failures treat it as a permission denial.
+var errExecDisabled = errors.New("forbidden: exec is disabled on this Radar instance (--disable-exec)")
 
 // requireExecEnabled rejects routes that run commands in Pods or start debug
 // shells when the operator started Radar with --disable-exec.
