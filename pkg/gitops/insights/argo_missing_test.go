@@ -1,8 +1,10 @@
 package insights
 
 import (
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 )
@@ -62,4 +64,25 @@ func TestConfirmedAbsenceCreatesIssueDespiteHealthyControllerVerdict(t *testing.
 			t.Fatal("controller health must remain available")
 		}
 	}
+}
+
+// A missing resource's "sync to create it" advice gets the same hazard
+// treatment as other sync advice: here a sync would also take over shared
+// resources.
+func TestMissingResourceAdviceCarriesSyncHazard(t *testing.T) {
+	ref := gitopstree.ResourceRef{Kind: "ConfigMap", Namespace: "prod", Name: "values"}
+	app := argoApp(map[string]any{
+		"resources":  []any{map[string]any{"kind": ref.Kind, "namespace": ref.Namespace, "name": ref.Name, "status": "OutOfSync"}},
+		"conditions": []any{map[string]any{"type": "SharedResourceWarning", "message": "ConfigMap/shared is part of applications argocd/demo and other"}},
+	})
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{{Ref: ref, Missing: true}}}
+	for _, issue := range buildIssues(app, tree, "argocd", nil) {
+		if issue.Scope == ScopeResource && issue.Reason == "Missing" {
+			if !strings.HasPrefix(issue.Action, "Resolve shared ownership before syncing") {
+				t.Fatalf("missing-resource advice ignores the sync hazard: %q", issue.Action)
+			}
+			return
+		}
+	}
+	t.Fatal("no missing-resource issue")
 }

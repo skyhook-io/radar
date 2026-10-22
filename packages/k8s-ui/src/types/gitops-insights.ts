@@ -124,6 +124,14 @@ export interface GitOpsIssue {
   rawMessage?: string
   refs?: GitOpsInsightRef[]
   action?: string
+  /** Optional presentation split; action always retains the complete guidance. */
+  actionPrimary?: string
+  actionSecondaryTitle?: string
+  actionSecondary?: string[]
+  // Set on a failed operation when syncing again would prune every managed
+  // resource or take resources over from another Application. Shown as a
+  // warning ahead of the cause, whose own advice may assume a sync is safe.
+  hazard?: string
   // Plain-English root cause when the message matched a recognized error
   // pattern. Empty for unrecognized messages — UI falls back to the raw message.
   cause?: string
