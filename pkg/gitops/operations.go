@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,25 +19,47 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 // Annotations written by SetArgoAutoSync when suspending auto-sync so that
-// the original prune/selfHeal settings can be restored on resume. Exported
-// so consumers can identify or clean these annotations up directly.
+// the original settings can be restored on resume. Exported so consumers can
+// identify or clean these annotations up directly.
+//
+// ArgoSuspendedAutomatedAnnotation holds the whole spec.syncPolicy.automated
+// block as JSON, so resume restores every setting (allowEmpty included). The
+// prune/selfHeal keys are still written beside it because older Radar builds
+// resume from them alone, defaulting both to true when they are missing.
 //
 // The legacy* keys are read on resume to honor Applications suspended by
 // older Radar builds; they're cleared on resume and never re-written. Safe
 // to drop once all installs have rolled through at least one resume cycle
 // past this release.
 const (
-	ArgoSuspendedPruneAnnotation    = "radarhq.io/suspended-prune"
-	ArgoSuspendedSelfHealAnnotation = "radarhq.io/suspended-selfheal"
+	ArgoSuspendedAutomatedAnnotation = "radarhq.io/suspended-automated"
+	ArgoSuspendedPruneAnnotation     = "radarhq.io/suspended-prune"
+	ArgoSuspendedSelfHealAnnotation  = "radarhq.io/suspended-selfheal"
 
 	legacyArgoSuspendedPruneAnnotation    = "skyhook.io/suspended-prune"
 	legacyArgoSuspendedSelfHealAnnotation = "skyhook.io/suspended-selfheal"
 )
 
-const argoRollbackInfoName = "radarhq.io/rollback"
+// Every operation Radar starts carries ArgoInitiatedViaInfo in operation.info
+// (stored in the Application JSON/YAML), next to initiatedBy.username. The
+// validation dry-run adds argoValidationInfoName to find its own result.
+const (
+	ArgoInitiatedViaInfo  = "Initiated via"
+	ArgoInitiatedViaRadar = "Radar"
+
+	argoRollbackInfoName   = "radarhq.io/rollback"
+	argoValidationInfoName = "radar-validation-id"
+	argoDefaultInitiator   = "radar"
+)
+
+// argoOperationAttempts bounds how often Radar rereads an Application that
+// changed between its read and its conditional write.
+const argoOperationAttempts = 3
 
 // Sentinel errors so HTTP handlers can map operation outcomes to status
 // codes via errors.Is rather than fragile substring matching.
@@ -50,6 +73,9 @@ var (
 	// ErrInvalidResourceSelection: a requested selective sync contains an
 	// incomplete resource identity. HTTP 400.
 	ErrInvalidResourceSelection = errors.New("invalid resource selection")
+	// ErrInvalidRevision: a scalar revision cannot select per-source revisions
+	// for a multi-source Application. HTTP 400.
+	ErrInvalidRevision = errors.New("invalid revision")
 	// ErrHistoryEntryNotFound: the requested rollback target id isn't in
 	// status.history. HTTP 404.
 	ErrHistoryEntryNotFound = errors.New("history entry not found")
@@ -269,9 +295,13 @@ type ArgoSyncResource struct {
 
 // ArgoSyncOptions controls an ArgoCD sync operation. Pointer-bool fields
 // let callers say "not set" via nil; DryRun/Force/ApplyOnly are only
-// written when non-nil so Argo's server default applies otherwise. Prune
-// is the exception — always written, defaulting to true when nil, to
-// match Argo's server default.
+// written when non-nil. Prune is always written and is false unless set, as
+// in Argo CD's UI and CLI.
+//
+// SyncOptions follows argocd-server: nil uses the Application's own
+// spec.syncPolicy.syncOptions, while a non-nil list, even an empty one,
+// replaces them for this sync. A JSON body that omits syncOptions (or sends
+// null) decodes to nil; one that sends [] decodes to an empty list.
 type ArgoSyncOptions struct {
 	Resources   []ArgoSyncResource `json:"resources,omitempty"`
 	Revision    string             `json:"revision,omitempty"`
@@ -279,7 +309,7 @@ type ArgoSyncOptions struct {
 	DryRun      *bool              `json:"dryRun,omitempty"`
 	Force       *bool              `json:"force,omitempty"`
 	ApplyOnly   *bool              `json:"applyOnly,omitempty"`
-	SyncOptions []string           `json:"syncOptions,omitempty"`
+	SyncOptions []string           `json:"syncOptions"`
 }
 
 type ArgoResourceValidationResult struct {
@@ -309,6 +339,94 @@ type ArgoRollbackOptions struct {
 
 // --- ArgoCD operations ---
 
+// argoInitiator uses the Cloud email group for display when present, otherwise
+// the authenticated username or "radar" without per-user auth. It is attribution
+// only: anyone who can patch the Application can write any name there, and
+// the Kubernetes audit log records the identity that made the write.
+func argoInitiator(ctx context.Context) string {
+	if user := pkgauth.UserFromContext(ctx); user != nil {
+		for _, group := range user.Groups {
+			if email, ok := strings.CutPrefix(group, "radar:email:"); ok && email != "" {
+				return email
+			}
+		}
+		if user.Username != "" {
+			return user.Username
+		}
+	}
+	return argoDefaultInitiator
+}
+
+func argoOperationInfo(validationID string) []any {
+	info := []any{map[string]any{"name": ArgoInitiatedViaInfo, "value": ArgoInitiatedViaRadar}}
+	if validationID != "" {
+		info = append(info, map[string]any{"name": argoValidationInfoName, "value": validationID})
+	}
+	return info
+}
+
+func getArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (*unstructured.Unstructured, error) {
+	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
+		}
+		return nil, fmt.Errorf("failed to get Application: %w", err)
+	}
+	return app, nil
+}
+
+// updateArgoApp reads the Application, lets build validate it and return a
+// merge patch (nil writes nothing), and writes the patch conditional on that
+// read's resourceVersion. A conflict means the Application changed in
+// between, so the next attempt reads and validates it again: nothing built
+// from a stale read is ever written. Errors from the read and from build are
+// returned as they are; a failed write is wrapped with verb, and a conflict
+// on the last attempt maps to ErrOperationInProgress.
+func updateArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name, verb string, build func(app *unstructured.Unstructured) (map[string]any, error)) error {
+	for attempt := 1; ; attempt++ {
+		app, err := getArgoApp(ctx, dynClient, namespace, name)
+		if err != nil {
+			return err
+		}
+		patch, err := build(app)
+		if err != nil || patch == nil {
+			return err
+		}
+		metadata, _ := patch["metadata"].(map[string]any)
+		if metadata == nil {
+			metadata = map[string]any{}
+			patch["metadata"] = metadata
+		}
+		metadata["resourceVersion"] = app.GetResourceVersion()
+		err = mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch)
+		switch {
+		case err == nil:
+			return nil
+		case !apierrors.IsConflict(err):
+			return fmt.Errorf("failed to %s Application %s/%s: %w", verb, namespace, name, err)
+		case attempt == argoOperationAttempts:
+			return fmt.Errorf("the Application %s/%s kept changing before %s could start; try again: %w", namespace, name, verb, ErrOperationInProgress)
+		}
+	}
+}
+
+// argoOperationPatch installs operation the way Argo CD's SetAppOperation
+// does: in the same write, it drops the completed status.operationState. The
+// controller merge-patches a new operation's state over the old one, so
+// fields the new state omits (initiatedBy.automated, retryCount, syncResult)
+// would survive into it. And its sync-window check reads the old state, so a
+// leftover automated one would hold a manual sync behind a window that allows
+// manual syncs. Callers refuse an Application whose operation is still in
+// progress before building this.
+func argoOperationPatch(app *unstructured.Unstructured, operation map[string]any) map[string]any {
+	patch := map[string]any{"operation": operation}
+	if _, found, _ := unstructured.NestedFieldNoCopy(app.Object, "status", "operationState"); found {
+		patch["status"] = map[string]any{"operationState": nil}
+	}
+	return patch
+}
+
 // SyncArgoApp triggers a sync operation on an ArgoCD Application.
 func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoSyncOptions) (OperationResult, error) {
 	return syncArgoApp(ctx, dynClient, namespace, name, opts, "")
@@ -321,30 +439,60 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 		}
 	}
 
-	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
+	timestamp := time.Now().Format(time.RFC3339Nano)
+	dryRun := opts.DryRun != nil && *opts.DryRun
+	err := updateArgoApp(ctx, dynClient, namespace, name, "sync", func(app *unstructured.Unstructured) (map[string]any, error) {
+		if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+			return nil, err
 		}
-		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
-	}
-
-	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+		if argoOperationInProgress(app) {
+			return nil, fmt.Errorf("sync operation already in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
+		}
+		if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 && opts.Revision != "" {
+			return nil, fmt.Errorf("cannot override revision for multi-source Application %s/%s; omit revision to use each source's targetRevision: %w", namespace, name, ErrInvalidRevision)
+		}
+		patch := argoOperationPatch(app, argoSyncOperation(ctx, app, opts, validationID))
+		if !dryRun {
+			patch["metadata"] = map[string]any{
+				"annotations": map[string]any{"argocd.argoproj.io/refresh": "hard"},
+			}
+		}
+		return patch, nil
+	})
+	if err != nil {
 		return OperationResult{}, err
 	}
 
-	if argoOperationInProgress(app) {
-		return OperationResult{}, fmt.Errorf("sync operation already in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
-	}
+	return OperationResult{
+		Message:     fmt.Sprintf("Sync initiated for ArgoCD Application %s/%s", namespace, name),
+		Operation:   "sync",
+		Tool:        "argocd",
+		Kind:        "Application",
+		Namespace:   namespace,
+		Name:        name,
+		RequestedAt: timestamp,
+	}, nil
+}
 
-	timestamp := time.Now().Format(time.RFC3339Nano)
-	prune := true
-	if opts.Prune != nil {
-		prune = *opts.Prune
-	}
+// argoSyncOperation builds the operation argocd-server's Sync writes, from
+// the Application as read now.
+//
+// A sync can wait in the queue, for instance behind a sync window. Like
+// argocd-server, Radar fixes the source(s) when the sync is requested, so an
+// edit to spec.source(s) after that doesn't change what the waiting sync
+// deploys (except on an Argo CD 2.11 controller, which takes a multi-source
+// Application's sources from its spec). Unlike argocd-server, which asks its
+// repo-server to resolve the revision to a commit or chart version at request
+// time, Radar has no repo-server to ask: the revision (the caller's for a
+// single-source Application, or each source's targetRevision when omitted)
+// is resolved by the controller when the sync runs.
+//
+// The Application's spec.syncPolicy.retry is copied too, except for Radar's
+// own validation dry-run, whose result would otherwise wait out the backoff.
+func argoSyncOperation(ctx context.Context, app *unstructured.Unstructured, opts ArgoSyncOptions, validationID string) map[string]any {
 	sync := map[string]any{
 		"revision": opts.Revision,
-		"prune":    prune,
+		"prune":    opts.Prune != nil && *opts.Prune,
 	}
 	if opts.DryRun != nil {
 		sync["dryRun"] = *opts.DryRun
@@ -369,11 +517,15 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	case force:
 		sync["syncStrategy"] = map[string]any{"hook": map[string]any{"force": true}}
 	}
-	if len(opts.SyncOptions) > 0 {
-		// Argo accepts free-form key=value entries here (Replace=true,
-		// ServerSideApply=true, PruneLast=true, ApplyOutOfSyncOnly=true,
-		// etc). Caller is responsible for spelling them right.
-		sync["syncOptions"] = opts.SyncOptions
+	// Argo accepts free-form key=value entries here (Replace=true,
+	// ServerSideApply=true, PruneLast=true, ApplyOutOfSyncOnly=true, etc).
+	// Caller is responsible for spelling them right.
+	if opts.SyncOptions != nil {
+		if len(opts.SyncOptions) > 0 {
+			sync["syncOptions"] = opts.SyncOptions
+		}
+	} else if syncOptions, _, _ := unstructured.NestedSlice(app.Object, "spec", "syncPolicy", "syncOptions"); len(syncOptions) > 0 {
+		sync["syncOptions"] = syncOptions
 	}
 	if len(opts.Resources) > 0 {
 		resources := make([]map[string]any, 0, len(opts.Resources))
@@ -387,46 +539,23 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 		}
 		sync["resources"] = resources
 	}
+	if sources, _, _ := unstructured.NestedSlice(app.Object, "spec", "sources"); len(sources) > 0 {
+		sync["sources"] = sources
+	} else if source, _, _ := unstructured.NestedMap(app.Object, "spec", "source"); len(source) > 0 {
+		sync["source"] = source
+	}
+
 	operation := map[string]any{
-		"initiatedBy": map[string]any{
-			"username": "radar",
-		},
-		"sync": sync,
+		"initiatedBy": map[string]any{"username": argoInitiator(ctx)},
+		"info":        argoOperationInfo(validationID),
+		"sync":        sync,
 	}
-	if validationID != "" {
-		operation["info"] = []any{map[string]any{
-			"name":  "radar-validation-id",
-			"value": validationID,
-		}}
-	}
-	patch := argoOperationPatch(app, operation)
-	patch["metadata"] = map[string]any{"resourceVersion": app.GetResourceVersion()}
-	dryRun := opts.DryRun != nil && *opts.DryRun
-	if !dryRun {
-		patch["metadata"] = map[string]any{
-			"resourceVersion": app.GetResourceVersion(),
-			"annotations": map[string]string{
-				"argocd.argoproj.io/refresh": "hard",
-			},
+	if validationID == "" {
+		if retry, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "retry"); len(retry) > 0 {
+			operation["retry"] = retry
 		}
 	}
-
-	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
-		if apierrors.IsConflict(err) {
-			return OperationResult{}, fmt.Errorf("Application changed before sync could start for %s/%s: %w", namespace, name, ErrOperationInProgress)
-		}
-		return OperationResult{}, fmt.Errorf("failed to sync Application %s/%s: %w", namespace, name, err)
-	}
-
-	return OperationResult{
-		Message:     fmt.Sprintf("Sync initiated for ArgoCD Application %s/%s", namespace, name),
-		Operation:   "sync",
-		Tool:        "argocd",
-		Kind:        "Application",
-		Namespace:   namespace,
-		Name:        name,
-		RequestedAt: timestamp,
-	}, nil
+	return operation
 }
 
 func ValidateArgoResource(ctx context.Context, dynClient dynamic.Interface, namespace, name string, resource ArgoSyncResource, opts ArgoSyncOptions) (ArgoResourceValidationResult, error) {
@@ -472,7 +601,7 @@ func ValidateArgoResource(ctx context.Context, dynClient dynamic.Interface, name
 
 func argoResourceValidationResult(app *unstructured.Unstructured, validationID string, target ArgoSyncResource) (ArgoResourceValidationResult, bool) {
 	operation, found, _ := unstructured.NestedMap(app.Object, "status", "operationState", "operation")
-	if !found || !argoOperationHasInfo(operation, "radar-validation-id", validationID) {
+	if !found || !argoOperationHasInfo(operation, argoValidationInfoName, validationID) {
 		return ArgoResourceValidationResult{}, false
 	}
 	phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
@@ -540,114 +669,169 @@ func stringValue(value any) string {
 	return result
 }
 
-// SetArgoAutoSync enables or disables automated sync on an ArgoCD Application.
+// SetArgoAutoSync suspends (enable=false) or resumes (enable=true) automated
+// sync on an ArgoCD Application.
+//
+// Suspend saves the whole spec.syncPolicy.automated block in annotations and
+// removes the block. If auto-sync is already off it changes nothing, so a
+// second suspend can't replace the saved settings with empty ones.
+//
+// Resume turns back on the newest settings it can find:
+//   - a block switched off in place with `enabled: false` (by Argo CD 3.x
+//     tooling, or an edit made while suspended): drop `enabled`, keep the rest;
+//   - otherwise the block Radar saved on suspend;
+//   - otherwise prune and selfHeal from the per-field annotations older Radar
+//     builds wrote. With none, the Application was never suspended by Radar:
+//     prune starts off, as in Argo CD's UI, and selfHeal on.
+//
+// If auto-sync is already on, for example re-enabled outside Radar while
+// suspended, the current block is kept and only Radar's saved copy is
+// dropped. Every write is conditional on the read it was built from.
 func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace, name string, enable bool) (OperationResult, error) {
-	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
-		}
-		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
+	operation, pastAction := "suspend", "suspended"
+	if enable {
+		operation, pastAction = "resume", "resumed"
 	}
-
-	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+	noChange := false
+	err := updateArgoApp(ctx, dynClient, namespace, name, operation, func(app *unstructured.Unstructured) (map[string]any, error) {
+		if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+			return nil, err
+		}
+		var patch map[string]any
+		var err error
+		if enable {
+			patch, noChange = argoResumePatch(app)
+		} else {
+			patch, noChange, err = argoSuspendPatch(app)
+		}
+		return patch, err
+	})
+	if err != nil {
 		return OperationResult{}, err
 	}
 
-	var patch map[string]any
-	operation := "suspend"
-	pastAction := "suspended"
-
-	if enable {
-		operation = "resume"
-		pastAction = "resumed"
-		prune := true
-		selfHeal := true
-
-		annotations, _, _ := unstructured.NestedStringMap(app.Object, "metadata", "annotations")
-		if annotations != nil {
-			// Prefer the current key; fall back to the legacy key for
-			// Applications suspended by older Radar builds.
-			if v, ok := annotations[ArgoSuspendedPruneAnnotation]; ok {
-				prune = v == "true"
-			} else if v, ok := annotations[legacyArgoSuspendedPruneAnnotation]; ok {
-				prune = v == "true"
-			}
-			if v, ok := annotations[ArgoSuspendedSelfHealAnnotation]; ok {
-				selfHeal = v == "true"
-			} else if v, ok := annotations[legacyArgoSuspendedSelfHealAnnotation]; ok {
-				selfHeal = v == "true"
-			}
-		}
-		// A block that exists, switched off in place with `enabled: false` or
-		// already on, holds the current prune/selfHeal; keep them, so a second
-		// resume can't fall back to the defaults. The patch drops `enabled`,
-		// which a merge patch would otherwise leave false.
-		if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
-			prune, _ = automated["prune"].(bool)
-			selfHeal, _ = automated["selfHeal"].(bool)
-		}
-
-		patch = map[string]any{
-			"metadata": map[string]any{
-				"annotations": map[string]any{
-					ArgoSuspendedPruneAnnotation:          nil,
-					ArgoSuspendedSelfHealAnnotation:       nil,
-					legacyArgoSuspendedPruneAnnotation:    nil,
-					legacyArgoSuspendedSelfHealAnnotation: nil,
-				},
-			},
-			"spec": map[string]any{
-				"syncPolicy": map[string]any{
-					"automated": map[string]any{
-						"prune":    prune,
-						"selfHeal": selfHeal,
-						"enabled":  nil,
-					},
-				},
-			},
-		}
-	} else {
-		prune := false
-		selfHeal := false
-
-		automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
-		if found && automated != nil {
-			if v, ok := automated["prune"].(bool); ok {
-				prune = v
-			}
-			if v, ok := automated["selfHeal"].(bool); ok {
-				selfHeal = v
-			}
-		}
-
-		patch = map[string]any{
-			"metadata": map[string]any{
-				"annotations": map[string]string{
-					ArgoSuspendedPruneAnnotation:    fmt.Sprintf("%v", prune),
-					ArgoSuspendedSelfHealAnnotation: fmt.Sprintf("%v", selfHeal),
-				},
-			},
-			"spec": map[string]any{
-				"syncPolicy": map[string]any{
-					"automated": nil,
-				},
-			},
-		}
+	message := fmt.Sprintf("ArgoCD Application %s/%s auto-sync %s", namespace, name, pastAction)
+	if noChange && enable {
+		message = fmt.Sprintf("ArgoCD Application %s/%s auto-sync is already on", namespace, name)
+	} else if noChange {
+		message = fmt.Sprintf("ArgoCD Application %s/%s auto-sync is already off", namespace, name)
 	}
-
-	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
-		return OperationResult{}, fmt.Errorf("failed to %s Application %s/%s: %w", operation, namespace, name, err)
-	}
-
 	return OperationResult{
-		Message:   fmt.Sprintf("ArgoCD Application %s/%s auto-sync %s", namespace, name, pastAction),
+		Message:   message,
 		Operation: operation,
 		Tool:      "argocd",
 		Kind:      "Application",
 		Namespace: namespace,
 		Name:      name,
+		NoChange:  noChange,
 	}, nil
+}
+
+func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, error) {
+	if !ArgoAutoSyncEnabled(app) {
+		return nil, true, nil
+	}
+	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	// An explicit `enabled: true` means the same as none, and resume drops it.
+	delete(automated, "enabled")
+	saved, err := json.Marshal(automated)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to save the automated sync settings: %w", err)
+	}
+	prune, _ := automated["prune"].(bool)
+	selfHeal, _ := automated["selfHeal"].(bool)
+	return map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
+				ArgoSuspendedAutomatedAnnotation: string(saved),
+				ArgoSuspendedPruneAnnotation:     strconv.FormatBool(prune),
+				ArgoSuspendedSelfHealAnnotation:  strconv.FormatBool(selfHeal),
+			},
+		},
+		"spec": map[string]any{
+			"syncPolicy": map[string]any{"automated": nil},
+		},
+	}, false, nil
+}
+
+func argoResumePatch(app *unstructured.Unstructured) (map[string]any, bool) {
+	annotations := app.GetAnnotations()
+	clearSaved := map[string]any{}
+	for _, key := range []string{
+		ArgoSuspendedAutomatedAnnotation,
+		ArgoSuspendedPruneAnnotation,
+		ArgoSuspendedSelfHealAnnotation,
+		legacyArgoSuspendedPruneAnnotation,
+		legacyArgoSuspendedSelfHealAnnotation,
+	} {
+		clearSaved[key] = nil
+	}
+	metadata := map[string]any{"annotations": clearSaved}
+
+	if ArgoAutoSyncEnabled(app) {
+		for key := range clearSaved {
+			if _, ok := annotations[key]; ok {
+				return map[string]any{"metadata": metadata}, true
+			}
+		}
+		return nil, true
+	}
+
+	var automated map[string]any
+	if _, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+		// Merge-patching only `enabled` keeps every other field of the block.
+		automated = map[string]any{"enabled": nil}
+	} else if saved := argoSavedAutomated(annotations); saved != nil {
+		automated = saved
+	} else {
+		automated = map[string]any{
+			"prune":    argoSavedFlag(annotations, ArgoSuspendedPruneAnnotation, legacyArgoSuspendedPruneAnnotation, false),
+			"selfHeal": argoSavedFlag(annotations, ArgoSuspendedSelfHealAnnotation, legacyArgoSuspendedSelfHealAnnotation, true),
+		}
+	}
+	return map[string]any{
+		"metadata": metadata,
+		"spec": map[string]any{
+			"syncPolicy": map[string]any{"automated": automated},
+		},
+	}, false
+}
+
+// argoSavedAutomated returns the automated block saved on suspend. An older
+// Radar's later suspend rewrites only the per-field annotations, so a saved
+// block that disagrees with them is from an earlier cycle and isn't used.
+func argoSavedAutomated(annotations map[string]string) map[string]any {
+	raw, ok := annotations[ArgoSuspendedAutomatedAnnotation]
+	if !ok {
+		return nil
+	}
+	var saved map[string]any
+	if err := json.Unmarshal([]byte(raw), &saved); err != nil || saved == nil {
+		return nil
+	}
+	delete(saved, "enabled")
+	for key, field := range map[string]string{
+		ArgoSuspendedPruneAnnotation:    "prune",
+		ArgoSuspendedSelfHealAnnotation: "selfHeal",
+	} {
+		value, _ := saved[field].(bool)
+		if annotated, ok := annotations[key]; ok && annotated != strconv.FormatBool(value) {
+			return nil
+		}
+	}
+	return saved
+}
+
+// argoSavedFlag reads a per-field suspend annotation, preferring the current
+// key over the legacy one, and returns fallback when neither is set.
+func argoSavedFlag(annotations map[string]string, key, legacyKey string, fallback bool) bool {
+	if v, ok := annotations[key]; ok {
+		return v == "true"
+	}
+	if v, ok := annotations[legacyKey]; ok {
+		return v == "true"
+	}
+	return fallback
 }
 
 // RefreshArgoApp triggers a refresh on an ArgoCD Application.
@@ -761,47 +945,33 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 	if opts.ID < 0 {
 		return OperationResult{}, fmt.Errorf("rollback requires a non-negative history id")
 	}
-	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
-		}
-		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
-	}
-
-	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
-		return OperationResult{}, err
-	}
-
-	if ArgoAutoSyncEnabled(app) {
-		return OperationResult{}, fmt.Errorf("cannot roll back %s/%s: %w, so Argo CD would sync it forward again; disable auto-sync first", namespace, name, ErrAutoSyncEnabled)
-	}
-
-	if argoOperationInProgress(app) {
-		return OperationResult{}, fmt.Errorf("cannot rollback while another operation is in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
-	}
-
-	entry := argoHistoryEntry(app, opts.ID)
-	if entry == nil {
-		return OperationResult{}, fmt.Errorf("history entry id=%d not found on Application %s/%s: %w", opts.ID, namespace, name, ErrHistoryEntryNotFound)
-	}
-	if !ArgoHistoryEntryRollbackable(entry) {
-		return OperationResult{}, fmt.Errorf("cannot roll back %s/%s to history entry id=%d: %w (written by Argo CD v0.11 or older); sync to its revision instead", namespace, name, opts.ID, ErrHistoryEntryNotRollbackable)
-	}
-
 	timestamp := time.Now().Format(time.RFC3339Nano)
-	patch := argoOperationPatch(app, map[string]any{
-		"initiatedBy": map[string]any{"username": "radar"},
-		"info":        []any{map[string]any{"name": argoRollbackInfoName, "value": "true"}},
-		"sync":        argoRollbackSyncOperation(app, entry, opts),
-	})
-	patch["metadata"] = map[string]any{"resourceVersion": app.GetResourceVersion()}
-
-	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
-		if apierrors.IsConflict(err) {
-			return OperationResult{}, fmt.Errorf("Application changed before rollback could start for %s/%s: %w", namespace, name, ErrOperationInProgress)
+	err := updateArgoApp(ctx, dynClient, namespace, name, "rollback", func(app *unstructured.Unstructured) (map[string]any, error) {
+		if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+			return nil, err
 		}
-		return OperationResult{}, fmt.Errorf("failed to rollback Application %s/%s: %w", namespace, name, err)
+		if ArgoAutoSyncEnabled(app) {
+			return nil, fmt.Errorf("cannot roll back %s/%s: %w, so Argo CD would sync it forward again; disable auto-sync first", namespace, name, ErrAutoSyncEnabled)
+		}
+		if argoOperationInProgress(app) {
+			return nil, fmt.Errorf("cannot rollback while another operation is in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
+		}
+		entry := argoHistoryEntry(app, opts.ID)
+		if entry == nil {
+			return nil, fmt.Errorf("history entry id=%d not found on Application %s/%s: %w", opts.ID, namespace, name, ErrHistoryEntryNotFound)
+		}
+		if !ArgoHistoryEntryRollbackable(entry) {
+			return nil, fmt.Errorf("cannot roll back %s/%s to history entry id=%d: %w (written by Argo CD v0.11 or older); sync to its revision instead", namespace, name, opts.ID, ErrHistoryEntryNotRollbackable)
+		}
+		// Like argocd-server's Rollback: no retry strategy, unlike a sync.
+		return argoOperationPatch(app, map[string]any{
+			"initiatedBy": map[string]any{"username": argoInitiator(ctx)},
+			"info":        append(argoOperationInfo(""), map[string]any{"name": argoRollbackInfoName, "value": "true"}),
+			"sync":        argoRollbackSyncOperation(app, entry, opts),
+		}), nil
+	})
+	if err != nil {
+		return OperationResult{}, err
 	}
 
 	return OperationResult{
@@ -878,16 +1048,6 @@ func argoSyncSources(sync map[string]any) []any {
 		return []any{sync["source"]}
 	}
 	return nil
-}
-
-// Argo merge-patches operation state, so omitted fields from a completed
-// operation (including its info) would otherwise survive into the next one.
-func argoOperationPatch(app *unstructured.Unstructured, operation map[string]any) map[string]any {
-	patch := map[string]any{"operation": operation}
-	if _, found, _ := unstructured.NestedFieldNoCopy(app.Object, "status", "operationState"); found {
-		patch["status"] = map[string]any{"operationState": nil}
-	}
-	return patch
 }
 
 func argoHistoryEntry(app *unstructured.Unstructured, id int64) map[string]any {

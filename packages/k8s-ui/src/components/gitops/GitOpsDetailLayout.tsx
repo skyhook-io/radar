@@ -11,6 +11,12 @@ import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
+function argoResumeDescription(suspended: boolean, settings: ArgoActionHandlers['resumeSettings']): string {
+  if (suspended) return 'Turn auto-sync back on with the settings it had before'
+  if (!settings) return 'Turn on automated sync, so Argo applies new commits from Git.'
+  return `Argo applies new commits${settings.selfHeal ? ' and reverts live edits (self-heal)' : ''}. Resources removed from Git are ${settings.prune ? 'deleted (prune on)' : 'kept (prune off)'}.`
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -86,6 +92,9 @@ export interface ArgoActionHandlers {
   // on (isArgoAutoSyncSwitchedOff): Enable auto-sync renders disabled, with
   // the upgrade note under the header.
   resumeUpgrade?: RadarUpgradeRequirement | null
+  // What Enable auto-sync turns on when Radar didn't suspend the app
+  // (argoResumeSettings). Without it the tooltip makes no prune claim.
+  resumeSettings?: { prune: boolean; selfHeal: boolean } | null
 }
 
 export interface FluxActionHandlers {
@@ -422,7 +431,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   ) : (
                     <ActionButton
                       label="Enable auto-sync"
-                      description="Re-enable automatic syncing of Git changes to the cluster."
+                      description={argoResumeDescription(effectiveSuspended, argo.resumeSettings)}
                       icon={Play}
                       loading={argo.resuming}
                       onClick={argo.onResume}

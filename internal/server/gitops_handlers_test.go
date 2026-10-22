@@ -79,6 +79,11 @@ func TestWriteGitOpsErrorStatusMapping(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name:       "wrapped ErrInvalidRevision → 400",
+			err:        errors.Join(gitops.ErrInvalidRevision, errors.New("multi-source Application")),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "wrapped ErrAutoSyncEnabled → 409",
 			err:        errors.Join(gitops.ErrAutoSyncEnabled, errors.New("extra context")),
 			wantStatus: http.StatusConflict,

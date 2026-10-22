@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getArgoApplicationStatus, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress } from './resource-utils-argo'
+import { argoResumeSettings, getArgoApplicationStatus, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress } from './resource-utils-argo'
 
 describe('getArgoApplicationStatus', () => {
   // A Suspended Argo app is intentionally paused — neutral (sky), matching the
@@ -86,5 +86,19 @@ describe('isArgoAutoSyncSwitchedOff', () => {
 
   it('tolerates a missing resource', () => {
     expect(isArgoAutoSyncSwitchedOff(undefined)).toBe(false)
+  })
+})
+
+describe('argoResumeSettings', () => {
+  const app = (syncPolicy: unknown) => ({ spec: { syncPolicy } })
+  it('keeps a block switched off in place, whatever the Radar', () => {
+    expect(argoResumeSettings(app({ automated: { enabled: false, prune: true } }), undefined)).toEqual({ prune: true, selfHeal: false })
+  })
+  it.each([
+    ['a Radar with the new default', true, { prune: false, selfHeal: true }],
+    ['an older Radar', false, { prune: true, selfHeal: true }],
+    ['an unknown Radar', undefined, null],
+  ])('without a block, follows %s', (_label, serverStartsPruneOff, expected) => {
+    expect(argoResumeSettings(app({}), serverStartsPruneOff)).toEqual(expected)
   })
 })

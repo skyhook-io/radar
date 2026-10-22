@@ -1406,6 +1406,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		TrafficRecords:        true,
 		GitOpsWriteEvidence:   true,
 		ArgoRollbackSync:      true,
+		ArgoSyncInheritance:   true,
 		HelmSourceIdentity:    true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()

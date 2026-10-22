@@ -3,8 +3,11 @@ package mcp
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -130,4 +133,94 @@ func TestHandleManageGitOpsRollback(t *testing.T) {
 			t.Fatalf("error lacks the suspend action: %v", err)
 		}
 	})
+}
+
+// Through the real MCP decode path: an omitted prune doesn't prune, an
+// omitted sync_options uses the Application's own, and [] clears them.
+func TestManageGitOpsSyncDefaults(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	appOptions := []any{"CreateNamespace=true", "ServerSideApply=true"}
+	for _, tc := range []struct {
+		name        string
+		args        map[string]any
+		wantPrune   bool
+		wantOptions []any
+	}{
+		{name: "defaults", args: map[string]any{}, wantOptions: appOptions},
+		{name: "explicit empty options", args: map[string]any{"sync_options": []any{}}},
+		{name: "explicit options and prune", args: map[string]any{"sync_options": []any{"Replace=true"}, "prune": true}, wantPrune: true, wantOptions: []any{"Replace=true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{
+				Group: "argoproj.io", Version: "v1alpha1", Kind: "Application",
+				Name: "applications", Namespaced: true, Verbs: []string{"get", "patch"},
+			}, &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "argoproj.io/v1alpha1",
+				"kind":       "Application",
+				"metadata":   map[string]any{"name": "demo", "namespace": "argocd"},
+				"spec":       map[string]any{"project": "default", "syncPolicy": map[string]any{"syncOptions": appOptions}},
+			}})
+			args := map[string]any{"action": "sync", "tool": "argocd", "namespace": "argocd", "name": "demo"}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			res, err := connectTestServer(t).CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "manage_gitops", Arguments: args})
+			if err != nil || res.IsError {
+				t.Fatalf("CallTool: err=%v result=%s", err, renderContent(res.Content))
+			}
+			app, err := k8s.GetDynamicClient().Resource(gvr).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("get app: %v", err)
+			}
+			sync, _, _ := unstructured.NestedMap(app.Object, "operation", "sync")
+			if sync["prune"] != tc.wantPrune {
+				t.Fatalf("prune = %#v, want %v", sync["prune"], tc.wantPrune)
+			}
+			got, _ := sync["syncOptions"].([]any)
+			if len(got) != len(tc.wantOptions) || (len(got) > 0 && !reflect.DeepEqual(got, tc.wantOptions)) {
+				t.Fatalf("syncOptions = %#v, want %#v", sync["syncOptions"], tc.wantOptions)
+			}
+			if username, _, _ := unstructured.NestedString(app.Object, "operation", "initiatedBy", "username"); username != "radar" {
+				t.Fatalf("initiatedBy.username = %q, want radar without per-user auth", username)
+			}
+		})
+	}
+}
+
+// sync_options is accepted only by sync: an explicit empty list sent to
+// another action is refused like any other option it can't use.
+func TestValidateGitOpsActionInputRejectsEmptySyncOptions(t *testing.T) {
+	err := validateGitOpsActionInput("rollback", manageGitOpsInput{SyncOptions: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "sync_options") {
+		t.Fatalf("error = %v, want sync_options rejected", err)
+	}
+}
+
+// resume on an Application Radar never suspended turns auto-sync on with
+// prune off, as Argo CD's UI does.
+func TestManageGitOpsResumeNeverAutomatedLeavesPruneOff(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{
+		Group: "argoproj.io", Version: "v1alpha1", Kind: "Application",
+		Name: "applications", Namespaced: true, Verbs: []string{"get", "patch"},
+	}, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"name": "demo", "namespace": "argocd"},
+		"spec":       map[string]any{"project": "default"},
+	}})
+	res, err := connectTestServer(t).CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "manage_gitops", Arguments: map[string]any{
+		"action": "resume", "tool": "argocd", "namespace": "argocd", "name": "demo",
+	}})
+	if err != nil || res.IsError {
+		t.Fatalf("CallTool: err=%v result=%s", err, renderContent(res.Content))
+	}
+	app, err := k8s.GetDynamicClient().Resource(gvr).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	if !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": true}) {
+		t.Fatalf("automated = %#v, want prune off and selfHeal on", automated)
+	}
 }

@@ -83,14 +83,35 @@ export function isArgoAutoSyncSwitchedOff(app: any): boolean {
   return automated != null && typeof automated === 'object' && automated.enabled === false
 }
 
+// argoResumeSettings says what Enable auto-sync turns on for an Application
+// Radar didn't suspend. A block switched off in place keeps its own prune and
+// selfHeal. Without a block it depends on the Radar serving the request: one
+// advertising argoSyncInheritance starts prune off and selfHeal on, an older
+// one turns both on. Null while that isn't known.
+export function argoResumeSettings(app: any, serverStartsPruneOff: boolean | undefined): { prune: boolean; selfHeal: boolean } | null {
+  const automated = app?.spec?.syncPolicy?.automated
+  if (automated != null && typeof automated === 'object') {
+    return { prune: automated.prune === true, selfHeal: automated.selfHeal === true }
+  }
+  if (serverStartsPruneOff === undefined) return null
+  return { prune: !serverStartsPruneOff, selfHeal: true }
+}
+
+// argoApplicationSyncOptions returns spec.syncPolicy.syncOptions: the options
+// Argo CD applies to every sync of the Application unless a sync names its own.
+export function argoApplicationSyncOptions(app: any): string[] {
+  const options = app?.spec?.syncPolicy?.syncOptions
+  return Array.isArray(options) ? options.filter((option): option is string => typeof option === 'string') : []
+}
+
 export function isArgoOperationInProgress(app: any): boolean {
   const phase = app?.status?.operationState?.phase
   return app?.operation != null || phase === 'Running' || phase === 'Terminating'
 }
 
 // Radar suspends an Argo Application by clearing spec.syncPolicy.automated and
-// recording the prior prune/selfHeal flags in annotations so Resume can restore
-// them. The *presence* of any of these annotations marks the app as suspended —
+// recording the prior block in annotations (the whole block, plus the
+// prune/selfHeal flags older builds read) so Resume can restore it. The *presence* of any of these annotations marks the app as suspended —
 // independent of health.status, which stays whatever the app's resources report
 // (often Missing/OutOfSync, never literally "Suspended"). Both the current
 // radarhq.io keys and the legacy skyhook.io keys (still on apps suspended by

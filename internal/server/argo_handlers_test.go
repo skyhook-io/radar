@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -120,5 +122,124 @@ func TestHandleArgoRollbackHistoryID(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The sync body's omitted fields keep their meaning end to end: no prune, and
+// the Application's own sync options; an explicit [] clears them, and an
+// explicit list replaces them.
+func TestHandleArgoSyncBodyDefaults(t *testing.T) {
+	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	seed := func(t *testing.T) *dynamicfake.FakeDynamicClient {
+		t.Helper()
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+			runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{appGVR: "ApplicationList"},
+			&unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "argoproj.io/v1alpha1",
+				"kind":       "Application",
+				"metadata":   map[string]any{"name": "demo", "namespace": "argocd"},
+				"spec": map[string]any{
+					"project":    "default",
+					"source":     map[string]any{"repoURL": "https://example.com/repo", "path": "app"},
+					"syncPolicy": map[string]any{"syncOptions": []any{"CreateNamespace=true", "ServerSideApply=true"}},
+				},
+			}},
+		)
+		if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+			{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"get", "patch"}},
+		}); err != nil {
+			t.Fatalf("seed argo app: %v", err)
+		}
+		t.Cleanup(k8s.ResetTestDynamicState)
+		return dyn
+	}
+	syncWith := func(t *testing.T, body string) map[string]any {
+		t.Helper()
+		dyn := seed(t)
+		req := httptest.NewRequest(http.MethodPost, "/api/argo/applications/argocd/demo/sync", strings.NewReader(body))
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("namespace", "argocd")
+		rctx.URLParams.Add("name", "demo")
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+		rr := httptest.NewRecorder()
+		(&Server{}).handleArgoSync(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+		}
+		var patch map[string]any
+		for _, action := range dyn.Actions() {
+			if pa, ok := action.(clienttesting.PatchAction); ok {
+				if err := json.Unmarshal(pa.GetPatch(), &patch); err != nil {
+					t.Fatalf("patch body not JSON: %v", err)
+				}
+			}
+		}
+		sync, _, _ := unstructured.NestedMap(patch, "operation", "sync")
+		return sync
+	}
+
+	for _, tc := range []struct {
+		name        string
+		body        string
+		wantPrune   bool
+		wantOptions []any
+	}{
+		{name: "empty body", body: ``, wantOptions: []any{"CreateNamespace=true", "ServerSideApply=true"}},
+		{name: "fields omitted", body: `{"dryRun":false}`, wantOptions: []any{"CreateNamespace=true", "ServerSideApply=true"}},
+		{name: "null options", body: `{"syncOptions":null}`, wantOptions: []any{"CreateNamespace=true", "ServerSideApply=true"}},
+		{name: "explicit empty options", body: `{"syncOptions":[]}`},
+		{name: "explicit options and prune", body: `{"prune":true,"syncOptions":["Replace=true"]}`, wantPrune: true, wantOptions: []any{"Replace=true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sync := syncWith(t, tc.body)
+			if sync["prune"] != tc.wantPrune {
+				t.Fatalf("prune = %#v, want %v", sync["prune"], tc.wantPrune)
+			}
+			got, _ := sync["syncOptions"].([]any)
+			if len(got) != len(tc.wantOptions) || (len(got) > 0 && !reflect.DeepEqual(got, tc.wantOptions)) {
+				t.Fatalf("syncOptions = %#v, want %#v", sync["syncOptions"], tc.wantOptions)
+			}
+		})
+	}
+}
+
+// POST .../resume on an Application Radar never suspended turns auto-sync on
+// with prune off, as Argo CD's UI does.
+func TestHandleArgoResumeNeverAutomatedLeavesPruneOff(t *testing.T) {
+	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{appGVR: "ApplicationList"},
+		&unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Application",
+			"metadata":   map[string]any{"name": "demo", "namespace": "argocd"},
+			"spec":       map[string]any{"project": "default"},
+		}},
+	)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"get", "patch"}},
+	}); err != nil {
+		t.Fatalf("seed argo app: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	req := httptest.NewRequest(http.MethodPost, "/api/argo/applications/argocd/demo/resume", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("namespace", "argocd")
+	rctx.URLParams.Add("name", "demo")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rr := httptest.NewRecorder()
+	(&Server{}).handleArgoResume(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	app, err := dyn.Resource(appGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	if !reflect.DeepEqual(automated, map[string]any{"prune": false, "selfHeal": true}) {
+		t.Fatalf("automated = %#v, want prune off and selfHeal on", automated)
 	}
 }
