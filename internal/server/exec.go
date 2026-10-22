@@ -276,8 +276,21 @@ func (t *terminalSizeQueue) Next() *remotecommand.TerminalSize {
 	return &size
 }
 
+// requireExecEnabled rejects routes that run commands in Pods or start debug
+// shells when the operator started Radar with --disable-exec.
+func (s *Server) requireExecEnabled(w http.ResponseWriter) bool {
+	if k8s.ForceDisableExec {
+		s.writeError(w, http.StatusForbidden, "exec is disabled on this Radar instance (--disable-exec)")
+		return false
+	}
+	return true
+}
+
 // handlePodExec handles WebSocket connections for pod exec
 func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")
@@ -601,6 +614,9 @@ type NodeDebugResponse struct {
 
 // handleNodeDebug creates a privileged debug pod on a node
 func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -711,6 +727,9 @@ type DebugContainerResponse struct {
 
 // handleCreateDebugContainer creates an ephemeral debug container in a pod
 func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 
