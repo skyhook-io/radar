@@ -515,11 +515,8 @@ func readGitOpsWritePolicy(owner *topology.ResourceRef, ownerObj, target *unstru
 	switch ownerTool(owner) {
 	case "argocd":
 		p := &gitOpsWritePolicy{Tool: "argocd"}
-		automated, hasAutomated, _ := unstructured.NestedMap(ownerObj.Object, "spec", "syncPolicy", "automated")
-		auto := hasAutomated && automated != nil
-		if enabled, ok := automated["enabled"].(bool); ok && !enabled {
-			auto = false
-		}
+		automated, _, _ := unstructured.NestedMap(ownerObj.Object, "spec", "syncPolicy", "automated")
+		auto := gitops.ArgoAutoSyncEnabled(ownerObj)
 		selfHeal, _ := automated["selfHeal"].(bool)
 		prune, _ := automated["prune"].(bool)
 		p.Auto = evidenceBool(auto)

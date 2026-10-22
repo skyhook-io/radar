@@ -284,6 +284,11 @@ type HistoryItem struct {
 	RawMessage  string `json:"rawMessage,omitempty"`
 	Source      string `json:"source,omitempty"`
 	InitiatedBy string `json:"initiatedBy,omitempty"`
+	// Rollbackable is set on every Argo CD status.history entry: whether
+	// RollbackArgoApp accepts it (gitops.ArgoHistoryEntryRollbackable). Nil on
+	// rows it doesn't apply to, such as the current operation and Flux.
+	Rollbackable *bool `json:"rollbackable,omitempty"`
+	MultiSource  bool  `json:"multiSource,omitempty"`
 }
 
 type Capabilities struct {
@@ -495,7 +500,8 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 }
 
 // describeArgoAutoSync formats spec.syncPolicy.automated into a chip label.
-// Empty when the field can't be read; "Manual" when automated is absent.
+// Empty when the field can't be read; "Manual" when automated is absent or
+// switched off with `enabled: false`.
 func describeArgoAutoSync(root *unstructured.Unstructured) string {
 	// An ApplicationSet has no sync policy of its own. Its spec.syncPolicy
 	// governs how generated Applications are created and deleted, not how
@@ -505,10 +511,10 @@ func describeArgoAutoSync(root *unstructured.Unstructured) string {
 	if root.GetKind() == "ApplicationSet" {
 		return ""
 	}
-	automated, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
-	if !found {
+	if !gitops.ArgoAutoSyncEnabled(root) {
 		return "Manual"
 	}
+	automated, _, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
 	parts := []string{"Auto"}
 	if v, ok := automated["prune"].(bool); ok && v {
 		parts = append(parts, "prune")
@@ -599,6 +605,26 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			out = append(out, issue)
 		} else if phase == "Running" {
 			out = append(out, Issue{Severity: SeverityInfo, Scope: ScopeOperation, Reason: "Running", Message: "A sync operation is currently running.", Action: "Wait for completion or terminate if it is stuck."})
+		} else if target, applied := gitops.ArgoRollbackRevisionMismatch(root); target != "" {
+			message := "Last rollback deployed different sources or revisions than requested."
+			if target != applied {
+				message = "Last rollback deployed different sources or revisions than requested: " + applied + " instead of " + target + "."
+			}
+			cause := "Argo CD applied different sources or revisions than the rollback requested."
+			action := "Sync the intended revision manually, then check the result."
+			sync, _, _ := unstructured.NestedMap(root.Object, "status", "operationState", "operation", "sync")
+			if sync["revisions"] != nil || sync["sources"] != nil {
+				cause = "Argo CD 2.11 can ignore a multi-source history entry's sources and revisions and sync the current ones."
+				action = "Check the Argo CD controller version, then sync the intended revision manually."
+			}
+			out = append(out, Issue{
+				Severity: SeverityWarning,
+				Scope:    ScopeOperation,
+				Reason:   "RollbackRevisionMismatch",
+				Message:  message,
+				Cause:    cause,
+				Action:   action,
+			})
 		} else if stuck := detectStuckDriftLoop(root); stuck != nil {
 			// Stuck-drift-loop detector: the user's "this is stuck forever and
 			// nothing tells me why" case. Argo reports the last sync as
@@ -651,7 +677,11 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				continue
 			}
 			if change.Missing {
-				out = append(out, resourceHealthIssue(change, nil))
+				issue := resourceHealthIssue(change, nil)
+				if revision, _ := gitops.ArgoSuccessfulRollback(root); revision != "" && change.Sync != "Synced" {
+					issue.Action = "Auto-sync is off after a rollback to " + revision + ". Syncing deploys the current revision, which can recreate it and undo the rollback."
+				}
+				out = append(out, issue)
 			} else if change.Health == "Degraded" || change.Health == "Missing" {
 				// Argo calling the app Healthy is its verdict on every resource
 				// it assesses; Radar's own read of a resource must not contradict
@@ -1416,10 +1446,6 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 					log.Printf("[gitops/insights] history entry %s/%s has unexpected id type %T (%v); rollback for this entry will be unavailable", root.GetNamespace(), root.GetName(), m["id"], m["id"])
 				}
 			}
-			source := ""
-			if sm, ok := m["source"].(map[string]any); ok {
-				source = joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
-			}
 			// initiatedBy carries who triggered the sync. Username is set for
 			// human/api triggers; automated is a *bool*, not a string — Argo
 			// flips it true when the controller's auto-sync fires. We coerce
@@ -1434,7 +1460,10 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 					}
 				}
 			}
-			out = append(out, HistoryItem{ID: id, Revision: gitops.StringValue(m["revision"]), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: source, InitiatedBy: initiatedBy})
+			rollbackable := gitops.ArgoHistoryEntryRollbackable(m)
+			sources, _, _ := unstructured.NestedSlice(m, "sources")
+			revisions, _, _ := unstructured.NestedStringSlice(m, "revisions")
+			out = append(out, HistoryItem{ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy, Rollbackable: &rollbackable, MultiSource: len(sources) > 0 || len(revisions) > 0})
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
 			initiatedBy := ""
@@ -1458,12 +1487,13 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 				deployedAt = gitops.StringValue(op["startedAt"])
 			}
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(gitops.StringValue(op["message"]))
+			syncResult, _ := op["syncResult"].(map[string]any)
 			out = append(out, HistoryItem{
 				Phase:       gitops.StringValue(op["phase"]),
 				Message:     msg,
 				RawMessage:  rawMsg,
 				DeployedAt:  deployedAt,
-				Revision:    nestedString(op, "syncResult", "revision"),
+				Revision:    argoRevisionLabel(syncResult),
 				InitiatedBy: initiatedBy,
 			})
 		}
@@ -1498,10 +1528,12 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 
 func buildCapabilities(root *unstructured.Unstructured, tool string) Capabilities {
 	if tool == "argocd" {
+		// A multi-source entry records `revisions`, not `revision`, so the
+		// entry's source is what makes it rollbackable.
 		hasHistory := false
 		raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
 		for _, item := range raw {
-			if m, ok := item.(map[string]any); ok && gitops.StringValue(m["revision"]) != "" {
+			if m, ok := item.(map[string]any); ok && gitops.ArgoHistoryEntryRollbackable(m) {
 				hasHistory = true
 				break
 			}
@@ -1803,6 +1835,45 @@ func stripUnknown(value string) string {
 	return value
 }
 
+// argoRevisionLabel is a history entry's (or sync result's) deployed revision.
+// A multi-source deploy records one revision per source in `revisions` and
+// leaves `revision` empty.
+func argoRevisionLabel(m map[string]any) string {
+	if revision := gitops.StringValue(m["revision"]); revision != "" {
+		return revision
+	}
+	revisions, _ := m["revisions"].([]any)
+	parts := make([]string, 0, len(revisions))
+	for _, revision := range revisions {
+		if s := gitops.StringValue(revision); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// argoSourceLabel describes the source a history entry deployed. A
+// multi-source entry carries `sources` (its `source` is an empty placeholder),
+// labelled by the first source and a count of the rest.
+func argoSourceLabel(m map[string]any) string {
+	describe := func(source any) string {
+		sm, _ := source.(map[string]any)
+		return joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
+	}
+	if label := describe(m["source"]); label != "" {
+		return label
+	}
+	sources, _ := m["sources"].([]any)
+	if len(sources) == 0 {
+		return ""
+	}
+	label := describe(sources[0])
+	if len(sources) > 1 {
+		label += fmt.Sprintf(" (+%d more)", len(sources)-1)
+	}
+	return label
+}
+
 func joinNonEmpty(values ...string) string {
 	var parts []string
 	for _, value := range values {
@@ -2069,9 +2140,8 @@ func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
 
 // detectManualDriftWithoutAutoSync emits a warning when an Argo Application
 // is OutOfSync but auto-sync is disabled. The user otherwise has no signal
-// that the drift won't resolve on its own — they wait, nothing happens,
-// and they file the bug. This issue puts a clear "Click Sync" prompt at
-// the top of the page so the next-step is obvious.
+// that the drift won't resolve on its own. A proven successful rollback
+// instead records the last rollback without claiming the live state is unchanged.
 //
 // Returns nil when conditions don't match — caller appends only on hit.
 func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
@@ -2085,6 +2155,23 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
 	if describeArgoAutoSync(root) != "Manual" {
 		return nil
 	}
+	if revision, username := gitops.ArgoSuccessfulRollback(root); revision != "" {
+		message := "Last rollback deployed " + revision
+		if username != "" {
+			message += " by " + username
+		}
+		revisionLabel := "revision"
+		if revisions, _, _ := unstructured.NestedStringSlice(root.Object, "status", "operationState", "syncResult", "revisions"); len(revisions) > 1 {
+			revisionLabel = "revisions"
+		}
+		return &Issue{
+			Severity: SeverityInfo,
+			Scope:    ScopeOperation,
+			Reason:   "RolledBack",
+			Message:  message + ".",
+			Cause:    "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current " + revisionLabel + " and can undo the rollback.",
+		}
+	}
 	return &Issue{
 		Severity: SeverityWarning,
 		Scope:    ScopeOperation,
@@ -2094,15 +2181,15 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
 	}
 }
 
-// argoAutoSync reports whether spec.syncPolicy.automated is present and, if so,
-// whether selfHeal is enabled within it. The two booleans distinguish the three
+// argoAutoSync reports whether automated sync is enabled and, if so, whether
+// selfHeal is enabled within it. The two booleans distinguish the three
 // drift-reconciliation postures: manual (!automated), auto-deploy-only
 // (automated && !selfHeal), and auto-heal (automated && selfHeal).
 func argoAutoSync(root *unstructured.Unstructured) (automated, selfHeal bool) {
-	m, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
-	if !found {
+	if !gitops.ArgoAutoSyncEnabled(root) {
 		return false, false
 	}
+	m, _, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
 	v, _ := m["selfHeal"].(bool)
 	return true, v
 }

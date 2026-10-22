@@ -24,12 +24,14 @@ export interface RollbackDialogProps {
   appLabel: string
   revision: string
   historyId?: string
+  source?: string
+  multiSource?: boolean
   pending?: boolean
   onCancel: () => void
   onConfirm: (opts: { prune: boolean; dryRun: boolean }) => void
 }
 
-export function RollbackDialog({ open, appLabel, revision, historyId, pending, onCancel, onConfirm }: RollbackDialogProps) {
+export function RollbackDialog({ open, appLabel, revision, historyId, source, multiSource, pending, onCancel, onConfirm }: RollbackDialogProps) {
   const titleId = useId()
   const [prune, setPrune] = useState(false)
   const [dryRun, setDryRun] = useState(false)
@@ -49,8 +51,15 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
       </div>
       <div className="space-y-4 px-4 py-4 text-sm">
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-          Argo will sync this application to a previous revision. This is a write operation on the cluster.
+          {dryRun
+            ? 'Argo will preview syncing this application to a previous revision without applying changes.'
+            : 'Argo will sync this application to a previous revision. Auto-sync is off. Later changes can still cause drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback.'}
         </div>
+        {multiSource && (
+          <p className="text-xs text-warning-text">
+            Rolling back a multi-source Application needs Argo CD 2.12 or later. A 2.11 controller ignores the history entry’s sources and revisions and syncs the current ones.
+          </p>
+        )}
         <dl className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
           <dt className="text-theme-text-tertiary">Revision</dt>
           <dd className="min-w-0">
@@ -58,6 +67,12 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
               <span className="block truncate font-mono text-theme-text-primary">{revision || '-'}</span>
             </Tooltip>
           </dd>
+          {source && (
+            <>
+              <dt className="text-theme-text-tertiary">Source</dt>
+              <dd className="min-w-0 break-words text-theme-text-primary">{source}</dd>
+            </>
+          )}
           {historyId && (
             <>
               <dt className="text-theme-text-tertiary">History ID</dt>
@@ -66,6 +81,7 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
           )}
         </dl>
         <div className="space-y-2">
+          <p className="text-xs text-theme-text-tertiary">Uses the Application's current sync options. Sync hooks don't run.</p>
           <label className="flex items-start gap-2">
             <input
               type="checkbox"
@@ -75,8 +91,8 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
               className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-sky-500 disabled:cursor-not-allowed"
             />
             <div className="min-w-0">
-              <div className="text-xs text-theme-text-primary">Prune resources added since this revision</div>
-              <div className="text-[11px] text-theme-text-tertiary">Off by default — leaves any resources created after this revision untouched.</div>
+              <div className="text-xs text-theme-text-primary">Delete tracked resources that aren't in the rollback target</div>
+              <div className="text-[11px] text-theme-text-tertiary">Off by default. The target's resources are still applied; other tracked resources are kept.</div>
             </div>
           </label>
           <label className="flex items-start gap-2">

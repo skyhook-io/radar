@@ -684,6 +684,31 @@ func TestDetectArgoAppProblems_ManualDriftGate(t *testing.T) {
 		}
 	})
 
+	t.Run("successful rollback past the gate keeps its identity with recovery guidance", func(t *testing.T) {
+		tr := newArgoDriftTracker()
+		app := mkManual("rollback", "OutOfSync")
+		_ = unstructured.SetNestedMap(app.Object, map[string]any{
+			"phase": "Succeeded",
+			"operation": map[string]any{
+				"info": []any{map[string]any{"name": "radarhq.io/rollback", "value": "true"}},
+				"sync": map[string]any{"revision": "rev-old"},
+			},
+			"syncResult": map[string]any{"revision": "rev-old"},
+		}, "status", "operationState")
+		detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base)
+		got := detectArgoAppProblems([]*unstructured.Unstructured{app}, tr, base.Add(25*time.Hour))
+		d, ok := findDetectionReason(got, "OutOfSyncManual")
+		if !ok || d.Severity != "warning" || !d.OnsetAt.Equal(base) || d.DurationSeconds != int64((25*time.Hour).Seconds()) {
+			t.Fatalf("rollback must retain the manual-drift warning identity and timing: %+v", got)
+		}
+		if d.Message != "Last rollback deployed rev-old; the live state differs from the desired state and auto-sync is off." {
+			t.Errorf("message = %q", d.Message)
+		}
+		if d.Action != "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source first, or keep auto-sync off. Review Changes for later edits." {
+			t.Errorf("action = %q", d.Action)
+		}
+	})
+
 	t.Run("returning to Synced resets the clock", func(t *testing.T) {
 		tr := newArgoDriftTracker()
 		detectArgoAppProblems([]*unstructured.Unstructured{mkManual("u1", "OutOfSync")}, tr, base)

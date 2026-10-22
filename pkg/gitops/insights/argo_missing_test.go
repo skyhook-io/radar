@@ -63,3 +63,28 @@ func TestConfirmedAbsenceCreatesIssueDespiteHealthyControllerVerdict(t *testing.
 		}
 	}
 }
+
+// After a rollback, a resource only the current revision declares is
+// expected to be missing; "sync to create it" would undo the rollback.
+func TestMissingResourceAdviceAfterRollback(t *testing.T) {
+	ref := gitopstree.ResourceRef{Kind: "ConfigMap", Namespace: "prod", Name: "values"}
+	app := argoApp(map[string]any{
+		"sync":      map[string]any{"status": "OutOfSync"},
+		"resources": []any{map[string]any{"kind": ref.Kind, "namespace": ref.Namespace, "name": ref.Name, "status": "OutOfSync"}},
+		"operationState": map[string]any{
+			"phase":      "Succeeded",
+			"operation":  map[string]any{"info": []any{map[string]any{"name": "radarhq.io/rollback", "value": "true"}}, "sync": map[string]any{"revision": "old"}},
+			"syncResult": map[string]any{"revision": "old"},
+		},
+	})
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{{Ref: ref, Missing: true}}}
+	for _, issue := range buildIssues(app, tree, "argocd", nil) {
+		if issue.Scope == ScopeResource && issue.Reason == "Missing" {
+			if issue.Action != "Auto-sync is off after a rollback to old. Syncing deploys the current revision, which can recreate it and undo the rollback." {
+				t.Fatalf("missing-resource advice after a rollback: %q", issue.Action)
+			}
+			return
+		}
+	}
+	t.Fatal("no missing-resource issue")
+}

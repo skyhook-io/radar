@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
-import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, useNodeRemovalPlan, usePodEnvironment, useSubjectIssues, useWorkloadHistory } from './client'
+import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, useNodeRemovalPlan, usePodEnvironment, useRadarFeature, useSubjectIssues, useWorkloadHistory } from './client'
 import { getApiBase } from './config'
 import { usePolicyResource } from './policy'
 import { isRadarFeatureUnsupported } from './radarFeatures'
@@ -282,4 +282,36 @@ it('asks again once capabilities confirm workload history after a probe hit an o
   await settle()
   await settle()
   expect(requested.filter((url) => url.includes('/history'))).toHaveLength(2)
+})
+
+function ArgoRollbackGate() {
+  const { upgrade } = useRadarFeature('argoRollback')
+  return <span>{upgrade ? `${upgrade.feature} @ ${upgrade.currentVersion}` : 'enabled'}</span>
+}
+
+it('hands a control the upgrade requirement once capabilities omit its flag', async () => {
+  client.setQueryData(['capabilities'], { features: { workloadHistory: true } })
+  await render(<ArgoRollbackGate />)
+  expect(element.textContent).toBe('Argo CD rollbacks @ v1.7.2')
+})
+
+it('disables a control when /api/capabilities fails', async () => {
+  const answer = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((input, init) =>
+    String(input).endsWith('/capabilities')
+      ? Promise.resolve(Response.json({ error: 'capabilities down' }, { status: 500 }))
+      : answer(input, init),
+  )
+  await render(<ArgoRollbackGate />)
+  await settle()
+  expect(element.textContent).toBe('Argo CD rollbacks @ v1.7.2')
+})
+
+it('leaves a control enabled while capabilities load, and once they carry its flag', async () => {
+  await render(<ArgoRollbackGate />)
+  expect(element.textContent).toBe('enabled')
+
+  await act(async () => { client.setQueryData(['capabilities'], { features: { argoRollbackSync: true } }) })
+  await settle()
+  expect(element.textContent).toBe('enabled')
 })

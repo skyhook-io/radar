@@ -62,7 +62,7 @@ The Issues band at the top of the detail page surfaces seven classes of problems
 
 - **Operation failures** (Argo) — the parser recognizes 11 patterns (annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.) and rewrites each into a plain-English cause
 - **Stuck-drift loop** — when sync succeeded but the app is *still* OutOfSync with auto-sync on and a recent reconcile, something is mutating resources after each apply. The Issue calls out likely culprits (mutating webhook, sibling controller, schema migration)
-- **Manual drift without auto-sync** — drift exists but auto-sync is disabled. The Issue tells you "nothing will reconcile until you click Sync" so you stop waiting
+- **Manual drift without auto-sync** — drift exists but auto-sync is disabled. The Issue tells you "nothing will reconcile until you click Sync" so you stop waiting. A rollback marker in the latest operation, if successful, instead gives an informational note naming the applied revision(s) and recorded initiator; resource rows explain that Sync can undo the rollback. This records the last rollback, not the current live state: later changes can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback. A marked, completed rollback whose result sources or revisions differ from the requested ones instead gives a warning, even if the app is Synced. Cluster Issues retains its delayed manual-drift warning after a successful rollback, with guidance to fix or revert Git before syncing again, or keep auto-sync off. Dry runs and failed or pending operations do not qualify. A later operation, including a dry-run, replaces the rollback evidence even if it does not move the app; Radar then returns to ordinary diagnosis. Argo's native rollback and a sync to an older revision have indistinguishable durable operation records, so Radar does not infer a rollback from old revisions or expiring audit events.
 - **Flux source and dependency failures** — when Flux reports that a Kustomization or HelmRelease is waiting on its source, chart or `dependsOn` target, the Issue links the object Flux names, so one click opens the failing GitRepository or HelmChart. A source that fails to fetch while the root is still Ready gets a warning: Flux can keep applying the last artifact it fetched, so new commits don't land while the fetch keeps failing
 - **Argo Application conditions** — `ComparisonError` (verify repo creds), `OrphanedResourceWarning`, `InvalidSpecError`, etc. extracted into typed-severity Issues
 - **Per-resource health** — Degraded / Missing children get a critical Issue each, deduped against any operation failure that already named the same resource (no triplicate rendering). See [Per-resource health](#per-resource-health) for where that health comes from
@@ -109,9 +109,11 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 | **Refresh** | Re-fetches the source repo |
 | **Hard refresh** | Sets `RefreshType=hard` to bypass repo-cache |
 | **Terminate** | Cancels an in-flight operation |
-| **Suspend / Enable auto-sync** | Toggles automated sync; remembers the prior `prune` / `selfHeal` settings on suspend so resume restores them |
-| **Rollback** | Pick a prior history entry by ID. Force / DryRun flags honored |
+| **Suspend / Enable auto-sync** | Toggles automated sync; remembers the prior `prune` / `selfHeal` settings on suspend so resume restores them. Resuming an app that still has an `automated` block (switched off in place with `enabled: false`, or already on) clears the flag and keeps that block's settings |
+| **Rollback** | Pick a prior history entry by ID (Argo numbers history from 0). Written the way argocd-server writes it: a sync operation pinned to that entry's revision(s) and source(s), apply strategy (hooks don't run), the app's sync options, Prune / DryRun off unless chosen. Refused with 409 while auto-sync is enabled; `automated.enabled: false` counts as off only on Argo CD 3.x controllers (2.x treats any automated block as on), while Radar’s suspend removes the block and works on both |
 | **Selective sync** | From the Topology tab, mark individual resources and sync only those |
+
+Multi-source rollback needs Argo CD 2.12 or later. A 2.11 controller ignores the history entry’s sources and revisions and syncs the current ones. Radar cannot detect the controller version; the rollback confirmation warns for multi-source history entries.
 
 ### Flux
 
