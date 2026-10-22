@@ -22,14 +22,16 @@ type Handlers struct {
 		Inspect(context.Context, InspectRequest) (*ImageFilesystem, error)
 		GetFileContent(context.Context, InspectRequest, string) ([]byte, string, error)
 	}
-	authorize func(*http.Request, string) (allowed, authoritative bool)
+	authorize       func(*http.Request, string) (allowed, authoritative bool)
+	authorizeSecret func(*http.Request, string, string) (allowed, authoritative bool)
 }
 
 // NewHandlers creates a new Handlers instance
-func NewHandlers(authorize func(*http.Request, string) (allowed, authoritative bool)) *Handlers {
+func NewHandlers(authorize func(*http.Request, string) (allowed, authoritative bool), authorizeSecret func(*http.Request, string, string) (allowed, authoritative bool)) *Handlers {
 	return &Handlers{
-		inspector: NewInspector(),
-		authorize: authorize,
+		inspector:       NewInspector(),
+		authorize:       authorize,
+		authorizeSecret: authorizeSecret,
 	}
 }
 
@@ -149,8 +151,8 @@ func (h *Handlers) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// inspectionRequest binds authenticated inspection to a readable Pod before any
-// registry credentials or shared image-cache contents can be accessed.
+// inspectionRequest limits authenticated inspection to anonymous access or
+// authorized pull secrets from a readable Pod that uses the requested image.
 func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, image string) (InspectRequest, bool) {
 	req := InspectRequest{
 		Image:     image,
@@ -167,8 +169,12 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		return req, true
 	}
 
-	if req.Namespace == "" || req.PodName == "" {
-		writeError(w, http.StatusBadRequest, "namespace and pod parameters are required for authenticated image inspection")
+	if req.PodName == "" {
+		req.keychain = &pullSecretKeychain{}
+		return req, true
+	}
+	if req.Namespace == "" {
+		writeError(w, http.StatusBadRequest, "namespace parameter is required when pod is given")
 		return req, false
 	}
 	if h.authorize == nil {
@@ -202,7 +208,13 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		writeError(w, http.StatusForbidden, "image is not used by pod "+req.Namespace+"/"+req.PodName)
 		return req, false
 	}
-	req.keychain = getPodKeychain(req.Namespace, pod)
+	req.keychain = getPodKeychain(req.Namespace, pod, func(secretName string) bool {
+		if h.authorizeSecret == nil {
+			return false
+		}
+		allowed, authoritative := h.authorizeSecret(r, req.Namespace, secretName)
+		return allowed && authoritative
+	})
 	return req, true
 }
 

@@ -28,6 +28,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"golang.org/x/sync/singleflight"
+	authv1 "k8s.io/api/authorization/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -779,6 +780,27 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 					return false, false
 				}
 				return s.canReadDecision(r, "", "pods", namespace, "get")
+			}, func(r *http.Request, namespace, secretName string) (bool, bool) {
+				user := auth.UserFromContext(r.Context())
+				if user == nil || s.permCache == nil {
+					return false, false
+				}
+				if allowed, authoritative := s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace}); allowed && authoritative {
+					return true, true
+				}
+				client := k8s.GetClient()
+				if client == nil {
+					return false, false
+				}
+				// Include Name so resourceNames-restricted Secret grants apply.
+				status, err := pkgauth.ReviewSubjectAccess(r.Context(), client, user.Username, user.Groups, authv1.ResourceAttributes{
+					Verb: "get", Resource: "secrets", Namespace: namespace, Name: secretName,
+				})
+				if err != nil {
+					log.Printf("[images] Failed to authorize pull secret %s/%s: %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(secretName), err)
+					return false, false
+				}
+				return status.Allowed, status.EvaluationError == ""
 			})
 			imageHandlers.RegisterRoutes(r)
 

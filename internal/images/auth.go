@@ -208,11 +208,11 @@ func GetAuthenticatedKeychain(imageRef string, namespace string, secretNames []s
 }
 
 // getPodKeychain excludes Radar's ambient credentials: authenticated callers
-// may use only the pull secrets declared on the Pod they can read.
-func getPodKeychain(namespace string, pod *corev1.Pod) authn.Keychain {
+// may use only authorized pull secrets declared on the Pod they can read.
+func getPodKeychain(namespace string, pod *corev1.Pod, canUseSecret func(string) bool) authn.Keychain {
 	var secretNames []string
 	for _, ref := range pod.Spec.ImagePullSecrets {
-		if ref.Name != "" {
+		if ref.Name != "" && canUseSecret(ref.Name) {
 			secretNames = append(secretNames, ref.Name)
 		}
 	}

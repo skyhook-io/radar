@@ -55,9 +55,9 @@ func TestImageInspectorCredentialIsolation(t *testing.T) {
 		wantUser, password string
 		succeeds           bool
 	}{
-		{"Pod secrets only", getPodKeychain("team", imageTestPod()), "pod-user", "test-password", true},
-		{"no Pod secrets", getPodKeychain("team", &corev1.Pod{}), "", "", false},
-		{"missing Pod secrets", getPodKeychain("team", &corev1.Pod{Spec: corev1.PodSpec{ImagePullSecrets: []corev1.LocalObjectReference{{Name: "missing"}}}}), "", "", false},
+		{"Pod secrets only", getPodKeychain("team", imageTestPod(), func(string) bool { return true }), "pod-user", "test-password", true},
+		{"no Pod secrets", getPodKeychain("team", &corev1.Pod{}, func(string) bool { return true }), "", "", false},
+		{"missing Pod secrets", getPodKeychain("team", &corev1.Pod{Spec: corev1.PodSpec{ImagePullSecrets: []corev1.LocalObjectReference{{Name: "missing"}}}}, func(string) bool { return true }), "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			google.Keychain = rejectingImageKeychain{t}

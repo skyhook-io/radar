@@ -12,6 +12,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { readErrorBody } from '../../api/httpErrors'
 import { Input } from '@skyhook-io/k8s-ui'
+import { useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
 
 const radarLoadingIconUrl = assetUrl(radarLoadingIcon)
 
@@ -417,11 +418,12 @@ interface AuthenticationHelpProps {
 }
 
 function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelpProps) {
+  const authEnabled = useIsAuthEnabled()
   const [copied, setCopied] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const registry = getRegistryHost(image)
   const authMethod = registryType || 'generic'
-  const authCommand = getAuthCommand(authMethod, image)
+  const authCommand = authEnabled ? null : getAuthCommand(authMethod, image)
 
   const handleCopy = async () => {
     if (!authCommand) return
@@ -489,8 +491,12 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
 
       {/* Explanation */}
       <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-6">
-        Radar uses your local Docker credentials (<span className="font-mono">~/.docker/config.json</span>).
-        Run the command above in your terminal, then click Retry.
+        {authEnabled ? (
+          <>Private images are read with the Pod's imagePullSecrets, and only if you can read those Secrets or exec into the Pod.</>
+        ) : (
+          <>Radar uses your local Docker credentials (<span className="font-mono">~/.docker/config.json</span>).
+          Run the command above in your terminal, then click Retry.</>
+        )}
       </p>
 
       {/* Retry button */}

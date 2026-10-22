@@ -37,12 +37,15 @@ Deletion-impact previews require read access to the root resource and use the ca
 ### Image inspection
 
 Authenticated requests (proxy, OIDC, or Radar Cloud) to `/api/images/metadata`,
-`/api/images/inspect`, and `/api/images/file` must name a `namespace` and `pod`.
-The caller must have `get pods` in that namespace, and the image must match a
+`/api/images/inspect`, and `/api/images/file` without a `pod` use anonymous-only
+registry access. If a `pod` is given, `namespace` is required, the caller must
+have `get pods` in that namespace, and the image must match a
 regular, init, or ephemeral container's spec image or status imageID digest reference.
 Authorization failures deny access; an unavailable authorization check returns 503.
-Registry credentials come only from that Pod's `spec.imagePullSecrets`, with
-anonymous fallback. The `pullSecrets` query parameter is ignored; ServiceAccount
+Registry credentials come only from that Pod's `spec.imagePullSecrets`, and each
+Secret is used only if the caller can `get` that exact Secret or `create pods/exec`
+in the namespace. Denied or non-authoritative credential checks drop the Secret,
+with anonymous fallback. The `pullSecrets` query parameter is ignored; ServiceAccount
 pull secrets, Radar's Docker config, and Google application default credentials
 are not used. Without an authenticated user, local image inspection keeps its
 existing credential discovery behavior.
