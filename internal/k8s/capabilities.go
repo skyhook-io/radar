@@ -608,6 +608,9 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
 	}
+	if ForceDisableExec {
+		caps.Exec = false
+	}
 
 	// Cache result
 	userCapabilitiesCache.Store(identityKey, &userCapEntry{

@@ -327,3 +327,26 @@ func TestDisableExecRejectsExecRoutes(t *testing.T) {
 		}
 	}
 }
+
+// Features that ask for the exec grant before running commands in Pods (the
+// database views, for example) must see a definite denial under --disable-exec,
+// with or without a signed-in user.
+func TestDisableExecDeniesExecGrant(t *testing.T) {
+	previousForceDisableExec := k8s.ForceDisableExec
+	t.Cleanup(func() { k8s.ForceDisableExec = previousForceDisableExec })
+	k8s.ForceDisableExec = true
+
+	s := &Server{permCache: auth.NewPermissionCache()}
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	perms.SetCanI("create", "", "pods/exec", "team", true)
+	s.permCache.Set("alice", nil, perms)
+	grant := Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: "team"}
+	for _, r := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/", nil),
+		requestWithUser(http.MethodGet, "/", &auth.User{Username: "alice"}),
+	} {
+		if allowed, authoritative := s.grantDecision(r, grant); allowed || !authoritative {
+			t.Fatalf("grantDecision = (%v, %v), want a definite denial", allowed, authoritative)
+		}
+	}
+}

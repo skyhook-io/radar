@@ -142,6 +142,11 @@ func (s *Server) grantPermission(r *http.Request, g Grant) string {
 // grantDecision asks for g as the caller. Subresource answers are memoized on
 // the same per-user cache as canRead, keyed resource/subresource.
 func (s *Server) grantDecision(r *http.Request, g Grant) (bool, bool) {
+	// --disable-exec is a definite no for every feature that runs commands in
+	// Pods through this grant (database sessions and inspection, for example).
+	if k8s.ForceDisableExec && g.Group == "" && g.Resource == "pods" && g.Subresource == "exec" {
+		return false, true
+	}
 	if auth.UserFromContext(r.Context()) == nil {
 		return localCanI(r.Context(), g)
 	}
