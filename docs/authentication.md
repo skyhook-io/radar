@@ -42,13 +42,16 @@ registry access. If a `pod` is given, `namespace` is required, the caller must
 have `get pods` in that namespace, and the image must match a
 regular, init, or ephemeral container's spec image or status imageID digest reference.
 Authorization failures deny access; an unavailable authorization check returns 503.
-Registry credentials come only from that Pod's `spec.imagePullSecrets`, and each
-Secret is used only if the caller can `get` that exact Secret or `create pods/exec`
-in the namespace. Denied or non-authoritative credential checks drop the Secret,
-with anonymous fallback. The `pullSecrets` query parameter is ignored; ServiceAccount
-pull secrets, Radar's Docker config, and Google application default credentials
-are not used. Without an authenticated user, local image inspection keeps its
-existing credential discovery behavior.
+Registry credentials come from that Pod's `spec.imagePullSecrets`, each used only
+if the caller can `get` that exact Secret or `create pods/exec` in the namespace.
+Radar's own registry credentials (its Docker config and Google application default
+credentials) are used only for callers with `create pods/exec`, and only to fetch
+the digest the kubelet recorded as pulled for one of the Pod's containers. This
+covers images pulled with the node's cloud identity and no pull secret, such as
+Artifact Registry on GKE. Denied or non-authoritative checks drop the credential,
+with anonymous fallback. The `pullSecrets` query parameter and ServiceAccount pull
+secrets are ignored. Without an authenticated user, local image inspection keeps
+its existing credential discovery behavior.
 
 ### Prometheus metrics
 

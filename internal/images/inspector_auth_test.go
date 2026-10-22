@@ -57,9 +57,9 @@ func TestImageInspectorCredentialIsolation(t *testing.T) {
 		wantUser, password string
 		succeeds           bool
 	}{
-		{"Pod secrets only", getPodKeychain("team", imageTestPod(), func(string) bool { return true }), "pod-user", "test-password", true},
-		{"no Pod secrets", getPodKeychain("team", &corev1.Pod{}, func(string) bool { return true }), "", "", false},
-		{"missing Pod secrets", getPodKeychain("team", &corev1.Pod{Spec: corev1.PodSpec{ImagePullSecrets: []corev1.LocalObjectReference{{Name: "missing"}}}}, func(string) bool { return true }), "", "", false},
+		{"Pod secrets only", getPodKeychain("team", imageTestPod(), false, func(string) bool { return true }), "pod-user", "test-password", true},
+		{"no Pod secrets", getPodKeychain("team", &corev1.Pod{}, false, func(string) bool { return true }), "", "", false},
+		{"missing Pod secrets", getPodKeychain("team", &corev1.Pod{Spec: corev1.PodSpec{ImagePullSecrets: []corev1.LocalObjectReference{{Name: "missing"}}}}, false, func(string) bool { return true }), "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			google.Keychain = rejectingImageKeychain{t}
@@ -111,7 +111,7 @@ func (k imageAnonymousKeychain) Resolve(authn.Resource) (authn.Authenticator, er
 func TestImagePodKeychainResolvesOnce(t *testing.T) {
 	imageTestCache(t, imageTestSecret("team", "pod-secret", "gcr.io", "pod-user"))
 	var checks atomic.Int32
-	keychain := getPodKeychain("team", imageTestPod(), func(secret string) bool {
+	keychain := getPodKeychain("team", imageTestPod(), false, func(secret string) bool {
 		if secret != "pod-secret" {
 			t.Errorf("unexpected Secret %s", secret)
 		}

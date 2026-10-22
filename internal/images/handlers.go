@@ -23,14 +23,16 @@ type Handlers struct {
 		GetFileContent(context.Context, InspectRequest, string) ([]byte, string, error)
 	}
 	authorize       func(*http.Request, string) (allowed, authoritative bool)
+	authorizeExec   func(*http.Request, string) (allowed, authoritative bool)
 	authorizeSecret func(*http.Request, string, string) (allowed, authoritative bool)
 }
 
 // NewHandlers creates a new Handlers instance
-func NewHandlers(authorize func(*http.Request, string) (allowed, authoritative bool), authorizeSecret func(*http.Request, string, string) (allowed, authoritative bool)) *Handlers {
+func NewHandlers(authorize, authorizeExec func(*http.Request, string) (allowed, authoritative bool), authorizeSecret func(*http.Request, string, string) (allowed, authoritative bool)) *Handlers {
 	return &Handlers{
 		inspector:       NewInspector(),
 		authorize:       authorize,
+		authorizeExec:   authorizeExec,
 		authorizeSecret: authorizeSecret,
 	}
 }
@@ -222,7 +224,16 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		writeError(w, http.StatusForbidden, "image is not used by pod "+req.Namespace+"/"+req.PodName)
 		return req, false
 	}
-	req.keychain = getPodKeychain(req.Namespace, pod, func(secretName string) bool {
+	// Exec holders may also use Radar's own registry credentials, but only for
+	// the digest the kubelet already pulled for this container: a tag can move,
+	// and a Pod that never pulled its image proves nothing.
+	useAmbient := false
+	if digestRef := pulledDigest(pod, image); digestRef != "" && h.authorizeExec != nil {
+		if allowed, authoritative := h.authorizeExec(r, req.Namespace); allowed && authoritative {
+			req.Image, useAmbient = digestRef, true
+		}
+	}
+	req.keychain = getPodKeychain(req.Namespace, pod, useAmbient, func(secretName string) bool {
 		if h.authorizeSecret == nil {
 			return false
 		}
@@ -230,6 +241,32 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		return allowed && authoritative
 	})
 	return req, true
+}
+
+// pulledDigest returns the repo@sha256 reference the kubelet recorded for a
+// container running image, or "" when no container has pulled it.
+func pulledDigest(pod *corev1.Pod, image string) string {
+	specImages := map[string]string{}
+	for _, containers := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
+		for _, container := range containers {
+			specImages[container.Name] = container.Image
+		}
+	}
+	for _, container := range pod.Spec.EphemeralContainers {
+		specImages[container.Name] = container.Image
+	}
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses, pod.Status.EphemeralContainerStatuses} {
+		for _, status := range statuses {
+			imageID := status.ImageID
+			if _, ref, ok := strings.Cut(imageID, "://"); ok {
+				imageID = ref
+			}
+			if strings.Contains(imageID, "@sha256:") && (specImages[status.Name] == image || imageID == image) {
+				return imageID
+			}
+		}
+	}
+	return ""
 }
 
 func podUsesImage(pod *corev1.Pod, image string) bool {

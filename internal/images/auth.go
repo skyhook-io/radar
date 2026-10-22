@@ -208,15 +208,19 @@ func GetAuthenticatedKeychain(imageRef string, namespace string, secretNames []s
 	return authn.NewMultiKeychain(keychains...)
 }
 
-// getPodKeychain excludes Radar's ambient credentials: authenticated callers
-// may use only authorized pull secrets declared on the Pod they can read.
-func getPodKeychain(namespace string, pod *corev1.Pod, canUseSecret func(string) bool) authn.Keychain {
-	return &podKeychain{namespace: namespace, pod: pod, canUseSecret: canUseSecret}
+// getPodKeychain scopes an authenticated caller's registry credentials to the
+// Pod they can read: the Pod's pull secrets the caller may use, plus, with
+// useAmbient (an exec holder fetching the digest the kubelet pulled), Radar's
+// own credentials, which node-identity pulls such as Artifact Registry on GKE
+// need.
+func getPodKeychain(namespace string, pod *corev1.Pod, useAmbient bool, canUseSecret func(string) bool) authn.Keychain {
+	return &podKeychain{namespace: namespace, pod: pod, useAmbient: useAmbient, canUseSecret: canUseSecret}
 }
 
 type podKeychain struct {
 	namespace    string
 	pod          *corev1.Pod
+	useAmbient   bool
 	canUseSecret func(string) bool
 	once         sync.Once
 	keychain     authn.Keychain
@@ -229,6 +233,10 @@ func (k *podKeychain) Resolve(target authn.Resource) (authn.Authenticator, error
 			if ref.Name != "" && k.canUseSecret(ref.Name) {
 				secretNames = append(secretNames, ref.Name)
 			}
+		}
+		if k.useAmbient {
+			k.keychain = GetAuthenticatedKeychain(target.String(), k.namespace, secretNames)
+			return
 		}
 		k.keychain = getKeychainFromSecrets(k.namespace, secretNames)
 		if k.keychain == nil {

@@ -287,10 +287,10 @@ func TestImagePodKeychainAnonymousFallback(t *testing.T) {
 	t.Cleanup(func() { google.Keychain = previousGoogle })
 	for _, secrets := range [][]corev1.LocalObjectReference{nil, {{Name: "missing"}}, {{Name: ""}}} {
 		pod := &corev1.Pod{Spec: corev1.PodSpec{ImagePullSecrets: secrets}}
-		assertImageCredentials(t, getPodKeychain("team", pod, func(string) bool { return true }), "gcr.io/project/app:v1", "")
+		assertImageCredentials(t, getPodKeychain("team", pod, false, func(string) bool { return true }), "gcr.io/project/app:v1", "")
 	}
 	k8s.ResetResourceCache()
-	assertImageCredentials(t, getPodKeychain("team", imageTestPod(), func(string) bool { return true }), "gcr.io/project/app:v1", "")
+	assertImageCredentials(t, getPodKeychain("team", imageTestPod(), false, func(string) bool { return true }), "gcr.io/project/app:v1", "")
 }
 
 func TestImageRoutesPullSecretAuthorization(t *testing.T) {
@@ -334,6 +334,63 @@ func TestImageRoutesPullSecretAuthorization(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestImageRoutesExecHolderUsesAmbientCredentials(t *testing.T) {
+	pulledDigest := "gcr.io/project/app@sha256:" + strings.Repeat("a", 64)
+	dockerDir := t.TempDir()
+	t.Setenv("DOCKER_CONFIG", dockerDir)
+	if err := os.WriteFile(filepath.Join(dockerDir, "config.json"), []byte(`{"auths":{"gcr.io":{"auth":"YW1iaWVudDpzZWNyZXQ="}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previousGoogle := google.Keychain
+	google.Keychain = imageAnonymousKeychain{resolve: func() {}}
+	t.Cleanup(func() { google.Keychain = previousGoogle })
+	for _, tc := range []struct {
+		name                   string
+		pulled                 bool
+		allowed, authoritative bool
+		wantUser, wantImage    string
+		wantExecCheck          bool
+	}{
+		{"exec allowed", true, true, true, "ambient", pulledDigest, true},
+		{"exec denied", true, false, true, "", "gcr.io/project/app:v1", true},
+		{"exec check failed", true, false, false, "", "gcr.io/project/app:v1", true},
+		{"non-authoritative allow", true, true, false, "", "gcr.io/project/app:v1", true},
+		{"image never pulled", false, true, true, "", "gcr.io/project/app:v1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := imageTestPod()
+			pod.Spec.ImagePullSecrets = nil
+			if !tc.pulled {
+				pod.Status.ContainerStatuses = nil
+			}
+			imageTestCache(t, pod)
+			execChecked := false
+			f := &fakeImageInspector{check: func(req InspectRequest) {
+				if req.Image != tc.wantImage {
+					t.Fatalf("image = %q; want %q", req.Image, tc.wantImage)
+				}
+				assertImageCredentials(t, req.keychain, req.Image, tc.wantUser)
+			}}
+			h := &Handlers{
+				inspector: f,
+				authorize: func(*http.Request, string) (bool, bool) { return true, true },
+				authorizeExec: func(r *http.Request, ns string) (bool, bool) {
+					if ns != "team" || auth.UserFromContext(r.Context()).Username != "alice" {
+						t.Fatal("wrong authorization target or identity")
+					}
+					execChecked = true
+					return tc.allowed, tc.authoritative
+				},
+				authorizeSecret: func(*http.Request, string, string) (bool, bool) { return false, true },
+			}
+			w := serveImageTest(h, "metadata", url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {"team"}, "pod": {"app"}}, true)
+			if w.Code != 200 || f.calls != 1 || execChecked != tc.wantExecCheck {
+				t.Fatalf("got %d %s, calls=%d, execChecked=%v", w.Code, w.Body.String(), f.calls, execChecked)
+			}
+		})
 	}
 }
 

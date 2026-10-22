@@ -496,7 +496,7 @@ function AuthenticationHelp({ image, registryType, hasPod, onRetry }: Authentica
       <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-6">
         {authEnabled ? (
           hasPod ? (
-            <>Private images are read with the Pod's imagePullSecrets, and only if you can read those Secrets or exec into the Pod.</>
+            <>Private images need exec access to the Pod, or read access to its imagePullSecrets. Exec access also lets Radar use its own registry credentials.</>
           ) : (
             <>This view reads images anonymously. Open the image from its Pod to use the Pod's pull secrets.</>
           )

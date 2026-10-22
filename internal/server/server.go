@@ -780,6 +780,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 					return false, false
 				}
 				return s.canReadDecision(r, "", "pods", namespace, "get")
+			}, func(r *http.Request, namespace string) (bool, bool) {
+				if auth.UserFromContext(r.Context()) == nil || s.permCache == nil {
+					return false, false
+				}
+				return s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace})
 			}, func(r *http.Request, namespace, secretName string) (bool, bool) {
 				user := auth.UserFromContext(r.Context())
 				if user == nil || s.permCache == nil {
