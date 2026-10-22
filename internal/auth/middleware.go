@@ -238,18 +238,24 @@ func AuditLog(r *http.Request, namespace, name string) {
 }
 
 type AuditActionDetails struct {
-	Kind      string
-	Group     string
-	Action    string
-	Namespace string
-	Name      string
-	Container string
-	Variable  string
-	Source    string
-	Outcome   string
-	Command   []string
-	ExitCode  *int
-	Duration  time.Duration
+	Kind string
+	Group string
+	Action        string
+	Namespace     string
+	Name          string
+	Container     string
+	Variable      string
+	Source        string
+	Outcome       string
+	Executable    string
+	ArgumentCount int
+	CommandHash   string
+	RequestedKind string
+	RequestedName string
+	SelectedUID   string
+	Node          string
+	ExitCode      *int
+	Duration      time.Duration
 }
 
 func AuditLogAction(r *http.Request, details AuditActionDetails) {
@@ -262,8 +268,17 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 	line := fmt.Sprintf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
 		username, groups, details.Action, r.URL.Path, details.Kind, details.Group, details.Namespace, details.Name,
 		details.Container, details.Variable, details.Source, details.Outcome)
-	if len(details.Command) > 0 {
-		line += fmt.Sprintf(" argv=%q", details.Command)
+	if details.CommandHash != "" {
+		line += fmt.Sprintf(" executable=%q argumentCount=%d commandHash=%q", details.Executable, details.ArgumentCount, details.CommandHash)
+	}
+	if details.RequestedName != "" {
+		line += fmt.Sprintf(" requestedKind=%q requestedName=%q", details.RequestedKind, details.RequestedName)
+	}
+	if details.SelectedUID != "" {
+		line += fmt.Sprintf(" selectedUID=%q", details.SelectedUID)
+	}
+	if details.Node != "" {
+		line += fmt.Sprintf(" node=%q", details.Node)
 	}
 	if details.ExitCode != nil {
 		line += fmt.Sprintf(" exitCode=%d", *details.ExitCode)

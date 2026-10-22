@@ -123,7 +123,7 @@ func TestExecPodTargetsRunningInitContainerInPendingPod(t *testing.T) {
 }
 
 func TestExecPodRealSPDYForbiddenResponse(t *testing.T) {
-	for _, code := range []int{http.StatusForbidden, http.StatusInternalServerError} {
+	for _, code := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusForbidden, http.StatusInternalServerError} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			t.Cleanup(k8s.SetTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected}))
 			var websocket, spdy atomic.Int32
@@ -158,6 +158,9 @@ func TestExecPodRealSPDYForbiddenResponse(t *testing.T) {
 			denied := strings.Contains(err.Error(), "rbac_denied") && strings.Contains(err.Error(), "get_subject_permissions")
 			if denied != (code == http.StatusForbidden) || websocket.Load() != 1 || spdy.Load() != 1 {
 				t.Fatalf("websocket=%d spdy=%d err=%v", websocket.Load(), spdy.Load(), err)
+			}
+			if code < 500 && strings.Contains(err.Error(), "may still be running") {
+				t.Fatalf("rejected upgrade reported as uncertain execution: %v", err)
 			}
 		})
 	}

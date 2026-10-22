@@ -61,9 +61,8 @@ import (
 // correct interpretation, not every response field.
 func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramRegistry *toolParamRegistry) {
 	boolPtr := func(b bool) *bool { return &b }
-	// All radar tools operate against the connected cluster (closed world),
-	// not the open internet — set OpenWorldHint=false so MCP clients that
-	// gate on this hint don't treat radar like a web-search tool.
+	// Kubernetes API tools have a closed domain; optional container execution
+	// can reach external services and has its own annotations.
 	readOnly := &mcp.ToolAnnotations{
 		ReadOnlyHint:  true,
 		OpenWorldHint: boolPtr(false),
@@ -688,7 +687,10 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 
 	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
 	if includeExec && execToolsEnabled.Load() {
-		registerExecTools(server, paramRegistry, writeTool)
+		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{
+			DestructiveHint: boolPtr(true),
+			OpenWorldHint:   boolPtr(true),
+		})
 	}
 }
 

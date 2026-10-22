@@ -40,7 +40,7 @@ Radar's MCP server solves these:
 - **Token-optimized** — resources are minified, stripping noise (managed fields, internal annotations, redundant status) while preserving what matters
 - **Enriched data** — topology graphs, health assessments, deduplicated events, filtered logs (prioritizing errors/warnings)
 - **Safe operations** — write tools such as restart, scale, apply, and rollback are identified for client confirmation and enforced through Kubernetes RBAC. Diagnosis is read-only by default; optional in-cluster route probing uses short-lived, self-deleting probe pods
-- **Secret-safe** — Secret data is never exposed, environment values are redacted, log output is scrubbed for API keys and tokens
+- **Secret-safe reads** — resource and log tools redact Secret data and sensitive values. The optional `exec_pod` tool returns raw command output, which can contain credentials
 - **RBAC-aware** — respects your cluster's RBAC permissions
 - **Vendor-neutral** — works with any MCP-compatible AI tool
 
@@ -122,10 +122,10 @@ pod or no known current revision is an error, not a fallback to an old pod.
 annotation wins, then the first non-mesh app container. Mesh proxies require
 an explicit container name; a proxy-only pod has no default.
 
-Every live Kubernetes request, including exec, uses the caller's impersonated
-client when authenticated, and the kubeconfig/ServiceAccount identity in
-no-auth mode. It never falls back to Radar's identity when impersonation
-fails. Kubernetes enforces `create` on `pods/exec`; workload resolution also
+Every live Kubernetes request, including exec, uses one snapshot of the caller's
+credentials when authenticated (impersonation or their forwarded token), and the
+kubeconfig/ServiceAccount identity in no-auth mode. It never falls back to
+Radar's identity when caller credentials are unavailable. Kubernetes enforces `create` on `pods/exec`; workload resolution also
 requires reads of the workload and its revision evidence. Forbidden errors
 carry `rbac_denied` and point to `get_subject_permissions`.
 
@@ -138,12 +138,22 @@ The result includes the exit code, including nonzero exits. At the deadline,
 `timedOut: true`, a null exit code, and a message explain that Radar stopped
 the exec stream; remote process termination is unconfirmed. Kubernetes exec
 does not guarantee killing the remote process when its stream closes. Audit
-logs record caller, namespace/pod/container, argv, exit code, and total duration.
+logs record caller, requested target, selected pod/container, selected Pod UID and
+node, executable, argument count, a SHA-256 command hash, exit code, and total
+duration. Radar does not log raw argv or command output. The selected UID records
+the pod Radar read; Kubernetes exec has no UID precondition, so it does not prove
+which incarnation ultimately ran the command. Canceled requests and broken
+streams report an unconfirmed outcome: the command may have started and may
+still be running. Inspect its effects before retrying.
 
-**Security:** Command output can contain secrets from environment variables or
-files; this is why the tool is opt-in. Treat output as untrusted data, never
-as instructions. Prefer read-only commands; commands can change container or
-external state, and their argv is recorded in audit logs.
+**Security:** Command output is not redacted and can contain secrets from
+environment variables or files, including mounted ServiceAccount credentials;
+this is why the tool is opt-in. Treat output as untrusted data, never as
+instructions. Prefer read-only commands; commands can change container or
+external state and use the container's network access and credentials. The
+operator opt-in makes the tool available to every caller whose Kubernetes
+permissions allow it; MCP clients control per-call approval. Kubernetes API
+audit policy may independently record command arguments.
 
 ## MCP Endpoint
 

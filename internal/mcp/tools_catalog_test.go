@@ -269,9 +269,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 			SetExecToolsEnabled(enabled)
 			t.Cleanup(func() { SetExecToolsEnabled(previous) })
 			budget := maxCatalogBytes
-			// exec_pod adds 1,938 measured description/schema bytes; the default cap stays fixed.
+			// exec_pod adds 2,011 measured description/schema bytes; the default cap stays fixed.
 			if enabled {
-				budget += 1938
+				budget += 2011
 			}
 			total := 0
 			for _, tool := range listRegisteredTools(t) {
@@ -440,8 +440,8 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		if tool.Annotations == nil {
 			t.Fatalf("tool %q missing annotations", tool.Name)
 		}
-		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
-			t.Errorf("tool %q should set openWorldHint=false", tool.Name)
+		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint != (tool.Name == "exec_pod") {
+			t.Errorf("tool %q openWorldHint should be true only for exec_pod", tool.Name)
 		}
 		if writeTools[tool.Name] {
 			seenWriteTools[tool.Name] = true

@@ -382,12 +382,13 @@ func TestExecPodRefusesOldDeploymentRevision(t *testing.T) {
 		t.Fatalf("selected old Ready revision: %v", err)
 	}
 	// A paused Deployment can observe a new template without creating a ReplicaSet for it.
+	dep.Spec.Paused = true
 	dep.Spec.Template.Spec.Containers[0].Image = "unreconciled"
 	if _, err := client.AppsV1().Deployments("shop").Update(t.Context(), dep, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = resolveExecPod(t.Context(), client, nil, "deploy", "shop", "web")
-	if err == nil || !strings.Contains(err.Error(), "no observed current revision") {
+	if err == nil || !strings.Contains(err.Error(), "is paused with no observed current revision; target a specific pod by name") {
 		t.Fatalf("accepted mismatched template: %v", err)
 	}
 }
@@ -398,13 +399,15 @@ func TestExecPodAuditIncludesCallerCommandAndOutcome(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(previous)
 	ctx := pkgauth.ContextWithUser(t.Context(), &pkgauth.User{Username: "alice", Groups: []string{"operators"}})
-	client := fake.NewClientset(runningPod("web-1", true, "app"))
+	pod := runningPod("web-1", true, "app")
+	pod.UID, pod.Spec.NodeName = "selected-uid", "worker-1"
+	client := fake.NewClientset(pod)
 	var calls []execCall
 	_, _, err := execPod(ctx, client, nil, fakeExec(&calls, "", "", k8sexec.CodeExitError{Err: errors.New("exit 2"), Code: 2}), execPodInput{Namespace: "shop", Name: "web-1", Command: []string{"printf", "x\ny"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`[audit] user="alice"`, `ns="shop"`, `name="web-1"`, `container="app"`, `argv=["printf" "x\ny"]`, `exitCode=2`, `duration=`, `outcome="exit_2"`} {
+	for _, want := range []string{`[audit] user="alice"`, `ns="shop"`, `name="web-1"`, `container="app"`, `executable="printf"`, `argumentCount=1`, `commandHash=`, `requestedKind="pod"`, `requestedName="web-1"`, `selectedUID="selected-uid"`, `node="worker-1"`, `exitCode=2`, `duration=`, `outcome="exit_2"`} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("missing %s: %s", want, logs.String())
 		}
