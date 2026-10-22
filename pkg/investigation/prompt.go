@@ -26,7 +26,7 @@ var ReadOnlyTools = []string{
 // WriteTools are the mutating Radar MCP tools — enabled only on an apply turn
 // the user explicitly confirmed. Never on the read-only investigation path.
 var WriteTools = []string{
-	"apply_resource", "patch_resource", "manage_workload",
+	"apply_resource", "patch_resource", "delete_resource", "manage_workload",
 	"manage_rollout", "manage_cronjob", "manage_node", "manage_gitops",
 }
 
@@ -206,10 +206,10 @@ const applyGuidance = "Use the Radar write tools to make the minimal patch; do n
 // what was shown in the confirmation dialog.
 func ApplyPrompt(target Target, fix string) string {
 	identityGuidance := " The immutable target API group is the Kubernetes core API group. " +
-		"When calling patch_resource, omit group (or pass an empty group); if using apply_resource, the manifest apiVersion must be v1. " +
+		"When calling patch_resource or delete_resource, omit group (or pass an empty group); if using apply_resource, the manifest apiVersion must be v1. " +
 		"Never mutate a same-named resource from another API group."
 	if target.Group != "" {
-		identityGuidance = fmt.Sprintf(" The immutable target API group is %q. Pass group=%q to patch_resource and all target reads; "+
+		identityGuidance = fmt.Sprintf(" The immutable target API group is %q. Pass group=%q to patch_resource, delete_resource and all target reads; "+
 			"if using apply_resource, the manifest apiVersion must belong to %q. Never mutate a same-named resource from another API group.",
 			target.Group, target.Group, target.Group)
 	}

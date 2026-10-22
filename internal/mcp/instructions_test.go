@@ -36,6 +36,7 @@ const (
 func TestServerInstructionsFitClientLimits(t *testing.T) {
 	for _, includeWrites := range []bool{true, false} {
 		text := serverInstructions(includeWrites)
+		t.Logf("includeWrites=%v: server instructions use %d characters", includeWrites, len([]rune(text)))
 		if n := len([]rune(text)); n > maxInstructionChars {
 			t.Errorf("includeWrites=%v: %d chars, limit %d", includeWrites, n, maxInstructionChars)
 		}
@@ -130,6 +131,7 @@ var instructionClaims = []struct{ tool, says, backedBy, param string }{
 	{tool: "get_neighborhood", says: "The graph around one object (owners, selectors, config references", backedBy: "targetPort/selector/endpoints problems, dependency timeouts, config/secret refs, owner chains"},
 	{tool: "get_cluster_audit", says: "get_cluster_audit is configuration posture", backedBy: "STATIC CONFIG POSTURE"},
 	{tool: "manage_workload", says: "manage_workload to restart, scale or roll back", backedBy: "'rollback'"},
+	{tool: "delete_resource", says: "apply_resource, delete_resource;", backedBy: "mandatory server dry-run preview"},
 }
 
 func TestServerInstructionsClaimsMatchToolContracts(t *testing.T) {

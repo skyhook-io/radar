@@ -247,8 +247,9 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// The manage_node drain contract (a 'partial' drain, with pods still on the
 	// node in errors/pendingPods/skippedPods, is not safe to take down) is one
 	// such uncertainty boundary.
+	// The catalog with delete_resource measures 63,088 bytes; retain 117 bytes of headroom.
 	const (
-		maxCatalogBytes         = 61726
+		maxCatalogBytes         = 63205
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -264,6 +265,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		}
 		total += len(tool.Description) + len(schema)
 	}
+	t.Logf("MCP tool descriptions and schemas use %d bytes, budget is %d", total, maxCatalogBytes)
 	if total > maxCatalogBytes {
 		t.Fatalf("MCP tool descriptions and schemas use %d bytes, budget is %d; raise deliberately for new tools or load-bearing contracts, and trim response-field manuals rather than routing or uncertainty boundaries",
 			total, maxCatalogBytes)
@@ -404,6 +406,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"manage_gitops":   true,
 		"apply_resource":  true,
 		"patch_resource":  true,
+		"delete_resource": true,
 		"manage_node":     true,
 	}
 
@@ -455,7 +458,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 // writeToolNames is the mutating tool set the read-only mount must exclude.
 var writeToolNames = []string{
 	"manage_workload", "manage_rollout", "manage_cronjob", "manage_gitops",
-	"apply_resource", "patch_resource", "manage_node",
+	"apply_resource", "patch_resource", "delete_resource", "manage_node",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the

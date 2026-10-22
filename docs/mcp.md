@@ -400,6 +400,75 @@ docker run -p 127.0.0.1:9280:9280 \
 
 The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
 
+## Single-object deletion
+
+`delete_resource` deletes one object under the caller's Kubernetes identity. It
+requires `get` and `delete` permission on the target. Omit `dry_run` (or set it to
+`true`) to validate a server-side `DryRun=All` delete without persisting it. The
+preview starts with a one-line `summary` and includes UID, generation,
+resourceVersion, finalizers, propagation, and a `confirm` token valid for five
+minutes. Review the preview, then repeat the same target and propagation with
+`dry_run: false` and that token. Tokens are bound to the caller
+and cluster context through a caller digest. A replaced UID, changed generation,
+or changed finalizer set requires a new preview, and the refusal names which
+changed (for finalizers, the new set). For kinds whose status is a subresource
+(most built-ins), status-only reconciliation does not invalidate confirmation. A
+custom resource without a status subresource, such as an Argo CD Application,
+bumps generation on every status write, so its confirm can be refused and the
+preview repeated; that fails safe. Kinds without generation use resourceVersion
+instead. Tokens are signed with a per-process key, so a Radar restart
+invalidates them. A preview of an object that is already deleting reports its
+`deletionTimestamp`. A `foregroundDeletion` or `orphan` finalizer records a pending
+`Foreground` or `Orphan` policy. When either is present, whether the object is live
+or terminating, preview, confirmation and conflict retry omit PropagationPolicy
+and report the recorded policy; an explicit conflicting propagation is rejected.
+Otherwise they send the requested propagation (default `Background`), even for a
+terminating object held by custom finalizers. Omitting the policy there can fall
+back to a kind's legacy orphan default and preserve its Pods. A repeated DELETE
+may shorten a remaining grace period, and cleanup may continue. The tool does not
+patch finalizers; the API server and controllers manage them during deletion.
+Immediately before DELETE the object is re-read as the caller and checked against
+the preview. Every DELETE uses UID and resourceVersion preconditions. On a
+confirmation conflict, the tool re-reads once and retries once with the new
+resourceVersion only if identity, generation, finalizers and effective propagation
+still match the preview, within the call's context deadline. Kinds without
+generation still require the previewed resourceVersion, since status-only changes
+cannot be distinguished safely.
+
+The call has a 40-second overall budget, including target reads, authorization,
+server dry-run or real DELETE, and the conflict retry. If it expires before a
+DELETE is attempted, the error says no deletion was attempted. Optional cascade
+enumeration gets at most five seconds of the remaining budget; on timeout the
+preview still succeeds with `cascade.incomplete: true` and unknown coverage.
+If a real DELETE times out before its response is received, its outcome is unknown:
+it may have been accepted. Inspect the resource before retrying.
+
+`propagation` accepts `background` (default, like kubectl), `foreground`, or
+`orphan`. Cached topology management edges show **possible relationship impact**, not a
+prediction of garbage collection or controller pruning. Pods the topology folds into a group
+are listed one by one under their owner. The approximation is bounded
+to a list of 100 caller-readable dependents. `cascade.dependentCounts` reports
+`byKind` and `total` from **all authorized observed dependents before truncation**,
+with `basis: "observed (not exhaustive)"`; `cascade.truncated` signals a capped
+list. When coverage is unknown, zero observed counts do not establish that there
+are no dependents. `cascade.notEnumerated` appears only for applicable categories:
+Namespace contents, CRD instances, controller cleanup for objects with finalizers,
+or cluster-scoped cascades outside cached topology. These categories' counts are
+unknown, never inferred from an empty dependent list. Deleting a Namespace removes
+all its contents; deleting a CRD removes all its instances, including with orphan
+propagation. Owner-reference orphaning does not prevent controller-finalizer
+cleanup.
+
+An accepted delete reports success while asynchronous cleanup may continue.
+`observation.pendingFinalizers` and `observation.deletionTimestamp` describe what
+an immediate follow-up read saw. That read gets at most five seconds, bounded by
+the remaining call budget; `observation.observationError` means cleanup could not
+be observed in that time or the read failed, not that deletion failed. An accepted
+DELETE still returns success. The tool does not patch finalizers or expose a force mode.
+Inspect controller cleanup first; `patch_resource` is a separate explicit step
+for finalizer intervention, which can orphan resources. Batch deletion and Helm
+release operations are separate follow-ups.
+
 ## `diagnose` evidence limits
 
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
@@ -711,6 +780,7 @@ selector change.
 |------|-------------|------------|
 | `apply_resource` | Create or update a Kubernetes resource from YAML. Supports multi-document YAML, per-document partial-failure results, server-side dry-run preview, and SSA ownership-conflict reporting. | `yaml` (required), `mode` (optional: `apply` or `create`, default `apply`), `dry_run` (optional, default false), `namespace` (optional, override), `verify` (optional, default true: real mutations return post-mutation state, submitted-vs-live diff, workload rollout/pods, and related issues; dry runs return a preview diff), `force` (optional, default false: take SSA field ownership from other managers) |
 | `patch_resource` | Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. Use for precise field/list edits when you know the exact path and do not want to rewrite the full manifest or take broad server-side-apply ownership. Strategic patch is for built-in Kubernetes kinds and name-keyed list edits, such as changing one container. | `kind` (required), `name` (required), `namespace` (required for namespaced resources), `group` (optional), `patch_type` (optional: `json` default, `merge`, or `strategic`), `patch` (required JSON string), `dry_run` (optional), `verify` (optional, default true: real mutations return compact post-patch state and JSON Patch field checks; dry runs return a preview diff) |
+| `delete_resource` | Delete one object after a mandatory caller-authorized server dry-run preview. Confirmation binds identity, generation/finalizers (resourceVersion when generation is absent), caller, context, and propagation. Dependents are approximate and caller-readable; GC-finalizer-recorded propagation is preserved; otherwise the requested policy (default Background) is sent, even while terminating. Finalizers are not patched. | `kind`, `name` (required), `namespace` (required for namespaced resources), `group` (optional), `propagation` (optional: `background`, `foreground`, `orphan`), `dry_run` (optional, default true), `confirm` (required for `dry_run: false`, valid five minutes) |
 | `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
 | `manage_rollout` | Drive an Argo Rollout's progressive delivery — the verbs with no Deployment equivalent. `abort` reverts traffic to the last stable version at once without touching spec and stays aborted until retried (the incident-response verb); `retry` clears an abort; `promote` clears the current pause to advance one step; `promote-full` skips all remaining steps, pauses, and analysis (emergency hotfix) — it waits for the controller to observe the current pod template first, so straight after a rollback it may report that the controller has not caught up, which is safe to retry; `skip-step` advances exactly one canary step (canary only). Rollback / restart / scale go through `manage_workload` with `kind=rollout`. | `action` (required: `abort`, `retry`, `promote`, `promote-full`, `skip-step`), `namespace` (required), `name` (required) |
 | `manage_cronjob` | Trigger, suspend, or resume a CronJob | `action` (required: `trigger`, `suspend`, `resume`), `namespace` (required), `name` (required) |
@@ -731,7 +801,7 @@ See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors)
 
 ## Security
 
-- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, the exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool is annotated `readOnlyHint: false` and `destructiveHint: false`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
+- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, the exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool is annotated `readOnlyHint: false` and `destructiveHint: false`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. Write tools (`apply_resource`, `patch_resource`, `delete_resource`, and the `manage_*` tools: restart, scale, rollback, sync, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
 - **RBAC-aware** — every call enforces RBAC at the same boundary as the REST API:
   - **Local binary**: the cache uses your kubeconfig identity, so MCP can only see what `kubectl` can see for that user
   - **In-cluster (auth enabled)**: read tools intersect namespaced reads with the calling user's RBAC-allowed namespaces; cluster-scoped reads (Nodes, PVs, ClusterRoles, cluster-scoped CRDs) are gated per-kind via SubjectAccessReview, so cluster-wide pod visibility doesn't implicitly grant Node read; write tools, exec, and logs are fully impersonated so the apiserver enforces the user's RBAC end-to-end

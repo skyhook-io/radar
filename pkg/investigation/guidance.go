@@ -43,7 +43,7 @@ WHICH TOOL
 // organizations) while still listing other vendors' write tools, so the line
 // conditions each Kubernetes write tool on that tool being listed rather than
 // on write tools in general.
-const GuidanceWriteRouting = "- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node. Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.\n"
+const GuidanceWriteRouting = "- Fixes, each only if listed: patch_resource, apply_resource, delete_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node. Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.\n"
 
 // GuidanceSignals says how to read what Radar returns.
 const GuidanceSignals = `READING RADAR'S SIGNALS

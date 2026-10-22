@@ -1912,6 +1912,13 @@
         "root": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
         "rootResolved": true,
         "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"},
           {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"}
         ]
       }
@@ -2096,7 +2103,15 @@
       "deletePreview": {
         "root": {"kind": "ReplicaSet", "namespace": "shop", "name": "big-8f9", "group": "apps"},
         "rootResolved": true,
-        "dependents": []
+        "dependents": [
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+          {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"}
+        ]
       }
     },
     {

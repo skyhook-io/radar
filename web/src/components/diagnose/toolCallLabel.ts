@@ -74,6 +74,10 @@ export function describeToolCall(tool: string, args?: string): string {
       return target
         ? `Patching ${kind ?? "resource"} ${target}`
         : "Patching a resource";
+    case "delete_resource":
+      return a.dry_run === false
+        ? `Deleting ${kind ?? "resource"} ${target ?? ""}`.trim()
+        : `Previewing deletion of ${kind ?? "resource"} ${target ?? ""}`.trim();
     case "manage_workload":
     case "manage_rollout":
     case "manage_node":
@@ -93,6 +97,7 @@ interface ToolArgs {
   name?: string;
   container?: string;
   previous?: boolean;
+  dry_run?: boolean;
   query?: string;
   chart?: string;
 }
@@ -111,6 +116,7 @@ function parseArgs(args: string | undefined): ToolArgs {
       name: str("name"),
       container: str("container"),
       previous: raw.previous === true,
+      dry_run: typeof raw.dry_run === "boolean" ? raw.dry_run : undefined,
       query: str("query"),
       chart: str("chart"),
     };

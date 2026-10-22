@@ -12,7 +12,7 @@ WHICH TOOL
 - Request, error, retry or queue metrics: discover_metrics, then query_prometheus.
 - The graph around one object (owners, selectors, config references, service routing): get_neighborhood; a namespace: get_topology.
 - Helm: list_helm_releases, get_helm_release.
-- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node. Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.
+- Fixes, each only if listed: patch_resource, apply_resource, delete_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node. Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.
 
 READING RADAR'S SIGNALS
 - An issues row naming a mechanism and an action is the leading hypothesis; start from its incident_parent if any. Confirm it with a targeted read; don't re-derive it. If it points at another resource, follow it. Conclude only when the evidence names the resource, explains the mechanism and accounts for the symptom; keep other findings separate.

@@ -228,12 +228,24 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 	visited := map[string]bool{rootID: true}
 	queue := []string{rootID}
 	var dependents []ResourceRef
+	groupedPods := map[ResourceRef]bool{}
 
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 
 		for _, targetID := range manages[current] {
+			// A pod group stands in for pods the graph doesn't draw one by
+			// one, and can hold several owners' pods; list this owner's.
+			if target := nodeByID[targetID]; target != nil && target.Kind == KindPodGroup {
+				for _, pod := range groupedPodsOwnedBy(target, nodeByID[current]) {
+					if !groupedPods[pod] {
+						groupedPods[pod] = true
+						dependents = append(dependents, pod)
+					}
+				}
+				continue
+			}
 			if visited[targetID] {
 				continue
 			}
@@ -253,6 +265,28 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 	}
 
 	return preview
+}
+
+// groupedPodsOwnedBy returns the pods in a pod group whose controlling owner is
+// owner, matched on the per-pod ownerKey the group records.
+func groupedPodsOwnedBy(group, owner *Node) []ResourceRef {
+	pods, _ := group.Data["pods"].([]map[string]any)
+	if owner == nil || len(pods) == 0 {
+		return nil
+	}
+	ownerKey := nodeNamespaceFromData(owner) + "/" + KubernetesKindForNode(owner) + "/" + owner.Name
+	var refs []ResourceRef
+	for _, pod := range pods {
+		if key, _ := pod["ownerKey"].(string); key != ownerKey {
+			continue
+		}
+		name, _ := pod["name"].(string)
+		namespace, _ := pod["namespace"].(string)
+		if name != "" {
+			refs = append(refs, ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})
+		}
+	}
+	return refs
 }
 
 // resolveAPIGroup returns the API group for a resource kind using resource discovery.

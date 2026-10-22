@@ -1,12 +1,15 @@
 package mcp
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -105,5 +108,23 @@ func TestResourceContextUsesHostRelationshipGraph(t *testing.T) {
 	SetRelationshipTopologySource(func() (*topology.Topology, *topology.RelationshipsIndex) { return nil, nil })
 	if built, _, _, _, ok := mcpTopologyForContext(); !ok || !hasNode(built, "cluster-web") {
 		t.Fatalf("fallback build missing: %+v", built)
+	}
+}
+
+func TestDeleteCascadePreviewTopologyAfterSwitch(t *testing.T) {
+	freshSummaryCtxTopoMemo(t)
+	setupMCPDynamicResource(t, schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "DeploymentList", k8s.APIResource{Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true})
+	preview := func(name string) map[string]any {
+		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": name, "namespace": "demo"}}}
+		return deleteCascadePreview(context.Background(), obj, metav1.DeletePropagationBackground)
+	}
+	useSwitchTestCluster(t, "old-cluster-web")
+	if before := preview("old-cluster-web"); before["rootResolved"] != true {
+		t.Fatalf("seed: expected old-cluster-web in the delete preview topology: %+v", before)
+	}
+
+	useSwitchTestCluster(t, "new-cluster-api")
+	if after := preview("new-cluster-api"); after["rootResolved"] != true {
+		t.Errorf("post-switch delete preview still reads the previous cluster's topology: %+v", after)
 	}
 }

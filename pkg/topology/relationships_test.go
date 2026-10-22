@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -779,5 +780,46 @@ func TestGetRelationships_SharedClaimListsEachConsumerOnce(t *testing.T) {
 	job := GetRelationships("Job", "team", "run-0", topo, nil, nil)
 	if job == nil || len(job.StorageRefs) != 1 {
 		t.Fatalf("storage refs = %+v, want the shared claim once", job)
+	}
+}
+
+func TestGetCascadeDeletePreview_ListsGroupedPodsOfEachOwner(t *testing.T) {
+	pod := func(name, owner string) map[string]any {
+		return map[string]any{"name": name, "namespace": "demo", "ownerKey": "demo/ReplicaSet/" + owner}
+	}
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "demo"}},
+			{ID: "replicaset/demo/web-stable", Kind: KindReplicaSet, Name: "web-stable", Data: map[string]any{"namespace": "demo"}},
+			{ID: "replicaset/demo/web-canary", Kind: KindReplicaSet, Name: "web-canary", Data: map[string]any{"namespace": "demo"}},
+			{ID: "podgroup/demo/web", Kind: KindPodGroup, Name: "web", Data: map[string]any{"namespace": "demo", "pods": []map[string]any{
+				pod("web-stable-a", "web-stable"), pod("web-stable-b", "web-stable"), pod("web-canary-a", "web-canary"),
+			}}},
+		},
+		Edges: []Edge{
+			{Source: "deployment/demo/web", Target: "replicaset/demo/web-stable", Type: EdgeManages},
+			{Source: "deployment/demo/web", Target: "replicaset/demo/web-canary", Type: EdgeManages},
+			{Source: "replicaset/demo/web-stable", Target: "podgroup/demo/web", Type: EdgeManages},
+			{Source: "replicaset/demo/web-canary", Target: "podgroup/demo/web", Type: EdgeManages},
+		},
+	}
+	names := func(preview *CascadeDeletePreview, kind string) []string {
+		var out []string
+		for _, ref := range preview.Dependents {
+			if ref.Kind == kind {
+				out = append(out, ref.Name)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	deployment := GetCascadeDeletePreview(ResourceRef{Kind: "Deployment", Namespace: "demo", Name: "web"}, topo, nil)
+	if got := names(deployment, "Pod"); !slices.Equal(got, []string{"web-canary-a", "web-stable-a", "web-stable-b"}) {
+		t.Fatalf("deployment pods = %v, want every grouped pod once", got)
+	}
+	canary := GetCascadeDeletePreview(ResourceRef{Kind: "ReplicaSet", Namespace: "demo", Name: "web-canary"}, topo, nil)
+	if got := names(canary, "Pod"); !slices.Equal(got, []string{"web-canary-a"}) {
+		t.Fatalf("canary pods = %v, want only its own pod from the shared group", got)
 	}
 }
