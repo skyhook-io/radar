@@ -37,9 +37,9 @@ Deletion-impact previews require read access to the root resource and use the ca
 ### Image inspection
 
 Authenticated requests (proxy, OIDC, or Radar Cloud) to `/api/images/metadata`,
-`/api/images/inspect`, and `/api/images/file` without a `pod` use anonymous-only
-registry access. If a `pod` is given, `namespace` is required, the caller must
-have `get pods` in that namespace, and the image must match a
+`/api/images/inspect`, and `/api/images/file` must name a `pod` and `namespace`
+(400 otherwise), so Radar only contacts the registry of an image a Pod runs. The
+caller must have `get pods` in that namespace, and the image must match a
 regular, init, or ephemeral container's spec image or status imageID digest reference.
 Authorization failures deny access; an unavailable authorization check returns 503.
 Registry credentials come from that Pod's `spec.imagePullSecrets`, each used only

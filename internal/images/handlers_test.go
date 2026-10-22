@@ -110,7 +110,7 @@ func TestImageRoutesAuthenticatedGuard(t *testing.T) {
 			want                        int
 			message                     string
 		}{
-			{"missing namespace", "", "app", "gcr.io/project/app:v1", true, true, 400, "namespace parameter is required"},
+			{"missing namespace", "", "app", "gcr.io/project/app:v1", true, true, 400, "pod and namespace are required"},
 			{"denied", "team", "app", "gcr.io/project/app:v1", false, true, 403, "rbac_denied: requires get pods in namespace team"},
 			{"check failed", "team", "app", "gcr.io/project/app:v1", false, false, 503, "Could not authorize"},
 			{"non-authoritative allow", "team", "app", "gcr.io/project/app:v1", true, false, 503, "Could not authorize"},
@@ -394,37 +394,22 @@ func TestImageRoutesExecHolderUsesAmbientCredentials(t *testing.T) {
 	}
 }
 
-func TestImageRoutesAuthenticatedWithoutPodAnonymousOnly(t *testing.T) {
-	imageTestCache(t, imageTestPod(), imageTestSecret("team", "pod-secret", "gcr.io", "pod-user"))
-	dockerDir := t.TempDir()
-	t.Setenv("DOCKER_CONFIG", dockerDir)
-	if err := os.WriteFile(filepath.Join(dockerDir, "config.json"), []byte(`{"auths":{"gcr.io":{"auth":"YW1iaWVudDpzZWNyZXQ="}}}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	previousGoogle := google.Keychain
-	google.Keychain = rejectingImageKeychain{t}
-	t.Cleanup(func() { google.Keychain = previousGoogle })
+func TestImageRoutesAuthenticatedRequirePod(t *testing.T) {
 	for _, route := range []string{"metadata", "inspect", "file"} {
-		for _, namespace := range []string{"", "team"} {
-			f := &fakeImageInspector{check: func(req InspectRequest) {
-				if req.keychain == nil || len(req.PullSecretNames) != 0 {
-					t.Fatalf("expected explicit anonymous-only keychain: %+v", req)
-				}
-				assertImageCredentials(t, req.keychain, "gcr.io/project/app:v1", "")
+		for _, q := range []url.Values{
+			{"image": {"10.0.0.5:8080/x:1"}},
+			{"image": {"10.0.0.5:8080/x:1"}, "namespace": {"team"}, "pullSecrets": {"pod-secret"}},
+			{"image": {"10.0.0.5:8080/x:1"}, "pod": {"app"}},
+		} {
+			q.Set("path", "/file.txt")
+			f := &fakeImageInspector{}
+			h := &Handlers{inspector: f, authorize: func(*http.Request, string) (bool, bool) {
+				t.Fatal("Pod authorization called without a Pod and namespace")
+				return false, false
 			}}
-			h := &Handlers{inspector: f,
-				authorize: func(*http.Request, string) (bool, bool) {
-					t.Fatal("Pod authorization called without Pod")
-					return false, false
-				},
-				authorizeSecret: func(*http.Request, string, string) (bool, bool) {
-					t.Fatal("Secret authorization called without Pod")
-					return false, false
-				},
-			}
-			w := serveImageTest(h, route, url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {namespace}, "pullSecrets": {"pod-secret"}, "path": {"/file.txt"}}, true)
-			if w.Code != 200 || f.calls != 1 {
-				t.Fatalf("got %d %s, calls=%d", w.Code, w.Body.String(), f.calls)
+			w := serveImageTest(h, route, q, true)
+			if w.Code != http.StatusBadRequest || f.calls != 0 {
+				t.Fatalf("%s %v: got %d %s, calls=%d", route, q, w.Code, w.Body.String(), f.calls)
 			}
 		}
 	}

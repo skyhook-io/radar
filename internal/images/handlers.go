@@ -156,8 +156,8 @@ func (h *Handlers) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// inspectionRequest limits authenticated inspection to anonymous access or
-// authorized pull secrets from a readable Pod that uses the requested image.
+// inspectionRequest limits authenticated inspection to an image a readable Pod
+// runs, with only the credentials that caller may use.
 func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, image string) (InspectRequest, bool) {
 	req := InspectRequest{
 		Image:     image,
@@ -174,12 +174,11 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		return req, true
 	}
 
-	if req.PodName == "" {
-		req.keychain = &pullSecretKeychain{}
-		return req, true
-	}
-	if req.Namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace parameter is required when pod is given")
+	// Without a Pod the caller could name any host and have Radar connect to
+	// it from inside the cluster network. Binding every authenticated request
+	// to a Pod they can read limits the registry host to that Pod's image.
+	if req.PodName == "" || req.Namespace == "" {
+		writeError(w, http.StatusBadRequest, "pod and namespace are required when authentication is enabled")
 		return req, false
 	}
 	if h.authorize == nil {

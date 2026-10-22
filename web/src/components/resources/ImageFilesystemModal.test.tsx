@@ -47,18 +47,6 @@ it.each([true, false])('shows private-image guidance for authEnabled=%s', async 
   }
 })
 
-it('shows anonymous-only guidance in auth mode without a Pod', async () => {
-  state.authEnabled = true
-  root = createRoot(document.createElement('div'))
-  await act(async () => {
-    root.render(<ImageFilesystemModal open onClose={() => {}} image="gcr.io/project/app:v1" namespace="team" podName="" pullSecrets={[]} />)
-  })
-  const text = document.body.textContent || ''
-  expect(text).toContain("This view reads images anonymously. Open the image from its Pod to use the Pod's pull secrets.")
-  expect(text).not.toContain("Private images are read with the Pod's imagePullSecrets")
-  expect(text).not.toContain('gcloud')
-})
-
 it.each([true, false])('shows download confirmation for authEnabled=%s', async (authEnabled) => {
   state.authEnabled = authEnabled
   state.showMetadata = true

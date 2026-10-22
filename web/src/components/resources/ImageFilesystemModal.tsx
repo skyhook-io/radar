@@ -204,7 +204,6 @@ export function ImageFilesystemModal({
             <AuthenticationHelp
               image={image}
               registryType={registryType}
-              hasPod={!!podName}
               onRetry={() => refetchMetadata()}
             />
           )}
@@ -416,11 +415,10 @@ function DownloadConfirmation({ metadata, onConfirm, onCancel }: DownloadConfirm
 interface AuthenticationHelpProps {
   image: string
   registryType?: string
-  hasPod: boolean
   onRetry: () => void
 }
 
-function AuthenticationHelp({ image, registryType, hasPod, onRetry }: AuthenticationHelpProps) {
+function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelpProps) {
   const authEnabled = useIsAuthEnabled()
   const [copied, setCopied] = useState(false)
   const [retrying, setRetrying] = useState(false)
@@ -495,11 +493,7 @@ function AuthenticationHelp({ image, registryType, hasPod, onRetry }: Authentica
       {/* Explanation */}
       <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-6">
         {authEnabled ? (
-          hasPod ? (
-            <>Private images need exec access to the Pod, or read access to its imagePullSecrets. Exec access also lets Radar use its own registry credentials.</>
-          ) : (
-            <>This view reads images anonymously. Open the image from its Pod to use the Pod's pull secrets.</>
-          )
+          <>Private images need exec access to the Pod, or read access to its imagePullSecrets. Exec access also lets Radar use its own registry credentials.</>
         ) : (
           <>Radar uses your local Docker credentials (<span className="font-mono">~/.docker/config.json</span>).
           Run the command above in your terminal, then click Retry.</>

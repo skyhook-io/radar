@@ -45,7 +45,7 @@ func TestImageRoutesPodAuthorization(t *testing.T) {
 			name, query, user, message string
 			status                     int
 		}{
-			{"missing namespace", "&pod=app", "denied", "namespace parameter is required", 400},
+			{"missing namespace", "&pod=app", "denied", "pod and namespace are required", 400},
 			{"get denied despite list allowed", "&namespace=team&pod=app", "denied", "rbac_denied: requires get pods in namespace team", 403},
 			{"check failed", "&namespace=team&pod=app", "check-error", "Could not authorize get pods", 503},
 		} {
