@@ -241,8 +241,12 @@ func execPodAudit(input execPodInput) auth.AuditActionDetails {
 	}
 	if len(input.Command) > 0 {
 		encoded, _ := json.Marshal(input.Command)
-		if !strings.ContainsRune(input.Command[0], '=') && strings.IndexFunc(input.Command[0], unicode.IsSpace) < 0 {
-			audit.Executable = truncateRunes(path.Base(input.Command[0]), 128)
+		executable := path.Base(input.Command[0])
+		validExecutable := len(executable) <= 128 && strings.IndexFunc(executable, func(r rune) bool {
+			return r > unicode.MaxASCII || !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._+-", r))
+		}) < 0
+		if validExecutable && !strings.ContainsRune(input.Command[0], '=') && strings.IndexFunc(input.Command[0], unicode.IsSpace) < 0 {
+			audit.Executable = executable
 		}
 		audit.ArgumentCount = len(input.Command) - 1
 		audit.CommandHash = fmt.Sprintf("%x", sha256.Sum256(encoded))

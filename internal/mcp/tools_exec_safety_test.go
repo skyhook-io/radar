@@ -45,7 +45,7 @@ func TestExecPodLogsMetadataWithoutCommandOrOutput(t *testing.T) {
 }
 
 func TestExecPodOmitsMistakenShellLinesFromAudit(t *testing.T) {
-	for _, command := range []string{"curl -H 'Authorization: Bearer command-secret' http://service", "PGPASSWORD=command-secret psql", "sh\u00a0-c\u00a0command-secret"} {
+	for _, command := range []string{"curl -H 'Authorization: Bearer command-secret' http://service", "PGPASSWORD=command-secret psql", "sh\u00a0-c\u00a0command-secret", "https://user:command-secret@host"} {
 		t.Run(command, func(t *testing.T) {
 			var logs bytes.Buffer
 			previous := log.Writer()
