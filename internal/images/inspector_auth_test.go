@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -104,4 +106,27 @@ type imageAnonymousKeychain struct{ resolve func() }
 func (k imageAnonymousKeychain) Resolve(authn.Resource) (authn.Authenticator, error) {
 	k.resolve()
 	return authn.Anonymous, nil
+}
+
+func TestImagePodKeychainResolvesOnce(t *testing.T) {
+	imageTestCache(t, imageTestSecret("team", "pod-secret", "gcr.io", "pod-user"))
+	var checks atomic.Int32
+	keychain := getPodKeychain("team", imageTestPod(), func(secret string) bool {
+		if secret != "pod-secret" {
+			t.Errorf("unexpected Secret %s", secret)
+		}
+		checks.Add(1)
+		return true
+	})
+	if checks.Load() != 0 {
+		t.Fatal("Secret checked before keychain resolution")
+	}
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() { assertImageCredentials(t, keychain, "gcr.io/project/app:v1", "pod-user") })
+	}
+	wg.Wait()
+	if got := checks.Load(); got != 1 {
+		t.Fatalf("Secret checked %d times, want 1", got)
+	}
 }

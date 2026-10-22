@@ -18,6 +18,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 const (
@@ -391,7 +392,7 @@ func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest
 	}
 
 	// Anonymous failed, try with credentials
-	log.Printf("Anonymous auth failed for %s, trying with credentials", req.Image)
+	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
 
 	keychain := req.keychain
 	if keychain == nil {

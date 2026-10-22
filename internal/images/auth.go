@@ -7,6 +7,7 @@ import (
 	"log"
 	"maps"
 	"strings"
+	"sync"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/v1/google"
@@ -210,16 +211,31 @@ func GetAuthenticatedKeychain(imageRef string, namespace string, secretNames []s
 // getPodKeychain excludes Radar's ambient credentials: authenticated callers
 // may use only authorized pull secrets declared on the Pod they can read.
 func getPodKeychain(namespace string, pod *corev1.Pod, canUseSecret func(string) bool) authn.Keychain {
-	var secretNames []string
-	for _, ref := range pod.Spec.ImagePullSecrets {
-		if ref.Name != "" && canUseSecret(ref.Name) {
-			secretNames = append(secretNames, ref.Name)
+	return &podKeychain{namespace: namespace, pod: pod, canUseSecret: canUseSecret}
+}
+
+type podKeychain struct {
+	namespace    string
+	pod          *corev1.Pod
+	canUseSecret func(string) bool
+	once         sync.Once
+	keychain     authn.Keychain
+}
+
+func (k *podKeychain) Resolve(target authn.Resource) (authn.Authenticator, error) {
+	k.once.Do(func() {
+		var secretNames []string
+		for _, ref := range k.pod.Spec.ImagePullSecrets {
+			if ref.Name != "" && k.canUseSecret(ref.Name) {
+				secretNames = append(secretNames, ref.Name)
+			}
 		}
-	}
-	if keychain := getKeychainFromSecrets(namespace, secretNames); keychain != nil {
-		return keychain
-	}
-	return &pullSecretKeychain{}
+		k.keychain = getKeychainFromSecrets(k.namespace, secretNames)
+		if k.keychain == nil {
+			k.keychain = &pullSecretKeychain{}
+		}
+	})
+	return k.keychain.Resolve(target)
 }
 
 // GetKeychainForImage creates an authn.Keychain for fetching an image

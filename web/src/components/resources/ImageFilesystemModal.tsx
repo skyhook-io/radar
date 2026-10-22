@@ -204,6 +204,7 @@ export function ImageFilesystemModal({
             <AuthenticationHelp
               image={image}
               registryType={registryType}
+              hasPod={!!podName}
               onRetry={() => refetchMetadata()}
             />
           )}
@@ -294,8 +295,9 @@ interface DownloadConfirmationProps {
 }
 
 function DownloadConfirmation({ metadata, onConfirm, onCancel }: DownloadConfirmationProps) {
+  const authEnabled = useIsAuthEnabled()
   const isPublic = metadata.authMethod === 'anonymous'
-  const authCommand = !isPublic ? getAuthCommand(metadata.authMethod, metadata.image) : null
+  const authCommand = !authEnabled && !isPublic ? getAuthCommand(metadata.authMethod, metadata.image) : null
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -414,10 +416,11 @@ function DownloadConfirmation({ metadata, onConfirm, onCancel }: DownloadConfirm
 interface AuthenticationHelpProps {
   image: string
   registryType?: string
+  hasPod: boolean
   onRetry: () => void
 }
 
-function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelpProps) {
+function AuthenticationHelp({ image, registryType, hasPod, onRetry }: AuthenticationHelpProps) {
   const authEnabled = useIsAuthEnabled()
   const [copied, setCopied] = useState(false)
   const [retrying, setRetrying] = useState(false)
@@ -492,7 +495,11 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
       {/* Explanation */}
       <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-6">
         {authEnabled ? (
-          <>Private images are read with the Pod's imagePullSecrets, and only if you can read those Secrets or exec into the Pod.</>
+          hasPod ? (
+            <>Private images are read with the Pod's imagePullSecrets, and only if you can read those Secrets or exec into the Pod.</>
+          ) : (
+            <>This view reads images anonymously. Open the image from its Pod to use the Pod's pull secrets.</>
+          )
         ) : (
           <>Radar uses your local Docker credentials (<span className="font-mono">~/.docker/config.json</span>).
           Run the command above in your terminal, then click Retry.</>

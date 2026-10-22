@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -23,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 type fakeImageInspector struct {
@@ -367,6 +369,31 @@ func TestImageRoutesAuthenticatedWithoutPodAnonymousOnly(t *testing.T) {
 			if w.Code != 200 || f.calls != 1 {
 				t.Fatalf("got %d %s, calls=%d", w.Code, w.Body.String(), f.calls)
 			}
+		}
+	}
+}
+
+func TestImageRoutesPodCacheSyncing(t *testing.T) {
+	k8s.ResetTestState()
+	t.Cleanup(k8s.ResetTestState)
+	client := fake.NewClientset()
+	client.PrependReactor("list", "pods", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("Pod list temporarily unavailable")
+	})
+	if err := k8s.InitTestPromotedSyncingCache(client, time.Second, time.Minute, nil); err != nil {
+		t.Fatal(err)
+	}
+	if cache, readiness := k8s.ReadableCacheForKind("pods"); cache == nil || readiness != k8s.KindPending {
+		t.Fatalf("expected a pending Pod cache, got %v", readiness)
+	}
+	for _, route := range []string{"metadata", "inspect", "file"} {
+		h := &Handlers{
+			inspector: &fakeImageInspector{check: func(InspectRequest) { t.Fatal("inspector called while Pods are syncing") }},
+			authorize: func(*http.Request, string) (bool, bool) { return true, true },
+		}
+		w := serveImageTest(h, route, url.Values{"image": {"gcr.io/project/app:v1"}, "namespace": {"team"}, "pod": {"app"}, "path": {"/file.txt"}}, true)
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "Pod cache is still syncing") {
+			t.Fatalf("%s: got %d %s", route, w.Code, w.Body.String())
 		}
 	}
 }

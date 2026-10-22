@@ -788,6 +788,13 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 				if allowed, authoritative := s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace}); allowed && authoritative {
 					return true, true
 				}
+				perms := s.permCache.Get(user.Username, user.Groups)
+				key := "secrets/" + secretName
+				if perms != nil {
+					if allowed, ok := perms.CanI("get", "", key, namespace); ok {
+						return allowed, true
+					}
+				}
 				client := k8s.GetClient()
 				if client == nil {
 					return false, false
@@ -800,7 +807,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 					log.Printf("[images] Failed to authorize pull secret %s/%s: %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(secretName), err)
 					return false, false
 				}
-				return status.Allowed, status.EvaluationError == ""
+				authoritative := status.EvaluationError == ""
+				if authoritative && perms != nil {
+					perms.SetCanI("get", "", key, namespace, status.Allowed)
+				}
+				return status.Allowed, authoritative
 			})
 			imageHandlers.RegisterRoutes(r)
 

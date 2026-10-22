@@ -2,22 +2,28 @@ package server
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 )
 
 func TestImageRoutesPodAuthorization(t *testing.T) {
@@ -100,6 +106,7 @@ func TestImageRoutesPullSecretPermissions(t *testing.T) {
 			s.authConfig.Defaults()
 			perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
 			perms.SetCanI("get", "", "pods", "team", true)
+			perms.SetCanI("get", "", "secrets", "team", true)
 			perms.SetCanI("create", "", "pods/exec", "team", tc.exec)
 			s.permCache.Set("alice", nil, perms)
 			router := chi.NewRouter()
@@ -132,8 +139,8 @@ func TestImageRoutesPullSecretPermissions(t *testing.T) {
 					t.Fatalf("exec permission should suffice: %v", *reviews)
 				}
 			} else {
-				if len(*reviews) != 6 {
-					t.Fatalf("want one exact Secret check per secret and route: %v", *reviews)
+				if len(*reviews) != 2 {
+					t.Fatalf("want one cached exact Secret check per secret: %v", *reviews)
 				}
 				for _, a := range *reviews {
 					if a.Verb != "get" || a.Group != "" || a.Resource != "secrets" || a.Namespace != "team" || (a.Name != "allowed-secret" && a.Name != "denied-secret") {
@@ -145,14 +152,117 @@ func TestImageRoutesPullSecretPermissions(t *testing.T) {
 	}
 }
 
-type imageRouteRegistryTransport struct{ auths []string }
+type imageRouteRegistryTransport struct {
+	auths          []string
+	publicManifest []byte
+}
 
 func (f *imageRouteRegistryTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.auths = append(f.auths, r.Header.Get("Authorization"))
+	if f.publicManifest != nil {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {string(types.OCIManifestSchema1)}}, Body: io.NopCloser(strings.NewReader(string(f.publicManifest))), Request: r}, nil
+	}
 	return &http.Response{
 		StatusCode: http.StatusUnauthorized,
 		Header:     http.Header{"Www-Authenticate": {`Basic realm="registry"`}},
 		Body:       io.NopCloser(strings.NewReader(`{"errors":[{"code":"UNAUTHORIZED"}]}`)),
 		Request:    r,
 	}, nil
+}
+
+func TestImageRoutesAnonymousSkipsSecretReviews(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "app"}, Spec: corev1.PodSpec{
+			Containers:       []corev1.Container{{Name: "app", Image: "registry.example/app:v1"}},
+			ImagePullSecrets: []corev1.LocalObjectReference{{Name: "pod-secret"}},
+		}},
+	), map[string]k8score.ResourceScope{"pods": {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	reviews := fakeSARServer(t, func(authv1.ResourceAttributes) bool { return false })
+	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache()}
+	s.authConfig.Defaults()
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	perms.SetCanI("get", "", "pods", "team", true)
+	s.permCache.Set("alice", nil, perms)
+	router := chi.NewRouter()
+	s.setupAppRoutes(router)
+	manifest, err := empty.Image.RawManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousTransport := remote.DefaultTransport
+	remote.DefaultTransport = &imageRouteRegistryTransport{publicManifest: manifest}
+	t.Cleanup(func() { remote.DefaultTransport = previousTransport })
+	r := httptest.NewRequest(http.MethodGet, "/api/images/metadata?image=registry.example/app:v1&namespace=team&pod=app", nil)
+	r.Header.Set("X-Forwarded-User", "alice")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || len(*reviews) != 0 {
+		t.Fatalf("anonymous fetch got %d %s, SARs=%v", w.Code, w.Body.String(), *reviews)
+	}
+}
+
+func TestImageRoutesNonAuthoritativeSecretChecksNotCached(t *testing.T) {
+	for _, failure := range []string{"evaluation error", "request error"} {
+		t.Run(failure, func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			restoreFixtureCache(t)
+			k8s.ResetResourceCache()
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(
+				&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "app"}, Spec: corev1.PodSpec{
+					Containers:       []corev1.Container{{Name: "app", Image: "registry.example/app:v1"}},
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "pod-secret"}},
+				}},
+			), map[string]k8score.ResourceScope{"pods": {Enabled: true}}); err != nil {
+				t.Fatal(err)
+			}
+			var checks atomic.Int32
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				checks.Add(1)
+				if failure == "request error" {
+					http.Error(w, "authorization unavailable", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(authv1.SubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{EvaluationError: "authorization unavailable"}})
+			}))
+			t.Cleanup(api.Close)
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousClient := k8s.SetTestClient(client)
+			t.Cleanup(func() { k8s.SetTestClient(previousClient) })
+			s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache()}
+			s.authConfig.Defaults()
+			perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+			perms.SetCanI("get", "", "pods", "team", true)
+			perms.SetCanI("create", "", "pods/exec", "team", false)
+			s.permCache.Set("alice", nil, perms)
+			router := chi.NewRouter()
+			s.setupAppRoutes(router)
+			previousTransport := remote.DefaultTransport
+			remote.DefaultTransport = &imageRouteRegistryTransport{}
+			t.Cleanup(func() { remote.DefaultTransport = previousTransport })
+			for range 2 {
+				r := httptest.NewRequest(http.MethodGet, "/api/images/metadata?image=registry.example/app:v1&namespace=team&pod=app", nil)
+				r.Header.Set("X-Forwarded-User", "alice")
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, r)
+				if w.Code != http.StatusUnauthorized {
+					t.Fatalf("got %d %s", w.Code, w.Body.String())
+				}
+			}
+			if checks.Load() != 2 {
+				t.Fatalf("non-authoritative check ran %d times, want 2", checks.Load())
+			}
+			if _, cached := perms.CanI("get", "", "secrets/pod-secret", "team"); cached {
+				t.Fatal("non-authoritative result cached")
+			}
+		})
+	}
 }

@@ -69,6 +69,7 @@ func (h *Handlers) handleMetadata(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "Image not found: "+image)
 			return
 		}
+		log.Printf("[images] Failed to get image metadata %s/%s: %v", k8s.SanitizeForLog(req.Namespace), k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
 		writeError(w, http.StatusInternalServerError, "Failed to inspect image")
 		return
 	}
@@ -101,6 +102,7 @@ func (h *Handlers) handleInspect(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "Image not found: "+image)
 			return
 		}
+		log.Printf("[images] Failed to inspect image %s/%s: %v", k8s.SanitizeForLog(req.Namespace), k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
 		writeError(w, http.StatusInternalServerError, "Failed to inspect image")
 		return
 	}
@@ -138,6 +140,7 @@ func (h *Handlers) handleGetFile(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "File not found: "+filePath)
 			return
 		}
+		log.Printf("[images] Failed to read image file %s/%s: %v", k8s.SanitizeForLog(req.Namespace), k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
 		writeError(w, http.StatusInternalServerError, "Failed to read image file")
 		return
 	}
@@ -190,8 +193,19 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		writeError(w, http.StatusForbidden, "rbac_denied: requires get pods in namespace "+req.Namespace)
 		return req, false
 	}
-	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Pods() == nil {
+	cache, readiness := k8s.ReadableCacheForKind("pods")
+	if cache == nil {
+		writeError(w, http.StatusServiceUnavailable, "Pod cache is unavailable")
+		return req, false
+	}
+	switch readiness {
+	case k8s.KindPending:
+		writeError(w, http.StatusServiceUnavailable, "Pod cache is still syncing")
+		return req, false
+	case k8s.KindFailed:
+		writeError(w, http.StatusServiceUnavailable, "Pod cache sync is overdue; retry later")
+		return req, false
+	case k8s.KindUnavailable:
 		writeError(w, http.StatusServiceUnavailable, "Pod cache is unavailable")
 		return req, false
 	}
