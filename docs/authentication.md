@@ -34,6 +34,19 @@ Issues follow the same rule: you see an issue only if you could open its resourc
 
 Deletion-impact previews require read access to the root resource and use the caller's visible topology. Related resources describe observed management relationships, not a guarantee of Kubernetes garbage collection. Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
 
+### Image inspection
+
+Authenticated requests (proxy, OIDC, or Radar Cloud) to `/api/images/metadata`,
+`/api/images/inspect`, and `/api/images/file` must name a `namespace` and `pod`.
+The caller must have `get pods` in that namespace, and the image must match a
+regular, init, or ephemeral container's spec image or status imageID digest reference.
+Authorization failures deny access; an unavailable authorization check returns 503.
+Registry credentials come only from that Pod's `spec.imagePullSecrets`, with
+anonymous fallback. The `pullSecrets` query parameter is ignored; ServiceAccount
+pull secrets, Radar's Docker config, and Google application default credentials
+are not used. Without an authenticated user, local image inspection keeps its
+existing credential discovery behavior.
+
 ### Prometheus metrics
 
 Charts of a specific resource are gated like the resource itself: you see them only if you can read what they chart. The surfaces that can't be tied to one resource — raw PromQL, metric discovery, alert rules and the cluster-wide aggregate — are gated on listing Pods in **every** namespace, because a PromQL expression can't be namespace-filtered by inspecting it. Kubernetes' built-in `view` ClusterRole meets that bar, so binding `view` also grants read access to everything the Prometheus backend holds, `kube-system` and node-level series included.

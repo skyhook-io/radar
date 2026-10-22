@@ -391,9 +391,12 @@ func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest
 	}
 
 	// Anonymous failed, try with credentials
-	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", req.Image, err)
+	log.Printf("Anonymous auth failed for %s, trying with credentials", req.Image)
 
-	keychain := GetAuthenticatedKeychain(req.Image, req.Namespace, req.PullSecretNames)
+	keychain := req.keychain
+	if keychain == nil {
+		keychain = GetAuthenticatedKeychain(req.Image, req.Namespace, req.PullSecretNames)
+	}
 	img, err = remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(keychain),

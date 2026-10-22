@@ -774,7 +774,12 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
-			imageHandlers := images.NewHandlers()
+			imageHandlers := images.NewHandlers(func(r *http.Request, namespace string) (bool, bool) {
+				if auth.UserFromContext(r.Context()) != nil && s.permCache == nil {
+					return false, false
+				}
+				return s.canReadDecision(r, "", "pods", namespace, "get")
+			})
 			imageHandlers.RegisterRoutes(r)
 
 			// Prometheus metrics routes. Every metrics read runs with Radar's

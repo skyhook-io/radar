@@ -207,6 +207,21 @@ func GetAuthenticatedKeychain(imageRef string, namespace string, secretNames []s
 	return authn.NewMultiKeychain(keychains...)
 }
 
+// getPodKeychain excludes Radar's ambient credentials: authenticated callers
+// may use only the pull secrets declared on the Pod they can read.
+func getPodKeychain(namespace string, pod *corev1.Pod) authn.Keychain {
+	var secretNames []string
+	for _, ref := range pod.Spec.ImagePullSecrets {
+		if ref.Name != "" {
+			secretNames = append(secretNames, ref.Name)
+		}
+	}
+	if keychain := getKeychainFromSecrets(namespace, secretNames); keychain != nil {
+		return keychain
+	}
+	return &pullSecretKeychain{}
+}
+
 // GetKeychainForImage creates an authn.Keychain for fetching an image
 // Deprecated: Use GetAuthenticatedKeychain for brute-force auth flow
 func GetKeychainForImage(imageRef string, namespace string, secretNames []string) authn.Keychain {
