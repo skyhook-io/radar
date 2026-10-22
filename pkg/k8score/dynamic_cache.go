@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"runtime"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2157,48 +2156,54 @@ func (d *DynamicResourceCache) IsNamespaceSynced(gvr schema.GroupVersionResource
 	return d.servedSynced(d.readEntries(gvr, namespace))
 }
 
-// DynamicReadServer identifies the informers serving reads of one GVR and
-// namespace at a moment. Starting a cluster-wide informer replaces a GVR's
-// namespace informers inside the same cache, so two readiness checks that
-// both pass can describe different informers; a read bracketed by two equal,
-// synced servers was answered by stores that were complete throughout.
-type DynamicReadServer struct {
-	entries []*informerEntry
-}
-
-// Same reports whether s and other are the same informers, in any order.
-func (s DynamicReadServer) Same(other DynamicReadServer) bool {
-	if len(s.entries) != len(other.entries) {
-		return false
-	}
-	for _, e := range s.entries {
-		if !slices.Contains(other.entries, e) {
-			return false
-		}
-	}
-	return true
-}
-
-// ReadServer returns the informers serving reads of gvr in namespace now and
+// servedEntries returns the informers serving reads of gvr in namespace now and
 // whether they answer authoritatively, by IsNamespaceSynced's rules. Both come
 // from the same informers, so a replacement between them cannot mix them.
-func (d *DynamicResourceCache) ReadServer(gvr schema.GroupVersionResource, namespace string) (DynamicReadServer, bool) {
+func (d *DynamicResourceCache) servedEntries(gvr schema.GroupVersionResource, namespace string) ([]*informerEntry, bool) {
 	if d == nil {
-		return DynamicReadServer{}, false
+		return nil, false
 	}
 	d.mu.RLock()
 	clusterWide, ok := d.informers[informerKey{gvr: gvr}]
 	d.mu.RUnlock()
 	if ok {
 		entries := []*informerEntry{clusterWide}
-		return DynamicReadServer{entries: entries}, d.servedSynced(entries)
+		return entries, d.servedSynced(entries)
 	}
 	entries := d.readEntries(gvr, namespace)
 	if namespace == "" {
 		// Only the cluster-wide informer answers a cluster-wide read.
-		return DynamicReadServer{entries: entries}, false
+		return entries, false
 	}
-	return DynamicReadServer{entries: entries}, d.servedSynced(entries)
+	return entries, d.servedSynced(entries)
+}
+
+// ReadableObject gets one object from the informers serving gvr in namespace
+// now ("" for a cluster-scoped resource), without probing, starting a watch or
+// waiting for one. found reports whether they hold it. ok is true only if they
+// had completed their initial list before the read; when ok is false, a miss
+// proves nothing.
+//
+// The object is the cached one, not a copy: callers must not modify it or keep
+// it beyond the computation that read it.
+func (d *DynamicResourceCache) ReadableObject(gvr schema.GroupVersionResource, namespace, name string) (obj *unstructured.Unstructured, found, ok bool) {
+	entries, ok := d.servedEntries(gvr, namespace)
+	if !ok {
+		return nil, false, false
+	}
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
+	}
+	item, found, err := getByKeyFromEntries(entries, key)
+	if err != nil {
+		return nil, false, false
+	}
+	if !found {
+		return nil, false, true
+	}
+	u, isUnstructured := item.(*unstructured.Unstructured)
+	return u, isUnstructured, isUnstructured
 }
 
 // ---------------------------------------------------------------------------
