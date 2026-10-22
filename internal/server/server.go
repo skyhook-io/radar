@@ -573,6 +573,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
 			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
 			r.Get("/topology", s.handleTopology)
+			r.Get("/gitops/capabilities/{kind}/{namespace}/{name}", s.handleGitOpsCapabilities)
 			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/gitops/destination/{kind}/{namespace}/{name}", s.handleGitOpsDestination)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
@@ -1392,20 +1393,21 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
-		YAMLReview:            true,
-		YAMLSchemas:           true,
-		WorkloadImages:        true,
-		ResourceIssues:        true,
-		ResourceIssueCoverage: true,
-		PodEnvironment:        true,
-		PolicyResource:        true,
-		WorkloadHistory:       true,
-		CNPGWorkspace:         true,
-		CNPGProtectionSetup:   true,
-		ServiceEndpointSlices: true,
-		TrafficRecords:        true,
-		GitOpsWriteEvidence:   true,
-		HelmSourceIdentity:    true,
+		YAMLReview:               true,
+		YAMLSchemas:              true,
+		WorkloadImages:           true,
+		ResourceIssues:           true,
+		ResourceIssueCoverage:    true,
+		PodEnvironment:           true,
+		PolicyResource:           true,
+		WorkloadHistory:          true,
+		CNPGWorkspace:            true,
+		CNPGProtectionSetup:      true,
+		ServiceEndpointSlices:    true,
+		TrafficRecords:           true,
+		GitOpsWriteEvidence:      true,
+		GitOpsActionCapabilities: true,
+		HelmSourceIdentity:       true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
@@ -5186,15 +5188,21 @@ func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	}
 }
 
-func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
-	body := map[string]string{"error": message}
+func (s *Server) writeError(w http.ResponseWriter, status int, message string, fields ...map[string]string) {
+	payload := map[string]string{}
+	for _, extra := range fields {
+		for key, value := range extra {
+			payload[key] = value
+		}
+	}
+	payload["error"] = message
 	if k8s.IsUserTokenRequired(message) {
 		status = http.StatusForbidden
-		body["reason"] = pkgauth.UserTokenRequiredReason
+		payload["reason"] = pkgauth.UserTokenRequiredReason
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		log.Printf("Failed to encode error response: %v", err)
 	}
 }
@@ -5222,11 +5230,7 @@ func (s *Server) writeApplyResourceError(w http.ResponseWriter, status int, mess
 // the frontend branches on (e.g. cloud_role_insufficient → "your role can't do
 // this" instead of a generic auth failure).
 func (s *Server) writeErrorCode(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message, "error_code": code}); err != nil {
-		log.Printf("Failed to encode error response: %v", err)
-	}
+	s.writeError(w, status, message, map[string]string{"error_code": code})
 }
 
 // writeTimelineStoreUnavailable answers a timeline read that found no store.

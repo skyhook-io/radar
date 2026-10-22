@@ -1,0 +1,217 @@
+suite: Radar Cloud owner integration writes
+templates:
+  - cloud-rbac-integration-write.yaml
+set:
+  cloud.enabled: true
+  cloud.token: dummy
+  cloud.url: wss://cloud.example
+  cloud.clusterName: test
+tests:
+  - it: grants owners get and patch on Argo CD Applications with the stock admin role
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRole
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-radar-integration-write
+        documentIndex: 0
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [argoproj.io]
+              resources: [applications]
+              verbs: [get, patch]
+        documentIndex: 0
+      - isKind:
+          of: ClusterRoleBinding
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-radar-cloud-owner-integration-write
+        documentIndex: 1
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: RELEASE-NAME-radar-integration-write
+        documentIndex: 1
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:owner
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: cloud:owner
+              apiGroup: rbac.authorization.k8s.io
+        documentIndex: 1
+  - it: auto grants with a cluster-admin owner role
+    set:
+      cloud.defaultRbac.ownerClusterRole: cluster-admin
+    asserts:
+      - hasDocuments:
+          count: 2
+  - it: auto grants nothing with a custom owner role
+    set:
+      cloud.defaultRbac.ownerClusterRole: platform-owner
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: auto compares the role name exactly
+    set:
+      cloud.defaultRbac.ownerClusterRole: Admin
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: true grants with a custom owner role
+    set:
+      cloud.defaultRbac.ownerClusterRole: platform-owner
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [argoproj.io]
+              resources: [applications]
+              verbs: [get, patch]
+        documentIndex: 0
+  - it: false grants nothing even with the stock roles
+    set:
+      cloud.defaultRbac.integrationWrite.gitops.owner: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: false grants nothing with cluster-admin
+    set:
+      cloud.defaultRbac.ownerClusterRole: cluster-admin
+      cloud.defaultRbac.integrationWrite.gitops.owner: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  # null deletes the key, as an older --reuse-values tree lacks it entirely.
+  - it: a missing integrationWrite map follows the gitops default (auto)
+    set:
+      cloud.defaultRbac.integrationWrite: null
+    asserts:
+      - hasDocuments:
+          count: 2
+  - it: a missing integrationWrite map stays off with a custom owner role
+    set:
+      cloud.defaultRbac.integrationWrite: null
+      cloud.defaultRbac.ownerClusterRole: platform-owner
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: a missing gitops map follows the gitops default (auto)
+    set:
+      cloud.defaultRbac.integrationWrite.gitops: null
+    asserts:
+      - hasDocuments:
+          count: 2
+  - it: a missing owner key follows the gitops default (auto)
+    set:
+      cloud.defaultRbac.integrationWrite.gitops.owner: null
+    asserts:
+      - hasDocuments:
+          count: 2
+  - it: respects customer-managed RBAC
+    set:
+      cloud.defaultRbac.create: false
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: needs the owner tier
+    set:
+      cloud.defaultRbac.owner: false
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: needs chart RBAC
+    set:
+      rbac.create: false
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: does not affect OSS
+    set:
+      cloud.enabled: false
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: follows the Argo collection flag
+    set:
+      rbac.crdGroups.argo: false
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: crdGroups.all enables only the reviewed grant rows
+    set:
+      rbac.crdGroups.argo: false
+      rbac.crdGroups.all: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [argoproj.io]
+              resources: [applications]
+              verbs: [get, patch]
+        documentIndex: 0
+  - it: never binds members or viewers
+    set:
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+    asserts:
+      - notContains:
+          path: subjects
+          content:
+            kind: Group
+            name: radar:member
+            apiGroup: rbac.authorization.k8s.io
+        documentIndex: 1
+      - notContains:
+          path: subjects
+          content:
+            kind: Group
+            name: radar:viewer
+            apiGroup: rbac.authorization.k8s.io
+        documentIndex: 1
+  - it: rejects switch values other than auto, true or false
+    set:
+      cloud.defaultRbac.integrationWrite.gitops.owner: "yes"
+    asserts:
+      - failedTemplate:
+          errorPattern: "integrationWrite[./]gitops[./]owner"
+  - it: rejects string true
+    set:
+      cloud.defaultRbac.integrationWrite.gitops.owner: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "integrationWrite[./]gitops[./]owner"
+  - it: rejects unknown capability keys
+    set:
+      cloud.defaultRbac.integrationWrite.flux.owner: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "integrationWrite"
+      - failedTemplate:
+          errorPattern: "flux"
+  - it: has no member or viewer switches
+    set:
+      cloud.defaultRbac.integrationWrite.gitops.member: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "integrationWrite[./]gitops"
+      - failedTemplate:
+          errorPattern: "member"

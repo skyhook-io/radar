@@ -161,6 +161,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+  gitOpsActionCapabilities?: boolean
  helmSourceIdentity?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean

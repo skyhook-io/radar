@@ -1,0 +1,314 @@
+# Explicit Radar Cloud owner write policy for integration actions, NOT the connector
+# service account's rules. Additions require review. Adding resources or verbs to a
+# capability expands every install that has it enabled: release-note the change.
+# grant: stock vendor installs don't give the built-in admin/edit roles this write.
+# existing: stock vendor aggregation (or the built-in roles) already grant it; no rule here.
+# withhold: this add-on grants nothing pending review; Kubernetes has no deny rule.
+# Grants are cluster-wide full-object writes: RBAC can't limit a patch to the fields an action sets.
+# actions lists every HTTP route and MCP tool action that needs the row, including indirect targets.
+capabilities:
+  gitops:
+    # Used when cloud.defaultRbac.integrationWrite.gitops.owner is absent (e.g. --reuse-values).
+    default: auto
+entries:
+  - group: "argoproj.io"
+    resources: ["applications"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "argo"
+    capability: gitops
+    decision: grant
+    reason: "Stock Argo CD aggregates no argoproj.io rules into admin or edit. Patching an Application delegates the Argo CD controller's deployment authority; see the chart README."
+    source: "pkg/gitops/operations.go; Argo CD v3.5.2 manifests/install.yaml (no aggregate-to-admin/edit ClusterRoles)"
+    actions:
+      - "POST /api/argo/applications/{namespace}/{name}/sync"
+      - "POST /api/argo/applications/{namespace}/{name}/validate-resource"
+      - "POST /api/argo/applications/{namespace}/{name}/refresh"
+      - "POST /api/argo/applications/{namespace}/{name}/rollback"
+      - "POST /api/argo/applications/{namespace}/{name}/terminate"
+      - "POST /api/argo/applications/{namespace}/{name}/suspend"
+      - "POST /api/argo/applications/{namespace}/{name}/resume"
+      - "MCP manage_gitops tool=argocd action=sync"
+      - "MCP manage_gitops tool=argocd action=refresh"
+      - "MCP manage_gitops tool=argocd action=terminate"
+      - "MCP manage_gitops tool=argocd action=rollback"
+      - "MCP manage_gitops tool=argocd action=suspend"
+      - "MCP manage_gitops tool=argocd action=resume"
+  - group: "source.toolkit.fluxcd.io"
+    resources: ["gitrepositories", "helmrepositories", "ocirepositories", "helmcharts", "buckets"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "flux"
+    capability: gitops
+    decision: existing
+    reason: "Stock flux-edit aggregates into edit and admin. Sync with source also patches the whole source chain, including a HelmChart and its repository, possibly in another namespace."
+    source: "https://github.com/fluxcd/flux2/blob/v2.4.0/manifests/rbac/edit.yaml"
+    actions:
+      - "POST /api/flux/{kind}/{namespace}/{name}/reconcile"
+      - "POST /api/flux/{kind}/{namespace}/{name}/sync-with-source"
+      - "POST /api/flux/{kind}/{namespace}/{name}/suspend"
+      - "POST /api/flux/{kind}/{namespace}/{name}/resume"
+      - "MCP manage_gitops tool=fluxcd action=reconcile"
+      - "MCP manage_gitops tool=fluxcd action=sync-with-source"
+      - "MCP manage_gitops tool=fluxcd action=suspend"
+      - "MCP manage_gitops tool=fluxcd action=resume"
+  - group: "kustomize.toolkit.fluxcd.io"
+    resources: ["kustomizations"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "flux"
+    capability: gitops
+    decision: existing
+    reason: "Stock flux-edit aggregates into edit and admin."
+    source: "https://github.com/fluxcd/flux2/blob/v2.4.0/manifests/rbac/edit.yaml"
+    actions:
+      - "POST /api/flux/{kind}/{namespace}/{name}/reconcile"
+      - "POST /api/flux/{kind}/{namespace}/{name}/sync-with-source"
+      - "POST /api/flux/{kind}/{namespace}/{name}/suspend"
+      - "POST /api/flux/{kind}/{namespace}/{name}/resume"
+      - "MCP manage_gitops tool=fluxcd action=reconcile"
+      - "MCP manage_gitops tool=fluxcd action=sync-with-source"
+      - "MCP manage_gitops tool=fluxcd action=suspend"
+      - "MCP manage_gitops tool=fluxcd action=resume"
+  - group: "helm.toolkit.fluxcd.io"
+    resources: ["helmreleases"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "flux"
+    capability: gitops
+    decision: existing
+    reason: "Stock flux-edit aggregates into edit and admin."
+    source: "https://github.com/fluxcd/flux2/blob/v2.4.0/manifests/rbac/edit.yaml"
+    actions:
+      - "POST /api/flux/{kind}/{namespace}/{name}/reconcile"
+      - "POST /api/flux/{kind}/{namespace}/{name}/sync-with-source"
+      - "POST /api/flux/{kind}/{namespace}/{name}/suspend"
+      - "POST /api/flux/{kind}/{namespace}/{name}/resume"
+      - "MCP manage_gitops tool=fluxcd action=reconcile"
+      - "MCP manage_gitops tool=fluxcd action=sync-with-source"
+      - "MCP manage_gitops tool=fluxcd action=suspend"
+      - "MCP manage_gitops tool=fluxcd action=resume"
+  - group: "notification.toolkit.fluxcd.io"
+    resources: ["alerts"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "flux"
+    capability: gitops
+    decision: existing
+    reason: "Stock flux-edit aggregates into edit and admin."
+    source: "https://github.com/fluxcd/flux2/blob/v2.4.0/manifests/rbac/edit.yaml"
+    actions:
+      - "POST /api/flux/{kind}/{namespace}/{name}/reconcile"
+      - "POST /api/flux/{kind}/{namespace}/{name}/suspend"
+      - "POST /api/flux/{kind}/{namespace}/{name}/resume"
+      - "MCP manage_gitops tool=fluxcd action=reconcile"
+      - "MCP manage_gitops tool=fluxcd action=suspend"
+      - "MCP manage_gitops tool=fluxcd action=resume"
+  - group: "argoproj.io"
+    resources: ["rollouts"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "argo"
+    capability: rollouts
+    decision: existing
+    reason: "Stock argo-rollouts-aggregate-to-admin and -to-edit include rollouts."
+    source: "https://github.com/argoproj/argo-rollouts/blob/v1.9.1/manifests/base/argo-rollouts-aggregate-roles.yaml"
+    actions:
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=abort"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=retry"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=promote"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=promote-full"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=skip-step"
+      - "POST /api/workloads/{kind}/{namespace}/{name}/restart kind=rollouts"
+      - "POST /api/workloads/{kind}/{namespace}/{name}/scale kind=rollouts"
+      - "POST /api/workloads/{kind}/{namespace}/{name}/rollback kind=rollouts"
+      - "POST /api/workloads/{kind}/{namespace}/{name}/images kind=rollouts"
+      - "MCP manage_rollout action=abort"
+      - "MCP manage_rollout action=retry"
+      - "MCP manage_rollout action=promote"
+      - "MCP manage_rollout action=promote-full"
+      - "MCP manage_rollout action=skip-step"
+      - "MCP manage_workload kind=rollout action=restart"
+      - "MCP manage_workload kind=rollout action=scale"
+      - "MCP manage_workload kind=rollout action=rollback"
+  - group: "argoproj.io"
+    resources: ["rollouts/status"]
+    verbs: ["patch"]
+    scope: Namespaced
+    collection: "argo"
+    capability: rollouts
+    decision: existing
+    reason: "Stock argo-rollouts-aggregate-to-admin and -to-edit include rollouts/status; patch on rollouts does not imply it."
+    source: "https://github.com/argoproj/argo-rollouts/blob/v1.9.1/manifests/base/argo-rollouts-aggregate-roles.yaml"
+    actions:
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=abort"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=retry"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=promote"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=promote-full"
+      - "POST /api/rollouts/{namespace}/{name}/{action} action=skip-step"
+      - "MCP manage_rollout action=abort"
+      - "MCP manage_rollout action=retry"
+      - "MCP manage_rollout action=promote"
+      - "MCP manage_rollout action=promote-full"
+      - "MCP manage_rollout action=skip-step"
+  - group: "apps"
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: ""
+    capability: rollouts
+    decision: existing
+    reason: "A workloadRef Rollout's rollback and image edits patch the referenced workload's template; built-in admin and edit already allow it."
+    source: "pkg/rollouts/revisions.go (workloadRefTargets)"
+    actions:
+      - "POST /api/workloads/{kind}/{namespace}/{name}/rollback kind=rollouts"
+      - "POST /api/workloads/{kind}/{namespace}/{name}/images kind=rollouts"
+      - "MCP manage_workload kind=rollout action=rollback"
+  - group: ""
+    resources: ["podtemplates"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: ""
+    capability: rollouts
+    decision: existing
+    reason: "A workloadRef Rollout's rollback and image edits patch the referenced PodTemplate; built-in admin and edit already allow it."
+    source: "pkg/rollouts/revisions.go (workloadRefTargets)"
+    actions:
+      - "POST /api/workloads/{kind}/{namespace}/{name}/rollback kind=rollouts"
+      - "POST /api/workloads/{kind}/{namespace}/{name}/images kind=rollouts"
+      - "MCP manage_workload kind=rollout action=rollback"
+  - group: "velero.io"
+    resources: ["downloadrequests"]
+    verbs: ["create", "get", "delete"]
+    scope: Namespaced
+    collection: "velero"
+    capability: velero
+    decision: withhold
+    reason: "Pending its own review. Radar returns parsed run messages, not the signed URL, but the grant would let a holder request any download target directly, including BackupContents (every backed-up object, Secrets included)."
+    source: "internal/server/velero_results.go; https://github.com/vmware-tanzu/velero/blob/v1.16.0/pkg/apis/velero/v1/download_request_types.go"
+    actions:
+      - "POST /api/velero/{kind}/{namespace}/{name}/messages"
+  - group: "postgresql.cnpg.io"
+    resources: ["clusters"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    capability: cnpg
+    decision: withhold
+    reason: "No additional CloudNativePG write grant is introduced; actions keep the caller's existing roles."
+    source: "internal/cnpg/actions.go; internal/cnpg/actions_maintenance.go; internal/cnpg/protection.go; internal/cnpg/recovery.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=backup"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=switchover"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restart"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restartInstance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=reload"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=fence"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=unfence"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=hibernate"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=rehydrate"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=cancelBackend"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=terminateBackend"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=destroyInstance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=setMaintenance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=unsetMaintenance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=configureArchiving"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/restore-validation"
+  - group: "postgresql.cnpg.io"
+    resources: ["clusters/status"]
+    verbs: ["patch"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    capability: cnpg
+    decision: withhold
+    reason: "Status writes can promote or restart a primary; no additional CloudNativePG write grant is introduced."
+    source: "internal/cnpg/actions.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=switchover"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restartInstance"
+  - group: "postgresql.cnpg.io"
+    resources: ["backups"]
+    verbs: ["get", "list", "create"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    capability: cnpg
+    decision: withhold
+    reason: "Backup creation keeps the caller's existing roles; no additional CloudNativePG write grant is introduced."
+    source: "internal/cnpg/actions.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=backup"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=run"
+  - group: "postgresql.cnpg.io"
+    resources: ["scheduledbackups"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    capability: cnpg
+    decision: withhold
+    reason: "Schedule writes keep the caller's existing roles; no additional CloudNativePG write grant is introduced."
+    source: "internal/cnpg/actions.go; internal/cnpg/protection.go"
+    actions:
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=suspend"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=resume"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=run"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=setSchedule"
+      - "POST /api/cnpg/scheduledbackups/{namespace}/{name}/actions/{action} action=repairMethod"
+  - group: "postgresql.cnpg.io"
+    resources: ["poolers"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    capability: cnpg
+    decision: withhold
+    reason: "Pooler writes keep the caller's existing roles; no additional CloudNativePG write grant is introduced."
+    source: "internal/cnpg/pooler_actions.go"
+    actions:
+      - "POST /api/cnpg/poolers/{namespace}/{name}/actions/{action} action=pause"
+      - "POST /api/cnpg/poolers/{namespace}/{name}/actions/{action} action=resume"
+  - group: ""
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+    scope: Namespaced
+    collection: ""
+    capability: cnpg
+    decision: existing
+    reason: "Built-in admin and edit already cover the Pod reads and deletes used by instance actions."
+    source: "internal/cnpg/actions.go; internal/cnpg/destroy.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=restartInstance"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=fence"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=destroyInstance"
+  - group: ""
+    resources: ["pods/exec"]
+    verbs: ["create"]
+    scope: Namespaced
+    collection: ""
+    capability: cnpg
+    decision: existing
+    reason: "Built-in admin and edit already cover the exec used to cancel or terminate a PostgreSQL backend."
+    source: "internal/cnpg/sessions.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=cancelBackend"
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=terminateBackend"
+  - group: ""
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "update", "delete"]
+    scope: Namespaced
+    collection: ""
+    capability: cnpg
+    decision: existing
+    reason: "Built-in admin and edit already cover the PVC detach or deletion used by destroy instance."
+    source: "internal/cnpg/destroy.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=destroyInstance"
+  - group: "batch"
+    resources: ["jobs"]
+    verbs: ["list", "delete"]
+    scope: Namespaced
+    collection: ""
+    capability: cnpg
+    decision: existing
+    reason: "Built-in admin and edit already cover the Job reads and deletes used by destroy instance."
+    source: "internal/cnpg/destroy.go"
+    actions:
+      - "POST /api/cnpg/clusters/{namespace}/{name}/actions/{action} action=destroyInstance"

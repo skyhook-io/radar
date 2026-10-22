@@ -153,11 +153,12 @@ type FeatureCapabilities struct {
 	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
-	CNPGWorkspace         bool `json:"cnpgWorkspace"`
-	CNPGProtectionSetup   bool `json:"cnpgProtectionSetup"`
-	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
+	CNPGWorkspace            bool `json:"cnpgWorkspace"`
+	CNPGProtectionSetup      bool `json:"cnpgProtectionSetup"`
+	ServiceEndpointSlices    bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords           bool `json:"trafficRecords"`           // GET /api/traffic/flows/records
+	GitOpsWriteEvidence      bool `json:"gitopsWriteEvidence"`      // POST /api/gitops/write-evidence
+	GitOpsActionCapabilities bool `json:"gitOpsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

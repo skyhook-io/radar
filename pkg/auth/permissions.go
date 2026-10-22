@@ -294,6 +294,9 @@ func DiscoverNamespaces(ctx context.Context, client kubernetes.Interface, userna
 // ReviewSubjectAccess asks the apiserver authorizer whether a subject can
 // perform the action described by attrs.
 func ReviewSubjectAccess(ctx context.Context, client kubernetes.Interface, username string, groups []string, attrs authv1.ResourceAttributes) (authv1.SubjectAccessReviewStatus, error) {
+	if username != "" && username != "system:anonymous" && !slices.Contains(groups, "system:authenticated") {
+		groups = append(slices.Clone(groups), "system:authenticated")
+	}
 	review := &authv1.SubjectAccessReview{
 		Spec: authv1.SubjectAccessReviewSpec{
 			User:               username,
