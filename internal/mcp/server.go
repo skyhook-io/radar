@@ -17,7 +17,7 @@ import (
 // newServer builds a Radar MCP server. instructions is the server-instructions
 // text sent in the initialize result and, on protocol 2026-07-28, the
 // server/discover result; empty sends none.
-func newServer(includeWrites bool, instructions string) *mcpsdk.Server {
+func newServer(includeWrites, includeExec bool, instructions string) *mcpsdk.Server {
 	paramRegistry := newToolParamRegistry()
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
@@ -36,7 +36,7 @@ func newServer(includeWrites bool, instructions string) *mcpsdk.Server {
 	// name is an unrecoverable dead end for an agent. See toolparams.go.
 	server.AddReceivingMiddleware(paramRepairMiddlewareFor(paramRegistry))
 
-	registerTools(server, includeWrites, paramRegistry)
+	registerTools(server, includeWrites, includeExec, paramRegistry)
 	registerResources(server)
 
 	return server
@@ -53,7 +53,7 @@ func privateCacheScope(_ context.Context, _ mcpsdk.Request, c *mcpsdk.Cacheable)
 
 // newFullServer is the public server with read and write tools, served over
 // stdio and on /mcp.
-func newFullServer() *mcpsdk.Server { return newServer(true, serverInstructions(true)) }
+func newFullServer() *mcpsdk.Server { return newServer(true, true, serverInstructions(true)) }
 
 // RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
@@ -62,7 +62,7 @@ func RunStdio(ctx context.Context) error {
 
 // RunStdioMode uses the same read-only catalog and enforcement as HTTP.
 func RunStdioMode(ctx context.Context, readOnly bool) error {
-	return newServer(!readOnly, serverInstructions(!readOnly)).Run(ctx, &mcpsdk.StdioTransport{})
+	return newServer(!readOnly, !readOnly, serverInstructions(!readOnly)).Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
@@ -70,7 +70,13 @@ func NewHandler() http.Handler { return handlerForServer(newFullServer()) }
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler {
-	return handlerForServer(newServer(false, serverInstructions(false)))
+	return handlerForServer(newServer(false, false, serverInstructions(false)))
+}
+
+// NewApplyHandler exposes remediation tools without container command execution
+// for every built-in agent, independently of its client-side tool restrictions.
+func NewApplyHandler() http.Handler {
+	return handlerForServer(newServer(true, false, ""))
 }
 
 // NewInvestigationHandler creates the private read-only MCP transport used by
@@ -80,7 +86,7 @@ func NewReadOnlyHandler() http.Handler {
 // normal tool result contract. It sends no server instructions: the agent
 // already runs under investigation.SystemPrompt.
 func NewInvestigationHandler(refs *investigationrefs.Registry) http.Handler {
-	return investigationHandlerForServer(newServer(false, ""), refs)
+	return investigationHandlerForServer(newServer(false, false, ""), refs)
 }
 
 func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationrefs.Registry) http.Handler {

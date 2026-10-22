@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -241,13 +242,22 @@ func AuditLog(r *http.Request, namespace, name string) {
 }
 
 type AuditActionDetails struct {
-	Action    string
-	Namespace string
-	Name      string
-	Container string
-	Variable  string
-	Source    string
-	Outcome   string
+	Action        string
+	Namespace     string
+	Name          string
+	Container     string
+	Variable      string
+	Source        string
+	Outcome       string
+	Executable    string
+	ArgumentCount int
+	CommandHash   string
+	RequestedKind string
+	RequestedName string
+	SelectedUID   string
+	Node          string
+	ExitCode      *int
+	Duration      time.Duration
 }
 
 func AuditLogAction(r *http.Request, details AuditActionDetails) {
@@ -257,7 +267,26 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 		username = user.Username
 		groups = user.Groups
 	}
-	log.Printf("[audit] user=%q groups=%q action=%q path=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
+	line := fmt.Sprintf("[audit] user=%q groups=%q action=%q path=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
 		username, groups, details.Action, r.URL.Path, details.Namespace, details.Name,
 		details.Container, details.Variable, details.Source, details.Outcome)
+	if details.CommandHash != "" {
+		line += fmt.Sprintf(" executable=%q argumentCount=%d commandHash=%q", details.Executable, details.ArgumentCount, details.CommandHash)
+	}
+	if details.RequestedName != "" {
+		line += fmt.Sprintf(" requestedKind=%q requestedName=%q", details.RequestedKind, details.RequestedName)
+	}
+	if details.SelectedUID != "" {
+		line += fmt.Sprintf(" selectedUID=%q", details.SelectedUID)
+	}
+	if details.Node != "" {
+		line += fmt.Sprintf(" node=%q", details.Node)
+	}
+	if details.ExitCode != nil {
+		line += fmt.Sprintf(" exitCode=%d", *details.ExitCode)
+	}
+	if details.Duration != 0 {
+		line += fmt.Sprintf(" duration=%s", details.Duration)
+	}
+	log.Print(line)
 }

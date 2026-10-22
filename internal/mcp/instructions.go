@@ -8,5 +8,8 @@ import "github.com/skyhook-io/radar/pkg/investigation"
 // (pkg/investigation/guidance.go), with the write-tool routing only where the
 // write tools are registered.
 func serverInstructions(includeWrites bool) string {
+	if includeWrites && execToolsEnabled.Load() {
+		return investigation.GeneralGuidanceExec
+	}
 	return investigation.GeneralGuidance(includeWrites)
 }

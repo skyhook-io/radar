@@ -1,0 +1,37 @@
+suite: Opt-in MCP exec tool
+templates:
+  - deployment.yaml
+  - clusterrole.yaml
+tests:
+  - it: omits the exec opt-in by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-exec-tools
+  - it: passes the explicit exec opt-in
+    template: deployment.yaml
+    set:
+      mcp.execTools: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mcp-exec-tools
+  - it: rejects a string exec opt-in at install time
+    template: deployment.yaml
+    set:
+      mcp.execTools: "false"
+    asserts:
+      - failedTemplate: {}
+  - it: reads workload controller revisions without exec enabled
+    template: clusterrole.yaml
+    set:
+      mcp.execTools: false
+      rbac.podExec: false
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [apps]
+            resources: [deployments, daemonsets, statefulsets, replicasets, controllerrevisions]
+            verbs: [get, list, watch]

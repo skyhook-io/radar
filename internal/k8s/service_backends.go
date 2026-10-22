@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/internal/imageutil"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -23,11 +24,7 @@ const (
 // MeshProxyContainers maps the container name a service mesh injects to the
 // mesh's name. Running proxies are the strongest evidence that a pod is meshed,
 // and they are infrastructure, never the application a Service fronts.
-var MeshProxyContainers = map[string]string{
-	"istio-proxy":      "Istio",
-	"linkerd-proxy":    "Linkerd",
-	"consul-dataplane": "Consul",
-}
+var MeshProxyContainers = k8score.MeshProxyContainers
 
 // PodMesh names the service mesh whose sidecar proxy runs in the pod, from its
 // proxy containers (regular or native sidecar) or its injection markers, or ""

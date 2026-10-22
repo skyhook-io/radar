@@ -38,8 +38,8 @@ func TestServerMCPModes(t *testing.T) {
 				defer host.Close()
 				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
-				for _, path := range []string{"/mcp", "/mcp-readonly", "/mcp-investigation"} {
-					available := mode.enabled && (path != "/mcp" || !mode.readOnly)
+				for _, path := range []string{"/mcp", "/mcp-readonly", "/mcp-investigation", "/mcp-apply"} {
+					available := mode.enabled && ((path != "/mcp" && path != "/mcp-apply") || !mode.readOnly)
 					if !available {
 						for _, suffix := range []string{"", "/", "/tools/call"} {
 							for _, method := range []string{http.MethodGet, http.MethodPost} {
@@ -84,7 +84,7 @@ func TestServerMCPModes(t *testing.T) {
 							hasWrite = true
 						}
 					}
-					if hasWrite != (path == "/mcp") {
+					if hasWrite != (path == "/mcp" || path == "/mcp-apply") {
 						t.Fatalf("%s write tool present = %v", path, hasWrite)
 					}
 					result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "list_namespaces", Arguments: struct{}{}})

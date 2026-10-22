@@ -117,6 +117,11 @@ func TestHealthFrameDisclosesMissingAuditInputsWithoutFindings(t *testing.T) {
 }
 
 func TestReadOnlyToolsExcludeWrites(t *testing.T) {
+	for _, tool := range []string{"exec_pod", "mcp__radar__exec_pod", "radar.exec_pod"} {
+		if IsReadOnlyTool(tool) || IsWriteTool(tool) {
+			t.Errorf("external-only tool %q must not be in either investigation allowlist", tool)
+		}
+	}
 	for _, tool := range ReadOnlyTools {
 		if IsWriteTool(tool) {
 			t.Errorf("write tool %q must not be in the read allowlist", tool)

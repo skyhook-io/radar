@@ -881,3 +881,37 @@ func TestMiddleware_NoRevoker_SkipsCheck(t *testing.T) {
 		t.Errorf("status = %d, want 200 when no revoker configured", rec.Code)
 	}
 }
+
+func TestAuditLogActionOptionalFieldsAreGeneric(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/example", nil)
+	base := `[audit] user="local-kubeconfig" groups=[] action="example" path="/api/example" ns="shop" name="web" container="app" variable="TOKEN" source="test" outcome="done"`
+	code := 0
+	for _, tc := range []struct {
+		name          string
+		executable    string
+		argumentCount int
+		commandHash   string
+		code          *int
+		duration      time.Duration
+		suffix        string
+	}{
+		{name: "unset"},
+		{name: "command metadata", executable: "printf", argumentCount: 1, commandHash: "digest", suffix: ` executable="printf" argumentCount=1 commandHash="digest"`},
+		{name: "zero exit", code: &code, suffix: ` exitCode=0`},
+		{name: "duration", duration: time.Second, suffix: ` duration=1s`},
+		{name: "all", executable: "true", commandHash: "digest", code: &code, duration: time.Second, suffix: ` executable="true" argumentCount=0 commandHash="digest" exitCode=0 duration=1s`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output.Reset()
+			AuditLogAction(request, AuditActionDetails{Action: "example", Namespace: "shop", Name: "web", Container: "app", Variable: "TOKEN", Source: "test", Outcome: "done", Executable: tc.executable, ArgumentCount: tc.argumentCount, CommandHash: tc.commandHash, ExitCode: tc.code, Duration: tc.duration})
+			_, line, found := strings.Cut(output.String(), "[audit]")
+			if !found || "[audit]"+strings.TrimSuffix(line, "\n") != base+tc.suffix {
+				t.Fatalf("line=%q want=%q", output.String(), base+tc.suffix)
+			}
+		})
+	}
+}

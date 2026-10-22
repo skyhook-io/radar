@@ -19,6 +19,7 @@ const defaultCapabilities: Capabilities = {
     rollouts: true,
   },
   mcpEnabled: true,
+  mcpExecTools: false,
   // Default to 'local' for the loading window so the UI renders the
   // OSS standalone shape until /api/capabilities resolves. Both
   // alternatives ('in-cluster', 'cloud') would cause OSS users to
@@ -43,6 +44,7 @@ const restrictedCapabilities: Capabilities = {
     rollouts: false,
   },
   mcpEnabled: false,
+  mcpExecTools: false,
   deployment: { mode: 'local' },
 }
 

@@ -109,6 +109,7 @@ rules:
       - daemonsets
       - statefulsets
       - replicasets
+      - controllerrevisions
     verbs: ["get", "list", "watch"]
 
   # Networking resources (read-only)

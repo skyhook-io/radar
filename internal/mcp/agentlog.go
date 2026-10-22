@@ -122,14 +122,21 @@ func logToolCall[In any](
 	handler func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error),
 ) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
-		args, _ := json.Marshal(input)
-		log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m %s", name, string(args))
+		sensitive := name == "exec_pod"
+		if sensitive {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m", name)
+		} else {
+			args, _ := json.Marshal(input)
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m %s", name, string(args))
+		}
 
 		start := time.Now()
 		result, extra, err := handler(ctx, req, input)
 		dur := time.Since(start)
 
-		if err != nil {
+		if err != nil && sensitive {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s)", name, dur.Round(time.Millisecond))
+		} else if err != nil {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), err)
 		} else {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[32mOK\033[0m (%s)", name, dur.Round(time.Millisecond))

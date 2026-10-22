@@ -61,7 +61,7 @@ func TestClaudeExecutionProfiles(t *testing.T) {
 	}
 }
 
-func TestClaudeSafeguardedApplyAllowsEveryRadarWriteTool(t *testing.T) {
+func TestClaudeSafeguardedApplyAllowlist(t *testing.T) {
 	a := &claudeAgent{bin: "claude"}
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:1/mcp", prompt: "apply",
@@ -72,6 +72,9 @@ func TestClaudeSafeguardedApplyAllowsEveryRadarWriteTool(t *testing.T) {
 	}
 	defer cleanup()
 	args := strings.Join(cmd.Args, " ")
+	if strings.Contains(args, "mcp__radar__exec_pod") {
+		t.Errorf("exec_pod must not be available on apply turns: %q", args)
+	}
 	for _, tool := range investigation.WriteTools {
 		if !strings.Contains(args, "mcp__radar__"+tool) {
 			t.Errorf("safeguarded apply command missing write tool %q: %q", tool, args)

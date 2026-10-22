@@ -96,6 +96,7 @@ type AppConfig struct {
 	Version                     string
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
+	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -106,6 +107,7 @@ type AppConfig struct {
 
 // SetGlobals applies debug/test flags to global state.
 func SetGlobals(cfg AppConfig) {
+	mcppkg.SetExecToolsEnabled(cfg.MCPEnabled && cfg.MCPExecTools && !cfg.DisableExec && !cfg.MCPReadOnly)
 	k8s.DebugEvents = cfg.DebugEvents
 	k8s.TimingLogs = cfg.DevMode
 	// Init-only write, before any goroutine reads it; later reads happen under
@@ -500,6 +502,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		ReachabilityImage:         cfg.ReachabilityImage,
 		MCP:                       &cfg.MCPEnabled,
 		MCPReadOnly:               &cfg.MCPReadOnly,
+		MCPExecTools:              &cfg.MCPExecTools,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -555,6 +558,9 @@ func CreateServer(cfg AppConfig) *server.Server {
 		serverCfg.AIHistoryDB = dbPath
 	}
 
+	mcpExecTools := cfg.MCPEnabled && cfg.MCPExecTools && !cfg.DisableExec && !cfg.MCPReadOnly
+	mcppkg.SetExecToolsEnabled(mcpExecTools)
+	serverCfg.MCPExecTools = mcpExecTools
 	if cfg.MCPEnabled {
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
@@ -563,6 +569,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		serverCfg.InvestigationRefs = evidenceRefs
 		if !cfg.MCPReadOnly {
 			serverCfg.MCPHandler = mcppkg.NewHandler()
+			serverCfg.MCPApplyHandler = mcppkg.NewApplyHandler()
 		}
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)

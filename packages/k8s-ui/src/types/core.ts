@@ -126,6 +126,7 @@ export interface Capabilities {
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  mcpExecTools?: boolean // Public MCP catalog includes opt-in container command execution
   mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
   // Karpenter discovery and NodePool read state. Optional on the wire for the

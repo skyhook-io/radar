@@ -436,6 +436,7 @@ func main() {
 		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:                  mcpEnabled,
 		MCPReadOnly:                 mcpMode.ReadOnly,
+		MCPExecTools:                mcpFlags.ExecToolsEnabled(),
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,

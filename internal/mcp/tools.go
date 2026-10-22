@@ -57,11 +57,10 @@ import (
 // steers. Put conditional advice in response guidance so it arrives when
 // relevant; otherwise describe only fields whose names are insufficient for
 // correct interpretation, not every response field.
-func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolParamRegistry) {
+func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramRegistry *toolParamRegistry) {
 	boolPtr := func(b bool) *bool { return &b }
-	// All radar tools operate against the connected cluster (closed world),
-	// not the open internet — set OpenWorldHint=false so MCP clients that
-	// gate on this hint don't treat radar like a web-search tool.
+	// Kubernetes API tools have a closed domain; optional container execution
+	// can reach external services and has its own annotations.
 	readOnly := &mcp.ToolAnnotations{
 		ReadOnlyHint:  true,
 		OpenWorldHint: boolPtr(false),
@@ -558,7 +557,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}, logToolCall("wait_for", handleWaitFor))
 
 	// --- Write tools (workload, cronjob, gitops, apply, patch, node) ---
-	// Registered only on the full server. The read-only mount omits them so a
+	// Registered on the full and Apply servers. The read-only mount omits them so a
 	// read-only investigation can't even discover a mutating tool — server-side
 	// enforcement that doesn't depend on the agent CLI's own tool allowlisting.
 	if !includeWrites {
@@ -653,6 +652,14 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"expectedSkip: normal exclusions. Complete does not certify shutdown safety.",
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
+
+	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
+	if includeExec && execToolsEnabled.Load() {
+		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{
+			DestructiveHint: boolPtr(true),
+			OpenWorldHint:   boolPtr(true),
+		})
+	}
 }
 
 // Tool input types
