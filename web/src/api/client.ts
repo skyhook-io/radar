@@ -854,6 +854,7 @@ export function useResourceIssues(
 // the caller's RBAC withheld. Polls like the page list.
 export interface CronJobSchedulingEvidence {
   uid: string;
+  event_id?: string;
   state: 'reported' | 'configuration_changed' | 'history_incomplete';
   reason: string;
   message: string;
@@ -2004,6 +2005,10 @@ export interface SearchResult {
   total: number;
   searched: number;
   total_matched: number;
+  /** "time_limit" when scan report findings were only partly searched. */
+  incomplete_findings?: string;
+  /** Some namespaces' scan reports were left out, access not confirmed yet. */
+  access_incomplete?: boolean;
 }
 
 const SEARCH_MIN_QUERY = 2;
@@ -2841,6 +2846,32 @@ export function useResource<T>(
     certificateInfo: query.data?.certificateInfo,
     hpaDiagnosis: query.data?.hpaDiagnosis,
   };
+}
+
+// Availability checks return headers only, without downloading Secret values.
+export async function fetchResourceAvailability(
+  kind: string,
+  namespace: string,
+  name: string,
+): Promise<"present" | "missing" | "unchecked"> {
+  const response = await apiFetch(`${getApiBase()}/resources/${encodeURIComponent(kind)}/${encodeURIComponent(namespace || "_")}/${encodeURIComponent(name)}`, { method: "HEAD" });
+  const resourceLookup = response.headers.get("X-Radar-Resource-Read") === "true";
+  if (resourceLookup && response.ok) return "present";
+  if (resourceLookup && response.status === 404) return "missing";
+  // Older Radar versions do not serve HEAD lookups. Keep their existing
+  // navigation without claiming that availability was verified.
+  if (response.status === 405 || response.ok) return "unchecked";
+  throw new ApiError(httpStatusMessage(response.status, response.statusText), response.status);
+}
+
+export function useResourceAvailability(kind: string, namespace: string, name: string) {
+  return useQuery({
+    queryKey: ["resource", kind, namespace, name, undefined, "availability"],
+    queryFn: () => fetchResourceAvailability(kind, namespace, name),
+    enabled: Boolean(kind && name),
+    refetchInterval: GONE_RECHECK_MS,
+    retry: (failureCount, error) => !isForbiddenError(error) && failureCount < 1,
+  });
 }
 
 // Hook that returns full response with relationships explicitly
@@ -7106,10 +7137,11 @@ export function useContexts() {
 
 // Where a remote Argo Application or Flux object (spec.kubeConfig) deploys:
 // the destination's host for display, and the kubeconfig contexts that reach it.
-export function useGitOpsDestination(kind: string, namespace: string, name: string, enabled: boolean) {
+export function useGitOpsDestination(kind: string, namespace: string, name: string, enabled: boolean, group?: string) {
+  const queryString = group ? `?group=${encodeURIComponent(group)}` : "";
   return useQuery<{ server: string; contexts: string[] }>({
-    queryKey: ["gitops-destination", kind, namespace, name],
-    queryFn: () => fetchJSON(`/gitops/destination/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
+    queryKey: ["gitops-destination", kind, namespace, name, group ?? ""],
+    queryFn: () => fetchJSON(`/gitops/destination/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}${queryString}`),
     enabled,
     staleTime: 60000,
     retry: false,

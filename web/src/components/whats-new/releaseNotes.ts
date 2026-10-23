@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, Network, RefreshCcw, Scale, ScrollText, SlidersHorizontal, Undo2 } from 'lucide-react'
+import { Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, Network, RefreshCcw, Scale, ScrollText, Search, SlidersHorizontal, Undo2 } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -47,6 +47,52 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.18.0',
+    highlights: [
+      {
+        id: 'trivy-cve-search',
+        icon: Search,
+        title: 'Investigate CVEs across your cluster',
+        description: 'Search Trivy findings by CVE, package or image. MCP agents can also inventory declared runtime versions that package scans may miss.',
+        leadDescription: 'With Trivy Operator installed, search by CVE, package, failed check ID or image to find affected workloads, installed and fixed package versions, and scans from older rollouts. MCP agents can also inventory runtime versions declared by running images and compare supported versions with a fixed release, covering runtimes that package scans may miss. Missing or unreadable declarations stay unknown; image metadata does not verify a fix.',
+        importance: 8,
+      },
+      {
+        id: 'mcp-guidance-waits-controls',
+        icon: Bot,
+        title: 'More capable agents through MCP',
+        description: 'MCP agents get built-in tool guidance and can wait for rollouts, readiness or deletion. An optional read-only mode exposes only read tools.',
+        importance: 5,
+      },
+      {
+        id: 'investigation-change-evidence',
+        icon: GitCompareArrows,
+        title: 'See more of what changed',
+        description: 'Investigations show more spec edits, policy and label changes, Secret rotations and stale env readers, and warn when history is incomplete.',
+        importance: 5,
+      },
+      {
+        id: 'workload-blockers',
+        icon: Network,
+        title: 'Find what is blocking your workload',
+        description: 'Issues explain policy and admission blocks, mixed Service backends, volume conflicts, storage rollout deadlocks and CronJob scheduling failures.',
+        importance: 5,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+    ],
+    improvements: [
+      'Logs keep your reading position and pause for text selection',
+      'Resource tables remember your column order for each kind',
+      'Open terminals and browse files in native sidecars',
+      'Node drains keep results visible and name remaining Pods',
+      'Issues name incomplete checks and let you retry them',
+      'Helm upgrades require an explicit chart source',
+      'Prometheus reconnects automatically when it appears',
+      'Argo CD views confirm when a local resource is missing',
+    ],
+  },
   {
     version: 'v1.17.0',
     highlights: [
@@ -217,7 +263,7 @@ export function releaseNotesFor(
 ): ReleaseNotes | undefined {
   if (!version) return undefined
   const normalized = version.startsWith('v') ? version : `v${version}`
-  return catalog.find(notes => notes.version === normalized)
+  return catalog.find(notes => notes.version === normalized || releaseLine(notes.version) === normalized)
 }
 
 /** The release line a catalog entry covers, e.g. v1.15 for v1.15.0: its patches show the same notes. */

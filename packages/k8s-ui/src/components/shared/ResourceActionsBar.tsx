@@ -32,6 +32,9 @@ import { getDefaultContainerName, getExecContainerNames } from '../resources/res
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
+import { getGitOpsTool } from '../gitops/detail-helpers'
+import { apiVersionToGroup } from '../../utils/navigation'
+import { isApiGroup } from '../resources/resource-utils-cnpg'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
 import { isCoreBatchJob } from '../../utils/api-resources'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -39,6 +42,8 @@ import { formatRelativeAgeTime } from '../../utils/format'
 // ============================================================================
 // ACTIONS BAR - Interactive buttons that change based on resource kind
 // ============================================================================
+
+const FLUX_ACTION_KINDS = new Set(['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'])
 
 interface ResourceActionsBarProps {
   resource: SelectedResource
@@ -187,6 +192,7 @@ export function ResourceActionsBar({
   onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
+  const isFluxAction = FLUX_ACTION_KINDS.has(kind) && getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
   const supportsWorkloadActions = ['deployments', 'statefulsets', 'daemonsets'].includes(kind) ||
     (kind === 'rollouts' && isArgoRolloutResource(data))
@@ -406,7 +412,7 @@ export function ResourceActionsBar({
       )}
 
       {/* Service actions */}
-      {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && canPortForward && resource.namespace && resource.name && renderPortForward && (
+      {kind === 'services' && data?.apiVersion === 'v1' && canPortForward && resource.namespace && resource.name && renderPortForward && (
         renderPortForward({
           type: 'service',
           namespace: resource.namespace,
@@ -516,7 +522,7 @@ export function ResourceActionsBar({
       )}
 
       {/* FluxCD actions */}
-      {['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind) && (
+      {isFluxAction && (
         <FluxActions
           resource={resource}
           data={data}
@@ -532,7 +538,7 @@ export function ResourceActionsBar({
       )}
 
       {/* ArgoCD actions */}
-      {kind === 'applications' && (
+      {kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io') && (
         <ArgoActions
           resource={resource}
           data={data}

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -340,6 +341,20 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Annotations: readOnly,
 	}, logToolCall("get_cluster_upgrade_readiness", handleGetUpgradeReadiness))
 
+	// --- Runtime versions of running images (read-only) ---
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "get_runtime_versions",
+		Description: "Which running workloads use which runtime version, for runtime CVEs " +
+			"(PHP, Node, Python, Go, Java, …). Reads the version each running image declares in its " +
+			"config (PHP_VERSION etc., set by Docker official images and inherited by images built " +
+			"FROM them) for the digest the Pod runs: manifest and config only. Declared, not proof; " +
+			"misses runtimes installed from distro packages, so also search Trivy reports for the " +
+			"CVE. Pass runtime and fixed_in to rank images below their branch's fix. A status " +
+			"other than ok means unknown, not absent.",
+		Annotations: readOnly,
+	}, logToolCall("get_runtime_versions", handleGetRuntimeVersions))
+
 	// --- Helm tools (read-only) ---
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
@@ -454,7 +469,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
 			"summaryContext. Use CEL filter for structural predicates. Searches typed kinds " +
-			"plus warmed CRDs; cold CRDs need list_resources first.",
+			"plus warmed CRDs; cold CRDs need list_resources first. Trivy reports match by CVE ID, " +
+			"package or SBOM component; the report binding matches one finding.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -721,7 +737,7 @@ type searchInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace to scope the search; equivalent to an inline ns: modifier. When set, overrides all inline namespace modifiers"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations, report (Trivy findings). Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
 	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare hits"`
 }
 
@@ -3363,6 +3379,34 @@ func mcpSearchSecretsRBAC(ctx context.Context, scanNamespaces []string) (decisio
 	return "override", scoped
 }
 
+// mcpSearchKindAccess mirrors Server.searchKindAccess for MCP. nil when auth
+// is off.
+func mcpSearchKindAccess(ctx context.Context) *search.KindAccess {
+	user, perms := resolveUserPerms(ctx)
+	if user == nil {
+		return nil
+	}
+	budget := new(atomic.Int32)
+	budget.Store(search.MaxAccessChecks)
+	return &search.KindAccess{
+		ClusterWide: func(group, resource string) bool {
+			return canReadInNamespace(ctx, group, resource, "", "list")
+		},
+		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
+			return search.CheckNamespaces(namespaces, budget,
+				func(ns string) (bool, bool) {
+					if perms == nil {
+						return false, false
+					}
+					return perms.CanI("list", group, resource, ns)
+				},
+				func(ns string) (bool, bool) {
+					return canReadInNamespaceDecision(ctx, group, resource, ns, "list")
+				})
+		},
+	}
+}
+
 func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
 	provider := search.NewCacheProvider()
 	if provider == nil {
@@ -3426,6 +3470,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		CanReadClusterScoped: func(kind, group, resource string) bool {
 			return canReadClusterScopedKind(ctx, kind, group, "list")
 		},
+		KindAccess: mcpSearchKindAccess(ctx),
 	}
 	if input.Filter != "" {
 		f, err := filter.CachedObjectFilter(input.Filter)
@@ -3449,7 +3494,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	if err != nil {
 		return nil, nil, err
 	}
-	resp := searchResponseMCP{Result: result, KindHint: searchKindHint(result.UnsearchedKinds)}
+	resp := searchResponseMCP{Result: result, KindHint: searchKindHint(result.UnsearchedKinds), FindingsHint: searchFindingsHint(result)}
 	// Steering hint when the result was capped.
 	if result.TotalMatched > result.Total {
 		resp.NarrowHint = fmt.Sprintf(
@@ -3464,8 +3509,21 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 // except for the added hint fields.
 type searchResponseMCP struct {
 	search.Result
-	NarrowHint string `json:"narrowHint,omitempty"`
-	KindHint   string `json:"kindHint,omitempty"`
+	NarrowHint   string `json:"narrowHint,omitempty"`
+	KindHint     string `json:"kindHint,omitempty"`
+	FindingsHint string `json:"findingsHint,omitempty"`
+}
+
+// searchFindingsHint says when Trivy reports were only partly searched, so a
+// missing CVE isn't read as "not affected".
+func searchFindingsHint(result search.Result) string {
+	switch {
+	case result.IncompleteFindings == search.FindingsTimeLimit:
+		return "Trivy report findings were only partly searched (time limit), so a missing CVE or package doesn't mean none exists. Narrow with ns: or kind:VulnerabilityReport and retry."
+	case result.AccessIncomplete:
+		return "Trivy reports in some namespaces were left out because your access to them isn't confirmed yet. Search again to include them."
+	}
+	return ""
 }
 
 // searchKindHint tells the agent what to do about each kind the search could

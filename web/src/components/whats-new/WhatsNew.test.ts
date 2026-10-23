@@ -141,6 +141,8 @@ describe('nextSeenVersion', () => {
 describe('release notes lookup', () => {
   it('matches an exact version with or without the v prefix', () => {
     expect(releaseNotesFor('2.0.0', catalog)?.version).toBe('v2.0.0')
+    expect(releaseNotesFor('v2.0', catalog)?.version).toBe('v2.0.0')
+    expect(releaseNotesFor('2.0', catalog)?.version).toBe('v2.0.0')
     expect(releaseNotesFor(undefined, catalog)).toBeUndefined()
   })
 

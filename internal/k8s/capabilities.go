@@ -246,7 +246,8 @@ var (
 
 	// ForceDisableHelmWrite overrides the helmWrite capability to false (for dev testing)
 	ForceDisableHelmWrite bool
-	// ForceDisableExec overrides the exec capability to false (for dev testing)
+	// ForceDisableExec turns off exec (--disable-exec): the capability reports false
+	// and the exec, debug and pod-file routes refuse requests.
 	ForceDisableExec bool
 	// ForceDisableLocalTerminal turns the local terminal off (--disable-local-terminal)
 	ForceDisableLocalTerminal bool
@@ -606,6 +607,9 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
+	}
+	if ForceDisableExec {
+		caps.Exec = false
 	}
 
 	// Cache result

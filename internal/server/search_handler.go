@@ -117,6 +117,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			}
 			return s.canRead(r, group, resource, "", "list")
 		},
+		KindAccess: s.searchKindAccess(r),
 	}
 	// summaryContext attaches managedBy/health/issueCount per hit. Build
 	// the per-request closure once (one Compose call + cached topology

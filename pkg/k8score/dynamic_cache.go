@@ -1439,6 +1439,35 @@ func (d *DynamicResourceCache) List(gvr schema.GroupVersionResource, namespace s
 	return result, nil
 }
 
+// ListReadOnly is List without its per-object copy: it returns the cached
+// objects themselves. Informer transforms run before objects enter the store,
+// and updates replace stored objects rather than mutating them in place.
+// Callers must not mutate the returned objects or retain them beyond the
+// synchronous computation that requested them.
+func (d *DynamicResourceCache) ListReadOnly(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	if d == nil {
+		return nil, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	if err := d.ensureWatching(gvr, namespace); err != nil {
+		return nil, err
+	}
+	entries := d.readEntries(gvr, namespace)
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("informer not found for %v", gvr)
+	}
+	items, err := indexerItems(entries, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list resources: %w", err)
+	}
+	result := make([]*unstructured.Unstructured, 0, len(items))
+	for _, item := range items {
+		if u, ok := item.(*unstructured.Unstructured); ok {
+			result = append(result, u)
+		}
+	}
+	return result, nil
+}
+
 // ListWatched returns every cached object for gvr across all currently-watched
 // scopes (cluster-wide and/or per-namespace), unioned. It does NOT start or
 // re-probe informers — it reads whatever is already watched. This is for

@@ -14,6 +14,9 @@ function node(extras: Partial<GitOpsTreeNode> = {}): GitOpsTreeNode {
 }
 
 describe('getSubtitle', () => {
+  it('shows confirmed absence even when controller health is unknown or stale', () => {
+    expect(getSubtitle(node({ tool: 'argocd', missing: true, sync: 'OutOfSync', health: 'Healthy' }))).toBe('OutOfSync • Not found in cluster')
+  })
   it('shows what a healthy resource exposes, not that it is healthy', () => {
     // The status dot and the left border stripe already paint a healthy node
     // green, so the word adds nothing and the ports are the only thing here the

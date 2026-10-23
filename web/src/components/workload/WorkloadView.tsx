@@ -816,6 +816,11 @@ export function WorkloadView({
   const liveIssues = useCronJobCoverage ? cronJobIssues.data?.issues : ordinaryIssues.data
   const issuesPending = useCronJobCoverage ? cronJobIssues.isPending : ordinaryIssues.isPending
   const schedulingEvidence = cronJobIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? cronJobIssues.data?.scheduling_report : undefined
+  const [schedulingTimelineFocus, setSchedulingTimelineFocus] = useState<{ uid: string; id: string }>()
+  const viewSchedulingReport = useCallback(() => {
+    setSchedulingTimelineFocus(schedulingEvidence?.event_id ? { uid: schedulingEvidence.uid, id: schedulingEvidence.event_id } : undefined)
+    handleTabChange('timeline')
+  }, [schedulingEvidence, handleTabChange])
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
   const {
@@ -1162,6 +1167,7 @@ export function WorkloadView({
         refetch={refetchResourceAndRuns}
         // Timeline
         allEvents={allEvents}
+        timelineFocusEvent={schedulingTimelineFocus?.uid === resource?.metadata?.uid ? schedulingTimelineFocus : undefined}
         historyTruncated={!historyFallback && historyTruncated}
         onLoadOlderHistory={historyFallback ? undefined : loadOlderHistory}
         loadingOlderHistory={!historyFallback && loadingOlderHistory}
@@ -1298,10 +1304,10 @@ export function WorkloadView({
         }}
         renderOverviewLead={() => (
           <div className="flex flex-col gap-4">
-          <CronJobSchedulingContext evidence={schedulingEvidence} onViewTimeline={() => handleTabChange('timeline')} />
+          <CronJobSchedulingContext evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
           <ResourceIssuesSection
             issues={liveIssues}
-            renderDetailSection={schedulingEvidence?.state === 'reported' ? ({ issue }) => issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason ? <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={() => handleTabChange('timeline')} /> : null : undefined}
+            renderDetailSection={schedulingEvidence?.state === 'reported' ? ({ issue }) => issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason ? <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} /> : null : undefined}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
             onResourceClick={

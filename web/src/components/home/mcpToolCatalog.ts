@@ -161,6 +161,16 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'get_runtime_versions',
+    desc: 'Which running workloads use which runtime version (PHP, Node, Python, Go, Java, …), read from the version each running image declares in its config, for runtime CVEs. Declared, not proof; misses runtimes installed from distro packages.',
+    params: [
+      { arg: 'namespace', desc: 'limit to one namespace' },
+      { arg: 'runtime', desc: 'keep images declaring this runtime, e.g. php' },
+      { arg: 'fixed_in', desc: 'first fixed release per branch, e.g. 8.2.35,8.3.36' },
+      { arg: 'limit', desc: 'max images (default 50, max 200)' },
+    ],
+  },
+  {
     name: 'list_helm_releases',
     desc: 'All Helm releases with status, resource health, storage namespace, Flux ownership, current lastOperation, and capped operation trails for failed upgrades, rollbacks, or stuck pending operations.',
     params: [{ arg: 'namespace', desc: 'filter to a specific namespace' }],

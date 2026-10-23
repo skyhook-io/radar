@@ -7400,7 +7400,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       // Disambiguate Gateway API vs Istio Gateway by apiVersion. Retained
       // alongside the case above because not every call site normalizes the
       // kind through GROUP_QUALIFIED_COLUMN_KEYS before dispatching.
-      if (resource.apiVersion?.includes('networking.istio.io')) {
+      if (isApiGroup(resource.apiVersion, 'networking.istio.io')) {
         return <IstioGatewayCell resource={resource} column={column} />
       }
       return <GatewayCell resource={resource} column={column} />

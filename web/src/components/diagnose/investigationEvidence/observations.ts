@@ -190,6 +190,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   top_resources: "Resource ranking",
   get_cluster_audit: "Posture findings",
   get_cluster_upgrade_readiness: "Upgrade readiness",
+  get_runtime_versions: "Runtime versions",
   list_helm_releases: "Helm releases",
   list_packages: "Installed packages",
   search: "Search results",

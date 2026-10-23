@@ -1531,7 +1531,7 @@ test('contextual Argo health and diff preserve benefits and open Argo settings',
   const state = await contextualFixture(page)
   const resource = { apiVersion: 'argoproj.io/v1alpha1', kind: 'Application', metadata: { name: 'storefront', namespace: 'argocd' }, spec: { destination: { namespace: 'default' } }, status: { health: { status: 'Degraded' }, sync: { status: 'OutOfSync' } } }
   const root = { id: 'app/storefront', ref: { kind: 'Application', namespace: 'argocd', name: 'storefront' }, role: 'root', tool: 'argocd', resource }
-  await page.route('**/api/resources/applications/argocd/storefront*', route => route.fulfill({ json: resource }))
+  await page.route('**/api/resources/applications/argocd/storefront*', route => route.fulfill({ json: { resource, relationships: {} } }))
   await page.route('**/api/gitops/tree/applications/argocd/storefront*', route => route.fulfill({ json: { root, nodes: [root], edges: [] } }))
   await page.route('**/api/gitops/insights/applications/argocd/storefront*', route => route.fulfill({ json: {
     summary: { tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'storefront', health: 'Degraded', resourceHealthMode: 'appTree' },

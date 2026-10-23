@@ -26,6 +26,7 @@ import type { WorkloadPodInfo } from '../../types'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
 import { ImageFilesystemModal } from '../resources/ImageFilesystemModal'
+import { useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
 import { executionDefinitionDiffers, executionDefinitionSummary, type ExecutionDefinitionSummary, type ExecutionUnitSummary } from './execution-definition'
 import { batchRunHasContainerOutcome, batchRunNextStep, isFailedRunPhase, type BatchRunNextStep } from './batch-run-actions'
 import { JobSetAdmission } from './JobSetAdmission'
@@ -731,18 +732,21 @@ function ExecutionDefinitionDetails({ summary, namespace, compact = false }: { s
 
 function ExecutionUnitDetails({ unit, namespace, pullSecrets, compact }: { unit: ExecutionUnitSummary; namespace: string; pullSecrets: string[]; compact: boolean }) {
   const [browseImage, setBrowseImage] = useState(false)
+  const authEnabled = useIsAuthEnabled()
+  // With auth on, images are browsed through a Pod; a template has none.
+  const canBrowseImage = !authEnabled
   return (
     <>
       <div className={clsx(!compact && 'rounded-md bg-theme-elevated/40 px-3 py-2')}>
         {!compact && <div className="mb-1 flex items-center justify-between gap-3"><span className="truncate text-xs font-medium text-theme-text-primary">{unit.name}</span><span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{unit.type}</span></div>}
         <div className="space-y-1">
-          {unit.image && <DefinitionFact label="Image" value={unit.image} mono onClick={() => setBrowseImage(true)} tooltip="Browse image filesystem from registry" />}
+          {unit.image && <DefinitionFact label="Image" value={unit.image} mono onClick={canBrowseImage ? () => setBrowseImage(true) : undefined} tooltip={canBrowseImage ? 'Browse image filesystem from registry' : undefined} />}
           {unit.command && <DefinitionFact label="Command" value={unit.command} mono />}
           {!compact && unit.requests && <DefinitionFact label="Requests" value={unit.requests} />}
           {!compact && unit.limits && <DefinitionFact label="Limits" value={unit.limits} />}
         </div>
       </div>
-      {unit.image && (
+      {unit.image && canBrowseImage && (
         <ImageFilesystemModal
           open={browseImage}
           onClose={() => setBrowseImage(false)}

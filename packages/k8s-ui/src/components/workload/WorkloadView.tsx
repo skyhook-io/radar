@@ -216,6 +216,8 @@ interface WorkloadViewProps {
   /** Timeline events the history lanes are built from: this workload's own
    *  history, or events for its namespace from a host that has no scoped query. */
   allEvents?: TimelineEvent[]
+  /** Reveals one event, loading older pages if needed. Use a new object for each navigation request. */
+  timelineFocusEvent?: { id: string }
   /** Older history exists beyond allEvents. */
   historyTruncated?: boolean
   /** Loads the next older page of history; omit when the host can't page. */
@@ -469,6 +471,7 @@ export function WorkloadView({
   refetch: refetchProp,
   // Timeline
   allEvents,
+  timelineFocusEvent,
   historyTruncated = false,
   onLoadOlderHistory,
   loadingOlderHistory = false,
@@ -1383,6 +1386,7 @@ export function WorkloadView({
         )}
         {effectiveTab === 'timeline' && (
           <EventsTab
+            focusEvent={timelineFocusEvent}
             events={resourceEvents}
             isLoading={eventsLoading}
             truncated={historyTruncated}
@@ -1688,6 +1692,7 @@ function OwnershipHeading({
 // ============================================================================
 
 function EventsTab({
+  focusEvent,
   events,
   isLoading,
   truncated,
@@ -1703,6 +1708,7 @@ function EventsTab({
   topology,
   onResourceClick,
 }: {
+  focusEvent?: { id: string }
   events: TimelineEvent[]
   isLoading: boolean
   truncated?: boolean
@@ -1798,6 +1804,22 @@ function EventsTab({
     onSelectEvent(id)
   }, [onSelectEvent])
 
+  const focusedRequest = useRef<typeof focusEvent>(undefined)
+  const requestedPage = useRef<{ focus: typeof focusEvent; events: TimelineEvent[] } | undefined>(undefined)
+  const focusFound = Boolean(focusEvent && cleanEvents.some((event) => event.id === focusEvent.id))
+  useEffect(() => {
+    if (!focusEvent || focusedRequest.current === focusEvent || isLoading) return
+    if (focusFound) {
+      handleSelect(focusEvent.id)
+      focusedRequest.current = focusEvent
+    } else if (truncated && onLoadOlder && !loadingOlder && !olderError && !error) {
+      // Strict Mode can replay this effect before the loading prop updates.
+      if (requestedPage.current?.focus === focusEvent && requestedPage.current.events === events) return
+      requestedPage.current = { focus: focusEvent, events }
+      onLoadOlder()
+    }
+  }, [focusEvent, focusFound, events, isLoading, truncated, onLoadOlder, loadingOlder, olderError, error, handleSelect])
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full text-theme-text-tertiary">
@@ -1827,6 +1849,15 @@ function EventsTab({
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      {focusEvent && !focusFound && (
+        <div className="shrink-0 border-b border-theme-border px-4 py-2 text-xs text-theme-text-secondary" role="status">
+          {olderError || error
+            ? "Couldn't find the reported error because some history couldn't be loaded."
+            : truncated && onLoadOlder
+              ? 'Finding the reported error in older history…'
+              : 'The reported error is not available in the retained timeline history.'}
+        </div>
+      )}
       {error && (
         <div className="shrink-0 flex flex-wrap items-center gap-x-2 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs" role="alert">
           <span className="text-[var(--color-error)]" title={error.message}>

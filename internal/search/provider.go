@@ -42,7 +42,11 @@ func (p *CacheProvider) ListDynamic(ctx context.Context, gvr schema.GroupVersion
 	if p.dynamic == nil {
 		return nil, nil
 	}
-	return p.dynamic.List(gvr, namespace)
+	// Search reads every listed object of every watched kind on each query
+	// and returns at most Limit of them, so it reads the cached objects in
+	// place instead of copying each one. Search must never change an object
+	// it lists; TestSearch_LeavesListedObjectsUnchanged guards that.
+	return p.dynamic.ListReadOnly(gvr, namespace)
 }
 
 func (p *CacheProvider) WatchedDynamic() []schema.GroupVersionResource {

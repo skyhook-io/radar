@@ -1665,21 +1665,33 @@ func (c *ResourceCache) GetDynamic(ctx context.Context, kind string, namespace s
 
 // GetDynamicWithGroup returns a single resource, using the group to disambiguate
 func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
-	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, false)
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, false, false)
+}
+
+// GetDynamicWithGroupVerified confirms cache misses with a direct API read.
+// Only an API NotFound establishes absence; an unavailable cache or API does not.
+func (c *ResourceCache) GetDynamicWithGroupVerified(ctx context.Context, kind, namespace, name, group string) (*unstructured.Unstructured, error) {
+	obj, err := c.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+	if !apierrors.IsNotFound(err) && !errors.Is(err, k8score.ErrResourceNotFound) {
+		return obj, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, false, true)
 }
 
 // GetDynamicWithGroupPreserveLastApplied returns a single resource while
 // preserving kubectl last-applied for internal drift computation. Do not use
 // for API/UI/MCP responses.
 func (c *ResourceCache) GetDynamicWithGroupPreserveLastApplied(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
-	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, true)
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, true, false)
 }
 
-func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string, preserveLastApplied bool) (*unstructured.Unstructured, error) {
+func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string, preserveLastApplied, forceDirect bool) (*unstructured.Unstructured, error) {
 	// preserveLastApplied must never take the typed route: the typed cache
 	// strips kubectl last-applied at ingestion, so serving drift reads from it
 	// would silently return "no drift" for every built-in kind.
-	if !preserveLastApplied {
+	if !preserveLastApplied && !forceDirect {
 		if gvr, ok := typedRouteGVR(kind, group); ok {
 			if u, handled, err := c.getTypedAsUnstructured(ctx, gvr, kind, namespace, name); handled {
 				return u, err
@@ -1732,7 +1744,7 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 	var err error
 	if preserveLastApplied {
 		u, err = dynamicCache.GetDirectPreserveLastApplied(ctx, gvr, namespace, name)
-	} else if ShouldBypassDynamicInformer(gvr) {
+	} else if forceDirect || ShouldBypassDynamicInformer(gvr) {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
 	} else if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)

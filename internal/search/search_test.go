@@ -22,6 +22,9 @@ type fakeProvider struct {
 	kinds                 map[schema.GroupVersionResource]string
 	namespaced            map[schema.GroupVersionResource]bool
 	dynamicListNamespaces []string
+	// filterDynamicByNamespace makes ListDynamic honor its namespace argument
+	// the way the real cache does.
+	filterDynamicByNamespace bool
 }
 
 func (f *fakeProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
@@ -36,7 +39,16 @@ func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionRes
 	if f.dynamicErrNamespaces[namespace] {
 		return nil, fmt.Errorf("list %s in %s: forbidden", gvr.Resource, namespace)
 	}
-	return f.dynamic[gvr], nil
+	if !f.filterDynamicByNamespace || namespace == "" {
+		return f.dynamic[gvr], nil
+	}
+	var out []*unstructured.Unstructured
+	for _, u := range f.dynamic[gvr] {
+		if u.GetNamespace() == namespace {
+			out = append(out, u)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeProvider) WatchedDynamic() []schema.GroupVersionResource {

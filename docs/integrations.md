@@ -562,6 +562,8 @@ resource, including core Secrets and these excluded kinds. See the
 
 **Resource Browser:** Smart columns show severity counts and scan status at a glance.
 
+**Search (UI, REST `/api/search`, MCP `search`):** reports are searchable by CVE ID (with package and installed/fixed version in the snippet), SBOM component name and version, failed check ID and the scanned image, so `CVE-2026-109618` or `image:php kind:VulnerabilityReport` finds every report that lists it. Severity words and titles are not indexed, and a secret finding's matched text is never indexed, never exposed to the CEL `filter`, and redacted from what AI agents receive (MCP `get_resource`, `search` with `include=raw`). The `filter` binds `report` to the findings (vulnerabilities, components, checks, secrets without their match) for single-finding predicates such as `report.vulnerabilities.exists(v, v.vulnerabilityID == "CVE-2026-109618" && v.resource.contains("php"))`. Each hit names the workload behind the scanned object and, for a ReplicaSet, its replica count, since an old ReplicaSet keeps its report after a rollout. A report is evidence about the scanned image at scan time: a CVE published after the last scan is absent until Trivy rescans with an updated database, and runtimes built from source (such as the official `php` images) are not detected by Trivy at all. With auth enabled, search returns a report only where the user may `list` that report kind, not wherever they may list Pods.
+
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |

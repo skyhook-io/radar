@@ -14,6 +14,15 @@ describe("describeToolCall", () => {
     ).toBe("Listing Ingresses");
   });
 
+  it("scopes the runtime inventory to its namespace", () => {
+    expect(describeToolCall("get_runtime_versions", JSON.stringify({ runtime: "php" }))).toBe(
+      "Reading runtime versions of running images",
+    );
+    expect(
+      describeToolCall("get_runtime_versions", JSON.stringify({ namespace: "shop", runtime: "php" })),
+    ).toBe("Reading runtime versions of running images in shop");
+  });
+
   it("names the target from the call's arguments", () => {
     expect(
       describeToolCall(

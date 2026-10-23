@@ -17,6 +17,7 @@ import (
 // CronJobSchedulingEvidence describes retained evidence, not a new health condition.
 type CronJobSchedulingEvidence struct {
 	UID                    string     `json:"uid"`
+	EventID                string     `json:"event_id,omitempty"`
 	State                  string     `json:"state"`
 	Reason                 string     `json:"reason"`
 	Message                string     `json:"message"`
@@ -193,7 +194,7 @@ func assessCronJobScheduling(cronjobs []*batchv1.CronJob, live []*corev1.Event, 
 			if !changed.IsZero() && reported.Truncate(time.Second).Equal(changed.Truncate(time.Second)) && reportSequences[latest] > 0 && editSequences[cj.UID] > 0 {
 				beforeEdit = reportSequences[latest] <= editSequences[cj.UID]
 			}
-			evidence := CronJobSchedulingEvidence{UID: string(cj.UID), State: "reported", Reason: d.Reason, Message: d.Message, LastReportedAt: reported, HistoryIncomplete: history.unavailable}
+			evidence := CronJobSchedulingEvidence{UID: string(cj.UID), EventID: string(latest.UID), State: "reported", Reason: d.Reason, Message: d.Message, LastReportedAt: reported, HistoryIncomplete: history.unavailable}
 			if beforeEdit {
 				if cj.Status.LastScheduleTime != nil && cj.Status.LastScheduleTime.After(changed) {
 					continue

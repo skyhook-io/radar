@@ -127,7 +127,7 @@ func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstr
 // status doesn't drift if an upstream error message gets reworded.
 func (s *Server) writeGitOpsBuildError(w http.ResponseWriter, req *gitopsRequest, err error) {
 	switch {
-	case errors.Is(err, k8s.ErrUnknownDynamicKind):
+	case errors.Is(err, k8s.ErrUnknownDynamicKind), errors.Is(err, gitopstree.ErrNotGitOpsResource):
 		s.writeError(w, http.StatusBadRequest, err.Error())
 	case apierrors.IsNotFound(err):
 		s.writeError(w, http.StatusNotFound, err.Error())

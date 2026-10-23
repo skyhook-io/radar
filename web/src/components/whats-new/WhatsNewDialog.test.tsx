@@ -290,6 +290,16 @@ describe('WhatsNew', () => {
     expect(seenPosts).toEqual([])
   })
 
+  it.each(['', '=v1.18', '=1.18', '=v1.18.0'])('previews v1.18 on a Git development build with ?whats-new%s', async suffix => {
+    setCatalog(...SHIPPED)
+    serverState = { currentVersion: 'v1.17.0-113-gb49561b78', storage: 'server', seenVersion: 'v1.17.0', priorInstall: true }
+    await render(`/resources/pods?whats-new${suffix}`)
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.18")
+    expect(dialog()?.textContent).toContain(SHIPPED[0].highlights[0].title)
+    await clickGotIt()
+    expect(seenPosts).toEqual([])
+  })
+
   it('records nothing when previewing the running release', async () => {
     serverState = { currentVersion: 'v1.15.0', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
     await render('/resources/pods?whats-new')

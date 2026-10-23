@@ -42,13 +42,40 @@ func objectActivation(obj runtime.Object, kind string) (map[string]any, error) {
 // unstructuredActivation builds the activation map for a CRD object.
 // We use a deep copy of u.Object so the in-place number normalization
 // doesn't mutate the cache-held unstructured.
-func unstructuredActivation(u *unstructured.Unstructured, kind string) map[string]any {
+//
+// A Trivy report binds `report` to trivyReportProjection, and its raw report
+// is left out of the deep copy: it can hold thousands of entries the
+// projection drops anyway, and the projection is already a fresh copy.
+// complete is false when the findings limit kept the report from being
+// projected: the object can't be evaluated, and an empty report must not
+// stand in for it.
+func unstructuredActivation(u *unstructured.Unstructured, kind, group string, findings *findingsScan) (act map[string]any, complete bool) {
 	if u == nil || u.Object == nil {
-		return nil
+		return nil, true
 	}
-	m := u.DeepCopy().Object
+	if group != trivyGroup {
+		m := u.DeepCopy().Object
+		normalizeNumbers(m)
+		return assembleActivation(m, kind), true
+	}
+	if !findings.allow() {
+		return nil, false
+	}
+	rest := make(map[string]any, len(u.Object))
+	for k, v := range u.Object {
+		if k != "report" {
+			rest[k] = v
+		}
+	}
+	m := runtime.DeepCopyJSON(rest)
 	normalizeNumbers(m)
-	return assembleActivation(m, kind)
+	out := assembleActivation(m, kind)
+	projection, ok := trivyReportProjection(asMap(u.Object["report"]), findings)
+	if !ok {
+		return nil, false
+	}
+	out["report"] = normalizeNumbers(projection)
+	return out, true
 }
 
 // normalizeNumbers walks v and converts every whole-number float64 to
@@ -90,6 +117,7 @@ func assembleActivation(obj map[string]any, kind string) map[string]any {
 		"status":      asMap(obj["status"]),
 		"labels":      asStringMap(getNested(obj, "metadata", "labels")),
 		"annotations": asStringMap(getNested(obj, "metadata", "annotations")),
+		"report":      map[string]any{},
 	}
 	return out
 }

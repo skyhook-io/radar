@@ -34,6 +34,9 @@ func TestCronJobTimelineReportLifecycle(t *testing.T) {
 	if len(got.detections) != 1 || got.evidence[cj.UID].State != "reported" {
 		t.Fatalf("retained Event missing after API deletion: %+v", got)
 	}
+	if got.evidence[cj.UID].EventID != report.ID {
+		t.Fatalf("timeline link targets %q, want %q", got.evidence[cj.UID].EventID, report.ID)
+	}
 	got = assessCronJobScheduling([]*batchv1.CronJob{cj}, nil, history, now.Add(48*time.Hour))
 	if len(got.detections) != 1 {
 		t.Fatal("report age was mistaken for recovery")
@@ -60,6 +63,17 @@ func TestCronJobTimelineReportLifecycle(t *testing.T) {
 	got = assessCronJobScheduling([]*batchv1.CronJob{cj}, nil, history, now)
 	if len(got.detections) != 1 || got.evidence[cj.UID].State != "reported" {
 		t.Fatalf("new report after recovery was lost: %+v", got)
+	}
+}
+
+func TestCronJobTimelineReportLinkUsesKubernetesEventIdentity(t *testing.T) {
+	now := time.Now()
+	cj := cronJobEventSubject(now)
+	event := cronJobHistoryEvent(schedulingHistoryRow(cj, "InvalidSchedule", now.Add(-time.Minute)))
+	row := timeline.NewK8sEventTimelineEvent(event, nil)
+	got := assessCronJobScheduling([]*batchv1.CronJob{cj}, []*corev1.Event{event}, cronJobSchedulingHistory{}, now)
+	if got.evidence[cj.UID].EventID != row.ID {
+		t.Fatalf("live report targets %q, timeline uses %q", got.evidence[cj.UID].EventID, row.ID)
 	}
 }
 

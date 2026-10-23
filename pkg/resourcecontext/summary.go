@@ -35,6 +35,9 @@ type SummaryOptions struct {
 	// container readiness, replica-count workloads, and the standard
 	// Ready/Available condition on CRDs. Non-trivial kinds derive to "".
 	Health string
+
+	// Scanned, for a security-scan report, names the object it scanned.
+	Scanned *ScannedRef
 }
 
 // BuildSummary produces the compact per-result ResourceSummaryContext
@@ -42,20 +45,21 @@ type SummaryOptions struct {
 // hits.
 //
 // Tightly bounded — only the triage fields needed to choose a next hop.
-// Returns nil when all three fields would be empty so callers can
+// Returns nil when every field would be empty so callers can
 // `omitempty` the entire object on bare results and keep the wire shape minimal.
 func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryContext {
 	health := opts.Health
 	if health == "" {
 		health = deriveHealth(obj)
 	}
-	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 {
+	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil {
 		return nil
 	}
 	return &ResourceSummaryContext{
 		ManagedBy:  opts.ManagedBy,
 		Health:     health,
 		IssueCount: opts.IssueCount,
+		Scanned:    opts.Scanned,
 	}
 }
 

@@ -15,6 +15,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
+import { HelmReleaseNotes } from './HelmReleaseNotes'
 import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, HelmOperationInsight, HelmOwnedResource, HookDiagnostic, HookLogEvidence, UpgradeInfo, ValuesPreviewResponse, SourceUpgradeSelection } from '../../types'
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
@@ -1528,21 +1529,7 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
 
       {/* Notes */}
       {release.notes && (
-        <div className="bg-theme-elevated/30 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-theme-text-secondary">Release Notes</h3>
-            <button
-              onClick={() => onCopy(release.notes, 'notes')}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-            >
-              {copied === 'notes' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-              Copy
-            </button>
-          </div>
-          <div className="text-xs bg-theme-base/50 rounded p-3 max-h-64 overflow-auto">
-            <Markdown>{release.notes}</Markdown>
-          </div>
-        </div>
+        <HelmReleaseNotes notes={release.notes} copied={copied === 'notes'} onCopy={text => onCopy(text, 'notes')} />
       )}
 
       {/* Dependencies */}

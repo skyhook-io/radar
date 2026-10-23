@@ -1,6 +1,7 @@
 import { argoApplicationSetConditionsToGitOpsStatus, argoStatusToGitOpsStatus, fluxConditionsToGitOpsStatus, type FluxCondition, type GitOpsStatus } from '../../types/gitops'
 import type { GitOpsResourceTree } from '../../types/gitops-tree'
 import { formatCompactAge } from '../../utils/format'
+import { apiVersionToGroup } from '../../utils/navigation'
 
 // =============================================================================
 // Shared helpers used by both per-cluster Radar's GitOps detail view (OSS
@@ -92,12 +93,31 @@ export function describeGitOpsTerminating(summary?: {
   }
 }
 
+const FLUX_KIND_GROUPS: Readonly<Record<string, string | undefined>> = {
+  gitrepositories: 'source.toolkit.fluxcd.io',
+  ocirepositories: 'source.toolkit.fluxcd.io',
+  helmrepositories: 'source.toolkit.fluxcd.io',
+  helmcharts: 'source.toolkit.fluxcd.io',
+  buckets: 'source.toolkit.fluxcd.io',
+  kustomizations: 'kustomize.toolkit.fluxcd.io',
+  helmreleases: 'helm.toolkit.fluxcd.io',
+  alerts: 'notification.toolkit.fluxcd.io',
+}
+const ARGO_CD_KINDS = new Set(['applications', 'applicationsets', 'appprojects'])
+
+
 // getGitOpsResourceStatus dispatches sync/health extraction by kind. Argo
 // Applications read from .status (rich operationState + sync state); Argo
 // ApplicationSets read their own generator conditions; Flux kinds read
 // .status.conditions + .spec.suspend. Returns null if the resource has
 // no recognizable status (e.g. just-created, status not yet populated).
 export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStatus | null {
+  // Existing callers also pass status-only objects with a controller-specific
+  // kind. A loaded API identity, when present, must agree with that kind.
+  const group = resource?.apiVersion ? apiVersionToGroup(resource.apiVersion)
+    : ARGO_CD_KINDS.has(kind) ? 'argoproj.io' : FLUX_KIND_GROUPS[kind]
+  const tool = getGitOpsTool(kind, group)
+  if (!tool) return null
   if (kind === 'applications') {
     return argoStatusToGitOpsStatus(resource?.status ?? {})
   }
@@ -110,6 +130,7 @@ export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStat
       (resource?.status?.conditions ?? []) as FluxCondition[]
     )
   }
+  if (tool === 'argo') return null
   const conditions = (resource?.status?.conditions ?? []) as FluxCondition[]
   return fluxConditionsToGitOpsStatus(conditions, resource?.spec?.suspend === true, {
     generation: resource?.metadata?.generation,
@@ -117,12 +138,22 @@ export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStat
   })
 }
 
-// getGitOpsTool routes a kind+group to 'argo' or 'flux'. Same shape used
-// by both detail pages + the fleet list normalizers so a kustomization
-// always reads as 'flux' and an Argo Application always as 'argo'.
-export function getGitOpsTool(kind: string, group?: string): 'argo' | 'flux' {
-  if (group === 'argoproj.io' || kind === 'applications' || kind === 'applicationsets' || kind === 'appprojects') return 'argo'
-  return 'flux'
+
+// getGitOpsTool decides the controller family from the API group, the same
+// rule the backend applies (pkg/gitops ToolFor). The kind alone is not
+// identity: SIG Apps (app.k8s.io) defines an Application too, and argoproj.io
+// is shared with Argo Rollouts and Workflows. null means the object is not a
+// supported GitOps resource and has no GitOps view or operations.
+export function getGitOpsTool(kind: string, group: string | undefined): 'argo' | 'flux' | null {
+  if (group === 'argoproj.io') return ARGO_CD_KINDS.has(kind) ? 'argo' : null
+  if (group && FLUX_KIND_GROUPS[kind] === group) return 'flux'
+  return null
+}
+
+// gitOpsDetailGroup is the API group a detail page acts on: the fetched
+// object's own apiVersion once it has loaded, the route's group before that.
+export function gitOpsDetailGroup(routeGroup: string, resource: { apiVersion?: string } | null | undefined): string {
+  return resource?.apiVersion ? apiVersionToGroup(resource.apiVersion) : routeGroup
 }
 
 // isDestinationRef reports whether a resource named on a remote GitOps

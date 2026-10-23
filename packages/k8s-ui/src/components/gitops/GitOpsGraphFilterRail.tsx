@@ -4,7 +4,7 @@ import { GitOpsFacetButton, GitOpsFilterSection } from './GitOpsTableView'
 import { Input } from '../ui/Input'
 import type { GitOpsResourceTree } from '../../types/gitops-tree'
 import type { GitOpsTreePreset } from './tree'
-import { treeNodeFilterRole } from './tree/tree-helpers'
+import { treeNodeFilterRole, treeNodeHealth } from './tree/tree-helpers'
 
 // =============================================================================
 // GitOpsGraphFilterRail — the left-side filter sidebar that pairs with
@@ -37,7 +37,7 @@ export function buildTreeFacets(tree: GitOpsResourceTree | null | undefined): Gi
     // Dependencies have no sync state of their own; counting them as Unknown
     // would read as a problem.
     sync: countValues(nodes.filter((n) => !n.dependency || n.sync).map((n) => n.sync || 'Unknown')),
-    health: countValues(nodes.map((n) => n.health || 'Unknown')),
+    health: countValues(nodes.map(treeNodeHealth)),
     namespaces: countValues(nodes.map((n) => n.ref.namespace || '(cluster)')),
     roles: countValues(nodes.map(treeNodeFilterRole)),
   }

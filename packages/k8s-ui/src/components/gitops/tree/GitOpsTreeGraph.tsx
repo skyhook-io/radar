@@ -28,7 +28,7 @@ import { radarHealthNote } from '../health-provenance'
 import { servicePortsTooltip, type ServicePortEntry } from '../../topology/K8sResourceNode'
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
-import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
+import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, treeNodeHealth, type GitOpsTreeFilters } from './tree-helpers'
 import { rankTree, renderedEdge, shortcutEdges, upstreamClosure, upstreamEdges } from './layout'
 
 export type GitOpsTreePreset = 'full' | 'compact' | 'workloads' | 'app'
@@ -541,7 +541,7 @@ function positionRanks(ranks: Map<number, string[]>, nodes: Map<string, GitOpsTr
 const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: NodeCause }>>) {
   const node = data.node
   const kind = normalizeDisplayKind(node)
-  const status = normalizeHealth(node.topologyStatus)
+  const status = node.missing ? 'unhealthy' : normalizeHealth(node.topologyStatus)
   const terminating = isNodeTerminating(node)
   const gitopsTool = gitopsToolForNode(node)
   const chips = buildChips(node)
@@ -727,7 +727,8 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   const relationship = stringData(data.relationship)
   if (relationship) chips.push({ value: relationship })
   if (node.sync === 'OutOfSync') chips.push({ value: 'OutOfSync', tone: 'warning' })
-  if (node.health === 'Degraded' || node.health === 'Missing') chips.push({ value: node.health, tone: 'danger' })
+  const health = treeNodeHealth(node)
+  if (health === 'Degraded' || health === 'Missing') chips.push({ value: health, tone: 'danger' })
   return chips
 }
 
@@ -789,6 +790,7 @@ export function getSubtitle(node: GitOpsTreeNode): string {
     // a state description, not an affordance.
     return 'Click to expand'
   }
+  if (node.missing) return `${node.sync ? `${node.sync} • ` : ''}Not found in cluster`
   if (isNodeTerminating(node)) {
     return 'Pending deletion'
   }
@@ -825,7 +827,7 @@ function matchesQuery(node: GitOpsTreeNode, query: string): boolean {
     node.ref.namespace,
     node.ref.group,
     node.sync,
-    node.health,
+    treeNodeHealth(node),
   ].some(value => String(value ?? '').toLowerCase().includes(query))
 }
 

@@ -1897,3 +1897,60 @@ func TestInlineHelmReleaseSummaryKeepsDeclaredSource(t *testing.T) {
 		t.Fatalf("source summary = %q", got)
 	}
 }
+
+func TestBuildDecidesToolByAPIGroup(t *testing.T) {
+	sigApp := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "app.k8s.io/v1beta1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"namespace": "shop", "name": "wordpress"},
+		"status": map[string]any{
+			"conditions": []any{map[string]any{"type": "Ready", "status": "True", "message": "all components ready", "lastTransitionTime": "2026-01-01T00:00:00Z"}},
+		},
+	}}
+	got := Build(sigApp, nil, nil)
+	if got.Summary.Tool != "" {
+		t.Fatalf("SIG Apps Application tool = %q, want none", got.Summary.Tool)
+	}
+	if !reflect.DeepEqual(got.Capabilities, Capabilities{}) {
+		t.Fatalf("SIG Apps Application offered operations: %+v", got.Capabilities)
+	}
+	if got.Summary.Kind != "Application" || got.Summary.Namespace != "shop" || got.Summary.Name != "wordpress" {
+		t.Fatalf("summary identity = %+v", got.Summary)
+	}
+	if h := BuildHistory(sigApp); h != nil {
+		t.Fatalf("SIG Apps Application history = %+v, want none", h)
+	}
+
+	argo := Build(argoApp(map[string]any{"sync": map[string]any{"status": "Synced"}}), nil, nil)
+	if argo.Summary.Tool != "argocd" || !argo.Capabilities.Sync {
+		t.Fatalf("Argo Application tool = %q, sync = %v; want argocd with sync", argo.Summary.Tool, argo.Capabilities.Sync)
+	}
+
+	kustomization := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+		"kind":       "Kustomization",
+		"metadata":   map[string]any{"namespace": "flux-system", "name": "apps"},
+	}}
+	if tool := Build(kustomization, nil, nil).Summary.Tool; tool != "fluxcd" {
+		t.Fatalf("Flux Kustomization tool = %q, want fluxcd", tool)
+	}
+}
+
+func TestArgoConfigurationKindsDoNotOfferApplicationOperations(t *testing.T) {
+	for _, kind := range []string{"ApplicationSet", "AppProject"} {
+		t.Run(kind, func(t *testing.T) {
+			root := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "argoproj.io/v1alpha1", "kind": kind,
+				"metadata": map[string]any{"name": "config", "namespace": "gitops"},
+			}}
+			out := Build(root, nil, nil)
+			if out.Summary.Tool != "argocd" {
+				t.Fatalf("tool = %q, want argocd", out.Summary.Tool)
+			}
+			want := Capabilities{UnsupportedReason: "GitOps actions are only available for Argo CD Applications."}
+			if !reflect.DeepEqual(out.Capabilities, want) {
+				t.Fatalf("capabilities = %+v, want %+v", out.Capabilities, want)
+			}
+		})
+	}
+}
