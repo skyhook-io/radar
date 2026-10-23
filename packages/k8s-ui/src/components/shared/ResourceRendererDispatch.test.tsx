@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
 import { getCellFilterValue } from '../resources/resource-utils'
+import { getTektonPipelineRunStatus, getTektonTaskRunStatus } from '../resources/resource-utils-tekton'
 import type { ResourceRef } from '../../types'
 
 function renderWithScalers(scalers: ResourceRef[]): string {
@@ -320,6 +321,23 @@ describe('getResourceStatus — colliding plurals', () => {
     expect(getResourceStatus('experiments', katib)).toEqual(getResourceStatus('trainingruns', katib))
   })
 
+  // A foreign pipelines CRD has no spec.tasks, so the Tekton reader called it
+  // "Empty" and raised a warning badge for a resource Tekton never owned.
+  it.each(['pipelines', 'pipelineruns', 'taskruns'])('does not score a foreign %s CRD with the Tekton vocabulary', (kind) => {
+    const foreign = { apiVersion: 'numaflow.numaproj.io/v1alpha1', spec: {}, status: { phase: 'Running' } }
+    expect(getResourceStatus(kind, foreign)).toEqual(getResourceStatus('trainingruns', foreign))
+  })
+
+  it('still scores tekton.dev pipelines with the Tekton vocabulary', () => {
+    expect(getResourceStatus('pipelines', { apiVersion: 'tekton.dev/v1', spec: {} })).toMatchObject({ text: 'Empty' })
+  })
+
+  it('still scores tekton.dev runs with the Tekton vocabulary', () => {
+    const run = { apiVersion: 'tekton.dev/v1', status: { conditions: [{ type: 'Succeeded', status: 'False', reason: 'Failed' }] } }
+    expect(getResourceStatus('pipelineruns', run)).toEqual(getTektonPipelineRunStatus(run))
+    expect(getResourceStatus('taskruns', run)).toEqual(getTektonTaskRunStatus(run))
+  })
+
   it('fabricates no engine status for a third-party backups CRD', () => {
     expect(getResourceStatus('backups', { apiVersion: 'kubevirt.io/v1', status: {} })).toBeNull()
     expect(getResourceStatus('backups', { apiVersion: 'kubevirt.io/v1', status: { phase: 'Running' } }))
@@ -370,6 +388,11 @@ describe('ResourceRendererDispatch — colliding plurals fall through', () => {
     // Velero's BackupRepository joined KNOWN_KINDS when it got a renderer, so
     // it needs the same fall-through as its siblings.
     ['backuprepositories', 'other.io/v1'],
+    // Tekton's plurals are generic: Numaflow ships pipelines.numaflow.numaproj.io,
+    // and any CI tool can ship pipelineruns or taskruns.
+    ['pipelines', 'numaflow.numaproj.io/v1alpha1'],
+    ['pipelineruns', 'other.io/v1'],
+    ['taskruns', 'other.io/v1'],
   ])('renders something for a foreign %s CRD', (kind, apiVersion) => {
     expect(renderCollidingKind(kind, apiVersion)).toContain(COLLISION_PROBE)
   })
@@ -389,6 +412,21 @@ describe('ResourceRendererDispatch — colliding plurals fall through', () => {
     ['postgresql.cnpg.io/v1', 'Applied'],
   ])('still renders the owning engine for subscriptions/%s', (apiVersion, marker) => {
     expect(renderCollidingKind('subscriptions', apiVersion)).toContain(marker)
+  })
+
+  it('gives a foreign pipelines CRD no Tekton Pipeline view', () => {
+    const html = renderCollidingKind('pipelines', 'numaflow.numaproj.io/v1alpha1')
+    expect(html).not.toContain('Pipeline Info')
+  })
+
+  it('still renders the Tekton Pipeline view for tekton.dev pipelines', () => {
+    const html = renderCollidingKind('pipelines', 'tekton.dev/v1')
+    expect(html).toContain('Pipeline Info')
+    expect(html).not.toContain(COLLISION_PROBE)
+  })
+
+  it.each(['pipelineruns', 'taskruns'])('still renders the Tekton view for tekton.dev %s', (kind) => {
+    expect(renderCollidingKind(kind, 'tekton.dev/v1')).not.toContain(COLLISION_PROBE)
   })
 
   it('does not double-render when a known engine matches', () => {

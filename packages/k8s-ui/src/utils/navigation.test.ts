@@ -190,6 +190,19 @@ describe('pluralToKind', () => {
     // of the heuristic fallback. Known kinds use the PLURAL_TO_KIND map instead.
     expect(pluralToKind('databases')).toBe('Databas')
   })
+
+  // Tekton's "Run" suffix (TaskRun, PipelineRun) doesn't naively de-pluralize
+  // to the right casing — the fallback heuristic would strip the trailing
+  // "s" and capitalize only the first letter, producing "Taskrun" — so these
+  // need the same seeded-before-discovery treatment Workflow/CronWorkflow
+  // already get, or a component that compares against the exact PascalCase
+  // kind (e.g. "kind === 'TaskRun'") silently never matches before API
+  // discovery has populated the real map.
+  test('Tekton kinds resolve correctly even before the discovery map arrives', () => {
+    expect(pluralToKind('taskruns')).toBe('TaskRun')
+    expect(pluralToKind('pipelineruns')).toBe('PipelineRun')
+    expect(pluralToKind('pipelines')).toBe('Pipeline')
+  })
 })
 
 describe('initNavigationMap', () => {

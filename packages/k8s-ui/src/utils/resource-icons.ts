@@ -11,6 +11,7 @@ import {
   Play,
   Timer,
   Boxes,
+  Workflow,
 
   // Networking
   Plug,
@@ -153,6 +154,11 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   clusterworkflowtemplate: Activity,
   application: GitBranch, // ArgoCD Application
   applicationset: GitBranch, // ArgoCD ApplicationSet
+
+  // Tekton
+  pipeline: Workflow,
+  pipelinerun: Workflow,
+  taskrun: Play,
 
   // FluxCD
   kustomization: Layers, // FluxCD Kustomization
@@ -299,6 +305,9 @@ const GROUP_QUALIFIED_KIND_ICONS: Record<string, Record<string, LucideIcon>> = {
   backup: { 'postgresql.cnpg.io': DatabaseBackup },
   scheduledbackup: { 'postgresql.cnpg.io': DatabaseBackup },
   pooler: { 'postgresql.cnpg.io': Waypoints },
+  pipeline: { 'tekton.dev': Workflow },
+  pipelinerun: { 'tekton.dev': Workflow },
+  taskrun: { 'tekton.dev': Play },
   networkpolicy: {
     'networking.k8s.io': ShieldCheck,
     'crd.projectcalico.org': ShieldCheck,

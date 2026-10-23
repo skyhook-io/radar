@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { supportsLogsWithoutPods } from './WorkloadView'
 
 describe('supportsLogsWithoutPods', () => {
+  it('keeps the Logs tab for Tekton runs only when they are tekton.dev', () => {
+    expect(supportsLogsWithoutPods('taskruns', 'TaskRun', 'tekton.dev', 'tekton.dev/v1')).toBe(true)
+    expect(supportsLogsWithoutPods('pipelineruns', 'PipelineRun', 'tekton.dev', 'tekton.dev/v1')).toBe(true)
+    expect(supportsLogsWithoutPods('taskruns', 'TaskRun', 'other.io', 'other.io/v1')).toBe(false)
+    expect(supportsLogsWithoutPods('pipelineruns', 'PipelineRun', 'other.io', 'other.io/v1')).toBe(false)
+  })
+
   it('allows the supported JobSet identity to select child Job logs', () => {
     expect(supportsLogsWithoutPods('jobsets', 'JobSet', 'jobset.x-k8s.io', 'jobset.x-k8s.io/v1alpha2')).toBe(true)
   })
