@@ -2123,7 +2123,7 @@ export interface CloudInstallAttempted {
   mode: 'fresh' | 'adopt' | 'gitops'
   namespace: string
   release: string
-  stage: 'inspect' | 'prepare' | 'preflight'
+  stage: CloudInstallStage
   // Discovery saw only the default namespace; a fresh plan is not proof that
   // no Radar exists elsewhere.
   partialScan?: boolean
@@ -2133,6 +2133,8 @@ export interface CloudInstallAttempted {
   // GitOps only: the Hub install-page tab of the verified owning controller.
   method?: 'argocd' | 'flux' | ''
 }
+
+export type CloudInstallStage = 'inspect' | 'prepare' | 'preflight'
 
 export interface CloudInstallBlocked {
   reason: 'gitops' | 'preflight' | 'unsupported'
@@ -2163,6 +2165,8 @@ export type CloudInstallState =
 export interface CloudInstallStatus {
   flowId?: string
   state: CloudInstallState
+  // Preparing only: the check the server is running now.
+  prepareStep?: CloudInstallStage
   plan?: CloudInstallPlanSummary
   clusterName?: string
   connectUrl?: string
@@ -2228,7 +2232,10 @@ export function useCloudConnectInfo(
   });
 }
 
-export function useCloudInstallStatus(enabled: boolean) {
+// preparing: the prepare request is in flight. It answers only once every
+// check has run, and the cached status from before it says idle, so without
+// this nothing would poll and the steps could not advance.
+export function useCloudInstallStatus(enabled: boolean, preparing = false) {
   const queryClient = useQueryClient()
   const query = useQuery<CloudInstallStatus>({
     queryKey: ['cloud-install-status'],
@@ -2236,7 +2243,10 @@ export function useCloudInstallStatus(enabled: boolean) {
     enabled,
     gcTime: 0,
     staleTime: 0,
-    refetchInterval: (q) => (cloudInstallActive(q.state.data?.state) ? 1500 : false),
+    refetchInterval: (q) => {
+      if (preparing || q.state.data?.state === 'preparing') return 1000
+      return cloudInstallActive(q.state.data?.state) ? 1500 : false
+    },
   })
   return {
     ...query,

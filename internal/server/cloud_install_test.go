@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1005,5 +1006,133 @@ func TestDiscoverConnectedNamesAlreadyCloudDeployments(t *testing.T) {
 	}
 	if got.Connected[3].Namespace != "legacy" || got.Connected[3].ClusterURL != "" || got.Connected[3].HubHost != "" {
 		t.Errorf("settings without a resolvable URL say nothing about where, and sort last: %+v", got.Connected[3])
+	}
+}
+
+// gatedPrepare makes each preparation step wait for its run's gate. A run is
+// named by the prepareRunKey on its context, so a test with two preparations
+// in flight releases exactly the one it means to.
+type prepareRunKey struct{}
+
+type gatedRuns struct {
+	entered chan string // "<run>:<stage>" as each step begins
+	mu      sync.Mutex
+	gates   map[string]chan struct{}
+}
+
+func (g *gatedRuns) gate(run string) chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.gates[run] == nil {
+		g.gates[run] = make(chan struct{})
+	}
+	return g.gates[run]
+}
+
+func (g *gatedRuns) step(ctx context.Context, stage string) {
+	run, _ := ctx.Value(prepareRunKey{}).(string)
+	g.entered <- run + ":" + stage
+	<-g.gate(run)
+}
+
+func gatedPrepare(fx *managerFixture) *gatedRuns {
+	g := &gatedRuns{entered: make(chan string, 16), gates: map[string]chan struct{}{}}
+	inspect, prepare, preflight := fx.m.backend.inspectPlan, fx.m.backend.prepare, fx.m.backend.preflight
+	fx.m.backend.inspectPlan = func(ctx context.Context, c cloudInstallClients, ns, rel string) (cloudinstall.InstallPlan, error) {
+		g.step(ctx, attemptStageInspect)
+		return inspect(ctx, c, ns, rel)
+	}
+	fx.m.backend.prepare = func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error) {
+		g.step(ctx, attemptStagePrepare)
+		return prepare(ctx, c, cfg)
+	}
+	fx.m.backend.preflight = func(ctx context.Context, c cloudInstallClients, p preparedInstall) (cloudinstall.PreflightResult, error) {
+		g.step(ctx, attemptStagePreflight)
+		return preflight(ctx, c, p)
+	}
+	return g
+}
+
+func startPrepareRun(fx *managerFixture, run string) chan error {
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := fx.m.prepare(context.WithValue(context.Background(), prepareRunKey{}, run))
+		done <- err
+	}()
+	return done
+}
+
+func TestCloudInstallPrepareReportsEachStep(t *testing.T) {
+	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	g := gatedPrepare(fx)
+	done := startPrepareRun(fx, "a")
+
+	for _, stage := range []string{attemptStageInspect, attemptStagePrepare, attemptStagePreflight} {
+		if got := <-g.entered; got != "a:"+stage {
+			t.Fatalf("backend entered %q, want a:%s", got, stage)
+		}
+		st := fx.m.status()
+		if st.State != cloudFlowPreparing || st.PrepareStep != stage {
+			t.Fatalf("during %s: status = %+v", stage, st)
+		}
+		g.gate("a") <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	raw, err := json.Marshal(fx.m.status())
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	if strings.Contains(string(raw), "prepareStep") {
+		t.Fatalf("a ready flow still reports a preparation step: %s", raw)
+	}
+}
+
+func TestCloudInstallCanceledPrepareDoesNotRelabelTheNextFlow(t *testing.T) {
+	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	g := gatedPrepare(fx)
+	oldDone := startPrepareRun(fx, "old")
+	if got := <-g.entered; got != "old:inspect" {
+		t.Fatalf("entered %q", got)
+	}
+	old := fx.m.status()
+	if err := fx.m.cancelFlow(old.FlowID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	newDone := startPrepareRun(fx, "new")
+	if got := <-g.entered; got != "new:inspect" {
+		t.Fatalf("entered %q", got)
+	}
+	next := fx.m.status()
+	if next.FlowID == old.FlowID || next.PrepareStep != attemptStageInspect {
+		t.Fatalf("new flow status = %+v", next)
+	}
+
+	// The old preparation advances into its prepare step; the new flow,
+	// still inspecting, must keep its own step.
+	g.gate("old") <- struct{}{}
+	if got := <-g.entered; got != "old:prepare" {
+		t.Fatalf("entered %q", got)
+	}
+	if st := fx.m.status(); st.FlowID != next.FlowID || st.PrepareStep != attemptStageInspect {
+		t.Fatalf("old preparation relabeled the new flow: %+v", st)
+	}
+
+	go func() {
+		for range g.entered {
+		}
+	}()
+	close(g.gate("old"))
+	close(g.gate("new"))
+	if err := <-oldDone; err == nil {
+		t.Fatalf("the canceled preparation should fail its final identity check")
+	}
+	if err := <-newDone; err != nil {
+		t.Fatalf("new prepare: %v", err)
+	}
+	if st := fx.m.status(); st.FlowID != next.FlowID || st.State != cloudFlowReady {
+		t.Fatalf("new flow after both finished = %+v", st)
 	}
 }
