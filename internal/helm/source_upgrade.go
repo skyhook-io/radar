@@ -44,6 +44,7 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		return nil, "", err
 	}
 	var data []byte
+	var indexDigest string
 	if c.chartPathLocator != nil {
 		ref := selected.Reference
 		if selected.Type == "repository" {
@@ -84,19 +85,24 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 			snapshot := *configured
 			snapshot.Name = "selected"
 			snapshot.URL = selected.URL
-			dl.Options = append(dl.Options, getter.WithInsecureSkipVerifyTLS(snapshot.InsecureSkipTLSverify))
-			repository, err := repo.NewChartRepository(&snapshot, getter.All(c.settings))
+			repository, err := repo.NewChartRepository(&snapshot, c.repositoryGettersWithTimeout(&snapshot, 30*time.Second))
 			if err != nil {
 				return nil, "", err
 			}
-			repository.Client, err = getter.NewHTTPGetter(getter.WithTimeout(30 * time.Second))
-			if err != nil {
-				return nil, "", err
-			}
+			dl.Getters = c.repositoryGettersWithTimeout(&snapshot, 30*time.Second)
 			repository.CachePath = dir
 			if _, err := repository.DownloadIndexFile(); err != nil {
 				return nil, "", fmt.Errorf("could not refresh the selected repository: %w", err)
 			}
+			index, err := repo.LoadIndexFile(filepath.Join(dir, "selected-index.yaml"))
+			if err != nil {
+				return nil, "", fmt.Errorf("read selected repository index: %w", err)
+			}
+			entry, err := index.Get(name, version)
+			if err != nil {
+				return nil, "", fmt.Errorf("selected repository has no chart %s version %s: %w", name, version, err)
+			}
+			indexDigest = entry.Digest
 			config := &repo.File{Repositories: []*repo.Entry{&snapshot}}
 			dl.RepositoryConfig = filepath.Join(dir, "repositories.yaml")
 			dl.RepositoryCache = dir
@@ -113,6 +119,9 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		if err != nil {
 			return nil, "", err
 		}
+	}
+	if err := verifyChartDigest(data, indexDigest); err != nil {
+		return nil, "", fmt.Errorf("chart %s version %s: %w", name, version, withChartDigestGuidance(err, true))
 	}
 	sum := sha256.Sum256(data)
 	ch, err := loader.LoadArchive(bytes.NewReader(data))

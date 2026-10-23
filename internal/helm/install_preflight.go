@@ -277,6 +277,9 @@ func classifyInstallError(err error) InstallErrorClass {
 	if err == nil {
 		return InstallErrorClass{}
 	}
+	if errors.Is(err, errChartDigest) {
+		return InstallErrorClass{Status: http.StatusBadGateway, Code: "chart_digest_failed", Message: err.Error()}
+	}
 	var pending *ReleasePendingError
 	if errors.As(err, &pending) {
 		return InstallErrorClass{

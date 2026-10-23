@@ -35,7 +35,6 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
-	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/kube"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
@@ -60,6 +59,16 @@ var repositoryRefreshErrorURL = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^
 
 // HTTP client for ArtifactHub requests
 var httpClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if !sameHTTPOrigin(via[0].URL, req.URL) {
+			req.Header.Del("Authorization")
+			req.Header.Del("Cookie")
+		}
+		return nil
+	},
 	Timeout: 30 * time.Second,
 }
 
@@ -2635,7 +2644,7 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 
 	loaded, err := load(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
-		if errors.Is(err, errSourceRequired) {
+		if errors.Is(err, errSourceRequired) || errors.Is(err, errChartDigest) {
 			return nil, err
 		}
 		if reconstructingStoredChart {
@@ -3176,7 +3185,7 @@ func (c *Client) UpdateRepository(repoName string) error {
 	}
 
 	// Create chart repository and download index
-	chartRepo, err := repo.NewChartRepository(repoEntry, getter.All(c.settings))
+	chartRepo, err := repo.NewChartRepository(repoEntry, c.repositoryGetters(repoEntry))
 	if err != nil {
 		return fmt.Errorf("failed to create chart repository %q: %s", repoName, repositoryRefreshErrorURL.ReplaceAllString(err.Error(), "<redacted>"))
 	}
@@ -3365,22 +3374,32 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 		chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 	}
 
-	cp, err := c.locateChartPath(nil, chartURL, chartVersion.Version)
+	var loadedChart *chart.Chart
+	if registry.IsOCI(chartURL) {
+		cp, locateErr := c.locateChartPath(nil, chartURL, chartVersion.Version)
+		if locateErr != nil {
+			return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
+		}
+		loadedChart, err = loadChartWithDigest(cp, chartVersion.Digest)
+	} else {
+		body, fetchErr := c.getRepositoryChart(repoEntry, chartURL)
+		if fetchErr != nil {
+			log.Printf("[helm] Could not download chart details for %s/%s; showing repository index information: %v", repoName, chartName, fetchErr)
+			return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
+		}
+		if err := verifyChartDigest(body.Bytes(), chartVersion.Digest); err != nil {
+			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, withChartDigestGuidance(err, false))
+		}
+		loadedChart, err = loader.LoadArchive(body)
+	}
 	if err != nil {
-		// If we can't download, return basic info from index
-		return &ChartDetail{
-			ChartInfo: chartVersionToInfo(chartVersion, repoName),
-		}, nil
+		if errors.Is(err, errChartDigest) {
+			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, withChartDigestGuidance(err, false))
+		}
+		return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
 	}
 
-	chart, err := loader.Load(cp)
-	if err != nil {
-		return &ChartDetail{
-			ChartInfo: chartVersionToInfo(chartVersion, repoName),
-		}, nil
-	}
-
-	return chartDetailFromChart(chart, chartVersionToInfo(chartVersion, repoName)), nil
+	return chartDetailFromChart(loadedChart, chartVersionToInfo(chartVersion, repoName)), nil
 }
 
 func chartDetailFromChart(chart *chart.Chart, info ChartInfo) *ChartDetail {
@@ -3444,6 +3463,8 @@ func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRe
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
 
 	var chartURL string
+	var indexDigest string
+	var downloadEntry *repo.Entry
 	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
@@ -3457,6 +3478,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, err
 		}
 	} else if isRepoURL {
+		downloadEntry = &repo.Entry{URL: req.Repository}
 		// Direct URL - fetch the repository index to find the chart
 		repoURL := strings.TrimSuffix(req.Repository, "/")
 
@@ -3514,6 +3536,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
@@ -3537,6 +3560,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			}
 		}
 
+		downloadEntry = repoEntry
 		if repoEntry == nil {
 			return nil, fmt.Errorf("repository %s not found", req.Repository)
 		}
@@ -3570,6 +3594,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
@@ -3593,19 +3618,31 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 	}
 	req.resolvedSource = resolvedSource
 
-	cp, err := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
-	if err != nil {
-		return nil, fmt.Errorf("failed to locate chart: %w", err)
+	var loadedChart *chart.Chart
+	if registry.IsOCI(chartURL) {
+		cp, locateErr := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
+		if locateErr != nil {
+			return nil, fmt.Errorf("failed to locate chart: %w", locateErr)
+		}
+		loadedChart, err = loadChartWithDigest(cp, indexDigest)
+	} else {
+		body, fetchErr := c.getRepositoryChart(downloadEntry, chartURL)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("failed to download chart: %w", fetchErr)
+		}
+		if err := verifyChartDigest(body.Bytes(), indexDigest); err != nil {
+			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
+		}
+		loadedChart, err = loader.LoadArchive(body)
 	}
-	chart, err := loader.Load(cp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load chart: %w", err)
+		return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 	}
 
 	if mode != installFresh {
 		log.Printf("[helm] install %q/%q: prior release record exists, recovering via %s", req.Namespace, req.ReleaseName, recoveryMode(mode))
 	}
-	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
+	rel, err := runInstallOrUpgrade(actionConfig, req, loadedChart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
@@ -3641,6 +3678,8 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	}
 
 	var chartURL string
+	var indexDigest string
+	var downloadEntry *repo.Entry
 	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
@@ -3655,6 +3694,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		}
 		sendProgress("resolving", "Resolving chart from OCI registry...", chartURL)
 	} else if isRepoURL {
+		downloadEntry = &repo.Entry{URL: req.Repository}
 		sendProgress("fetching", "Fetching repository index...", req.Repository)
 
 		repoURL := strings.TrimSuffix(req.Repository, "/")
@@ -3711,6 +3751,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		chartURL = chartVersion.URLs[0]
 		if !isAbsoluteChartURL(chartURL) {
@@ -3733,6 +3774,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			}
 		}
 
+		downloadEntry = repoEntry
 		if repoEntry == nil {
 			return nil, fmt.Errorf("repository %s not found", req.Repository)
 		}
@@ -3765,6 +3807,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		chartURL = chartVersion.URLs[0]
 		if !isAbsoluteChartURL(chartURL) {
@@ -3799,41 +3842,24 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("failed to locate chart: %w", err)
 		}
 		sendProgress("loading", "Loading chart...", chartPath)
-		loadedChart, err = loader.Load(chartPath)
+		loadedChart, err = loadChartWithDigest(chartPath, indexDigest)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load chart: %w", err)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 	} else {
-		// Preserve the existing direct HTTP path. Helm's ChartDownloader loads all
-		// locally registered indexes and can fail because an unrelated cache entry
-		// is stale or missing.
-		chartResp, err := httpClient.Get(chartURL)
+		body, fetchErr := c.getRepositoryChart(downloadEntry, chartURL)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("failed to download chart: %w", fetchErr)
+		}
+		sendProgress("loading", "Loading chart...", "")
+		if err := verifyChartDigest(body.Bytes(), indexDigest); err != nil {
+			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
+		}
+		loadedChart, err = loader.LoadArchive(body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to download chart: %w", err)
-		}
-		defer chartResp.Body.Close()
-		if chartResp.StatusCode != 200 {
-			return nil, fmt.Errorf("failed to download chart: server returned %d", chartResp.StatusCode)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 
-		tmpChart, err := os.CreateTemp("", "helm-chart-*.tgz")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temp file for chart: %w", err)
-		}
-		defer os.Remove(tmpChart.Name())
-		defer tmpChart.Close()
-
-		if _, err := tmpChart.ReadFrom(chartResp.Body); err != nil {
-			return nil, fmt.Errorf("failed to write chart to temp file: %w", err)
-		}
-		tmpChart.Close()
-
-		sendProgress("loading", "Loading chart...", tmpChart.Name())
-
-		loadedChart, err = loader.Load(tmpChart.Name())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load chart: %w", err)
-		}
 	}
 
 	switch mode {
