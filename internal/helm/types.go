@@ -312,17 +312,6 @@ type ChartSourceStatus struct {
 	Candidates           []ChartSourceCandidate  `json:"candidates,omitempty"`
 }
 
-// ArtifactHubSourceCandidate is unverified discovery metadata. Source uses the
-// same suggestion model as configured source choices, but remains unchecked
-// until the operator explicitly asks Radar to verify this one result.
-type ArtifactHubSourceCandidate struct {
-	ChartSourceSuggestion
-	RepositoryName    string `json:"repositoryName"`
-	Publisher         string `json:"publisher"`
-	Official          bool   `json:"official"`
-	VerifiedPublisher bool   `json:"verifiedPublisher"`
-}
-
 // UpgradeInfo contains information about available upgrades
 type UpgradeInfo struct {
 	CurrentVersion  string `json:"currentVersion"`

@@ -8,6 +8,7 @@ import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '.
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
+import { artifactHubPublisher, isArtifactHubOfficial } from '../../utils/artifacthub'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 
 interface ChartBrowserProps {
@@ -548,7 +549,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <div className="flex items-center gap-2 mt-0.5 text-xs text-theme-text-tertiary">
             <span className="flex items-center gap-1">
               <Building2 className="w-3 h-3" />
-              {chart.repository.organizationName || chart.repository.name}
+              {artifactHubPublisher(chart.repository)}
             </span>
             <span className="flex items-center gap-1">
               <Globe className="w-3 h-3" />
@@ -630,12 +631,12 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           </Tooltip>
 
           {/* Official */}
-          <Tooltip content={chart.repository.official ? 'Official package' : 'Community package'}>
+          <Tooltip content={isArtifactHubOfficial(chart) ? 'Official package' : 'Community package'}>
             <span className={clsx(
               'p-1.5 rounded',
-              chart.repository.official ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
+              isArtifactHubOfficial(chart) ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
             )}>
-              <Star className={clsx('w-4 h-4', chart.repository.official && 'fill-current')} />
+              <Star className={clsx('w-4 h-4', isArtifactHubOfficial(chart) && 'fill-current')} />
             </span>
           </Tooltip>
         </div>

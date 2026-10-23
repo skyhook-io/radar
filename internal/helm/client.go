@@ -3128,7 +3128,7 @@ func (c *Client) ListRepositories() ([]HelmRepository, error) {
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return []HelmRepository{}, nil
 		}
 		return nil, fmt.Errorf("failed to load repo file: %w", err)
@@ -3213,7 +3213,7 @@ func (c *Client) SearchCharts(query string, allVersions bool) (*ChartSearchResul
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return &ChartSearchResult{Charts: []ChartInfo{}}, nil
 		}
 		return nil, fmt.Errorf("failed to load repo file: %w", err)

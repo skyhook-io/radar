@@ -46,7 +46,6 @@ import type {
   ChartSourceCandidate,
   SourceUpgradeSelection,
   ChartSourceStatus,
-  ArtifactHubSourceCandidate,
   ValuesDiff,
   ValuesPreviewResponse,
   HelmRepository,
@@ -6521,50 +6520,6 @@ export function useSetHelmSource(namespace: string, releaseName: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["helm-source-status", namespace, releaseName] });
  queryClient.invalidateQueries({ queryKey: ["helm-source-versions", namespace, releaseName] });
-      queryClient.invalidateQueries({ queryKey: ["helm-upgrade-info"] });
-      queryClient.invalidateQueries({ queryKey: ["helm-release-versions"] });
-      queryClient.invalidateQueries({ queryKey: ["helm-batch-upgrade-info"] });
-    },
-  });
-}
-
-export function useDiscoverArtifactHubSources(namespace: string, releaseName: string) {
-  return useMutation({
-    mutationFn: async (signal?: AbortSignal): Promise<ArtifactHubSourceCandidate[]> => {
-      const response = await apiFetch(apiUrl(`/helm/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}/source-discovery/artifacthub`), {
-        method: "POST",
-        signal,
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Unknown error" }));
-        throw new Error(error.error || `HTTP ${response.status}`);
-      }
-      return response.json();
-    },
-  });
-}
-
-export function useRecoverArtifactHubSource(namespace: string, releaseName: string) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (candidate: ArtifactHubSourceCandidate): Promise<{ status: string; source: ChartSourceCandidate }> => {
-      const response = await apiFetch(apiUrl(`/helm/releases/${encodeURIComponent(namespace)}/${encodeURIComponent(releaseName)}/source-recovery/artifacthub`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(candidate),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: "Unknown error" }));
-        throw new Error(error.error || `HTTP ${response.status}`);
-      }
-      return response.json();
-    },
-    meta: { errorMessage: "Failed to recover chart source", successMessage: "Chart source verified and associated" },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["helm-repositories"] });
-      queryClient.invalidateQueries({ queryKey: ["helm-oci-sources"] });
-      queryClient.invalidateQueries({ queryKey: ["helm-source-status", namespace, releaseName] });
-      queryClient.invalidateQueries({ queryKey: ["helm-source-versions", namespace, releaseName] });
       queryClient.invalidateQueries({ queryKey: ["helm-upgrade-info"] });
       queryClient.invalidateQueries({ queryKey: ["helm-release-versions"] });
       queryClient.invalidateQueries({ queryKey: ["helm-batch-upgrade-info"] });

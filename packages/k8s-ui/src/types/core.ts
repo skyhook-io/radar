@@ -1127,15 +1127,6 @@ export interface ChartSourceStatus {
   candidates?: ChartSourceCandidate[]
 }
 
-// Unverified ArtifactHub discovery metadata. The source remains an unchecked
-// suggestion until the operator explicitly asks Radar to verify this result.
-export interface ArtifactHubSourceCandidate extends ChartSourceSuggestion {
-  repositoryName: string
-  publisher: string
-  official: boolean
-  verifiedPublisher: boolean
-}
-
 // Batch upgrade info keyed by "storageNamespace/name".
 export interface BatchUpgradeInfo {
   releases: Record<string, UpgradeInfo>
@@ -1221,6 +1212,7 @@ export interface InstallChartRequest {
 
 // ArtifactHub chart with rich metadata
 export interface ArtifactHubChart {
+  official?: boolean
   packageId: string
   name: string
   version: string
@@ -1243,6 +1235,9 @@ export interface ArtifactHubChart {
 
 // ArtifactHub repository info
 export interface ArtifactHubRepository {
+  organizationDisplayName?: string
+  userAlias?: string
+  displayName?: string
   name: string
   url: string
   official?: boolean
