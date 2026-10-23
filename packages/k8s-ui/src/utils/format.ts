@@ -141,8 +141,13 @@ export function parseMemoryToBytes(memString: string): number {
     'Ei': 1024 ** 6,
   }
 
-  // Decimal suffixes (powers of 1000)
+  // Decimal suffixes (powers of 1000). The sub-unit ones are real inputs too:
+  // a request written as "1288490188800m" is valid, and a sum that includes one
+  // keeps the milli scale, so a whole cluster's total serializes with "m".
   const decimalSuffixes: Record<string, number> = {
+    'n': 1000 ** -3,
+    'u': 1000 ** -2,
+    'm': 1000 ** -1,
     'k': 1000,
     'K': 1000,
     'M': 1000 ** 2,
