@@ -45,6 +45,13 @@ func beylaJobSelector() string {
 	return defaultBeylaJobSelector
 }
 
+// beylaSeriesSelector is the full matcher fragment for Beyla series: the job
+// selector plus any configured cluster matchers. Operator-facing messages name
+// beylaJobSelector instead, since that is the flag the operator can change.
+func beylaSeriesSelector() string {
+	return withClusterMatchers(beylaJobSelector())
+}
+
 type promQueryFunc func(ctx context.Context, query string) (*prom.QueryResult, error)
 
 // usableSample reports whether a series value can be turned into a count. The
@@ -145,7 +152,7 @@ func (s *BeylaSource) Detect(ctx context.Context) (*DetectionResult, error) {
 	// single regex union of the two names: a cluster part-way through migrating
 	// from Beyla to OBI would run both, and summing them would double every edge.
 	for _, metric := range []string{beylaFlowMetric, obiFlowMetric} {
-		qr, err := s.query(ctx, fmt.Sprintf(`count(%s{%s})`, metric, beylaJobSelector()))
+		qr, err := s.query(ctx, fmt.Sprintf(`count(%s{%s})`, metric, beylaSeriesSelector()))
 		if err != nil || qr == nil || len(qr.Series) == 0 {
 			continue
 		}
@@ -232,7 +239,7 @@ func (s *BeylaSource) buildInfoVersion(ctx context.Context, scoped bool) string 
 	for _, metric := range []string{"beyla_build_info", "obi_build_info"} {
 		query := metric
 		if scoped {
-			query = fmt.Sprintf(`%s{%s}`, metric, beylaJobSelector())
+			query = fmt.Sprintf(`%s{%s}`, metric, beylaSeriesSelector())
 		}
 		qr, err := s.query(ctx, query)
 		if err != nil || qr == nil {
@@ -767,7 +774,7 @@ func beylaWindow(since time.Duration) rateWindow {
 // "src OR dst namespace matches" inside a single label selector.
 func beylaRateQuery(groupBy, metric, namespace, extra string, w rateWindow) string {
 	sum := func(more string) string {
-		return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s%s}[%s]))`, groupBy, metric, beylaJobSelector(), extra, more, w.promQL)
+		return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s%s}[%s]))`, groupBy, metric, beylaSeriesSelector(), extra, more, w.promQL)
 	}
 	if namespace == "" {
 		return sum("")
@@ -787,7 +794,7 @@ func beylaL7LatencyQuery(namespace string, w rateWindow) string {
 	}
 	group := beylaL7DetailGroupBy
 	return fmt.Sprintf(`sum by (%s) (rate(http_server_request_duration_seconds_sum{%s%s}[%s])) / sum by (%s) (rate(%s{%s%s}[%s]))`,
-		group, beylaJobSelector(), extra, w.promQL, group, beylaL7Metric, beylaJobSelector(), extra, w.promQL)
+		group, beylaSeriesSelector(), extra, w.promQL, group, beylaL7Metric, beylaSeriesSelector(), extra, w.promQL)
 }
 
 // beylaL7ErrorQuery is the 5xx share of requests, the same definition the Istio
@@ -799,7 +806,7 @@ func beylaL7ErrorQuery(namespace string, w rateWindow) string {
 	}
 	group := beylaL7DetailGroupBy
 	return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s, http_response_status_code=~"5.."}[%s]))`,
-		group, beylaL7Metric, beylaJobSelector(), extra, w.promQL)
+		group, beylaL7Metric, beylaSeriesSelector(), extra, w.promQL)
 }
 
 // beylaL7RateQuery builds the L7 query. Unlike beylaRateQuery, there's only
@@ -810,7 +817,7 @@ func beylaL7RateQuery(namespace string, w rateWindow) string {
 	if namespace != "" {
 		extra = fmt.Sprintf(`, k8s_namespace_name=%q`, namespace)
 	}
-	return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s}[%s]))`, beylaL7GroupBy, beylaL7Metric, beylaJobSelector(), extra, w.promQL)
+	return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s}[%s]))`, beylaL7GroupBy, beylaL7Metric, beylaSeriesSelector(), extra, w.promQL)
 }
 
 func (s *BeylaSource) queryL4(ctx context.Context, opts FlowOptions) (map[l4Key]*Flow, l4LabelPresence, error) {
@@ -854,7 +861,7 @@ func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow) float
 	// scoping it would mean an `or` of two counts and no single value to read.
 	query := fmt.Sprintf(
 		`1 - ((count(rate(%s{%s, direction="response"}[%s]) > 0) or vector(0)) / (count(%s{%s, direction="response"}) or vector(1)))`,
-		metric, beylaJobSelector(), w.promQL, metric, beylaJobSelector())
+		metric, beylaSeriesSelector(), w.promQL, metric, beylaSeriesSelector())
 	result, err := s.query(ctx, query)
 	if err != nil || result == nil || len(result.Series) == 0 || len(result.Series[0].DataPoints) == 0 {
 		return 0

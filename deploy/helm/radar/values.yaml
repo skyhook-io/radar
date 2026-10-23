@@ -624,6 +624,7 @@ traffic:
   # Optional workload/PVC metrics scope override, not a feature enable switch.
   # Leave both unset for automatic matching; set at most one mode.
   # Does not scope rightsizing, node/HPA or legacy network/storage queries.
+  # prometheusClusterLabels also scopes the Caretta and Beyla traffic map.
   prometheusSingleCluster: false
   prometheusClusterLabels: {}
   # Beyla Live Traffic matcher fragment. Workload charts use it only with an
