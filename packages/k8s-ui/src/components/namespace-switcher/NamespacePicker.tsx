@@ -82,7 +82,8 @@ export interface NamespacePickerProps {
  *
  * Selection model: the dropdown keeps a draft Set<string>; toggling rows
  * mutates the draft locally; closing the dropdown applies the draft in a single
- * onApply. "Clear all" applies immediately and closes.
+ * onApply. "Clear all" applies immediately and closes, as does clicking a
+ * namespace's name, which selects only that namespace.
  */
 export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePickerProps>(function NamespacePicker(
   { scope, onApply, loading = false, pending = false, disabled = false, disabledTooltip, className = '', variant = 'chip', label, limitedListHelp },
@@ -196,6 +197,14 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
     if (next.has(ns)) next.delete(ns)
     else next.add(ns)
     setDraft(next)
+  }
+
+  const selectOnly = (ns: string) => {
+    const next = new Set([ns])
+    setDraft(next)
+    setIsOpen(false)
+    setSearch('')
+    applySelection(next)
   }
 
   const clearAll = () => {
@@ -350,6 +359,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
                 onSelectionChange={setDraft}
                 onClearAll={clearAll}
                 onDone={closeAndApply}
+                onSelectOnly={selectOnly}
                 search={search}
                 onSearchChange={setSearch}
                 searchPlaceholder="Filter namespaces"

@@ -16,6 +16,11 @@ export interface MultiSelectPickerProps {
   onClearAll: () => void
   /** Footer "Done" button. */
   onDone: () => void
+  /**
+   * When set, clicking an item's name (rather than its checkbox) selects only
+   * that item. The host decides whether that also commits and closes.
+   */
+  onSelectOnly?: (item: string) => void
 
   /** Controlled search term (kept in the host so the body stays SSR-testable). */
   search: string
@@ -50,6 +55,7 @@ export function MultiSelectPicker({
   onSelectionChange,
   onClearAll,
   onDone,
+  onSelectOnly,
   search,
   onSearchChange,
   searchPlaceholder,
@@ -137,18 +143,39 @@ export function MultiSelectPicker({
 
         {filteredItems.map(item => (
           <li key={item}>
-            <label className="w-full flex items-center justify-between px-3 py-1.5 text-sm hover:bg-theme-hover text-left text-theme-text-primary cursor-pointer">
-              <span className="flex items-center gap-2 min-w-0">
+            {onSelectOnly ? (
+              <div className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-theme-hover text-left text-theme-text-primary">
                 <input
                   type="checkbox"
                   checked={selected.has(item)}
                   onChange={() => toggle(item)}
-                  className="shrink-0 accent-current"
+                  aria-label={`Select ${item}`}
+                  className="shrink-0 accent-current cursor-pointer"
                 />
-                <span className="truncate">{item}</span>
+                <button
+                  type="button"
+                  onClick={() => onSelectOnly(item)}
+                  title={`Show only ${item}`}
+                  className="truncate hover:underline text-left"
+                >
+                  {item}
+                </button>
                 {renderItemMeta?.(item)}
-              </span>
-            </label>
+              </div>
+            ) : (
+              <label className="w-full flex items-center justify-between px-3 py-1.5 text-sm hover:bg-theme-hover text-left text-theme-text-primary cursor-pointer">
+                <span className="flex items-center gap-2 min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(item)}
+                    onChange={() => toggle(item)}
+                    className="shrink-0 accent-current"
+                  />
+                  <span className="truncate">{item}</span>
+                  {renderItemMeta?.(item)}
+                </span>
+              </label>
+            )}
           </li>
         ))}
       </ul>

@@ -36,6 +36,13 @@ describe('MultiSelectPicker', () => {
     expect(html).toContain('>Done</button>')
   })
 
+  it('renders item names as plain text unless a select-only handler is given', () => {
+    expect(render()).not.toContain('Show only')
+    const html = render({ onSelectOnly: () => {} })
+    expect(html).toContain('title="Show only Pod"')
+    expect(html).toContain('type="checkbox"')
+  })
+
   it('shows the filter input above the threshold and hides it below', () => {
     const shown = render()
     expect(shown).toContain('placeholder="Filter kinds"')
