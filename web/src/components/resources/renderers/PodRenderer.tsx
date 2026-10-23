@@ -152,6 +152,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
           containers={containers}
           initialContainer={initialContainer}
           onSwitchToImageFiles={onSwitchToImageFiles}
+          pod={data}
         />
       )}
     />
