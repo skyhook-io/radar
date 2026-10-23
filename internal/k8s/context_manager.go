@@ -470,6 +470,7 @@ func reinitializeCurrentContextIfOperationCurrent(
 	InvalidateCapabilitiesCache()
 	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
+	InvalidatePlatformCache()
 
 	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
 	defer initCancel()
@@ -596,6 +597,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	InvalidateCapabilitiesCache()
 	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
+	InvalidatePlatformCache()
 
 	// Step 3: Test connectivity before proceeding with initialization.
 	// Contexts are derived from the operation context so they're canceled
@@ -758,6 +760,7 @@ func reinitializeNamespaceScope(namespace, resetMessage string) error {
 	SetNamespaceScopeOverride(namespace)
 	InvalidateCapabilitiesCache()
 	InvalidateServerVersionCache()
+	InvalidatePlatformCache()
 
 	t = time.Now()
 	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
