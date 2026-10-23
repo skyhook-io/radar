@@ -121,7 +121,7 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 		}
 	}
 	if err := verifyChartDigest(data, indexDigest); err != nil {
-		return nil, "", fmt.Errorf("chart %s version %s: %w", name, version, err)
+		return nil, "", fmt.Errorf("chart %s version %s: %w", name, version, withChartDigestGuidance(err, true))
 	}
 	sum := sha256.Sum256(data)
 	ch, err := loader.LoadArchive(bytes.NewReader(data))

@@ -3388,13 +3388,13 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 			return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
 		}
 		if err := verifyChartDigest(body.Bytes(), chartVersion.Digest); err != nil {
-			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, err)
+			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, withChartDigestGuidance(err, false))
 		}
 		loadedChart, err = loader.LoadArchive(body)
 	}
 	if err != nil {
 		if errors.Is(err, errChartDigest) {
-			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, err)
+			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, withChartDigestGuidance(err, false))
 		}
 		return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
 	}
@@ -3631,12 +3631,12 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, fmt.Errorf("failed to download chart: %w", fetchErr)
 		}
 		if err := verifyChartDigest(body.Bytes(), indexDigest); err != nil {
-			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, err)
+			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 		loadedChart, err = loader.LoadArchive(body)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, err)
+		return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 	}
 
 	if mode != installFresh {
@@ -3844,7 +3844,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		sendProgress("loading", "Loading chart...", chartPath)
 		loadedChart, err = loadChartWithDigest(chartPath, indexDigest)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, err)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 	} else {
 		body, fetchErr := c.getRepositoryChart(downloadEntry, chartURL)
@@ -3853,11 +3853,11 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		}
 		sendProgress("loading", "Loading chart...", "")
 		if err := verifyChartDigest(body.Bytes(), indexDigest); err != nil {
-			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, err)
+			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 		loadedChart, err = loader.LoadArchive(body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, err)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 
 	}

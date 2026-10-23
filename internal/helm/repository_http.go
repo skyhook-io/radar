@@ -128,7 +128,8 @@ func (c *Client) repositoryGettersWithTimeout(entry *repo.Entry, timeout time.Du
 				providers[i].New = func(_ ...getter.Option) (getter.Getter, error) {
 					return repositoryHTTPGetter{entry: snapshot, timeout: timeout}, nil
 				}
-				break
+				// Helm lists its built-in HTTP provider before downloader plugins.
+				return providers
 			}
 		}
 	}

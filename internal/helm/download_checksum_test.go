@@ -18,7 +18,7 @@ import (
 )
 
 func TestRepositoryChartChecksum(t *testing.T) {
-	for _, digest := range []string{"wrong", "malformed", "valid", "absent"} {
+	for _, digest := range []string{"wrong", "malformed", "whitespace", "valid", "absent"} {
 		for _, consumer := range []string{"source", "install", "progress", "detail", "direct-install", "direct-progress"} {
 			t.Run(digest+"/"+consumer, func(t *testing.T) {
 				c := newChartSourceTestClient(t)
@@ -36,12 +36,14 @@ func TestRepositoryChartChecksum(t *testing.T) {
 					advertised = strings.Repeat("0", 64)
 				case "malformed":
 					advertised = "not-sha256"
+				case "whitespace":
+					advertised = "   "
 				case "valid":
 					advertised = fmt.Sprintf("%x", sha256.Sum256(body))
 				}
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/index.yaml" {
-						fmt.Fprintf(w, "apiVersion: v1\nentries:\n  radar:\n  - apiVersion: v2\n    name: radar\n    version: 1.0.0\n    urls: [radar.tgz]\n    digest: %s\n", advertised)
+						fmt.Fprintf(w, "apiVersion: v1\nentries:\n  radar:\n  - apiVersion: v2\n    name: radar\n    version: 1.0.0\n    urls: [radar.tgz]\n    digest: %q\n", advertised)
 					} else {
 						w.Write(body)
 					}
@@ -70,9 +72,16 @@ func TestRepositoryChartChecksum(t *testing.T) {
 				case "detail":
 					_, err = c.GetChartDetail("probe", "radar", "1.0.0")
 				}
-				if digest == "wrong" || digest == "malformed" {
+				if digest == "wrong" || digest == "malformed" || digest == "whitespace" {
 					if err == nil || !strings.Contains(err.Error(), "digest") {
 						t.Fatalf("expected digest rejection, got %v", err)
+					}
+					if consumer == "source" || strings.HasPrefix(consumer, "direct-") {
+						if strings.Contains(strings.ToLower(err.Error()), "refresh the repository") {
+							t.Fatalf("fresh index must not recommend another refresh: %v", err)
+						}
+					} else if !strings.Contains(strings.ToLower(err.Error()), "refresh the repository") {
+						t.Fatalf("cached index needs actionable refresh guidance: %v", err)
 					}
 					if consumer == "install" || consumer == "progress" {
 						if _, e := cfg.Releases.Last(req.ReleaseName); e == nil {

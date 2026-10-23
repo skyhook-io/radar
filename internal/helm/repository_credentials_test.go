@@ -259,7 +259,7 @@ func TestRepositoryChartKeepsPluginGetter(t *testing.T) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	config := "name: fixture\nversion: 0.1.0\nusage: fixture\ndescription: local test downloader\ndownloaders:\n- command: download.sh\n  protocols: [fixture]\n"
+	config := "name: fixture\nversion: 0.1.0\nusage: fixture\ndescription: local test downloader\ndownloaders:\n- command: download.sh\n  protocols: [fixture, https]\n"
 	if err := os.WriteFile(filepath.Join(dir, "plugin.yaml"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
