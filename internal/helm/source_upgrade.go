@@ -85,15 +85,11 @@ func (c *Client) loadSourceChart(cfg *action.Configuration, source ChartSourceCa
 			snapshot := *configured
 			snapshot.Name = "selected"
 			snapshot.URL = selected.URL
-			dl.Options = append(dl.Options, getter.WithInsecureSkipVerifyTLS(snapshot.InsecureSkipTLSverify))
-			repository, err := repo.NewChartRepository(&snapshot, getter.All(c.settings))
+			repository, err := repo.NewChartRepository(&snapshot, c.repositoryGettersWithTimeout(&snapshot, 30*time.Second))
 			if err != nil {
 				return nil, "", err
 			}
-			repository.Client, err = getter.NewHTTPGetter(getter.WithTimeout(30 * time.Second))
-			if err != nil {
-				return nil, "", err
-			}
+			dl.Getters = c.repositoryGettersWithTimeout(&snapshot, 30*time.Second)
 			repository.CachePath = dir
 			if _, err := repository.DownloadIndexFile(); err != nil {
 				return nil, "", fmt.Errorf("could not refresh the selected repository: %w", err)

@@ -153,6 +153,14 @@ Programmatic upgrades require a confirmed saved source or an explicit source sel
 
 Explicit source changes use `POST /api/helm/releases/{namespace}/{name}/source/preview`, followed by `/source/upgrade` or `/source/upgrade-stream`. These routes require the `sourceUpgrade` selection, explicit values and an exact version (body `version` for preview, query `version` for upgrade). Preview returns `previewDigest`; send it back in the selection when applying. The selection also carries `expectedRevision` and `expectedSource` from source status. Older backends return 404 for these routes instead of ignoring the selected source. Ordinary upgrade routes reject source-change fields.
 
+### Repository credentials and redirects
+
+For HTTP repositories, Radar sends repository passwords and client certificates only to the configured address's scheme, hostname and port. A redirect or a chart URL on another origin is fetched without those credentials by default. Public chart hosts are fetched without repository credentials. By default, on a different origin, Radar verifies the server certificate using system trust plus any configured CA, even if verification was skipped for the repository.
+
+If a private repository deliberately shares credentials with its chart host, its Helm configuration must explicitly enable `pass_credentials_all`. This also permits sending the client certificate to that host. Use it only for hosts you trust. Redirected Basic authentication still follows Go's hostname restrictions; Radar does not restore a header Go removed.
+
+Custom CA certificates, client certificates and `insecure_skip_tls_verify` remain supported, including configurations with both a CA file and skipped certificate verification. If a repository address redirects from HTTP to HTTPS, configure its final HTTPS address to keep authenticated requests on the configured origin.
+
 ### Chart download checksums
 
 When an HTTP repository index advertises a SHA-256 checksum, Radar checks the downloaded chart archive before reading or using it. An invalid checksum or a mismatch stops chart details, installation, source recording and any upgrade or values operation that downloads that chart. The release stays unchanged.
