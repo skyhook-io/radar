@@ -55,6 +55,7 @@ func pruneMapCompact(m map[string]any) {
 	if p, ok := statusProfileByKind[strings.ToLower(kind)]; ok {
 		prune.ApplyInPlace(m, p)
 	}
+	decodeCertificateSigningRequest(m)
 }
 
 // pruneSpecElementsCompact handles conditional per-element container pruning;

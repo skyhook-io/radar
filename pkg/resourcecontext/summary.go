@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/csr"
 	"github.com/skyhook-io/radar/pkg/health"
 )
 
@@ -155,6 +156,9 @@ func levelToString(l health.Level) string {
 func unstructuredHealth(u *unstructured.Unstructured) string {
 	if u == nil {
 		return ""
+	}
+	if csr.IsObject(u.Object) {
+		return levelToString(csr.StatusOf(u.Object).State.Level())
 	}
 	conditions, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !found || len(conditions) == 0 {

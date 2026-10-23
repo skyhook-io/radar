@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, type ReactNode } from 'react'
 import { AlertTriangle, Copy, Check, Shield, Pencil, Save, XCircle, RefreshCw, Eye, EyeOff } from 'lucide-react'
 import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
@@ -313,21 +313,29 @@ function secretSaveErrorMessage(error: unknown): { reason?: string } {
   return { reason: error instanceof Error && error.message ? error.message : undefined }
 }
 
-function CertificateInfoSection({ cert, index, total }: { cert: CertificateInfo; index: number; total: number }) {
+export function CertificateInfoSection({ cert, index, total, title: titleOverride, children }: {
+  cert: CertificateInfo
+  index: number
+  total: number
+  title?: string
+  /** Extra properties shown after the subject. */
+  children?: ReactNode
+}) {
   const expiryTextColor = cert.expired || cert.daysLeft <= 7
     ? 'text-red-400'
     : cert.daysLeft <= 30
       ? 'text-yellow-400'
       : 'text-green-400'
 
-  const title = total > 1
+  const title = titleOverride ?? (total > 1
     ? `Certificate ${index + 1} of ${total}`
-    : 'Certificate Info'
+    : 'Certificate Info')
 
   return (
     <Section title={title} icon={Shield} defaultExpanded={index === 0}>
       <PropertyList>
         <Property label="Subject (CN)" value={cert.subject} />
+        {children}
         {cert.sans && cert.sans.length > 0 && (
           <Property label="SANs" value={
             <div className="flex flex-wrap gap-1">

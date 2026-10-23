@@ -35,6 +35,7 @@ import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _
 import { getGenericResourceStatus } from './generic-status'
 import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString, getAuthorizationPolicySelectorString as _getAuthorizationPolicySelectorString, getDestinationRuleTlsMode as _getDestinationRuleTlsMode } from './resource-utils-istio'
 import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
+import { getCertificateSigningRequestStatus as _getCertificateSigningRequestStatus, isCertificateSigningRequest as _isCertificateSigningRequest } from './resource-utils-csr'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -2422,6 +2423,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'cronjobs') return getCronJobStatus(resource).text
       if (kindLower === 'certificates') return getCertificateStatus(resource).text
       if (kindLower === 'certificaterequests') return getCertificateRequestStatus(resource).text
+      if (kindLower === 'certificatesigningrequests' && _isCertificateSigningRequest(resource)) return _getCertificateSigningRequestStatus(resource).text
       if (kindLower === 'clusterissuers' || kindLower === 'issuers') return getClusterIssuerStatus(resource).text
       if (kindLower === 'persistentvolumeclaims') return getPVCStatus(resource).text
       if (kindLower === 'persistentvolumes') return getPVStatus(resource).text

@@ -36,7 +36,7 @@ import {
   Stethoscope,
   Coins,
 } from 'lucide-react'
-import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
+import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo, CertificateSigningRequestDetails } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -186,6 +186,8 @@ interface WorkloadViewProps {
   relationships?: Relationships
   /** TLS certificate info for secrets */
   certificateInfo?: any
+  /** Decoded request and certificate for CertificateSigningRequest detail responses */
+  certificateSigningRequest?: CertificateSigningRequestDetails
   /** HPA diagnosis for HorizontalPodAutoscaler detail responses */
   hpaDiagnosis?: HPADiagnosis
   /** Compact diagnosis for autoscalers controlling this workload */
@@ -457,6 +459,7 @@ export function WorkloadView({
   resource,
   relationships,
   certificateInfo,
+  certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
   workloadPods,
@@ -1114,6 +1117,7 @@ export function WorkloadView({
                 data={resource}
                 relationships={relationships}
                 certificateInfo={certificateInfo}
+                certificateSigningRequest={certificateSigningRequest}
                 hpaDiagnosis={hpaDiagnosis}
                 scalerDiagnostics={scalerDiagnostics}
                 workloadPods={workloadPods}
@@ -1327,6 +1331,7 @@ export function WorkloadView({
               selectedResource={selectedResource}
               relationships={relationships}
               certificateInfo={certificateInfo}
+              certificateSigningRequest={certificateSigningRequest}
               hpaDiagnosis={hpaDiagnosis}
               scalerDiagnostics={scalerDiagnostics}
               workloadPods={workloadPods}
@@ -1964,6 +1969,7 @@ function InfoTab({
   selectedResource,
   relationships,
   certificateInfo,
+  certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
   workloadPods,
@@ -2000,6 +2006,7 @@ function InfoTab({
   selectedResource: SelectedResource
   relationships?: Relationships
   certificateInfo?: any
+  certificateSigningRequest?: CertificateSigningRequestDetails
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
   workloadPods?: WorkloadPodInfo[]
@@ -2054,6 +2061,7 @@ function InfoTab({
           data={resource}
           relationships={relationships}
           certificateInfo={certificateInfo}
+          certificateSigningRequest={certificateSigningRequest}
           hpaDiagnosis={hpaDiagnosis}
           scalerDiagnostics={scalerDiagnostics}
           onCopy={onCopy}

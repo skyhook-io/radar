@@ -137,6 +137,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["certificates.k8s.io"]
     resources:
+      - certificatesigningrequests
       - podcertificaterequests
       - clustertrustbundles
     verbs: ["get", "list", "watch"]

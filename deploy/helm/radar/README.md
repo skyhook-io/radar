@@ -387,7 +387,7 @@ Always granted (required for basic functionality):
 | `batch` | jobs, cronjobs |
 | `autoscaling` | horizontalpodautoscalers |
 | `scheduling.k8s.io` | priorityclasses; feature-gated workloads, podgroups, compositepodgroups when served |
-| `certificates.k8s.io` | podcertificaterequests, clustertrustbundles (stable in Kubernetes 1.37) |
+| `certificates.k8s.io` | certificatesigningrequests; podcertificaterequests, clustertrustbundles (stable in Kubernetes 1.37) |
 | `apiextensions.k8s.io` | customresourcedefinitions (for CRD discovery) |
 
 ### Privileged Permissions (Opt-in)

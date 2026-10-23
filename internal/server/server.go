@@ -3073,11 +3073,11 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
 		}
 
-		s.writeJSON(w, topology.ResourceWithRelationships{
+		s.writeJSON(w, newResourceReadResponse(topology.ResourceWithRelationships{
 			Resource:      resource,
 			Relationships: relationships,
 			HPADiagnosis:  hpaDiagnosisFor(resource),
-		})
+		}))
 		return
 	}
 
@@ -3343,7 +3343,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.writeJSON(w, response)
+	s.writeJSON(w, newResourceReadResponse(response))
 }
 
 // getLiveSecret reads one Secret from the API server as the caller. It

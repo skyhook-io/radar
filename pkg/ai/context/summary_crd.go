@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/csr"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -80,6 +81,8 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 		return summarizeNvidiaClusterPolicy(obj)
 	case group == "nvidia.com" && kind == "NVIDIADriver":
 		return summarizeNvidiaDriver(obj)
+	case group == csr.Group && kind == csr.Kind:
+		return summarizeCertificateSigningRequest(obj)
 	}
 
 	// Generic fallback

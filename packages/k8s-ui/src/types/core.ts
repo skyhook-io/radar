@@ -700,6 +700,46 @@ export interface SecretCertificateInfo {
   certificates: CertificateInfo[]
 }
 
+/** How much of a CertificateSigningRequest payload Radar could read (pkg/csr). */
+export type CSRDecodeStatus = 'absent' | 'decoded' | 'partial' | 'invalid'
+
+/** The PKCS#10 request: the identity its creator asked for, not what was approved or issued. */
+export interface CSRRequestDetails {
+  status: CSRDecodeStatus
+  error?: string
+  subject?: string
+  commonName?: string
+  organizations?: string[]
+  dnsNames?: string[]
+  ipAddresses?: string[]
+  emailAddresses?: string[]
+  uris?: string[]
+  publicKey?: string
+  signatureAlgorithm?: string
+  /** Set when the request parses but is not signed by its own key. */
+  signatureError?: string
+}
+
+export interface CSRIssuedCertificate extends CertificateInfo {
+  /** The whole subject; CertificateInfo.subject keeps only the common name. */
+  subjectDN?: string
+  emailAddresses?: string[]
+  uris?: string[]
+}
+
+export interface CSRCertificateDetails {
+  status: CSRDecodeStatus
+  certificates?: CSRIssuedCertificate[]
+  /** Each part of status.certificate that is not a readable certificate. */
+  problems?: string[]
+}
+
+/** Decoded spec.request and status.certificate of a CertificateSigningRequest. */
+export interface CertificateSigningRequestDetails {
+  request: CSRRequestDetails
+  certificate: CSRCertificateDetails
+}
+
 export type HPADiagnosisState =
   | 'ok'
   | 'scaling_up'
@@ -769,6 +809,8 @@ export interface ResourceWithRelationships<T = unknown> {
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
   hpaDiagnosis?: HPADiagnosis
+  /** Absent from Radar versions that predate CertificateSigningRequest decoding. */
+  certificateSigningRequest?: CertificateSigningRequestDetails
 }
 
 // API Resource (from discovery endpoint)

@@ -37,11 +37,12 @@ const (
 )
 
 var featuredKubernetesAPIs = map[string]struct{}{
-	"scheduling.k8s.io/Workload":                {},
-	"scheduling.k8s.io/PodGroup":                {},
-	"scheduling.k8s.io/CompositePodGroup":       {},
-	"certificates.k8s.io/PodCertificateRequest": {},
-	"certificates.k8s.io/ClusterTrustBundle":    {},
+	"scheduling.k8s.io/Workload":                    {},
+	"scheduling.k8s.io/PodGroup":                    {},
+	"scheduling.k8s.io/CompositePodGroup":           {},
+	"certificates.k8s.io/CertificateSigningRequest": {},
+	"certificates.k8s.io/PodCertificateRequest":     {},
+	"certificates.k8s.io/ClusterTrustBundle":        {},
 }
 
 func isFeaturedKubernetesAPI(group, kind string) bool {

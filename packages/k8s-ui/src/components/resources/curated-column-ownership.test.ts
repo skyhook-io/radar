@@ -108,7 +108,7 @@ describe('curated column ownership', () => {
   // Brace-counting, not parsing: assert the extraction actually saw the whole
   // table, or a silently-missed key would let the guard above pass vacuously.
   it('extracted every curated key', () => {
-    expect(CURATED.length).toBe(240)
+    expect(CURATED.length).toBe(241)
     expect(OWNED.size).toBe(202)
     expect(CURATED).toContain('pods')
     expect(CURATED).toContain('crossplanemanagedresources')
