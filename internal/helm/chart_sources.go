@@ -600,6 +600,9 @@ func (c *Client) setSourceWith(actionConfig *action.Configuration, name string, 
 	} else {
 		loaded, _, err := c.loadSourceChart(actionConfig, selected, rel.Chart.Metadata.Name, rel.Chart.Metadata.Version)
 		if err != nil {
+			if errors.Is(err, errChartDigest) {
+				return fmt.Errorf("%w: could not verify the selected installed chart version: %w", errInvalidChartSource, err)
+			}
 			return fmt.Errorf("%w: could not verify the selected installed chart version: %v", errInvalidChartSource, err)
 		}
 		if chartSourceBinding(loaded) != chartSourceBinding(rel.Chart) {
