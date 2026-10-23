@@ -76,6 +76,9 @@ export type DiagnoseSetup =
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
   setupState: DiagnoseSetup; // readiness for the setup nudge (see DiagnoseSetup)
+  // Why setupState is "off", when the server says: a team installation
+  // ("shared") versus the MCP mount being off ("no-mcp").
+  unavailableReason: "" | "shared" | "no-mcp";
   // Re-reads the agent list; the server turns investigations on if a CLI was
   // installed since the last check. Resolves once the new state is applied.
   recheckAgents: () => Promise<void>;
@@ -395,6 +398,8 @@ function RoutedDiagnoseProvider({
   }, [location]);
   const [available, setAvailable] = useState(false);
   const [eligible, setEligible] = useState(false);
+  const [unavailableReason, setUnavailableReason] =
+    useState<DiagnoseCtx["unavailableReason"]>("");
   const [agentEligibilityResolved, setAgentEligibilityResolved] =
     useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -521,6 +526,7 @@ function RoutedDiagnoseProvider({
       setCliOverride(!!r.cliOverride);
       setConsented(r.consented ?? {});
       setEligible(!!r.eligible);
+      setUnavailableReason(r.unavailableReason ?? "");
       const supported = r.agents.filter(
         (a) =>
           a.supported &&
@@ -1099,6 +1105,7 @@ function RoutedDiagnoseProvider({
   const value: DiagnoseCtx = {
     available,
     setupState,
+    unavailableReason,
     recheckAgents,
     checkingAgents,
     agentsCheckFailed,

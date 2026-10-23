@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useIssues, useSubjectIssues, type SubjectIssuesResponse } from "../../api/client";
+import { useClusterInfo, useIssues, useSubjectIssues, type SubjectIssuesResponse } from "../../api/client";
 import {
   useAPIResources,
   karpenterCapacityAvailable,
@@ -25,6 +25,10 @@ import {
 import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
+import { CloudAlertPrompt } from "../cloudHints/CloudAlertPrompt";
+import { SharedInstallAiLine } from "../cloudHints/SharedInstallAiLine";
+import { useDiagnose } from "../diagnose/DiagnoseContext";
+import { useCloudHintsEnabled } from "../cloudHints/cloudHints";
 import { uncheckedSourceLines } from "./uncheckedSources";
 import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
 
@@ -186,6 +190,13 @@ export function IssuesPane({
     useIssues(namespaces, !subject);
   const { connection } = useConnection();
   const navigate = useNavigate();
+  const cloudHints = useCloudHintsEnabled();
+  const clusterContext = useClusterInfo().data?.context;
+  const diagnose = useDiagnose();
+  const sharedInstallAi =
+    cloudHints &&
+    diagnose.setupState === "off" &&
+    diagnose.unavailableReason === "shared";
   const apiResources = useAPIResources();
   const hasKarpenter = karpenterCapacityAvailable(
     useCapabilitiesContext().karpenter,
@@ -295,6 +306,8 @@ export function IssuesPane({
           </>
         }
       />
+
+      {sharedInstallAi && <SharedInstallAiLine />}
 
       {!subject && error && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
@@ -417,6 +430,11 @@ export function IssuesPane({
           issues={shown}
           anyData={subject ? !!related.data : !!data}
           onResourceClick={onResourceClick}
+          renderDetailSection={
+            cloudHints
+              ? ({ issue }) => <CloudAlertPrompt key={issue.id} issue={issue} context={clusterContext} />
+              : undefined
+          }
           renderActions={({ issue }) => {
             const capacityHref = capacityHrefForIssue(issue, hasKarpenter);
             return (
@@ -435,6 +453,7 @@ export function IssuesPane({
                   group={issue.group}
                   namespace={issue.namespace ?? ""}
                   name={issue.name}
+                  issueId={issue.id}
                 />
               </div>
             );

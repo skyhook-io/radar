@@ -22,7 +22,7 @@
  * Pure presentation: it never fetches. All colors are theme CSS variables.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Minus, Plus } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
@@ -77,6 +77,10 @@ export interface TimelineStripProps {
   lensResizable?: boolean
   liveState?: TimelineLiveState
   onLiveChipClick?: () => void
+  /** One line under the footer while the dimmed pre-data region is on screen,
+   *  for a host that has something to say about the missing history. Gets the
+   *  floor and the same stamp the strip uses for it. */
+  renderHistoryFloorHint?: (floorMs: number, floorStamp: string) => ReactNode
   className?: string
 }
 
@@ -298,6 +302,7 @@ export function TimelineStrip({
   lensResizable = true,
   liveState,
   onLiveChipClick,
+  renderHistoryFloorHint,
   className,
 }: TimelineStripProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -466,7 +471,7 @@ export function TimelineStrip({
     if (hoverX == null || msPerPx <= 0) return null
     const t = selection.fromMs + hoverX * msPerPx
     if (historyUnavailableBeforeMs != null && historyUnavailableBeforeMs > selection.fromMs && t < historyUnavailableBeforeMs) {
-      return `No data recorded before ${footerStamp(historyUnavailableBeforeMs)} — Radar wasn't watching yet`
+      return `No history before ${footerStamp(historyUnavailableBeforeMs)}: the cluster doesn't store it`
     }
     if (gaps?.some((g) => t >= g.fromMs && t <= g.toMs)) {
       return 'No data recorded — connector was offline'
@@ -805,6 +810,11 @@ export function TimelineStrip({
           {isLiveSelection && <span className="text-theme-text-tertiary/80"> · now</span>}
         </span>
       </div>
+      {renderHistoryFloorHint && historyUnavailableBeforeMs != null && historyUnavailableBeforeMs > selection.fromMs && (
+        <div className="mt-1 text-[11px] text-theme-text-tertiary" data-testid="strip-history-floor-hint">
+          {renderHistoryFloorHint(historyUnavailableBeforeMs, footerStamp(historyUnavailableBeforeMs))}
+        </div>
+      )}
       </div>
 
       {liveState && (

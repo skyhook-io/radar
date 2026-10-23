@@ -29,6 +29,10 @@ export interface AgentsResponse {
   // "install an agent to enable this" (eligible && !enabled) apart from "not
   // available here" (auth/cloud/--no-mcp). Absent on older servers / embed hosts.
   eligible?: boolean;
+  // Why investigations can't run here when not eligible: "shared" for a team
+  // installation (auth or operator-managed config), "no-mcp" when the MCP
+  // mount is off. Empty when eligible; absent on older servers.
+  unavailableReason?: "" | "shared" | "no-mcp";
   // cliOverride: RADAR_AI_CLI_BIN is set, pinning the engine to one CLI. With
   // CLIs detected and investigations still off, that variable is what's broken.
   // Absent on older servers and embed hosts.
@@ -229,8 +233,9 @@ export interface RunSummary {
   group: string;
   namespace: string;
   name: string;
-  /** The issue this session is for, on hosts that key sessions by issue. Always
-   *  absent from Radar's own backend, which records no issue. */
+  /** The issue this session was started from. Hosts that key sessions by
+   *  issue group on it; Radar's own backend records it so the Findings card
+   *  can offer an alert on that exact issue. */
   issueId?: string;
   context: string;
   agent?: string; // backend CLI that drove this run ("claude"/"codex")
@@ -361,10 +366,9 @@ export async function createRun(
     group: string;
     namespace: string;
     name: string;
-    // Associates the session with the issue it was started from, for hosts that
-    // group sessions that way. Inert for Radar's own backend, which neither reads
-    // it on start nor emits it on RunSummary — carried so both hosts share one
-    // request shape.
+    // Associates the session with the issue it was started from. Hosts that
+    // group sessions by issue key on it; Radar's own backend only records it
+    // and echoes it on RunSummary, and it never changes what the run does.
     issueId?: string;
     // Start a new session rather than continuing whatever the backend would
     // otherwise hand back for this target. Inert for Radar's own backend, which

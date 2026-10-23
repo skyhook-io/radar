@@ -97,12 +97,16 @@ function CheckAgainButton({
 //    say only that and offer a re-check.
 export function AgentSetupNotice({
   setupState,
+  cloudOption,
   cliOverride,
   checkingAgents,
   agentsCheckFailed,
   recheckAgents,
 }: {
   setupState: DiagnoseSetup;
+  // A secondary option shown after the local agents (the host's Radar Cloud
+  // row); omitted where there is nothing to offer.
+  cloudOption?: ReactNode;
   cliOverride: boolean;
   checkingAgents: boolean;
   agentsCheckFailed: boolean;
@@ -164,6 +168,7 @@ export function AgentSetupNotice({
           <AgentRow key={a.name} agent={a} />
         ))}
       </div>
+      {cloudOption}
       <CheckAgainButton checking={checkingAgents} onCheck={check} />
       {unreachable ||
         (showResult && (

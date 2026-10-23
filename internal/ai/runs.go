@@ -103,6 +103,10 @@ type Run struct {
 	status    string // running | done | error | stopped | stale
 	sessionID string
 	preview   string // last root cause, for the list
+	// issueID is the issue the run was started from ("" = started from the
+	// resource itself, or asked for by more than one issue). Radar never reads
+	// it; the UI uses it to offer an alert on that exact issue.
+	issueID   string
 	updatedAt time.Time
 	events    []RunEvent
 	// hydrated marks that r.events holds the run's full log. Runs created live
@@ -134,6 +138,7 @@ type RunSummary struct {
 	Model     string                `json:"model,omitempty"`
 	Effort    string                `json:"effort,omitempty"`
 	ManagedBy string                `json:"managedBy,omitempty"`
+	IssueID   string                `json:"issueId,omitempty"`
 	Health    *ResourceHealthSignal `json:"health,omitempty"`
 	Status    string                `json:"status"`
 	SessionID string                `json:"sessionId,omitempty"`
@@ -293,7 +298,7 @@ func (m *RunManager) loadPersisted() {
 			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
 			Health: s.Health, CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
 			store:  m.store,
-			status: s.Status, sessionID: s.SessionID, preview: s.Preview,
+			status: s.Status, sessionID: s.SessionID, preview: s.Preview, issueID: s.IssueID,
 			updatedAt: s.UpdatedAt,
 			subs:      map[int]chan RunEvent{},
 		}
@@ -499,7 +504,7 @@ func (m *RunManager) ctx() string {
 // Start creates and launches an investigation, or focuses an existing live run for
 // the same target+context instead of duplicating it. Returns ErrAtCapacity when
 // the concurrent-running cap is reached.
-func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
+func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy, issueID string, health *ResourceHealthSignal) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
 	// Focus an existing live run for this exact target+mode rather than duplicate it.
@@ -508,7 +513,7 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 		if r.matchesTarget(kind, group, namespace, name, cur, agent, profile, model, effort) &&
 			r.snapshotStatus() == "running" {
 			m.mu.Unlock()
-			return r.Summary(), nil
+			return r.focusFor(issueID), nil
 		}
 	}
 	if m.countInFlightLocked() >= m.maxConcurrent {
@@ -522,7 +527,7 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
 		OwnerPID: os.Getpid(),
 		store:    m.store,
-		status:   "running", inFlight: true, updatedAt: nowUTC(),
+		status:   "running", inFlight: true, updatedAt: nowUTC(), issueID: issueID,
 		hydrated: true, // born live — its full log is in memory by construction
 		subs:     map[int]chan RunEvent{},
 	}
@@ -1293,7 +1298,7 @@ func (r *Run) summaryLocked() RunSummary {
 	return RunSummary{
 		ID: r.ID, Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
 		Context: r.Context, Agent: r.Agent, Profile: r.Profile,
-		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy,
+		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy, IssueID: r.issueID,
 		Health: r.Health,
 		Status: r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,
 		Preview: r.preview, CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,
@@ -1414,6 +1419,22 @@ func (r *Run) matchesTarget(kind, group, namespace, name, ctx, agent string, pro
 	return r.Kind == kind && r.Group == group && r.Namespace == namespace && r.Name == name &&
 		r.Context == ctx && r.Agent == agent && r.Profile == profile &&
 		r.Model == model && r.Effort == effort
+}
+
+// focusFor returns a live run that a new start request is joining. The run
+// keeps one issue attribution, so a request from a different issue drops it:
+// Findings then offers no alert rather than one for the wrong issue. A request
+// from the resource itself names no issue and leaves it as it is.
+func (r *Run) focusFor(issueID string) RunSummary {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if issueID != "" && r.issueID != "" && r.issueID != issueID {
+		r.issueID = ""
+		if r.store != nil {
+			r.store.SaveRun(r.summaryLocked())
+		}
+	}
+	return r.summaryLocked()
 }
 
 func (r *Run) snapshotStatus() string {
