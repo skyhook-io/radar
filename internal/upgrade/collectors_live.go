@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -36,8 +37,20 @@ const (
 	upgradeNodeRuntimeCollectionTimeout  = 20 * time.Second
 	upgradeNodeEvidenceResponseLimit     = 8 << 20
 	upgradeAPIMetricsCollectionTimeout   = 10 * time.Second
-	upgradeAPIMetricsResponseLimit       = 16 << 20
+	upgradeAPIMetricsResponseLimit       = upgradereadiness.APIMetricsResponseLimit
+	upgradeAPIMetricsLineBuffer          = upgradereadiness.APIMetricsLineLimit
 )
+
+// A busy API server's /metrics exceeds 16 MiB, so the stream is filtered to the
+// lines the deprecated-API check parses instead of being held whole.
+var upgradeAPIMetricsLinePrefixes = [][]byte{
+	[]byte("# TYPE apiserver_requested_deprecated_apis "),
+	[]byte("apiserver_requested_deprecated_apis{"),
+	[]byte("apiserver_requested_deprecated_apis "),
+	[]byte("# TYPE process_start_time_seconds "),
+	[]byte("process_start_time_seconds{"),
+	[]byte("process_start_time_seconds "),
+}
 
 func sameNamespaceScope(a, b []string) bool {
 	if (a == nil) != (b == nil) {
@@ -55,11 +68,7 @@ func collectUpgradeHelmManifests(ctx context.Context, namespaces []string) ([]up
 	if client == nil {
 		return nil, nil, 0
 	}
-	username, groups := "", []string(nil)
-	if user := auth.UserFromContext(ctx); user != nil {
-		username, groups = user.Username, user.Groups
-	}
-	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(ctx, namespaces, username, groups)
+	resources, unavailableNamespaces, parseErrors, err := client.ListManifestResourcesAcrossNamespaces(ctx, namespaces, auth.UserFromContext(ctx))
 	if err != nil {
 		if !helm.IsForbiddenError(err) && !errors.Is(ctx.Err(), context.Canceled) {
 			log.Printf("[upgrade-impact] failed to inspect Helm manifests: %v", err)
@@ -84,25 +93,41 @@ func collectUpgradeHelmManifests(ctx context.Context, namespaces []string) ([]up
 	return result, unavailableNamespaces, parseErrors
 }
 
-func collectDeprecatedAPIRequests(ctx context.Context) ([]upgradereadiness.DeprecatedAPIRequest, string) {
+func collectDeprecatedAPIRequests(ctx context.Context) ([]upgradereadiness.DeprecatedAPIRequest, string, upgradereadiness.APIMetricsFailure) {
 	client := k8s.ClientFromContext(ctx)
 	if client == nil || client.Discovery().RESTClient() == nil {
-		return nil, ""
+		return nil, "", upgradereadiness.APIMetricsUnreadable
 	}
+	return collectDeprecatedAPIRequestsWithClient(ctx, client.Discovery().RESTClient())
+}
+
+func collectDeprecatedAPIRequestsWithClient(ctx context.Context, client rest.Interface) ([]upgradereadiness.DeprecatedAPIRequest, string, upgradereadiness.APIMetricsFailure) {
 	metricsCtx, cancel := context.WithTimeout(ctx, upgradeAPIMetricsCollectionTimeout)
 	defer cancel()
-	stream, err := client.Discovery().RESTClient().Get().AbsPath("/metrics").Stream(metricsCtx)
+	stream, err := client.Get().AbsPath("/metrics").Stream(metricsCtx)
 	if err != nil {
-		return nil, ""
+		if apierrors.IsForbidden(err) {
+			return nil, "", upgradereadiness.APIMetricsForbidden
+		}
+		if !errors.Is(err, context.Canceled) {
+			log.Printf("[upgrade-impact] failed to request API server metrics: %v", err)
+		}
+		return nil, "", upgradereadiness.APIMetricsUnreadable
 	}
-	raw, err := readBoundedUpgradeResponse(stream, upgradeAPIMetricsResponseLimit)
+	raw, err := readAPIMetricsEvidence(stream, upgradeAPIMetricsResponseLimit)
 	if err != nil {
-		return nil, ""
+		if !errors.Is(err, context.Canceled) {
+			log.Printf("[upgrade-impact] failed to read API server metrics: %v", err)
+		}
+		if errors.Is(err, errAPIMetricsTooLarge) {
+			return nil, "", upgradereadiness.APIMetricsTooLarge
+		}
+		return nil, "", upgradereadiness.APIMetricsUnreadable
 	}
 	requests, processStartedAt, err := parseDeprecatedAPIRequests(raw)
 	if err != nil {
 		log.Printf("[upgrade-impact] failed to parse API server metrics: %v", err)
-		return nil, ""
+		return nil, "", upgradereadiness.APIMetricsUnreadable
 	}
 	window := ""
 	if !processStartedAt.IsZero() {
@@ -111,7 +136,85 @@ func collectDeprecatedAPIRequests(ctx context.Context) ([]upgradereadiness.Depre
 			window = timeutil.FormatAgeShort(age)
 		}
 	}
-	return requests, window
+	return requests, window, ""
+}
+
+var errAPIMetricsTooLarge = errors.New("API server metrics exceed size limit")
+
+// readAPIMetricsEvidence keeps only the lines the deprecated-API check parses;
+// limit caps the bytes scanned, not the bytes kept. A line longer than the read
+// buffer is skipped unless it is one we keep, which is an error.
+func readAPIMetricsEvidence(stream io.ReadCloser, limit int64) ([]byte, error) {
+	defer stream.Close()
+	limited := &io.LimitedReader{R: stream, N: limit + 1}
+	reader := bufio.NewReaderSize(limited, upgradeAPIMetricsLineBuffer)
+	var kept bytes.Buffer
+	var validation bytes.Buffer
+	validatedSample := false
+	parser := expfmt.NewTextParser(model.LegacyValidation)
+	validate := func() error {
+		if validation.Len() == 0 {
+			return nil
+		}
+		families, err := parser.TextToMetricFamilies(bytes.NewReader(validation.Bytes()))
+		if err != nil {
+			return fmt.Errorf("invalid API server metrics response: %w", err)
+		}
+		validatedSample = validatedSample || len(families) > 0
+		validation.Reset()
+		return nil
+	}
+	for {
+		line, err := reader.ReadSlice('\n')
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			if isAPIMetricsEvidenceLine(line) {
+				return nil, fmt.Errorf("%w: line exceeds %d bytes", errAPIMetricsTooLarge, upgradeAPIMetricsLineBuffer)
+			}
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = reader.ReadSlice('\n')
+			}
+		case isAPIMetricsEvidenceLine(line):
+			kept.Write(bytes.TrimRight(line, "\r\n"))
+			kept.WriteByte('\n')
+		default:
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) > 0 && (trimmed[0] != '#' || bytes.HasPrefix(trimmed, []byte("# TYPE")) || bytes.HasPrefix(trimmed, []byte("# HELP"))) {
+				if validation.Len()+len(trimmed)+1 > upgradeAPIMetricsLineBuffer {
+					if err := validate(); err != nil {
+						return nil, err
+					}
+				}
+				validation.Write(trimmed)
+				validation.WriteByte('\n')
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if limited.N <= 0 {
+		return nil, fmt.Errorf("%w: response exceeds %d bytes", errAPIMetricsTooLarge, limit)
+	}
+	if err := validate(); err != nil {
+		return nil, err
+	}
+	if kept.Len() == 0 && !validatedSample {
+		return nil, errors.New("API server response contains no readable metrics")
+	}
+	return kept.Bytes(), nil
+}
+
+func isAPIMetricsEvidenceLine(line []byte) bool {
+	for _, prefix := range upgradeAPIMetricsLinePrefixes {
+		if bytes.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readBoundedUpgradeResponse(stream io.ReadCloser, limit int64) ([]byte, error) {

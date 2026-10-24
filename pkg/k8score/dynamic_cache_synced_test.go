@@ -82,3 +82,27 @@ func TestListBlocking_TimeoutCoversEveryInformer(t *testing.T) {
 		t.Fatal("test premise broken: the x informer synced")
 	}
 }
+
+// A fallback walk that stopped early leaves namespaces with no informer, so an
+// all-namespaces read is incomplete even when every started informer synced.
+// A namespace-scoped install never walks, so it never reports this.
+func TestAllNamespacesFanoutIncomplete(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	d := &DynamicResourceCache{fanoutIncomplete: map[schema.GroupVersionResource]bool{gvr: true}}
+	if !d.AllNamespacesFanoutIncomplete(gvr) {
+		t.Error("walk ended early: want incomplete")
+	}
+	d.fanoutIncomplete[gvr] = false
+	if d.AllNamespacesFanoutIncomplete(gvr) {
+		t.Error("walk finished: want complete")
+	}
+	scoped := &DynamicResourceCache{config: DynamicCacheConfig{NamespaceScoped: true, Namespace: "team"},
+		fanoutIncomplete: map[schema.GroupVersionResource]bool{gvr: true}}
+	if scoped.AllNamespacesFanoutIncomplete(gvr) {
+		t.Error("namespace-scoped install: want never incomplete")
+	}
+	var nilCache *DynamicResourceCache
+	if nilCache.AllNamespacesFanoutIncomplete(gvr) {
+		t.Error("nil cache: want false")
+	}
+}

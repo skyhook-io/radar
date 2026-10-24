@@ -1,10 +1,13 @@
 import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { Badge } from '../ui/Badge'
 import { PaneLoader } from '../ui/PaneLoader'
 import { RestrictedState } from '../ui/RestrictedState'
 import { FetchResult } from '../ui/FetchResult'
 import { Input } from '../ui/Input'
+import { ColumnPickerList } from './ColumnPickerList'
+import { applyColumnOrder, sanitizeColumnOrder } from './column-order'
 import type { TopPodMetrics, TopNodeMetrics, ContainerResourceMetrics } from '../../types'
 import {
   Search,
@@ -145,6 +148,7 @@ import {
   SEVERITY_DOT_COLOR,
   healthColors,
 } from './resource-utils'
+import { TRIVY_GROUP, searchTrivyFindings, type TrivyFindingMatch, type TrivyFindingsSearch } from './resource-utils-trivy'
 import { getGenericResourceStatus } from './generic-status'
 import { ActiveFilterBar } from './ActiveFilterBar'
 import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
@@ -161,6 +165,8 @@ import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
+import type { Issue } from '../issues/types'
+import { issueTitle } from '../issues/severity'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
@@ -3255,6 +3261,7 @@ function filterHostExtras(
 
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
+const CHECKBOX_VISIBILITY_KEY = 'radar-resource-checkboxes'
 
 // Storage identity for a kind's column settings. normalizeKindToPlural falls
 // through to the bare plural for anything outside the curated collision
@@ -3280,6 +3287,8 @@ interface ColumnSettings {
    *  load tell a column they hid from one that did not exist yet. Absent on
    *  blobs written before this field. */
   known?: string[]
+  /** Optional display order for movable columns, including hidden ones. */
+  order?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3342,6 +3351,9 @@ interface ResourcesViewData {
   // cluster-scoped kind. An ExternalSecret names a store; only the store
   // knows which backend it reads from.
   storeProviders?: Record<string, string>
+  /** Current CronJob Issues keyed by "namespace/name", supplied by the host. */
+  operationalIssuesIncomplete?: boolean
+  operationalIssues?: Record<string, Issue>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -3406,6 +3418,9 @@ interface ResourcesViewProps {
   // cluster-scoped kind. An ExternalSecret names a store; only the store
   // knows which backend it reads from.
   storeProviders?: Record<string, string>
+  /** Current CronJob Issues keyed by "namespace/name", supplied by the host. */
+  operationalIssuesIncomplete?: boolean
+  operationalIssues?: Record<string, Issue>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -3692,6 +3707,8 @@ export function ResourcesView({
   certExpiryError,
   storeProviders,
   auditBadges,
+  operationalIssues,
+  operationalIssuesIncomplete,
   pinned = [],
   togglePin = () => {},
   isPinned = () => false,
@@ -3747,7 +3764,6 @@ export function ResourcesView({
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setBulkMode(false)
     setCheckedResources(new Set())
     setShowBulkDeleteConfirm(false)
     setShowBulkRestartConfirm(false)
@@ -3808,6 +3824,7 @@ export function ResourcesView({
   // Column visibility and resize state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const [columnOrder, setColumnOrder] = useState<string[] | null>(null)
   const [showColumnPicker, setShowColumnPicker] = useState(false)
   const [customColumns, setCustomColumns] = useState<CustomColumnDef[]>([])
   const [customColumnDraft, setCustomColumnDraft] = useState<CustomColumnDef>({ source: 'label', path: '' })
@@ -3820,10 +3837,10 @@ export function ResourcesView({
   const [ownerKind, setOwnerKind] = useState<string>(initialFilters.ownerKind)
   const [ownerName, setOwnerName] = useState<string>(initialFilters.ownerName)
 
-  // Multi-select state for bulk operations. Checkboxes only render while
-  // bulk mode is active — entered via the toolbar toggle — so mutating
-  // actions stay out of the way during normal browsing.
-  const [bulkMode, setBulkMode] = useState(false)
+  const [showCheckboxes, setShowCheckboxes] = useState(() => {
+    try { return localStorage.getItem(CHECKBOX_VISIBILITY_KEY) === 'true' }
+    catch { return false }
+  })
   const [checkedResources, setCheckedResources] = useState<Set<string>>(new Set())
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
   const [showBulkRestartConfirm, setShowBulkRestartConfirm] = useState(false)
@@ -3831,8 +3848,7 @@ export function ResourcesView({
   const [bulkForceDelete, setBulkForceDelete] = useState(false)
   const [bulkScaleReplicas, setBulkScaleReplicas] = useState(0)
 
-  const exitBulkMode = useCallback(() => {
-    setBulkMode(false)
+  const clearBulkSelection = useCallback(() => {
     setCheckedResources(new Set())
   }, [])
 
@@ -3949,13 +3965,16 @@ export function ResourcesView({
     [printerTable, builtPrinterColumns],
   )
 
-  const allColumns = useMemo(() => {
+  const definedColumns = useMemo(() => {
     const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     if (!extraLeadingColumns?.length && !builtCustomColumns.length) return kindColumns
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const filteredExtras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
+  // Display order. Everything downstream reads this, so the picker, the header
+  // and the resize width snapshot (which maps <th> index to key) agree.
+  const allColumns = useMemo(() => applyColumnOrder(definedColumns, columnOrder), [definedColumns, columnOrder])
 
   // The offered key set, and a stable signature for it. allColumns is a new
   // identity on every printer-column refetch; depending on the array itself
@@ -4090,15 +4109,18 @@ export function ResourcesView({
         hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
+        setColumnOrder(null)
       } else {
         setVisibleColumns(mergeSavedVisibleColumns(
           saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown,
         ))
         setColumnWidths(saved.widths || {})
+        setColumnOrder(sanitizeColumnOrder(saved.order))
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setColumnWidths({})
+      setColumnOrder(null)
     }
     // printerColumnsKey, not builtPrinterColumns: the built array is a new
     // identity on every refetch, and re-running this effect would reset the
@@ -4120,12 +4142,13 @@ export function ResourcesView({
       widths: columnWidths,
       custom: customColumns,
       known: Array.from(knownColumnKeys.current),
+      order: columnOrder ?? undefined,
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
     hadSavedColumnSettings.current = true
     // allColumnKeysSig, not allColumnKeys: see the memo above.
-  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
+  }, [visibleColumns, columnWidths, customColumns, columnOrder, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
 
   // Close column picker on outside click or Escape
   useEffect(() => {
@@ -4233,6 +4256,7 @@ export function ResourcesView({
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setColumnWidths({})
+    setColumnOrder(null)
     setSortColumn(null)
     setSortDirection(null)
     saveSavedSort(selectedKind.name, selectedKind.group, null)
@@ -4552,14 +4576,11 @@ export function ResourcesView({
     {
       id: 'resources-bulk-select',
       keys: 'b',
-      description: 'Toggle bulk select',
+      description: 'Show or hide selection checkboxes',
       category: 'Table',
       scope: 'resources',
       handler: () => {
-        if (bulkMode) { exitBulkMode(); return }
-        if (!canBulkSelect) return
-        exitCompareMode()
-        setBulkMode(true)
+        if (canBulkSelect) toggleCheckboxVisibility()
       },
     },
     {
@@ -4574,7 +4595,7 @@ export function ResourcesView({
         if (showProblemsDropdown) { setShowProblemsDropdown(false); return }
         if (showLabelsDropdown) { setShowLabelsDropdown(false); return }
         if (compareMode) { exitCompareMode(); return }
-        if (bulkMode) { exitBulkMode(); return }
+        if (checkedResources.size > 0) { clearBulkSelection(); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
@@ -5292,6 +5313,15 @@ export function ResourcesView({
     saveSavedSort(selectedKind.name, selectedKind.group, newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
   }, [sortColumn, sortDirection, canSortBy, selectedKind.name, selectedKind.group])
 
+  const getDisplayFilterValue = useCallback((resource: { metadata?: { namespace?: string; name?: string } }, column: string, kind: string): string => {
+    if (column === 'status' && selectedKind.group === 'batch' && kind === 'cronjobs') {
+      const issue = operationalIssues?.[`${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`]
+      if (issue) return issueTitle(issue)
+      if (operationalIssuesIncomplete) return 'Unknown'
+    }
+    return getCellFilterValue(resource, column, kind)
+  }, [operationalIssues, operationalIssuesIncomplete, selectedKind.group])
+
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {
     const meta = resource.metadata || {}
@@ -5320,7 +5350,7 @@ export function ResourcesView({
         if (hasCuratedColumns(selectedKind.name, selectedKind.group) && status.phase) {
           return status.phase
         }
-        return getCellFilterValue(resource, 'status', kindLower)
+        return getDisplayFilterValue(resource, 'status', kindLower)
       case 'servers':
         // Numeric so 10 does not sort before 9.
         if (kindLower === 'istiogateways') return getIstioGatewayServerCount(resource)
@@ -5410,7 +5440,7 @@ export function ResourcesView({
       default:
         return ''
     }
-  }, [metricsLookup, selectedKind.name, selectedKind.group])
+  }, [metricsLookup, selectedKind.name, selectedKind.group, getDisplayFilterValue])
 
   // Helper to check if a pod matches problem filters
   const podMatchesProblemFilter = useCallback((pod: any, filters: string[]): boolean => {
@@ -5433,13 +5463,18 @@ export function ResourcesView({
     }
   }, [regexMode, deferredSearchTerm])
 
+  const isTrivyKind = selectedKind.group === TRIVY_GROUP
+
   // Filter resources by search term, status, problems, and sort
-  const filteredResources = useMemo(() => {
-    if (!tableActive || !resources) return []
+  const { list: filteredResources, findings: findingsSearch } = useMemo((): { list: any[]; findings: TrivyFindingsSearch | null } => {
+    if (!tableActive || !resources) return { list: [], findings: null }
 
     let result = resources
+    let findings: TrivyFindingsSearch | null = null
 
-    // Apply search filter
+    // Apply search filter. On Trivy report kinds a plain search also matches
+    // findings and runs below, after the other filters. Regex mode stays on
+    // names: a pattern run over every finding could backtrack for seconds.
     if (deferredSearchTerm) {
       if (regexMode) {
         const re = searchRegex.re
@@ -5449,7 +5484,7 @@ export function ResourcesView({
             re.test(r.metadata?.namespace ?? '')
           )
         }
-      } else {
+      } else if (!isTrivyKind) {
         const term = deferredSearchTerm.toLowerCase()
         result = result.filter((r: any) =>
           r.metadata?.name?.toLowerCase().includes(term) ||
@@ -5467,7 +5502,7 @@ export function ResourcesView({
       result = result.filter((r: any) =>
         activeColFilters.every(([col, vals]) => {
           const extra = extraColumnsByKey.get(col)
-          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, cellFilterKind)
+          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getDisplayFilterValue(r, col, cellFilterKind)
           const match = vals.includes(cellVal)
           return columnFilterExcludes[col] ? !match : match
         })
@@ -5523,6 +5558,19 @@ export function ResourcesView({
           ref.kind === ownerKind && ref.name === ownerName
         )
       })
+    }
+
+    // Trivy findings are searched after the other filters, so rows they hide
+    // don't spend the findings budget.
+    if (deferredSearchTerm && !regexMode && isTrivyKind) {
+      const term = deferredSearchTerm.toLowerCase()
+      const matched = searchTrivyFindings(result, term)
+      findings = matched
+      result = result.filter((r: any) =>
+        r.metadata?.name?.toLowerCase().includes(term) ||
+        r.metadata?.namespace?.toLowerCase().includes(term) ||
+        matched.matches.has(r)
+      )
     }
 
     // Apply custom sorting if set. Extra columns override
@@ -5620,8 +5668,8 @@ export function ResourcesView({
       }
     }
 
-    return result
-  }, [tableActive, resources, deferredSearchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, effectiveSortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
+    return { list: result, findings }
+  }, [tableActive, resources, deferredSearchTerm, regexMode, searchRegex, isTrivyKind, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, effectiveSortColumn, sortDirection, getSortValue, getDisplayFilterValue, extraColumnsByKey, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -5746,16 +5794,25 @@ export function ResourcesView({
     setCheckedResources(allVisibleChecked ? new Set() : new Set(filteredResources.map(getResourceKey)))
   }, [allVisibleChecked, filteredResources, getResourceKey])
 
-  const isCheckboxMode = canBulkSelect && bulkMode
+  const toggleCheckboxVisibility = useCallback(() => {
+    const next = compareMode || !showCheckboxes
+    exitCompareMode()
+    clearBulkSelection()
+    setShowCheckboxes(next)
+    try { localStorage.setItem(CHECKBOX_VISIBILITY_KEY, String(next)) }
+    catch { /* Keep the choice for this session when storage is unavailable. */ }
+  }, [compareMode, showCheckboxes, exitCompareMode, clearBulkSelection])
+
+  const isCheckboxMode = canBulkSelect && !compareMode && showCheckboxes
+  const showBulkBar = isCheckboxMode && checkedItems.length > 0
 
   // Stable row handlers so the memoized ResourceRowCells skips re-rendering
   // rows whose data didn't change on a refetch (React Query's structural
   // sharing keeps unchanged resources referentially identical).
   const handleRowClick = useCallback((resource: any, isSelected: boolean) => {
     if (compareMode) toggleComparePick(resource)
-    else if (isCheckboxMode) toggleChecked(resource)
     else selectResource(resource, isSelected)
-  }, [compareMode, isCheckboxMode, toggleComparePick, toggleChecked, selectResource])
+  }, [compareMode, toggleComparePick, selectResource])
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
@@ -5847,7 +5904,7 @@ export function ResourcesView({
       // Count distinct values for this column
       const valueCounts: Record<string, number> = {}
       for (const r of resources) {
-        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col.key, cellFilterKind)
+        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getDisplayFilterValue(r, col.key, cellFilterKind)
         if (val) {
           valueCounts[val] = (valueCounts[val] || 0) + 1
         }
@@ -5930,7 +5987,7 @@ export function ResourcesView({
 
     if (filterableColumns.length === 0 && !problems && labelValues.length === 0) return null
     return { columns: filterableColumns, problems, labels: labelValues }
-  }, [tableActive, resources, selectedKind.name, selectedKind.group, allColumns])
+  }, [tableActive, resources, selectedKind.name, selectedKind.group, allColumns, getDisplayFilterValue])
 
   // Map filterable columns by key for O(1) lookup in header rendering
   const filterableColumnMap = useMemo(() => {
@@ -6005,9 +6062,11 @@ export function ResourcesView({
     certExpiry,
     certExpiryError,
     auditBadges,
+    operationalIssues,
+    operationalIssuesIncomplete,
     onOpenLogs,
     onOpenWorkloadLogs,
-  }), [onNavigate, certExpiry, certExpiryError, auditBadges, onOpenLogs, onOpenWorkloadLogs])
+  }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
   return (
     <ResourcesViewDataContext.Provider value={resourcesViewDataContextValue}>
@@ -6048,7 +6107,7 @@ export function ResourcesView({
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
               <Input
                 ref={searchInputRef}
-                placeholder={regexMode ? 'Search by regex... (press /)' : 'Search... (press /)'}
+                placeholder={regexMode ? 'Search by regex... (press /)' : isTrivyKind ? 'Search names and findings... (press /)' : 'Search... (press /)'}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onKeyDown={(e) => {
@@ -6109,6 +6168,11 @@ export function ResourcesView({
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
+              )}
+              {!searchRegex.error && findingsSearch?.truncated && (
+                <div className="absolute left-0 top-full mt-1 z-10 px-2 py-1 rounded bg-theme-elevated border border-theme-border text-xs text-theme-text-secondary shadow-theme-sm">
+                  Too many findings to search them all here; some weren't searched.
+                </div>
               )}
               {searchRegex.error && (
                 <div
@@ -6316,41 +6380,14 @@ export function ResourcesView({
                 {/* Column list scrolls; the add-column footer stays pinned so
                     its input isn't pushed below the fold on kinds with many columns. */}
                 <div className="overflow-y-auto flex-1 min-h-0">
-                {allColumns.map(col => {
-                  const isCustom = customColumnKeySet.has(col.key)
-                  return (
-                    <div
-                      key={col.key}
-                      className="group flex items-center gap-2 px-3 py-1.5 hover:bg-theme-elevated"
-                    >
-                      <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={visibleColumns.has(col.key)}
-                          onChange={() => toggleColumnVisibility(col.key)}
-                          disabled={col.key === 'name'}
-                          className="rounded border-theme-border"
-                        />
-                        <span className={clsx(
-                          'text-sm truncate',
-                          col.key === 'name' ? 'text-theme-text-tertiary' : 'text-theme-text-primary'
-                        )} title={col.tooltip || col.label}>
-                          {col.label}
-                        </span>
-                      </label>
-                      {isCustom && (
-                        <button
-                          type="button"
-                          onClick={() => removeCustomColumn(col.key)}
-                          className="shrink-0 p-0.5 text-theme-text-tertiary hover:text-red-500 opacity-0 group-hover:opacity-100 focus:opacity-100"
-                          title="Remove column"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
+                <ColumnPickerList
+                  columns={allColumns}
+                  visibleColumns={visibleColumns}
+                  customColumnKeys={customColumnKeySet}
+                  onToggle={toggleColumnVisibility}
+                  onRemoveCustom={removeCustomColumn}
+                  onReorder={setColumnOrder}
+                />
                 </div>
                 {/* Add a label/annotation column */}
                 <div className="shrink-0 border-t border-theme-border pt-2 px-3 pb-1">
@@ -6420,7 +6457,7 @@ export function ResourcesView({
               <button
                 onClick={() => {
                   if (compareMode) { exitCompareMode(); return }
-                  exitBulkMode()
+                  clearBulkSelection()
                   setCompareMode(true)
                 }}
                 aria-pressed={compareMode}
@@ -6436,17 +6473,14 @@ export function ResourcesView({
             </Tooltip>
           )}
           {canBulkSelect && (
-            <Tooltip content={bulkMode ? 'Exit bulk select mode' : 'Select multiple resources'}>
+            <Tooltip content={isCheckboxMode ? 'Hide selection checkboxes' : 'Show selection checkboxes'}>
               <button
-                onClick={() => {
-                  if (bulkMode) { exitBulkMode(); return }
-                  exitCompareMode()
-                  setBulkMode(true)
-                }}
-                aria-pressed={bulkMode}
+                onClick={toggleCheckboxVisibility}
+                aria-label={isCheckboxMode ? 'Hide selection checkboxes' : 'Show selection checkboxes'}
+                aria-pressed={isCheckboxMode}
                 className={clsx(
                   'p-2 rounded-lg transition-colors',
-                  bulkMode
+                  isCheckboxMode
                     ? 'bg-skyhook-500/15 text-skyhook-300 border border-skyhook-400/50'
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated',
                 )}
@@ -6466,7 +6500,7 @@ export function ResourcesView({
         </div>
 
         {/* Bulk actions bar */}
-        {isCheckboxMode && (
+        {showBulkBar && (
           <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0">
             <span className="text-sm font-medium text-theme-text-primary">
               {checkedItems.length} selected
@@ -6506,10 +6540,10 @@ export function ResourcesView({
             )}
             <button
               type="button"
-              onClick={exitBulkMode}
+              onClick={clearBulkSelection}
               className="px-3 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
             >
-              Cancel
+              Clear selection
             </button>
           </div>
         )}
@@ -6603,6 +6637,13 @@ export function ResourcesView({
                   No results for "{searchTerm}"
                   <X className="w-3.5 h-3.5" />
                 </button>
+              )}
+              {searchTerm && isTrivyKind && (
+                <p className="text-xs mt-1 text-theme-text-tertiary">
+                  {regexMode
+                    ? 'Regex search matches names and namespaces only.'
+                    : 'Searched names, namespaces and report findings (CVE, package, check ID, image).'}
+                </p>
               )}
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
               <ActiveFilterBar
@@ -6912,6 +6953,7 @@ export function ResourcesView({
                     comparePickIndex={pickIdx}
                     rowHref={rowHrefFor?.(resource)}
                     onRowCheckToggle={toggleChecked}
+                    findingMatch={findingsSearch?.matches.get(resource)}
                   />
                 )
               }}
@@ -6948,7 +6990,7 @@ export function ResourcesView({
         onBulkDelete?.(checkedBulkItems, {
           force: bulkForceDelete,
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkDeleteConfirm(false)
             setBulkForceDelete(false)
           },
@@ -6978,7 +7020,7 @@ export function ResourcesView({
       onConfirm={() => {
         onBulkRestart?.(checkedBulkItems, {
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkRestartConfirm(false)
           },
         })
@@ -6997,7 +7039,7 @@ export function ResourcesView({
       onConfirm={() => {
         onBulkScale?.(checkedBulkItems, bulkScaleReplicas, {
           onSuccess: () => {
-            exitBulkMode()
+            clearBulkSelection()
             setShowBulkScaleDialog(false)
           },
         })
@@ -7079,6 +7121,9 @@ interface ResourceRowCellsProps {
    *  is unaffected (still toggles picks). */
   rowHref?: string
   onRowCheckToggle?: (resource: any) => void
+  /** What a Trivy report matched the table search through, when its name
+   *  and namespace didn't. */
+  findingMatch?: TrivyFindingMatch
 }
 
 function rowHighlightClass(
@@ -7100,7 +7145,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle, findingMatch }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
@@ -7170,6 +7215,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
             storeProviders={storeProviders}
             extraColumn={extraColumnsByKey?.get(col.key)}
             nameHref={col.key === 'name' ? rowHref : undefined}
+            findingMatch={col.key === 'name' ? findingMatch : undefined}
           />
         </td>
       ))}
@@ -7219,9 +7265,10 @@ interface CellContentProps {
   /** When set on the name column, the resource name renders as `<a href>`
    *  so ⌘-click / copy-link / hover-URL all work. */
   nameHref?: string
+  findingMatch?: TrivyFindingMatch
 }
 
-function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref }: CellContentProps) {
+function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref, findingMatch }: CellContentProps) {
   const { auditBadges } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
@@ -7239,7 +7286,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     const auditTotal = audit ? audit.danger + audit.warning : 0
     return (
       <div className="flex items-center gap-1.5 min-w-0">
-        <Tooltip content={meta.name}>
+        <Tooltip content={meta.name} wrapperClassName={findingMatch ? 'min-w-0' : undefined}>
           {nameHref ? (
             <a
               href={nameHref}
@@ -7254,6 +7301,13 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
           )}
         </Tooltip>
         <CopyNameButton name={meta.name} />
+        {findingMatch && (
+          <Tooltip content={findingMatch.text}>
+            <span className="shrink-0 text-xs italic text-theme-text-tertiary cursor-help">
+              {findingMatch.site === 'image' ? 'in image' : 'in findings'}
+            </span>
+          </Tooltip>
+        )}
         {auditTotal > 0 && audit && (
           <Tooltip content={audit.messages && audit.messages.length > 0
             ? <AuditBadgeTooltip messages={audit.messages} />
@@ -7390,7 +7444,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       // Disambiguate Gateway API vs Istio Gateway by apiVersion. Retained
       // alongside the case above because not every call site normalizes the
       // kind through GROUP_QUALIFIED_COLUMN_KEYS before dispatching.
-      if (resource.apiVersion?.includes('networking.istio.io')) {
+      if (isApiGroup(resource.apiVersion, 'networking.istio.io')) {
         return <IstioGatewayCell resource={resource} column={column} />
       }
       return <GatewayCell resource={resource} column={column} />
@@ -8629,6 +8683,7 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
 }
 
 function CronJobCell({ resource, column }: { resource: any; column: string }) {
+  const { operationalIssues, operationalIssuesIncomplete } = useContext(ResourcesViewDataContext)
   switch (column) {
     case 'schedule': {
       const { cron, readable } = getCronJobSchedule(resource)
@@ -8640,6 +8695,13 @@ function CronJobCell({ resource, column }: { resource: any; column: string }) {
       )
     }
     case 'status': {
+      const issue = operationalIssues?.[`${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`]
+      if (issue) {
+        return <Tooltip content={issue.message}><Badge severity={issue.severity === 'critical' ? 'error' : 'warning'}>{issueTitle(issue)}</Badge></Tooltip>
+      }
+      if (operationalIssuesIncomplete) {
+        return <Tooltip content="The issue list is incomplete. This CronJob's status could not be checked."><Badge severity="neutral">Unknown</Badge></Tooltip>
+      }
       const status = getCronJobStatus(resource)
       return (
         <span className={clsx('badge', status.color)}>

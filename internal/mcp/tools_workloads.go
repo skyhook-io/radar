@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/rollouts"
@@ -109,6 +110,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 			return nil, nil, fmt.Errorf("restart failed: %w", err)
 		}
 		resp := map[string]any{
+			"next":    fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
 			"status":  "ok",
 			"message": fmt.Sprintf("Rolling restart initiated for %s %s/%s", kind, input.Namespace, input.Name),
 		}
@@ -128,6 +130,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 			return nil, nil, fmt.Errorf("scale failed: %w", err)
 		}
 		return toJSONResult(map[string]any{
+			"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
 			"status":   "ok",
 			"message":  fmt.Sprintf("Scaled %s %s/%s to %d replicas", kind, input.Namespace, input.Name, *input.Replicas),
 			"replicas": *input.Replicas,
@@ -141,6 +144,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 			return nil, nil, fmt.Errorf("rollback failed: %w", err)
 		}
 		resp := map[string]any{
+			"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
 			"status":   "ok",
 			"message":  fmt.Sprintf("Rollback of %s %s/%s to revision %d initiated — the controller applies it", kind, input.Namespace, input.Name, *input.Revision),
 			"revision": *input.Revision,
@@ -615,20 +619,8 @@ type podLogEntry struct {
 // zero restart count with no last termination covers both an apiserver
 // "not found" response and an empty successful previous-log stream.
 func expectedPreviousLogAbsence(pod *corev1.Pod, container string) bool {
-	if pod == nil {
-		return false
-	}
-	for _, statuses := range [][]corev1.ContainerStatus{
-		pod.Status.ContainerStatuses,
-		pod.Status.InitContainerStatuses,
-	} {
-		matching := filterContainerStatuses(statuses, container)
-		if len(matching) == 0 {
-			continue
-		}
-		return matching[0].RestartCount == 0 && matching[0].LastTerminationState.Terminated == nil
-	}
-	return false
+	had, known := podlogs.EarlierRun(pod, container)
+	return known && !had
 }
 
 // fetchPodLogs fans out kubectl-logs requests across the given pods x containers.
@@ -673,8 +665,7 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 				if err != nil {
 					log.Printf("[mcp] Failed to get logs for %s/%s: %v", podName, containerName, err)
 					entry.Error = fmt.Sprintf("failed to get logs: %v", err)
-					entry.previousLogNotFound = previous && apierrors.IsBadRequest(err) &&
-						strings.Contains(err.Error(), fmt.Sprintf("previous terminated container %q in pod %q not found", containerName, podName))
+					entry.previousLogNotFound = previous && podlogs.IsNoPreviousRun(err)
 					mu.Lock()
 					allLogs = append(allLogs, entry)
 					mu.Unlock()
@@ -738,7 +729,8 @@ type manageNodeInput struct {
 	Name               string `json:"name" jsonschema:"node name"`
 	DeleteEmptyDirData *bool  `json:"delete_empty_dir_data,omitempty" jsonschema:"evict pods with emptyDir volumes (default true, set false to skip them)"`
 	Force              bool   `json:"force,omitempty" jsonschema:"force evict pods not managed by a controller (default false)"`
-	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain timeout in seconds (default 60)"`
+	WaitForDeletion    *bool  `json:"wait_for_deletion,omitempty" jsonschema:"default true; false returns once evictions are accepted (pods may still be terminating)"`
+	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain deadline in seconds; 0 = server default (2m when waiting)"`
 }
 
 func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manageNodeInput) (*mcp.CallToolResult, any, error) {
@@ -780,8 +772,10 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 			IgnoreDaemonSets:   true,
 			DeleteEmptyDirData: deleteLocal,
 			Force:              input.Force,
-			Timeout:            60 * time.Second,
+			// An accepted eviction does not establish that the workload has left.
+			WaitForDeletion: input.WaitForDeletion == nil || *input.WaitForDeletion,
 		}
+		// Timeout left at 0 lets DrainNode pick a default sized for the operation.
 		if input.Timeout > 0 {
 			opts.Timeout = time.Duration(input.Timeout) * time.Second
 		}
@@ -789,23 +783,98 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 		if err != nil {
 			return nil, nil, fmt.Errorf("drain failed: %w", err)
 		}
-		status := "ok"
-		msg := fmt.Sprintf("Drained node %s: %d pods evicted", input.Name, len(result.EvictedPods))
-		if len(result.Errors) > 0 {
-			status = "partial"
-			msg = fmt.Sprintf("Drain partially completed on node %s: %d evicted, %d failed",
-				input.Name, len(result.EvictedPods), len(result.Errors))
-		}
+		status, msg := describeNodeDrain(input.Name, result)
 		return toJSONResult(map[string]any{
-			"status":      status,
-			"message":     msg,
-			"evictedPods": result.EvictedPods,
-			"errors":      result.Errors,
+			"status":            status,
+			"message":           msg,
+			"evictedPods":       result.EvictedPods,
+			"skippedPods":       skippedPodsForMCP(result.SkippedPods),
+			"pendingPods":       result.PendingPods,
+			"waitedForDeletion": result.WaitedForDeletion,
+			"outcome":           result.CompletionOutcome(),
+			"unconfirmedPods":   result.UnconfirmedPods,
+			"verificationError": result.VerificationError,
+			"errors":            result.Errors,
 		})
 
 	default:
 		return nil, nil, fmt.Errorf("unknown action %q: must be cordon, uncordon, or drain", input.Action)
 	}
+}
+
+type mcpSkippedPod struct {
+	Pod          string `json:"pod"`
+	Reason       string `json:"reason"`
+	ExpectedSkip bool   `json:"expectedSkip"`
+}
+
+func skippedPodsForMCP(skipped []k8score.PodDrainDecision) []mcpSkippedPod {
+	out := make([]mcpSkippedPod, 0, len(skipped))
+	for _, d := range skipped {
+		out = append(out, mcpSkippedPod{Pod: d.Namespace + "/" + d.Name, Reason: d.Reason, ExpectedSkip: d.ExpectedSkip})
+	}
+	return out
+}
+
+func describeNodeDrain(name string, result *k8s.DrainResult) (status, message string) {
+	outcome := result.CompletionOutcome()
+	var details []string
+	blocking, expected := 0, 0
+	for _, pod := range result.SkippedPods {
+		if pod.BlocksDrain() {
+			blocking++
+		} else {
+			expected++
+		}
+	}
+	if len(result.Errors) > 0 {
+		details = append(details, fmt.Sprintf("Failed evictions: %d (see errors)", len(result.Errors)))
+	}
+	if len(result.PendingPods) > 0 {
+		details = append(details, fmt.Sprintf("Evicted pods still on the node: %d (see pendingPods)", len(result.PendingPods)))
+	}
+	if blocking > 0 {
+		details = append(details, fmt.Sprintf("Skipped pods requiring attention: %d (see skippedPods for reasons)", blocking))
+	}
+	if len(result.UnconfirmedPods) > 0 {
+		details = append(details, fmt.Sprintf("Pods with unconfirmed deletion: %d (see unconfirmedPods)", len(result.UnconfirmedPods)))
+	}
+	if result.VerificationError != "" {
+		details = append(details, "could not verify pod deletion: "+result.VerificationError)
+	}
+	if expected > 0 {
+		details = append(details, fmt.Sprintf("Pods left in place by design: %d (see skippedPods)", expected))
+	}
+	status = "ok"
+	switch outcome {
+	case k8score.DrainIncomplete:
+		status, message = "partial", "Drain incomplete on node "+name
+	case k8score.DrainUnconfirmed:
+		status, message = "partial", "Could not confirm drain completion on node "+name
+	case k8score.DrainStarted:
+		message = fmt.Sprintf("Evictions started on node %s: %d accepted; pod deletion has not been confirmed", name, len(result.EvictedPods))
+	default:
+		if len(result.EvictedPods) == 0 {
+			message = "Drain complete on node " + name + ": nothing to evict"
+		} else {
+			podLabel := "pods"
+			if len(result.EvictedPods) == 1 {
+				podLabel = "pod"
+			}
+			message = fmt.Sprintf("Drain complete on node %s: %d %s removed and confirmed gone", name, len(result.EvictedPods), podLabel)
+		}
+	}
+	if len(details) > 0 {
+		message += "; " + strings.Join(details, "; ")
+	}
+	message += ". The node remains cordoned."
+	if status == "partial" {
+		if blocking > 0 {
+			message += " Review skipped workloads and drain options before retrying."
+		}
+		message += " Do not take the node down until required workloads are removed."
+	}
+	return status, message
 }
 
 // normalizeWorkloadKind converts various kind formats to the plural lowercase form.

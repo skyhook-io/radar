@@ -8,6 +8,7 @@ import (
 	"log"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 var (
 	promQueryTimeout      = 30 * time.Second
 	promSuggestionTimeout = 5 * time.Second
+	promNearMissTimeout   = 2 * time.Second
 )
 
 var (
@@ -85,18 +87,22 @@ type discoverMetricsInput struct {
 }
 
 type promQueryResponse struct {
-	Query            string          `json:"query"`
-	Type             string          `json:"type"`
-	Start            string          `json:"start,omitempty"`
-	End              string          `json:"end,omitempty"`
-	Step             string          `json:"step,omitempty"`
-	ResultType       string          `json:"resultType,omitempty"`
-	SeriesCount      int             `json:"seriesCount"`
-	Series           []prom.Series   `json:"series"`
-	Truncated        bool            `json:"truncated,omitempty"`
-	Summary          json.RawMessage `json:"summary,omitempty"`
-	Note             string          `json:"note,omitempty"`
-	SuggestedMetrics []string        `json:"suggestedMetrics,omitempty"`
+	Warnings           []string        `json:"warnings,omitempty"`
+	Infos              []string        `json:"infos,omitempty"`
+	AnnotationsOmitted int             `json:"annotationsOmitted,omitempty"`
+	Partial            bool            `json:"partial,omitempty"`
+	Query              string          `json:"query"`
+	Type               string          `json:"type"`
+	Start              string          `json:"start,omitempty"`
+	End                string          `json:"end,omitempty"`
+	Step               string          `json:"step,omitempty"`
+	ResultType         string          `json:"resultType,omitempty"`
+	SeriesCount        int             `json:"seriesCount"`
+	Series             []prom.Series   `json:"series"`
+	Truncated          bool            `json:"truncated,omitempty"`
+	Summary            json.RawMessage `json:"summary,omitempty"`
+	Note               string          `json:"note,omitempty"`
+	SuggestedMetrics   []string        `json:"suggestedMetrics,omitempty"`
 	// Selectors is the query's vector-selector inventory, so a consumer can
 	// tell a query scoped to one workload from a cluster-wide one without
 	// re-parsing PromQL. Always an array; SelectorsUnknown marks a query the
@@ -112,14 +118,15 @@ type promMetricInfo struct {
 }
 
 type discoverMetricsResponse struct {
-	Match     string           `json:"match,omitempty"`
-	Label     string           `json:"label,omitempty"`
-	Count     int              `json:"count"`
-	Metrics   []promMetricInfo `json:"metrics,omitempty"`
-	Values    []string         `json:"values,omitempty"`
-	Truncated bool             `json:"truncated,omitempty"`
-	Note      string           `json:"note,omitempty"`
-	Usage     string           `json:"usage,omitempty"`
+	NearMisses []string         `json:"nearMisses,omitempty"`
+	Match      string           `json:"match,omitempty"`
+	Label      string           `json:"label,omitempty"`
+	Count      int              `json:"count"`
+	Metrics    []promMetricInfo `json:"metrics,omitempty"`
+	Values     []string         `json:"values,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+	Note       string           `json:"note,omitempty"`
+	Usage      string           `json:"usage,omitempty"`
 }
 
 // requireClusterWideMetrics gates the tools whose queries are unbounded by a
@@ -183,11 +190,34 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, promQueryError(ctx, input.Query, timeout, err)
 	}
 
+	resp.Partial = result.Annotations.Partial
+	annotationBytes := 0
+	exhausted := false
+	for _, kind := range []struct {
+		in  []string
+		out *[]string
+	}{{result.Annotations.Warnings, &resp.Warnings}, {result.Annotations.Infos, &resp.Infos}} {
+		for _, annotation := range kind.in {
+			annotation = prom.RedactURLs(annotation)
+			if exhausted || annotationBytes+len(annotation) > 2048 {
+				exhausted = true
+				resp.AnnotationsOmitted++
+				continue
+			}
+			*kind.out = append(*kind.out, annotation)
+			annotationBytes += len(annotation)
+		}
+	}
+	partialNote := ""
+	if resp.Partial {
+		partialNote = "backend returned a partial result (some stores did not answer) — absent series are not zero. "
+	}
+	resp.Note = strings.TrimSpace(partialNote)
 	resp.ResultType = result.ResultType
 	resp.SeriesCount = len(result.Series)
 	resp.Series = []prom.Series{}
 	if len(result.Series) == 0 {
-		resp.Note = "query returned no data — verify metric and label names with discover_metrics"
+		resp.Note = partialNote + "query returned no data — verify metric and label names with discover_metrics"
 		prefix := promMetricFamilyPrefix(input.Query)
 		if prefix != "" {
 			discoveryCtx, discoveryCancel := context.WithTimeout(ctx, promSuggestionTimeout)
@@ -205,7 +235,7 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 				if truncated {
 					qualifier = fmt.Sprintf(" (first %d)", promSuggestionLimit)
 				}
-				resp.Note = fmt.Sprintf("query returned no data — suggestedMetrics contains active metric names beginning with %q%s; verify metric and label names with discover_metrics", prefix, qualifier)
+				resp.Note = partialNote + fmt.Sprintf("query returned no data — suggestedMetrics contains active metric names beginning with %q%s; verify metric and label names with discover_metrics", prefix, qualifier)
 			}
 		}
 		return toJSONResult(resp)
@@ -218,7 +248,7 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	if len(seriesBytes) > prometheus.MaxResponseBytes() {
 		resp.Truncated = true
 		resp.Summary = prometheus.SummarizeLargeResult(result, input.Query, queryType == "range")
-		resp.Note = "result too large to return raw — do NOT answer from partial data. Retry with the summary's suggestion (topk), a tighter label selector, or a shorter window; labelCardinality shows which label to constrain."
+		resp.Note = partialNote + "result too large to return raw — do NOT answer from partial data. Retry with the summary's suggestion (topk), a tighter label selector, or a shorter window; labelCardinality shows which label to constrain."
 		return toJSONResult(resp)
 	}
 
@@ -314,7 +344,73 @@ func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input 
 	if hasCounter {
 		resp.Usage = "some results are counters (type=counter) — they only ever increase, so wrap them in rate(metric[5m]) before querying; gauges can be queried directly"
 	}
+	nearMisses, pattern := discoverPromNearMisses(ctx, p, input.Match, values)
+	resp.NearMisses = nearMisses
+	if len(resp.NearMisses) > 0 {
+		if resp.Usage != "" {
+			resp.Usage += "; "
+		}
+		resp.Usage += "PromQL regex matchers are fully anchored; nearMisses contain your pattern but were excluded. To match anywhere use __name__=~" + strconv.Quote(".*(?:"+pattern+").*")
+	}
 	return toJSONResult(resp)
+}
+
+func discoverPromNearMisses(ctx context.Context, p *prom.Client, match string, primary []string) ([]string, string) {
+	selectors, unknown := prometheus.ExtractSelectors(match)
+	if unknown || len(selectors) != 1 || selectors[0].Metric != "" {
+		return nil, ""
+	}
+	nameMatchers := 0
+	pattern := ""
+	hasScope := false
+	var scope []string
+	for _, matcher := range selectors[0].Matchers {
+		if matcher.Label == "__name__" {
+			nameMatchers++
+			if matcher.Op != "=~" {
+				return nil, ""
+			}
+			pattern = matcher.Value
+			continue
+		}
+		if matcher.Op == "=" && matcher.Value != "" {
+			hasScope = true
+		}
+		scope = append(scope, matcher.Label+matcher.Op+strconv.Quote(matcher.Value))
+	}
+	if nameMatchers != 1 || !hasScope {
+		return nil, ""
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, ""
+	}
+	anchored, err := regexp.Compile("^(?:" + pattern + ")$")
+	if err != nil {
+		return nil, ""
+	}
+	scopeCtx, cancel := context.WithTimeout(ctx, promNearMissTimeout)
+	defer cancel()
+	values, truncated, err := discoverPromLabelValues(scopeCtx, p, "__name__", []string{"{" + strings.Join(scope, ",") + "}"}, 500)
+	if err != nil || truncated || scopeCtx.Err() != nil {
+		return nil, ""
+	}
+	seen := make(map[string]bool, len(primary))
+	for _, name := range primary {
+		seen[name] = true
+	}
+	var nearMisses []string
+	for _, name := range values {
+		if !seen[name] && re.MatchString(name) && !anchored.MatchString(name) {
+			nearMisses = append(nearMisses, name)
+			seen[name] = true
+		}
+	}
+	sort.Strings(nearMisses)
+	if len(nearMisses) > 10 {
+		nearMisses = nearMisses[:10]
+	}
+	return nearMisses, pattern
 }
 
 func discoverPromLabelValues(ctx context.Context, p *prom.Client, label string, matches []string, limit int) ([]string, bool, error) {
@@ -694,6 +790,9 @@ func promHTTPError(err error, noun, value string) error {
 		return nil
 	}
 	body := strings.TrimSpace(string(httpErr.Body))
+	if len(body) > 1024 {
+		body = strings.ToValidUTF8(body[:1024], "") + "…"
+	}
 	if value == "" {
 		return fmt.Errorf("prometheus returned %d for %s: %s", httpErr.StatusCode, noun, body)
 	}
@@ -709,6 +808,12 @@ func promQueryError(ctx context.Context, query string, timeout time.Duration, er
 			timeout, query)
 	}
 	if e := promHTTPError(err, "query", query); e != nil {
+		var httpErr *prom.HTTPError
+		if errors.As(err, &httpErr) && (httpErr.StatusCode == 400 || httpErr.StatusCode == 422) {
+			if hint := promQLHint(string(httpErr.Body)); hint != "" {
+				return fmt.Errorf("%s — hint: %s", e, hint)
+			}
+		}
 		return e
 	}
 	return err
@@ -724,4 +829,34 @@ func promDiscoverError(ctx context.Context, match string, err error) error {
 		return e
 	}
 	return err
+}
+
+var promRangeFunctionPattern = regexp.MustCompile(`expected type range vector in call to function \\?"([a-z_]+)\\?"`)
+
+// Counter-rate functions are the only ones where the repair is "apply the
+// function before aggregating"; a subquery over an aggregated counter hides
+// per-series resets.
+var promCounterRateFunctions = map[string]bool{"rate": true, "irate": true, "increase": true}
+
+func promQLHint(body string) string {
+	switch {
+	case strings.Contains(body, "vector cannot contain metrics with the same labelset"):
+		return "two or more result series ended up with identical labels; commonly a function such as rate() dropped the metric name across several metrics (query each metric separately), or label_replace/aggregation removed the label that kept series apart"
+	case strings.Contains(body, "many-to-many matching not allowed"):
+		side := "one side"
+		if strings.Contains(body, "on the left hand-side") {
+			side = "the left side"
+		} else if strings.Contains(body, "on the right hand-side") {
+			side = "the right side"
+		}
+		return side + " has several series per on()/ignoring() group; aggregate that side by the matching labels, or match on labels that are unique on that side"
+	case strings.Contains(body, "expected type range vector in call to function"):
+		if m := promRangeFunctionPattern.FindStringSubmatch(body); m != nil && promCounterRateFunctions[m[1]] {
+			return m[1] + "() needs a range on a raw selector, e.g. " + m[1] + "(metric[5m]); apply it before aggregating: sum(" + m[1] + "(m[5m])), not " + m[1] + "(sum(m))"
+		}
+		return "this function needs a range vector: add a range to a raw selector, e.g. f(metric[5m]), or use a subquery for an expression, e.g. f((expr)[5m:1m])"
+	case strings.Contains(body, "ranges only allowed for vector selectors"):
+		return "a range applies only to a raw selector or a subquery; put it on the selector, e.g. sum(rate(m[5m])) for a counter, or write a subquery (expr)[5m:1m]"
+	}
+	return ""
 }

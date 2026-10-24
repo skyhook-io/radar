@@ -34,13 +34,87 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
 
       {/* Field changes */}
       <div className="space-y-1.5">
-        {diff.fields.map((field, idx) => (
-          <FieldChangeRow key={`${field.path}-${idx}`} field={field} />
-        ))}
+        {diffRows(diff.fields).map((row, idx) =>
+          row.kind === 'keys' ? (
+            <KeyListRow key={`${row.field}-${idx}`} row={row} />
+          ) : (
+            <FieldChangeRow key={`${row.field.path}-${idx}`} field={row.field} />
+          ),
+        )}
       </div>
     </div>
   )
 })
+
+// Secret and ConfigMap diffs report which keys changed as name lists, under
+// paths like "data (modified keys)", never values. Rendered as an old→new
+// pair, a modified key reads as removed and re-added, so key lists of one
+// field are merged into a single row that names what happened to each key.
+const KEY_LIST_PATH = /^(.+) \((added|removed|modified) keys\)$/
+
+type KeyChange = 'added' | 'removed' | 'modified'
+
+interface KeyListDiffRow {
+  kind: 'keys'
+  field: string
+  keys: Record<KeyChange, string[]>
+}
+
+type DiffRow = KeyListDiffRow | { kind: 'field'; field: FieldChange }
+
+function keyNames(value: unknown): string[] | null {
+  if (value === null || value === undefined) return []
+  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null
+}
+
+function diffRows(fields: FieldChange[]): DiffRow[] {
+  const rows: DiffRow[] = []
+  const byField = new Map<string, KeyListDiffRow>()
+  for (const field of fields) {
+    const match = KEY_LIST_PATH.exec(field.path)
+    const oldKeys = keyNames(field.oldValue)
+    const newKeys = keyNames(field.newValue)
+    if (!match || !oldKeys || !newKeys) {
+      rows.push({ kind: 'field', field })
+      continue
+    }
+    const [, base, change] = match
+    let row = byField.get(base)
+    if (!row) {
+      row = { kind: 'keys', field: base, keys: { added: [], removed: [], modified: [] } }
+      byField.set(base, row)
+      rows.push(row)
+    }
+    const list = row.keys[change as KeyChange]
+    for (const key of [...oldKeys, ...newKeys]) {
+      if (!list.includes(key)) list.push(key)
+    }
+  }
+  return rows
+}
+
+const KEY_CHANGE_LABEL: Record<KeyChange, string> = {
+  modified: 'keys changed',
+  added: 'added',
+  removed: 'removed',
+}
+
+function KeyListRow({ row }: { row: KeyListDiffRow }) {
+  const parts = (['modified', 'added', 'removed'] as const).filter((change) => row.keys[change].length > 0)
+  return (
+    <div className="rounded bg-theme-surface/50 border border-theme-border px-3 py-2">
+      <div className="text-xs font-mono text-theme-text-tertiary mb-1 break-words [overflow-wrap:anywhere]">{row.field}</div>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-theme-text-secondary">
+        {parts.map((change, idx) => (
+          <span key={change} className="min-w-0 [overflow-wrap:anywhere]">
+            {idx > 0 ? <span aria-hidden className="mr-2 text-theme-text-tertiary">·</span> : null}
+            {KEY_CHANGE_LABEL[change]}: <span className="font-mono">{row.keys[change].join(', ')}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 interface FieldChangeRowProps {
   field: FieldChange

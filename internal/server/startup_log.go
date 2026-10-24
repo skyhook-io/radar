@@ -29,6 +29,7 @@ type startupLogSummary struct {
 	authMode             string
 	proxyUserHeader      string
 	proxyGroupsHeader    string
+	mcpReadOnly          bool
 	mcpEnabled           bool
 	aiAgent              string
 	aiCLIOverride        string
@@ -53,7 +54,8 @@ func (s *Server) logStartupSummaryBlock() {
 		authMode:             s.authConfig.Mode,
 		proxyUserHeader:      s.authConfig.UserHeader,
 		proxyGroupsHeader:    s.authConfig.GroupsHeader,
-		mcpEnabled:           s.mcpHandler != nil,
+		mcpEnabled:           s.mcpEnabled(),
+		mcpReadOnly:          s.mcpReadOnly(),
 		aiAgent:              aiAgent,
 		aiCLIOverride:        strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")),
 		configManagement:     s.configManagement(),
@@ -139,8 +141,10 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 		lines = append(lines, row("Kubeconfig", kubeconfig))
 	}
 
-	if summary.mcpEnabled {
-		lines = append(lines, row("MCP", "enabled at /mcp"))
+	if summary.mcpEnabled && summary.mcpReadOnly {
+		lines = append(lines, row("MCP", "enabled (read-only at "+summary.basePath+"/mcp-readonly)"))
+	} else if summary.mcpEnabled {
+		lines = append(lines, row("MCP", "enabled at "+summary.basePath+"/mcp"))
 	} else {
 		lines = append(lines, row("MCP", "disabled"))
 	}

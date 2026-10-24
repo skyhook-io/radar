@@ -216,6 +216,8 @@ interface WorkloadViewProps {
   /** Timeline events the history lanes are built from: this workload's own
    *  history, or events for its namespace from a host that has no scoped query. */
   allEvents?: TimelineEvent[]
+  /** Reveals one event, loading older pages if needed. Use a new object for each navigation request. */
+  timelineFocusEvent?: { id: string }
   /** Older history exists beyond allEvents. */
   historyTruncated?: boolean
   /** Loads the next older page of history; omit when the host can't page. */
@@ -353,6 +355,8 @@ interface WorkloadViewProps {
     namespace: string
     name: string
     resource: any
+    /** Place resource notices within the replacement layout's content area. */
+    leadContent?: ReactNode
   }) => ReactNode
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
@@ -398,6 +402,8 @@ interface WorkloadViewProps {
    *  live issues for this resource). Avoids showing the same failure twice.
    *  Also gates the `renderOverviewLead` wrapper (see above). */
   hasOperationalIssues?: boolean
+  /** Also show the lead for neutral context without suppressing renderer problems. */
+  hasOverviewLead?: boolean
   /** True while the live-issues fetch is still pending. Renderers suppress their
    *  banners during this window too — a banner whose failure the pipeline covers
    *  would otherwise flash on first paint before the issues arrive and hide it. */
@@ -465,6 +471,7 @@ export function WorkloadView({
   refetch: refetchProp,
   // Timeline
   allEvents,
+  timelineFocusEvent,
   historyTruncated = false,
   onLoadOlderHistory,
   loadingOlderHistory = false,
@@ -518,6 +525,7 @@ export function WorkloadView({
   renderOverviewIntro,
   renderOverviewLead,
   hasOperationalIssues,
+  hasOverviewLead,
   operationalIssuesPending,
   // Actions bar
   actionsBarProps,
@@ -930,7 +938,12 @@ export function WorkloadView({
   useEffect(() => {
     if (shouldCommitFallback && activeTab !== 'overview') onTabChange?.('overview', { replace: true })
   }, [activeTab, onTabChange, shouldCommitFallback])
-  const expandedOverview = expanded ? renderExpandedOverview?.({ kind, apiKind, namespace, name, resource }) : null
+  const expandedOverview = expanded ? renderExpandedOverview?.({
+    kind, apiKind, namespace, name, resource,
+    leadContent: (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
+      ? renderOverviewLeadForState({ kind, namespace, name })
+      : undefined,
+  }) : null
   const overviewIntro = renderOverviewIntro?.({ kind, namespace, name })
 
   // ── Collapsed (drawer) mode ──────────────────────────────────────────────
@@ -1090,11 +1103,12 @@ export function WorkloadView({
                 drawerSummary
               ) : (
               <>
-              {renderOverviewLeadForState && hasOperationalIssues && (
+              {renderOverviewLeadForState && (hasOverviewLead ?? hasOperationalIssues) && (
                 <div className="px-4 pt-4">
                   {renderOverviewLeadForState({ kind, namespace, name })}
                 </div>
               )}
+              {overviewIntro && <div className="px-4 pt-4">{overviewIntro}</div>}
               <ResourceRendererDispatch
                 resource={selectedResource}
                 data={resource}
@@ -1303,11 +1317,6 @@ export function WorkloadView({
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
           <div className="h-full min-h-0">
-            {hasOperationalIssues && renderOverviewLeadForState && (
-              <div className="px-4 pt-4">
-                {renderOverviewLeadForState({ kind, namespace, name })}
-              </div>
-            )}
             {expandedOverview}
           </div>
         ) : effectiveTab === 'spec' && specTab?.render && !resourceGone ? (
@@ -1350,7 +1359,7 @@ export function WorkloadView({
                 // A host's spec lead replaces the operational issues there: its Overview already leads with them.
                 effectiveTab === 'spec' && specTab?.lead
                   ? specTab.lead
-                  : hasOperationalIssues && renderOverviewLeadForState
+                  : (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState
                     ? renderOverviewLeadForState({ kind, namespace, name })
                     : undefined
               }
@@ -1377,6 +1386,7 @@ export function WorkloadView({
         )}
         {effectiveTab === 'timeline' && (
           <EventsTab
+            focusEvent={timelineFocusEvent}
             events={resourceEvents}
             isLoading={eventsLoading}
             truncated={historyTruncated}
@@ -1682,6 +1692,7 @@ function OwnershipHeading({
 // ============================================================================
 
 function EventsTab({
+  focusEvent,
   events,
   isLoading,
   truncated,
@@ -1697,6 +1708,7 @@ function EventsTab({
   topology,
   onResourceClick,
 }: {
+  focusEvent?: { id: string }
   events: TimelineEvent[]
   isLoading: boolean
   truncated?: boolean
@@ -1792,6 +1804,22 @@ function EventsTab({
     onSelectEvent(id)
   }, [onSelectEvent])
 
+  const focusedRequest = useRef<typeof focusEvent>(undefined)
+  const requestedPage = useRef<{ focus: typeof focusEvent; events: TimelineEvent[] } | undefined>(undefined)
+  const focusFound = Boolean(focusEvent && cleanEvents.some((event) => event.id === focusEvent.id))
+  useEffect(() => {
+    if (!focusEvent || focusedRequest.current === focusEvent || isLoading) return
+    if (focusFound) {
+      handleSelect(focusEvent.id)
+      focusedRequest.current = focusEvent
+    } else if (truncated && onLoadOlder && !loadingOlder && !olderError && !error) {
+      // Strict Mode can replay this effect before the loading prop updates.
+      if (requestedPage.current?.focus === focusEvent && requestedPage.current.events === events) return
+      requestedPage.current = { focus: focusEvent, events }
+      onLoadOlder()
+    }
+  }, [focusEvent, focusFound, events, isLoading, truncated, onLoadOlder, loadingOlder, olderError, error, handleSelect])
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full text-theme-text-tertiary">
@@ -1821,6 +1849,15 @@ function EventsTab({
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      {focusEvent && !focusFound && (
+        <div className="shrink-0 border-b border-theme-border px-4 py-2 text-xs text-theme-text-secondary" role="status">
+          {olderError || error
+            ? "Couldn't find the reported error because some history couldn't be loaded."
+            : truncated && onLoadOlder
+              ? 'Finding the reported error in older history…'
+              : 'The reported error is not available in the retained timeline history.'}
+        </div>
+      )}
       {error && (
         <div className="shrink-0 flex flex-wrap items-center gap-x-2 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs" role="alert">
           <span className="text-[var(--color-error)]" title={error.message}>

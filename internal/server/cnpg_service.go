@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -16,7 +17,6 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	bp "github.com/skyhook-io/radar/pkg/audit"
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 type cnpgReadAdapter struct {
@@ -73,15 +73,14 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		adapter.dynamic, adapter.Clients.Typed = nil, nil
 		if adapter.config != nil {
-			base := adapter.config
-			adapter.config = pkgauth.ImpersonatedConfig(base, user.Username, user.Groups)
+			adapter.config = k8s.UserRESTConfig(adapter.config, user)
 			var err error
-			adapter.Clients.Typed, err = pkgauth.ImpersonatedClient(base, user.Username, user.Groups)
+			adapter.Clients.Typed, err = kubernetes.NewForConfig(adapter.config)
 			if err != nil {
 				adapter.Clients.Typed = nil
 				log.Printf("[auth] Failed to build CNPG typed client for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			}
-			adapter.dynamic, err = pkgauth.ImpersonatedDynamicClient(base, user.Username, user.Groups)
+			adapter.dynamic, err = dynamic.NewForConfig(adapter.config)
 			if err != nil {
 				adapter.dynamic = nil
 				log.Printf("[auth] Failed to build CNPG dynamic client for %s: %v", k8s.SanitizeForLog(user.Username), err)
@@ -90,6 +89,13 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 	}
 	adapter.Clients.Proxy = cnpgRuntimeClient(adapter.config)
 	adapter.Clients.Exec = cnpgsvc.NewExec(adapter.Clients.Typed, adapter.config)
+	if k8s.ForceDisableExec {
+		// Session reads and cancel/terminate actions run psql through this
+		// client; a forbidden error surfaces as "exec denied" in both.
+		adapter.Clients.Exec = func(context.Context, string, string, string, []string, string) ([]byte, error) {
+			return nil, errExecDisabled
+		}
+	}
 	current := func() bool { return operation != nil && operation.Err() == nil }
 	boundBudget := func(ctx context.Context) *syncBudget {
 		budget := newSyncBudget(ctx)

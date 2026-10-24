@@ -1,9 +1,10 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit, useIssues } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
-import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
+import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
+import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
 import { readErrorBody } from '../../api/httpErrors'
 import { useAPIResources } from '../../api/apiResources'
@@ -111,6 +112,18 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Track the selected kind from the k8s-ui component
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(null)
+  const { data: issuesData } = useIssues(namespaces, selectedKind?.group === 'batch' && selectedKind?.name === 'cronjobs', 'CronJob')
+  const operationalIssues = useMemo(() => {
+    const result: Record<string, Issue> = {}
+    for (const issue of issuesData?.issues ?? []) {
+      if (issue.kind !== 'CronJob' || issue.group !== 'batch') continue
+      const key = `${issue.namespace ?? ''}/${issue.name}`
+      const previous = result[key]
+      if (!previous || ISSUE_SEVERITY_RANK[issue.severity] > ISSUE_SEVERITY_RANK[previous.severity] ||
+        (issue.severity === previous.severity && issue.id < previous.id)) result[key] = issue
+    }
+    return result
+  }, [issuesData])
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
@@ -314,7 +327,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const { data: topNodeMetrics } = useTopNodeMetrics({ enabled: topNodeMetricsEnabled })
 
   // Certificate expiry
-  const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry()
+  const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry(namespaces)
 
   // An ExternalSecret names a store; only the store says which backend it reads
   // from. Two list calls per page beat one lookup per row, and the column shows
@@ -426,6 +439,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       certExpiry={certExpiry}
       storeProviders={storeProviders}
       certExpiryError={certExpiryError}
+      operationalIssues={operationalIssues}
+      operationalIssuesIncomplete={Boolean(issuesData && (issuesData.total_matched ?? issuesData.total ?? issuesData.issues.length) > issuesData.issues.length)}
       auditBadges={auditBadges}
       // Pinned kinds
       pinned={pinned}

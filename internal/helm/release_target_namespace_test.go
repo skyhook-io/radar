@@ -8,6 +8,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -55,6 +56,9 @@ func targetNamespaceActionConfig(t *testing.T) (*action.Configuration, *[]string
 		}
 		objects[ns+"/"+name] = obj
 	}
+	// The kube client issues requests concurrently, so the handler's shared
+	// state needs a lock.
+	var mu sync.Mutex
 	var writes []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -83,6 +87,8 @@ func targetNamespaceActionConfig(t *testing.T) (*action.Configuration, *[]string
 			return
 		}
 		key := parts[3] + "/" + path.Base(r.URL.Path)
+		mu.Lock()
+		defer mu.Unlock()
 		if r.Method == "POST" {
 			obj := &corev1.ConfigMap{}
 			if err := json.NewDecoder(r.Body).Decode(obj); err != nil {
@@ -113,7 +119,7 @@ func targetNamespaceActionConfig(t *testing.T) (*action.Configuration, *[]string
 		writeTestJSON(t, w, obj)
 	}))
 	t.Cleanup(srv.Close)
-	getter := newRESTConfigGetter(&rest.Config{Host: srv.URL}, "store", "", nil)
+	getter := newRESTConfigGetter(&rest.Config{Host: srv.URL}, "store", nil)
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Version: "v1"}})
 	mapper.Add(schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, meta.RESTScopeNamespace)
 	getter.mapper = mapper
@@ -231,6 +237,12 @@ func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			source := &ChartSourceCandidate{Type: "repository", Reference: repoName, URL: srv.URL}
+			rel.Labels = chartSourceLabels(source)
+			rel.Labels[chartSourceBindingLabel] = chartSourceBinding(rel.Chart)
+			if err := cfg.Releases.Update(rel); err != nil {
+				t.Fatal(err)
+			}
 			values := map[string]any{"message": "new"}
 			noop := func(string, string, string) {}
 			var rendered *release.Release
@@ -250,7 +262,7 @@ func TestUpgradeAndValuesUseTargetNamespace(t *testing.T) {
 			case "preview values":
 				_, err = client.previewValuesChangeWith(cfg, "demo", values, "", "")
 			case "install recovery":
-				rendered, err = runInstallOrUpgrade(cfg, &InstallRequest{Namespace: "store", ReleaseName: "demo", Values: values}, &next, installUpgrade)
+				rendered, err = runInstallOrUpgrade(cfg, &InstallRequest{Namespace: "store", ReleaseName: "demo", Values: values, resolvedSource: source}, &next, installUpgrade)
 			}
 			if err != nil {
 				t.Fatal(err)

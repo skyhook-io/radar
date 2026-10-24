@@ -2,10 +2,7 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,6 +43,19 @@ func (s *Server) recentChangeReadFilter(ctx context.Context) func(issuesapi.Rece
 	authz := s.changeAuthorizerForCtx(ctx)
 	return func(c issuesapi.RecentChange) bool {
 		return k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz)
+	}
+}
+
+// recentChangeViewer gates the Pod and workload names change rows carry.
+// The zero Viewer when auth is off.
+func (s *Server) recentChangeViewer(ctx context.Context) meaningfulchanges.Viewer {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return meaningfulchanges.Viewer{}
+	}
+	return meaningfulchanges.Viewer{
+		CanReadPods:     func(namespace string) bool { return s.canReadUser(ctx, user, "", "pods", namespace, "get") },
+		CanReadConsumer: s.recentChangeReadFilter(ctx),
 	}
 }
 
@@ -127,13 +137,13 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	helmIssues, helmUnchecked := s.nativeHelmIssuesForRequest(r, namespaces, filters)
+	helmIssues, helmUnchecked, helmIncomplete := s.nativeHelmIssuesForRequest(r, namespaces, filters)
 	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse); surfaces add their
 	// own enrichments after this point.
 	resp := issues.NewListResponse(out, stats)
-	if helmUnchecked {
-		resp.UncheckedSources = []issuesapi.UncheckedSource{{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonReadFailed}}
+	if helmIncomplete {
+		resp.UncheckedSources = append(resp.UncheckedSources, helmUnchecked)
 	}
 	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func(group, resource string) bool {
 		return s.canRead(r, group, resource, "kube-system", "list")
@@ -149,7 +159,8 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 				// per-kind — drop changes for kinds the caller can't read before
 				// ranking and the cut, so priority/recap logic operates on the
 				// visible set.
-				Allow: s.recentChangeReadFilter(r.Context()),
+				Allow:  s.recentChangeReadFilter(r.Context()),
+				Viewer: s.recentChangeViewer(r.Context()),
 			})
 			if err != nil {
 				resp.RecentChangesError = err.Error()
@@ -203,52 +214,36 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 	}
 }
 
-var helmIssuesDeniedLogged sync.Map
-
 // nativeHelmIssuesForRequest reads Helm release storage on the request's
 // context, so the read stops when the caller disconnects instead of running
-// to completion for nobody. unchecked reports a failed read whose answer
-// someone is still waiting for (see helm.IssueReadUnchecked).
-func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked bool) {
+// to completion for nobody. incomplete reports a failed read whose answer
+// someone is still waiting for (see helm.IssueReadUnchecked); the issues
+// returned alongside it come from the namespaces that were read.
+func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
-		return nil, false
+		return nil, unchecked, false
 	}
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return nil, false
+		return nil, unchecked, false
 	}
 	ctx := r.Context()
+	user := auth.UserFromContext(ctx)
 	username, groups := "", []string(nil)
-	if user := auth.UserFromContext(ctx); user != nil {
-		username = user.Username
-		groups = user.Groups
+	if user != nil {
+		username, groups = user.Username, user.Groups
 	}
 	helmNamespaces := namespaces
 	if helmNamespaces == nil {
 		var ok bool
 		helmNamespaces, ok = s.resolveHelmNamespaces(r)
 		if !ok {
-			return nil, false
+			return nil, unchecked, false
 		}
 	}
-	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
-	if err != nil {
-		switch {
-		case errors.Is(ctx.Err(), context.Canceled):
-			// The caller went away; nobody is left to tell.
-		case !helm.IssueReadDenied(err):
-			log.Printf("[issues] Failed to list Helm releases for issue stream: %v", err)
-		default:
-			if _, seen := helmIssuesDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
-				// Logged once per identity (username + groups): the alerts worker
-				// polls this, and a cluster without a Secret-read binding would
-				// otherwise drop Helm alerts with no trace anywhere.
-				log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
-			}
-		}
-		return nil, helm.IssueReadUnchecked(ctx, err)
-	}
-	return issues.NativeHelmReleaseIssues(releases, time.Now()), false
+	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
+	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 
 // handleResourceIssues serves GET /api/issues/resource/{kind}/{namespace}/{name}
@@ -344,6 +339,9 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		Issues:   related,
 		Coverage: resourceIssuesCoverage(kind, group, namespace),
 	}
+	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
+		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
+	}
 	if withheld.Issues > 0 {
 		resp.Withheld = &withheld
 	}
@@ -355,7 +353,8 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 
 // ResourceIssuesResponse is /api/issues/resource with ?coverage=1.
 type ResourceIssuesResponse struct {
-	Issues []issues.Issue `json:"issues"`
+	SchedulingReport *k8s.CronJobSchedulingEvidence `json:"scheduling_report,omitempty"`
+	Issues           []issues.Issue                 `json:"issues"`
 	// Whether the issues engine reads the subject's kind: ok, syncing,
 	// notWatched, or unknownKind (discovery doesn't serve the kind, as when a
 	// link made on one cluster opens on another). Anything but ok makes an

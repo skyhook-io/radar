@@ -68,6 +68,8 @@ export function describeToolCall(tool: string, args?: string): string {
       return "Running the cluster audit";
     case "get_cluster_upgrade_readiness":
       return "Checking upgrade readiness";
+    case "get_runtime_versions":
+      return scoped("Reading runtime versions of running images");
     case "apply_resource":
       return "Applying the change";
     case "patch_resource":

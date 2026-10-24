@@ -16,6 +16,46 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
+func TestReadOnlyMCPStartsAIEngine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	bin := filepath.Join(home, "claude")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RADAR_AI_CLI_BIN", bin)
+	stub := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	s := &Server{mcpReadOnlyHandler: stub, mcpInvestigationHandler: stub, aiInvestigationRefs: investigationrefs.NewRegistry()}
+	t.Cleanup(func() {
+		if runs := s.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
+	if !listAgentsEnabled(t, s) {
+		t.Fatal("read-only MCP did not start AI engine")
+	}
+	response := httptest.NewRecorder()
+	s.handleListAgents(response, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+	var result struct {
+		Agents []struct {
+			Apply        bool `json:"apply"`
+			Verification bool `json:"verification"`
+		} `json:"agents"`
+		Eligible bool `json:"eligible"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.Eligible || len(result.Agents) == 0 {
+		t.Fatalf("agents: %s", response.Body.String())
+	}
+	for _, agent := range result.Agents {
+		if agent.Apply || !agent.Verification {
+			t.Fatalf("agent capabilities: %+v", agent)
+		}
+	}
+}
+
 func listAgentsEnabled(t *testing.T, s *Server) bool {
 	t.Helper()
 	rec := httptest.NewRecorder()

@@ -8,8 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-
-	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // StreamCursor remembers where one container's follow left off, so a stream
@@ -96,35 +94,43 @@ func (c *StreamCursor) Admit(entry Entry) bool {
 	return true
 }
 
-// UnavailableSources tracks the stream sources, keyed pod/container, whose node
-// answered with its notice instead of logs. A live view reopens each source
-// every discovery pass, so the same answer repeats; the methods report whether
-// the set changed so the notice is only sent when it does. Only the stream's
-// main loop may touch it.
-type UnavailableSources map[string]bool
-
-func (u UnavailableSources) Add(key string) bool {
-	if u[key] {
-		return false
-	}
-	u[key] = true
-	return true
+type sourceFailure struct {
+	follow int
+	reason string
 }
 
-func (u UnavailableSources) Remove(key string) bool {
-	if !u[key] {
+// UnavailableSources tracks failure reasons and recovery follow IDs per
+// pod/container. Only the stream's main loop may touch it. Methods report
+// changes to the displayed notice; repeated failures do not republish it.
+type UnavailableSources map[string]sourceFailure
+
+func (u UnavailableSources) Add(key string, follow int, reason string) bool {
+	previous, exists := u[key]
+	if exists && follow < previous.follow {
 		return false
 	}
-	delete(u, key)
+	u[key] = sourceFailure{follow: follow, reason: reason}
+	return !exists || previous.reason != reason
+}
+
+func (u UnavailableSources) Remove(key string, follow int) bool {
+	failedFollow, exists := u[key]
+	// Buffered records from the failed request are not evidence of recovery.
+	if !exists || failedFollow.reason == "" || follow <= failedFollow.follow {
+		return false
+	}
+	// Keep the recovery's follow ID so an older queued failure cannot bring
+	// back a warning after a newer follow has recovered.
+	u[key] = sourceFailure{follow: follow}
 	return true
 }
 
 func (u UnavailableSources) RemovePod(podName string) bool {
 	changed := false
-	for key := range u {
+	for key, failure := range u {
 		if strings.HasPrefix(key, podName+"/") {
 			delete(u, key)
-			changed = true
+			changed = changed || failure.reason != ""
 		}
 	}
 	return changed
@@ -133,8 +139,11 @@ func (u UnavailableSources) RemovePod(podName string) bool {
 // Notice is the current set as a notice; an empty notice clears it.
 func (u UnavailableSources) Notice() string {
 	failures := make([]string, 0, len(u))
-	for key := range u {
-		failures = append(failures, key+": "+k8score.ErrLogsUnavailable.Error())
+	for key, failure := range u {
+		if failure.reason == "" {
+			continue
+		}
+		failures = append(failures, key+": "+failure.reason)
 	}
 	return UnreadableSourcesNotice(failures)
 }

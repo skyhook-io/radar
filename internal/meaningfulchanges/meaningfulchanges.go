@@ -3,20 +3,26 @@ package meaningfulchanges
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 const (
@@ -222,9 +228,8 @@ var (
 		// webhook config gates admission across all namespaces.
 		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration", "GatewayClass",
 	}
-	// lifecycleOnlyKinds surface ONLY their delete events (name-only — never
-	// data). A deleted Secret breaks every consumer with zero K8s symptom on
-	// the Secret itself; its updates stay out of the feed entirely.
+	// lifecycleOnlyKinds contribute deletes; Secret updates have a separate
+	// reference gate in the default feed.
 	lifecycleOnlyKinds = []string{"Secret"}
 )
 
@@ -240,9 +245,41 @@ type Query struct {
 	// places.
 	Allow func(issuesapi.RecentChange) bool
 
+	// Viewer gates what rows say about other objects.
+	Viewer Viewer
+
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
 	start time.Time
+}
+
+// Viewer gates the Pod and workload names a row carries beyond its own
+// object. Nil fields mean auth is off.
+type Viewer struct {
+	// CanReadPods gates Pod-derived names and stale-env evidence.
+	CanReadPods func(namespace string) bool
+	// CanReadConsumer gates each workload named in consumed_by and
+	// running_previous_value, checked as a change row of that kind.
+	CanReadConsumer func(issuesapi.RecentChange) bool
+}
+
+func (v Viewer) canReadPods(namespace string) bool {
+	return v.CanReadPods == nil || v.CanReadPods(namespace)
+}
+
+func (v Viewer) canNameConsumer(kind, group, namespace string) bool {
+	if v.CanReadConsumer == nil {
+		return true
+	}
+	// Owner references resolve to a group, not a version. The read check
+	// keys on the group alone (k8s.ChangeReadAllowed reads
+	// GroupFromAPIVersion), so any version names the same resource: an Argo
+	// Rollout (argoproj.io/v1alpha1) checks as argoproj.io/rollouts.
+	apiVersion := "v1"
+	if group != "" {
+		apiVersion = group + "/v1"
+	}
+	return v.CanReadConsumer(issuesapi.RecentChange{Kind: kind, APIVersion: apiVersion, Namespace: namespace})
 }
 
 type RecentResult struct {
@@ -279,7 +316,7 @@ func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	updateKinds := [][]string{q.Kinds}
 	lifecycleKinds := q.Kinds
 	if len(q.Kinds) == 0 && q.Name == "" {
-		updateKinds = [][]string{configKinds, specKinds}
+		updateKinds = [][]string{configKinds, specKinds, {"Secret"}}
 		lifecycleKinds = append(append(append([]string{}, configKinds...), specKinds...), lifecycleOnlyKinds...)
 	}
 	var events []timeline.TimelineEvent
@@ -299,7 +336,7 @@ func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	events = append(events, got...)
 	saturated = saturated || full
 
-	changes, capped := rankedChanges(coalesceRecreatePairs(dedupeEvents(events)), q)
+	changes, capped := rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
 	return RecentResult{
 		Changes:        changes,
 		OutputCapped:   capped,
@@ -392,8 +429,8 @@ func HistoryCoverageSince(windowStart time.Time) issuesapi.HistoryCoverage {
 // flag: true when a candidate fetch hit its cap and the window may contain
 // changes the query never saw. Callers asserting "no recent changes" must
 // treat saturation as unknown, never as evidence of absence.
-func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
-	result, err := RecentForResourceDetailed(ctx, kind, namespace, name, since, limit, fieldLimit)
+func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) ([]issuesapi.RecentChange, bool, error) {
+	result, err := RecentForResourceDetailed(ctx, kind, namespace, name, since, limit, fieldLimit, viewer)
 	return result.Changes, result.FetchSaturated, err
 }
 
@@ -401,7 +438,7 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 // that display source coverage. The historical wrapper above intentionally
 // exposes only fetch saturation because issue-correlation uses that bool for
 // negative-claim gating.
-func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) (RecentResult, error) {
+func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) (RecentResult, error) {
 	return Recent(ctx, Query{
 		Namespaces: []string{namespace},
 		Kinds:      []string{canonicalKind(kind)},
@@ -409,19 +446,21 @@ func RecentForResourceDetailed(ctx context.Context, kind, namespace, name string
 		Since:      since,
 		Limit:      limit,
 		FieldLimit: fieldLimit,
+		Viewer:     viewer,
 	})
 }
 
-func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
+// RecentForWorkloadAndConfigMaps includes directly referenced ConfigMaps and Secrets.
+func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int, viewer Viewer) ([]issuesapi.RecentChange, bool, error) {
 	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
-		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil,
+		ctx, obj, kind, namespace, name, since, limit, fieldLimit, nil, viewer,
 	)
 	return result.Changes, result.FetchSaturated, err
 }
 
 // RecentForWorkloadAndConfigMapsAuthorizedDetailed is the authorization-aware
-// form used by cached-data surfaces. includeSource is evaluated for every
-// resource whose timeline would be queried, before the query runs. A false
+// form used by cached-data surfaces, including directly referenced Secrets.
+// includeSource is evaluated for every resource whose timeline would be queried, before the query runs. A false
 // result skips that source and makes coverageLimited true even when the source
 // has no matching rows; callers can therefore avoid both leaking hidden-row
 // counts and presenting a filtered empty result as complete coverage.
@@ -434,29 +473,31 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 	since time.Duration,
 	limit, fieldLimit int,
 	includeSource func(kind, name string) bool,
+	viewer Viewer,
 ) (result RecentResult, coverageLimited bool, err error) {
-	start := time.Now().Add(-since)
+	store := timeline.GetStore()
+	if store == nil {
+		return RecentResult{}, false, timeline.StoreMissingError()
+	}
+	q := normalizeQuery(Query{Namespaces: []string{namespace}, Since: since, Limit: limit, FieldLimit: fieldLimit, Viewer: viewer})
+	var events []timeline.TimelineEvent
 	fetch := func(resourceKind, resourceName string) error {
 		canonicalResourceKind := canonicalKind(resourceKind)
 		if includeSource != nil && !includeSource(canonicalResourceKind, resourceName) {
 			coverageLimited = true
 			return nil
 		}
-		resourceResult, err := Recent(ctx, Query{
-			Namespaces: []string{namespace},
-			Kinds:      []string{canonicalResourceKind},
-			Name:       resourceName,
-			Since:      since,
-			Limit:      limit,
-			FieldLimit: fieldLimit,
-			start:      start,
-		})
-		if err != nil {
-			return err
+		sourceQuery := q
+		sourceQuery.Kinds = []string{canonicalResourceKind}
+		sourceQuery.Name = resourceName
+		for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
+			got, saturated, err := queryCandidates(ctx, store, sourceQuery, sourceQuery.Kinds, eventTypes, NamedFetchBound)
+			if err != nil {
+				return err
+			}
+			events = append(events, got...)
+			result.FetchSaturated = result.FetchSaturated || saturated
 		}
-		result.Changes = append(result.Changes, resourceResult.Changes...)
-		result.OutputCapped = result.OutputCapped || resourceResult.OutputCapped
-		result.FetchSaturated = result.FetchSaturated || resourceResult.FetchSaturated
 		return nil
 	}
 
@@ -465,15 +506,15 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 			return RecentResult{}, coverageLimited, err
 		}
 	}
-	for _, cm := range DirectConfigMapNames(obj) {
-		if err := fetch("ConfigMap", cm); err != nil {
+	for _, ref := range DirectConfigReferences(obj) {
+		if err := fetch(ref.Kind, ref.Name); err != nil {
 			return RecentResult{}, coverageLimited, err
 		}
 	}
-	result.History = historyCoverage(start, []string{namespace})
-	preCapCount := len(result.Changes)
-	RankAndCap(&result.Changes, limit)
-	result.OutputCapped = result.OutputCapped || len(result.Changes) < preCapCount
+	result.History = historyCoverage(q.start, q.Namespaces)
+	// These are explicitly scoped sources: retain every update, as for a name query.
+	q.Kinds = []string{canonicalKind(kind)}
+	result.Changes, result.OutputCapped = rankedChanges(ctx, coalesceRecreatePairs(dedupeEvents(events)), q)
 	return result, coverageLimited, nil
 }
 
@@ -525,46 +566,40 @@ func ConfigMapKind(kind string) bool {
 
 func WorkloadKind(kind string) bool { return isWorkloadKind(kind) }
 
-func DirectConfigMapNames(obj any) []string {
+// DirectConfigReferences returns env and native volume references, excluding
+// image-pull and volume-driver credentials.
+func DirectConfigReferences(obj any) []configrefs.Ref {
 	spec, ok := podSpecForObject(obj)
 	if !ok {
 		return nil
 	}
-	seen := map[string]bool{}
-	add := func(name string) {
-		if name != "" {
-			seen[name] = true
+	seen := map[configrefs.Ref]bool{}
+	configrefs.VisitPodSpecReferences("", spec, func(ref configrefs.PodSpecReference) {
+		if ref.Kind != "Secret" && ref.Kind != "ConfigMap" {
+			return
 		}
+		if strings.HasPrefix(ref.Path, "volumes[].") &&
+			!strings.HasPrefix(ref.Path, "volumes[].secret.") &&
+			!strings.HasPrefix(ref.Path, "volumes[].configMap.") &&
+			!strings.HasPrefix(ref.Path, "volumes[].projected.sources[].secret.") &&
+			!strings.HasPrefix(ref.Path, "volumes[].projected.sources[].configMap.") {
+			return
+		}
+		if strings.HasPrefix(ref.Path, "imagePullSecrets") {
+			return
+		}
+		seen[ref.Ref] = true
+	})
+	out := make([]configrefs.Ref, 0, len(seen))
+	for ref := range seen {
+		out = append(out, ref)
 	}
-	for _, v := range spec.Volumes {
-		if v.ConfigMap != nil {
-			add(v.ConfigMap.Name)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
 		}
-		if v.Projected != nil {
-			for _, source := range v.Projected.Sources {
-				if source.ConfigMap != nil {
-					add(source.ConfigMap.Name)
-				}
-			}
-		}
-	}
-	for _, c := range allContainers(spec) {
-		for _, from := range c.EnvFrom {
-			if from.ConfigMapRef != nil {
-				add(from.ConfigMapRef.Name)
-			}
-		}
-		for _, env := range c.Env {
-			if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil {
-				add(env.ValueFrom.ConfigMapKeyRef.Name)
-			}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	sort.Strings(out)
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -643,6 +678,9 @@ func commonTrackedAPIGroups(kinds []string) []string {
 	var common string
 	for i, kind := range kinds {
 		group, ok := trackedKindGroups[canonicalKind(kind)]
+		if canonicalKind(kind) == "Secret" {
+			group, ok = "", true
+		}
 		if !ok {
 			return nil
 		}
@@ -677,13 +715,16 @@ func eventGroupMatchesTracked(kind, apiVersion string) bool {
 		return true // emitter did not record it — unknown, not mismatched
 	}
 	expected, ok := trackedKindGroups[canonicalKind(kind)]
+	if canonicalKind(kind) == "Secret" {
+		expected, ok = "", true
+	}
 	if !ok {
 		return true
 	}
 	return resourceid.GroupFromAPIVersion(apiVersion) == expected
 }
 
-func rankedChanges(events []timeline.TimelineEvent, q Query) ([]issuesapi.RecentChange, bool) {
+func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query) ([]issuesapi.RecentChange, bool) {
 	out := make([]issuesapi.RecentChange, 0, len(events))
 	for _, e := range events {
 		if q.Name != "" && e.Name != q.Name {
@@ -698,62 +739,87 @@ func rankedChanges(events []timeline.TimelineEvent, q Query) ([]issuesapi.Recent
 		}
 		out = append(out, change)
 	}
+	index, pods := annotateConfigConsumers(ctx, out, q)
+	if len(q.Kinds) == 0 && q.Name == "" {
+		visible := out[:0]
+		for _, change := range out {
+			if change.Kind == "Secret" && change.ChangeType == "update" && !index[resourceKey(change.Kind, change.Namespace, change.Name)].referenced {
+				continue
+			}
+			visible = append(visible, change)
+		}
+		out = visible
+	}
+	annotateRunningPreviousValue(ctx, out, pods, q.Viewer)
+	if len(q.Kinds) == 0 && q.Name == "" {
+		out = collapseSecretUpdates(out)
+	}
 	capped := len(out) > q.Limit
-	annotateConfigMapConsumers(out)
 	RankAndCap(&out, q.Limit)
 	return out, capped
 }
 
-// maxConsumersPerEntry bounds the consumed_by list on a ConfigMap entry.
 const maxConsumersPerEntry = 5
 
-// annotateConfigMapConsumers fills ConsumedBy on ConfigMap change entries from
-// a single workload-cache pass. Direct references only: a workload that reads
-// this ConfigMap's data through an intermediary service is invisible here, and
-// ConsumedBy deliberately makes no claim about it.
-func annotateConfigMapConsumers(changes []issuesapi.RecentChange) {
+type configConsumers struct {
+	referenced bool
+	names      []string
+	// withheld holds the names the caller may not read; only their count
+	// leaves this package.
+	withheld []string
+}
+
+func annotateConfigConsumers(ctx context.Context, changes []issuesapi.RecentChange, q Query) (map[string]configConsumers, map[string][]*corev1.Pod) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return
-	}
-	needsIndex := false
-	for i := range changes {
-		if changes[i].Kind == "ConfigMap" && changes[i].Namespace != "" {
-			needsIndex = true
-			break
-		}
-	}
-	if !needsIndex {
-		return
+		return nil, nil
 	}
 	namespaces := map[string]bool{}
 	for _, change := range changes {
-		if change.Kind == "ConfigMap" && change.Namespace != "" {
+		if (change.Kind == "ConfigMap" || change.Kind == "Secret") && change.Namespace != "" {
 			namespaces[change.Namespace] = true
 		}
 	}
-	index := configMapConsumerIndex(cache, namespaces)
+	index, pods := configConsumerIndex(ctx, cache, namespaces, q)
 	for i := range changes {
-		if changes[i].Kind != "ConfigMap" || changes[i].Namespace == "" {
-			continue
-		}
-		changes[i].ConsumedBy = index[configMapKey(changes[i].Namespace, changes[i].Name)]
+		entry := index[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
+		changes[i].ConsumedBy = entry.names
+		changes[i].ConsumedByWithheld = withheldCount(len(entry.withheld))
 	}
+	return index, pods
 }
 
-func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool) map[string][]string {
-	index := map[string][]string{}
-	add := func(namespace, kind, name string, obj any) {
-		for _, cm := range DirectConfigMapNames(obj) {
-			key := configMapKey(namespace, cm)
-			index[key] = append(index[key], kind+"/"+name)
+func configConsumerIndex(ctx context.Context, cache *k8s.ResourceCache, namespaces map[string]bool, q Query) (map[string]configConsumers, map[string][]*corev1.Pod) {
+	index := map[string]configConsumers{}
+	pods := map[string][]*corev1.Pod{}
+	nameable := map[string]bool{}
+	canName := func(kind, group, namespace string) bool {
+		key := group + "/" + kind + "/" + namespace
+		allowed, checked := nameable[key]
+		if !checked {
+			allowed = q.Viewer.canNameConsumer(kind, group, namespace)
+			nameable[key] = allowed
+		}
+		return allowed
+	}
+	add := func(namespace, kind, name string, obj any, showName bool) {
+		for _, ref := range DirectConfigReferences(obj) {
+			key := resourceKey(ref.Kind, namespace, ref.Name)
+			entry := index[key]
+			entry.referenced = true
+			if showName {
+				entry.names = append(entry.names, kind+"/"+name)
+			} else {
+				entry.withheld = append(entry.withheld, kind+"/"+name)
+			}
+			index[key] = entry
 		}
 	}
 	if lister := cache.Deployments(); lister != nil {
 		for namespace := range namespaces {
 			if items, err := lister.Deployments(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "Deployment", item.Name, item)
+					add(namespace, "Deployment", item.Name, item, canName("Deployment", "apps", namespace))
 				}
 			}
 		}
@@ -762,7 +828,7 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.StatefulSets(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "StatefulSet", item.Name, item)
+					add(namespace, "StatefulSet", item.Name, item, canName("StatefulSet", "apps", namespace))
 				}
 			}
 		}
@@ -771,7 +837,7 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.DaemonSets(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "DaemonSet", item.Name, item)
+					add(namespace, "DaemonSet", item.Name, item, canName("DaemonSet", "apps", namespace))
 				}
 			}
 		}
@@ -780,7 +846,7 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.Jobs(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "Job", item.Name, item)
+					add(namespace, "Job", item.Name, item, canName("Job", "batch", namespace))
 				}
 			}
 		}
@@ -789,24 +855,64 @@ func configMapConsumerIndex(cache *k8s.ResourceCache, namespaces map[string]bool
 		for namespace := range namespaces {
 			if items, err := lister.CronJobs(namespace).List(labels.Everything()); err == nil {
 				for _, item := range items {
-					add(namespace, "CronJob", item.Name, item)
+					add(namespace, "CronJob", item.Name, item, canName("CronJob", "batch", namespace))
 				}
 			}
 		}
 	}
-	for key, consumers := range index {
-		sort.Strings(consumers)
-		if len(consumers) > maxConsumersPerEntry {
-			index[key] = consumers[:maxConsumersPerEntry]
-		} else {
-			index[key] = consumers
+	// Rollouts are indexed through their current Pods below, which resolve to
+	// the Rollout owner: listing the dynamic kind here could start an informer
+	// or probe access on every feed read.
+	for namespace := range namespaces {
+		if cache.Pods() == nil {
+			continue
+		}
+		items, err := cache.Pods().Pods(namespace).List(labels.Everything())
+		if err != nil {
+			continue
+		}
+		readable := q.Viewer.canReadPods(namespace)
+		for _, pod := range items {
+			kind, group, name := "Pod", "", pod.Name
+			if owner, ok := k8s.PodWorkload(cache, pod); ok {
+				kind, group, name = owner.Kind, owner.Group, owner.Name
+			}
+			add(namespace, kind, name, pod, readable && canName(kind, group, namespace))
+		}
+		if readable {
+			pods[namespace] = items
 		}
 	}
-	return index
+	for key, entry := range index {
+		sort.Strings(entry.names)
+		entry.names = slices.Compact(entry.names)
+		entry.withheld = withheldNames(entry.withheld, entry.names)
+		if len(entry.names) > maxConsumersPerEntry {
+			entry.names = entry.names[:maxConsumersPerEntry]
+		}
+		index[key] = entry
+	}
+	return index, pods
 }
 
-func configMapKey(namespace, name string) string {
-	return namespace + "\x00" + name
+// withheldNames returns the distinct hidden names that are not also listed:
+// a workload named through its readable template stays named even when its
+// Pods are not readable.
+func withheldNames(hidden, shown []string) []string {
+	var out []string
+	for _, name := range hidden {
+		if !slices.Contains(shown, name) && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func withheldCount(n int) *issuesapi.Withheld {
+	if n == 0 {
+		return nil
+	}
+	return &issuesapi.Withheld{Count: n, Reason: readreason.UserForbidden}
 }
 
 func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, activeIssues []issuesapi.Issue) {
@@ -828,10 +934,11 @@ func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, acti
 			continue
 		}
 		isExplained := explained[resourceKey(changes[i].Kind, changes[i].Namespace, changes[i].Name)]
-		if changes[i].Kind == "ConfigMap" {
-			// consumed_by is capped. At the cap, an omitted consumer may carry
-			// the issue, so absence is not strong enough to promote this entry.
-			if len(changes[i].ConsumedBy) >= maxConsumersPerEntry {
+		if changes[i].Kind == "ConfigMap" || changes[i].Kind == "Secret" {
+			// consumed_by is capped and filtered by access. At the cap, or with
+			// any consumer withheld, an omitted consumer may carry the issue,
+			// so absence is not strong enough to promote this entry.
+			if len(changes[i].ConsumedBy) >= maxConsumersPerEntry || changes[i].ConsumedByWithheld != nil {
 				continue
 			}
 			for _, consumer := range changes[i].ConsumedBy {
@@ -844,6 +951,9 @@ func markChangesNotLinkedToReturnedIssues(changes []issuesapi.RecentChange, acti
 		}
 		if !isExplained {
 			changes[i].NotLinkedToReturnedIssues = true
+			if changes[i].Kind == "Secret" {
+				continue
+			}
 			if changes[i].ChangeType == string(timeline.EventTypeAdd) {
 				changes[i].RankReason = "recreated with application configuration changes not linked to any returned issue"
 			} else {
@@ -880,10 +990,8 @@ func TrackedKind(kind string) bool {
 // Knative Service (serving.knative.dev) is not the core Service whose
 // changes the feed tracks.
 // NOTE: this map must cover exactly TrackedKind's set (configKinds +
-// specKinds) — no lifecycleOnlyKinds. Secret is delete-only in the feed
-// (updates are never recorded), so making Secret issues marker-eligible
-// would emit a false no_recent_changes after a data rotation the feed
-// cannot see. The drift-guard test pins both directions.
+// specKinds). Secret issues stay ineligible: API-only consumers are outside
+// the reference-gated default feed, so absence cannot establish no changes.
 var trackedKindGroups = map[string]string{
 	"ConfigMap": "", "Service": "", "ResourceQuota": "", "LimitRange": "",
 	"Deployment": "apps", "StatefulSet": "apps", "DaemonSet": "apps",
@@ -937,6 +1045,11 @@ func RankAndCap(changes *[]issuesapi.RecentChange, limit int) {
 		a, b := (*changes)[i], (*changes)[j]
 		if score(a) != score(b) {
 			return score(a) > score(b)
+		}
+		aStaleSecret := a.Kind == "Secret" && a.RunningPreviousValue != nil
+		bStaleSecret := b.Kind == "Secret" && b.RunningPreviousValue != nil
+		if score(a) == 105 && aStaleSecret != bStaleSecret {
+			return aStaleSecret
 		}
 		at, _ := time.Parse(time.RFC3339, a.Timestamp)
 		bt, _ := time.Parse(time.RFC3339, b.Timestamp)
@@ -1089,8 +1202,34 @@ func score(c issuesapi.RecentChange) int {
 
 const generationOnlyRankReason = "generation changed; specific fields were not tracked"
 
+// secretRankReason states only what the row establishes: a data change when
+// keys changed, references when consumed_by names them, and stale env readers
+// when running_previous_value is set.
+func secretRankReason(change issuesapi.RecentChange) string {
+	reason := "Secret changed"
+	if len(secretChangedKeys(change.Fields)) > 0 {
+		reason = "Secret data changed"
+	}
+	switch {
+	case change.RunningPreviousValue != nil:
+		if change.RunningPreviousValue.Pods == 1 {
+			return reason + "; 1 Pod likely still holds the earlier value"
+		}
+		return fmt.Sprintf("%s; %d Pods likely still hold the earlier value", reason, change.RunningPreviousValue.Pods)
+	case len(change.ConsumedBy) > 0:
+		return reason + "; referenced by a workload template or current Pod spec"
+	default:
+		return reason
+	}
+}
+
 func classifyApplicationConfigurationChange(change *issuesapi.RecentChange) {
 	if change == nil || change.NotLinkedToReturnedIssues {
+		return
+	}
+	if change.Kind == "Secret" && change.ChangeCategory == issuesapi.ChangeCategorySpecConfig {
+		change.ApplicationConfigurationChange = change.RunningPreviousValue != nil
+		change.RankReason = secretRankReason(*change)
 		return
 	}
 	if change.ApplicationConfigurationChange {
@@ -1455,16 +1594,51 @@ func podSpecForObject(obj any) (corev1.PodSpec, bool) {
 		return o.Spec.Template.Spec, true
 	case *batchv1.CronJob:
 		return o.Spec.JobTemplate.Spec.Template.Spec, true
-	default:
-		return corev1.PodSpec{}, false
+	case *unstructured.Unstructured:
+		if o.GetKind() == "Rollout" && resourceid.GroupFromAPIVersion(o.GetAPIVersion()) == "argoproj.io" {
+			template, found, err := unstructured.NestedMap(o.Object, "spec", "template", "spec")
+			if err == nil && found {
+				var spec corev1.PodSpec
+				if runtime.DefaultUnstructuredConverter.FromUnstructured(template, &spec) == nil {
+					return spec, true
+				}
+			}
+			return rolloutWorkloadRefPodSpec(o)
+		}
 	}
+	return corev1.PodSpec{}, false
 }
 
-func allContainers(spec corev1.PodSpec) []corev1.Container {
-	out := make([]corev1.Container, 0, len(spec.InitContainers)+len(spec.Containers))
-	out = append(out, spec.InitContainers...)
-	out = append(out, spec.Containers...)
-	return out
+// rolloutWorkloadRefPodSpec reads the pod template of the Deployment or
+// ReplicaSet a Rollout's spec.workloadRef names, from the informer cache.
+func rolloutWorkloadRefPodSpec(rollout *unstructured.Unstructured) (corev1.PodSpec, bool) {
+	target, err := rollouts.ResolveTemplateTarget(rollout)
+	cache := k8s.GetResourceCache()
+	if err != nil || target.GVR == rollouts.GVR || cache == nil {
+		return corev1.PodSpec{}, false
+	}
+	switch target.GVR.Resource {
+	case "deployments":
+		if lister := cache.Deployments(); lister != nil {
+			if deployment, err := lister.Deployments(rollout.GetNamespace()).Get(target.Name); err == nil {
+				return deployment.Spec.Template.Spec, true
+			}
+		}
+	case "replicasets":
+		if lister := cache.ReplicaSets(); lister != nil {
+			if replicaSet, err := lister.ReplicaSets(rollout.GetNamespace()).Get(target.Name); err == nil {
+				return replicaSet.Spec.Template.Spec, true
+			}
+		}
+	}
+	return corev1.PodSpec{}, false
+}
+
+// ConfigReferencesKnown reports whether obj's pod template could be read, so
+// its referenced ConfigMaps and Secrets are known.
+func ConfigReferencesKnown(obj any) bool {
+	_, ok := podSpecForObject(obj)
+	return ok
 }
 
 func changeKey(c issuesapi.RecentChange) string {

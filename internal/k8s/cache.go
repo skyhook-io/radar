@@ -868,7 +868,7 @@ func isNoisyResource(kind, name, op string) bool {
 	}
 
 	if kind == "Secret" {
-		if strings.HasSuffix(name, "-token") || strings.Contains(name, "leader-election") {
+		if strings.Contains(name, "leader-election") {
 			return true
 		}
 	}
@@ -890,7 +890,27 @@ func getGeneration(obj any) int64 {
 	return m.GetGeneration()
 }
 
+// deletionAccountsForGenerationBump reports whether an update is the start of
+// deletion and that explains its whole generation bump. The API server
+// increments generation once when it first sets deletionTimestamp: on graceful
+// deletion (Pods, from Kubernetes 1.33) and on deletion held by finalizers.
+// A larger jump means the informer folded a spec edit into the same update
+// (a relist after a watch gap), so that still counts as a spec change.
+func deletionAccountsForGenerationBump(oldObj, newObj any) bool {
+	oldMeta, oldOK := oldObj.(metav1.Object)
+	newMeta, newOK := newObj.(metav1.Object)
+	if !oldOK || !newOK {
+		return false
+	}
+	return oldMeta.GetDeletionTimestamp() == nil && newMeta.GetDeletionTimestamp() != nil &&
+		newMeta.GetGeneration()-oldMeta.GetGeneration() == 1
+}
+
 func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
+	// The delete event that follows records the removal.
+	if deletionAccountsForGenerationBump(oldObj, newObj) {
+		return false
+	}
 	if kind != "Deployment" {
 		return true
 	}
@@ -989,8 +1009,26 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		apiGroup = resourceid.GroupFromAPIVersion(apiVersion)
 	}
 
+	// ServiceAccount token updates are token-controller bookkeeping; they are
+	// not recorded, though their tombstone stays current below.
+	serviceAccountTokenUpdate := false
+	if kind == "Secret" && apiGroup == "" && op == "update" {
+		var secretType string
+		switch secret := obj.(type) {
+		case *corev1.Secret:
+			secretType = string(secret.Type)
+		case *unstructured.Unstructured:
+			secretType, _, _ = unstructured.NestedString(secret.Object, "type")
+		}
+		serviceAccountTokenUpdate = secretType == string(corev1.SecretTypeServiceAccountToken)
+	}
+
 	store := timeline.GetStore()
 	if store == nil {
+		if serviceAccountTokenUpdate {
+			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoisyFilter, op, clusterContext)
+			return
+		}
 		if op == "delete" {
 			timeline.NoteDeletedWhileUnavailable(clusterContext, apiGroup, kind, namespace, name)
 		}
@@ -1056,6 +1094,10 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	// entry was preserving.
 	if name != "" && extracted {
 		tombstones.Put(uid, apiVersion, kind, namespace, name, entry)
+	}
+	if serviceAccountTokenUpdate {
+		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoisyFilter, op, clusterContext)
+		return
 	}
 
 	var diff *timeline.DiffInfo
@@ -1623,21 +1665,33 @@ func (c *ResourceCache) GetDynamic(ctx context.Context, kind string, namespace s
 
 // GetDynamicWithGroup returns a single resource, using the group to disambiguate
 func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
-	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, false)
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, false, false)
+}
+
+// GetDynamicWithGroupVerified confirms cache misses with a direct API read.
+// Only an API NotFound establishes absence; an unavailable cache or API does not.
+func (c *ResourceCache) GetDynamicWithGroupVerified(ctx context.Context, kind, namespace, name, group string) (*unstructured.Unstructured, error) {
+	obj, err := c.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+	if !apierrors.IsNotFound(err) && !errors.Is(err, k8score.ErrResourceNotFound) {
+		return obj, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, false, true)
 }
 
 // GetDynamicWithGroupPreserveLastApplied returns a single resource while
 // preserving kubectl last-applied for internal drift computation. Do not use
 // for API/UI/MCP responses.
 func (c *ResourceCache) GetDynamicWithGroupPreserveLastApplied(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
-	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, true)
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, true, false)
 }
 
-func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string, preserveLastApplied bool) (*unstructured.Unstructured, error) {
+func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string, preserveLastApplied, forceDirect bool) (*unstructured.Unstructured, error) {
 	// preserveLastApplied must never take the typed route: the typed cache
 	// strips kubectl last-applied at ingestion, so serving drift reads from it
 	// would silently return "no drift" for every built-in kind.
-	if !preserveLastApplied {
+	if !preserveLastApplied && !forceDirect {
 		if gvr, ok := typedRouteGVR(kind, group); ok {
 			if u, handled, err := c.getTypedAsUnstructured(ctx, gvr, kind, namespace, name); handled {
 				return u, err
@@ -1690,7 +1744,7 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 	var err error
 	if preserveLastApplied {
 		u, err = dynamicCache.GetDirectPreserveLastApplied(ctx, gvr, namespace, name)
-	} else if ShouldBypassDynamicInformer(gvr) {
+	} else if forceDirect || ShouldBypassDynamicInformer(gvr) {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
 	} else if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)

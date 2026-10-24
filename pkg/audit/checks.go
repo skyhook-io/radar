@@ -301,7 +301,7 @@ func checkWorkloadPodSpecs(tr *evalTracker, input *CheckInput) []Finding {
 	for _, w := range specs {
 		findings = append(findings, checkPodSpecSecurity(tr, w.kind, w.namespace, w.name, w.spec, saByKey, saCovers(w.namespace))...)
 		findings = append(findings, checkPodSpecReliability(tr, w.kind, w.namespace, w.name, w.spec)...)
-		findings = append(findings, checkPodSpecEfficiency(tr, w.kind, w.namespace, w.name, w.spec, limitsByNs[w.namespace], lrAuthoritative)...)
+		findings = append(findings, checkPodSpecEfficiency(tr, w.kind, w.namespace, w.name, w.spec, limitsByNs[w.namespace], lrAuthoritative, input.ClusterVersion)...)
 		findings = append(findings, checkPodSpecVolumes(tr, w.kind, w.namespace, w.name, w.spec)...)
 	}
 	return findings
@@ -357,40 +357,6 @@ func indexLimitRangesByNamespace(lrs []*corev1.LimitRange) map[string][]*corev1.
 		m[lr.Namespace] = append(m[lr.Namespace], lr)
 	}
 	return m
-}
-
-// containerDefaultsFromLimitRanges reports which container resource types
-// (cpu/memory requests/limits) would be filled in by admission based on the
-// namespace's LimitRange defaults. Only LimitRange items with Type=Container
-// contribute to container defaults.
-type containerDefaults struct {
-	cpuRequest, memoryRequest bool
-	cpuLimit, memoryLimit     bool
-}
-
-func containerDefaultsFromLimitRanges(lrs []*corev1.LimitRange) containerDefaults {
-	var d containerDefaults
-	for _, lr := range lrs {
-		for _, item := range lr.Spec.Limits {
-			if item.Type != corev1.LimitTypeContainer {
-				continue
-			}
-			// DefaultRequest covers requests; Default covers limits.
-			if _, ok := item.DefaultRequest[corev1.ResourceCPU]; ok {
-				d.cpuRequest = true
-			}
-			if _, ok := item.DefaultRequest[corev1.ResourceMemory]; ok {
-				d.memoryRequest = true
-			}
-			if _, ok := item.Default[corev1.ResourceCPU]; ok {
-				d.cpuLimit = true
-			}
-			if _, ok := item.Default[corev1.ResourceMemory]; ok {
-				d.memoryLimit = true
-			}
-		}
-	}
-	return d
 }
 
 // ============================================================================
@@ -851,42 +817,55 @@ func checkMissingPDB(tr *evalTracker, deployments []*appsv1.Deployment, stateful
 // Efficiency checks
 // ============================================================================
 
-func checkPodSpecEfficiency(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec, lrs []*corev1.LimitRange, lrAuthoritative bool) []Finding {
-	if !lrAuthoritative {
-		// LimitRange defaults suppress these findings; without the inventory
-		// every emission would be a potential false positive. Skip the whole
-		// family rather than report on data Radar couldn't see.
+func checkPodSpecEfficiency(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec, lrs []*corev1.LimitRange, lrAuthoritative bool, version string) []Finding {
+	if kind != "Pod" && !lrAuthoritative {
 		return nil
 	}
-	tr.recordAll(podSpecEfficiencyCheckIDs, namespace)
+	candidates := podResourceCandidates(spec, kind == "Pod", version, lrs)
+	containerSets := make([][]corev1.Container, len(candidates))
+	for i, candidate := range candidates {
+		containerSets[i] = efficiencyContainers(candidate)
+	}
 	var findings []Finding
-	f := func(checkID, severity, msg string) {
-		findings = append(findings, Finding{
-			Kind: kind, Namespace: namespace, Name: name,
-			CheckID: checkID, Category: CategoryEfficiency, Severity: severity, Message: msg,
-		})
+	for _, check := range []struct {
+		id, label string
+		resource  corev1.ResourceName
+		request   bool
+	}{
+		{"cpuRequestMissing", "CPU request", corev1.ResourceCPU, true},
+		{"memoryRequestMissing", "memory request", corev1.ResourceMemory, true},
+		{"cpuLimitMissing", "CPU limit", corev1.ResourceCPU, false},
+		{"memoryLimitMissing", "memory limit", corev1.ResourceMemory, false},
+	} {
+		allCovered, failed := true, false
+		for i, c := range efficiencyContainers(spec) {
+			alwaysMissing := true
+			for j, candidate := range candidates {
+				if resourceConfigured(candidate, containerSets[j][i], check.resource, check.request) {
+					alwaysMissing = false
+				} else {
+					allCovered = false
+				}
+			}
+			if alwaysMissing {
+				label := "Container"
+				if i >= len(spec.Containers) {
+					label = "Sidecar"
+				}
+				findings = append(findings, Finding{
+					Kind: kind, Namespace: namespace, Name: name,
+					CheckID: check.id, Category: CategoryEfficiency, Severity: SeverityWarning,
+					Message: fmt.Sprintf("%s %q has no %s", label, c.Name, check.label),
+				})
+				failed = true
+			}
+		}
+		if allCovered || failed {
+			tr.record(check.id, namespace)
+		} else {
+			tr.skip("pod-resource-defaulting")
+		}
 	}
-
-	// LimitRange defaults in the namespace are applied by admission — skip
-	// flagging missing values that would be filled in automatically.
-	defaults := containerDefaultsFromLimitRanges(lrs)
-
-	for _, c := range spec.Containers {
-		res := c.Resources
-		if (res.Requests.Cpu() == nil || res.Requests.Cpu().IsZero()) && !defaults.cpuRequest {
-			f("cpuRequestMissing", SeverityWarning, fmt.Sprintf("Container %q has no CPU request", c.Name))
-		}
-		if (res.Requests.Memory() == nil || res.Requests.Memory().IsZero()) && !defaults.memoryRequest {
-			f("memoryRequestMissing", SeverityWarning, fmt.Sprintf("Container %q has no memory request", c.Name))
-		}
-		if (res.Limits.Cpu() == nil || res.Limits.Cpu().IsZero()) && !defaults.cpuLimit {
-			f("cpuLimitMissing", SeverityWarning, fmt.Sprintf("Container %q has no CPU limit", c.Name))
-		}
-		if (res.Limits.Memory() == nil || res.Limits.Memory().IsZero()) && !defaults.memoryLimit {
-			f("memoryLimitMissing", SeverityWarning, fmt.Sprintf("Container %q has no memory limit", c.Name))
-		}
-	}
-
 	return findings
 }
 
@@ -1696,12 +1675,12 @@ func imageTag(image string) string {
 	if strings.Contains(image, "@") {
 		return strings.SplitN(image, "@", 2)[1]
 	}
-	// Handle tag references (image:tag)
-	parts := strings.SplitN(image, ":", 2)
-	if len(parts) == 2 && !strings.Contains(parts[1], "/") {
-		return parts[1]
+	// A colon before the last slash is a registry port, not a tag separator.
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon == -1 || strings.LastIndex(image, "/") > lastColon {
+		return ""
 	}
-	return ""
+	return image[lastColon+1:]
 }
 
 func tagDisplay(tag string) string {

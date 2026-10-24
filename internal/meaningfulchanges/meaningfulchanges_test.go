@@ -361,7 +361,7 @@ func TestRecentForResourceLifecycleEventSurvivesLifecycleChurn(t *testing.T) {
 		}
 	}
 
-	changes, saturated, err := RecentForResource(context.Background(), "Service", "shop", "user-service", time.Hour, ResourceLimit, DefaultFieldLimit)
+	changes, saturated, err := RecentForResource(context.Background(), "Service", "shop", "user-service", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{})
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 	}
 
 	// Exactly the bound is a complete read: the extra row decides.
-	_, saturated, err := RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit)
+	_, saturated, err := RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{})
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestRecentForResourceReportsSaturation(t *testing.T) {
 	}
 
 	appendChurn(NamedFetchBound)
-	_, saturated, err = RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit)
+	_, saturated, err = RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{})
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestRecentForResourceGroupCollisionChurnDoesNotCrowdOrSaturate(t *testing.T
 	}
 
 	changes, saturated, err := RecentForResource(
-		context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit,
+		context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit, Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
@@ -565,7 +565,7 @@ func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
 	}
 
 	result, _, err := RecentForWorkloadAndConfigMapsAuthorizedDetailed(
-		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit, nil,
+		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit, nil, Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
@@ -580,7 +580,7 @@ func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
 		t.Fatal("four fully fetched changes must not be mislabeled as candidate-fetch saturation")
 	}
 	legacyChanges, fetchSaturated, err := RecentForWorkloadAndConfigMaps(
-		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit,
+		context.Background(), deployment, "Deployment", "shop", "web", time.Hour, 3, DefaultFieldLimit, Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMaps: %v", err)
@@ -596,6 +596,7 @@ func TestRecentForWorkloadAndConfigMapsReportsMergedOutputCap(t *testing.T) {
 			seenSources[kind+"/"+name] = true
 			return kind != "ConfigMap"
 		},
+		Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)
@@ -647,6 +648,7 @@ func TestRecentForWorkloadAndConfigMapsIncludesArgoRolloutSource(t *testing.T) {
 			seenSources[kind+"/"+name] = true
 			return true
 		},
+		Viewer{},
 	)
 	if err != nil {
 		t.Fatalf("RecentForWorkloadAndConfigMapsAuthorizedDetailed: %v", err)

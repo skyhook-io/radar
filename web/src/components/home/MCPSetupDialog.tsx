@@ -8,6 +8,7 @@ import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 interface MCPSetupDialogProps {
   open: boolean
   onClose: () => void
+  readOnly?: boolean
   mcpUrl: string
 }
 
@@ -43,7 +44,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -115,6 +116,12 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
   if (!open) return null
 
   const currentPort = Number(window.location.port) || 80
+
+  const tools = MCP_TOOL_CATALOG
+    .filter((tool) => !readOnly || !tool.write)
+    .map((tool) => readOnly && tool.name === 'diagnose'
+      ? { ...tool, params: tool.params.filter((param) => param.arg !== 'in_cluster') }
+      : tool)
 
   const mcpServersUrlConfig = (key: 'url' | 'serverUrl') => JSON.stringify({
     mcpServers: {
@@ -210,17 +217,17 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline underline-offset-2">
                 Model Context Protocol
               </a>{' '}
-              (MCP) server that lets AI agents inspect, investigate, and operate your cluster through Radar.
+              (MCP) server that lets AI agents {readOnly ? 'inspect and investigate' : 'inspect, investigate, and operate'} your cluster through Radar.
               Unlike raw kubectl access, Radar gives your AI pre-processed, enriched data —
               topology graphs, health assessments, deduplicated events, filtered logs — so it
               can understand your cluster state quickly without burning through context on
               verbose YAML output.
             </p>
             <p className="text-sm text-theme-text-secondary leading-relaxed">
-              Most read tools do not change cluster state. An in-cluster route probe can create up
+              {readOnly ? 'Read-only mode blocks write tools and diagnostic options that create temporary Kubernetes resources. It does not restrict the Radar UI or REST API.' : <>Most read tools do not change cluster state. An in-cluster route probe can create up
               to five self-deleting probe pods when explicitly requested. Write tools (restart,
               scale, sync, apply, node drain) are annotated as destructive so your AI client
-              can flag them and prompt before running.
+              can flag them and prompt before running.</>}
             </p>
           </div>
 
@@ -319,10 +326,10 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
           <div className="space-y-2">
             <div className="flex items-baseline justify-between">
               <h4 className="text-sm font-semibold text-theme-text-primary">Tools</h4>
-              <span className="text-[11px] text-theme-text-tertiary">{MCP_TOOL_CATALOG.length} tools</span>
+              <span className="text-[11px] text-theme-text-tertiary">{tools.length} tools</span>
             </div>
             <div className="grid grid-cols-1 gap-1.5">
-              {MCP_TOOL_CATALOG.map((tool) => (
+              {tools.map((tool) => (
                 <div key={tool.name} className="card-inner space-y-1.5">
                   <div className="flex items-center gap-2">
                     <code className="inline-code text-[11px]">{tool.name}</code>

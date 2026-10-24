@@ -222,7 +222,7 @@ func useHelmStorageServer(t *testing.T, hold bool, secrets ...*corev1.Secret) *h
 func TestBatchUpgradeCheckReadsHelmStorageOnce(t *testing.T) {
 	rel := helmTestRelease("api", "shop", 1, release.StatusDeployed, "Install complete")
 	storage := useHelmStorageServer(t, false, helmReleaseSecret(t, "shop", rel, true))
-	info, err := testHelmClientWithRepos(t).BatchCheckUpgradesAcrossNamespaces(context.Background(), nil, "", nil)
+	info, err := testHelmClientWithRepos(t).BatchCheckUpgradesAcrossNamespaces(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestBatchUpgradeCheckStopsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := testHelmClientWithRepos(t).BatchCheckUpgradesAcrossNamespaces(ctx, nil, "", nil)
+		_, err := testHelmClientWithRepos(t).BatchCheckUpgradesAcrossNamespaces(ctx, nil, nil)
 		result <- err
 	}()
 	select {

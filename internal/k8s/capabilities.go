@@ -90,15 +90,16 @@ type PermissionCheckResult struct {
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	ConfigManagement string                   `json:"configManagement"`
-	Exec             bool                     `json:"exec"`                    // Can create pods/exec (terminal feature)
-	LocalTerminal    bool                     `json:"localTerminal"`           // Local terminal available (not in-cluster, not disabled)
-	Logs             bool                     `json:"logs"`                    // Can get pods/log (log viewer)
-	PortForward      bool                     `json:"portForward"`             // Can create pods/portforward
-	Secrets          bool                     `json:"secrets"`                 // Can list secrets
-	SecretsUpdate    bool                     `json:"secretsUpdate"`           // Can update secrets (inline editing)
-	HelmWrite        bool                     `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite        bool                     `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites   WorkloadWritePermissions `json:"workloadWrites"`          // Can patch workload kinds (restart/scale controls)
+	Exec             bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
+	LocalTerminal    bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
+	Logs             bool                     `json:"logs"`           // Can get pods/log (log viewer)
+	PortForward      bool                     `json:"portForward"`    // Can create pods/portforward
+	Secrets          bool                     `json:"secrets"`        // Can list secrets
+	SecretsUpdate    bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
+	HelmWrite        bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite        bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites   WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	MCPReadOnly      bool                     `json:"mcpReadOnly"`
 	MCPEnabled       bool                     `json:"mcpEnabled"`              // MCP server is running
 	Deployment       DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
 	Features         FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
@@ -142,6 +143,7 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
+	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
@@ -244,7 +246,8 @@ var (
 
 	// ForceDisableHelmWrite overrides the helmWrite capability to false (for dev testing)
 	ForceDisableHelmWrite bool
-	// ForceDisableExec overrides the exec capability to false (for dev testing)
+	// ForceDisableExec turns off exec (--disable-exec): the capability reports false
+	// and the exec, debug and pod-file routes refuse requests.
 	ForceDisableExec bool
 	// ForceDisableLocalTerminal turns the local terminal off (--disable-local-terminal)
 	ForceDisableLocalTerminal bool
@@ -604,6 +607,9 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
+	}
+	if ForceDisableExec {
+		caps.Exec = false
 	}
 
 	// Cache result

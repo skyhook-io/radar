@@ -14,7 +14,37 @@ import (
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/config"
 )
+
+func TestStandaloneRejectsDisabledMCPBeforeBoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RADAR_MCP_READ_ONLY", "")
+	disabled := false
+	if err := config.Save(config.Config{MCP: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := bootEphemeral("")
+	if err == nil || !strings.Contains(err.Error(), "MCP is disabled") {
+		t.Fatalf("boot: %v", err)
+	}
+}
+
+func TestStandaloneRejectsMalformedMCPBeforeBoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := config.Save(config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.Path(), []byte(`{"mcpReadOnly":"true"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := bootEphemeral("")
+	if err == nil || !strings.Contains(err.Error(), "invalid Radar config") {
+		t.Fatalf("boot: %v", err)
+	}
+}
 
 func TestCursorConsentNoticeDisclosesAutoApprovedTools(t *testing.T) {
 	notice := strings.Join(strings.Fields(consentNotice("cursor-agent", ai.ExecutionProfileFullLocal)), " ")

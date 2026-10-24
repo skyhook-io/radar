@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
 // fromObject builds a candidate from a typed K8s object. Returns ok=false
@@ -33,10 +35,13 @@ func fromObject(obj runtime.Object, kind string) (candidate, bool) {
 	return c, true
 }
 
-// fromUnstructured builds a candidate from a CRD object. The kind is
-// already known by the caller (we don't trust the unstructured's Kind
-// since informers strip TypeMeta).
-func fromUnstructured(u *unstructured.Unstructured, kind, group string) candidate {
+// identityFromUnstructured builds a CRD candidate without Content: enough to
+// evaluate modifiers, so a candidate they reject never pays for content
+// extraction (addUnstructuredContent). The kind is already known by the
+// caller (we don't trust the unstructured's Kind since informers strip
+// TypeMeta). A Trivy report's scanned image is part of identity, for image:
+// modifiers.
+func identityFromUnstructured(u *unstructured.Unstructured, kind, group string) candidate {
 	c := candidate{
 		Kind:        kind,
 		Group:       group,
@@ -46,8 +51,21 @@ func fromUnstructured(u *unstructured.Unstructured, kind, group string) candidat
 		Annotations: u.GetAnnotations(),
 	}
 	c.Images = imagesFromUnstructured(u)
-	c.Content = contentFromUnstructured(u, kind)
+	if group == trivyGroup {
+		if img := aicontext.TrivyArtifactImage(asMap(u.Object["report"])); img != "" {
+			c.Images = append(c.Images, img)
+		}
+	}
 	return c
+}
+
+// addUnstructuredContent fills Content, which only free tokens read.
+func addUnstructuredContent(c *candidate, u *unstructured.Unstructured, findings *findingsScan) {
+	c.Content = contentFromUnstructured(u, c.Kind)
+	if c.Group == trivyGroup && findings.allow() {
+		c.report = asMap(u.Object["report"])
+		c.findings = findings
+	}
 }
 
 func contentForTyped(obj runtime.Object, kind string) []ContentField {

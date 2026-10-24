@@ -28,6 +28,7 @@ import (
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"golang.org/x/net/http/httpguts"
 	authv1 "k8s.io/api/authorization/v1"
@@ -95,7 +96,10 @@ func main() {
 
 	// Load persistent config (~/.radar/config.json) for flag defaults.
 	// CLI flags override config file values.
-	fileCfg := config.Load()
+	fileCfg, err := config.LoadForStartup()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
 	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
@@ -114,7 +118,7 @@ func main() {
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging (logs all event drops)")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)")
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
-	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions (disables terminal, debug shell)")
+	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells and pod file browsing")
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable the host local terminal")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
@@ -157,7 +161,7 @@ func main() {
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
 	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL matcher fragment for Beyla Live Traffic, e.g. 'job=~"my-beyla.*"' (empty = *beyla* or *alloy* jobs). Workload charts use this override only with an explicit Prometheus scope flag and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it.`)
 	// MCP server
-	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
+	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
 	// Auth flags
@@ -194,6 +198,7 @@ func main() {
 	cloudToken := flag.String("cloud-token", os.Getenv("RADAR_CLOUD_TOKEN"), "Connection token from the Radar install flow (rhc_<random>). Env: RADAR_CLOUD_TOKEN")
 	cloudClusterName := flag.String("cluster-name", os.Getenv("RADAR_CLOUD_CLUSTER_NAME"), "Human-readable cluster name shown in Radar (required with --cloud-url). Env: RADAR_CLOUD_CLUSTER_NAME")
 	cloudInsecureSkipVerify := flag.Bool("cloud-insecure-skip-verify", os.Getenv("RADAR_CLOUD_INSECURE_SKIP_VERIFY") == "true", "Skip TLS verification on the Radar Hub tunnel — for trials against a Radar Cloud Self-Managed control plane with a self-signed cert (insecure: encrypted but not authenticated). Env: RADAR_CLOUD_INSECURE_SKIP_VERIFY")
+	k8sCredentials := flag.String("auth-k8s-credentials", os.Getenv("RADAR_AUTH_K8S_CREDENTIALS"), "How Radar authenticates the Kubernetes calls it makes for a user: impersonate (default; Radar's ServiceAccount impersonates the user) or user-token (the user's own token, received with each request through the Radar Cloud tunnel; no impersonation). user-token requires RADAR_CLOUD_MODE and a verified tunnel. Env: RADAR_AUTH_K8S_CREDENTIALS")
 	// Tunable deadlines for slow / high-latency / SSH-tunneled clusters.
 	// Defaults preserve the original behavior. Each flag falls back to an
 	// environment variable so Kubernetes deployments can source values from
@@ -244,6 +249,20 @@ func main() {
 		*authGroupsHeader = "X-Forwarded-Groups"
 		log.Printf("[cloud] RADAR_CLOUD_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
 	}
+	credentialMode, err := pkgauth.ParseCredentialMode(*k8sCredentials)
+	if err != nil {
+		log.Fatalf("--auth-k8s-credentials: %v", err)
+	}
+	if credentialMode == pkgauth.CredentialsUserToken {
+		if !cloudMode {
+			log.Fatalf("--auth-k8s-credentials=user-token requires RADAR_CLOUD_MODE=true: the token arrives only through the Radar Cloud tunnel")
+		}
+		if *cloudInsecureSkipVerify || cloud.ValidateWebSocketURL(*cloudURL) != nil {
+			log.Fatalf("--auth-k8s-credentials=user-token needs a verified tunnel (wss:// without --cloud-insecure-skip-verify; ws:// only to loopback): user tokens travel over it")
+		}
+		log.Printf("[auth] Kubernetes credentials: user-token (no impersonation)")
+	}
+	pkgauth.SetCredentialMode(credentialMode)
 	if *showVersion {
 		fmt.Printf("radar %s\n", version)
 		os.Exit(0)
@@ -298,7 +317,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --opencost-currency %q: %v", *openCostCurrency, err)
 	}
-	noMCPFlagSet := false
 	kubeconfigFlagSet := false
 	kubeconfigDirsFlagSet := false
 	namespaceFlagSet := false
@@ -307,8 +325,6 @@ func main() {
 	prometheusURLFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "no-mcp":
-			noMCPFlagSet = true
 		case "kubeconfig":
 			kubeconfigFlagSet = true
 		case "kubeconfig-dir":
@@ -323,10 +339,21 @@ func main() {
 			prometheusURLFlagSet = true
 		}
 	})
-	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
+	mcpMode, err := mcpFlags.Resolve()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Catalog entrypoints enable MCP even when the saved default disables it.
+	noMCPExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "no-mcp" {
+			noMCPExplicit = f.Value.String() == "true"
+		}
+	})
+	if *mcpCatalogOnly && noMCPExplicit {
 		log.Fatalf("--mcp-catalog-only cannot be combined with --no-mcp")
 	}
-	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
+	if *mcpCatalogStdio && noMCPExplicit {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
 	}
 	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
@@ -346,7 +373,7 @@ func main() {
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
-	mcpEnabled := !*noMCP
+	mcpEnabled := mcpMode.Enabled
 	if *mcpCatalogOnly || *mcpCatalogStdio {
 		mcpEnabled = true
 	}
@@ -408,6 +435,7 @@ func main() {
 		BeylaJobSelector:            *beylaJobSelector,
 		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:                  mcpEnabled,
+		MCPReadOnly:                 mcpMode.ReadOnly,
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,
@@ -416,6 +444,7 @@ func main() {
 		CloudTunnelConfigured:       *cloudURL != "",
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
+			TokenReviewer:             k8s.ReviewUserToken,
 			Secret:                    *authSecret,
 			CookieTTL:                 *authCookieTTL,
 			UserHeader:                *authUserHeader,
@@ -447,10 +476,14 @@ func main() {
 	app.SetGlobals(cfg)
 
 	if *mcpCatalogStdio {
-		log.Printf("MCP catalog stdio mode enabled: skipping Kubernetes initialization")
+		mode := "full"
+		if mcpMode.ReadOnly {
+			mode = "read-only"
+		}
+		log.Printf("MCP catalog stdio mode enabled (%s): skipping Kubernetes initialization", mode)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := mcppkg.RunStdio(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := mcppkg.RunStdioMode(ctx, mcpMode.ReadOnly); err != nil && !errors.Is(err, context.Canceled) {
 			log.Fatalf("MCP stdio server failed: %v", err)
 		}
 		return

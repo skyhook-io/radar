@@ -33,7 +33,7 @@ export { Disclosure } from './Disclosure'
 export { ResourceBar } from './ResourceBar'
 export { ForceDeleteConfirmDialog } from './ForceDeleteConfirmDialog'
 export { InClusterConsentDialog } from './InClusterConsentDialog'
-export { ToastProvider, useToast, showApiError, showApiSuccess } from './Toast'
+export { ToastProvider, useToast, showApiError, showApiSuccess, showApiNotice } from './Toast'
 export { CodeViewer } from './CodeViewer'
 export { YamlEditor, YamlDiffEditor } from './YamlEditor'
 // Boots the self-hosted Monaco runtime (bundled editor, local workers) without

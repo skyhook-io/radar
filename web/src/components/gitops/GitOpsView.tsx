@@ -21,6 +21,7 @@ import {
   formatGitOpsSourceUrl,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  gitOpsDetailGroup,
   isDestinationRef,
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
@@ -373,20 +374,22 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const treeQ = useGitOpsTree(kind, namespace, name, group, namespaces)
   const insightsQ = useGitOpsInsights(kind, namespace, name, group, namespaces)
   const switchFlow = useContextSwitchFlow()
-  const status = resourceQ.data ? getGitOpsResourceStatus(kind, resourceQ.data) : null
-  const tool = getGitOpsTool(kind, group)
+  const effectiveGroup = gitOpsDetailGroup(group, resourceQ.data)
+  const tool = resourceQ.data ? getGitOpsTool(kind, effectiveGroup) : null
+  const isArgoApp = tool === 'argo' && kind === 'applications'
+  const status = tool && resourceQ.data ? getGitOpsResourceStatus(kind, resourceQ.data) : null
   // Argo "auto-sync ON" is determined by spec.syncPolicy.automated being set,
   // not by health.status === Suspended (which is Argo's CronJob-style suspend).
   // The toggle button reads from this so the label flips correctly when an
   // app is in Manual mode or suspended via Radar's annotations.
-  const argoAutoSyncEnabled = kind === 'applications' && Boolean(resourceQ.data?.spec?.syncPolicy?.automated)
+  const argoAutoSyncEnabled = isArgoApp && Boolean(resourceQ.data?.spec?.syncPolicy?.automated)
   // Radar-driven Argo suspension is signaled by annotations that record the
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
   // the app is in a deliberately-paused state (vs. Manual mode, which is a
   // normal operational choice) and should surface a Suspended chip alongside
   // the other status indicators. Shared with the fleet table's row normalizer
   // (isArgoSuspendedByRadar) so both surfaces agree on what "suspended" means.
-  const argoSuspendedByRadar = kind === 'applications' && isArgoSuspendedByRadar(resourceQ.data)
+  const argoSuspendedByRadar = isArgoApp && isArgoSuspendedByRadar(resourceQ.data)
   const effectiveSuspended = (status?.suspended ?? false) || argoSuspendedByRadar
   // Lifecycle gate: when the resource is pending deletion, mutating
   // actions are futile (the controller is processing finalizers and
@@ -453,9 +456,9 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     setSyncDialogTarget(null)
   }
 
-  const detailRow = resourceQ.data ? normalizeDetailResource(kind, group, resourceQ.data) : null
+  const detailRow = tool && resourceQ.data ? normalizeDetailResource(kind, effectiveGroup, tool, resourceQ.data) : null
   const tree = treeQ.data ?? null
-  const helmValues = useMemo(() => extractHelmValues(kind, resourceQ.data), [kind, resourceQ.data])
+  const helmValues = useMemo(() => (tool ? extractHelmValues(kind, resourceQ.data) : null), [tool, kind, resourceQ.data])
   const graphFilters = useMemo<GitOpsTreeFilters>(() => ({
     kinds: graphKinds,
     sync: graphSync,
@@ -466,8 +469,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const graphFacets = useMemo(() => buildTreeFacets(tree), [tree])
   // The tree and insights load separately; either one seeing a remote
   // destination is enough to keep its resources from opening here.
-  const remoteDestination = !!(tree?.remoteDestination || insightsQ.data?.summary?.remoteDestination)
-  const destination = useDestinationCluster(remoteDestination, kind, namespace, name)
+  const remoteDestination = tool !== null && !!(tree?.remoteDestination || insightsQ.data?.summary?.remoteDestination)
+  const destination = useDestinationCluster(remoteDestination, kind, namespace, name, effectiveGroup)
 
   function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef, node?: GitOpsTreeNode) {
     // Locality comes from the node, not the name: a remote app can deploy a
@@ -488,6 +491,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
           }),
         } : undefined,
       })
+      return
+    }
+    if (node?.missing) {
+      const nextStep = node.sync === 'Synced'
+        ? 'Argo reports it as synced. Refresh the application to check its status.'
+        : 'Sync the application to create it.'
+      showToast(`${ref.kind} ${ref.name} is not present in this cluster. ${nextStep}`, { type: 'info' })
       return
     }
     if (isGitOpsDetailRef(ref) && isValidKubernetesName(ref.name)) {
@@ -535,9 +545,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
 
   const isRunning = resourceQ.data?.status?.operationState?.phase === 'Running'
   const operationInProgress = isArgoOperationInProgress(resourceQ.data)
-  const isFluxWorkload = kind === 'kustomizations' || kind === 'helmreleases'
+  const isFluxWorkload = tool === 'flux' && (kind === 'kustomizations' || kind === 'helmreleases')
   const isFlux = tool === 'flux'
-  const isArgoApp = kind === 'applications'
+  const notGitOpsError = resourceQ.data && tool === null
+    ? new Error(notGitOpsMessage(resourceQ.data.kind ?? apiKind?.kind ?? kind, effectiveGroup, namespace, name))
+    : null
 
   // Detail-page shortcuts. Skip when a modal is already open so a stray "s"
   // in an input field doesn't pop another sync dialog.
@@ -651,7 +663,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
         group,
         namespace,
         name,
-        toolLabel: tool === 'argo' ? 'ArgoCD' : 'FluxCD',
+        toolLabel: tool === 'argo' ? 'ArgoCD' : tool === 'flux' ? 'FluxCD' : undefined,
         kindLabel: apiKind?.kind ?? kind,
       }}
       parent={parent}
@@ -659,8 +671,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       terminating={terminating}
       terminatingChipTooltip={terminatingChipTooltip}
       terminatingActionTooltip={terminatingActionTooltip}
-      detail={detail}
-      insight={insightsQ.data ?? null}
+      detail={tool ? detail : undefined}
+      insight={tool ? insightsQ.data ?? null : null}
       insightLoading={insightsQ.isLoading}
       healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
       remoteDestinationHint={<RemoteDestinationCloudHint />}
@@ -695,7 +707,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 // Defer the success toast until we know whether the follow-on
                 // sync was triggered, so a successful create-namespace + sync
                 // failure doesn't yield a misleading "sync triggered" toast.
-                if (kind === 'applications') {
+                if (isArgoApp) {
                   argoSync.mutate(
                     { namespace, name },
                     {
@@ -738,7 +750,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       fullscreen={graphFullscreen}
       onToggleFullscreen={() => setGraphFullscreen(!graphFullscreen)}
       resourceLoading={resourceQ.isLoading}
-      resourceError={(resourceQ.error as Error | null) ?? null}
+      resourceError={(resourceQ.error as Error | null) ?? notGitOpsError}
       onNavigateRoot={() => navigate('/gitops')}
       onNavigateParent={parent ? () => {
         const params = new URLSearchParams()
@@ -974,16 +986,23 @@ function tryParseYaml(value: string): unknown {
 
 
 
-function normalizeDetailResource(kind: string, group: string, resource: any): GitOpsRow | null {
-  if (kind === 'applications') return normalizeArgoApplication(resource)
-  if (kind === 'applicationsets') return normalizeArgoApplicationSet(resource)
-  if (kind === 'kustomizations') return normalizeFluxKustomization(resource)
-  if (kind === 'helmreleases') return normalizeFluxHelmRelease(resource)
+// notGitOpsMessage matches the tree/insights endpoints' refusal text.
+function notGitOpsMessage(kind: string, group: string, namespace: string, name: string): string {
+  const kindGroup = group ? `${kind}.${group}` : kind
+  const ref = namespace ? `${namespace}/${name}` : name
+  return `${kindGroup} ${ref} is not a supported Argo CD or Flux resource, so it has no GitOps view`
+}
+
+function normalizeDetailResource(kind: string, group: string, tool: 'argo' | 'flux', resource: any): GitOpsRow | null {
+  if (tool === 'argo' && kind === 'applications') return normalizeArgoApplication(resource)
+  if (tool === 'argo' && kind === 'applicationsets') return normalizeArgoApplicationSet(resource)
+  if (tool === 'flux' && kind === 'kustomizations') return normalizeFluxKustomization(resource)
+  if (tool === 'flux' && kind === 'helmreleases') return normalizeFluxHelmRelease(resource)
   const status = getGitOpsResourceStatus(kind, resource)
   return {
     id: `${group}/${kind}/${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`,
     mode: 'applications',
-    tool: getGitOpsTool(kind, group),
+    tool,
     kindName: kind,
     kind: resource.kind ?? kind,
     group,

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
@@ -257,7 +258,17 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 	var changes []FieldChange
 	var summary []string
 
-	if oldGen, newGen := oldU.GetGeneration(), newU.GetGeneration(); oldGen != newGen && oldGen > 0 && newGen > 0 {
+	// Kinds whose deletion does not bump generation (CustomResourceDefinition)
+	// can still fold a spec edit into a +1 update, so the spec must match too.
+	if deletionAccountsForGenerationBump(oldU, newU) && reflect.DeepEqual(oldU.Object["spec"], newU.Object["spec"]) {
+		// Without this row the update would read as "resource changed".
+		changes = append(changes, FieldChange{
+			Path:     "metadata.deletionTimestamp",
+			OldValue: nil,
+			NewValue: newU.GetDeletionTimestamp().UTC().Format(time.RFC3339),
+		})
+		summary = append(summary, "deletion started")
+	} else if oldGen, newGen := oldU.GetGeneration(), newU.GetGeneration(); oldGen != newGen && oldGen > 0 && newGen > 0 {
 		changes = append(changes, FieldChange{
 			Path:     "metadata.generation",
 			OldValue: oldGen,

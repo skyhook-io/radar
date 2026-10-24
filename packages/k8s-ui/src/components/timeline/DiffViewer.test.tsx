@@ -46,4 +46,50 @@ describe("DiffViewer", () => {
     expect(html).toContain("Set");
     expect(html).toContain("Removed");
   });
+
+  it("names key changes instead of striking through an unchanged key list", () => {
+    const html = renderToStaticMarkup(
+      <DiffViewer
+        diff={{
+          summary: "data modified keys: [password]",
+          fields: [{ path: "data (modified keys)", oldValue: ["password"], newValue: ["password"] }],
+        }}
+      />,
+    );
+    expect(html).toContain("keys changed: <span class=\"font-mono\">password</span>");
+    expect(html).not.toContain("line-through");
+    expect(html).not.toContain("Old value:");
+  });
+
+  it("merges added, removed and modified key lists of one field into one row", () => {
+    const html = renderToStaticMarkup(
+      <DiffViewer
+        diff={{
+          summary: "",
+          fields: [
+            { path: "data (added keys)", oldValue: null, newValue: ["token"] },
+            { path: "data (removed keys)", oldValue: ["old"], newValue: null },
+            { path: "data (modified keys)", oldValue: ["a", "b"], newValue: ["a", "b"] },
+            { path: "stringData (added keys)", oldValue: null, newValue: ["extra"] },
+            { path: "type", oldValue: "Opaque", newValue: "kubernetes.io/tls" },
+          ],
+        }}
+      />,
+    );
+    expect(html.match(/>data</g)).toHaveLength(1);
+    expect(html).toMatch(/keys changed: <span[^>]*>a, b<\/span>.*added: <span[^>]*>token<\/span>.*removed: <span[^>]*>old<\/span>/);
+    expect(html).toContain(">stringData<");
+    expect(html).toContain("added: <span class=\"font-mono\">extra</span>");
+    // Ordinary fields keep the old→new rendering.
+    expect(html).toContain("Old value:");
+    expect(html).toContain("kubernetes.io/tls");
+  });
+
+  it("keeps the old→new rendering when a key-list path does not carry a list", () => {
+    const html = renderToStaticMarkup(
+      <DiffViewer diff={{ summary: "", fields: [{ path: "data (modified keys)", oldValue: "x", newValue: "y" }] }} />,
+    );
+    expect(html).toContain("Old value:");
+    expect(html).not.toContain("keys changed");
+  });
 });

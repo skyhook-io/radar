@@ -655,6 +655,33 @@ kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 
 If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades. If it does and exec still fails, see the next section: the terminal uses the same address check as changes.
 
+### Node drain requests time out
+
+Drain waits for pod deletion by default. The default deadline is two minutes for
+eviction retries and deletion waiting together, followed by a final verification
+read of up to five seconds. Configure every proxy and client on this path to allow
+at least 150 seconds for the default. If you send an explicit drain timeout, allow
+more than that value plus five seconds and network latency.
+
+For ingress-nginx, add these annotations to your Radar Ingress, or set them under
+the Helm chart's `ingress.annotations` values:
+
+```yaml
+nginx.ingress.kubernetes.io/proxy-read-timeout: "150"
+nginx.ingress.kubernetes.io/proxy-send-timeout: "150"
+```
+
+These are the ingress-nginx controller's [timeout annotations](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/#custom-timeouts).
+Other ingress controllers and load balancers have their own request or upstream
+response timeout settings. Set each layer explicitly; extending Radar's deadline
+cannot override a shorter limit in front of it.
+
+A browser, proxy or MCP timeout does not prove the drain failed or that nothing
+changed. Evictions may have been accepted already. Check the node's pods before
+retrying or shutting it down. API callers can use `waitForDeletion: false` and MCP
+callers `wait_for_deletion: false` for admission-only behavior, but must then
+verify deletion separately. See [MCP drain timeouts](mcp.md#node-drain-timeouts).
+
 ### Changes fail with "Radar refused this request"
 
 If you can browse, but every action that changes the cluster (apply, delete, scale, restart, drain, Argo CD or Flux sync) fails with *Radar refused this request because it came from ...*, the proxy in front of Radar is rewriting the `Host` header. The pod terminal does not connect, and a few views that load data with POST, such as application cost, fail the same way. Radar accepts these only from a page served at its own address, so that another website you have open cannot act through your browser, and a rewritten `Host` hides that address. The message names both addresses: where the request came from, and the `Host` Radar received.

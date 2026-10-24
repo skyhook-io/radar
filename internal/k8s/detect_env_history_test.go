@@ -1011,7 +1011,9 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 			t.Fatalf("got %d checks, want 1: %+v", len(checks), checks)
 		}
 		msg := checks[0].Message
-		if !strings.Contains(msg, "managedFields cannot identify which field changed") || !strings.Contains(msg, "may not have touched data at all") {
+		generic := strings.Contains(msg, "managedFields cannot identify which field changed") && strings.Contains(msg, "may not have touched data at all")
+		metadataWriter := strings.Contains(msg, "Secret labels or annotations, so managedFields cannot tell whether this write changed data")
+		if !generic && !metadataWriter {
 			t.Fatalf("named writer dropped the hedge: %q", msg)
 		}
 		if strings.Contains(msg, "data write") || strings.Contains(msg, "changed by") || strings.Contains(msg, "last written") || strings.Contains(msg, "latest") {
@@ -1073,6 +1075,42 @@ func TestStaleSecretEnvManagedFieldsNamesLastDataWriter(t *testing.T) {
 		tied := checkFor(t, entry("ancient-changes", at, dataOnly), entry("helm", at, dataOnly))
 		if !strings.Contains(tied.Message, written(at, "helm, a field manager that owns its data")) {
 			t.Fatalf("a real writer tied with a bucket should be named alone: %q", tied.Message)
+		}
+	})
+
+	t.Run("release tools and secret operators are said to write metadata too", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		const tail = " Secret labels or annotations, so managedFields cannot tell whether this write changed data, and if the write touched a consumed key"
+		for _, manager := range []string{
+			"helm", "helm-controller", "kustomize-controller", "argocd-controller", "argocd-application-controller",
+			"external-secrets", "externalsecrets.external-secrets.io/db-conn", "cert-manager-certificates-issuing",
+		} {
+			check := checkFor(t, entry(manager, at, dataOnly))
+			if want := written(at, manager+", a field manager that owns its data") + ", after container app started at " + startedAt.Format(time.RFC3339) + "; " + manager + " also writes" + tail; !strings.Contains(check.Message, want) {
+				t.Fatalf("%s: message %q does not contain %q", manager, check.Message, want)
+			}
+			if strings.Contains(check.Message, "may not have touched data at all") {
+				t.Fatalf("%s: both hedges in one note: %q", manager, check.Message)
+			}
+		}
+		tied := checkFor(t, entry("helm", at, dataOnly), entry("argocd-controller", at, dataOnly))
+		if !strings.Contains(tied.Message, "; argocd-controller and helm also write"+tail) {
+			t.Fatalf("tied release tools: %q", tied.Message)
+		}
+	})
+
+	t.Run("any other writer keeps the general hedge", func(t *testing.T) {
+		at := now.Add(-time.Minute)
+		for _, fields := range [][]metav1.ManagedFieldsEntry{
+			{entry("kubectl-edit", at, dataOnly)},
+			{entry("vault-rotator", at, dataOnly)},
+			{entry("helm", at, dataOnly), entry("kubectl-edit", at, dataOnly)},
+			{entry("ancient-changes", at, dataOnly)},
+		} {
+			check := checkFor(t, fields...)
+			if !strings.Contains(check.Message, "managedFields cannot identify which field changed, so the write may not have touched data at all") || strings.Contains(check.Message, "labels or annotations") {
+				t.Fatalf("%v: %q", fields[0].Manager, check.Message)
+			}
 		}
 	})
 

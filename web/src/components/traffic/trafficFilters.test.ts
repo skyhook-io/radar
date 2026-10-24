@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -676,5 +676,24 @@ describe('mergedEdgePort', () => {
     expect(mergedEdgePort(0, 5432)).toBe(5432)
     expect(mergedEdgePort(5432, 0)).toBe(5432)
     expect(mergedEdgePort(0, 0)).toBe(0)
+  })
+})
+
+describe('verdictChoices', () => {
+  it('offers forwarded and dropped when both are present', () => {
+    expect(verdictChoices(['forwarded', 'dropped'])).toEqual(['forwarded', 'dropped'])
+  })
+
+  it('offers forwarded and error from a source that reports errors', () => {
+    expect(verdictChoices(['error', 'forwarded'])).toEqual(['forwarded', 'error'])
+  })
+
+  it('offers nothing when every flow is forwarded, since the filter would match all', () => {
+    expect(verdictChoices(['forwarded'])).toEqual([])
+    expect(verdictChoices([])).toEqual([])
+  })
+
+  it('offers Forwarded when another verdict without a chip is present, since it then excludes something', () => {
+    expect(verdictChoices(['forwarded', 'redirected'])).toEqual(['forwarded'])
   })
 })

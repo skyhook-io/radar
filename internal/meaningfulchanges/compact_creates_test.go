@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 var compactBase = time.Date(2026, 10, 16, 4, 43, 24, 0, time.FixedZone("", 3*3600))
@@ -134,6 +135,15 @@ func TestCompactCreatesKeepsFullRows(t *testing.T) {
 		{"application configuration flag", func(c *issuesapi.RecentChange) { c.ApplicationConfigurationChange = true }},
 		{"different rank reason", func(c *issuesapi.RecentChange) { c.RankReason = "something else" }},
 		{"cluster scoped", func(c *issuesapi.RecentChange) { c.Namespace = "" }},
+		{"some consumers withheld", func(c *issuesapi.RecentChange) {
+			c.Kind = "ConfigMap"
+			c.ConsumedBy = []string{"Deployment/web"}
+			c.ConsumedByWithheld = &issuesapi.Withheld{Count: 1, Reason: readreason.UserForbidden}
+		}},
+		{"all consumers withheld", func(c *issuesapi.RecentChange) {
+			c.Kind = "ConfigMap"
+			c.ConsumedByWithheld = &issuesapi.Withheld{Count: 2, Reason: readreason.UserForbidden}
+		}},
 	}
 	for _, kind := range []string{"NetworkPolicy", "ResourceQuota", "LimitRange", "HorizontalPodAutoscaler", "PodDisruptionBudget", "ReferenceGrant", "Application", "Kustomization", "HelmRelease"} {
 		kind := kind

@@ -127,6 +127,16 @@ async function clickGotIt() {
 }
 
 describe('WhatsNew', () => {
+  it.each(['v1.18.0', 'v1.18.1'])('opens the shipped notes on Home after upgrading to %s', async version => {
+    setCatalog(...SHIPPED)
+    serverState = { currentVersion: version, storage: 'server', seenVersion: 'v1.17.0', priorInstall: true }
+    await render('/')
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.18")
+    await clickGotIt()
+    expect(seenPosts).toEqual([version])
+    expect(status.current.unread).toBe(false)
+  })
+
   it('auto-opens on Home after an upgrade and records the running version on close', async () => {
     serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
     await render('/')
@@ -286,6 +296,16 @@ describe('WhatsNew', () => {
     serverState = { currentVersion: 'v1.16.0', storage: 'server', seenVersion: 'v1.16.0', priorInstall: true }
     await render('/?whats-new=v1.16.0&whats-new-from=v1.14.0')
     expect(dialog()?.textContent).toContain("What's new since Radar v1.14")
+    await clickGotIt()
+    expect(seenPosts).toEqual([])
+  })
+
+  it.each(['', '=v1.18', '=1.18', '=v1.18.0'])('previews v1.18 on a Git development build with ?whats-new%s', async suffix => {
+    setCatalog(...SHIPPED)
+    serverState = { currentVersion: 'v1.17.0-113-gb49561b78', storage: 'server', seenVersion: 'v1.17.0', priorInstall: true }
+    await render(`/resources/pods?whats-new${suffix}`)
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.18")
+    expect(dialog()?.textContent).toContain(SHIPPED[0].highlights[0].title)
     await clickGotIt()
     expect(seenPosts).toEqual([])
   })

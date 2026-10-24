@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -309,6 +310,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			if len(namespaces) > 0 {
 				clusterScopedWatchedCounts = dynamicCache.CountWatched(nil)
 			}
+			trivyAccess := s.newTrivyCountAccess(r)
 			for _, key := range crdOrder {
 				crd := crds[key]
 				countSource := watchedCounts
@@ -317,6 +319,25 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 					countSource = clusterScopedWatchedCounts
+				} else if crd.group == aicontext.TrivyGroup {
+					readable, all, complete := trivyAccess.scope(crd.gvr, namespaces)
+					if !complete {
+						markUnavailable(key)
+						continue
+					}
+					if !all {
+						if len(readable) == 0 {
+							markForbidden(key, reasonRBACDenied)
+							continue
+						}
+						n, err := dynamicCache.Count(crd.gvr, readable)
+						if err != nil {
+							markUnavailable(key)
+							continue
+						}
+						markCounted(key, n)
+						continue
+					}
 				}
 				if n, ok := countSource[crd.gvr]; ok {
 					markCounted(key, n)

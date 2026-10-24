@@ -26,3 +26,21 @@ func TestSearchKindHint(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchFindingsHint(t *testing.T) {
+	if got := searchFindingsHint(search.Result{}); got != "" {
+		t.Fatalf("a whole search must give no hint, got %q", got)
+	}
+	access := searchFindingsHint(search.Result{AccessIncomplete: true})
+	if !strings.Contains(access, "couldn't be confirmed in this search") || strings.Contains(access, "ran out of time") {
+		t.Errorf("access-only hint = %q", access)
+	}
+	timed := searchFindingsHint(search.Result{IncompleteFindings: search.FindingsTimeLimit})
+	if !strings.Contains(timed, "ran out of time") || strings.Contains(timed, "couldn't be confirmed") {
+		t.Errorf("time-only hint = %q", timed)
+	}
+	both := searchFindingsHint(search.Result{AccessIncomplete: true, IncompleteFindings: search.FindingsTimeLimit})
+	if !strings.Contains(both, "couldn't be confirmed") || !strings.Contains(both, "ran out of time") {
+		t.Errorf("both causes must be reported, got %q", both)
+	}
+}

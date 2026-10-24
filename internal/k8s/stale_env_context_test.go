@@ -110,6 +110,25 @@ func TestFindStaleEnvConsumersOfSecret(t *testing.T) {
 		}
 	})
 
+	t.Run("managedFields write by a release tool names its metadata writes", func(t *testing.T) {
+		pod := staleSecretEnvPod("catalog", startedAt, true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+		withWrite := secret.DeepCopy()
+		withWrite.ManagedFields = []metav1.ManagedFieldsEntry{{
+			Manager: "helm", Operation: metav1.ManagedFieldsOperationUpdate,
+			Time: &metav1.Time{Time: changedAt}, FieldsType: "FieldsV1",
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:data":{"f:password":{}},"f:metadata":{"f:labels":{"f:helm.sh/chart":{}}}}`)},
+		}}
+		cache := envHistoryTestCache(t, pod, withWrite)
+		setEnvHistoryEvents(t)
+		facts := FindStaleEnvConsumersOf(context.Background(), cache, "Secret", "shop", "db-conn")
+		if len(facts) != 1 || facts[0].EvidenceSource != staleSecretEvidenceManagedFields || facts[0].Key != "" {
+			t.Fatalf("want one keyless managedFields row: %+v", facts)
+		}
+		if !strings.Contains(facts[0].Message, "helm also writes Secret labels or annotations, so managedFields cannot tell whether this write changed data") {
+			t.Fatalf("release-tool wording missing: %q", facts[0].Message)
+		}
+	})
+
 	t.Run("every rotated envFrom key is reported, past the diagnose per-container cap", func(t *testing.T) {
 		pod := staleSecretEnvPod("catalog", startedAt, true, corev1.EnvVar{Name: "K1", Value: "pinned"}, corev1.EnvVar{Name: "K2", Value: "$(K2)?sslmode=require"})
 		pod.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "db-conn"}}}}
@@ -202,4 +221,16 @@ func TestFindStaleEnvConfigMap(t *testing.T) {
 			t.Fatalf("added key flagged: %+v", facts)
 		}
 	})
+}
+
+func TestGroupedStaleEnvFactKeepsEveryPodName(t *testing.T) {
+	changedAt := time.Now().UTC().Truncate(time.Second)
+	facts := groupStaleEnvFacts([]StaleEnvFact{
+		{Pod: "reader-b", Container: "app", Env: "PASSWORD", SourceKind: "Secret", SourceName: "db", Key: "password", EvidenceSource: staleSecretEvidenceObservedChange, ChangedAt: changedAt},
+		{Pod: "reader-a", Container: "app", Env: "PASSWORD", SourceKind: "Secret", SourceName: "db", Key: "password", EvidenceSource: staleSecretEvidenceObservedChange, ChangedAt: changedAt},
+		{Pod: "reader-b", Container: "app", Env: "PASSWORD", SourceKind: "Secret", SourceName: "db", Key: "password", EvidenceSource: staleSecretEvidenceObservedChange, ChangedAt: changedAt},
+	})
+	if len(facts) != 1 || facts[0].AffectedPods != 2 || strings.Join(facts[0].Pods, ",") != "reader-a,reader-b" {
+		t.Fatalf("grouped facts=%+v", facts)
+	}
 }

@@ -320,6 +320,18 @@ type DynamicResourceObservation struct {
 	Namespaces []string                `json:"namespaces,omitempty"`
 	Truncated  bool                    `json:"truncated,omitempty"`  // Incomplete namespace probing, beyond intentional scope limits.
 	ObservedAt *time.Time              `json:"observedAt,omitempty"` // Age of a retained probe decision, not resource freshness.
+	// The two fields below are for Radar's own readers and are not serialized.
+	// UnansweredNamespaces are namespaces where Radar's access check (a
+	// one-item list it makes before watching a kind there) got no answer:
+	// it timed out, or the client-side rate limiter held it back. They are
+	// neither watched nor known to be outside Radar's access.
+	UnansweredNamespaces []string `json:"-"`
+	// ProbeRetrying is true while the cache re-checks unanswered access
+	// checks (UnansweredNamespaces, or the whole kind when that is empty)
+	// within their retry budget. Once it is false, any UnansweredNamespaces
+	// left never got an answer; the slower re-checks after the budget
+	// (ProbeRecoveryIntervals) don't make it true again.
+	ProbeRetrying bool `json:"-"`
 }
 
 // DynamicCacheConfig holds configuration for creating a DynamicResourceCache.
@@ -377,6 +389,16 @@ type DynamicCacheConfig struct {
 	// omitted candidates. It matters only when a GVR cannot be watched
 	// cluster-wide and falls back to per-namespace informers.
 	NamespaceFallbacksTruncated bool
+
+	// ProbeRetryBackoff spaces the cache's re-checks of access checks that got
+	// no answer. Empty means four attempts, sharing a 30 s budget with the
+	// cache's first round of checks for the kind.
+	ProbeRetryBackoff []time.Duration
+
+	// ProbeRecoveryIntervals space the slower re-checks of access checks still
+	// unanswered once ProbeRetryBackoff's budget runs out; the last interval
+	// repeats until they answer. Empty means 1 min, 2 min, then every 5 min.
+	ProbeRecoveryIntervals []time.Duration
 
 	// SyncStallAfter is how long an informer may stay unsynced before its
 	// observation reports sync_stalled instead of initial_sync. Zero means 30

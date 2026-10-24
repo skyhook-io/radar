@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -46,6 +47,12 @@ func (s *Server) handleGitOpsDestination(w http.ResponseWriter, r *http.Request)
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	gvr, err := gitOpsDestinationGVR(kind, r.URL.Query().Get("group"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	dyn := s.getDynamicClientForRequest(r)
 	client := s.getClientForRequest(r)
 	if dyn == nil || client == nil {
@@ -54,21 +61,15 @@ func (s *Server) handleGitOpsDestination(w http.ResponseWriter, r *http.Request)
 	}
 
 	var server string
-	if strings.EqualFold(kind, "applications") || strings.EqualFold(kind, "application") {
-		app, err := dyn.Resource(argoApplicationGVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	if gvr.Group == argoApplicationGVR.Group {
+		app, err := dyn.Resource(gvr).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
 		if err != nil {
 			s.writeDestinationError(w, err, namespace, name)
 			return
 		}
 		server = argoDestinationServer(app, argoClusterServers)
 	} else {
-		entry, err := gitops.ResolveFluxKind(kind)
-		if err != nil {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		entry = entry.Served(k8s.ServedGVR)
-		obj, err := dyn.Resource(entry.GVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
+		obj, err := dyn.Resource(gvr).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
 		if err != nil {
 			s.writeDestinationError(w, err, namespace, name)
 			return
@@ -95,6 +96,25 @@ func (s *Server) handleGitOpsDestination(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	s.writeJSON(w, resp)
+}
+
+// A missing group retains the controller-specific routes used by older UIs.
+// An explicit identity must never resolve a same-named object in another group.
+func gitOpsDestinationGVR(kind, group string) (schema.GroupVersionResource, error) {
+	if strings.EqualFold(kind, "applications") || strings.EqualFold(kind, "application") {
+		if group == "" || group == argoApplicationGVR.Group {
+			return argoApplicationGVR, nil
+		}
+	} else {
+		entry, err := gitops.ResolveFluxKind(kind)
+		if err != nil {
+			return schema.GroupVersionResource{}, err
+		}
+		if group == "" || group == entry.GVR.Group {
+			return entry.Served(k8s.ServedGVR).GVR, nil
+		}
+	}
+	return schema.GroupVersionResource{}, fmt.Errorf("GitOps destination lookup is not supported for %s in API group %q", kind, group)
 }
 
 func (s *Server) writeDestinationError(w http.ResponseWriter, err error, namespace, name string) {

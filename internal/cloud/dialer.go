@@ -11,9 +11,17 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
-const selfUpgradeAvailableHeader = "X-Radar-Self-Upgrade-Available"
+const (
+	selfUpgradeAvailableHeader = "X-Radar-Self-Upgrade-Available"
+	// kubernetesCredentialsHeader tells Radar Cloud how this agent
+	// authenticates user calls, so a control plane that relays user tokens
+	// never sends them to an agent that would ignore them and impersonate.
+	kubernetesCredentialsHeader = "X-Radar-Kubernetes-Credentials"
+)
 
 // dial establishes a WebSocket to Radar Cloud, authenticates with the
 // cluster bearer token, and returns a yamux session with this side as the
@@ -63,6 +71,7 @@ func cloudHandshakeHeaders(cfg Config, selfUpgrade bool) http.Header {
 	headers.Set("Authorization", "Bearer "+cfg.Token)
 	headers.Set("X-Radar-Version", Version)
 	headers.Set(selfUpgradeAvailableHeader, strconv.FormatBool(selfUpgrade))
+	headers.Set(kubernetesCredentialsHeader, string(pkgauth.CurrentCredentialMode()))
 	if cfg.Namespace != "" {
 		headers.Set("X-Radar-Namespace", cfg.Namespace)
 	}

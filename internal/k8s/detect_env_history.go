@@ -1199,18 +1199,30 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 // Secret's managedFields, unmapped. A manager's timestamp moves on a write to
 // any field it owns, and the index keeps an earlier data timestamp across a
 // later metadata-only update, so the note claims only that this manager
-// wrote at that time, not that it was the latest write or a data change. The names are Secret
+// wrote at that time, not that it was the latest write or a data change. When
+// every named writer is a release tool or secret operator, the note says that
+// writer also writes Secret labels or annotations, which can move its
+// timestamp without a data change. The names are Secret
 // metadata: they reach only callers the resource context lets read the
 // Secret, which drops the whole row for anyone else.
 func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKind, prefix, secretName string, startedAt time.Time, write secretDataManagerWrite) StaleSecretEnvCheck {
 	changedAt := write.at
 	writer := "a field manager that owns its data"
-	switch names := slices.DeleteFunc(slices.Clone(write.managers), isUnnamedManagedFieldsManager); len(names) {
+	hedge := "managedFields cannot identify which field changed, so the write may not have touched data at all"
+	names := slices.DeleteFunc(slices.Clone(write.managers), isUnnamedManagedFieldsManager)
+	switch len(names) {
 	case 0:
 	case 1:
 		writer = names[0] + ", a field manager that owns its data"
 	default:
 		writer = strings.Join(names, " and ") + ", field managers that own its data"
+	}
+	if len(names) > 0 && !slices.ContainsFunc(names, func(name string) bool { return !writesSecretMetadata(name) }) {
+		verb := "writes"
+		if len(names) > 1 {
+			verb = "write"
+		}
+		hedge = fmt.Sprintf("%s also %s Secret labels or annotations, so managedFields cannot tell whether this write changed data", strings.Join(names, " and "), verb)
 	}
 	return StaleSecretEnvCheck{
 		Namespace:          pod.Namespace,
@@ -1222,8 +1234,24 @@ func newManagedFieldsStaleSecretEnvCheck(pod *corev1.Pod, container, referenceKi
 		SecretName:         secretName,
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
-		Message:            fmt.Sprintf("Secret/%s had a write at %s by %s, after container %s started at %s; managedFields cannot identify which field changed, so the write may not have touched data at all, and if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), writer, container, startedAt.UTC().Format(time.RFC3339)),
+		Message:            fmt.Sprintf("Secret/%s had a write at %s by %s, after container %s started at %s; %s, and if the write touched a consumed key the running process may hold a stale env value until restart.", secretName, changedAt.UTC().Format(time.RFC3339), writer, container, startedAt.UTC().Format(time.RFC3339), hedge),
 	}
+}
+
+// writesSecretMetadata reports the field managers of release tools and secret
+// operators: Helm, Flux, Argo CD, External Secrets Operator (manager
+// external-secrets, or externalsecrets.external-secrets.io/<name> in newer
+// releases) and cert-manager. Each writes its own labels or annotations onto
+// the Secrets it manages, so a release or a re-sync that leaves data unchanged
+// still moves its managedFields time.
+func writesSecretMetadata(manager string) bool {
+	switch manager {
+	case "helm", "helm-controller", "kustomize-controller":
+		return true
+	}
+	return strings.HasPrefix(manager, "argocd") ||
+		strings.Contains(manager, "external-secrets") ||
+		strings.HasPrefix(manager, "cert-manager")
 }
 
 // isUnnamedManagedFieldsManager reports managedFields entries that name no

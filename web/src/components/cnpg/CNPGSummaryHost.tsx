@@ -218,7 +218,8 @@ function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspac
 }
 
 function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
-  // Subscribers are the Subscriptions in view; the publisher's own runtime
+  // Subscribers are the Subscriptions in every namespace the caller can read,
+  // since logical replication crosses namespaces; the publisher's own runtime
   // answers for every slot.
   const pubCluster = props.resource?.spec?.cluster?.name
   const ns = props.resource?.metadata?.namespace ?? ''
@@ -251,7 +252,7 @@ function ObjectSummaryHost({ ctx, Summary }: { ctx: SummaryContext; Summary: Obj
   // A ClusterImageCatalog is referenced from any namespace, so its users are
   // read across every namespace the caller can see.
   const clusterScoped = ctx.resource?.kind === 'ClusterImageCatalog'
-  const { query } = useCNPGFleet(clusterScoped ? [] : [ctx.namespace])
+  const { query } = useCNPGFleet(clusterScoped ? [] : [ctx.namespace], true, false)
   if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
   const workspace = query.data?.installed ? query.data : null
   const go = ctx.onNavigate ? (ref: ResourceRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
@@ -259,7 +260,7 @@ function ObjectSummaryHost({ ctx, Summary }: { ctx: SummaryContext; Summary: Obj
 }
 
 function PoolerSummaryHost({ ctx }: { ctx: SummaryContext }) {
-  const { query } = useCNPGFleet([ctx.namespace])
+  const { query } = useCNPGFleet([ctx.namespace], true, false)
   const { live, queries } = useCNPGPoolerLive(ctx.namespace, ctx.name)
   if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
   const workspace = query.data?.installed ? query.data : null

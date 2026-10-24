@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -383,5 +384,21 @@ func TestFluxBlockerConditionSurvivesDeniedSource(t *testing.T) {
 	out := s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, gitopsinsights.Insight{Issues: []gitopsinsights.Issue{issue}}, nil)
 	if len(out.Issues) != 1 || out.Issues[0].Message != issue.Message || out.Issues[0].Cause != "" || len(out.Issues[0].Refs) != 0 {
 		t.Fatalf("root condition lost or source status leaked: %+v", out.Issues)
+	}
+}
+
+// A root that is not an Argo CD or Flux object is a bad request, not a
+// server failure, and the message names it.
+func TestWriteGitOpsBuildErrorRefusesNonGitOpsRoot(t *testing.T) {
+	s := &Server{}
+	req := &gitopsRequest{Kind: "applications", Namespace: "shop", Name: "wordpress", Group: "app.k8s.io"}
+	err := fmt.Errorf("Application.app.k8s.io shop/wordpress is %w, so it has no GitOps view", gitopstree.ErrNotGitOpsResource)
+	rec := httptest.NewRecorder()
+	s.writeGitOpsBuildError(rec, req, err)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "Application.app.k8s.io shop/wordpress is not a supported Argo CD or Flux resource") {
+		t.Fatalf("body = %s", rec.Body.String())
 	}
 }

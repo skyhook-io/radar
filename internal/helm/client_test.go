@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,201 +40,6 @@ import (
 	ktesting "k8s.io/client-go/testing"
 )
 
-func TestFindBestUpgradeVersion(t *testing.T) {
-	tests := []struct {
-		name        string
-		candidates  []repoVersionInfo
-		sourceHosts []string
-		wantVersion string
-		wantRepo    string
-	}{
-		{
-			name:        "no candidates returns empty",
-			candidates:  nil,
-			wantVersion: "",
-			wantRepo:    "",
-		},
-		{
-			name: "single repo with current version",
-			candidates: []repoVersionInfo{
-				{repoName: "metallb", latestVersion: "0.15.3", hasCurrentVersion: true},
-			},
-			wantVersion: "0.15.3",
-			wantRepo:    "metallb",
-		},
-		{
-			name: "multiple repos only one has current version - picks source repo",
-			candidates: []repoVersionInfo{
-				{repoName: "bitnami", latestVersion: "6.4.22", hasCurrentVersion: false},
-				{repoName: "metallb", latestVersion: "0.15.3", hasCurrentVersion: true},
-			},
-			wantVersion: "0.15.3",
-			wantRepo:    "metallb",
-		},
-		{
-			name: "multiple repos both have current version without affinity - bail out",
-			candidates: []repoVersionInfo{
-				{repoName: "repo-a", latestVersion: "2.0.0", hasCurrentVersion: true, repoURL: "https://charts.example-a.com"},
-				{repoName: "repo-b", latestVersion: "3.0.0", hasCurrentVersion: true, repoURL: "https://charts.example-b.com"},
-			},
-			wantVersion: "",
-			wantRepo:    "",
-		},
-		{
-			name: "multiple repos both have current version with affinity - picks matching repo",
-			candidates: []repoVersionInfo{
-				{repoName: "repo-a", latestVersion: "2.0.0", hasCurrentVersion: true, repoURL: "https://charts.example-a.com"},
-				{repoName: "repo-b", latestVersion: "3.0.0", hasCurrentVersion: true, repoURL: "https://charts.example-b.com"},
-			},
-			sourceHosts: []string{"example-b.com"},
-			wantVersion: "3.0.0",
-			wantRepo:    "repo-b",
-		},
-		{
-			name: "source repo has lower latest than non-source - still picks source",
-			candidates: []repoVersionInfo{
-				{repoName: "community", latestVersion: "10.0.0", hasCurrentVersion: false},
-				{repoName: "official", latestVersion: "1.2.0", hasCurrentVersion: true},
-			},
-			wantVersion: "1.2.0",
-			wantRepo:    "official",
-		},
-		{
-			name: "ambiguous chart-name collision without affinity - bail out",
-			candidates: []repoVersionInfo{
-				{repoName: "bitnami", latestVersion: "6.4.22", hasCurrentVersion: false, repoURL: "https://charts.bitnami.com/bitnami"},
-				{repoName: "argo", latestVersion: "8.5.0", hasCurrentVersion: false, repoURL: "https://argoproj.github.io/argo-helm"},
-			},
-			wantVersion: "",
-			wantRepo:    "",
-		},
-		{
-			name: "single candidate without current version - accept (stale index case)",
-			candidates: []repoVersionInfo{
-				{repoName: "argo", latestVersion: "8.5.0", hasCurrentVersion: false, repoURL: "https://argoproj.github.io/argo-helm"},
-			},
-			wantVersion: "8.5.0",
-			wantRepo:    "argo",
-		},
-		{
-			name: "source-affinity host match picks correct repo",
-			candidates: []repoVersionInfo{
-				{repoName: "bitnami", latestVersion: "6.4.22", hasCurrentVersion: false, repoURL: "https://charts.bitnami.com/bitnami"},
-				{repoName: "argo", latestVersion: "8.5.0", hasCurrentVersion: false, repoURL: "https://argoproj.github.io/argo-helm"},
-			},
-			sourceHosts: []string{"argoproj.github.io"},
-			wantVersion: "8.5.0",
-			wantRepo:    "argo",
-		},
-		{
-			name: "source-affinity registered-domain match (charts.bitnami.com vs bitnami.com)",
-			candidates: []repoVersionInfo{
-				{repoName: "bitnami", latestVersion: "12.0.0", hasCurrentVersion: false, repoURL: "https://charts.bitnami.com/bitnami"},
-				{repoName: "argo", latestVersion: "8.5.0", hasCurrentVersion: false, repoURL: "https://argoproj.github.io/argo-helm"},
-			},
-			sourceHosts: []string{"bitnami.com"},
-			wantVersion: "12.0.0",
-			wantRepo:    "bitnami",
-		},
-		{
-			name: "source-affinity hosts present but none match - bail out",
-			candidates: []repoVersionInfo{
-				{repoName: "bitnami", latestVersion: "6.4.22", hasCurrentVersion: false, repoURL: "https://charts.bitnami.com/bitnami"},
-				{repoName: "argo", latestVersion: "8.5.0", hasCurrentVersion: false, repoURL: "https://argoproj.github.io/argo-helm"},
-			},
-			sourceHosts: []string{"github.com"}, // chart-declared, but not the repo's host
-			wantVersion: "",
-			wantRepo:    "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotVersion, gotRepo := findBestUpgradeVersion(tt.candidates, tt.sourceHosts)
-			if gotVersion != tt.wantVersion {
-				t.Errorf("findBestUpgradeVersion() version = %q, want %q", gotVersion, tt.wantVersion)
-			}
-			if gotRepo != tt.wantRepo {
-				t.Errorf("findBestUpgradeVersion() repo = %q, want %q", gotRepo, tt.wantRepo)
-			}
-		})
-	}
-}
-
-func TestApplyNoClassicCandidateUpgrade_SourceIssueMapping(t *testing.T) {
-	tests := []struct {
-		name                    string
-		noClassicRepos          bool
-		indexLoadFailed         bool
-		hasRegisteredOCISources bool
-		ociFallback             bool
-		wantIssue               UpgradeSourceIssue
-		wantUntracked           bool
-		wantSourceType          string
-		wantErrorContains       string
-	}{
-		{
-			name:                    "registered OCI source wins before repo index error",
-			indexLoadFailed:         true,
-			hasRegisteredOCISources: true,
-			ociFallback:             true,
-			wantSourceType:          "oci",
-		},
-		{
-			name:                    "repo index error when OCI does not resolve",
-			indexLoadFailed:         true,
-			hasRegisteredOCISources: true,
-			wantIssue:               UpgradeSourceIssueRepoIndexError,
-			wantErrorContains:       "failed to load one or more configured repository indexes",
-		},
-		{
-			name:              "no configured chart sources",
-			noClassicRepos:    true,
-			wantIssue:         UpgradeSourceIssueUntracked,
-			wantUntracked:     true,
-			wantErrorContains: "no chart sources configured",
-		},
-		{
-			name:                    "chart absent from configured sources",
-			hasRegisteredOCISources: true,
-			wantIssue:               UpgradeSourceIssueUntracked,
-			wantUntracked:           true,
-			wantErrorContains:       "chart not found in configured repositories or registered OCI sources",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			info := &UpgradeInfo{}
-			applyNoClassicCandidateUpgrade(info, tt.noClassicRepos, tt.indexLoadFailed, tt.hasRegisteredOCISources, func() bool {
-				if !tt.ociFallback {
-					return false
-				}
-				info.SourceType = "oci"
-				info.ChartRef = "oci://reg/charts/app"
-				info.LatestVersion = "1.2.0"
-				return true
-			})
-
-			if info.SourceIssue != tt.wantIssue {
-				t.Fatalf("SourceIssue = %q, want %q (info=%+v)", info.SourceIssue, tt.wantIssue, info)
-			}
-			if info.Untracked != tt.wantUntracked {
-				t.Fatalf("Untracked = %v, want %v (info=%+v)", info.Untracked, tt.wantUntracked, info)
-			}
-			if info.SourceType != tt.wantSourceType {
-				t.Fatalf("SourceType = %q, want %q (info=%+v)", info.SourceType, tt.wantSourceType, info)
-			}
-			if tt.wantErrorContains != "" && !strings.Contains(info.Error, tt.wantErrorContains) {
-				t.Fatalf("Error = %q, want to contain %q", info.Error, tt.wantErrorContains)
-			}
-			if tt.wantErrorContains == "" && info.Error != "" {
-				t.Fatalf("Error = %q, want empty", info.Error)
-			}
-		})
-	}
-}
-
 func TestMarkUpgradeSourceIssue_AmbiguousRepositoryIsNotUntracked(t *testing.T) {
 	info := &UpgradeInfo{}
 
@@ -243,117 +50,6 @@ func TestMarkUpgradeSourceIssue_AmbiguousRepositoryIsNotUntracked(t *testing.T) 
 	}
 	if info.Untracked {
 		t.Fatal("ambiguous classic repository should not be marked untracked")
-	}
-}
-
-func TestChartSourceHosts(t *testing.T) {
-	tests := []struct {
-		name    string
-		home    string
-		sources []string
-		want    []string
-	}{
-		{
-			name: "empty inputs",
-			want: nil,
-		},
-		{
-			name: "bitnami home only",
-			home: "https://bitnami.com",
-			want: []string{"bitnami.com"},
-		},
-		{
-			name: "subdomain expands to registered domain",
-			home: "https://charts.bitnami.com",
-			want: []string{"charts.bitnami.com", "bitnami.com"},
-		},
-		{
-			name:    "deduplicates across home and sources",
-			home:    "https://github.com/argoproj/argo-helm",
-			sources: []string{"https://github.com/argoproj/argo-cd"},
-			want:    []string{"github.com", "argoproj.github.io"},
-		},
-		{
-			name: "argo-cd realistic chart metadata derives argoproj.github.io",
-			home: "https://github.com/argoproj/argo-helm",
-			want: []string{"github.com", "argoproj.github.io"},
-		},
-		{
-			name: "github.io chart home does not seed bare github.io (multi-tenant)",
-			home: "https://argoproj.github.io",
-			want: []string{"argoproj.github.io"},
-		},
-		{
-			name: "ipv4 host does not seed a bogus registered domain",
-			home: "http://127.0.0.1:8080/charts",
-			want: []string{"127.0.0.1"},
-		},
-		{
-			name:    "skips invalid urls",
-			sources: []string{"not a url", "ftp://", ""},
-			want:    nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := chartSourceHosts(tt.home, tt.sources)
-			if !equalStringSlices(got, tt.want) {
-				t.Errorf("chartSourceHosts() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRepoURLMatchesAny(t *testing.T) {
-	tests := []struct {
-		name    string
-		repoURL string
-		hosts   []string
-		want    bool
-	}{
-		{name: "empty repo url", repoURL: "", hosts: []string{"bitnami.com"}, want: false},
-		{name: "empty hosts", repoURL: "https://charts.bitnami.com", hosts: nil, want: false},
-		{name: "exact host match", repoURL: "https://argoproj.github.io/argo-helm", hosts: []string{"argoproj.github.io"}, want: true},
-		{name: "registered-domain match", repoURL: "https://charts.bitnami.com/bitnami", hosts: []string{"bitnami.com"}, want: true},
-		{name: "no match", repoURL: "https://charts.bitnami.com", hosts: []string{"argoproj.github.io"}, want: false},
-		{name: "github.io is multi-tenant: unrelated github.io repos do not match each other", repoURL: "https://kubernetes-sigs.github.io/external-dns", hosts: []string{"argoproj.github.io"}, want: false},
-		{name: "oci registry host match", repoURL: "oci://registry-1.docker.io/bitnamicharts/argo-cd", hosts: []string{"docker.io"}, want: true},
-		{name: "https with explicit port", repoURL: "https://charts.example.com:8443/charts", hosts: []string{"example.com"}, want: true},
-		{name: "https with userinfo", repoURL: "https://user:pass@charts.bitnami.com/bitnami", hosts: []string{"bitnami.com"}, want: true},
-		{name: "invalid url", repoURL: "://broken", hosts: []string{"bitnami.com"}, want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := repoURLMatchesAny(tt.repoURL, tt.hosts); got != tt.want {
-				t.Errorf("repoURLMatchesAny(%q, %v) = %v, want %v", tt.repoURL, tt.hosts, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestMarkCurrentVersion_DoesNotMutateBaseOrLeakAcrossReleases(t *testing.T) {
-	base := []repoVersionInfo{
-		{repoName: "bitnami", latestVersion: "20.0.0"},
-		{repoName: "argo", latestVersion: "8.5.0"},
-	}
-	versions := map[string][]string{
-		"bitnami": {"19.0.0", "20.0.0"},
-		"argo":    {"8.4.0", "8.5.0"},
-	}
-
-	a := markCurrentVersion(base, versions, "20.0.0")
-	b := markCurrentVersion(base, versions, "8.5.0")
-
-	if !a[0].hasCurrentVersion || a[1].hasCurrentVersion {
-		t.Errorf("release A: bitnami should match, argo should not; got %+v", a)
-	}
-	if b[0].hasCurrentVersion || !b[1].hasCurrentVersion {
-		t.Errorf("release B: argo should match, bitnami should not; got %+v", b)
-	}
-	if base[0].hasCurrentVersion || base[1].hasCurrentVersion {
-		t.Errorf("base slice was mutated; per-release flags would leak across releases sharing a chart name: %+v", base)
 	}
 }
 
@@ -1758,66 +1454,8 @@ func secretsToObjects(secrets []*corev1.Secret) []runtime.Object {
 	return objects
 }
 
-func TestResolveUpgradeChartPath_UsesRepositoryHint(t *testing.T) {
-	client := testHelmClientWithRepos(t)
-
-	chartPath, repoName, err := client.resolveUpgradeChartPath("argo-cd", "9.5.11", "argo", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if repoName != "argo" {
-		t.Fatalf("repo = %q, want argo", repoName)
-	}
-	if !strings.Contains(chartPath, "argoproj.github.io") {
-		t.Fatalf("chart path = %q, want argo repo URL", chartPath)
-	}
-}
-
-func TestResolveUpgradeChartPath_RepositoryIndexOCIURLIsAbsolute(t *testing.T) {
-	dir := t.TempDir()
-	cacheDir := filepath.Join(dir, "cache")
-	if err := os.Mkdir(cacheDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	repoFile := filepath.Join(dir, "repositories.yaml")
-	if err := os.WriteFile(repoFile, []byte(`apiVersion: v1
-generated: "2026-05-05T00:00:00Z"
-repositories:
-- name: bitnami
-  url: https://charts.bitnami.com/bitnami
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cacheDir, "bitnami-index.yaml"), []byte(`apiVersion: v1
-entries:
-  nginx:
-  - name: nginx
-    version: 25.0.5
-    urls:
-    - oci://registry-1.docker.io/bitnamicharts/nginx
-generated: "2026-05-05T00:00:00Z"
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	client := &Client{settings: &cli.EnvSettings{
-		RepositoryConfig: repoFile,
-		RepositoryCache:  cacheDir,
-	}}
-
-	chartPath, repoName, err := client.resolveUpgradeChartPath("nginx", "25.0.5", "bitnami", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if repoName != "bitnami" {
-		t.Fatalf("repo = %q, want bitnami", repoName)
-	}
-	if chartPath != "oci://registry-1.docker.io/bitnamicharts/nginx" {
-		t.Fatalf("chart path = %q, want OCI URL unchanged", chartPath)
-	}
-}
-
 func TestListReleasesAcrossNamespacesEmptySerializesAsArray(t *testing.T) {
-	releases, err := (&Client{}).ListReleasesAcrossNamespaces(context.Background(), []string{}, "", nil)
+	releases, err := (&Client{}).ListReleasesAcrossNamespaces(context.Background(), []string{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1830,87 +1468,136 @@ func TestListReleasesAcrossNamespacesEmptySerializesAsArray(t *testing.T) {
 	}
 }
 
-func TestResolveUpgradeChartPath_AmbiguousWithoutHintOrAffinity(t *testing.T) {
-	client := testHelmClientWithRepos(t)
-
-	_, _, err := client.resolveUpgradeChartPath("argo-cd", "9.5.11", "", nil)
-	if err == nil {
-		t.Fatal("expected ambiguous chart error")
-	}
-	if !strings.Contains(err.Error(), "could not identify upstream chart repository") {
-		t.Fatalf("error = %q", err)
-	}
-}
-
-func TestResolveUpgradeChartPath_UsesSourceAffinity(t *testing.T) {
-	client := testHelmClientWithRepos(t)
-
-	chartPath, repoName, err := client.resolveUpgradeChartPath("argo-cd", "9.5.11", "", []string{"argoproj.github.io"})
+func TestLoadTargetChart_IgnoresMissingUnrelatedRepositoryIndex(t *testing.T) {
+	targetChart := &chart.Chart{Metadata: &chart.Metadata{
+		APIVersion: "v2",
+		Name:       "kube-prometheus-stack",
+		Version:    "92.9.0",
+	}}
+	archivePath, err := chartutil.Save(targetChart, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repoName != "argo" {
-		t.Fatalf("repo = %q, want argo", repoName)
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(chartPath, "argoproj.github.io") {
-		t.Fatalf("chart path = %q, want argo repo URL", chartPath)
-	}
-}
 
-func TestResolveUpgradeChartPath_RepositoryHintDoesNotFallback(t *testing.T) {
-	client := testHelmClientWithRepoVersions(t, map[string][]string{
-		"bitnami": {"9.5.11"},
-		"argo":    {"9.5.10"},
-	})
+	var repository *httptest.Server
+	repository = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/index.yaml":
+			_, _ = fmt.Fprintf(w, `apiVersion: v1
+entries:
+  kube-prometheus-stack:
+  - apiVersion: v2
+    name: kube-prometheus-stack
+    version: 92.9.0
+    urls: [%s/kube-prometheus-stack-92.9.0.tgz]
+`, repository.URL)
+		case "/kube-prometheus-stack-92.9.0.tgz":
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(repository.Close)
 
-	_, _, err := client.resolveUpgradeChartPath("argo-cd", "9.5.11", "argo", nil)
-	if err == nil {
-		t.Fatal("expected target version missing from hinted repo")
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "chart argo-cd version 9.5.11 not found in repository argo") {
-		t.Fatalf("error = %q", err)
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(fmt.Sprintf(`apiVersion: v1
+generated: "2026-10-16T00:00:00Z"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami
+- name: prometheus-community
+  url: %s
+`, repository.URL)), 0o600); err != nil {
+		t.Fatal(err)
 	}
-}
+	if err := os.WriteFile(filepath.Join(cacheDir, "prometheus-community-index.yaml"), []byte(fmt.Sprintf(`apiVersion: v1
+entries:
+  kube-prometheus-stack:
+  - apiVersion: v2
+    name: kube-prometheus-stack
+    version: 92.9.0
+    urls: [%s/kube-prometheus-stack-92.9.0.tgz]
+generated: "2026-10-16T00:00:00Z"
+`, repository.URL)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-func TestResolveUpgradeChartPath_ReportsIndexErrorAfterOCIFallbackFails(t *testing.T) {
-	withOCISources(t, nil)
-	client := testHelmClientWithRepoConfigOnly(t)
-
-	_, _, err := client.resolveUpgradeChartPath("postgres", "0.19.6", "", nil)
-	if err == nil {
-		t.Fatal("expected index error after OCI fallback miss")
+	client := &Client{settings: &cli.EnvSettings{
+		RepositoryConfig: repoFile,
+		RepositoryCache:  cacheDir,
+	}}
+	rel := &release.Release{
+		Name: "monitoring",
+		Chart: &chart.Chart{Metadata: &chart.Metadata{
+			Name:    "kube-prometheus-stack",
+			Version: "77.12.0",
+			Home:    repository.URL,
+		}},
 	}
-	if !strings.Contains(err.Error(), "not found in configured repositories or registered OCI sources") {
-		t.Fatalf("error = %q", err)
-	}
-	if !strings.Contains(err.Error(), "failed to load indexes") {
-		t.Fatalf("error = %q", err)
-	}
-}
 
-func TestResolveUpgradeChartPath_UsesOCIBeforeUnrelatedIndexError(t *testing.T) {
-	client := testHelmClientWithRepoConfigOnly(t)
+	bindTestRelease(rel, ChartSourceCandidate{Type: "repository", Reference: "prometheus-community", URL: repository.URL})
 
-	chartPath, repoName, err := client.resolveUpgradeChartPathWithOCIResolver(
-		"postgres",
-		"0.19.6",
-		"",
-		nil,
-		func(chartName, targetVersion string) (string, bool) {
-			if chartName != "postgres" || targetVersion != "0.19.6" {
-				return "", false
-			}
-			return "oci://registry-1.docker.io/cloudpirates/postgres", true
-		},
+	loaded, err := client.loadTargetChart(
+		&action.Configuration{}, rel, "92.9.0", "prometheus-community",
+		func(string, string, string) {},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repoName != "oci" {
-		t.Fatalf("repoName = %q, want oci", repoName)
+	if loaded.Metadata.Name != "kube-prometheus-stack" || loaded.Metadata.Version != "92.9.0" {
+		t.Fatalf("loaded chart = %s %s", loaded.Metadata.Name, loaded.Metadata.Version)
 	}
-	if chartPath != "oci://registry-1.docker.io/cloudpirates/postgres" {
-		t.Fatalf("chartPath = %q, want OCI chart path", chartPath)
+}
+
+func TestLegacyCloudNativePGRequiresExplicitSourceBeforeDownload(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoFile := filepath.Join(dir, "repositories.yaml")
+	if err := os.WriteFile(repoFile, []byte(`apiVersion: v1
+generated: "2026-10-14T00:00:00Z"
+repositories:
+- name: bitnami
+  url: https://charts.bitnami.com/bitnami
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "bitnami-index.yaml"), []byte(`apiVersion: v1
+entries:
+  cloudnative-pg:
+  - name: cloudnative-pg
+    version: 1.0.11
+    appVersion: 1.26.1
+    urls: [cloudnative-pg-1.0.11.tgz]
+generated: "2026-10-14T00:00:00Z"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{settings: &cli.EnvSettings{RepositoryConfig: repoFile, RepositoryCache: cacheDir}}
+
+	rel := &release.Release{
+		Name: "cloudnative-pg",
+		Chart: &chart.Chart{Metadata: &chart.Metadata{
+			Name:    "cloudnative-pg",
+			Version: "0.29.1",
+			Home:    "https://cloudnative-pg.io",
+			Sources: []string{"https://github.com/cloudnative-pg/charts"},
+		}},
+	}
+	_, err := client.loadTargetChart(nil, rel, "1.0.11", "bitnami", func(string, string, string) {})
+	if err == nil || !errors.Is(err, errSourceRequired) {
+		t.Fatalf("upgrade resolution error = %v, want unrelated-source refusal", err)
 	}
 }
 
@@ -2019,7 +1706,7 @@ func TestCompareVersions(t *testing.T) {
 func TestListManifestResourcesAcrossNamespacesHonorsCancellationBetweenNamespaces(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	resources, unavailable, parseErrors, err := (&Client{}).ListManifestResourcesAcrossNamespaces(ctx, []string{"default"}, "", nil)
+	resources, unavailable, parseErrors, err := (&Client{}).ListManifestResourcesAcrossNamespaces(ctx, []string{"default"}, nil)
 	if !errors.Is(err, context.Canceled) || len(resources) != 0 || !equalStringSlices(unavailable, []string{"default"}) || parseErrors != 0 {
 		t.Fatalf("canceled collection = resources=%v unavailable=%v parseErrors=%d err=%v", resources, unavailable, parseErrors, err)
 	}

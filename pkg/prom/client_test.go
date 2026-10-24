@@ -2,9 +2,11 @@ package prom
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -489,5 +491,48 @@ func TestQueryAtAnchorsInstantEvidence(t *testing.T) {
 	})
 	if _, err := NewClient(tr).QueryAt(context.Background(), "up", time.Unix(1700000000, 0)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQueryAnnotations(t *testing.T) {
+	for _, mode := range []string{"instant", "at", "range"} {
+		t.Run(mode, func(t *testing.T) {
+			tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"status":"success","warnings":["store missing"],"infos":["histogram info"],"isPartial":true,"data":{"resultType":"vector","result":[{"metric":{},"value":[1,"2"]}]}}`))
+			})
+			c := NewClient(tr)
+			var result *QueryResult
+			var err error
+			switch mode {
+			case "instant":
+				result, err = c.Query(context.Background(), "up")
+			case "at":
+				result, err = c.QueryAt(context.Background(), "up", time.Unix(1, 0))
+			case "range":
+				result, err = c.QueryRange(context.Background(), "up", time.Unix(1, 0), time.Unix(60, 0), time.Second)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := QueryAnnotations{Warnings: []string{"store missing"}, Infos: []string{"histogram info"}, Partial: true}
+			if !reflect.DeepEqual(result.Annotations, want) {
+				t.Fatalf("annotations = %+v, want %+v", result.Annotations, want)
+			}
+			body, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := *result
+			plain.Annotations = QueryAnnotations{}
+			unchanged, err := json.Marshal(plain)
+			if err != nil || string(body) != string(unchanged) {
+				t.Fatalf("annotations changed REST serialization: %s / %s: %v", body, unchanged, err)
+			}
+			for _, key := range []string{"annotations", "Annotations", "infos", "warnings", "partial"} {
+				if strings.Contains(string(body), `"`+key+`"`) {
+					t.Fatalf("REST leaked %s: %s", key, body)
+				}
+			}
+		})
 	}
 }

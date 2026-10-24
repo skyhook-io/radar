@@ -29,6 +29,7 @@ type Options struct {
 	ManifestParseErrors                  int
 	DeprecatedAPIRequests                []upgradereadiness.DeprecatedAPIRequest
 	DeprecatedAPIMetricsWindow           string
+	DeprecatedAPIMetricsFailure          upgradereadiness.APIMetricsFailure
 	PrometheusRules                      []*unstructured.Unstructured
 	PrometheusRulesInstalled             bool
 	PrometheusRulesDiscoveryAvailable    bool
@@ -78,6 +79,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 		ManifestParseErrors:                  opts.ManifestParseErrors,
 		DeprecatedAPIRequests:                opts.DeprecatedAPIRequests,
 		DeprecatedAPIMetricsWindow:           opts.DeprecatedAPIMetricsWindow,
+		DeprecatedAPIMetricsFailure:          opts.DeprecatedAPIMetricsFailure,
 		PrometheusRules:                      opts.PrometheusRules,
 		PrometheusRulesInstalled:             opts.PrometheusRulesInstalled,
 		PrometheusRulesDiscoveryAvailable:    opts.PrometheusRulesDiscoveryAvailable,

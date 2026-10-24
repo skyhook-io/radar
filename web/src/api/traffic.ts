@@ -99,8 +99,10 @@ export interface TrafficScope {
 
 function trafficScopeParams({ namespaces = [], since, excludeNamespaces, excludeHost }: TrafficScope): URLSearchParams {
   const params = new URLSearchParams()
-  // With several namespaces in view the server reads them from the saved pick.
+  // Every namespace in view is sent: a read naming none covers every
+  // namespace the caller can see.
   if (namespaces.length === 1) params.set('namespace', namespaces[0])
+  else if (namespaces.length > 1) params.set('namespaces', namespaces.join(','))
   if (since) params.set('since', since)
   if (excludeNamespaces?.length) params.set('excludeNamespaces', excludeNamespaces.join(','))
   if (excludeHost) params.set('excludeHost', 'true')

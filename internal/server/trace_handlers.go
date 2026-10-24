@@ -12,11 +12,9 @@ import (
 )
 
 // traceNamespaceCeiling returns the caller's RBAC-allowed namespaces (nil =
-// unrestricted). A trace subject is directly addressed, so gating it on the
-// in-app namespace VIEW pick (parseNamespacesForUser's fallback) was wrong
-// twice over: page navigation races the pick save, so a freshly-opened detail
-// page read the previous page's pick and claimed "RBAC denies access" on a
-// fully readable resource; and the pick redacted cross-namespace fan-out (a
+// unrestricted). A trace subject is directly addressed, so a namespace view
+// filter must never gate it: it would claim "RBAC denies access" on a fully
+// readable resource outside the view, and redact cross-namespace fan-out (a
 // parent Gateway living in its own namespace) the caller is allowed to see.
 // Mirror preflightResourceGet: RBAC only. ForceNamespaceScope still wins -
 // in that mode nothing outside the target namespace may be served.

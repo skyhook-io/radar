@@ -126,6 +126,7 @@ export interface Capabilities {
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
   // Karpenter discovery and NodePool read state. Optional on the wire for the
   // same newer-frontend/older-backend reason as `deployment` below — consumers
@@ -160,6 +161,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+ helmSourceIdentity?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
@@ -1137,7 +1139,7 @@ export interface UpgradeInfo {
   error?: string
   // Machine-readable source-resolution failure, used to make the Helm drawer
   // explain whether tracking an OCI source can help.
-  sourceIssue?: 'untracked' | 'repo_index_error' | 'ambiguous_repository' | 'ambiguous_source' | 'source_unavailable'
+  sourceIssue?: 'source_confirmation_required' | 'source_change_required' | 'release_changing' | 'untracked' | 'repo_index_error' | 'ambiguous_repository' | 'ambiguous_source' | 'source_unavailable'
   // True only when the error is a genuinely untracked source (registering a
   // chart source could fix it). Kept for compatibility; prefer sourceIssue.
   untracked?: boolean
@@ -1147,7 +1149,26 @@ export type ChartSourceCandidate =
   | { type: 'repository'; reference: string; url: string }
   | { type: 'oci'; reference: string; url?: never }
 
+export interface SourceUpgradeSelection {
+ source: ChartSourceCandidate
+ expectedRevision: number
+ expectedSource: ChartSourceCandidate | null
+ previewDigest?: string
+}
+
+export interface ChartSourceSuggestion {
+ source: ChartSourceCandidate
+ current: boolean
+ hasInstalledVersion: boolean
+ state: 'available' | 'index_unavailable' | 'unchecked'
+}
+
 export interface ChartSourceStatus {
+ changing?: boolean
+ revision?: number
+ confirmed?: boolean
+ sourceChangeRequired?: boolean
+ suggestions?: ChartSourceSuggestion[]
   recorded?: ChartSourceCandidate
   configured: boolean
   available: boolean
@@ -1168,6 +1189,9 @@ export interface ApplyValuesRequest {
 
 // Response for previewing values changes
 export interface ValuesPreviewResponse {
+	baselineSource?: ChartSourceCandidate
+ previewDigest?: string
+ baselineRevision?: number
   currentValues: Record<string, unknown>
   newValues: Record<string, unknown>
   manifestDiff: string
@@ -1236,6 +1260,7 @@ export interface InstallChartRequest {
 
 // ArtifactHub chart with rich metadata
 export interface ArtifactHubChart {
+  official?: boolean
   packageId: string
   name: string
   version: string
@@ -1258,6 +1283,9 @@ export interface ArtifactHubChart {
 
 // ArtifactHub repository info
 export interface ArtifactHubRepository {
+  organizationDisplayName?: string
+  userAlias?: string
+  displayName?: string
   name: string
   url: string
   official?: boolean

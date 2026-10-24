@@ -24,6 +24,8 @@ export interface GitOpsTreeNode {
   tool: GitOpsTreeTool
   sync?: SyncStatus
   health?: GitOpsHealthStatus
+  // A local lookup confirmed NotFound; independent of controller health.
+  missing?: boolean
   // Who assessed `health`. 'controller' is the GitOps controller's own
   // verdict; 'radar' is Radar's read of the live object (topology status, or
   // the issues engine's finding when the controller's verdict isn't

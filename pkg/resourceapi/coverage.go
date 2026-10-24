@@ -53,7 +53,10 @@ const (
 	NarrowedByUserAccess Narrowing = "user_access"
 	// NarrowedByNamespacePin: Radar's --namespace-scope pin.
 	NarrowedByNamespacePin Narrowing = "namespace_pin"
-	// NarrowedByNamespaceSelection: the user's saved namespace selection.
+	// NarrowedByNamespaceSelection: a namespace selection the server applied
+	// to an implicitly broad request. The picker's stored selection is not
+	// one: data reads never inherit it, and the UI sends it as named
+	// namespaces.
 	NarrowedByNamespaceSelection Narrowing = "namespace_selection"
 	// NarrowedByNamespaceCollection: the namespaces Radar collects a kind in,
 	// when its identity can't list the kind cluster-wide. Whoever runs Radar

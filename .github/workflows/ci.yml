@@ -426,9 +426,10 @@ jobs:
         run: ./scripts/test-chart.sh
 
       - name: Intall helmfile
-        uses: helmfile/helmfile-action@v2.2.0
+        uses: helmfile/helmfile-action@v2.4.8
         with:
-          helmfile-auto-init: 'true'
+          # Auto-init bypasses helm-version and keeps the earlier Helm 4 binary.
+          helmfile-auto-init: 'false'
           # Helm 3 ONLY here: helm-unittest cannot run under Helm 4's plugin
           # layout (fork/exec untt: no such file) — upstream tracking issue
           # helm-unittest/helm-unittest#777. Lift to 4 when that closes.

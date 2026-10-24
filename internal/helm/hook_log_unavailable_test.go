@@ -28,3 +28,19 @@ func TestFetchHookLogReportsLogsUnavailable(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, ok)
 	}
 }
+
+func TestFetchHookLogPreservesApplicationWatcherError(t *testing.T) {
+	const applicationLog = "failed to create fsnotify watcher: too many open files"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(applicationLog + "\n"))
+	}))
+	defer server.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := fetchHookLog(context.Background(), client, "apps", "migrate-abc", "migrate", false)
+	if !ok || got.Error != "" || len(got.Lines) != 1 || got.Lines[0] != applicationLog {
+		t.Fatalf("application output changed: %+v, %v", got, ok)
+	}
+}
