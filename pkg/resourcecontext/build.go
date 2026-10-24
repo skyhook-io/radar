@@ -221,7 +221,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			rel = &topology.Relationships{}
 		}
 		ref := resourceid.Ref{Group: ident.Group, Kind: ident.Kind, Namespace: ident.Namespace, Name: ident.Name}
-		opts.Ownership(rel, ownership.Observe(ref, obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), m))
+		opts.Ownership(rel, ownership.Observe(ref, m))
 		answered = true
 	}
 
@@ -263,7 +263,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		case rel.Ownership.PrimaryOwnerState == "withheld":
 			omitted.add("owner", OmittedRBACDenied)
 		case rel.Ownership.PrimaryOwnerState == "unknown",
-			(rel.Ownership.UnavailableReason != "" || rel.Ownership.SubjectReplaced) && ownerFromObject(obj, ident.Namespace) != nil:
+			rel.Ownership.UnavailableReason != "" && ownerFromObject(obj, ident.Namespace) != nil:
 			omitted.add("owner", OmittedUnavailable)
 		}
 	} else if owner := ownerFromObject(obj, ident.Namespace); owner != nil && !answered {

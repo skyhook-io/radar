@@ -29,7 +29,7 @@ func fetched(t *testing.T, w ownershiptest.World, ref resourceid.Ref) ownership.
 	t.Helper()
 	for _, o := range w.Objects {
 		if o.Ref == ref {
-			return ownership.Observation{Ref: o.Ref, APIVersion: o.APIVersion, UID: o.UID, OwnerReferences: o.Owners}
+			return ownership.Observation{Ref: o.Ref, UID: o.UID, OwnerReferences: o.Owners}
 		}
 	}
 	t.Fatalf("no %v in the fixture", ref)
@@ -312,7 +312,7 @@ func TestApplyOwnershipWithoutAnAnswer(t *testing.T) {
 		check   func(*OwnershipCoverage) bool
 	}{
 		"the caller may not read it": {denyPods{}, fetched(t, w, pod), func(c *OwnershipCoverage) bool { return c.UnavailableReason == string(readreason.UserForbidden) }},
-		"it was recreated":           {ownership.Unrestricted(), recreated, func(c *OwnershipCoverage) bool { return c.SubjectReplaced }},
+		"it was recreated":           {ownership.Unrestricted(), recreated, func(c *OwnershipCoverage) bool { return c.UnavailableReason == string(readreason.ReadError) }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rel := &Relationships{Owner: &ResourceRef{Kind: "Deployment"}, Children: []ResourceRef{{Kind: "Pod"}}, manageSources: []ResourceRef{{Kind: "Application"}}}
@@ -356,7 +356,7 @@ func TestApplyOwnershipCapsChildren(t *testing.T) {
 		b.Add("", "Pod", "alpha", fmt.Sprintf("wide-%04d", i), rs.OwnerRef(true))
 	}
 	rel := &Relationships{}
-	ApplyOwnership(rel, ownershipView(t, b.World(), ownership.Unrestricted()), ownership.Observation{Ref: rs.Ref, APIVersion: rs.APIVersion, UID: rs.UID})
+	ApplyOwnership(rel, ownershipView(t, b.World(), ownership.Unrestricted()), ownership.Observation{Ref: rs.Ref, UID: rs.UID})
 	if len(rel.Children) != maxOwnershipRefs || !rel.Ownership.Children.Truncated || rel.Ownership.Children.Complete {
 		t.Fatalf("%d children, coverage %+v; want the first %d, marked truncated", len(rel.Children), rel.Ownership.Children, maxOwnershipRefs)
 	}
@@ -369,9 +369,9 @@ type searchCounter struct {
 	searches int
 }
 
-func (s *searchCounter) DependentCandidates(uid types.UID, domain ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
+func (s *searchCounter) DependentCandidates(uid types.UID, domain ownership.SearchScope) ownership.DependentCandidatesRead {
 	s.searches++
-	return s.ReadSession.DependentCandidates(uid, domain, limit)
+	return s.ReadSession.DependentCandidates(uid, domain)
 }
 
 func (s *searchCounter) Members(manager resourceid.Ref) ownership.MembersRead {
@@ -388,7 +388,7 @@ func (s *searchCounter) RecordingManagers(ref resourceid.Ref) ownership.Recordin
 // ownership answer at all rather than one with nothing in it and no reason.
 func TestApplyOwnershipSaysNothingOfAnEvent(t *testing.T) {
 	w := ownershiptest.Fixture()
-	event := ownership.Observation{Ref: resourceid.Ref{Kind: "Event", Namespace: "alpha", Name: "e1"}, APIVersion: "v1", UID: "uid-alpha-e1"}
+	event := ownership.Observation{Ref: resourceid.Ref{Kind: "Event", Namespace: "alpha", Name: "e1"}, UID: "uid-alpha-e1"}
 	rel := &Relationships{Owner: &ResourceRef{Kind: "Pod", Namespace: "alpha", Name: "stale"}}
 	ApplyOwnership(rel, ownershipView(t, w, ownership.Unrestricted()), event)
 	if rel.Ownership != nil || rel.Owner != nil || rel.Children != nil {
@@ -422,7 +422,7 @@ func TestApplyOwnerAnswersTheOwnerWithoutSearching(t *testing.T) {
 			continue
 		}
 		if got != nil && (got.PrimaryOwnerState != want.PrimaryOwnerState || !reflect.DeepEqual(got.OwnerRef, want.OwnerRef) || got.OwnerReason != want.OwnerReason ||
-			got.UnavailableReason != want.UnavailableReason || got.SubjectReplaced != want.SubjectReplaced) {
+			got.UnavailableReason != want.UnavailableReason) {
 			t.Errorf("%v: owner coverage %+v, want %+v", o.Ref, got, want)
 		}
 	}
@@ -448,9 +448,6 @@ func TestApplyOwnershipNamesOnlyManagersTheCallerReads(t *testing.T) {
 		rel := &Relationships{manageSources: []ResourceRef{refOf(app.Ref)}}
 		v := ownershipView(t, tc.w, tc.access)
 		ApplyOwnership(rel, v, fetched(t, tc.w, cm.Ref))
-		if err := v.ValidateAnswers(); err != nil {
-			t.Fatal(err)
-		}
 		if len(rel.Managers) != tc.want {
 			t.Errorf("%s: managers %v, want %d", name, refsText(rel.Managers), tc.want)
 		}
@@ -562,7 +559,7 @@ func TestApplyOwnershipListsAnUnreadKindOnce(t *testing.T) {
 		namespaces = append(namespaces, fmt.Sprint("team-", i))
 	}
 	rel := &Relationships{}
-	ApplyOwnership(rel, ownershipView(t, w, namespaces), ownership.Observation{Ref: node.Ref, APIVersion: node.APIVersion, UID: node.UID})
+	ApplyOwnership(rel, ownershipView(t, w, namespaces), ownership.Observation{Ref: node.Ref, UID: node.UID})
 	var unread []OwnershipGap
 	for _, g := range rel.Ownership.Children.NotChecked {
 		if g.Group == widgets.Group && g.Kind == widgets.Kind {
@@ -573,7 +570,7 @@ func TestApplyOwnershipListsAnUnreadKindOnce(t *testing.T) {
 		t.Fatalf("Widget gaps on the Node = %+v; want one, across the caller's namespaces", unread)
 	}
 	rel = &Relationships{}
-	ApplyOwnership(rel, ownershipView(t, w, namespaces), ownership.Observation{Ref: rs.Ref, APIVersion: rs.APIVersion, UID: rs.UID})
+	ApplyOwnership(rel, ownershipView(t, w, namespaces), ownership.Observation{Ref: rs.Ref, UID: rs.UID})
 	if !slices.Contains(rel.Ownership.Children.NotChecked, OwnershipGap{Group: widgets.Group, Kind: widgets.Kind, Reason: string(readreason.RadarKindNotCollected)}) {
 		t.Fatalf("a namespaced owner's gaps = %+v; want Widget, wherever the search looked", rel.Ownership.Children.NotChecked)
 	}
@@ -582,7 +579,7 @@ func TestApplyOwnershipListsAnUnreadKindOnce(t *testing.T) {
 	// once, naming no namespace when it was more than one.
 	w.Collection[resourceid.GroupKind{Kind: "Pod"}] = ownershiptest.Collection{State: ownershiptest.Loading, Namespaces: []string{"alpha", "beta"}}
 	rel = &Relationships{}
-	ApplyOwnership(rel, ownershipView(t, w, namespacesOnly{"alpha", "beta"}), ownership.Observation{Ref: node.Ref, APIVersion: node.APIVersion, UID: node.UID})
+	ApplyOwnership(rel, ownershipView(t, w, namespacesOnly{"alpha", "beta"}), ownership.Observation{Ref: node.Ref, UID: node.UID})
 	var loading []OwnershipGap
 	for _, g := range rel.Ownership.Children.NotChecked {
 		if g.Kind == "Pod" {
@@ -625,9 +622,6 @@ func TestApplyOwnershipTakesGitOpsManagersFromTheirLists(t *testing.T) {
 		}
 		v := ownershipView(t, w, tc.access)
 		ApplyOwnership(rel, v, fetched(t, w, tc.subject.Ref))
-		if err := v.ValidateAnswers(); err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
 		if got := refsText(rel.Managers); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: managers %v, want %v", tc.name, got, tc.want)
 		}
@@ -647,9 +641,6 @@ func TestApplyOwnershipKeepsAReadListOverAGapElsewhere(t *testing.T) {
 	v := ownershipView(t, w, ownership.Unrestricted())
 	rel := &Relationships{manageSources: []ResourceRef{refOf(manager.Ref)}}
 	ApplyOwnership(rel, v, fetched(t, w, subject.Ref))
-	if err := v.ValidateAnswers(); err != nil {
-		t.Fatal(err)
-	}
 	if len(rel.Managers) != 0 {
 		t.Errorf("managers %v, want none; gaps %+v", refsText(rel.Managers), v.RecordingManagers(subject.Ref).Gaps)
 	}
@@ -687,9 +678,6 @@ func TestApplyOwnershipKeepsTheEdgeOfAManagerBehindAHiddenGap(t *testing.T) {
 	v := ownership.NewView(stalledManagers{s}, wholeKindUndecided{ownership.Unrestricted()})
 	rel := &Relationships{manageSources: []ResourceRef{refOf(app.Ref)}}
 	ApplyOwnership(rel, v, fetched(t, w, cfg.Ref))
-	if err := v.ValidateAnswers(); err != nil {
-		t.Fatal(err)
-	}
 	if got := refsText(rel.Managers); !slices.Equal(got, []string{app.Ref.String()}) {
 		t.Errorf("managers %v, want %v from its edge", got, app.Ref)
 	}

@@ -1,13 +1,11 @@
 package k8s
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	goruntime "runtime"
 	"slices"
 	"testing"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -62,12 +60,12 @@ func (s *scriptedSource) Begin() (ownership.ReadSession, error) {
 	return scriptedSession{ReadSession: inner, validate: v, calls: &s.calls}, nil
 }
 
-func TestAnswerOwnershipRetriesChangedObjectsAndRefusesReplacedCaches(t *testing.T) {
+func TestAnswerOwnershipRefusesReplacedCaches(t *testing.T) {
 	pod := resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "web-1-a"}
 	var fetched ownership.Observation
 	for _, o := range ownershiptest.Fixture().Objects {
 		if o.Ref == pod {
-			fetched = ownership.Observation{Ref: o.Ref, APIVersion: o.APIVersion, UID: o.UID, OwnerReferences: o.Owners}
+			fetched = ownership.Observation{Ref: o.Ref, UID: o.UID, OwnerReferences: o.Owners}
 		}
 	}
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
@@ -78,8 +76,6 @@ func TestAnswerOwnershipRetriesChangedObjectsAndRefusesReplacedCaches(t *testing
 		unavailable readreason.Code
 	}{
 		{"valid at once", &scriptedSource{}, 1, ""},
-		{"objects changed once", &scriptedSource{validate: []error{ownership.ErrObjectsChanged}}, 2, ""},
-		{"objects changed twice", &scriptedSource{validate: []error{ownership.ErrObjectsChanged, ownership.ErrObjectsChanged}}, 2, readreason.ReadError},
 		{"caches replaced", &scriptedSource{validate: []error{ownership.ErrCachesReplaced}}, 1, readreason.ConnectionChanged},
 		{"no caches", &scriptedSource{begin: errors.New("not connected")}, 0, readreason.ClusterConnecting},
 	} {
@@ -95,7 +91,7 @@ func TestAnswerOwnershipRetriesChangedObjectsAndRefusesReplacedCaches(t *testing
 				t.Errorf("calls %v, want %v: each answer is presented before it is validated", tc.source.calls, want)
 			}
 			if wantInactive := map[bool]int{true: 1, false: 0}[tc.unavailable == ""]; len(rel.OlderRevisions) != wantInactive {
-				t.Errorf("inactive children %v; a refused answer keeps none, a retried one only its last", rel.OlderRevisions)
+				t.Errorf("inactive children %v; a refused answer keeps none", rel.OlderRevisions)
 			}
 			if tc.source.begun != tc.begun {
 				t.Errorf("began %d sessions, want %d", tc.source.begun, tc.begun)
@@ -170,7 +166,7 @@ func TestAnswerOwnershipWaitsForDiscovery(t *testing.T) {
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 	for name, apply := range map[string]func(*topology.Relationships, *ownership.View, ownership.Observation){"full": topology.ApplyOwnership, "owner only": topology.ApplyOwner} {
 		rel := &topology.Relationships{}
-		answerOwnership(source, apply, nil, rel, ownership.Observe(subject, "apps/v1", deployment), unrestricted)
+		answerOwnership(source, apply, nil, rel, ownership.Observe(subject, deployment), unrestricted)
 		if rel.Ownership == nil || rel.Ownership.UnavailableReason != string(readreason.ClusterConnecting) || len(rel.Children) != 0 {
 			t.Errorf("%s: ownership %+v, children %v; want unavailable while discovery hasn't answered", name, rel.Ownership, rel.Children)
 		}
@@ -189,7 +185,7 @@ func TestSplitHistoryCostsNothingForAnOwnerWithoutHistory(t *testing.T) {
 	_, _, source, _ := historyFixture(t, objects...)
 	rs := objects[0].(*appsv1.ReplicaSet)
 	subject := resourceid.Ref{Group: "apps", Kind: "ReplicaSet", Namespace: "shop", Name: "web-big"}
-	fetched := ownership.Observe(subject, "apps/v1", rs)
+	fetched := ownership.Observe(subject, rs)
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 	bytes := func(present func(*topology.Relationships, *ownership.View, ownership.ReadSession)) uint64 {
 		const answers = 5
@@ -223,7 +219,7 @@ func TestSplitHistoryReadsTheSessionsCache(t *testing.T) {
 	)
 	subject := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
 	rel := &topology.Relationships{}
-	answerOwnership(source, topology.ApplyOwnership, splitHistory(subject, deployment), rel, ownership.Observe(subject, "apps/v1", deployment), func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
+	answerOwnership(source, topology.ApplyOwnership, splitHistory(subject, deployment), rel, ownership.Observe(subject, deployment), func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
 	if want := []topology.ResourceRef{historyChild("web-1"), historyChild("web-3")}; !slices.Equal(rel.Children, want) {
 		t.Errorf("children %v, want %v: the live revision and one still holding a Pod", rel.Children, want)
 	}
@@ -239,50 +235,5 @@ func TestSplitHistoryReadsTheSessionsCache(t *testing.T) {
 	splitHistory(subject, deployment)(rel, ownership.NewView(scripted, ownership.Unrestricted()), scripted)
 	if len(rel.OlderRevisions) != 0 {
 		t.Errorf("a session over other caches moved %v; only the typed cache it reads can say", rel.OlderRevisions)
-	}
-}
-
-// The view captured a ReplicaSet as the Deployment's child; one replaced at
-// its name before the split, idle and at an older revision, must not stand in
-// for it, whether the captured one runs a Pod or is the current revision
-// scaled to zero.
-func TestSplitHistoryJudgesTheReplicaSetTheViewCaptured(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		captured *appsv1.ReplicaSet
-		pods     []runtime.Object
-	}{
-		{"running a Pod", historyReplicaSet("web-3", "3", 1, 1), []runtime.Object{historyPod("web-3-a", "web-3")}},
-		{"the current revision scaled to zero", historyReplicaSet("web-3", "3", 0, 0), nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client, typed, source, deployment := historyFixture(t, append([]runtime.Object{tc.captured}, tc.pods...)...)
-			subject := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
-			replaceAfterAnswering := func(rel *topology.Relationships, v *ownership.View, fetched ownership.Observation) {
-				topology.ApplyOwnership(rel, v, fetched)
-				replacement := historyReplicaSet("web-3", "1", 0, 0)
-				replacement.UID, replacement.OwnerReferences = "uid-replacement", nil
-				ctx := context.Background()
-				if err := client.AppsV1().ReplicaSets("shop").Delete(ctx, "web-3", metav1.DeleteOptions{}); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := client.AppsV1().ReplicaSets("shop").Create(ctx, replacement, metav1.CreateOptions{}); err != nil {
-					t.Fatal(err)
-				}
-				for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-					if obj, found, ok := typed.ReadableObject(k8score.ReplicaSets, "shop", "web-3"); ok && found && obj.(*appsv1.ReplicaSet).UID == replacement.UID {
-						break
-					}
-					if time.Now().After(deadline) {
-						t.Fatal("the replacement never reached the cache")
-					}
-				}
-			}
-			rel := &topology.Relationships{}
-			answerOwnership(source, replaceAfterAnswering, splitHistory(subject, deployment), rel, ownership.Observe(subject, "apps/v1", deployment), func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
-			if len(rel.OlderRevisions) != 0 || !slices.Equal(rel.Children, []topology.ResourceRef{historyChild("web-3")}) {
-				t.Fatalf("children %v, inactive %v: the split judged the replacement, not the ReplicaSet the view captured", rel.Children, rel.OlderRevisions)
-			}
-		})
 	}
 }

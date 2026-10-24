@@ -589,9 +589,6 @@ type OwnershipCoverage struct {
 	Children ChildrenCoverage `json:"children"`
 	// Manages is set for a GitOps manager whose status lists its members.
 	Manages *MembersCoverage `json:"manages,omitempty"`
-	// SubjectReplaced: the object the answers are about was replaced after the one
-	// this response shows was read, so there are none.
-	SubjectReplaced bool `json:"subjectReplaced,omitempty"`
 	// UnavailableReason is a reason code when Radar couldn't answer at all.
 	UnavailableReason string `json:"unavailableReason,omitempty"`
 }

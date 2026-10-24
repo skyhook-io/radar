@@ -28,127 +28,6 @@ func changeManager(t *testing.T, s *countingSession, w ownershiptest.World, mana
 	s.now = later
 }
 
-// Asked twice about one object, the view gives one answer, from the managers
-// it captured, however they changed since.
-func TestRecordingManagersAnswerEachObjectOnce(t *testing.T) {
-	b := ownershiptest.NewBuilder()
-	cfg := b.Add("", "ConfigMap", "alpha", "cfg")
-	app := b.Manager(ownership.ArgoApplication, "argocd", "app", ownership.MembersRecorded, "alpha", cfg.Ref)
-	w := b.World()
-	s := newCountingSession(t, w)
-	v := ownership.NewView(s, ownership.Unrestricted())
-	before := v.RecordingManagers(cfg.Ref)
-	if len(before.Managers) != 1 {
-		t.Fatalf("RecordingManagers = %+v, want %v", before, app.Ref)
-	}
-	changeManager(t, s, w, app.Ref, func(o *ownershiptest.Object) { o.Members = nil })
-	if after := v.RecordingManagers(cfg.Ref); len(after.Managers) != 1 || after.Managers[0].Ref != app.Ref {
-		t.Fatalf("asked again, RecordingManagers = %+v; want the first answer", after)
-	}
-	if err := v.ValidateAnswers(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A manager's member list, read through Members, and a search for the
-// managers recording an object must agree, in either order; when the manager
-// changed between them, ValidateAnswers says so.
-func TestRecordingManagersAgreeWithTheMemberListsTheViewRead(t *testing.T) {
-	setup := func(t *testing.T, members ...resourceid.Ref) (*ownership.View, *countingSession, ownershiptest.World, ownershiptest.Object, ownershiptest.Object) {
-		b := ownershiptest.NewBuilder()
-		cfg := b.Add("", "ConfigMap", "alpha", "cfg")
-		app := b.Manager(ownership.ArgoApplication, "argocd", "app", ownership.MembersRecorded, "alpha", members...)
-		w := b.World()
-		s := newCountingSession(t, w)
-		return ownership.NewView(s, ownership.Unrestricted()), s, w, cfg, app
-	}
-	cfgRef := resourceid.Ref{Kind: "ConfigMap", Namespace: "alpha", Name: "cfg"}
-	t.Run("one version, both ways", func(t *testing.T) {
-		v, _, _, cfg, app := setup(t, cfgRef)
-		if got := v.Members(app.Ref); len(got.Members) != 1 {
-			t.Fatalf("Members = %+v", got)
-		}
-		if got := v.RecordingManagers(cfg.Ref); len(got.Managers) != 1 {
-			t.Fatalf("RecordingManagers = %+v", got)
-		}
-		if err := v.ValidateAnswers(); err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Run("a readable list, then the manager found unreadable", func(t *testing.T) {
-		v, s, w, cfg, app := setup(t)
-		if got := v.Members(app.Ref); got.Membership != ownership.MembersRecorded {
-			t.Fatalf("Members = %+v", got)
-		}
-		changeManager(t, s, w, app.Ref, func(o *ownershiptest.Object) { o.Membership = ownership.MembersUnreadable })
-		v.RecordingManagers(cfg.Ref)
-		if v.ValidateAnswers() == nil {
-			t.Fatal("a manager read with a readable list, then found unreadable, passed ValidateAnswers")
-		}
-	})
-	t.Run("a list naming the object, then the manager not found", func(t *testing.T) {
-		v, s, w, cfg, app := setup(t, cfgRef)
-		v.Members(app.Ref)
-		changeManager(t, s, w, app.Ref, func(o *ownershiptest.Object) { o.Members = nil })
-		v.RecordingManagers(cfg.Ref)
-		if v.ValidateAnswers() == nil {
-			t.Fatal("a member list naming the object, then a search not finding its manager, passed ValidateAnswers")
-		}
-	})
-	t.Run("the manager not found, then its list naming the object", func(t *testing.T) {
-		v, s, w, cfg, app := setup(t)
-		if got := v.RecordingManagers(cfg.Ref); len(got.Managers) != 0 {
-			t.Fatalf("RecordingManagers = %+v", got)
-		}
-		changeManager(t, s, w, app.Ref, func(o *ownershiptest.Object) { o.Members = []resourceid.Ref{cfgRef} })
-		v.Members(app.Ref)
-		if v.ValidateAnswers() == nil {
-			t.Fatal("a search not finding the manager, then its member list naming the object, passed ValidateAnswers")
-		}
-	})
-	t.Run("the manager found unreadable, then its list read", func(t *testing.T) {
-		v, s, w, cfg, app := setup(t)
-		changeManager(t, s, w, app.Ref, func(o *ownershiptest.Object) { o.Membership = ownership.MembersUnreadable })
-		if got := v.RecordingManagers(cfg.Ref); len(got.Unreadable) != 1 {
-			t.Fatalf("RecordingManagers = %+v", got)
-		}
-		changeManager(t, s, w, app.Ref, func(o *ownershiptest.Object) { o.Membership = ownership.MembersRecorded })
-		v.Members(app.Ref)
-		if v.ValidateAnswers() == nil {
-			t.Fatal("a manager found unreadable, then read with a readable list, passed ValidateAnswers")
-		}
-	})
-}
-
-// A manager one search found unreadable and the next found readable, listing
-// that search's object or not, changed between them.
-func TestRecordingManagersSeeEachManagerInOneState(t *testing.T) {
-	for name, members := range map[string]func(other resourceid.Ref) []resourceid.Ref{
-		"listing the next object": func(other resourceid.Ref) []resourceid.Ref { return []resourceid.Ref{other} },
-		"listing neither object":  func(resourceid.Ref) []resourceid.Ref { return nil },
-	} {
-		t.Run(name, func(t *testing.T) {
-			b := ownershiptest.NewBuilder()
-			cfg := b.Add("", "ConfigMap", "alpha", "cfg")
-			other := b.Add("", "ConfigMap", "alpha", "other")
-			app := b.Manager(ownership.ArgoApplication, "argocd", "app", ownership.MembersUnreadable, "alpha")
-			w := b.World()
-			s := newCountingSession(t, w)
-			v := ownership.NewView(s, ownership.Unrestricted())
-			if got := v.RecordingManagers(cfg.Ref); len(got.Unreadable) != 1 {
-				t.Fatalf("RecordingManagers = %+v", got)
-			}
-			changeManager(t, s, w, app.Ref, func(o *ownershiptest.Object) {
-				o.Membership, o.Members = ownership.MembersRecorded, members(other.Ref)
-			})
-			v.RecordingManagers(other.Ref)
-			if v.ValidateAnswers() == nil {
-				t.Fatal("a manager unreadable for one search and readable for the next passed ValidateAnswers")
-			}
-		})
-	}
-}
-
 // A caller who may read no manager of a kind learns nothing of how Radar
 // collects it.
 func TestRecordingManagersHideGapsOfKindsTheCallerCantRead(t *testing.T) {
@@ -172,8 +51,8 @@ func (s fixedManagers) RecordingManagers(resourceid.Ref) ownership.RecordingMana
 	return s.answer
 }
 
-// A manager's list was searched unless the object couldn't be named, or a gap
-// leaves the manager's kind unread where the manager is.
+// A manager's list was searched unless a gap leaves the manager's kind unread
+// where the manager is.
 func TestRecordingManagersAnswerSearched(t *testing.T) {
 	scan, err := ownershiptest.Scan(ownershiptest.Fixture()).Begin()
 	if err != nil {
@@ -189,7 +68,6 @@ func TestRecordingManagersAnswerSearched(t *testing.T) {
 		want   bool
 	}{
 		{"no gaps", ownership.RecordingManagersRead{}, true},
-		{"the object can't be named", ownership.RecordingManagersRead{TargetUnresolvable: true}, false},
 		{"its namespace loading", ownership.RecordingManagersRead{Gaps: []ownership.Gap{gap("alpha", readreason.KindSyncPending)}}, false},
 		{"another namespace loading", ownership.RecordingManagersRead{Gaps: []ownership.Gap{gap("beta", readreason.KindSyncPending)}}, true},
 		{"the namespaces Radar doesn't collect", ownership.RecordingManagersRead{Gaps: []ownership.Gap{gap("", readreason.RadarNamespaceNotCollected)}}, true},
@@ -230,8 +108,8 @@ func TestRecordingManagersSearchedCountsGapsTheCallerCantRead(t *testing.T) {
 	}
 }
 
-// A manager the caller may not read takes no part in the view's answers, so
-// however it changes between two searches, ValidateAnswers holds.
+// A manager the caller may not read takes no part in the view's answers,
+// however it changes between two searches.
 func TestRecordingManagersIgnoreManagersTheCallerCantRead(t *testing.T) {
 	for decision, hidden := range map[string]access{
 		"denied":    {denied: []resourceid.GroupKind{ownership.ArgoApplication}},
@@ -269,9 +147,6 @@ func TestRecordingManagersIgnoreManagersTheCallerCantRead(t *testing.T) {
 				}
 				if got := v.RecordingManagers(second.Ref); len(got.Managers)+len(got.Unreadable) != 0 {
 					t.Fatalf("RecordingManagers = %+v; want the manager hidden", got)
-				}
-				if err := v.ValidateAnswers(); err != nil {
-					t.Errorf("only a manager the caller can't read changed, and ValidateAnswers = %v", err)
 				}
 			})
 		}

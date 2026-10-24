@@ -143,9 +143,6 @@ describe('RelatedResourcesSection ownership', () => {
   })
 
   it('says why owner and children could not be read at all', () => {
-    expect(renderToString(<RelatedResourcesSection relationships={{ ownership: { subjectReplaced: true, children: { complete: false } } }} />)).toContain(
-      'the object was deleted and recreated after it was opened',
-    )
     expect(renderToString(<RelatedResourcesSection relationships={{ ownership: { unavailableReason: 'connection_changed', children: { complete: false } } }} />)).toContain(
       'Owner and children couldn&#x27;t be read: Radar switched clusters meanwhile.',
     )

@@ -4,7 +4,6 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -155,7 +154,12 @@ func (s *session) placements(ref resourceid.Ref) ([]string, readreason.Code) {
 func (s *session) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
 	keys, reason := s.placements(ref)
 	if reason != "" {
-		return ownership.RecordingManagersRead{TargetUnresolvable: true, Gaps: []ownership.Gap{{Kind: ref.GroupKind(), Namespace: ref.Namespace, Reason: reason}}}
+		var r ownership.RecordingManagersRead
+		for _, gk := range ownership.RecordingManagerKinds() {
+			r.Gaps = append(r.Gaps, ownership.Gap{Kind: gk, Reason: reason})
+		}
+		slices.SortFunc(r.Gaps, compareGaps)
+		return r
 	}
 	q := &search{domain: ownership.Everywhere()}
 	var managers []candidate
@@ -179,7 +183,7 @@ func (s *session) RecordingManagers(ref resourceid.Ref) ownership.RecordingManag
 	slices.SortFunc(managers, func(a, b candidate) int { return compareRefs(a.ref, b.ref) })
 	managers = slices.CompactFunc(managers, func(a, b candidate) bool { return a.ref == b.ref })
 	for _, c := range managers {
-		if read := observe(c.ref, c.apiVersion, c.obj); read.State == ownership.Present {
+		if read := observe(c.ref, c.obj); read.State == ownership.Present {
 			r.Managers = append(r.Managers, read.Object)
 		} else {
 			q.gaps = append(q.gaps, read.Gap)
@@ -211,7 +215,7 @@ func (s *session) readMembers(kind ownership.CatalogKind, keys []string) members
 	var m membersRead
 	q := &search{domain: ownership.Everywhere()}
 	keys = append([]string{k8score.UnreadableMembersKey}, keys...)
-	s.dynamicIndexed(q, kind, k8score.GitOpsMembersIndex, keys, func(gvr schema.GroupVersionResource, u *unstructured.Unstructured) {
+	s.dynamicIndexed(q, kind, k8score.GitOpsMembersIndex, keys, func(u *unstructured.Unstructured) {
 		manager := resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()}
 		switch memberState(gk, u) {
 		case ownership.MembersUnreadable:
@@ -219,7 +223,7 @@ func (s *session) readMembers(kind ownership.CatalogKind, keys []string) members
 		case ownership.MembersRemote:
 			m.remote = append(m.remote, manager)
 		default:
-			m.managers = append(m.managers, candidate{ref: manager, apiVersion: gvr.GroupVersion().String(), obj: u})
+			m.managers = append(m.managers, candidate{ref: manager, obj: u})
 		}
 	})
 	if s.recordingManagersRead != nil {

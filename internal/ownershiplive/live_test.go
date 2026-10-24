@@ -203,7 +203,7 @@ func TestLiveParity(t *testing.T) {
 	// collected kind, every UID an object has or names plus one nothing has,
 	// and domains around a sample of namespaces. Each question is asked once.
 	questions := func(w ownershiptest.World) ownershiptest.Queries {
-		q := ownershiptest.Queries{Domains: []ownership.SearchScope{ownership.Everywhere(), {Namespaces: []string{""}, IncludeClusterScoped: true}}, Limits: []int{0}}
+		q := ownershiptest.Queries{Domains: []ownership.SearchScope{ownership.Everywhere(), {Namespaces: []string{""}, IncludeClusterScoped: true}}}
 		refs := map[resourceid.Ref]bool{}
 		uids := map[types.UID]bool{"uid-nothing-has": true}
 		var namespaces []string

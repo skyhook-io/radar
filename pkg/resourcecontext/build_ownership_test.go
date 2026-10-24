@@ -34,7 +34,6 @@ func TestBuildSaysWhyOwnershipNamedNoOwner(t *testing.T) {
 		{"withheld", topology.OwnershipCoverage{PrimaryOwnerState: "withheld"}, OmittedRBACDenied},
 		{"unknown", topology.OwnershipCoverage{PrimaryOwnerState: "unknown"}, OmittedUnavailable},
 		{"unavailable", topology.OwnershipCoverage{UnavailableReason: "connection_changed"}, OmittedUnavailable},
-		{"changed", topology.OwnershipCoverage{SubjectReplaced: true}, OmittedUnavailable},
 		{"gone", topology.OwnershipCoverage{PrimaryOwnerState: "gone"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

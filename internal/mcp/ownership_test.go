@@ -23,21 +23,21 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// A namespaced kind in any namespace: a cluster-wide grant, or a grant in one
-// of the user's namespaces.
+// A namespaced kind in any namespace: a cluster-wide grant allows it, and
+// anything else is undecided rather than checked namespace by namespace.
 func TestOwnershipAccessDecidesAKindInAnyNamespace(t *testing.T) {
 	t.Cleanup(func() { getPermCache().Invalidate() })
 	secret := resourceid.GroupKind{Kind: "Secret"}
-	for name, beta := range map[string]bool{"somewhere": true, "nowhere": false} {
+	for name, clusterWide := range map[string]bool{"everywhere": true, "some namespaces": false} {
 		perms := &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}}
-		perms.SetCanI("get", "", "secrets", "", false)
+		perms.SetCanI("get", "", "secrets", "", clusterWide)
 		perms.SetCanI("get", "", "secrets", "alpha", false)
-		perms.SetCanI("get", "", "secrets", "beta", beta)
+		perms.SetCanI("get", "", "secrets", "beta", true)
 		getPermCache().Set(name, nil, perms)
 		ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: name})
 		a := ownershipAccess(ctx, ownership.NewCatalog(nil, true))
-		want := ownership.Denied
-		if beta {
+		want := ownership.Undecided
+		if clusterWide {
 			want = ownership.Allowed
 		}
 		if got := a.CanRead(secret, ""); got != want {
@@ -46,21 +46,6 @@ func TestOwnershipAccessDecidesAKindInAnyNamespace(t *testing.T) {
 		if got := a.CanRead(secret, "alpha"); got != ownership.Denied {
 			t.Errorf("%s: Read(Secret, alpha) = %v, want denied", name, got)
 		}
-	}
-}
-
-// A user who may read every namespace, when the cluster's namespaces can't be
-// listed: there is no telling whether some namespace grants the kind.
-func TestOwnershipAccessCannotTellWithoutTheClustersNamespaces(t *testing.T) {
-	t.Cleanup(func() { getPermCache().Invalidate() })
-	perms := &pkgauth.UserPermissions{}
-	perms.SetCanI("get", "", "secrets", "", false)
-	getPermCache().Set("gina", nil, perms)
-	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "gina"})
-	a := ownershipAccess(ctx, ownership.NewCatalog(nil, true)).(*mcpAccess)
-	a.clusterNamespaces = func(context.Context) []string { return nil }
-	if got := a.CanRead(resourceid.GroupKind{Kind: "Secret"}, ""); got != ownership.Undecided {
-		t.Errorf("CanRead(Secret) in any namespace without the namespace list = %v, want undecided", got)
 	}
 }
 
@@ -141,7 +126,7 @@ func TestOwnershipAccessKeepsAGapOnAnAmbiguousKind(t *testing.T) {
 	if got := a.CanRead(foo, "alpha"); got != ownership.Undecided {
 		t.Fatalf("CanRead(Foo, alpha) = %v, want undecided", got)
 	}
-	got := ownership.NewView(s, a).Children(owner.Ref, 0)
+	got := ownership.NewView(s, a).Children(owner.Ref)
 	if got.Complete() || !slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == foo }) {
 		t.Fatalf("children = %+v; want the ambiguous kind left unread", got)
 	}

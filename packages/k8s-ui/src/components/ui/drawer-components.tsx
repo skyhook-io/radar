@@ -985,7 +985,6 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
 
 // ownershipUnanswered says why Owner and Children couldn't be answered at all.
 function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | undefined {
-  if (coverage?.subjectReplaced) return "Owner and children aren't shown: the object was deleted and recreated after it was opened."
   const reason = coverage?.unavailableReason
   if (!reason) return undefined
   if (reason === 'user_forbidden') return "Owner and children aren't shown: your access lets you open this object, but not list its kind here."

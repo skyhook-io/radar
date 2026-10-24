@@ -724,8 +724,6 @@ export interface OwnershipCoverage {
     unknown?: number
     truncated?: boolean
   }
-  /** The object was replaced after it was read, so there are no answers. */
-  subjectReplaced?: boolean
   /** A readreason code when Radar couldn't answer at all. */
   unavailableReason?: string
 }

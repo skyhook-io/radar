@@ -18,8 +18,8 @@ var quick = settle{tries: 3, pause: time.Millisecond}
 // candidateDrop drops every candidate: a broken owner index.
 type candidateDrop struct{ ownership.ReadSession }
 
-func (c candidateDrop) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := c.ReadSession.DependentCandidates(uid, d, limit)
+func (c candidateDrop) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := c.ReadSession.DependentCandidates(uid, d)
 	r.Candidates = nil
 	return r
 }
@@ -27,8 +27,8 @@ func (c candidateDrop) DependentCandidates(uid types.UID, d ownership.SearchScop
 // inventedUID returns every candidate under a UID it doesn't have.
 type inventedUID struct{ ownership.ReadSession }
 
-func (c inventedUID) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := c.ReadSession.DependentCandidates(uid, d, limit)
+func (c inventedUID) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := c.ReadSession.DependentCandidates(uid, d)
 	for i := range r.Candidates {
 		r.Candidates[i].UID = "invented"
 	}
@@ -60,8 +60,8 @@ type extraCandidate struct {
 	extra ownership.Observation
 }
 
-func (e extraCandidate) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := e.ReadSession.DependentCandidates(uid, d, limit)
+func (e extraCandidate) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := e.ReadSession.DependentCandidates(uid, d)
 	r.Candidates = append(r.Candidates, e.extra)
 	return r
 }
@@ -69,8 +69,8 @@ func (e extraCandidate) DependentCandidates(uid types.UID, d ownership.SearchSco
 // twice returns every candidate twice.
 type twice struct{ ownership.ReadSession }
 
-func (c twice) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := c.ReadSession.DependentCandidates(uid, d, limit)
+func (c twice) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := c.ReadSession.DependentCandidates(uid, d)
 	r.Candidates = append(r.Candidates, r.Candidates...)
 	return r
 }
@@ -83,8 +83,8 @@ type dropsLater struct {
 	calls *int
 }
 
-func (l dropsLater) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := l.ReadSession.DependentCandidates(uid, d, limit)
+func (l dropsLater) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := l.ReadSession.DependentCandidates(uid, d)
 	if *l.calls++; *l.calls > 1 {
 		r.Candidates = slices.DeleteFunc(r.Candidates, func(c ownership.Observation) bool { return c.Ref == l.drop })
 	}
@@ -97,8 +97,8 @@ type alwaysDrops struct {
 	drop resourceid.Ref
 }
 
-func (a alwaysDrops) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := a.ReadSession.DependentCandidates(uid, d, limit)
+func (a alwaysDrops) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := a.ReadSession.DependentCandidates(uid, d)
 	r.Candidates = slices.DeleteFunc(r.Candidates, func(c ownership.Observation) bool { return c.Ref == a.drop })
 	return r
 }
@@ -120,8 +120,8 @@ type misleadsLater struct {
 	calls map[string]int
 }
 
-func (m misleadsLater) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := m.ReadSession.DependentCandidates(uid, d, limit)
+func (m misleadsLater) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := m.ReadSession.DependentCandidates(uid, d)
 	r.Candidates = m.mislead("DependentCandidates", r.Candidates)
 	return r
 }
@@ -155,8 +155,8 @@ type earlyGap struct {
 	calls *int
 }
 
-func (e earlyGap) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := e.ReadSession.DependentCandidates(uid, d, limit)
+func (e earlyGap) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := e.ReadSession.DependentCandidates(uid, d)
 	if *e.calls++; *e.calls == 1 {
 		r.Gaps = append(r.Gaps, ownership.Gap{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "beta", Reason: "kind_sync_pending"})
 	}
@@ -169,8 +169,8 @@ type laterGap struct {
 	calls *int
 }
 
-func (l laterGap) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	r := l.ReadSession.DependentCandidates(uid, d, limit)
+func (l laterGap) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	r := l.ReadSession.DependentCandidates(uid, d)
 	if *l.calls++; *l.calls > 1 {
 		r.Gaps = append(r.Gaps, ownership.Gap{Kind: resourceid.GroupKind{Kind: "Pod"}, Namespace: "beta", Reason: "kind_sync_pending"})
 	}
@@ -195,8 +195,8 @@ func (l lagging) view() ownership.ReadSession {
 
 func (l lagging) Object(ref resourceid.Ref) ownership.ObjectRead { return l.view().Object(ref) }
 
-func (l lagging) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
-	return l.view().DependentCandidates(uid, d, limit)
+func (l lagging) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
+	return l.view().DependentCandidates(uid, d)
 }
 
 func world(objects ...ownershiptest.Object) ownershiptest.World {
@@ -253,7 +253,7 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 
 	listed := world(rs, pod)
 	behindList, listedWithSibling, listedWithStranger := world(rs, orphaned), world(rs, pod, sibling), world(rs, pod, stranger)
-	q := ownershiptest.Queries{Refs: []resourceid.Ref{pod.Ref}, UIDs: []types.UID{"uid-rs"}, Domains: []ownership.SearchScope{ownership.InNamespace("alpha")}, Limits: []int{0}}
+	q := ownershiptest.Queries{Refs: []resourceid.Ref{pod.Ref}, UIDs: []types.UID{"uid-rs"}, Domains: []ownership.SearchScope{ownership.InNamespace("alpha")}}
 	for _, tc := range []struct {
 		name  string
 		now   ownershiptest.World
@@ -403,7 +403,7 @@ func TestRecheckDoesNotLetAKindlessGapExcuseAnOmission(t *testing.T) {
 			listedWorld, now := world(owner, a, sibling), world(owner, updated, sibling)
 			listedWorld.Partial, now.Partial = tc.partial, tc.partial
 			cache := dropsLater{begin(t, now), sibling.Ref, new(int)}
-			q := ownershiptest.Queries{UIDs: []types.UID{"uid-parent"}, Domains: []ownership.SearchScope{tc.domain}, Limits: []int{0}}
+			q := ownershiptest.Queries{UIDs: []types.UID{"uid-parent"}, Domains: []ownership.SearchScope{tc.domain}}
 			diffs := ownershiptest.Differences(begin(t, listedWorld), cache, q)
 			if len(diffs) != 1 || diffs[0].Coverage || len(diffs[0].WantGaps) == 0 || diffs[0].WantGaps[0].Kind != (resourceid.GroupKind{}) {
 				t.Fatalf("scenario: want one object difference beside a kindless gap, got %v", diffs)

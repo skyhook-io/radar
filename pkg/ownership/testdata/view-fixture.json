@@ -5,6 +5,9 @@
       "subject": "present",
       "children": [
         "Pod alpha/web-1-b"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
       ]
     },
     {
@@ -14,7 +17,10 @@
         "found Widget.example.io alpha/w1",
         "found Widget.example.io alpha/w2"
       ],
-      "owner": "several, none a controller"
+      "owner": "several, none a controller",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "ConfigMap alpha/versioned",
@@ -22,7 +28,10 @@
       "references": [
         "found Widget.example.io alpha/w1"
       ],
-      "owner": "reference 0: found Widget.example.io alpha/w1"
+      "owner": "reference 0: found Widget.example.io alpha/w1",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "Event alpha/e1",
@@ -62,7 +71,10 @@
       "references": [
         "gone ReplicaSet.apps alpha/gone"
       ],
-      "owner": "reference 0: gone ReplicaSet.apps alpha/gone"
+      "owner": "reference 0: gone ReplicaSet.apps alpha/gone",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "Pod alpha/replaced",
@@ -70,7 +82,10 @@
       "references": [
         "replaced ReplicaSet.apps alpha/web-old"
       ],
-      "owner": "reference 0: replaced ReplicaSet.apps alpha/web-old"
+      "owner": "reference 0: replaced ReplicaSet.apps alpha/web-old",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "Pod alpha/web-1-a",
@@ -79,6 +94,9 @@
         "found ReplicaSet.apps alpha/web-1"
       ],
       "owner": "reference 0: found ReplicaSet.apps alpha/web-1",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "controllerChain": "Deployment.apps alpha/web"
     },
     {
@@ -89,6 +107,9 @@
         "found ConfigMap alpha/cfg"
       ],
       "owner": "reference 0: found ReplicaSet.apps alpha/web-1",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "controllerChain": "Deployment.apps alpha/web"
     },
     {
@@ -97,7 +118,10 @@
       "references": [
         "gone Deployment.apps alpha/nope"
       ],
-      "owner": "reference 0: gone Deployment.apps alpha/nope"
+      "owner": "reference 0: gone Deployment.apps alpha/nope",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "Pod beta/stray",
@@ -109,6 +133,9 @@
       "children": [
         "ReplicaSet.apps alpha/web-1 (controller)",
         "Widget.example.io alpha/w1"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
       ]
     },
     {
@@ -122,15 +149,24 @@
         "Pod alpha/web-1-a (controller)",
         "Pod alpha/web-1-b (controller)"
       ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "controllerChain": "Deployment.apps alpha/web"
     },
     {
       "object": "ReplicaSet.apps alpha/web-old",
-      "subject": "present"
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "Application.argoproj.io argocd/by-name",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "members": [
         "PersistentVolume pv1",
         "Deployment.apps alpha/web"
@@ -140,36 +176,57 @@
     {
       "object": "Application.argoproj.io argocd/elsewhere",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "membership": "remote; 0 missing, 0 withheld, 0 unknown"
     },
     {
       "object": "Application.argoproj.io argocd/elsewhere-by-name",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "membership": "remote; 0 missing, 0 withheld, 0 unknown"
     },
     {
       "object": "Application.argoproj.io argocd/empty",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
     },
     {
       "object": "Application.argoproj.io argocd/empty-list",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
     },
     {
       "object": "Application.argoproj.io argocd/malformed",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
     },
     {
       "object": "Application.argoproj.io argocd/new",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
     },
     {
       "object": "Application.argoproj.io argocd/no-destination-namespace",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "members": [
         "ConfigMap alpha/cfg",
         "Node n1"
@@ -179,11 +236,17 @@
     {
       "object": "Application.argoproj.io argocd/nowhere",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
     },
     {
       "object": "Application.argoproj.io argocd/web",
       "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
       "members": [
         "ConfigMap alpha/cfg",
         "Node n1",
@@ -199,7 +262,10 @@
       "references": [
         "unknown (kind_unknown Widget.example.io/)"
       ],
-      "owner": "reference 0: unknown (kind_unknown Widget.example.io/)"
+      "owner": "reference 0: unknown (kind_unknown Widget.example.io/)",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "ClusterWidget.example.io cw1",
@@ -218,7 +284,10 @@
     },
     {
       "object": "Node.example.io alpha/n1",
-      "subject": "present"
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
     },
     {
       "object": "Summary.example.io alpha/s1",
@@ -236,7 +305,8 @@
         "ConfigMap alpha/versioned"
       ],
       "childrenCoverage": [
-        "not read: kind_unknown Widget.example.io/"
+        "not read: kind_unknown Widget.example.io/",
+        "narrowed to what the caller may read"
       ]
     },
     {
@@ -244,6 +314,9 @@
       "subject": "present",
       "children": [
         "ConfigMap alpha/shared"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
       ]
     },
     {

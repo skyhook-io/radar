@@ -122,7 +122,7 @@ func answer(v *ownership.View, ref resourceid.Ref) goldenAnswer {
 	case owner.Reference != nil:
 		a.Owner = fmt.Sprintf("reference %d: %s", referenceIndex(owner), resolutionText(owner.Resolution))
 	}
-	children := v.Children(ref, 0)
+	children := v.Children(ref)
 	for _, c := range children.Children {
 		s := c.Ref.String()
 		if slices.ContainsFunc(c.OwnerReferences, func(r metav1.OwnerReference) bool {

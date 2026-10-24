@@ -52,8 +52,8 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	named := namedOwners(owner.Subject.Read.Object)
 	rel.Deployment = deploymentOf(v, subject)
 
-	children := v.Children(subject, 0)
-	cov.Children = ChildrenCoverage{Complete: children.Complete(), Truncated: children.Truncated, Narrowed: children.Narrowed, NotChecked: notChecked(children.Gaps)}
+	children := v.Children(subject)
+	cov.Children = ChildrenCoverage{Complete: children.Complete(), Narrowed: children.Narrowed, NotChecked: notChecked(children.Gaps)}
 	isChild := map[resourceid.Ref]bool{}
 	for _, c := range children.Children {
 		isChild[c.Ref] = true
@@ -175,7 +175,9 @@ func applyOwner(rel *Relationships, v *ownership.View, fetched ownership.Observa
 		cov.UnavailableReason = string(owner.Subject.Read.Gap.Reason)
 		return cov, owner, false
 	case owner.Subject.Read.Object.UID != fetched.UID:
-		cov.SubjectReplaced = true
+		// Deleted and recreated since it was fetched: the answers would be
+		// about another object.
+		cov.UnavailableReason = string(readreason.ReadError)
 		return cov, owner, false
 	}
 

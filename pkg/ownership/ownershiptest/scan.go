@@ -189,7 +189,7 @@ func (s scanSession) dependentKinds() []dependentKind {
 	return out
 }
 
-func (s scanSession) DependentCandidates(uid types.UID, domain ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
+func (s scanSession) DependentCandidates(uid types.UID, domain ownership.SearchScope) ownership.DependentCandidatesRead {
 	var r ownership.DependentCandidatesRead
 	gap := func(gk resourceid.GroupKind, namespace string, reason readreason.Code) {
 		r.Gaps = append(r.Gaps, ownership.Gap{Kind: gk, Namespace: namespace, Reason: reason})
@@ -265,9 +265,6 @@ func (s scanSession) DependentCandidates(uid types.UID, domain ownership.SearchS
 		}
 	}
 	slices.SortFunc(found, func(a, b Object) int { return compareRefs(a.Ref, b.Ref) })
-	if limit > 0 && len(found) > limit {
-		found, r.Truncated = found[:limit], true
-	}
 	for _, o := range found {
 		r.Candidates = append(r.Candidates, observation(o))
 	}
@@ -293,7 +290,6 @@ func Observe(o Object) ownership.Observation {
 func observation(o Object) ownership.Observation {
 	obs := ownership.Observation{
 		Ref:             o.Ref,
-		APIVersion:      o.APIVersion,
 		UID:             o.UID,
 		ResourceVersion: o.ResourceVersion,
 	}
@@ -365,8 +361,10 @@ func (s scanSession) nameable(ref resourceid.Ref) readreason.Code {
 func (s scanSession) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
 	var r ownership.RecordingManagersRead
 	if reason := s.nameable(ref); reason != "" {
-		r.TargetUnresolvable = true
-		r.Gaps = []ownership.Gap{{Kind: ref.GroupKind(), Namespace: ref.Namespace, Reason: reason}}
+		for _, gk := range managers {
+			r.Gaps = append(r.Gaps, ownership.Gap{Kind: gk, Reason: reason})
+		}
+		slices.SortFunc(r.Gaps, compareGaps)
 		return r
 	}
 	gap := func(gk resourceid.GroupKind, namespace string, reason readreason.Code) {

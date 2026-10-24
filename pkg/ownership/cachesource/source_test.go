@@ -195,7 +195,6 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 	read := s.Object(ref("apps", "ReplicaSet", "alpha", "web-1"))
 	want := ownership.Observation{
 		Ref:             ref("apps", "ReplicaSet", "alpha", "web-1"),
-		APIVersion:      "apps/v1",
 		UID:             "uid-rs",
 		ResourceVersion: "rv-web-1",
 		OwnerReferences: replicaSetOwners,
@@ -214,7 +213,7 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 		t.Fatal("changing an observation changed the cached object")
 	}
 
-	if pod := s.Object(ref("", "Pod", "alpha", "web-1-a")); pod.State != ownership.Present || pod.Object.APIVersion != "v1" {
+	if pod := s.Object(ref("", "Pod", "alpha", "web-1-a")); pod.State != ownership.Present || pod.Object.UID != "uid-pod" {
 		t.Fatalf("Pod = %v %+v", pod.State, pod.Object)
 	}
 	// The other direction, checked by identity: writing to the cache would
@@ -227,7 +226,7 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 
 	w := s.Object(ref("example.io", "Widget", "alpha", "w1"))
 	wantOwners := []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "uid-deploy"}}
-	if w.State != ownership.Present || w.Object.APIVersion != "example.io/v1" || w.Object.UID != "uid-widget" ||
+	if w.State != ownership.Present || w.Object.UID != "uid-widget" ||
 		!reflect.DeepEqual(w.Object.OwnerReferences, wantOwners) {
 		t.Fatalf("Widget = %v %+v", w.State, w.Object)
 	}
@@ -238,7 +237,7 @@ func TestObjectCopiesWhatOwnershipReads(t *testing.T) {
 
 	w2 := s.Object(ref("example.io", "Widget", "alpha", "w2"))
 	wantW2 := ownership.Observation{
-		Ref: ref("example.io", "Widget", "alpha", "w2"), APIVersion: "example.io/v1", UID: "uid-w2", ResourceVersion: "rv-w2",
+		Ref: ref("example.io", "Widget", "alpha", "w2"), UID: "uid-w2", ResourceVersion: "rv-w2",
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "uid-deploy", Controller: ptr(true), BlockOwnerDeletion: ptr(false)}},
 	}
 	if w2.State != ownership.Present || !reflect.DeepEqual(w2.Object, wantW2) {
@@ -523,7 +522,7 @@ func TestReadsFollowAWatchReplacement(t *testing.T) {
 	}
 }
 
-func TestValidateFailsOnceTheCachesAreRetired(t *testing.T) {
+func TestValidateFailsOnceTheConnectionIsReplaced(t *testing.T) {
 	first := newFixture(t, k8score.CacheConfig{}, nil)
 	second := newFixture(t, k8score.CacheConfig{}, nil)
 	current := first.caches
@@ -535,23 +534,12 @@ func TestValidateFailsOnceTheCachesAreRetired(t *testing.T) {
 		t.Fatalf("after a switch: %v, want ErrCachesReplaced", err)
 	}
 
+	// A host takes its typed cache away before it stops it.
 	s = begin(t, source)
-	second.caches.Dynamic.Stop()
-	if err := s.ValidateCaches(); !errors.Is(err, ownership.ErrCachesReplaced) {
-		t.Fatalf("after the dynamic cache stopped: %v, want ErrCachesReplaced", err)
-	}
-	if _, err := source.Begin(); !errors.Is(err, ownership.ErrNotConnected) {
-		t.Fatalf("Begin over a stopped cache = %v, want ErrNotConnected", err)
-	}
-
-	current = first.caches
-	s = begin(t, source)
-	first.caches.Typed.Stop()
-	if err := s.ValidateCaches(); !errors.Is(err, ownership.ErrCachesReplaced) {
-		t.Fatalf("after the typed cache stopped: %v, want ErrCachesReplaced", err)
-	}
-
 	current = Caches{}
+	if err := s.ValidateCaches(); !errors.Is(err, ownership.ErrCachesReplaced) {
+		t.Fatalf("after a disconnect: %v, want ErrCachesReplaced", err)
+	}
 	if _, err := source.Begin(); !errors.Is(err, ownership.ErrNotConnected) {
 		t.Fatalf("Begin with no caches = %v, want ErrNotConnected", err)
 	}
@@ -572,27 +560,9 @@ func TestValidateAcceptsCachesThatArriveAfterBegin(t *testing.T) {
 	if err := s.ValidateCaches(); err != nil {
 		t.Fatalf("ValidateCaches once the dynamic cache and discovery arrive = %v, want nil", err)
 	}
-
-	other := newFixture(t, k8score.CacheConfig{}, nil)
-	s = begin(t, source)
-	current.Dynamic = other.caches.Dynamic
-	if err := s.ValidateCaches(); !errors.Is(err, ownership.ErrCachesReplaced) {
-		t.Fatalf("after the dynamic cache was replaced: %v, want ErrCachesReplaced", err)
-	}
-	current = f.caches
-	s = begin(t, source)
-	current.Discovery = other.caches.Discovery
-	if err := s.ValidateCaches(); !errors.Is(err, ownership.ErrCachesReplaced) {
-		t.Fatalf("after discovery was replaced: %v, want ErrCachesReplaced", err)
-	}
-	current = f.caches
-	s = begin(t, source)
-	current.Dynamic = nil
-	if err := s.ValidateCaches(); !errors.Is(err, ownership.ErrCachesReplaced) {
-		t.Fatalf("after the dynamic cache went away: %v, want ErrCachesReplaced", err)
-	}
 	// A typed cache replaced by one still running is a switch even before
 	// the old one stops.
+	other := newFixture(t, k8score.CacheConfig{}, nil)
 	current = f.caches
 	s = begin(t, source)
 	current.Typed = other.caches.Typed
@@ -661,20 +631,16 @@ func waitForWatches(t *testing.T, client *k8stesting.Fake, resources ...string) 
 	}
 }
 
-func TestCatalogIsBuiltOncePerDiscoveryGeneration(t *testing.T) {
+func TestSessionCatalogIsFixedAtBegin(t *testing.T) {
 	f := newFixture(t, k8score.CacheConfig{}, nil)
 	source := f.source()
 	first := begin(t, source).Catalog()
-	if again := begin(t, source).Catalog(); again != first {
-		t.Fatal("an unchanged discovery generation rebuilt the catalog")
-	}
 	if !first.Complete() || !first.Serves(resourceid.GroupKind{Group: "example.io", Kind: "Widget"}, "v1beta1") {
 		t.Fatal("the catalog must keep every served version")
 	}
 	f.caches.Discovery.AddAPIResource(k8score.APIResource{Group: "example.io", Version: "v1", Kind: "Sprocket", Name: "sprockets", Namespaced: true})
-	next := begin(t, source).Catalog()
-	if _, ok := next.Kind(resourceid.GroupKind{Group: "example.io", Kind: "Sprocket"}); !ok || next == first {
-		t.Fatal("a new discovery generation must give a new catalog")
+	if _, ok := begin(t, source).Catalog().Kind(resourceid.GroupKind{Group: "example.io", Kind: "Sprocket"}); !ok {
+		t.Fatal("a session begun after discovery changed must read the change")
 	}
 	if _, ok := first.Kind(resourceid.GroupKind{Group: "example.io", Kind: "Sprocket"}); ok {
 		t.Fatal("a session's catalog changed after it began")
@@ -723,7 +689,7 @@ func TestEveryTypedKindIsReadAtItsInformersVersion(t *testing.T) {
 	}
 	// An object created at the built-in's version reaches the store only if
 	// the informer lists that version, and the store must hold that version's
-	// type: the session reports the built-in's version as the object's.
+	// type.
 	for _, b := range typedKinds {
 		namespace := ""
 		if b.Namespaced {
@@ -746,8 +712,8 @@ func TestEveryTypedKindIsReadAtItsInformersVersion(t *testing.T) {
 			continue
 		}
 		got := begin(t, New(func() Caches { return Caches{Typed: rc} })).Object(ref(b.Group, b.Kind, namespace, "probe"))
-		if got.State != ownership.Present || got.Object.APIVersion != b.APIVersion() {
-			t.Errorf("%s = %v at %q; want present at %s", b.Kind, got.State, got.Object.APIVersion, b.APIVersion())
+		if got.State != ownership.Present {
+			t.Errorf("%s = %v %+v; want present", b.Kind, got.State, got.Gap)
 		}
 	}
 }
@@ -843,65 +809,32 @@ func betaWidget(u *unstructured.Unstructured) *unstructured.Unstructured {
 	return u
 }
 
-func atVersion(u *unstructured.Unstructured, rv string) *unstructured.Unstructured {
-	u.SetResourceVersion(rv)
-	return u
-}
-
-func adopted(u *unstructured.Unstructured) *unstructured.Unstructured {
-	u.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "Gadget", Name: "new-owner", UID: "uid-new-owner", Controller: ptr(true)}})
-	return u
-}
-
-func TestObjectNeedsEveryWatchedVersionToAgree(t *testing.T) {
+// A resource watched at two versions answers from the most stable version
+// that has loaded, whatever the other holds.
+func TestObjectReadsTheMostStableLoadedVersion(t *testing.T) {
 	w1 := ref("example.io", "Widget", "alpha", "w1")
 	for _, tc := range []struct {
 		name        string
 		v1, v1beta1 []runtime.Object
 		hold        func(string) bool
 		want        ownership.ReadState
-		wantVersion string
-		wantReason  readreason.Code
+		wantUID     types.UID
 	}{
 		{name: "both hold it", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
-			want: ownership.Present, wantVersion: "example.io/v1"},
+			want: ownership.Present, wantUID: "uid-widget"},
 		{name: "neither holds it", want: ownership.Absent},
-		{name: "only one holds it", v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
-			want: ownership.Unavailable, wantReason: readreason.KindSyncPending},
+		{name: "only the less stable one holds it", v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
+			want: ownership.Absent},
 		{name: "two incarnations", v1: []runtime.Object{widget("alpha", "w1", "uid-new")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-old"))},
-			want: ownership.Unavailable, wantReason: readreason.KindSyncPending},
-		{name: "only the loaded one answers", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
-			hold: func(v string) bool { return v == "v1" }, want: ownership.Present, wantVersion: "example.io/v1beta1"},
-		// One watch holds an update, such as an adoption, the other hasn't
-		// received: the same incarnation at two resource versions.
-		{name: "one holds a later update", v1: []runtime.Object{atVersion(widget("alpha", "w1", "uid-widget"), "41")},
-			v1beta1: []runtime.Object{betaWidget(adopted(atVersion(widget("alpha", "w1", "uid-widget"), "42")))},
-			want:    ownership.Unavailable, wantReason: readreason.KindSyncPending},
+			want: ownership.Present, wantUID: "uid-new"},
+		{name: "only the loaded one answers", v1: []runtime.Object{widget("alpha", "w1", "uid-new")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-old"))},
+			hold: func(v string) bool { return v == "v1" }, want: ownership.Present, wantUID: "uid-old"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := versionsFixture(t, tc.v1, tc.v1beta1, tc.hold)
-			s := begin(t, f.source())
-			got := s.Object(w1)
-			if got.State != tc.want || got.Object.APIVersion != tc.wantVersion || got.Gap.Reason != tc.wantReason {
-				t.Fatalf("Widget = %v at %q %+v; want %v at %q reason %q", got.State, got.Object.APIVersion, got.Gap, tc.want, tc.wantVersion, tc.wantReason)
-			}
-		})
-	}
-}
-
-// A search over two watched versions needs them to hold each object at the
-// same update, as a read does: one watch holding an adoption the other lacks
-// leaves the namespace loading.
-func TestDependentCandidatesNeedVersionsToAgreeOnTheUpdate(t *testing.T) {
-	for name, domain := range map[string]ownership.SearchScope{"in alpha": ownership.InNamespace("alpha"), "everywhere": ownership.Everywhere()} {
-		t.Run(name, func(t *testing.T) {
-			f := versionsFixture(t, []runtime.Object{atVersion(widget("alpha", "w1", "uid-w1"), "41")}, []runtime.Object{betaWidget(atVersion(widget("alpha", "w1", "uid-w1"), "42"))}, nil)
-			got := begin(t, f.source()).DependentCandidates("uid-deploy", domain, 0)
-			widget := resourceid.GroupKind{Group: "example.io", Kind: "Widget"}
-			listed := slices.ContainsFunc(got.Candidates, func(c ownership.Observation) bool { return c.Ref.GroupKind() == widget })
-			loading := slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widget && g.Reason == readreason.KindSyncPending })
-			if listed || !loading || got.Complete() {
-				t.Fatalf("got %+v; the two versions hold w1 at two updates", got)
+			got := begin(t, f.source()).Object(w1)
+			if got.State != tc.want || got.Object.UID != tc.wantUID {
+				t.Fatalf("Widget = %v %q %+v; want %v %q", got.State, got.Object.UID, got.Gap, tc.want, tc.wantUID)
 			}
 		})
 	}
@@ -1009,7 +942,7 @@ func TestViewWithoutTheDynamicCacheAnswers(t *testing.T) {
 	for _, r := range []resourceid.Ref{rs, ref("", "Pod", "alpha", "web-1-a"), ref("apps", "Deployment", "alpha", "web"), ref("", "Node", "", "n1"), widget} {
 		v.Owner(r)
 		v.References(r)
-		v.Children(r, 0)
+		v.Children(r)
 		v.ControllerChain(r)
 	}
 	if got := v.Owner(rs); got.Subject.Read.State != ownership.Present {
@@ -1018,7 +951,7 @@ func TestViewWithoutTheDynamicCacheAnswers(t *testing.T) {
 	if got := v.Owner(widget); got.Subject.Read.State != ownership.Unavailable {
 		t.Errorf("a Widget without the dynamic cache reads %v", got.Subject.Read.State)
 	}
-	if err := v.ValidateAnswers(); err != nil {
+	if err := s.ValidateCaches(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1042,34 +975,5 @@ func TestBeginWithoutDiscoveryReadsTypedKinds(t *testing.T) {
 	}
 	if err := s.ValidateCaches(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// A catalog belongs to one discovery, not to a generation number: after a
-// context switch the new cluster's discovery can be at the same generation as
-// the old one's, and its sessions must still read its own catalog.
-func TestSessionsReadTheCatalogOfTheirOwnDiscovery(t *testing.T) {
-	f := newFixture(t, k8score.CacheConfig{}, nil)
-	client := fake.NewClientset()
-	client.Discovery().(*fakediscovery.FakeDiscovery).Resources = append(discoveryLists(), &metav1.APIResourceList{
-		GroupVersion: "other.example.io/v1",
-		APIResources: []metav1.APIResource{{Name: "gizmos", Kind: "Gizmo", Namespaced: true, Verbs: []string{"delete", "get", "list", "watch"}}},
-	})
-	other, err := k8score.NewResourceDiscovery(client.Discovery())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if other.Generation() != f.caches.Discovery.Generation() {
-		t.Fatalf("generations %d and %d; the test needs them equal", other.Generation(), f.caches.Discovery.Generation())
-	}
-	current := f.caches
-	source := New(func() Caches { return current })
-	gizmo := resourceid.GroupKind{Group: "other.example.io", Kind: "Gizmo"}
-	if _, known := begin(t, source).Catalog().Kind(gizmo); known {
-		t.Fatal("the first cluster's catalog lists Gizmo")
-	}
-	current.Discovery = other
-	if _, known := begin(t, source).Catalog().Kind(gizmo); !known {
-		t.Fatal("a session over the second cluster's discovery read the first one's catalog")
 	}
 }

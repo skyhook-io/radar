@@ -28,16 +28,6 @@ type requestAccess struct {
 	// couldn't be discovered.
 	namespaces []string
 	failed     bool
-	// clusterNamespaces lists every namespace, for a user who may read them
-	// all.
-	clusterNamespaces func() []string
-	decided           map[accessKey]ownership.Decision
-	everything        *bool
-}
-
-type accessKey struct {
-	kind      resourceid.GroupKind
-	namespace string
 }
 
 // ownershipAccess is what the request's user may read; without
@@ -47,20 +37,12 @@ func (s *Server) ownershipAccess(r *http.Request, catalog *ownership.Catalog) ow
 		return ownership.Unrestricted()
 	}
 	namespaces, failed := s.getUserNamespacesWithStatus(r, nil)
-	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed, clusterNamespaces: allNamespaceNames, decided: map[accessKey]ownership.Decision{}}
+	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed}
 }
 
+// CanRead's checks are memoized on the user's permissions, so asking again
+// costs a lookup.
 func (a *requestAccess) CanRead(kind resourceid.GroupKind, namespace string) ownership.Decision {
-	key := accessKey{kind: kind, namespace: namespace}
-	if d, ok := a.decided[key]; ok {
-		return d
-	}
-	d := a.read(kind, namespace)
-	a.decided[key] = d
-	return d
-}
-
-func (a *requestAccess) read(kind resourceid.GroupKind, namespace string) ownership.Decision {
 	resource, namespaced, known := a.resource(kind)
 	switch {
 	case !known && a.catalog.Ambiguous(kind):
@@ -86,8 +68,8 @@ func (a *requestAccess) read(kind resourceid.GroupKind, namespace string) owners
 
 // anyNamespace decides whether the user may read a namespaced kind in at
 // least one of their namespaces: an ordinary kind wherever namespace access
-// reaches, a kind checked per namespace by a cluster-wide grant or else a
-// grant in one of them.
+// reaches. A kind checked per namespace is allowed by a cluster-wide grant,
+// and otherwise undecided rather than checked namespace by namespace.
 func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string) ownership.Decision {
 	switch {
 	case a.failed:
@@ -97,20 +79,10 @@ func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string)
 			return ownership.Allowed
 		}
 		return ownership.Denied
-	}
-	if a.check(kind.Group, resource, "") == ownership.Allowed {
+	case a.check(kind.Group, resource, "") == ownership.Allowed:
 		return ownership.Allowed
 	}
-	namespaces := a.namespaces
-	if namespaces == nil {
-		if namespaces = a.clusterNamespaces(); len(namespaces) == 0 {
-			// Without the cluster's namespaces there is no telling.
-			return ownership.Undecided
-		}
-	}
-	return ownership.AnyNamespace(namespaces, func(namespace string) ownership.Decision {
-		return a.check(kind.Group, resource, namespace)
-	})
+	return ownership.Undecided
 }
 
 // checkedInNamespace reports the namespaced kinds authorized per namespace
@@ -152,31 +124,6 @@ func (a *requestAccess) Namespaces() ([]string, bool) {
 		return []string{}, false
 	}
 	return a.namespaces, a.namespaces == nil
-}
-
-// AllKindsIn holds when the user may read namespace and every kind there
-// that is checked per namespace.
-func (a *requestAccess) CanReadAllKindsIn(namespace string) bool {
-	if a.CanRead(resourceid.GroupKind{Kind: "Secret"}, namespace) != ownership.Allowed ||
-		a.CanRead(resourceid.GroupKind{Kind: "LimitRange"}, namespace) != ownership.Allowed {
-		return false
-	}
-	for _, k := range a.catalog.DependentKinds() {
-		if k.Namespaced && checkedInNamespace(k.GroupKind) && a.CanRead(k.GroupKind, namespace) != ownership.Allowed {
-			return false
-		}
-	}
-	return true
-}
-
-// Everything holds for a user with every namespace and a wildcard read
-// grant, as cluster-admin has.
-func (a *requestAccess) CanReadEverything() bool {
-	if a.everything == nil {
-		all := !a.failed && a.namespaces == nil && a.check("*", "*", "") == ownership.Allowed
-		a.everything = &all
-	}
-	return *a.everything
 }
 
 // relationshipsFor is a fetched resource's Related Resources: the links the

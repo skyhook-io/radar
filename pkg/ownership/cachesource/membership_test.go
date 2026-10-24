@@ -1,20 +1,13 @@
 package cachesource
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"slices"
 	"testing"
-	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	apiruntime "k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	fakediscovery "k8s.io/client-go/discovery/fake"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -93,25 +86,7 @@ func TestMembersReadTheShapesControllersWrite(t *testing.T) {
 			map[string]any{"id": "shop_web-podinfo__Service", "v": "v1"},
 		}}}), ownership.MembersRemote, []gitops.Member{{Kind: "Service", Namespace: "shop", Name: "web-podinfo"}}},
 		{"a HelmRelease applying elsewhere, without an inventory", manager(hr, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, nil), ownership.MembersUnreadable, nil},
-		// spec.kubeConfig removed and not yet reconciled, or a
-		// kustomize-controller reconcile of it failing: the inventory may
-		// still be the other cluster's.
-		{"a Kustomization whose inventory predates its spec", atGeneration(manager(ks, map[string]any{"prune": true}, map[string]any{"observedGeneration": int64(1), "inventory": map[string]any{"entries": []any{
-			map[string]any{"id": "shop_ui__Service", "v": "v1"},
-		}}}), 2), ownership.MembersUnreadable, nil},
-		{"a HelmRelease whose inventory predates its spec", atGeneration(manager(hr, map[string]any{"releaseName": "web"}, map[string]any{"observedGeneration": int64(1), "inventory": map[string]any{"entries": []any{}}}), 2), ownership.MembersUnreadable, nil},
-		// Suspending writes the spec, and the controllers record that
-		// generation as observed without applying anything, so the inventory
-		// of the last apply reads, as it must for a suspended object's members
-		// to keep their manager. A destination changed in that write isn't
-		// detected.
-		{"a Kustomization suspended while Ready", atGeneration(manager(ks, map[string]any{"suspend": true}, map[string]any{"observedGeneration": int64(2), "inventory": map[string]any{"entries": []any{
-			map[string]any{"id": "shop_ui__Service", "v": "v1"},
-		}}}), 2), ownership.MembersRecorded, []gitops.Member{{Kind: "Service", Namespace: "shop", Name: "ui"}}},
-		{"a suspended HelmRelease", atGeneration(manager(hr, map[string]any{"suspend": true}, map[string]any{"observedGeneration": int64(2), "inventory": map[string]any{"entries": []any{
-			map[string]any{"id": "shop_web-podinfo__Service", "v": "v1"},
-		}}}), 2), ownership.MembersRecorded, []gitops.Member{{Kind: "Service", Namespace: "shop", Name: "web-podinfo"}}},
-		{"a Kustomization that reconciled its spec", atGeneration(manager(ks, nil, map[string]any{"observedGeneration": int64(2), "inventory": map[string]any{"entries": []any{
+		{"a Kustomization whose spec changed since its inventory", atGeneration(manager(ks, nil, map[string]any{"observedGeneration": int64(1), "inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "shop_ui__Service", "v": "v1"},
 		}}}), 2), ownership.MembersRecorded, []gitops.Member{{Kind: "Service", Namespace: "shop", Name: "ui"}}},
 	} {
@@ -223,10 +198,15 @@ func TestRecordingManagersOfABuiltInDiscoveryDisputes(t *testing.T) {
 			w.Objects = []ownershiptest.Object{app}
 			scan, _ := ownershiptest.Scan(w).Begin()
 			cache := begin(t, render(t, w).source())
-			want := []ownership.Gap{{Kind: clusterRole, Reason: readreason.ReadError}}
+			// The ClusterRole can't be named, so no manager kind was searched.
+			var want []ownership.Gap
+			for _, gk := range ownership.RecordingManagerKinds() {
+				want = append(want, ownership.Gap{Kind: gk, Reason: readreason.ReadError})
+			}
+			slices.SortFunc(want, compareGaps)
 			for source, s := range map[string]ownership.ReadSession{"scan": scan, "cache": cache} {
-				if got := s.RecordingManagers(reader); len(got.Managers) != 0 || !got.TargetUnresolvable || !slices.Equal(got.Gaps, want) {
-					t.Errorf("%s: RecordingManagers(%v) = %+v, want the target unresolvable with only %+v", source, reader, got, want)
+				if got := s.RecordingManagers(reader); len(got.Managers) != 0 || !slices.Equal(got.Gaps, want) {
+					t.Errorf("%s: RecordingManagers(%v) = %+v, want every manager kind unread: %+v", source, reader, got, want)
 				}
 				if got := s.Members(app.Ref); got.Membership != ownership.MembersRecorded || !slices.Equal(got.Members, []resourceid.Ref{reader}) {
 					t.Errorf("%s: Members = %v %v, want the entry as recorded", source, got.Membership, got.Members)
@@ -371,58 +351,6 @@ func TestMemberStateCostDoesNotGrowWithTheList(t *testing.T) {
 	}
 }
 
-// A Flux object whose spec.kubeConfig was removed keeps the other cluster's
-// inventory until a reconcile applies the new spec; RecordingManagers must not take
-// its entries for this cluster's objects, or call the answer complete, while
-// the controller hasn't observed that spec.
-func TestRecordingManagersDistrustAFluxInventoryFromBeforeItsSpec(t *testing.T) {
-	for _, kind := range []resourceid.GroupKind{ownership.FluxKustomization, ownership.FluxHelmRelease} {
-		t.Run(kind.Kind, func(t *testing.T) {
-			target := resourceid.Ref{Kind: "Service", Namespace: "shop", Name: "ui"}
-			k, _ := ownershiptest.KindOf(kind)
-			m := ownershiptest.Object{Ref: resourceid.Ref{Group: kind.Group, Kind: kind.Kind, Namespace: "ops", Name: "m"}, APIVersion: k.APIVersion(),
-				UID: "uid-m", ResourceVersion: "1", Membership: ownership.MembersRemote, Members: []resourceid.Ref{target}}
-			w := ownershiptest.World{Resources: ownershiptest.Resources(), Collection: map[resourceid.GroupKind]ownershiptest.Collection{}, Objects: []ownershiptest.Object{m}}
-			for _, item := range ownershiptest.Kinds {
-				w.Collection[item.GroupKind] = ownershiptest.Collection{OnDemand: !item.Typed}
-			}
-			r := render(t, w)
-			client := r.dynamic.Resource(schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Resource}).Namespace("ops")
-			u, err := client.Get(context.Background(), "m", metav1.GetOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := unstructured.SetNestedField(u.Object, int64(1), "status", "observedGeneration"); err != nil {
-				t.Fatal(err)
-			}
-			u.Object["spec"] = map[string]any{}
-			u.SetGeneration(2)
-			u.SetResourceVersion("2")
-			if _, err := client.Update(context.Background(), u, metav1.UpdateOptions{}); err != nil {
-				t.Fatal(err)
-			}
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				s := begin(t, r.source())
-				if inv := s.Members(m.Ref); inv.Manager.Object.ResourceVersion == "2" {
-					if inv.Membership != ownership.MembersUnreadable {
-						t.Fatalf("Members = %v", inv.Membership)
-					}
-					got := s.RecordingManagers(target)
-					if len(got.Managers) > 0 || got.Complete() || !slices.Contains(got.Unreadable, m.Ref) {
-						t.Fatalf("RecordingManagers(%v) = %+v, complete %v; the list may be the other cluster's", target, got, got.Complete())
-					}
-					return
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("the updated spec never reached the cache")
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
-		})
-	}
-}
-
 // Opening a member of a large Application or Kustomization searches for the
 // managers recording it; that costs the same however long the list naming it
 // is, RBAC names Flux encodes included. Counting allocations can't tell:
@@ -473,43 +401,5 @@ func TestRecordingManagersCostDoesNotGrowWithTheManagersList(t *testing.T) {
 				t.Fatalf("%d bytes per search when a 10,000-entry list names the object, %d for 40", large, small)
 			}
 		})
-	}
-}
-
-// A manager kind watched at two versions can hold one manager at two updates
-// while a watch catches up; here the newer copy's list may be another
-// cluster's. A search must not classify the older copy and call the answer
-// complete, just as Members doesn't answer from it.
-func TestRecordingManagersNeedManagerVersionsToAgreeOnTheUpdate(t *testing.T) {
-	stable := schema.GroupVersionResource{Group: ownership.FluxHelmRelease.Group, Version: "v2", Resource: "helmreleases"}
-	beta := stable
-	beta.Version = "v2beta1"
-	older := atGeneration(manager(ownership.FluxHelmRelease, nil, map[string]any{"observedGeneration": int64(1),
-		"inventory": map[string]any{"entries": []any{map[string]any{"id": "shop_ui__Service"}}}}), 1)
-	older.SetAPIVersion(stable.GroupVersion().String())
-	older.SetResourceVersion("41")
-	older.SetUID("uid-m")
-	newer := older.DeepCopy()
-	newer.SetAPIVersion(beta.GroupVersion().String())
-	newer.SetResourceVersion("42")
-	newer.SetGeneration(2)
-	newer.Object["spec"] = map[string]any{"suspend": true, "kubeConfig": map[string]any{"secretRef": map[string]any{"name": "other"}}}
-	f := newFixture(t, k8score.CacheConfig{}, func(f *fixture) {
-		f.dynamic = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(apiruntime.NewScheme(),
-			map[schema.GroupVersionResource]string{stable: "HelmReleaseList", beta: "HelmReleaseList"}, older, newer)
-		d := f.typed.Discovery().(*fakediscovery.FakeDiscovery)
-		for _, gvr := range []schema.GroupVersionResource{stable, beta} {
-			d.Resources = append(d.Resources, &metav1.APIResourceList{GroupVersion: gvr.GroupVersion().String(),
-				APIResources: []metav1.APIResource{{Name: gvr.Resource, Kind: ownership.FluxHelmRelease.Kind, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}})
-		}
-	})
-	f.watch(t, stable)
-	f.watch(t, beta)
-	s := begin(t, f.source())
-	if inv := s.Members(resourceid.Ref{Group: stable.Group, Kind: ownership.FluxHelmRelease.Kind, Namespace: "ops", Name: "m"}); inv.Manager.State != ownership.Unavailable {
-		t.Fatalf("Members = %+v; the two versions disagree", inv)
-	}
-	if got := s.RecordingManagers(resourceid.Ref{Kind: "Service", Namespace: "shop", Name: "ui"}); got.Complete() || len(got.Managers) != 0 {
-		t.Fatalf("RecordingManagers = %+v, complete %v; it classified the older copy", got, got.Complete())
 	}
 }

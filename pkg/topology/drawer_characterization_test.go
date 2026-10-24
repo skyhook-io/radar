@@ -120,11 +120,11 @@ func charDrawer(t *testing.T, f *charFixture) []byte {
 			// REST answers ownership for an object the graph links to nothing.
 			rel = &Relationships{}
 		}
-		ApplyOwnership(rel, v, ownership.Observe(resourceid.Ref{Group: o.group, Kind: o.kind, Namespace: ref.Namespace, Name: ref.Name}, "", o.obj))
+		ApplyOwnership(rel, v, ownership.Observe(resourceid.Ref{Group: o.group, Kind: o.kind, Namespace: ref.Namespace, Name: ref.Name}, o.obj))
 		canonicalRefLists(reflect.ValueOf(rel))
 		records = append(records, record{Root: o.key(), Relationships: rel})
 	}
-	if err := v.ValidateAnswers(); err != nil {
+	if err := s.ValidateCaches(); err != nil {
 		t.Fatalf("the caches changed while the drawer answers were read: %v", err)
 	}
 	sort.SliceStable(records, func(i, j int) bool { return records[i].Root < records[j].Root })
@@ -154,7 +154,7 @@ func TestDrawerOwnershipIgnoresBuildOptions(t *testing.T) {
 			if rel == nil {
 				rel = &Relationships{}
 			}
-			ApplyOwnership(rel, v, ownership.Observe(resourceid.Ref{Group: o.group, Kind: o.kind, Namespace: ref.Namespace, Name: ref.Name}, "", o.obj))
+			ApplyOwnership(rel, v, ownership.Observe(resourceid.Ref{Group: o.group, Kind: o.kind, Namespace: ref.Namespace, Name: ref.Name}, o.obj))
 			canonicalRefLists(reflect.ValueOf(rel))
 			out[o.key()] = []any{rel.Owner, rel.Owners, rel.Children, rel.Deployment, rel.Ownership}
 		}

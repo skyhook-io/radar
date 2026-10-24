@@ -143,8 +143,9 @@ func TestResourceGetWithoutAGraphSendsNoRelationships(t *testing.T) {
 	}
 }
 
-// A user who may read the namespace but not one of the kinds the GET gate
-// checks there sees the same children, marked narrowed.
+// With authentication, children are always the ones the user may read, so
+// they are marked narrowed, whether or not the user may read every kind the
+// GET gate checks there.
 func TestResourceGetOwnershipForAUserWhoMayReadLess(t *testing.T) {
 	withOwnershipDiscovery(t)
 	env := newAuthTestServer(t)
@@ -154,7 +155,7 @@ func TestResourceGetOwnershipForAUserWhoMayReadLess(t *testing.T) {
 		secrets  bool
 		narrowed bool
 	}{
-		{"alice", true, false},
+		{"alice", true, true},
 		{"bob", false, true},
 	} {
 		env.srv.permCache.Set(tc.user, nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
@@ -223,23 +224,6 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 			t.Errorf("CanRead(%v, %q) = %v, want %v", tc.kind, tc.namespace, got, tc.want)
 		}
 	}
-	if a.CanReadAllKindsIn("alpha") || a.CanReadEverything() {
-		t.Errorf("CanReadAllKindsIn(alpha)=%v CanReadEverything=%v; Secrets and a Calico policy are hidden in alpha", a.CanReadAllKindsIn("alpha"), a.CanReadEverything())
-	}
-	// Every kind in a namespace includes each Calico policy kind there.
-	for name, calico := range map[string]bool{"carol": false, "dave": true} {
-		env.srv.permCache.Set(name, nil, &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
-		p := env.srv.permCache.Get(name, nil)
-		p.SetCanI("list", "", "secrets", "alpha", true)
-		p.SetCanI("list", "", "limitranges", "alpha", true)
-		p.SetCanI("list", "projectcalico.org", "networkpolicies", "alpha", calico)
-		p.SetCanI("list", "crd.projectcalico.org", "networkpolicies", "alpha", true)
-		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		got := env.srv.ownershipAccess(r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: name})), catalog).CanReadAllKindsIn("alpha")
-		if got != calico {
-			t.Errorf("%s: CanReadAllKindsIn(alpha) = %v with projectcalico.org policies readable %v", name, got, calico)
-		}
-	}
 	if ns, all := a.Namespaces(); all || len(ns) != 1 || ns[0] != "alpha" {
 		t.Errorf("Namespaces = %v %v", ns, all)
 	}
@@ -250,13 +234,13 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 	gina.SetCanI("list", "", "limitranges", "alpha", false)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	limited := env.srv.ownershipAccess(req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "gina"})), catalog)
-	if got := limited.CanRead(resourceid.GroupKind{Kind: "LimitRange"}, "alpha"); got != ownership.Denied || limited.CanReadAllKindsIn("alpha") {
-		t.Errorf("gina: CanRead(LimitRange, alpha) = %v, CanReadAllKindsIn(alpha) = %v; gina may not list LimitRanges there", got, limited.CanReadAllKindsIn("alpha"))
+	if got := limited.CanRead(resourceid.GroupKind{Kind: "LimitRange"}, "alpha"); got != ownership.Denied {
+		t.Errorf("gina: CanRead(LimitRange, alpha) = %v; gina may not list LimitRanges there", got)
 	}
 
 	// In any namespace: an ordinary kind wherever namespace access reaches; a
-	// kind checked per namespace by a cluster-wide grant, or else a grant in
-	// one of the user's namespaces.
+	// kind checked per namespace by a cluster-wide grant, and otherwise
+	// undecided rather than checked namespace by namespace.
 	user := func(name string, grants map[string]bool) ownership.Access {
 		env.srv.permCache.Set(name, nil, &auth.UserPermissions{})
 		perms := env.srv.permCache.Get(name, nil)
@@ -273,8 +257,6 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 	}
 	somewhere := user("bob", map[string]bool{allNamespaceNames()[0]: true})
 	nowhere := user("erin", nil)
-	unlisted := user("frank", nil)
-	unlisted.(*requestAccess).clusterNamespaces = func() []string { return nil }
 	for _, tc := range []struct {
 		name string
 		a    ownership.Access
@@ -282,12 +264,11 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 		want ownership.Decision
 	}{
 		{"alice", a, resourceid.GroupKind{Kind: "ConfigMap"}, ownership.Allowed},
-		{"alice", a, resourceid.GroupKind{Kind: "Secret"}, ownership.Denied},
+		{"alice", a, resourceid.GroupKind{Kind: "Secret"}, ownership.Undecided},
 		{"bob", somewhere, resourceid.GroupKind{Kind: "ConfigMap"}, ownership.Allowed},
-		{"bob", somewhere, resourceid.GroupKind{Kind: "Secret"}, ownership.Allowed},
+		{"bob", somewhere, resourceid.GroupKind{Kind: "Secret"}, ownership.Undecided},
 		{"bob", somewhere, resourceid.GroupKind{Kind: "LimitRange"}, ownership.Allowed},
-		{"erin", nowhere, resourceid.GroupKind{Kind: "Secret"}, ownership.Denied},
-		{"frank, without the cluster's namespaces", unlisted, resourceid.GroupKind{Kind: "Secret"}, ownership.Undecided},
+		{"erin", nowhere, resourceid.GroupKind{Kind: "Secret"}, ownership.Undecided},
 	} {
 		if got := tc.a.CanRead(tc.kind, ""); got != tc.want {
 			t.Errorf("%s: Read(%v) in any namespace = %v, want %v", tc.name, tc.kind, got, tc.want)
