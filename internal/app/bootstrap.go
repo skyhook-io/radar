@@ -56,6 +56,7 @@ type AppConfig struct {
 	NoBrowser                   bool
 	Browser                     string
 	DevMode                     bool
+	EnablePprof                 bool
 	HistoryLimit                int
 	DebugEvents                 bool
 	FakeInCluster               bool
@@ -512,6 +513,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		StartupLog:            true,
 		RemoteAccessHint:      cfg.ShowRemoteAccessHint,
 		DevMode:               cfg.DevMode,
+		EnablePprof:           cfg.EnablePprof,
 		StaticFS:              static.FS,
 		StaticRoot:            "dist",
 		EffectiveConfig:       effectiveCfg,
@@ -524,6 +526,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,
+			Pprof:                cfg.EnablePprof || cfg.DevMode,
 			Namespace:            cfg.Namespace,
 			TimelineStorage:      cfg.TimelineStorage,
 			HistoryLimit:         cfg.HistoryLimit,

@@ -7875,6 +7875,7 @@ export interface DiagnosticsSnapshot {
     debugEvents: boolean;
     mcpEnabled: boolean;
     mcpReadOnly: boolean;
+    pprof?: boolean;
     hasPrometheusURL: boolean;
     hasPrometheusHeaders: boolean;
   };

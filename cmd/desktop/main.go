@@ -73,6 +73,7 @@ func main() {
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
+	enablePprof := flag.Bool("pprof", os.Getenv("RADAR_PPROF") == "true" || os.Getenv("RADAR_PPROF") == "1", "Enable pprof profiling endpoints at /debug/pprof (Env: RADAR_PPROF)")
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	flag.Parse()
 
@@ -186,6 +187,7 @@ func main() {
 		PortFallback:              desktopPortRemembered,
 		ListenAddress:             "127.0.0.1",
 		DevMode:                   false,
+		EnablePprof:               *enablePprof,
 		HistoryLimit:              *historyLimit,
 		DebugEvents:               *debugEvents,
 		FakeInCluster:             *fakeInCluster,

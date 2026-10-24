@@ -1843,6 +1843,85 @@ func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
 	}
 }
 
+func TestSmokePprofGating(t *testing.T) {
+	t.Run("default disabled", func(t *testing.T) {
+		srv := New(Config{DevMode: false, EnablePprof: false})
+		defer srv.Stop()
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
+
+		if rec.Code == http.StatusOK {
+			body := rec.Body.String()
+			if strings.Contains(body, "Types of profiles available") {
+				t.Fatalf("pprof index served when pprof is disabled")
+			}
+		}
+	})
+
+	t.Run("explicitly enabled", func(t *testing.T) {
+		srv := New(Config{DevMode: false, EnablePprof: true})
+		defer srv.Stop()
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "Types of profiles available") && !strings.Contains(body, "profiles:") {
+			t.Fatalf("expected pprof index content, got: %s", body)
+		}
+	})
+
+	t.Run("dev mode enables pprof", func(t *testing.T) {
+		srv := New(Config{DevMode: true, EnablePprof: false})
+		defer srv.Stop()
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("cloud mode overrides enable flag", func(t *testing.T) {
+		t.Setenv("RADAR_CLOUD_MODE", "true")
+		srv := New(Config{DevMode: true, EnablePprof: true})
+		defer srv.Stop()
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
+
+		if rec.Code == http.StatusOK {
+			body := rec.Body.String()
+			if strings.Contains(body, "Types of profiles available") {
+				t.Fatalf("pprof index served under cloud mode")
+			}
+		}
+	})
+
+	t.Run("diagnostics reflects effective state", func(t *testing.T) {
+		srv := New(Config{DevMode: true, EnablePprof: false, DiagConfig: &DiagConfig{}})
+		defer srv.Stop()
+
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		var snap DiagnosticsSnapshot
+		if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+			t.Fatalf("unmarshal diagnostics: %v", err)
+		}
+		if snap.Config == nil || !snap.Config.Pprof {
+			t.Fatalf("expected snap.Config.Pprof to be true in dev mode, got: %+v", snap.Config)
+		}
+	})
+}
+
 func TestSmokeGetConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
