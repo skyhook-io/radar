@@ -46,10 +46,16 @@ func argoMembers(app *unstructured.Unstructured, collect bool) (list MemberList,
 		if reconciled, _, _ := unstructured.NestedString(app.Object, "status", "reconciledAt"); reconciled == "" {
 			return MemberList{}, false
 		}
+		if argoComparisonFailed(app) {
+			return MemberList{}, false
+		}
 		return list, true
 	}
 	items, isList := raw.([]any)
 	if !isList {
+		return MemberList{}, false
+	}
+	if len(items) == 0 && argoComparisonFailed(app) {
 		return MemberList{}, false
 	}
 	if collect && len(items) > 0 {
@@ -147,4 +153,20 @@ func optionalString(v any) (string, bool) {
 	}
 	s, ok := v.(string)
 	return s, ok
+}
+
+// argoComparisonFailed reports whether Argo CD's last comparison failed. A
+// failed comparison records an empty resource list and still sets
+// reconciledAt, so an empty list then says nothing about what it manages.
+func argoComparisonFailed(app *unstructured.Unstructured) bool {
+	if status, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status"); status == "Unknown" {
+		return true
+	}
+	conditions, _, _ := unstructured.NestedSlice(app.Object, "status", "conditions")
+	for _, c := range conditions {
+		if m, ok := c.(map[string]any); ok && m["type"] == "ComparisonError" {
+			return true
+		}
+	}
+	return false
 }

@@ -100,15 +100,26 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 		state = ownership.MembersRecorded
 	}
 	raw := status["resources"]
-	if raw == nil {
-		if reconciled, _ := status["reconciledAt"].(string); reconciled != "" {
-			return state, []resourceid.Ref{}, namespace
-		}
+	list, ok := raw.([]any)
+	if raw != nil && !ok {
 		return ownership.MembersUnreadable, nil, namespace
 	}
-	list, ok := raw.([]any)
-	if !ok {
-		return ownership.MembersUnreadable, nil, namespace
+	if len(list) == 0 {
+		// After a failed comparison Argo CD records no resources and still
+		// sets reconciledAt.
+		failed := sync["status"] == "Unknown"
+		conditions, _ := status["conditions"].([]any)
+		for _, c := range conditions {
+			if m, _ := c.(map[string]any); m["type"] == "ComparisonError" {
+				failed = true
+			}
+		}
+		if reconciled, _ := status["reconciledAt"].(string); reconciled == "" || failed {
+			return ownership.MembersUnreadable, nil, namespace
+		}
+		if raw == nil {
+			return state, []resourceid.Ref{}, namespace
+		}
 	}
 	members := []resourceid.Ref{}
 	for _, item := range list {

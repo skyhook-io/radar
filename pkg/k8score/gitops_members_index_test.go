@@ -57,6 +57,18 @@ func TestMemberKeys(t *testing.T) {
 	for name, app := range map[string]*unstructured.Unstructured{
 		"not reconciled":        argoApplication("web", nil),
 		"an entry with no name": argoApplication("web", []any{map[string]any{"kind": "Service"}}),
+		"a failed comparison": func() *unstructured.Unstructured {
+			app := argoApplication("web", []any{})
+			app.Object["status"].(map[string]any)["conditions"] = []any{map[string]any{"type": "ComparisonError", "message": "revision not found"}}
+			return app
+		}(),
+		"a comparison whose outcome is unknown": func() *unstructured.Unstructured {
+			app := argoApplication("web", nil)
+			status := app.Object["status"].(map[string]any)
+			status["reconciledAt"] = "2026-10-19T00:00:00Z"
+			status["sync"].(map[string]any)["status"] = "Unknown"
+			return app
+		}(),
 	} {
 		if got, _ := keys(app); !slices.Equal(got, []string{UnreadableMembersKey}) {
 			t.Fatalf("%s: keys = %q, want only the unreadable key", name, got)
