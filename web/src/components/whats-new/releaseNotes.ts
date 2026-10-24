@@ -35,6 +35,8 @@ export interface ReleaseHighlight {
 
 export interface ReleaseNotes {
   version: string
+  /** Announce this release on upgrade regardless of its highlight score. */
+  autoOpen?: boolean
   highlights: ReleaseHighlight[]
   improvements: string[]
 }
@@ -49,13 +51,14 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 export const RELEASE_NOTES: ReleaseNotes[] = [
   {
     version: 'v1.18.0',
+    autoOpen: true,
     highlights: [
       {
         id: 'trivy-cve-search',
         icon: Search,
         title: 'Investigate CVEs across your cluster',
-        description: 'Search Trivy findings by CVE, package or image. MCP agents can also inventory declared runtime versions that package scans may miss.',
-        leadDescription: 'With Trivy Operator installed, search by CVE, package, failed check ID or image to find affected workloads and their installed and fixed package versions. MCP agents can also inventory runtime versions declared by running images and compare supported versions with a fixed release, covering runtimes that package scans may miss. Missing or unreadable declarations stay unknown; image metadata does not verify a fix.',
+        description: 'Search Trivy findings by CVE, package or image, including in resource tables. MCP agents can inventory declared runtime versions.',
+        leadDescription: 'With Trivy Operator installed, search globally or within report tables by CVE, package, failed check ID or image to find matching scan reports, then open a report for installed and fixed package versions. Partial searches say what could not be checked. MCP agents can also inventory runtime versions declared by running images and compare supported versions with a fixed release. Missing or unreadable declarations stay unknown; image metadata does not verify a fix.',
         importance: 8,
       },
       {
@@ -69,26 +72,26 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         id: 'investigation-change-evidence',
         icon: GitCompareArrows,
         title: 'See more of what changed',
-        description: 'Investigations show more spec edits, policy and label changes, Secret rotations and stale env readers, and warn when history is incomplete.',
+        description: 'Investigations show more spec edits, NetworkPolicy and Pod label changes, Secret rotations and stale env readers, and flag incomplete history.',
         importance: 5,
       },
       {
         id: 'workload-blockers',
         icon: Network,
-        title: 'Find what is blocking your workload',
-        description: 'Issues explain policy and admission blocks, mixed Service backends, volume conflicts, storage rollout deadlocks and CronJob scheduling failures.',
+        title: 'Better issue detection and warnings',
+        description: 'Issues catch more network, storage and scheduling problems, add diagnostic context, and flag checks that could not complete.',
         importance: 5,
         path: '/issues',
         cta: 'Open Issues',
       },
     ],
     improvements: [
-      'Logs keep your reading position and pause for text selection',
+      'Logs wait for containers to start and keep your reading position',
       'Resource tables remember your column order for each kind',
       'Open terminals and browse files in native sidecars',
       'Node drains keep results visible and name remaining Pods',
-      'Issues name incomplete checks and let you retry them',
-      'Helm upgrades require an explicit chart source',
+      'Audits recognize shared Pod CPU and memory budgets',
+      'Find public Helm chart sources through ArtifactHub',
       'Prometheus reconnects automatically when it appears',
       'Argo CD views confirm when a local resource is missing',
     ],

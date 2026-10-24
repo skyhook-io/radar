@@ -127,6 +127,16 @@ async function clickGotIt() {
 }
 
 describe('WhatsNew', () => {
+  it.each(['v1.18.0', 'v1.18.1'])('opens the shipped notes on Home after upgrading to %s', async version => {
+    setCatalog(...SHIPPED)
+    serverState = { currentVersion: version, storage: 'server', seenVersion: 'v1.17.0', priorInstall: true }
+    await render('/')
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.18")
+    await clickGotIt()
+    expect(seenPosts).toEqual([version])
+    expect(status.current.unread).toBe(false)
+  })
+
   it('auto-opens on Home after an upgrade and records the running version on close', async () => {
     serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
     await render('/')
