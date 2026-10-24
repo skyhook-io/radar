@@ -751,13 +751,17 @@ and shared Pod budgets in `spec.resources` (or the workload's Pod template).
 Regular containers and restartable init sidecars are checked; one-shot init
 containers are excluded from these efficiency checks.
 
-For existing Pods, Radar reads the stored, admitted specification. For workload
+For standalone Pods with no owner references, Radar reads the stored, admitted
+specification. Owned Pods are not checked directly by these efficiency checks.
+For workload
 templates, it considers request-from-limit defaulting, namespace LimitRanges,
 and possible shared-budget admission behavior. When those possibilities disagree,
 Radar leaves the affected evaluation unknown rather than reporting a certain
 pass or failure. Scan-level `missingInputs` includes `pod-resource-defaulting`
 when this uncertainty prevents an evaluation. These are configuration checks,
-not measurements of actual consumption.
+not measurements of actual consumption. If LimitRanges cannot be listed,
+workload-template efficiency checks are skipped and `missingInputs` includes
+`limitranges`.
 
 ### Per-resource check suppression
 
