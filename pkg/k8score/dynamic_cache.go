@@ -269,6 +269,11 @@ func (d *DynamicResourceCache) observationLocked(gvr schema.GroupVersionResource
 		}
 		observation.UnansweredNamespaces = slices.Clone(r.unanswered)
 		observation.ProbeRetrying = r.running && !r.settled()
+		if r.rejected {
+			// Watches that started before the 401 keep their own state, but
+			// the checks still outstanding were refused, not unanswered.
+			observation.ReasonCode = "credentials_rejected"
+		}
 		if (r.whole || namespace == "" && !r.fullWalk) && !observation.ProbeRetrying && observation.ReasonCode != "credentials_rejected" {
 			observation.ReasonCode = "scope_probe_incomplete"
 		}
@@ -771,7 +776,7 @@ func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr sch
 	if d.config.NamespaceScoped && d.config.Namespace != "" && d.gvrIsNamespaced(gvr) {
 		ns, err := d.classifyScope(gvr, d.config.Namespace, d.listProbe(ctx, gvr, d.config.Namespace))
 		if probeUnanswered(err) {
-			return probeOutcome{unanswered: []string{d.config.Namespace}, err: err}
+			return probeOutcome{unanswered: []string{d.config.Namespace}, err: fmt.Errorf("%w: %w", errScopeProbeIncomplete, err)}
 		}
 		if err != nil {
 			return probeOutcome{complete: true, answered: []string{d.config.Namespace}, err: err}
@@ -1091,7 +1096,6 @@ func (d *DynamicResourceCache) recoverProbes(gvr schema.GroupVersionResource, r 
 	}
 }
 
-// waitFor waits for delay and reports whether ctx was still live after it.
 func waitFor(ctx context.Context, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()

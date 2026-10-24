@@ -1266,3 +1266,52 @@ func TestProbeRetryRearmTakesOverOutstandingGaps(t *testing.T) {
 		})
 	}
 }
+
+// A 401 met while namespaces already have watches: those keep their own
+// state, but the kind and the namespaces still outstanding read as rejected
+// credentials, not as checks that never answered.
+func TestObservationShowsRejectionBesideWatchedNamespaces(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: rateLimitedLists(gvr, []string{"a"}, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if err := d.startWatching(gvr, "a"); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.probeRetries[gvr] = &probeRetry{unanswered: []string{"b"}, fullWalk: true, rejected: true}
+	d.mu.Unlock()
+	if o := d.Observation(gvr); o.ReasonCode != "credentials_rejected" {
+		t.Fatalf("kind observation = %+v, want credentials_rejected", o)
+	}
+	if o := d.NamespaceObservation(gvr, "b"); o.ReasonCode != "credentials_rejected" {
+		t.Fatalf("observation of b = %+v, want credentials_rejected", o)
+	}
+	if o := d.NamespaceObservation(gvr, "a"); o.ReasonCode == "credentials_rejected" {
+		t.Fatalf("observation of watched a = %+v, want its own watch state", o)
+	}
+}
+
+// Under --namespace-scope, a pinned namespace whose check never answered is
+// an unfinished check, as it is for a fallback namespace, not a failed one.
+func TestPinnedNamespaceUnansweredIsIncomplete(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{
+		DynamicClient:          rateLimitedLists(gvr, []string{"team"}, map[string]int{"team": 100}),
+		NamespaceScoped:        true,
+		Namespace:              "team",
+		ProbeRetryBackoff:      []time.Duration{time.Hour},
+		ProbeRecoveryIntervals: []time.Duration{time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	d.WarmupParallel([]schema.GroupVersionResource{gvr}, 5*time.Second)
+	o := d.Observation(gvr)
+	if o.ReasonCode != "scope_probe_incomplete" || !slices.Equal(o.UnansweredNamespaces, []string{"team"}) {
+		t.Fatalf("observation = %+v, want scope_probe_incomplete with team unanswered", o)
+	}
+}
