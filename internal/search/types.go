@@ -97,7 +97,21 @@ type Result struct {
 	// for, so an empty result for them reads as "not looked at", not "none
 	// exist". Kinds the caller may not list are left out.
 	UnsearchedKinds []UnsearchedKind `json:"unsearched_kinds,omitempty"`
+	// IncompleteFindings is FindingsTimeLimit when searching Trivy report
+	// findings ran out of its time budget. Reports can still match by name,
+	// kind, namespace or scanned image; a CVE or package that sits in a
+	// skipped report's findings is missing from the hits.
+	IncompleteFindings string `json:"incomplete_findings,omitempty"`
+	// AccessIncomplete is set when Trivy reports in some namespaces were
+	// left out because the caller's access to them isn't confirmed yet: the
+	// per-search limit on fresh checks (MaxAccessChecks) was reached, or a
+	// check failed. Confirmed decisions are remembered, so searching again
+	// covers more. It never depends on what the query matched.
+	AccessIncomplete bool `json:"access_incomplete,omitempty"`
 }
+
+// FindingsTimeLimit: findings search ran out of its time budget.
+const FindingsTimeLimit = "time_limit"
 
 // UnsearchedKind is one kind a kind: filter asked for that the search did not
 // fully scan.

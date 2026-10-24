@@ -53,10 +53,8 @@
 }
 
 /*
- * Tailwind v4 theme tokens. Migrated from the legacy v3 tailwind.config.js
- * to CSS-first @theme so library consumers (e.g. radar-hub-web) don't need
- * to pick up radar's Node config or its `@tailwindcss/typography` plugin
- * when they consume this package from npm.
+ * Tailwind v4 theme tokens live in CSS so library consumers (e.g.
+ * radar-hub-web) get the same theme when they import this package's styles.
  */
 @theme {
   --color-investigation-assessment: light-dark(#edf3fc, #182237);

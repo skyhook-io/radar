@@ -13,6 +13,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -119,9 +121,9 @@ func TestClientSafetySnapshotsUseOneBinding(t *testing.T) {
 	if client != sharedClient || binding != "kcb1_management" {
 		t.Fatalf("client safety snapshot = (%p, %q), want (%p, %q)", client, binding, sharedClient, "kcb1_management")
 	}
-	impersonated, impersonatedBinding, err := ImpersonatedClientSafetySnapshot("alice", []string{"operators"})
+	impersonated, impersonatedBinding, err := UserClientSafetySnapshot(&pkgauth.User{Username: "alice", Groups: []string{"operators"}})
 	if err != nil {
-		t.Fatalf("ImpersonatedClientSafetySnapshot: %v", err)
+		t.Fatalf("UserClientSafetySnapshot: %v", err)
 	}
 	if impersonated == nil || impersonatedBinding != "kcb1_management" {
 		t.Fatalf("impersonated safety snapshot = (%v, %q), want non-nil client and %q", impersonated, impersonatedBinding, "kcb1_management")

@@ -43,7 +43,14 @@ export function changeSync(change: GitOpsChange): SyncStatus {
 }
 
 export function changeHealth(change: GitOpsChange): GitOpsHealthStatus {
+  if (change.missing) return 'Missing'
   return normalizeHealthStatus(change.health)
+}
+
+export function missingResourceMessage(sync?: string): string {
+  return sync === 'Synced'
+    ? 'Argo reports this resource as synced, but it is not present in the cluster. Refresh the application to check its status.'
+    : 'Not present in the cluster. Sync the application to create it.'
 }
 
 export function isArgoResourceSyncEligible(change: GitOpsChange, declared: boolean, hook?: string): boolean {

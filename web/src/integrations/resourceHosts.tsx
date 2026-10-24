@@ -35,6 +35,7 @@ import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPo
 import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRenderer'
 import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBackupRenderer'
 import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
+import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
@@ -47,6 +48,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
+  { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   cnpgResourceHost,
 ]
 

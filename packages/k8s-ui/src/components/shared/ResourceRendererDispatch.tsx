@@ -1,3 +1,5 @@
+import { getGitOpsTool } from '../gitops/detail-helpers'
+import { apiVersionToGroup } from '../../utils/navigation'
 import { hasReflectorDetails } from '../resources/renderers/ReflectorSection'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE, HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
@@ -314,6 +316,7 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
  * When an override is not provided, the base (shared) renderer is used.
  */
 export interface RendererOverrides {
+  FluxHelmReleaseRenderer?: React.ComponentType<React.ComponentProps<typeof FluxHelmReleaseRenderer>>
   JobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   JobSetRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayJobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
@@ -700,8 +703,11 @@ export function ResourceRendererDispatch({
   // foreign CRD render a BLANK drawer rather than the generic one.
   // CAPI's `machines` and `machinesets` need the same protection because another
   // API group can publish either plural without inheriting CAPI presentation.
+  const isFluxKind = ['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind)
+  const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
   const isGroupGatedKind =
-    kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
+    isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
+    || kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'databaseroles' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
@@ -709,7 +715,13 @@ export function ResourceRendererDispatch({
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
-    (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
+    (isFluxKind && isFluxResource)
+    || (kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io'))
+    || (kind === 'services' && (data?.apiVersion === 'v1' || isApiGroup(data?.apiVersion, 'serving.knative.dev')))
+    || (kind === 'ingresses' && ['networking.k8s.io', 'extensions', 'networking.internal.knative.dev'].some(group => isApiGroup(data?.apiVersion, group)))
+    || (kind === 'certificates' && ['cert-manager.io', 'networking.internal.knative.dev'].some(group => isApiGroup(data?.apiVersion, group)))
+    || (kind === 'gateways' && ['gateway.networking.k8s.io', 'networking.istio.io'].some(group => isApiGroup(data?.apiVersion, group)))
+    || (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
     || (kind === 'backups' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'velero.io')))
     || ((kind === 'scheduledbackups' || kind === 'poolers') && isCNPGApiVersion)
     || (kind === 'objectstores' && isApiGroup(data?.apiVersion, 'barmancloud.cnpg.io'))
@@ -755,6 +767,7 @@ export function ResourceRendererDispatch({
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const JobComp = rendererOverrides?.JobRenderer ?? JobRenderer
+  const FluxHelmReleaseComp = rendererOverrides?.FluxHelmReleaseRenderer ?? FluxHelmReleaseRenderer
   const JobSetComp = rendererOverrides?.JobSetRenderer ?? JobSetRenderer
   const RayJobComp = rendererOverrides?.RayJobRenderer ?? RayJobRenderer
   const RayClusterComp = rendererOverrides?.RayClusterRenderer ?? RayClusterRenderer
@@ -822,9 +835,9 @@ export function ResourceRendererDispatch({
           />
         )}
         {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
-        {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} />}
+        {kind === 'services' && data?.apiVersion === 'v1' && <ServiceComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} />}
         {kind === 'endpointslices' && <EndpointSliceRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'ingresses' && (isApiGroup(data?.apiVersion, 'networking.k8s.io') || isApiGroup(data?.apiVersion, 'extensions')) && <IngressRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobComp data={data} onNavigate={onNavigate} />}
@@ -846,7 +859,7 @@ export function ResourceRendererDispatch({
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'analysistemplates' || kind === 'clusteranalysistemplates') && <AnalysisTemplateRenderer data={data} />}
         {kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io') && <ExperimentRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
+        {kind === 'certificates' && isApiGroup(data?.apiVersion, 'cert-manager.io') && <CertificateRenderer data={data} />}
         {kind === 'workflows' && <WorkflowRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'storageclasses' && <StorageClassRenderer data={data} />}
@@ -855,7 +868,7 @@ export function ResourceRendererDispatch({
         {kind === 'issuers' && <IssuerRenderer data={data} />}
         {kind === 'orders' && <OrderRenderer data={data} />}
         {kind === 'challenges' && <ChallengeRenderer data={data} />}
-        {kind === 'gateways' && (data.apiVersion?.includes('networking.istio.io') ? <IstioGatewayRenderer data={data} /> : <GatewayRenderer data={data} onNavigate={onNavigate} />)}
+        {kind === 'gateways' && groupGatedMatched && (isApiGroup(data.apiVersion, 'networking.istio.io') ? <IstioGatewayRenderer data={data} /> : <GatewayRenderer data={data} onNavigate={onNavigate} />)}
         {kind === 'gatewayclasses' && <GatewayClassRenderer data={data} />}
         {kind === 'httproutes' && <HTTPRouteRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'grpcroutes' && <GRPCRouteRenderer data={data} onNavigate={onNavigate} />}
@@ -875,13 +888,13 @@ export function ResourceRendererDispatch({
         {(kind === 'roles' || kind === 'clusterroles') && <RoleComp data={data} onNavigate={onNavigate} />}
         {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'gitrepositories' && <GitRepositoryRenderer data={data} />}
-        {kind === 'ocirepositories' && <OCIRepositoryRenderer data={data} />}
-        {kind === 'helmrepositories' && <HelmRepositoryRenderer data={data} />}
-        {kind === 'kustomizations' && <KustomizationRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'helmreleases' && <FluxHelmReleaseRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'alerts' && <AlertRenderer data={data} />}
-        {kind === 'applications' && <ArgoApplicationRenderer data={data} />}
+        {kind === 'gitrepositories' && isFluxResource && <GitRepositoryRenderer data={data} />}
+        {kind === 'ocirepositories' && isFluxResource && <OCIRepositoryRenderer data={data} />}
+        {kind === 'helmrepositories' && isFluxResource && <HelmRepositoryRenderer data={data} />}
+        {kind === 'kustomizations' && isFluxResource && <KustomizationRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'helmreleases' && isFluxResource && <FluxHelmReleaseComp data={data} onNavigate={onNavigate} />}
+        {kind === 'alerts' && isFluxResource && <AlertRenderer data={data} />}
+        {kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io') && <ArgoApplicationRenderer data={data} />}
         {kind === 'nodepools' && <KarpenterNodePoolComp data={data} onNavigate={onNavigate} />}
         {kind === 'nodeclaims' && <KarpenterNodeClaimRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'ec2nodeclasses' && <KarpenterEC2NodeClassRenderer data={data} />}
@@ -987,14 +1000,14 @@ export function ResourceRendererDispatch({
         {kind === 'leases' && <LeaseRenderer data={data} />}
         {kind === 'limitranges' && <LimitRangeRenderer data={data} />}
         {/* Knative Serving */}
-        {(kind === 'services' && data?.apiVersion?.includes('serving.knative.dev')) && <KnativeServiceRenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'services' && isApiGroup(data?.apiVersion, 'serving.knative.dev')) && <KnativeServiceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'knativeservices' && <KnativeServiceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'knativeconfigurations' && <KnativeConfigurationRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'knativerevisions' && <KnativeRevisionRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'knativeroutes' && <KnativeRouteRenderer data={data} onNavigate={onNavigate} />}
-        {(kind === 'ingresses' && data?.apiVersion?.includes('networking.internal.knative.dev')) && <KnativeIngressRenderer data={data} />}
+        {(kind === 'ingresses' && isApiGroup(data?.apiVersion, 'networking.internal.knative.dev')) && <KnativeIngressRenderer data={data} />}
         {kind === 'knativeingresses' && <KnativeIngressRenderer data={data} />}
-        {(kind === 'certificates' && data?.apiVersion?.includes('networking.internal.knative.dev')) && <KnativeCertificateRenderer data={data} />}
+        {(kind === 'certificates' && isApiGroup(data?.apiVersion, 'networking.internal.knative.dev')) && <KnativeCertificateRenderer data={data} />}
         {kind === 'knativecertificates' && <KnativeCertificateRenderer data={data} />}
         {kind === 'serverlessservices' && <ServerlessServiceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'domainmappings' && <DomainMappingRenderer data={data} onNavigate={onNavigate} />}
@@ -1099,11 +1112,11 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   }
   if (k === 'replicasets') return getWorkloadStatus(data, k)
   if (k === 'services') {
-    if (data.apiVersion?.includes('serving.knative.dev')) {
+    if (isApiGroup(data.apiVersion, 'serving.knative.dev')) {
       const status = getKnativeConditionStatus(data)
       return { text: status.text, color: status.color }
     }
-    return getServiceStatus(data)
+    if (data.apiVersion === 'v1') return getServiceStatus(data)
   }
   if (k === 'endpointslices') {
     const endpoints = data.endpoints || []
@@ -1176,11 +1189,11 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'workflows') return getWorkflowStatus(data)
   if (k === 'cronworkflows') return getCronWorkflowStatus(data)
   if (k === 'certificates') {
-    if (data.apiVersion?.includes('networking.internal.knative.dev')) {
+    if (isApiGroup(data.apiVersion, 'networking.internal.knative.dev')) {
       const status = getKnativeConditionStatus(data)
       return { text: status.text, color: status.color }
     }
-    return getCertificateStatus(data)
+    if (isApiGroup(data.apiVersion, 'cert-manager.io')) return getCertificateStatus(data)
   }
   if (k === 'persistentvolumes') return getPVStatus(data)
   if (k === 'certificaterequests') return getCertificateRequestStatus(data)
@@ -1189,20 +1202,21 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'orders') return getOrderState(data)
   if (k === 'challenges') return getChallengeState(data)
   if (k === 'gateways') {
-    if (data.apiVersion?.includes('networking.istio.io')) return getIstioGatewayStatus(data)
-    return getGatewayStatus(data)
+    if (isApiGroup(data.apiVersion, 'networking.istio.io')) return getIstioGatewayStatus(data)
+    if (isApiGroup(data.apiVersion, 'gateway.networking.k8s.io')) return getGatewayStatus(data)
   }
   if (k === 'gatewayclasses') return getGatewayClassStatus(data)
   if (k === 'httproutes' || k === 'grpcroutes' || k === 'tcproutes' || k === 'tlsroutes' || k === 'udproutes') return getRouteStatus(data)
   if (k === 'sealedsecrets') return getSealedSecretStatus(data)
   if (k === 'poddisruptionbudgets') return getPDBStatus(data)
-  if (k === 'gitrepositories') return getGitRepositoryStatus(data)
-  if (k === 'ocirepositories') return getOCIRepositoryStatus(data)
-  if (k === 'helmrepositories') return getHelmRepositoryStatus(data)
-  if (k === 'kustomizations') return getKustomizationStatus(data)
-  if (k === 'helmreleases') return getFluxHelmReleaseStatus(data)
-  if (k === 'alerts') return getFluxAlertStatus(data)
-  if (k === 'applications') return getArgoApplicationStatus(data)
+  const isFluxResource = getGitOpsTool(k, apiVersionToGroup(data.apiVersion)) === 'flux'
+  if (k === 'gitrepositories' && isFluxResource) return getGitRepositoryStatus(data)
+  if (k === 'ocirepositories' && isFluxResource) return getOCIRepositoryStatus(data)
+  if (k === 'helmrepositories' && isFluxResource) return getHelmRepositoryStatus(data)
+  if (k === 'kustomizations' && isFluxResource) return getKustomizationStatus(data)
+  if (k === 'helmreleases' && isFluxResource) return getFluxHelmReleaseStatus(data)
+  if (k === 'alerts' && isFluxResource) return getFluxAlertStatus(data)
+  if (k === 'applications' && isApiGroup(data.apiVersion, 'argoproj.io')) return getArgoApplicationStatus(data)
   if (k === 'nodepools') return getNodePoolStatus(data)
   if (k === 'nodeclaims') return getNodeClaimStatus(data)
   if (k === 'ec2nodeclasses') return getEC2NodeClassStatus(data)
@@ -1347,7 +1361,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (
     knativeConditionKinds.includes(k)
     || isKnativeSubscription
-    || (k === 'ingresses' && data.apiVersion?.includes('networking.internal.knative.dev'))
+    || (k === 'ingresses' && isApiGroup(data.apiVersion, 'networking.internal.knative.dev'))
   ) {
     const status = getKnativeConditionStatus(data)
     return { text: status.text, color: status.color }

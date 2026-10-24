@@ -41,6 +41,7 @@ export {
   describeGitOpsTerminating,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  gitOpsDetailGroup,
   isDestinationRef,
 } from './detail-helpers'
 export { SyncOptionsDialog } from './SyncOptionsDialog'

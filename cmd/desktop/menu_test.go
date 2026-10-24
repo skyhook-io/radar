@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"reflect"
 	goruntime "runtime"
+	"strings"
 	"testing"
 
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -161,6 +163,22 @@ func TestPasteAcceleratorDroppedOnlyOnWindows(t *testing.T) {
 				t.Fatalf("pasteAccelerator(%q) = %+v, want %+v", tc.goos, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNativePasteSourceEncodesClipboardText(t *testing.T) {
+	text := "line one\n'\"`); alert(1); // <tag> caf\u00e9"
+	source := nativePasteSource(text)
+	const prefix, suffix = "Promise.resolve(", ")"
+	if !strings.HasPrefix(source, prefix) || !strings.HasSuffix(source, suffix) {
+		t.Fatalf("native paste source = %q, want Promise.resolve(...) expression", source)
+	}
+	var decoded string
+	if err := json.Unmarshal([]byte(source[len(prefix):len(source)-len(suffix)]), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded != text {
+		t.Fatalf("encoded clipboard text = %q, want %q", decoded, text)
 	}
 }
 

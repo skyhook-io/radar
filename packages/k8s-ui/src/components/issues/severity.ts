@@ -77,7 +77,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   gateway_not_ready: 'Gateway not ready',
   gateway_route_invalid: 'Gateway route invalid',
   dns_failure: 'DNS failure',
-  network_policy_block: 'Network policy block',
+  network_policy_denied: 'Traffic denied by NetworkPolicy',
   pvc_pending: 'PVC pending',
   pvc_lost: 'PVC lost',
   pv_failed: 'PV failed',
@@ -88,7 +88,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   backup_target_unavailable: 'Backup target unavailable',
   backup_stalled: 'Backup not progressing',
   job_failed: 'Job failed',
-  cronjob_failed: 'CronJob failed',
+  cronjob_failed: 'CronJob needs attention',
   rollout_stalled: 'Rollout stalled',
   hpa_limited_or_failed: 'Autoscaling limited',
   rbac_forbidden: 'Permission denied',
@@ -140,6 +140,12 @@ export function categoryLabel(category: string): string {
 // Reasons filed under a category whose label names a different operation:
 // CNPG archiving and an unanswered scheduled run sit under backup_failed.
 const REASON_TITLE: Record<string, string> = {
+  InvalidSchedule: 'Scheduling error reported',
+  UnparseableSchedule: 'Scheduling error reported',
+  UnParseableCronJobSchedule: 'Scheduling error reported',
+  UnknownTimeZone: 'Time zone error reported',
+  MissSchedule: 'Missed schedule reported',
+  TooManyMissedTimes: 'Missed schedules reported',
   CNPGWALArchivingFailing: "WAL archiving failing",
   CNPGLastBackupFailed: "Latest backup failed",
   CNPGScheduleDestinationMissing: "Backup schedule has no destination",

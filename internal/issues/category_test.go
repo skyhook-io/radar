@@ -31,7 +31,7 @@ func TestClassify(t *testing.T) {
 		{"coredns service rewrite", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS service DNS rewrite"}, issuesapi.CategoryDNSFailure},
 		{"env missing service", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Missing referenced Service"}, issuesapi.CategoryMissingConfigRef},
 		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryMissingConfigRef},
-		{"networkpolicy denies all ingress", classifyInput{Source: SourceProblem, Kind: "NetworkPolicy", APIGroup: "networking.k8s.io", Reason: k8s.NetworkPolicyDenyAllIngressReason}, issuesapi.CategoryNetworkPolicyBlock},
+		{"networkpolicy denies all ingress", classifyInput{Source: SourceProblem, Kind: "NetworkPolicy", APIGroup: "networking.k8s.io", Reason: k8s.NetworkPolicyDenyAllIngressReason}, issuesapi.CategoryNetworkPolicyDenied},
 		{"deployment duplicate env", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
 		{"job duplicate env is not job failure", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
 		{"cronjob duplicate env", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},

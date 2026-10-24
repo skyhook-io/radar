@@ -48,3 +48,38 @@ func TestFluxTargetsLocalCluster(t *testing.T) {
 		t.Error("nil must fail closed")
 	}
 }
+
+func TestToolForDecidesByAPIGroup(t *testing.T) {
+	cases := []struct {
+		group, kind, want string
+	}{
+		{"argoproj.io", "Application", ToolArgoCD},
+		{"argoproj.io", "ApplicationSet", ToolArgoCD},
+		{"argoproj.io", "AppProject", ToolArgoCD},
+		{"kustomize.toolkit.fluxcd.io", "Kustomization", ToolFluxCD},
+		{"helm.toolkit.fluxcd.io", "HelmRelease", ToolFluxCD},
+		{"source.toolkit.fluxcd.io", "GitRepository", ToolFluxCD},
+		// SIG Apps defines its own Application kind.
+		{"app.k8s.io", "Application", ""},
+		{"some.vendor", "FooApplication", ""},
+		// argoproj.io is shared with Argo Rollouts and Workflows.
+		{"argoproj.io", "Rollout", ""},
+		{"argoproj.io", "Workflow", ""},
+		{"", "Application", ""},
+		{"fluxcd.io.example.com", "Kustomization", ""},
+		{"fake.kustomize.toolkit.fluxcd.io", "Kustomization", ""},
+		{"notargoproj.io", "Application", ""},
+		{"source.toolkit.fluxcd.io", "Application", ""},
+		{"source.toolkit.fluxcd.io", "Kustomization", ""},
+		{"kustomize.toolkit.fluxcd.io", "HelmRelease", ""},
+		{"source.toolkit.fluxcd.io", "HelmChart", ToolFluxCD},
+		{"source.toolkit.fluxcd.io", "Bucket", ToolFluxCD},
+		{"notification.toolkit.fluxcd.io", "Alert", ToolFluxCD},
+		{"image.toolkit.fluxcd.io", "ImageRepository", ""},
+	}
+	for _, tc := range cases {
+		if got := ToolFor(tc.group, tc.kind); got != tc.want {
+			t.Errorf("ToolFor(%q, %q) = %q, want %q", tc.group, tc.kind, got, tc.want)
+		}
+	}
+}

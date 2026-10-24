@@ -143,6 +143,12 @@ func currentIsStable(ro *unstructured.Unstructured) bool {
 	return current == stable
 }
 
+// ControllerObservedSpec reports whether the controller has reconciled the current template,
+// including a workloadRef template source read with the supplied client.
+func ControllerObservedSpec(ctx context.Context, client dynamic.Interface, ro *unstructured.Unstructured) (bool, error) {
+	return controllerObservedSpec(ctx, client, ro)
+}
+
 // controllerObservedSpec reports that the controller has reconciled the pod template as
 // it stands now. Until it has, status still describes the PREVIOUS revision, so
 // currentIsStable is not evidence that there is nothing left to promote.

@@ -382,3 +382,132 @@ func TestApplyInClusterResultsSettlesOnlyBackendsItReached(t *testing.T) {
 		t.Errorf("primary finding = %+v (found %v), want one of svc-a's standing warnings", f, ok)
 	}
 }
+
+// A probe Job with a mesh sidecar can get a connection accepted by its own
+// proxy before the backend does, so its success doesn't settle policy findings.
+func TestApplyInClusterResultsIgnoresMeshedProbeForPolicy(t *testing.T) {
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "shop", Name: "rec"},
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service", Namespace: "shop", Name: "rec"}, Edge: "entry:Service", Findings: []Finding{
+				{Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress"},
+			}},
+			{Resource: ResourceRef{Kind: "Pods", Namespace: "shop"}, Edge: "Service->Pods",
+				Meta:     map[string]any{"policyVerdict": "would-deny", "policyNames": []string{"deny-all"}, "policyPort": ":80", "policyDenyPort": int32(80), "policyProtocol": "TCP"},
+				Findings: []Finding{{Code: codePolicyWouldDeny, Severity: SeverityWarning, Message: "A network rule here would block this traffic"}}},
+		},
+		Routes: []RouteResult{{Route: "rec", Target: "rec:80", Outcome: OutcomeReached, Confidence: ConfidenceIndirect,
+			InClusterRequest: &ProbeRequest{Protocol: "http", Scheme: "http", Path: "/"}}},
+		Coverage: &Coverage{Tested: 1, Passed: 1},
+	}
+	pass := cleanInClusterPass()
+	pass[0].Mesh = "Istio"
+	ApplyInClusterResults(tr, map[string][]probe.Result{InClusterResultKey("rec", "rec:80", ""): pass})
+	for i, h := range tr.Downstream {
+		if f := h.Findings[0]; f.Severity != SeverityWarning {
+			t.Errorf("hop %d %s = %s, want the warning kept after a meshed probe", i, f.Code, f.Severity)
+		}
+	}
+}
+
+// Pods that declare no containerPort get no per-pod probes. Radar's data probe
+// through the Service on the prediction's Service port then settles both the
+// prediction and a lone deny-all issue, and the diagnosis doesn't lead with
+// them; a failed probe keeps both.
+func TestReconcilePolicySettlesFromServiceProbeWithoutContainerPort(t *testing.T) {
+	trace := func(ok bool) *Trace {
+		return &Trace{Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service", Namespace: "shop", Name: "rec"}, Edge: "entry:Service",
+				Findings: []Finding{{Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress"}},
+				Probes:   []probe.Result{{Layer: probe.LayerTCP, Target: "10.96.0.10:80", Port: 80, Path: probe.PathData, Vantage: probe.VantageInCluster, OK: ok}}},
+			{Resource: ResourceRef{Kind: "Pods", Namespace: "shop"}, Edge: "Service->Pods",
+				Meta:     map[string]any{"policyVerdict": "would-deny", "policyNames": []string{"deny-all"}, "policyPort": ":80", "policyDenyPort": int32(80), "policyProtocol": "TCP"},
+				Findings: []Finding{{Code: codePolicyWouldDeny, Severity: SeverityWarning, Message: "A network rule here would block this traffic"}}},
+		}, BrokenAt: -1, radarUnmeshed: true}
+	}
+	tr := trace(true)
+	reconcilePolicyFindings(tr)
+	for i, h := range tr.Downstream {
+		if f := h.Findings[0]; f.Severity != SeverityInfo {
+			t.Errorf("hop %d %s = %s, want info after the Service probe got through", i, f.Code, f.Severity)
+		}
+	}
+	if f, _, ok := primaryProblemFinding(tr); ok {
+		t.Errorf("primary finding = %+v, want none after the probe got through", f)
+	}
+
+	tr = trace(false)
+	reconcilePolicyFindings(tr)
+	for i, h := range tr.Downstream {
+		if f := h.Findings[0]; f.Severity != SeverityWarning {
+			t.Errorf("hop %d %s = %s, want the warning kept when the probe was dropped", i, f.Code, f.Severity)
+		}
+	}
+
+	// Radar couldn't read its own pod, so a sidecar there can't be ruled out.
+	tr = trace(true)
+	tr.radarUnmeshed = false
+	reconcilePolicyFindings(tr)
+	for i, h := range tr.Downstream {
+		if f := h.Findings[0]; f.Severity != SeverityWarning {
+			t.Errorf("hop %d %s = %s, want the warning kept when Radar's own mesh status is unknown", i, f.Code, f.Severity)
+		}
+	}
+}
+
+// A prediction without a recorded Service port isn't settled by an in-cluster
+// pass: its pod port can't be compared with the Service port of a route.
+func TestInClusterPassNeedsThePredictionsServicePort(t *testing.T) {
+	meta := map[string]any{"policyVerdict": "would-deny", "policyDenyPort": int32(80), "policyProtocol": "TCP"}
+	if inClusterPassCoversPrediction(map[int32]bool{80: true}, meta) {
+		t.Error("a prediction without policyPort was settled by a pass on Service port 80")
+	}
+	meta["policyPort"] = ":80"
+	if !inClusterPassCoversPrediction(map[int32]bool{80: true}, meta) {
+		t.Error("a pass on the prediction's Service port didn't settle it")
+	}
+}
+
+// Radar's own probes through a sidecar proxy in its pod don't settle policy
+// findings either: the proxy can accept before the backend does.
+func TestReconcilePolicyIgnoresMeshedRadarProbes(t *testing.T) {
+	tr := &Trace{Downstream: []Hop{
+		{Resource: ResourceRef{Kind: "Service", Namespace: "shop", Name: "rec"}, Edge: "entry:Service",
+			Findings: []Finding{{Code: k8s.NetworkPolicyDenyAllIngressFingerprint, Severity: SeverityWarning, Message: "NetworkPolicy denies all ingress"}},
+			Probes:   []probe.Result{{Layer: probe.LayerTCP, Target: "10.96.0.10:80", Port: 80, Path: probe.PathData, Vantage: probe.VantageInCluster, OK: true, Mesh: "Istio"}}},
+		{Resource: ResourceRef{Kind: "Pods", Namespace: "shop"}, Edge: "Service->Pods",
+			Meta:     map[string]any{"policyVerdict": "would-deny", "policyNames": []string{"deny-all"}, "policyPort": ":80", "policyDenyPort": int32(80), "policyProtocol": "TCP"},
+			Findings: []Finding{{Code: codePolicyWouldDeny, Severity: SeverityWarning, Message: "A network rule here would block this traffic"}}},
+	}}
+	reconcilePolicyFindings(tr)
+	for i, h := range tr.Downstream {
+		if f := h.Findings[0]; f.Severity != SeverityWarning {
+			t.Errorf("hop %d %s = %s, want the warning kept after a meshed probe", i, f.Code, f.Severity)
+		}
+	}
+}
+
+// selfPodMesh finds Radar's own pod in the cache by the downward-API env.
+func TestSelfPodMesh(t *testing.T) {
+	defer k8s.ResetTestState()
+	pod := func(name string, containers ...string) *corev1.Pod {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "radar"}}
+		for _, c := range containers {
+			p.Spec.Containers = append(p.Spec.Containers, corev1.Container{Name: c})
+		}
+		return p
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod("radar-meshed", "radar", "istio-proxy"), pod("radar-plain", "radar"))); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	t.Setenv("MY_POD_NAMESPACE", "radar")
+	for _, tt := range []struct {
+		name, mesh string
+		known      bool
+	}{{"radar-meshed", "Istio", true}, {"radar-plain", "", true}, {"radar-missing", "", false}} {
+		t.Setenv("MY_POD_NAME", tt.name)
+		if mesh, known := selfPodMesh(); mesh != tt.mesh || known != tt.known {
+			t.Errorf("%s: selfPodMesh = %q, %v; want %q, %v", tt.name, mesh, known, tt.mesh, tt.known)
+		}
+	}
+}

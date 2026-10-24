@@ -210,7 +210,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	// Every local agent runs through the run manager, which performs the
 	// confirmed apply turn and the verification that follows it.
 	for i := range agents {
-		agents[i].Apply = true
+		agents[i].Apply = !s.mcpReadOnly()
 		agents[i].Verification = true
 	}
 	// eligible: this deployment can run local BYO-agent investigations, the same
@@ -278,7 +278,7 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 }
 
 // aiReady gates every diagnose endpoint: the engine exists only in no-auth
-// standalone radar with /mcp mounted, once an agent CLI has been found. Returns
+// standalone Radar with the investigation MCP mounted, once an agent CLI is found. Returns
 // the run manager, or false (having written the error) when unavailable.
 func (s *Server) aiReady(w http.ResponseWriter) (*ai.RunManager, bool) {
 	runs := s.aiRunManager()
@@ -467,6 +467,10 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Apply && body.Verify {
 		s.writeError(w, http.StatusBadRequest, ai.ErrInvalidTurn.Error())
+		return
+	}
+	if body.Apply && s.mcpReadOnly() {
+		s.writeError(w, http.StatusForbidden, "AI apply is unavailable in read-only MCP mode. Restart Radar with --mcp-read-only=false to enable MCP write tools.")
 		return
 	}
 	if body.Verify && strings.TrimSpace(body.Question) == "" {

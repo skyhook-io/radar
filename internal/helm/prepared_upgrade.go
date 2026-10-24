@@ -270,6 +270,10 @@ func (c *Client) prepareCloudUpgradeWith(ctx context.Context, actionConfig *acti
 		return nil, err
 	}
 	request.Version = exactVersion
+	request.resolvedSource, err = c.installChartSource(&request)
+	if err != nil {
+		return nil, fmt.Errorf("record chart source: %w", err)
+	}
 	request.Values = cloudUpgradeValues(request.Values)
 
 	currentWorkload, err := preCloudDeploymentRef(current.Manifest, request.Namespace, request.ReleaseName)
@@ -370,13 +374,14 @@ func (p *PreparedUpgrade) Upgrade(ctx context.Context, values map[string]any) (*
 	if _, err := p.validateManifestWith(ctx, actionConfig, values); err != nil {
 		return nil, fmt.Errorf("final upgrade validation: %w", err)
 	}
-	if _, err := p.recheck(actionConfig); err != nil {
+	current, err := p.recheck(actionConfig)
+	if err != nil {
 		return nil, err
 	}
 
 	request := p.request
 	request.Values = cloudUpgradeValues(values)
-	upgrade := preparedUpgradeAction(actionConfig, p.request.Namespace)
+	upgrade := preparedUpgradeAction(actionConfig, &request, p.chart, current.Labels)
 	upgrade.Atomic = true
 	upgrade.CleanupOnFail = true
 	// Run synchronously. RunWithContext returns when ctx is cancelled while the
@@ -498,16 +503,17 @@ func releaseIdentity(rel *release.Release) (preparedReleaseIdentity, error) {
 }
 
 func runServerUpgradeDryRun(ctx context.Context, actionConfig *action.Configuration, req *InstallRequest, loaded *chart.Chart) (*release.Release, error) {
-	upgrade := preparedUpgradeAction(actionConfig, req.Namespace)
+	upgrade := preparedUpgradeAction(actionConfig, req, loaded, nil)
 	upgrade.DryRun = true
 	upgrade.DryRunOption = "server"
 	upgrade.HideSecret = true
 	return upgrade.RunWithContext(ctx, req.ReleaseName, loaded, req.Values)
 }
 
-func preparedUpgradeAction(actionConfig *action.Configuration, namespace string) *action.Upgrade {
+func preparedUpgradeAction(actionConfig *action.Configuration, request *InstallRequest, loaded *chart.Chart, currentLabels map[string]string) *action.Upgrade {
 	upgrade := action.NewUpgrade(actionConfig)
-	upgrade.Namespace = namespace
+	upgrade.Namespace = request.Namespace
+	upgrade.Labels = boundChartSourceLabels(currentLabels, request.resolvedSource, loaded)
 	upgrade.Timeout = 120 * time.Second
 	upgrade.ResetThenReuseValues = true
 	return upgrade

@@ -7,6 +7,7 @@ import { TRANSITION_BACKDROP, TRANSITION_MENU, TW_EASE_UI, overlayExitMs, overla
 import { SearchPillInput, type SearchModifier } from '@skyhook-io/k8s-ui'
 import { getResourceIcon } from '../../utils/resource-icons'
 import type { SearchHit, SearchMatchedField } from '../../api/client'
+import { contentMatchLabel, partialSearchNotices } from './omnibar-match'
 import { recordUsageEvent } from '../../api/usage-data'
 import { bestScore, type CommandItem } from './command-items'
 import { SearchSyntaxHelp } from './SearchSyntaxHelp'
@@ -28,6 +29,10 @@ export interface OmnibarSearchResult {
   hits: SearchHit[]
   total?: number
   total_matched?: number
+  /** "time_limit" when scan report findings were only partly searched. */
+  incomplete_findings?: string
+  /** Some namespaces' scan reports were left out, access not confirmed yet. */
+  access_incomplete?: boolean
 }
 
 // Health → dot color (summaryContext.health is the same vocabulary as the rest
@@ -424,6 +429,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac')
   const total = searchData?.total ?? 0
   const totalMatched = searchData?.total_matched ?? 0
+  const partialNotices = partialSearchNotices(searchData)
   const hasNsPill = pills.some((p) => p.key === 'ns')
   const dropdownOpen = open && !suggesting && (rows.length > 0 || searchActive)
   // Presence: the scrim and the results panel are menu-kind overlays (140ms
@@ -491,6 +497,11 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
                     <ResourceRow key={row.id} hit={row.hit} stale={resourcesStale} selected={row.id === selectedId} onSelect={() => selectRow(row.id)} onActivate={() => { if (!resourcesStale) execute(row) }} />
                   ))
                 )}
+                {!isFetching && !isError && partialNotices.map((notice) => (
+                  <div key={notice} className="flex items-start gap-2 px-3 py-1.5 text-xs text-warning-text">
+                    <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" /> {notice}
+                  </div>
+                ))}
               </>
             )}
 
@@ -614,7 +625,7 @@ function ResourceRow({ hit, selected, stale, onSelect, onActivate }: { hit: Sear
   const Icon = getResourceIcon(hit.kind)
   const dot = healthDot(hit.summaryContext?.health)
   const issues = hit.summaryContext?.issueCount ?? 0
-  const contentOnly = !!hit.matched?.length && hit.matched.every((m) => m.site.startsWith('content:'))
+  const contentLabel = contentMatchLabel(hit.matched)
   return (
     <button
       data-selected={selected}
@@ -630,7 +641,7 @@ function ResourceRow({ hit, selected, stale, onSelect, onActivate }: { hit: Sear
         {hit.namespace ? <> · {highlight(hit.namespace, tokensForSite(hit.matched, 'namespace'))}</> : ''}
         {hit.clusterName ? <> · <span className="text-theme-text-secondary">{hit.clusterName}</span></> : ''}
       </span>
-      {contentOnly && <span className="shrink-0 text-[10px] text-theme-text-tertiary italic">in spec</span>}
+      {contentLabel && <span className="shrink-0 text-[10px] text-theme-text-tertiary italic">{contentLabel}</span>}
       {issues > 0 && <span className="ml-auto shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-400">{issues} issue{issues === 1 ? '' : 's'}</span>}
     </button>
   )

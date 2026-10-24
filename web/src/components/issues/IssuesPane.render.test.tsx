@@ -95,6 +95,27 @@ describe('Issues page when Radar could not read Helm releases', () => {
     expect(html).toContain('The selected Pod keeps crashing')
   })
 
+  it.each([true, false])('keeps the last unchecked result and retry after a failed refresh (rows: %s)', (hasRows) => {
+    state.fleet.data = { issues: hasRows ? [issue] : [], unchecked_sources: [{ source: 'helm', reason: 'read_failed' }] }
+    state.fleet.error = new Error('Refresh unavailable')
+    const html = text(render('/issues'))
+    expect(html).toContain('Issue refresh failed. Showing the last successful result.')
+    expect(html).toContain(line)
+    expect(html).toContain('Check again')
+    expect(html).not.toContain('Failed to load issues')
+    expect(html).not.toContain('Nothing broken right now')
+    if (hasRows) expect(html).toContain('The selected Pod keeps crashing')
+  })
+
+  it('does not show an all-clear from a cached empty result after refresh fails', () => {
+    state.fleet.data = { issues: [], total: 0 }
+    state.fleet.error = new Error('Refresh unavailable')
+    const html = text(render('/issues'))
+    expect(html).toContain('No issues in the last successful result')
+    expect(html).not.toContain('Nothing broken right now')
+    expect(html).not.toContain('Failed to load issues')
+  })
+
   it('shows no all-clear for a source this version does not know, with a generic line', () => {
     state.fleet.data = { issues: [], total: 0, total_matched: 0, unchecked_sources: [{ source: 'some-new-source', reason: 'read_failed' }] }
     const html = text(render('/issues'))

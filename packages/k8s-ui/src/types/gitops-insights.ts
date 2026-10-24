@@ -170,6 +170,7 @@ export interface GitOpsChange {
   hookPhase?: string
   hasDesired: boolean
   hasLive: boolean
+  missing?: boolean
   // Structured per-field diff between the desired state (parsed from
   // kubectl.kubernetes.io/last-applied-configuration) and the live spec.
   // Undefined when the diff couldn't be computed (no annotation, SSA-applied

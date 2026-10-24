@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { PolicyCoverageSection } from '@skyhook-io/k8s-ui/components/resources/renderers/PolicyCoverageSection'
 import type { PolicyCoverageSubject, ResourceRef } from '@skyhook-io/k8s-ui'
 import { usePolicyCoverage } from '../../../api/policy'
+import { namespacesFromSearch } from '../../../utils/navigation'
 
 /** Mirrors maxPolicyCoverageSubjectsHard in internal/server/policy_handlers.go —
  *  asking for more than the server will send just returns the same list. */
@@ -32,13 +33,11 @@ export function KyvernoPolicyCoverage({
   // ceiling — past which the response says what it could not send.
   const [limit, setLimit] = useState<number | undefined>(undefined)
 
-  // The header's namespace filter is applied SERVER-side from session state, so
-  // the same URL returns a different body once it changes and nothing in the
-  // request distinguishes the two. Without it in the cache key, a policy opened
-  // under "All namespaces" keeps serving that body after the filter narrows —
-  // the view then shows other people's namespaces under your scope, and which
-  // behaviour you get depends on where you navigated from.
-  const viewFilter = useLocation().search
+  // A ClusterPolicy's subjects are narrowed to the header's namespace filter,
+  // which the server applies only when the request names it. A namespaced
+  // Policy's own namespace is its filter.
+  const viewNamespaces = namespacesFromSearch(new URLSearchParams(useLocation().search))
+  const viewFilter = namespace ? [] : viewNamespaces
   const query = usePolicyCoverage(name, namespace || undefined, !!name, limit, viewFilter)
 
   return (

@@ -50,7 +50,10 @@ func gpuPolicyName(p linux.WebviewGpuPolicy) string {
 
 func main() {
 	// Load persistent config (~/.radar/config.json) for flag defaults.
-	fileCfg := config.Load()
+	fileCfg, err := config.LoadForStartup()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
 	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
@@ -62,7 +65,7 @@ func main() {
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing")
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions")
-	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions")
+	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells and pod file browsing")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
@@ -70,11 +73,17 @@ func main() {
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
+	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("radar-desktop %s\n", version)
 		os.Exit(0)
+	}
+
+	mcpMode, err := mcpFlags.Resolve()
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// Suppress verbose client-go logs
@@ -204,7 +213,8 @@ func main() {
 		Version:                   version,
 		HubAPIURL:                 hubAPIURL,
 		HubAppURL:                 hubAppURL,
-		MCPEnabled:                fileCfg.MCPEnabledOr(true),
+		MCPEnabled:                mcpMode.Enabled,
+		MCPReadOnly:               mcpMode.ReadOnly,
 		AIHistory:                 fileCfg.AIHistoryOr(true),
 		AIHistoryDBPath:           fileCfg.AIHistoryDBPath,
 	}

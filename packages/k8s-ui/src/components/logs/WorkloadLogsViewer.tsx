@@ -97,7 +97,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
-  const { entries, append, set, clear } = useLogBuffer()
+  const { entries, isFollowing, pendingLineCount, retainedLineCount, missingLineCount, getRetainedEntries, setFollowing, append, set, clear } = useLogBuffer()
   const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
@@ -430,6 +430,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     {(fetchError || streamError) && entries.length > 0 && <div role="alert" className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-secondary">{fetchError || streamError} · Previously loaded logs remain below.</div>}
     <div className="min-h-0 flex-1"><LogCore
       entries={filteredEntries}
+      isFollowing={isFollowing}
+      onFollowingChange={setFollowing}
+      pendingLineCount={pendingLineCount}
+      retainedLineCount={retainedLineCount}
+      missingLineCount={missingLineCount}
+      getRetainedEntries={getRetainedEntries}
       allEntries={entries}
       isLoading={isLoading || isConnecting}
       isStreaming={isStreaming}

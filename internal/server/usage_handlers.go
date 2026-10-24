@@ -125,7 +125,7 @@ func (s *Server) usageSetup() usagedata.Setup {
 	return usagedata.Setup{
 		AuthMode:        authMode,
 		TimelineStorage: timeline,
-		MCPEnabled:      s.mcpHandler != nil,
+		MCPEnabled:      s.mcpEnabled(),
 		Prometheus:      prom,
 		CostSource:      string(opencost.ConfigSnapshot().Source),
 	}

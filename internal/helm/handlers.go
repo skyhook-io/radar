@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"io"
 	"log"
 	"net/http"
@@ -33,6 +34,10 @@ func IsForbiddenError(err error) bool {
 // caller. Helm stores releases as Secrets, so a denial is the caller's
 // Kubernetes RBAC, not a server fault.
 func writeReleaseReadError(w http.ResponseWriter, err error) {
+	if sourceErrorCode(err) != "" {
+		writeChartSourceOperationError(w, err, "read-release", "", "")
+		return
+	}
 	if isReleaseReadForbidden(err) {
 		writeError(w, http.StatusForbidden, "insufficient permissions to read this Helm release: "+err.Error())
 		return
@@ -50,13 +55,10 @@ func isReleaseReadForbidden(err error) bool {
 }
 
 // userCreds pulls the auth user off the request for *AsUser helpers.
-// Returns ("", nil) when no user is attached (auth disabled / local binary),
+// Returns nil when no user is attached (auth disabled / local binary),
 // which the *AsUser methods treat as "use the SA identity".
-func userCreds(r *http.Request) (string, []string) {
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		return user.Username, user.Groups
-	}
-	return "", nil
+func userCreds(r *http.Request) *pkgauth.User {
+	return auth.UserFromContext(r.Context())
 }
 
 // decodeApplyValuesRequest parses an apply-values body. Apply always targets
@@ -70,7 +72,7 @@ func decodeApplyValuesRequest(body io.Reader) (ApplyValuesRequest, error) {
 	if err := json.NewDecoder(body).Decode(&req); err != nil {
 		return req, fmt.Errorf("invalid request body: %s", err.Error())
 	}
-	if req.Version != "" || req.Repository != "" {
+	if req.Version != "" || req.Repository != "" || req.SourceUpgrade != nil {
 		return req, errors.New("version and repository are not supported when applying values; use the upgrade endpoint to change the chart version")
 	}
 	return req, nil
@@ -136,12 +138,16 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases/{namespace}/{name}/upgrade-info", h.handleCheckUpgrade)
 		r.Get("/releases/{namespace}/{name}/versions", h.handleAvailableVersions)
 		r.Get("/releases/{namespace}/{name}/source", h.handleSourceStatus)
+		r.Get("/releases/{namespace}/{name}/source/versions", h.handleSourceVersions)
 		r.Get("/upgrade-check", h.handleBatchUpgradeCheck)
 		// Actions (write operations)
 		r.Post("/releases/{namespace}/{name}/rollback", h.handleRollback)
 		r.Post("/releases/{namespace}/{name}/rollback-stream", h.handleRollbackStream)
 		r.Post("/releases/{namespace}/{name}/upgrade", h.handleUpgrade)
 		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.handleUpgradeStream)
+		r.Post("/releases/{namespace}/{name}/source/upgrade", h.handleUpgrade)
+		r.Post("/releases/{namespace}/{name}/source/upgrade-stream", h.handleUpgradeStream)
+		r.Post("/releases/{namespace}/{name}/source/preview", h.handlePreviewValues)
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
 		r.Put("/releases/{namespace}/{name}/values", h.handleApplyValues)
 		r.Put("/releases/{namespace}/{name}/source", h.handleSetSource)
@@ -178,7 +184,7 @@ func (h *Handlers) handleSourceStatus(w http.ResponseWriter, r *http.Request) {
 	var status *ChartSourceStatus
 	var err error
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		status, err = client.SourceStatusAsUser(namespace, name, user.Username, user.Groups)
+		status, err = client.SourceStatusAsUser(namespace, name, user)
 	} else {
 		status, err = client.SourceStatus(namespace, name)
 	}
@@ -207,7 +213,7 @@ func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
 	selected := ChartSourceCandidate{Type: req.Type, Reference: req.Reference, URL: req.URL}
 	var err error
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		err = client.SetSourceAsUser(namespace, name, selected, user.Username, user.Groups)
+		err = client.SetSourceAsUser(namespace, name, selected, user)
 	} else {
 		err = client.SetSource(namespace, name, selected)
 	}
@@ -236,13 +242,13 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username, groups := userCreds(r)
-	releases, err := client.ListReleasesAcrossNamespaces(r.Context(), namespaces, username, groups)
+	user := userCreds(r)
+	releases, err := client.ListReleasesAcrossNamespaces(r.Context(), namespaces, user)
 	if err != nil {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			return // the caller left; this is not a Helm failure
 		}
-		if IsForbiddenError(err) {
+		if ReleaseReadDeniedForCaller(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to list Helm releases")
 			return
 		}
@@ -264,8 +270,8 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	username, groups := userCreds(r)
-	release, err := client.GetReleaseAsUser(namespace, name, username, groups)
+	user := userCreds(r)
+	release, err := client.GetReleaseAsUser(namespace, name, user)
 	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
@@ -300,8 +306,8 @@ func (h *Handlers) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	username, groups := userCreds(r)
-	manifest, err := client.GetManifestAsUser(namespace, name, revision, username, groups)
+	user := userCreds(r)
+	manifest, err := client.GetManifestAsUser(namespace, name, revision, user)
 	if err != nil {
 		writeReleaseReadError(w, err)
 		return
@@ -333,8 +339,8 @@ func (h *Handlers) handleGetValues(w http.ResponseWriter, r *http.Request) {
 		revision = rev
 	}
 
-	username, groups := userCreds(r)
-	values, err := client.GetValuesRevisionAsUser(namespace, name, allValues, revision, username, groups)
+	user := userCreds(r)
+	values, err := client.GetValuesRevisionAsUser(namespace, name, allValues, revision, user)
 	if err != nil {
 		writeReleaseReadError(w, err)
 		return
@@ -359,8 +365,8 @@ func (h *Handlers) handleGetValuesDiff(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 	allValues := r.URL.Query().Get("all") == "true"
-	username, groups := userCreds(r)
-	diff, err := client.GetValuesDiffAsUser(namespace, name, rev1, rev2, allValues, username, groups)
+	user := userCreds(r)
+	diff, err := client.GetValuesDiffAsUser(namespace, name, rev1, rev2, allValues, user)
 	if err != nil {
 		writeReleaseReadError(w, err)
 		return
@@ -384,8 +390,8 @@ func (h *Handlers) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username, groups := userCreds(r)
-	diff, err := client.GetManifestDiffAsUser(namespace, name, rev1, rev2, username, groups)
+	user := userCreds(r)
+	diff, err := client.GetManifestDiffAsUser(namespace, name, rev1, rev2, user)
 	if err != nil {
 		writeReleaseReadError(w, err)
 		return
@@ -407,8 +413,8 @@ func (h *Handlers) handleGetNotesDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
-	username, groups := userCreds(r)
-	diff, err := client.GetNotesDiffAsUser(namespace, name, rev1, rev2, username, groups)
+	user := userCreds(r)
+	diff, err := client.GetNotesDiffAsUser(namespace, name, rev1, rev2, user)
 	if err != nil {
 		writeReleaseReadError(w, err)
 		return
@@ -429,8 +435,8 @@ func (h *Handlers) handleGetHooksDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
-	username, groups := userCreds(r)
-	diff, err := client.GetHooksDiffAsUser(namespace, name, rev1, rev2, username, groups)
+	user := userCreds(r)
+	diff, err := client.GetHooksDiffAsUser(namespace, name, rev1, rev2, user)
 	if err != nil {
 		writeReleaseReadError(w, err)
 		return
@@ -451,8 +457,8 @@ func (h *Handlers) handleGetResourceDiff(w http.ResponseWriter, r *http.Request)
 	}
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
-	username, groups := userCreds(r)
-	diff, err := client.GetResourceDiffAsUser(namespace, name, rev1, rev2, username, groups)
+	user := userCreds(r)
+	diff, err := client.GetResourceDiffAsUser(namespace, name, rev1, rev2, user)
 	if err != nil {
 		writeReleaseReadError(w, err)
 		return
@@ -495,8 +501,8 @@ func (h *Handlers) handleCheckUpgrade(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	username, groups := userCreds(r)
-	info, err := client.CheckForUpgradeAsUser(namespace, name, username, groups)
+	user := userCreds(r)
+	info, err := client.CheckForUpgradeAsUser(namespace, name, user)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -518,8 +524,8 @@ func (h *Handlers) handleAvailableVersions(w http.ResponseWriter, r *http.Reques
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	username, groups := userCreds(r)
-	versions, err := client.AvailableVersionsAsUser(namespace, name, username, groups)
+	user := userCreds(r)
+	versions, err := client.AvailableVersionsAsUser(namespace, name, user)
 	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to read Helm release")
@@ -549,8 +555,8 @@ func (h *Handlers) handleBatchUpgradeCheck(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	username, groups := userCreds(r)
-	info, err := client.BatchCheckUpgradesAcrossNamespaces(r.Context(), namespaces, username, groups)
+	user := userCreds(r)
+	info, err := client.BatchCheckUpgradesAcrossNamespaces(r.Context(), namespaces, user)
 	if err != nil {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			return // the caller left; this is not a Helm failure
@@ -592,7 +598,7 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	var rollbackErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		rollbackErr = client.RollbackAsUser(namespace, name, revision, user.Username, user.Groups)
+		rollbackErr = client.RollbackAsUser(namespace, name, revision, user)
 	} else {
 		rollbackErr = client.Rollback(namespace, name, revision)
 	}
@@ -655,7 +661,7 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 	resultCh := make(chan error, 1)
 	go func() {
 		if user != nil {
-			resultCh <- client.RollbackWithProgressAsUser(namespace, name, revision, user.Username, user.Groups, progressCh)
+			resultCh <- client.RollbackWithProgressAsUser(namespace, name, revision, user, progressCh)
 			return
 		}
 		resultCh <- client.RollbackWithProgress(namespace, name, revision, progressCh)
@@ -722,7 +728,7 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	var uninstallErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		uninstallErr = client.UninstallAsUser(namespace, name, user.Username, user.Groups)
+		uninstallErr = client.UninstallAsUser(namespace, name, user)
 	} else {
 		uninstallErr = client.Uninstall(namespace, name)
 	}
@@ -760,19 +766,22 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	repositoryName := r.URL.Query().Get("repository")
 
-	auth.AuditLog(r, namespace, name)
-	var upgradeErr error
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		upgradeErr = client.UpgradeAsUser(namespace, name, version, repositoryName, user.Username, user.Groups)
-	} else {
-		upgradeErr = client.Upgrade(namespace, name, version, repositoryName)
+	req, err := decodeUpgradeRequest(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid upgrade request")
+		return
 	}
+	if !validSourceUpgradeRoute(w, r, req) {
+		return
+	}
+	auth.AuditLog(r, namespace, name)
+	upgradeErr := client.upgradeRequestAsUser(namespace, name, version, repositoryName, req, userCreds(r), func(string, string, string) {})
 	if err := upgradeErr; err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to upgrade Helm release")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChartSourceOperationError(w, err, "upgrade", namespace, name)
 		return
 	}
 
@@ -801,12 +810,15 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 	}
 	repositoryName := r.URL.Query().Get("repository")
 
-	editedValues, err := decodeOptionalApplyValuesRequest(r.Body)
+	req, err := decodeUpgradeRequest(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
+	if !validSourceUpgradeRoute(w, r, req) {
+		return
+	}
 	// Set up SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -820,27 +832,12 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	progressCh := make(chan InstallProgress, 10)
-	defer close(progressCh)
+	// An upgrade may finish after the client disconnects; the receiver must not close the producer's channel.
 
 	auth.AuditLog(r, namespace, name)
 	resultCh := make(chan error, 1)
 	go func() {
-		user := auth.UserFromContext(r.Context())
-		// Use != nil, not len > 0: an explicit empty map ({}) means
-		// "clear all my overrides" and must NOT fall back to carry-over.
-		if editedValues != nil {
-			if user != nil {
-				resultCh <- client.UpgradeWithValuesProgressAsUser(namespace, name, version, repositoryName, editedValues, user.Username, user.Groups, progressCh)
-				return
-			}
-			resultCh <- client.UpgradeWithValuesProgress(namespace, name, version, repositoryName, editedValues, progressCh)
-			return
-		}
-		if user != nil {
-			resultCh <- client.UpgradeWithProgressAsUser(namespace, name, version, repositoryName, user.Username, user.Groups, progressCh)
-			return
-		}
-		resultCh <- client.UpgradeWithProgress(namespace, name, version, repositoryName, progressCh)
+		resultCh <- client.upgradeRequestAsUser(namespace, name, version, repositoryName, req, userCreds(r), progressSender(progressCh))
 	}()
 
 	for {
@@ -864,8 +861,9 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 		case err := <-resultCh:
 			if err != nil {
 				event := map[string]any{
-					"type":    "error",
-					"message": err.Error(),
+					"type":      "error",
+					"message":   err.Error(),
+					"errorCode": sourceErrorCode(err),
 				}
 				data, _ := json.Marshal(event)
 				w.Write([]byte("data: " + string(data) + "\n\n"))
@@ -909,10 +907,25 @@ func (h *Handlers) handlePreviewValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username, groups := userCreds(r)
-	preview, err := client.PreviewValuesChangeAsUser(namespace, name, req.Values, req.Version, req.Repository, username, groups)
+	if !validSourceUpgradeRoute(w, r, req) {
+		return
+	}
+	user := userCreds(r)
+	var preview *ValuesPreviewResponse
+	var err error
+	if req.SourceUpgrade != nil {
+		cfg, cfgErr := client.getActionConfigForUser(namespace, user)
+		if cfgErr != nil {
+			writeReleaseReadError(w, cfgErr)
+			return
+		}
+		preview, err = client.sourceUpgradeWith(cfg, name, req.Version, req.Values, *req.SourceUpgrade, true, func(string, string, string) {})
+	} else {
+		preview, err = client.PreviewValuesChangeAsUser(namespace, name, req.Values, req.Version, req.Repository, user)
+	}
+
 	if err != nil {
-		writeReleaseReadError(w, err)
+		writeChartSourceOperationError(w, err, "preview-upgrade", namespace, name)
 		return
 	}
 
@@ -943,7 +956,7 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	var applyErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		applyErr = client.ApplyValuesAsUser(namespace, name, req.Values, user.Username, user.Groups)
+		applyErr = client.ApplyValuesAsUser(namespace, name, req.Values, user)
 	} else {
 		applyErr = client.ApplyValues(namespace, name, req.Values)
 	}
@@ -952,7 +965,7 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to apply Helm values")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChartSourceOperationError(w, err, "apply-values", namespace, name)
 		return
 	}
 
@@ -1016,7 +1029,7 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 	if req.Namespace != "" {
 		selected := ChartSourceCandidate{Type: "repository", Reference: name, URL: canonicalURL}
 		if user := auth.UserFromContext(r.Context()); user != nil {
-			err = client.SetSourceAsUser(req.Namespace, req.ReleaseName, selected, user.Username, user.Groups)
+			err = client.SetSourceAsUser(req.Namespace, req.ReleaseName, selected, user)
 		} else {
 			err = client.SetSource(req.Namespace, req.ReleaseName, selected)
 		}
@@ -1030,11 +1043,13 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 
 func chartSourceErrorStatus(err error) int {
 	switch {
+	case errors.Is(err, errSourceUnavailable):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, driver.ErrReleaseNotFound):
 		return http.StatusNotFound
 	case isReleaseReadForbidden(err):
 		return http.StatusForbidden
-	case errors.Is(err, errRepositoryConflict), errors.Is(err, errReleaseChanging):
+	case errors.Is(err, errRepositoryConflict), errors.Is(err, errReleaseChanging), errors.Is(err, errSourceRequired), errors.Is(err, errSourceConflict), errors.Is(err, errSourceAlreadyConfirmed):
 		return http.StatusConflict
 	case errors.Is(err, errInvalidChartSource), errors.Is(err, errInvalidRepositoryRequest):
 		return http.StatusBadRequest
@@ -1047,6 +1062,10 @@ func writeChartSourceOperationError(w http.ResponseWriter, err error, action, na
 	status := chartSourceErrorStatus(err)
 	if status >= 500 {
 		log.Printf("[helm] %s %q/%q failed: %v", action, namespace, releaseName, err)
+	}
+	if code := sourceErrorCode(err); code != "" {
+		writeErrorPayload(w, status, map[string]string{"error": err.Error(), "errorCode": code})
+		return
 	}
 	writeError(w, status, err.Error())
 }
@@ -1072,7 +1091,7 @@ func (h *Handlers) handleUpdateRepository(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := client.UpdateRepository(repoName); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChartSourceOperationError(w, err, "refresh-repository", "", repoName)
 		return
 	}
 
@@ -1234,7 +1253,7 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 	var release *HelmRelease
 	var installErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		release, installErr = client.InstallAsUser(&req, user.Username, user.Groups)
+		release, installErr = client.InstallAsUser(&req, user)
 	} else {
 		release, installErr = client.Install(&req)
 	}
@@ -1307,7 +1326,7 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 		var release *HelmRelease
 		var err error
 		if user != nil {
-			release, err = client.InstallWithProgressAsUser(&req, progressCh, user.Username, user.Groups)
+			release, err = client.InstallWithProgressAsUser(&req, progressCh, user)
 		} else {
 			release, err = client.InstallWithProgress(&req, progressCh)
 		}
@@ -1415,6 +1434,15 @@ func writeJSON(w http.ResponseWriter, data any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	writeErrorPayload(w, status, map[string]string{"error": message})
+}
+
+func writeErrorPayload(w http.ResponseWriter, status int, payload map[string]string) {
+	message := payload["error"]
+	if k8s.IsUserTokenRequired(message) {
+		writeUserTokenRequired(w, message)
+		return
+	}
 	if status >= 500 && k8s.MarkDisconnectedIfClusterUnreachable(message) {
 		status = http.StatusServiceUnavailable
 	}
@@ -1423,22 +1451,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	json.NewEncoder(w).Encode(payload)
 }
 
-// writeErrorCode is writeError with a stable machine-readable error_code
-// in the response body so the frontend + MCP clients can branch on the error
-// type without parsing the human message.
-func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
-	if status >= 500 {
-		errorlog.Record("helm", "error", "%s", message)
-	}
+func writeUserTokenRequired(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{
-		"error":      message,
-		"error_code": code,
-	})
+	w.WriteHeader(http.StatusForbidden)
+	json.NewEncoder(w).Encode(map[string]string{"error": message, "reason": pkgauth.UserTokenRequiredReason})
+}
+
+func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
+	writeErrorPayload(w, status, map[string]string{"error": message, "error_code": code})
 }
 
 // ============================================================================

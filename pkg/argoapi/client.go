@@ -21,6 +21,10 @@ var (
 	ErrUnauthorized = errors.New("argoapi: unauthorized")
 	// ErrNotFound is wrapped into errors returned for 404 responses.
 	ErrNotFound = errors.New("argoapi: not found")
+	// ErrGatewayUnavailable is wrapped into errors returned for 502/503/504:
+	// a proxy or load balancer in front of argocd-server answered because
+	// argocd-server didn't, as while it restarts behind an ingress.
+	ErrGatewayUnavailable = errors.New("argoapi: argocd-server unavailable behind a gateway")
 )
 
 // Options configures a Client.
@@ -290,7 +294,7 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 	c.logf("argoapi: GET %s → %d (%d bytes)", path, resp.StatusCode, len(body))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return statusError(resp.StatusCode, path, body)
+		return statusError(resp.StatusCode, path, body, c.token)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("argoapi: parse response from %s: %w", path, err)
@@ -304,13 +308,18 @@ func setNonEmpty(params url.Values, key, value string) {
 	}
 }
 
-func statusError(status int, path string, body []byte) error {
-	msg := errorMessage(body)
+// statusError masks token in the server's message: a server or proxy that
+// echoes the bearer token back would otherwise put it in every log line that
+// prints the error, and only the client knows which token it sent.
+func statusError(status int, path string, body []byte, token string) error {
+	msg := errorMessage(body, token)
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("%w: %d from %s: %s", ErrUnauthorized, status, path, msg)
 	case http.StatusNotFound:
 		return fmt.Errorf("%w: %s: %s", ErrNotFound, path, msg)
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return fmt.Errorf("%w: %s returned %d: %s", ErrGatewayUnavailable, path, status, msg)
 	}
 	return fmt.Errorf("argoapi: %s returned %d: %s", path, status, msg)
 }
@@ -322,16 +331,21 @@ func statusError(status int, path string, body []byte) error {
 // structured error shape we return a generic marker instead. The structured
 // message is capped — Argo's API errors are short ("application not found"),
 // so a long value is suspect.
-func errorMessage(body []byte) string {
+func errorMessage(body []byte, token string) string {
 	var e struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
 	}
 	if json.Unmarshal(body, &e) == nil {
-		if m := strings.TrimSpace(e.Message); m != "" {
-			return capMessage(m)
-		}
-		if m := strings.TrimSpace(e.Error); m != "" {
+		for _, m := range []string{e.Message, e.Error} {
+			m = strings.TrimSpace(m)
+			if m == "" {
+				continue
+			}
+			// Before capping, so a cut can't leave part of the token behind.
+			if token != "" {
+				m = strings.ReplaceAll(m, token, "<redacted-token>")
+			}
 			return capMessage(m)
 		}
 	}

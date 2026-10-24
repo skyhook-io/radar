@@ -35,6 +35,8 @@ type Node struct {
 	Tool   Tool        `json:"tool"`
 	Sync   string      `json:"sync,omitempty"`
 	Health string      `json:"health,omitempty"`
+	// Missing is a confirmed local NotFound, independent of controller health.
+	Missing bool `json:"missing,omitempty"`
 	// HealthSource says who produced Health. The GitOps controller's own
 	// verdict (HealthSourceController) and Radar's own read of the live
 	// object (HealthSourceRadar) are different claims and the UI labels the

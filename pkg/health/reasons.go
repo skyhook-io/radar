@@ -323,6 +323,18 @@ func podReadyFalseLongEnough(pod *corev1.Pod, now time.Time, minAge time.Duratio
 	return false
 }
 
+// PodBlockingReason identifies a fatal waiting state, including init containers.
+func PodBlockingReason(pod *corev1.Pod) (container, reason, message string) {
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, cs := range statuses {
+			if w := cs.State.Waiting; w != nil && isFatalWaitingReason(w.Reason) {
+				return cs.Name, w.Reason, containerStateMessage(&cs)
+			}
+		}
+	}
+	return "", "", ""
+}
+
 // isFatalWaitingReason reports whether a container's Waiting reason is a hard
 // failure that won't self-resolve on its own — as opposed to the transient
 // PodInitializing/ContainerCreating states. InvalidImageName is permanent (a

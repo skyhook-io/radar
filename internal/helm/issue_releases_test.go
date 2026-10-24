@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/helmhistory"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 
 	"helm.sh/helm/v3/pkg/release"
 	helmtime "helm.sh/helm/v3/pkg/time"
@@ -322,7 +325,7 @@ func TestIssueReleasesReadOnlyFailedOrPendingReleasesInFull(t *testing.T) {
 	defer server.Close()
 
 	client := &Client{restConfig: &rest.Config{Host: server.URL}}
-	rows, err := client.ListIssueReleasesAcrossNamespaces(context.Background(), nil, "", nil)
+	rows, err := client.ListIssueReleasesAcrossNamespaces(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,21 +340,28 @@ func TestIssueReleasesReadOnlyFailedOrPendingReleasesInFull(t *testing.T) {
 	}
 }
 
-// A namespace the caller may not read is skipped, but a 401 in one namespace
-// must fail the issue read even when another namespace read fine, or the
-// caller gets an empty answer with nothing saying Helm went unchecked.
+// A namespace the caller may not read is skipped silently. Any other failure
+// in one namespace keeps the releases read from the others and names the
+// namespace that failed, so one bad namespace can't hide the rest.
 func TestIssueReleasesSkipOnlyDeniedNamespaces(t *testing.T) {
+	impersonation := apierrors.NewForbidden(schema.GroupResource{Resource: "users"}, "alice",
+		fmt.Errorf(`User "system:serviceaccount:radar:radar" cannot impersonate resource "users" in API group "" at the cluster scope`))
 	cases := []struct {
-		name      string
-		err       error
-		unchecked bool
+		name       string
+		err        error
+		unchecked  bool
+		reason     issuesapi.UncheckedReason
+		wantFailed []string
 	}{
-		{"forbidden", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", fmt.Errorf("denied")), false},
-		{"unauthorized", apierrors.NewUnauthorized("Unauthorized"), true},
+		{name: "forbidden", err: apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", fmt.Errorf("denied"))},
+		{name: "unauthorized", err: apierrors.NewUnauthorized("Unauthorized"), unchecked: true, reason: issuesapi.UncheckedReasonReadFailed, wantFailed: []string{"blocked"}},
+		{name: "server error", err: apierrors.NewInternalError(fmt.Errorf("etcdserver: request timed out")), unchecked: true, reason: issuesapi.UncheckedReasonReadFailed, wantFailed: []string{"blocked"}},
+		{name: "Radar may not impersonate", err: impersonation, unchecked: true, reason: issuesapi.UncheckedReasonCollectorAccessDenied, wantFailed: []string{"blocked"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			labels := metadataClientFor(t, nil)
+			secrets := []*corev1.Secret{labelledReleaseSecret(t, "open", helmTestRelease("shop", "open", 1, release.StatusFailed, "Install failed"))}
+			labels := metadataClientFor(t, secrets)
 			labels.PrependReactor("list", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
 				if action.GetNamespace() == "blocked" {
 					return true, nil, tc.err
@@ -359,10 +369,160 @@ func TestIssueReleasesSkipOnlyDeniedNamespaces(t *testing.T) {
 				return false, nil, nil
 			})
 			ctx := context.Background()
-			_, err := listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(), labels, "", []string{"open", "blocked"})
-			if got := IssueReadUnchecked(ctx, err); got != tc.unchecked {
-				t.Fatalf("IssueReadUnchecked = %v, want %v (err: %v)", got, tc.unchecked, err)
+			releases, err := listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(secretsToObjects(secrets)...), labels, "", []string{"open", "blocked"})
+			if len(releases) != 1 || releases[0].Name != "shop" {
+				t.Fatalf("releases = %v, want the failed release read from the open namespace (err: %v)", releases, err)
+			}
+			got, unchecked := IssueReadUnchecked(ctx, err)
+			if unchecked != tc.unchecked {
+				t.Fatalf("unchecked = %v, want %v (err: %v)", unchecked, tc.unchecked, err)
+			}
+			if !unchecked {
+				return
+			}
+			want := issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: tc.reason, Namespaces: tc.wantFailed}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("unchecked = %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+// When no namespace was read, the whole source is unchecked, with no
+// namespace list to suggest the rest was complete.
+func TestIssueReleasesFailWholeWhenNoNamespaceWasRead(t *testing.T) {
+	labels := metadataClientFor(t, nil)
+	labels.PrependReactor("list", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewUnauthorized("Unauthorized")
+	})
+	ctx := context.Background()
+	releases, err := listIssueReleasesWithClients(ctx, fake.NewSimpleClientset(), labels, "", []string{"a", "b"})
+	if releases != nil {
+		t.Fatalf("releases = %v, want none", releases)
+	}
+	got, unchecked := IssueReadUnchecked(ctx, err)
+	want := issuesapi.UncheckedSource{Source: issuesapi.UncheckedSourceHelm, Reason: issuesapi.UncheckedReasonReadFailed}
+	if !unchecked || !reflect.DeepEqual(got, want) {
+		t.Fatalf("unchecked = %v %+v, want %+v", unchecked, got, want)
+	}
+}
+
+// A missing impersonate permission refuses every user the same way. It is
+// Radar's own access failing, not the caller's permission boundary.
+func TestImpersonationDenialIsNotTheCallersDenial(t *testing.T) {
+	err := apierrors.NewForbidden(schema.GroupResource{Resource: "users"}, "alice",
+		fmt.Errorf(`User "system:serviceaccount:radar:radar" cannot impersonate resource "users" in API group "" at the cluster scope`))
+	if ReleaseReadDeniedForCaller(err) {
+		t.Fatal("impersonation denial read as the caller's own denial")
+	}
+	callerDenied := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", fmt.Errorf(`User "alice" cannot list resource "secrets"`))
+	if !ReleaseReadDeniedForCaller(callerDenied) {
+		t.Fatal("caller denial not recognised")
+	}
+	if ReleaseReadDeniedForCaller(apierrors.NewUnauthorized("Unauthorized")) {
+		t.Fatal("401 read as the caller's own denial")
+	}
+}
+
+// Open tabs and the alerts worker poll the issue stream constantly, so a
+// failure that persists is logged once, and again only after a read succeeds.
+func TestReportIssueReadLogsAFailureOncePerClass(t *testing.T) {
+	var buf strings.Builder
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+		issueReadFailureLogged.Clear()
+	})
+	issueReadFailureLogged.Clear()
+
+	ctx := context.Background()
+	failure := apierrors.NewInternalError(fmt.Errorf("etcdserver: request timed out"))
+	for range 3 {
+		ReportIssueRead(ctx, failure, "", nil, nil)
+	}
+	ReportIssueRead(ctx, apierrors.NewUnauthorized("Unauthorized"), "", nil, nil)
+	if got := strings.Count(buf.String(), "couldn't be checked"); got != 2 {
+		t.Fatalf("logged %d failures, want one per class (2):\n%s", got, buf.String())
+	}
+	ReportIssueRead(ctx, nil, "", nil, nil)
+	ReportIssueRead(ctx, failure, "", nil, nil)
+	if got := strings.Count(buf.String(), "couldn't be checked"); got != 3 {
+		t.Fatalf("logged %d failures, want the failure logged again after a successful read (3):\n%s", got, buf.String())
+	}
+}
+
+// One user's successful read must not reset another user's failure log: with
+// payments always failing and shop always succeeding, alternating polls log
+// the payments failure once.
+func TestReportIssueReadSuccessOnlyClearsThatIdentity(t *testing.T) {
+	var buf strings.Builder
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+		issueReadFailureLogged.Clear()
+	})
+	issueReadFailureLogged.Clear()
+
+	ctx := context.Background()
+	failure := apierrors.NewInternalError(fmt.Errorf("etcdserver: request timed out"))
+	for range 3 {
+		ReportIssueRead(ctx, failure, "payments", []string{"team-payments"}, nil)
+		ReportIssueRead(ctx, nil, "shop", []string{"team-shop"}, nil)
+	}
+	if got := strings.Count(buf.String(), "couldn't be checked"); got != 1 {
+		t.Fatalf("logged %d failures, want 1:\n%s", got, buf.String())
+	}
+	ReportIssueRead(ctx, nil, "payments", []string{"team-payments"}, nil)
+	ReportIssueRead(ctx, failure, "payments", []string{"team-payments"}, nil)
+	if got := strings.Count(buf.String(), "couldn't be checked"); got != 2 {
+		t.Fatalf("logged %d failures, want it logged again after payments recovered (2):\n%s", got, buf.String())
+	}
+}
+
+// The same user reading a healthy namespace in one tab and a failing one in
+// another logs the failure once: the healthy reads don't reset it.
+func TestReportIssueReadSuccessOnlyClearsThatScope(t *testing.T) {
+	var buf strings.Builder
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+		issueReadFailureLogged.Clear()
+	})
+	issueReadFailureLogged.Clear()
+
+	ctx := context.Background()
+	failure := apierrors.NewInternalError(fmt.Errorf("etcdserver: request timed out"))
+	for range 3 {
+		ReportIssueRead(ctx, failure, "alice", nil, []string{"payments"})
+		ReportIssueRead(ctx, nil, "alice", nil, []string{"shop"})
+	}
+	if got := strings.Count(buf.String(), "couldn't be checked"); got != 1 {
+		t.Fatalf("logged %d failures, want 1:\n%s", got, buf.String())
+	}
+}
+
+// Failed namespaces share one unchecked entry, so it may name a specific
+// reason only when every namespace failed for that reason.
+func TestIssueReadUncheckedMixedPartialFailuresUseTheGenericReason(t *testing.T) {
+	impersonation := apierrors.NewForbidden(schema.GroupResource{Resource: "users"}, "alice", fmt.Errorf("cannot impersonate"))
+	timeout := apierrors.NewInternalError(fmt.Errorf("etcdserver: request timed out"))
+	ctx := context.Background()
+
+	same, _ := IssueReadUnchecked(ctx, &PartialReadError{Namespaces: []string{"b", "a"}, Err: impersonation, Errs: []error{impersonation, impersonation}})
+	if same.Reason != issuesapi.UncheckedReasonCollectorAccessDenied || !slices.Equal(same.Namespaces, []string{"a", "b"}) {
+		t.Fatalf("one shared cause = %+v, want collector_access_denied for a and b", same)
+	}
+	mixed, _ := IssueReadUnchecked(ctx, &PartialReadError{Namespaces: []string{"a", "b"}, Err: impersonation, Errs: []error{impersonation, timeout}})
+	if mixed.Reason != issuesapi.UncheckedReasonReadFailed {
+		t.Fatalf("mixed causes = %+v, want the generic read_failed", mixed)
 	}
 }

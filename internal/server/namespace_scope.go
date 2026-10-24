@@ -27,9 +27,10 @@ const (
 
 // NamespaceScopeResponse describes this user's namespace-pick state.
 //
-// The picker is a per-user view filter — it does NOT mutate the shared cache.
-// Picking namespaces narrows what THIS user sees on subsequent reads to the
-// intersection of (their picks) and (their RBAC-allowed namespaces).
+// The pick is a per-user UI preference that the server remembers and echoes
+// back here; the UI narrows a view by sending the pick as namespaces on each
+// read. Data reads never inherit it, and it does NOT mutate the shared cache
+// (except under --namespace-scope, where it selects the cache scope).
 //
 //   - Actives is the user's current pick set (empty = "All namespaces", no
 //     narrowing).
@@ -191,7 +192,8 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	gitopstree.ResetUnknownKindLogDedup()
 }
 
-// loadSavedNamespacePreference seeds the per-user map on first reach.
+// loadSavedNamespacePreference seeds the per-user map on the first preference
+// read (GET /api/cluster/namespace-scope); data reads never seed it.
 // Sources, in priority order:
 //   - a settings.json pick (no-auth local single-user only) — a remembered
 //     narrower choice survives restarts, and a persisted empty entry is the
@@ -309,9 +311,9 @@ func pruneToExistingNamespaces(picks, existing []string) []string {
 // commitPickMutation replaces the active pick with survivors, but only if the
 // stored pick is still exactly `expected` under the still-current context.
 //
-// Every read-path pick mutation (deleted-namespace prune, RBAC trim, empty-
-// fallback clear, first-request seed) computes its result from a snapshot read
-// earlier in the request. Between that read and the write, a concurrent POST
+// Every preference-read pick mutation (deleted-namespace prune, RBAC trim,
+// first-request seed) computes its result from a snapshot read earlier in the
+// request. Between that read and the write, a concurrent POST
 // can install a fresh pick or a context switch can swap the cluster. Writing
 // unconditionally would revert the fresh pick or persist old-context survivors
 // under the new context's key — the lost-update class the namespace-pick lock
@@ -321,8 +323,8 @@ func pruneToExistingNamespaces(picks, existing []string) []string {
 //
 // persist rewrites the no-auth settings.json so the mutation survives a restart
 // (and isn't re-seeded stale from disk). Only the deleted-namespace prune sets
-// it — an RBAC trim, empty-fallback clear, or seed is a per-user in-memory view
-// filter that must not touch the shared single-user settings file.
+// it — an RBAC trim or seed is per-user in-memory state that must not touch
+// the shared single-user settings file.
 func (s *Server) commitPickMutation(r *http.Request, ctxName string, expected, survivors []string, persist bool) {
 	if ctxName == "" {
 		return
@@ -367,9 +369,10 @@ func (s *Server) commitPickMutation(r *http.Request, ctxName string, expected, s
 }
 
 // pruneDeletedNamespacePicks drops saved picks whose namespaces were deleted
-// from the cluster. Without this, a stale pick silently empties every read —
-// in no-auth mode nothing downstream re-validates it (getUserNamespaces is a
-// pass-through), so the UI looks like an empty cluster forever.
+// from the cluster. Without this, the UI adopts the stale pick from `actives`
+// and sends it on every read — in no-auth mode nothing downstream re-validates
+// it (getUserNamespaces is a pass-through), so the UI looks like an empty
+// cluster forever.
 //
 // Survivors are written back to the in-memory pick and, for the no-auth
 // single-user case, to settings.json — otherwise loadSavedNamespacePreference
@@ -638,8 +641,8 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 		s.scopeMutationMu.Lock()
 		defer s.scopeMutationMu.Unlock()
 	}
-	// Pairs this handler's persist+set with the read-path stale-pick prune:
-	// the prune re-checks the live pick under the same lock before mutating,
+	// Pairs this handler's persist+set with the preference GET's stale-pick
+	// prune: the prune re-checks the live pick under the same lock before mutating,
 	// so it can't revert a pick set here from a stale snapshot. Lock order is
 	// scopeMutationMu → nsPickMu; the prune takes only nsPickMu.
 	//
@@ -671,8 +674,8 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 	// from this saved value, so a rescope must NOT proceed if we can't save the
 	// pick: the cache would rebuild for the new namespace but snap back to the
 	// stale saved one on the next reconnect, diverging from the live override.
-	// Outside scope mode the pick is just a view filter, so a save failure is
-	// non-fatal — log and continue.
+	// Outside scope mode the pick is just a remembered UI preference, so a save
+	// failure is non-fatal — log and continue.
 	if auth.UserFromContext(r.Context()) == nil {
 		if ctxName := k8s.GetContextName(); ctxName != "" {
 			if err := persistNamespacePick(ctxName, cleaned, true); err != nil {

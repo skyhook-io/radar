@@ -380,7 +380,7 @@ func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, name
 	// secrets, so impersonating would 403 viewers on inventory metadata
 	// that isn't credential data). Sensitive Helm reads (GetValues,
 	// GetManifest) and all writes still impersonate.
-	helmReleases, helmErrs := collectHelmReleases(ctx, namespaces, "", nil)
+	helmReleases, helmErrs := collectHelmReleases(ctx, namespaces, nil)
 	src.Helm = helmReleases
 	errs = append(errs, helmErrs...)
 
@@ -460,7 +460,7 @@ func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, name
 // multi-namespace → one call per namespace; per-namespace forbidden
 // errors are coalesced into one SourceError so a user with access to
 // ns-a but not ns-b still sees ns-a's releases.
-func collectHelmReleases(ctx context.Context, namespaces []string, user string, groups []string) ([]packages.HelmRelease, []SourceError) {
+func collectHelmReleases(ctx context.Context, namespaces []string, user *auth.User) ([]packages.HelmRelease, []SourceError) {
 	// Defensive: empty (non-nil) slice means "no namespaces authorized";
 	// callers should short-circuit before reaching here, but guard
 	// against a future caller that forgets and would otherwise fall
@@ -488,7 +488,7 @@ func collectHelmReleases(ctx context.Context, namespaces []string, user string, 
 	var otherErrNamespaces []string
 	var otherErrs []error
 	for _, ns := range scopes {
-		releases, err := hClient.ListReleasesAsUser(ctx, ns, user, groups)
+		releases, err := hClient.ListReleasesAsUser(ctx, ns, user)
 		if err == nil {
 			for _, h := range releases {
 				out = append(out, packages.HelmRelease{

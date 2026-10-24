@@ -17,8 +17,9 @@ export function useDestinationCluster(
   kind: string,
   namespace: string,
   name: string,
+  group: string,
 ): DestinationCluster {
-  const destination = useGitOpsDestination(kind, namespace, name, !!remote)
+  const destination = useGitOpsDestination(kind, namespace, name, !!remote, group)
   const contexts = useContexts()
   const capabilities = useCapabilities()
   const contextName = destination.data?.contexts[0]

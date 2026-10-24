@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Package, Settings, CheckCircle2, History, FileCode2, GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
@@ -5,12 +6,21 @@ import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
 
+export interface FluxValuesReference {
+  kind?: 'ConfigMap' | 'Secret'
+  name: string
+  optional?: boolean
+  valuesKey?: string
+  targetPath?: string
+}
+
 interface FluxHelmReleaseRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  renderValuesReference?: (reference: FluxValuesReference) => ReactNode
 }
 
-export function FluxHelmReleaseRenderer({ data, onNavigate }: FluxHelmReleaseRendererProps) {
+export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReference }: FluxHelmReleaseRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = (status.conditions || []) as FluxCondition[]
@@ -59,7 +69,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate }: FluxHelmReleaseRen
   }
 
   // Values info
-  const valuesFrom = spec.valuesFrom || []
+  const valuesFrom: FluxValuesReference[] = spec.valuesFrom || []
   const values = spec.values || {}
   const valueKeys = Object.keys(values)
 
@@ -149,15 +159,18 @@ export function FluxHelmReleaseRenderer({ data, onNavigate }: FluxHelmReleaseRen
                 Values From
               </div>
               <div className="space-y-1">
-                {valuesFrom.map((ref: any, idx: number) => (
+                {valuesFrom.map((ref, idx) => (
                   <div key={idx} className="card-inner text-sm flex items-center gap-2 flex-wrap">
                     <span className="badge-sm status-neutral">{ref.kind || 'ConfigMap'}</span>
-                    <ResourceLink
-                      name={ref.name}
-                      kind={ref.kind === 'Secret' ? 'secrets' : 'configmaps'}
-                      namespace={data.metadata?.namespace || ''}
-                      onNavigate={onNavigate}
-                    />
+                    {ref.optional && <span className="badge-sm status-neutral">Optional</span>}
+                    {renderValuesReference ? renderValuesReference(ref) : (
+                      <ResourceLink
+                        name={ref.name}
+                        kind={ref.kind === 'Secret' ? 'secrets' : 'configmaps'}
+                        namespace={data.metadata?.namespace || ''}
+                        onNavigate={onNavigate}
+                      />
+                    )}
                     {ref.valuesKey && (
                       <span className="text-theme-text-tertiary text-xs">
                         key: {ref.valuesKey}

@@ -164,6 +164,9 @@ func isPlainCreate(c issuesapi.RecentChange) bool {
 		!c.ApplicationConfigurationChange &&
 		!c.NotLinkedToReturnedIssues &&
 		len(c.Fields) == 0 &&
+		// The line grammar has no place for a withheld count; a create whose
+		// consumers were partly hidden keeps its full row.
+		c.ConsumedByWithheld == nil &&
 		!standaloneCreateKinds[c.Kind] &&
 		createdObjectNamePlain(c.Kind) &&
 		createdObjectNamePlain(c.Name)

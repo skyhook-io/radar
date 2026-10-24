@@ -2,6 +2,22 @@
 
 This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
 
+## MCP exposure
+
+MCP is enabled with read and write tools by default. `--no-mcp` disables all
+MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
+`/mcp-investigation` endpoint, while `/mcp` returns 404. Both CLI and Desktop
+support these flags. This controls MCP exposure only; UI and REST writes are
+unchanged.
+
+Use `RADAR_MCP_READ_ONLY=1` or `"mcpReadOnly": true` in
+`~/.radar/config.json` for persistent deployments. CLI overrides environment,
+which overrides file settings. Explicitly selecting disabled or read-only mode
+overrides a competing mode from a lower-priority source. Explicit false clears
+only its own setting. Contradictory flags, or contradictory settings within the
+config file, are errors. See [MCP configuration](mcp.md#enabling--disabling) for
+examples, boolean parsing and alternate entrypoints.
+
 ## HTTP Listener
 
 Radar listens on `127.0.0.1:9280` by default, so an unauthenticated local
@@ -678,6 +694,8 @@ The header has a namespace picker on the right. Pick a single namespace to focus
 
 The pick is a per-user view filter — it doesn't change anything for other users sharing the same Radar instance. Locally, your pick is remembered per kubeconfig context across restarts. In shared (auth-enabled) deployments the pick lives for the session.
 
+The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
+
 Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice sticks for the context and the kubeconfig value is no longer consulted.
 
 When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
@@ -698,7 +716,7 @@ Radar Desktop doesn't take command-line flags, so set the same list in `~/.radar
 { "namespaces": ["ns1", "ns2", "ns3"] }
 ```
 
-Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default seeded on first read. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
+Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default the UI picks up when it loads. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
 
 This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
 

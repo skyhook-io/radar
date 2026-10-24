@@ -19,13 +19,14 @@ import (
 // values only when a container starts, so those containers keep the earlier
 // value until they restart. Volume mounts are not covered: the kubelet
 // refreshes them in place. Rows are grouped across Pods: Pod names one of
-// AffectedPods Pods, and the times are that Pod's.
+// AffectedPods Pods, Pods lists their names, and the times are that Pod's.
 //
 // Secret rows reuse the stale-Secret-env check diagnose runs, including its
 // managedFields fallback for writes made before Radar started (Key and Env are
 // empty on those rows). ConfigMap rows come only from changes Radar observed.
 type StaleEnvFact struct {
 	Pod                string
+	Pods               []string
 	AffectedPods       int
 	Container          string
 	Env                string
@@ -315,6 +316,10 @@ func groupStaleEnvFacts(rows []StaleEnvFact) []StaleEnvFact {
 	for _, current := range byKey {
 		fact := current.fact
 		fact.AffectedPods = len(current.pods)
+		for pod := range current.pods {
+			fact.Pods = append(fact.Pods, pod)
+		}
+		sort.Strings(fact.Pods)
 		fact.Message = staleEnvFactMessage(fact)
 		out = append(out, fact)
 	}

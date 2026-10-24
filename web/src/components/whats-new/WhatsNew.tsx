@@ -142,7 +142,8 @@ interface DialogView {
 /**
  * Opens after an upgrade when the releases the user hasn't seen have enough to
  * show; otherwise the nav rail's unread dot carries them.
- * `?whats-new` (or `?whats-new=v1.15.0`) opens it on demand for previews, and
+ * `?whats-new` previews the newest authored release; `?whats-new=v1.15`
+ * (or `v1.15.0`) selects a release, and
  * `&whats-new-from=v1.14.0` previews it as composed for an upgrade from that version.
  */
 export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
@@ -205,16 +206,16 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
 
   useEffect(() => {
     if (previewParam === null) return
-    const target = releaseNotesFor(previewParam)?.version ?? currentVersion ?? RELEASE_NOTES[0]?.version
+    const single = releaseNotesFor(previewParam) ?? RELEASE_NOTES[0]
+    const target = single?.version
     if (!target) return
     const upgrade = previewFrom ? unreadReleases(target, previewFrom, true) : []
     if (upgrade.length > 0) {
       show({ notes: composeReleaseNotes(upgrade), since: previewFrom, to: target, acknowledges: false })
       return
     }
-    const single = releaseNotesFor(previewParam) ?? latestReleaseNotesFor(currentVersion) ?? RELEASE_NOTES[0]
     if (single) show({ notes: composeReleaseNotes([single]), since: null, to: single.version, acknowledges: false })
-  }, [previewParam, previewFrom, currentVersion, show])
+  }, [previewParam, previewFrom, show])
 
   useEffect(() => {
     if (!state || lastSeen === undefined || previewParam !== null || decidedRef.current) return

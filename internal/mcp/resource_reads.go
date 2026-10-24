@@ -1269,45 +1269,48 @@ func isObjectNotFound(err error) bool {
 	return apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)
 }
 
-// exactAccessResource names the core resource a read of kind needs the
-// caller's exact permission for, beyond namespace visibility: Secrets (the
-// chart can grant Radar every Secret in the cluster) and LimitRanges, as on
-// the REST routes. It is "" for every other kind.
-func exactAccessResource(kind, group string) string {
+// exactAccessResource names the resource, and its API group, that a read of
+// kind needs the caller's own permission for, beyond seeing the namespace:
+// Secrets, LimitRanges, and Trivy Operator reports, whose findings can quote
+// a leaked credential. resource is "" for any other kind.
+func exactAccessResource(kind, group string) (string, string) {
+	if gvr, ok := k8s.TrivyReportGVR(kind, group); ok {
+		return gvr.Group, gvr.Resource
+	}
 	if group != "" {
-		return ""
+		return "", ""
 	}
 	switch kind {
 	case "secrets", "limitranges":
-		return kind
+		return "", kind
 	}
-	return ""
+	return "", ""
 }
 
 // narrowByExactAccess keeps the namespaces of target where the caller can
 // list (or get) resource. Namespace access does not imply that access, so
 // withheld namespaces are a gap within the target, not a narrowing of it. An
 // unrestricted caller is checked cluster-wide.
-func narrowByExactAccess(ctx context.Context, target []string, resource, verb string) ([]string, gapSet, error) {
+func narrowByExactAccess(ctx context.Context, target []string, group, resource, verb string) ([]string, gapSet, error) {
 	var gaps gapSet
 	if target == nil {
-		granted, checked := canReadInNamespaceDecision(ctx, "", resource, "", verb)
+		granted, checked := canReadInNamespaceDecision(ctx, group, resource, "", verb)
 		if !granted {
-			return nil, gaps, resourcePermissionErrorNext(ctx, checked, verb, "", resource, "",
+			return nil, gaps, resourcePermissionErrorNext(ctx, checked, verb, group, resource, "",
 				fmt.Sprintf("If you can %s %s in some namespaces, call list_resources again with namespace set to one of them.", verb, resource))
 		}
 		return nil, gaps, nil
 	}
-	allowed, denied, unchecked := partitionNamespacesByCanRead(ctx, "", resource, verb, target)
+	allowed, denied, unchecked := partitionNamespacesByCanRead(ctx, group, resource, verb, target)
 	if len(denied) > 0 {
-		gaps.add(readreason.UserForbidden, resourcePermissionError(ctx, true, verb, "", resource, namespaceForError(denied)), denied...)
+		gaps.add(readreason.UserForbidden, resourcePermissionError(ctx, true, verb, group, resource, namespaceForError(denied)), denied...)
 	}
 	if len(unchecked) > 0 {
-		gaps.add(readreason.UserPermissionCheckFailed, resourcePermissionError(ctx, false, verb, "", resource, namespaceForError(unchecked)), unchecked...)
+		gaps.add(readreason.UserPermissionCheckFailed, resourcePermissionError(ctx, false, verb, group, resource, namespaceForError(unchecked)), unchecked...)
 	}
 	if len(allowed) == 0 {
 		if gaps.empty() {
-			return nil, gaps, resourcePermissionError(ctx, true, verb, "", resource, namespaceForError(target))
+			return nil, gaps, resourcePermissionError(ctx, true, verb, group, resource, namespaceForError(target))
 		}
 		return nil, gaps, gaps.failure()
 	}

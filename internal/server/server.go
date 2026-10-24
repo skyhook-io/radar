@@ -28,6 +28,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"golang.org/x/sync/singleflight"
+	authv1 "k8s.io/api/authorization/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -63,6 +64,7 @@ import (
 	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/argoapi"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -118,10 +120,10 @@ type Server struct {
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
-	// (new cluster ⇒ old picks meaningless). The pick is a per-user view
-	// filter — intersected with the user's RBAC-allowed namespaces at read
-	// time. Picking does NOT narrow the shared informer cache (would corrupt
-	// other users' views).
+	// (new cluster ⇒ old picks meaningless). The pick is a remembered per-user
+	// UI preference: the namespace-scope GET echoes it and the UI sends it on
+	// its reads, but data reads never inherit it. Picking does NOT narrow the
+	// shared informer cache (would corrupt other users' views).
 	nsPreferences sync.Map
 
 	// scopeMutationMu serializes a forced (--namespace-scope) namespace change so
@@ -136,7 +138,7 @@ type Server struct {
 	rootHintOnce sync.Once
 
 	// nsPickMu serializes namespace-pick mutations: the POST handler's
-	// persist+set pair and the read-path stale-pick prune. Without it, a
+	// persist+set pair and the preference GET's stale-pick prune. Without it, a
 	// prune computed from a stale snapshot can land after a user's fresh
 	// pick and silently revert it.
 	nsPickMu sync.Mutex
@@ -206,7 +208,7 @@ type Config struct {
 	TrustedOrigins          []string                    // Extra origins allowed to make changes, from ParseTrustedOrigins
 	StaticFS                embed.FS                    // Embedded frontend files
 	StaticRoot              string                      // Path within StaticFS
-	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
+	MCPHandler              http.Handler                // Full MCP server handler (nil = full endpoint disabled)
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
@@ -519,7 +521,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
 
-		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
+		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
+		// and, by default, for the evicted pods to finish terminating.
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
 
 		// Cloud Connect prepare/start — outside the 60s timeout group. prepare
@@ -630,6 +633,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/resource-counts", s.handleResourceCounts)
 			r.Get("/resources/{kind}", s.handleListResources)
 			r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
+			r.Head("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
 			r.Post("/resources/preview", s.handlePreviewResources)
 			r.Post("/resources/schemas", s.handleResourceSchemas)
 			r.Post("/resources/apply", s.handleApplyResource)
@@ -771,7 +775,49 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
-			imageHandlers := images.NewHandlers()
+			imageHandlers := images.NewHandlers(func(r *http.Request, namespace string) (bool, bool) {
+				if auth.UserFromContext(r.Context()) != nil && s.permCache == nil {
+					return false, false
+				}
+				return s.canReadDecision(r, "", "pods", namespace, "get")
+			}, func(r *http.Request, namespace string) (bool, bool) {
+				if auth.UserFromContext(r.Context()) == nil || s.permCache == nil {
+					return false, false
+				}
+				return s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace})
+			}, func(r *http.Request, namespace, secretName string) (bool, bool) {
+				user := auth.UserFromContext(r.Context())
+				if user == nil || s.permCache == nil {
+					return false, false
+				}
+				if allowed, authoritative := s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace}); allowed && authoritative {
+					return true, true
+				}
+				perms := s.permCache.Get(user.Username, user.Groups)
+				key := "secrets/" + secretName
+				if perms != nil {
+					if allowed, ok := perms.CanI("get", "", key, namespace); ok {
+						return allowed, true
+					}
+				}
+				client := k8s.GetClient()
+				if client == nil {
+					return false, false
+				}
+				// Include Name so resourceNames-restricted Secret grants apply.
+				status, err := pkgauth.ReviewSubjectAccess(r.Context(), client, user.Username, user.Groups, authv1.ResourceAttributes{
+					Verb: "get", Resource: "secrets", Namespace: namespace, Name: secretName,
+				})
+				if err != nil {
+					log.Printf("[images] Failed to authorize pull secret %s/%s: %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(secretName), err)
+					return false, false
+				}
+				authoritative := status.EvaluationError == ""
+				if authoritative && perms != nil {
+					perms.SetCanI("get", "", key, namespace, status.Allowed)
+				}
+				return status.Allowed, authoritative
+			})
 			imageHandlers.RegisterRoutes(r)
 
 			// Prometheus metrics routes. Every metrics read runs with Radar's
@@ -935,12 +981,18 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
 		r.Mount("/mcp", s.mcpHandler)
+	} else {
+		r.Mount("/mcp", http.NotFoundHandler())
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+	} else {
+		r.Mount("/mcp-readonly", http.NotFoundHandler())
 	}
 	if s.mcpInvestigationHandler != nil {
 		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
+	} else {
+		r.Mount("/mcp-investigation", http.NotFoundHandler())
 	}
 
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend
@@ -1378,7 +1430,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	responseCaps := *caps
 	caps = &responseCaps
 
-	caps.MCPEnabled = s.mcpHandler != nil
+	caps.MCPEnabled = s.mcpEnabled()
+	caps.MCPReadOnly = s.mcpReadOnly()
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
@@ -1395,6 +1448,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		ServiceEndpointSlices: true,
 		TrafficRecords:        true,
 		GitOpsWriteEvidence:   true,
+		HelmSourceIdentity:    true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
@@ -1505,14 +1559,15 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 // or an empty non-nil slice when the user has no namespace access.
 // Use readscope.NoNamespaceAccess() to check the no-access case.
 //
-// If the request omits an explicit namespace filter, falls back to the user's
-// in-app namespace pick (from the namespace switcher). The pick is treated as
-// a view filter — it's still intersected with the user's RBAC-allowed
-// namespaces in getUserNamespaces.
+// A request that names no namespaces reads everything the caller may see:
+// data reads never inherit a stored view selection. The namespace picker's
+// selection is a remembered UI preference that the UI sends explicitly, so a
+// caller acting as the same user for another purpose (Radar Hub's fan-outs,
+// background pollers seeded by --namespaces) isn't silently narrowed by a
+// pick made while browsing. The --namespace-scope clamp still applies — it is
+// the real extent of the cache.
 func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	namespaces := parseNamespaces(r.URL.Query())
-	pickFallback := false
-	pickCtx := ""
 	if k8s.ForceNamespaceScope {
 		target := k8s.GetNamespaceScopeTarget()
 		if target == "" {
@@ -1526,38 +1581,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 			return []string{}
 		}
 	}
-	if namespaces == nil {
-		// No explicit filter — use the user's saved picks if any, pruned of
-		// namespaces that were deleted from the cluster since the pick was made.
-		// When every pick is stale, fall through with no filter so the user sees
-		// the full cluster instead of a silently-empty UI. Read the pick and its
-		// context as one snapshot so the empty-fallback clear below commits
-		// against the same context, not one switched in mid-request.
-		s.loadSavedNamespacePreference(r)
-		if ctx, picks := s.getActiveNamespaceForUserInContext(r); len(picks) > 0 {
-			picks = s.pruneDeletedNamespacePicks(r, ctx, picks)
-			if len(picks) > 0 {
-				namespaces = picks
-				pickFallback = true
-				pickCtx = ctx
-			}
-		}
-	}
-	filtered, discoveryFailed := s.getUserNamespacesWithStatus(r, namespaces)
-	// If picks lost RBAC mid-session, the filter shrinks the set. When the
-	// intersection is empty every read returns []; recover by dropping the
-	// stale pick entirely and recomputing as if no filter were set, so the
-	// user sees their full RBAC ceiling instead of a silently-empty UI.
-	// Symmetric with handleGetNamespaceScope's partial-revocation eviction.
-	// namespaces holds the pruned picks this fallback filtered on; clear only
-	// if it's still the live pick, so a stale read can't wipe a concurrent
-	// POST or clear across a context switch. A failed access check is empty
-	// for the wrong reason and must not cost the user their pick.
-	if pickFallback && !discoveryFailed && readscope.NoNamespaceAccess(filtered) {
-		s.commitPickMutation(r, pickCtx, namespaces, nil, false)
-		filtered = s.getUserNamespaces(r, nil)
-	}
-	return filtered
+	return s.getUserNamespaces(r, namespaces)
 }
 
 // resolveHelmNamespaces decides which namespaces a Helm list (releases, upgrade
@@ -2216,7 +2240,8 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 	// rbac.helm, auth.mode != "none", or cloud.enabled — see deploy/helm/
 	// radar/templates/clusterrole.yaml). When any of those triggers fires
 	// the cache holds every secret in the cluster, so per-user RBAC must
-	// gate the read. Other namespaced kinds are deferred.
+	// gate the read. Trivy reports are gated below; other namespaced kinds
+	// are deferred.
 	if kind == "secrets" || kind == "secret" {
 		if auth.UserFromContext(r.Context()) != nil {
 			if namespaces == nil {
@@ -2232,6 +2257,15 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 					return namespaces, http.StatusForbidden, "insufficient permissions to list secrets", false
 				}
 			}
+		}
+	}
+
+	if gvr, ok := k8s.TrivyReportGVR(kind, group); ok {
+		if readable, all := s.readableTrivyNamespaces(r, gvr, namespaces); !all {
+			if len(readable) == 0 {
+				return readable, http.StatusForbidden, fmt.Sprintf("insufficient permissions to list %s", kind), false
+			}
+			namespaces = readable
 		}
 	}
 
@@ -2898,7 +2932,7 @@ func hpaDiagnosisFor(resource any) *hpadiag.Diagnosis {
 //  1. kind == "namespaces"        → full Namespace object requires get-namespaces SAR
 //  2. cluster-scoped (Node/CRD/…) → per-kind get SAR (ClassifyKindScope)
 //  3. namespaced                   → namespace access via getUserNamespaces,
-//     plus per-namespace get SAR for Secrets
+//     plus per-namespace get SAR for Secrets, LimitRanges and Trivy reports
 func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) (int, string, bool) {
 	isNamespacesKind := kind == "namespaces" || kind == "namespace"
 	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
@@ -2930,6 +2964,9 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 		}
 		if (kind == "limitranges" || kind == "limitrange") && group == "" && !s.canRead(r, "", "limitranges", namespace, "get") {
 			return http.StatusForbidden, fmt.Sprintf("no access to limitranges in namespace %q", namespace), false
+		}
+		if gvr, ok := k8s.TrivyReportGVR(kind, group); ok && !s.canRead(r, gvr.Group, gvr.Resource, namespace, "get") {
+			return http.StatusForbidden, fmt.Sprintf("no access to %s in namespace %q", kind, namespace), false
 		}
 	default:
 		// Empty namespace and not a recognized cluster-scoped kind: an empty
@@ -2986,6 +3023,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	cache, ok := s.gateResourceRead(w, kind, group)
 	if !ok {
 		return
+	}
+	if r.Method == http.MethodHead {
+		// Distinguish an authorized resource lookup from an upstream 404.
+		w.Header().Set("X-Radar-Resource-Read", "true")
 	}
 
 	var resource any
@@ -3111,7 +3152,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 		var cached *corev1.Secret
 		cached, err = lister.Secrets(namespace).Get(name)
-		if err == nil && k8score.IsHelmReleaseSecret(cached) {
+		if err == nil && k8score.IsHelmReleaseSecret(cached) && r.Method != http.MethodHead {
 			// The cache holds digests in place of Helm release Secret values.
 			live, status, liveErr := s.getLiveSecret(r, namespace, name)
 			if liveErr != nil {
@@ -3267,6 +3308,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -5198,9 +5243,14 @@ func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
+	body := map[string]string{"error": message}
+	if k8s.IsUserTokenRequired(message) {
+		status = http.StatusForbidden
+		body["reason"] = pkgauth.UserTokenRequiredReason
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		log.Printf("Failed to encode error response: %v", err)
 	}
 }
@@ -5380,7 +5430,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		// Pre-compute the Cloud role so the frontend doesn't have to
 		// re-parse `cloud:<tier>` group prefixes. Empty string means
 		// "not running under Cloud" (OSS deploy or no role group).
-		if role := auth.CloudRoleFromGroups(user.Groups); role != auth.RoleNone {
+		if role := auth.CloudRoleFromContext(r.Context()); role != auth.RoleNone {
 			resp["cloudRole"] = string(role)
 		}
 		// Lets the shell explain an empty cluster: every read is filtered to
@@ -5416,7 +5466,7 @@ func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
 
 func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, contextName, err := k8s.ImpersonatedDynamicClientSnapshot(user.Username, user.Groups)
+		client, contextName, err := k8s.UserDynamicClientSnapshot(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil, contextName
@@ -5436,7 +5486,7 @@ func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
 
 func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		cfg, contextName, err := k8s.ImpersonatedConfigSnapshot(user.Username, user.Groups)
+		cfg, contextName, err := k8s.UserConfigSnapshot(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil, contextName
@@ -5451,7 +5501,7 @@ func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, str
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, err := k8s.ImpersonatedClient(user.Username, user.Groups)
+		client, err := k8s.UserClient(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil
@@ -5470,7 +5520,7 @@ func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
 
 func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.Interface, string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
-		client, binding, err := k8s.ImpersonatedClientSafetySnapshot(user.Username, user.Groups)
+		client, binding, err := k8s.UserClientSafetySnapshot(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil, binding
@@ -5995,6 +6045,10 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var updated config.Config
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := config.ValidateMCPFile(updated); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	normalizedCurrency, err := config.NormalizeOpenCostCurrency(updated.OpenCostCurrency)

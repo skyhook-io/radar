@@ -57,7 +57,12 @@ func newFullServer() *mcpsdk.Server { return newServer(true, serverInstructions(
 
 // RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
-	return newFullServer().Run(ctx, &mcpsdk.StdioTransport{})
+	return RunStdioMode(ctx, false)
+}
+
+// RunStdioMode uses the same read-only catalog and enforcement as HTTP.
+func RunStdioMode(ctx context.Context, readOnly bool) error {
+	return newServer(!readOnly, serverInstructions(!readOnly)).Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.

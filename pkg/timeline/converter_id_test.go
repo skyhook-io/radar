@@ -8,6 +8,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestK8sEventTimelineUsesSeriesOccurrence(t *testing.T) {
+	now := time.Now()
+	event := &corev1.Event{
+		EventTime: metav1.NewMicroTime(now.Add(-2 * time.Hour)),
+		Series:    &corev1.EventSeries{Count: 9, LastObservedTime: metav1.NewMicroTime(now)},
+	}
+	got := NewK8sEventTimelineEvent(event, nil)
+	if !got.Timestamp.Equal(now) || got.Count != 9 {
+		t.Fatalf("recurring controller report has wrong time/count: %+v", got)
+	}
+}
+
 // A relist re-emits the current state; the id must be identical whether the
 // arrival is labeled add or update, so replays de-dupe.
 func TestInformerEventID_StableAcrossAddUpdate(t *testing.T) {

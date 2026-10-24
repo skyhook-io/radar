@@ -20,6 +20,10 @@ export function treeNodeFilterRole(node: GitOpsTreeNode): string {
   return node.dependency ? 'dependency' : node.role
 }
 
+export function treeNodeHealth(node: GitOpsTreeNode): string {
+  return node.missing ? 'Missing' : node.health || 'Unknown'
+}
+
 export function matchesGitOpsTreeFilters(node: GitOpsTreeNode, filters?: GitOpsTreeFilters): boolean {
   if (!filters) return true
   const kinds = gitOpsFilterSet(filters.kinds)
@@ -31,7 +35,7 @@ export function matchesGitOpsTreeFilters(node: GitOpsTreeNode, filters?: GitOpsT
   if (kinds && !kinds.has(node.ref.kind)) return false
   if (namespaces && !namespaces.has(node.ref.namespace || '(cluster)')) return false
   if (sync && !sync.has(node.sync || 'Unknown')) return false
-  if (health && !health.has(node.health || 'Unknown')) return false
+  if (health && !health.has(treeNodeHealth(node))) return false
   if (roles && !roles.has(treeNodeFilterRole(node))) return false
   return true
 }

@@ -10,8 +10,8 @@ import {
 } from '../cost/format'
 import { costFreshnessLabel } from '../cost/source'
 
-export function CostCard({ onNavigate }: { onNavigate?: () => void }) {
-  const { data } = useOpenCostSummary()
+export function CostCard({ namespaces, onNavigate }: { namespaces?: string[]; onNavigate?: () => void }) {
+  const { data } = useOpenCostSummary(true, namespaces)
 
   // Only show when OpenCost data is actually available — no placeholder card
   if (!data || !data.available) {

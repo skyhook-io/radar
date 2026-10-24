@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -75,6 +76,18 @@ func recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bo
 	}
 	return func(c issuesapi.RecentChange) bool {
 		return c.Source == helmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authorize)
+	}
+}
+
+// recentChangeViewer gates the Pod and workload names change rows carry.
+// The zero Viewer when auth is off.
+func recentChangeViewer(ctx context.Context) meaningfulchanges.Viewer {
+	if pkgauth.UserFromContext(ctx) == nil {
+		return meaningfulchanges.Viewer{}
+	}
+	return meaningfulchanges.Viewer{
+		CanReadPods:     func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "get") },
+		CanReadConsumer: recentChangeReadFilter(ctx),
 	}
 }
 

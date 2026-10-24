@@ -5,7 +5,23 @@ import { TimeValue } from '../../ui/ScheduleValue'
 import { formatRelativeAgeTime } from '../../../utils/format'
 
 interface CronJobRendererProps {
-  data: any
+  data: {
+    metadata?: { namespace?: string }
+    spec?: {
+      schedule?: string
+      timeZone?: string
+      suspend?: boolean
+      concurrencyPolicy?: string
+      startingDeadlineSeconds?: number
+      successfulJobsHistoryLimit?: number
+      failedJobsHistoryLimit?: number
+    }
+    status?: {
+      lastScheduleTime?: string
+      lastSuccessfulTime?: string
+      active?: { name: string; namespace?: string }[]
+    }
+  }
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
@@ -13,21 +29,13 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
 
-  // Check for issues or notable states
   const isSuspended = spec.suspend === true
   const hasNeverRun = !status.lastScheduleTime
 
-  // "Recent failures" means the latest scheduled run didn't reach success.
-  // Only meaningful once nothing is running — while a job is active the most
-  // recent run is simply still in flight, not failing. With concurrencyPolicy
-  // Allow an older failed run can overlap a new active one; CronJob status only
-  // carries aggregate timestamps, so we accept missing that rare case here (the
-  // failed Job still surfaces in the job list / topology) rather than reviving
-  // the false positive that fired on every normal in-flight run.
   const activeJobs = status.active?.length || 0
   const lastSchedule = status.lastScheduleTime ? new Date(status.lastScheduleTime).getTime() : 0
   const lastSuccess = status.lastSuccessfulTime ? new Date(status.lastSuccessfulTime).getTime() : 0
-  const recentFailures = activeJobs === 0 && lastSchedule > 0 && lastSchedule > lastSuccess
+  const completionUnverified = activeJobs === 0 && lastSchedule > 0 && lastSchedule > lastSuccess
 
   return (
     <>
@@ -46,23 +54,23 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
         <AlertBanner
           variant="info"
           title="Never Scheduled"
-          message="This CronJob has never run. Check the schedule and starting deadline settings."
+          message="Kubernetes has not recorded a scheduled run. Check the schedule and controller Events."
         />
       )}
 
-      {/* Recent failures warning */}
-      {recentFailures && !isSuspended && (
+      {completionUnverified && !isSuspended && (
         <AlertBanner
-          variant="error"
-          title="Recent Jobs Failing"
-          message={<>Jobs have been scheduled but haven't succeeded recently. Last success: {formatRelativeAgeTime(status.lastSuccessfulTime, 'never')}. Check job history and pod logs.</>}
+          variant="info"
+          title="Latest completion not verified"
+          message={<>No successful completion is recorded after the latest scheduled run. Last success: {formatRelativeAgeTime(status.lastSuccessfulTime, 'never')}. Inspect the Job history to check the execution outcome.</>}
         />
       )}
 
       <Section title="Schedule" icon={Clock}>
         <PropertyList>
           <Property label="Schedule" value={spec.schedule} />
-          <Property label="Human" value={cronToHuman(spec.schedule)} />
+          <Property label="Human" value={cronToHuman(spec.schedule ?? '')} />
+          <Property label="Time Zone" value={spec.timeZone ?? 'Controller local time (zone not reported)'} />
           <Property label="Suspend" value={spec.suspend ? 'Yes' : 'No'} />
           <Property label="Last Schedule" value={<TimeValue timestamp={status.lastScheduleTime} fallback="Never" />} />
           <Property label="Last Success" value={<TimeValue timestamp={status.lastSuccessfulTime} fallback="Never" />} />
@@ -73,16 +81,16 @@ export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
       <Section title="Configuration">
         <PropertyList>
           <Property label="Concurrency" value={spec.concurrencyPolicy || 'Allow'} />
-          <Property label="Starting Deadline" value={spec.startingDeadlineSeconds ? `${spec.startingDeadlineSeconds}s` : 'None'} />
+          <Property label="Starting Deadline" value={spec.startingDeadlineSeconds != null ? `${spec.startingDeadlineSeconds}s` : 'None'} />
           <Property label="Success History" value={spec.successfulJobsHistoryLimit ?? 3} />
           <Property label="Failed History" value={spec.failedJobsHistoryLimit ?? 1} />
         </PropertyList>
       </Section>
 
-      {status.active?.length > 0 && (
+      {status.active && status.active.length > 0 && (
         <Section title="Active Jobs">
           <div className="space-y-1">
-            {status.active.map((job: any) => (
+            {status.active.map((job) => (
               <div key={job.name} className="text-sm">
                 <ResourceLink name={job.name} kind="jobs" namespace={job.namespace || data.metadata?.namespace || ''} onNavigate={onNavigate} />
               </div>

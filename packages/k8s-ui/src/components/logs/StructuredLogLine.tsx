@@ -113,7 +113,7 @@ function FilterableValue({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onFilter(value) }}
-        className={`opacity-0 group-hover/flt:opacity-100 transition-opacity ${palette.textTertiary} ${palette.hoverText} px-0.5`}
+        className={`opacity-0 group-hover/flt:opacity-100 focus-visible:opacity-100 transition-opacity ${palette.textTertiary} ${palette.hoverText} px-0.5`}
         title={`Filter to lines containing "${value}"`}
         aria-label={`Filter to lines containing ${value}`}
       >

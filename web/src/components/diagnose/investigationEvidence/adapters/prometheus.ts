@@ -620,6 +620,14 @@ const METRIC_FAMILY_LABELS: Record<string, string> = {
   container_fs_usage_bytes: "Filesystem usage",
   up: "Scrape target up",
 };
+
+function optionalStringList(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((item) => typeof item === "string"))
+  );
+}
+
 export function adaptQueryPrometheus(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
@@ -635,7 +643,12 @@ export function adaptQueryPrometheus(
     !Array.isArray(value.selectors) ||
     (value.selectorsUnknown !== undefined &&
       typeof value.selectorsUnknown !== "boolean") ||
-    (value.truncated !== undefined && typeof value.truncated !== "boolean")
+    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+    (value.partial !== undefined && typeof value.partial !== "boolean") ||
+    !optionalStringList(value.warnings) ||
+    !optionalStringList(value.infos) ||
+    (value.annotationsOmitted !== undefined &&
+      typeof value.annotationsOmitted !== "number")
   ) {
     invalidPayload(builder, source, "Prometheus query");
     return;
@@ -653,6 +666,43 @@ export function adaptQueryPrometheus(
     invalidPayload(builder, source, "Prometheus query");
     return;
   }
+  if (value.partial === true) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      "The metrics backend returned a partial result, so some series may be missing.",
+      "unknown",
+    );
+  }
+  const warnings = (value.warnings as string[] | undefined) ?? [];
+  const infos = (value.infos as string[] | undefined) ?? [];
+  if (warnings.length > 0) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `The metrics backend returned ${warnings.length === 1 ? "a warning" : `${warnings.length} warnings`} with this result: ${warnings.join("; ")}`,
+      "unknown",
+    );
+  }
+  if (infos.length > 0) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `Prometheus noted about this query: ${infos.join("; ")}`,
+      "unknown",
+    );
+  }
+  if (
+    typeof value.annotationsOmitted === "number" &&
+    value.annotationsOmitted > 0
+  ) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `${value.annotationsOmitted} more backend ${value.annotationsOmitted === 1 ? "message was" : "messages were"} left out to keep the result small.`,
+      "unknown",
+    );
+  }
   const selectorsUnknown = value.selectorsUnknown === true;
   const relevance = metricsScope(
     builder.target,
@@ -663,7 +713,19 @@ export function adaptQueryPrometheus(
   const start = nonEmptyString(value.start) ? value.start : undefined;
   const end = nonEmptyString(value.end) ? value.end : undefined;
   const step = nonEmptyString(value.step) ? value.step : undefined;
-  const note = nonEmptyString(value.note) ? value.note : undefined;
+  const qualifications = [
+    warnings.length > 0
+      ? `Backend warning${warnings.length === 1 ? "" : "s"}: ${warnings.join("; ")}.`
+      : "",
+    infos.length > 0 ? `Prometheus noted: ${infos.join("; ")}.` : "",
+    typeof value.annotationsOmitted === "number" && value.annotationsOmitted > 0
+      ? `${value.annotationsOmitted} more backend ${value.annotationsOmitted === 1 ? "message" : "messages"} left out.`
+      : "",
+  ].filter(Boolean);
+  const note =
+    [nonEmptyString(value.note) ? value.note : "", ...qualifications]
+      .filter(Boolean)
+      .join(" ") || undefined;
   if (value.truncated === true) {
     const summary = record(value.summary);
     const cardinality = record(summary?.labelCardinality);

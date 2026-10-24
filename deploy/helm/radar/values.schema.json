@@ -252,6 +252,7 @@
         "existingSecret": { "type": "string" },
         "existingSecretKey": { "type": "string" },
         "cookieTTL": { "type": "string", "description": "Go duration string, e.g. \"4h\"." },
+        "kubernetesCredentials": { "type": "string", "enum": ["impersonate", "user-token"] },
         "proxy": {
           "type": "object",
           "additionalProperties": false,

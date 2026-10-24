@@ -45,7 +45,7 @@ import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
-import { ConnectionProvider, useConnection } from './context/ConnectionContext'
+import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
@@ -77,7 +77,7 @@ import { SettingsDialog, type SettingsSectionId } from './components/settings/Se
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { createViewMemory } from './utils/viewMemory'
 import { createKindFilterStore } from './utils/kindFilterStore'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams, CROSS_VIEW_PARAMS } from './utils/navigation'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams, CROSS_VIEW_PARAMS, namespacesFromSearch } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -416,24 +416,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
   }, [navigate])
 
-  // Parse namespaces from URL (supports both 'namespaces' and legacy 'namespace')
-  const parseNamespacesFromURL = (params: URLSearchParams): string[] => {
-    // Prefer 'namespaces' (plural, comma-separated)
-    const nsParam = params.get('namespaces')
-    if (nsParam) {
-      return nsParam.split(',').map(s => s.trim()).filter(Boolean)
-    }
-    // Fall back to 'namespace' (singular) for backward compatibility
-    const ns = params.get('namespace')
-    if (ns) {
-      return [ns]
-    }
-    return []
-  }
-
   // Initialize state from URL
   const getInitialState = () => {
-    const namespaces = parseNamespacesFromURL(searchParams)
+    const namespaces = namespacesFromSearch(searchParams)
     return {
       namespaces,
       topologyMode: (searchParams.get('mode') as TopologyMode) || 'resources',
@@ -1236,11 +1221,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     onContextChanged: (context) => {
       resetNavigationMap()
 
-      // Clear all React Query caches when cluster context changes
-      // This ensures helm releases, resources, etc. are refetched from the new cluster
-      // removeQueries clears cached data, invalidateQueries triggers refetch
-      queryClient.removeQueries()
-      queryClient.invalidateQueries()
+      // Reconnects also emit context_changed. Preserve only this context's drain record.
+      refreshQueriesAfterReconnect(queryClient, connection.context, context)
 
       // Cancel any pending SSE-driven invalidation — old cluster's events are irrelevant
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
@@ -1442,11 +1424,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const setActiveNamespace = useSetActiveNamespace()
   // Defer the state flip to onSuccess. Setting namespaces to [] before the
   // server-side pref has actually been cleared makes React Query refetch
-  // under the new empty key while the server still returns the previous
-  // pick's scope, caching stale data under the new key with no later
-  // invalidation. onSettled would do the same on errors, leaving the UI
-  // showing "All namespaces" while data is still namespace-scoped — onSuccess
-  // keeps state aligned with the server.
+  // under the new empty key while a Radar that applies the stored pick to
+  // reads naming no namespace (Hub embeds this UI against such Radars) returns
+  // the previous pick's scope, caching stale data under the new key with no
+  // later invalidation.
+  // onSettled would do the same on errors, leaving the UI showing "All
+  // namespaces" while data is still namespace-scoped — onSuccess keeps state
+  // aligned with the server.
   //
   // Don't touch the URL here either: setSearchParams on a still-set state
   // trips the URL→state sync into firing setNamespaces([]) and a duplicate
@@ -1587,7 +1571,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // server while the per-user pick was still narrowed — the picker would
   // show the server scope but lists/dashboard would stay on "all namespaces".
   useEffect(() => {
-    const urlNamespaces = parseNamespacesFromURL(searchParams)
+    const urlNamespaces = namespacesFromSearch(searchParams)
     debugNamespaceLog('app:url-sync', {
       search: searchParams.toString(),
       urlNamespaces,
@@ -2570,7 +2554,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
 
       {/* Bottom Dock for Terminal/Logs */}
-      <BottomDock />
+      <BottomDock viewNamespaces={namespaces} />
 
       {/* Spacer for dock */}
       <DockSpacer />

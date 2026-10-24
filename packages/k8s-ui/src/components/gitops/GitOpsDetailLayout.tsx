@@ -20,8 +20,9 @@ export interface GitOpsDetailIdentity {
   name: string
   // toolLabel: "ArgoCD" | "FluxCD" — passed through as a chip; kept as a
   // free string so future tools (Komodor, Argo Workflows, etc.) don't need
-  // an enum bump here.
-  toolLabel: string
+  // an enum bump here. Omitted for a root that is not a GitOps resource,
+  // which hides the tool/kind chip.
+  toolLabel?: string
   // kindLabel: human-facing kind (e.g. "Application"). Caller does the
   // lookup against its API resource catalog.
   kindLabel: string
@@ -117,7 +118,9 @@ export interface GitOpsDetailLayoutProps {
   terminatingActionTooltip: string
 
   // Spec/config row
-  detail: GitOpsDetailMetadata
+  // Omitted for a root that is not a GitOps resource, which hides the
+  // spec/config facts row.
+  detail?: GitOpsDetailMetadata
 
   // Insights — drives StatusStrip + IssuesBand
   insight: GitOpsInsight | null
@@ -334,9 +337,11 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     </span>
                   </Tooltip>
                 )}
-                <span className="inline-flex shrink-0 items-center rounded border border-theme-border bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary">
-                  {identity.toolLabel} · {identity.kindLabel}
-                </span>
+                {identity.toolLabel && (
+                  <span className="inline-flex shrink-0 items-center rounded border border-theme-border bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary">
+                    {identity.toolLabel} · {identity.kindLabel}
+                  </span>
+                )}
                 {isFleetContext && destinationCluster && (
                   // Cross-cluster lineage chip — fleet-only. Renders the
                   // destination cluster alongside the tool/kind chip so
@@ -350,14 +355,16 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                 )}
               </div>
               {/* Spec/config row */}
-              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
-                <AppFact label="Project" value={detail.project || '-'} />
-                {detail.repository && <AppFact label="Source" value={detail.repository} />}
-                {detail.path && <AppFact label="Path" value={detail.path} />}
-                {detail.chart && <AppFact label="Chart" value={detail.chart} />}
-                <AppFact label="Destination" value={detail.destination || '-'} />
-                {detail.autoSyncMode && <AppFact label="Sync mode" value={detail.autoSyncMode} />}
-              </div>
+              {detail && (
+                <div className="mt-2 flex flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
+                  <AppFact label="Project" value={detail.project || '-'} />
+                  {detail.repository && <AppFact label="Source" value={detail.repository} />}
+                  {detail.path && <AppFact label="Path" value={detail.path} />}
+                  {detail.chart && <AppFact label="Chart" value={detail.chart} />}
+                  <AppFact label="Destination" value={detail.destination || '-'} />
+                  {detail.autoSyncMode && <AppFact label="Sync mode" value={detail.autoSyncMode} />}
+                </div>
+              )}
             </div>
             {/* Action buttons */}
             <div className="flex flex-wrap items-center gap-2">
@@ -518,7 +525,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
       {resourceLoading ? (
         <PaneLoader label="Loading GitOps resource…" className="flex-1" />
       ) : resourceError ? (
-        <div className="p-4 text-sm text-red-500">Failed to load resource: {resourceError.message}</div>
+        <div className="p-4 text-sm text-red-500">Failed to load GitOps view: {resourceError.message}</div>
       ) : (
         <div className={bodyShellClass}>
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-4 py-2">

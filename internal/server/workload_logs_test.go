@@ -871,3 +871,22 @@ func TestWorkloadRunsHTTPContract(t *testing.T) {
 		})
 	}
 }
+
+func TestCronJobRunsRejectPredecessorAndWrongGroup(t *testing.T) {
+	controller := true
+	cj := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "ci", Name: "nightly", UID: "current"}}
+	job := func(name, uid, group string) *batchv1.Job {
+		return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "ci", Name: name,
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: group + "/v1", Kind: "CronJob", Name: cj.Name, UID: types.UID(uid), Controller: &controller}},
+		}}
+	}
+	useTestResourceCache(t, fake.NewSimpleClientset(cj,
+		job("current-run", "current", "batch"),
+		job("predecessor-run", "deleted", "batch"),
+		job("different-controller", "current", "example.com"),
+	))
+	runs, err := (&Server{}).getWorkloadRuns(context.Background(), "cronjobs", "ci", cj.Name, nil, true)
+	if err != nil || len(runs) != 1 || runs[0].Name != "current-run" {
+		t.Fatalf("runs=%+v error=%v, want only current incarnation", runs, err)
+	}
+}

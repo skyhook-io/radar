@@ -106,3 +106,36 @@ func ParseFluxInventoryID(id string) (group, kind, namespace, name string, ok bo
 	}
 	return group, kind, namespace, name, true
 }
+
+// GitOps controller families, as reported on the wire.
+const (
+	ToolArgoCD = "argocd"
+	ToolFluxCD = "fluxcd"
+)
+
+// ToolFor returns the controller family that owns objects of this API group
+// and kind, or "" when Radar has no GitOps view for that identity. The kind alone is
+// not identity: SIG Apps (app.k8s.io) defines an Application too. Argo CD
+// shares argoproj.io with Argo Rollouts, Workflows and Events, so it is
+// matched by kind as well. Flux uses the supported operation registry.
+func ToolFor(group, kind string) string {
+	if group == "argoproj.io" {
+		switch kind {
+		case "Application", "ApplicationSet", "AppProject":
+			return ToolArgoCD
+		}
+		return ""
+	}
+	if entry, err := ResolveFluxKind(kind); err == nil && entry.GVR.Group == group {
+		return ToolFluxCD
+	}
+	return ""
+}
+
+// ToolOf is ToolFor for a live object, read from its apiVersion and kind.
+func ToolOf(obj *unstructured.Unstructured) string {
+	if obj == nil {
+		return ""
+	}
+	return ToolFor(resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), obj.GetKind())
+}

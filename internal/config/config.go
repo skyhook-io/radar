@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -47,6 +48,7 @@ type Config struct {
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
 	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
 	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
+	MCPReadOnly              *bool             `json:"mcpReadOnly,omitempty"`
 	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 	// DebugImage is the image used for ephemeral debug containers and node debug
 	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
@@ -141,21 +143,31 @@ func Path() string {
 
 // Load reads config from disk. Returns zero-value Config if the file is missing or invalid.
 func Load() Config {
+	c, err := LoadForStartup()
+	if err != nil {
+		log.Printf("[config] Failed to load config: %v", err)
+		return Config{}
+	}
+	return c
+}
+
+// LoadForStartup returns errors instead of discarding a persisted MCP policy.
+// A missing file uses defaults; an unreadable or malformed file stops startup.
+func LoadForStartup() (Config, error) {
 	path := Path()
 	if path == "" {
-		return Config{}
+		return Config{}, fmt.Errorf("cannot determine Radar config path")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("[config] Failed to read %s: %v", path, err)
+		if os.IsNotExist(err) {
+			return Config{}, nil
 		}
-		return Config{}
+		return Config{}, fmt.Errorf("cannot read Radar config: %w", err)
 	}
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
-		log.Printf("[config] Failed to parse %s: %v", path, err)
-		return Config{}
+		return Config{}, fmt.Errorf("invalid Radar config: %w", err)
 	}
 	normalizedCurrency, err := NormalizeOpenCostCurrency(c.OpenCostCurrency)
 	if err != nil {
@@ -164,7 +176,7 @@ func Load() Config {
 	} else {
 		c.OpenCostCurrency = normalizedCurrency
 	}
-	return c
+	return c, nil
 }
 
 // Save writes config to disk using atomic rename.

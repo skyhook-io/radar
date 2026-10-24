@@ -11,6 +11,16 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+type APIMetricsFailure string
+
+const (
+	APIMetricsForbidden     APIMetricsFailure = "forbidden"
+	APIMetricsTooLarge      APIMetricsFailure = "too_large"
+	APIMetricsUnreadable    APIMetricsFailure = "unreadable"
+	APIMetricsResponseLimit                   = 256 << 20
+	APIMetricsLineLimit                       = 64 << 10
+)
+
 type Verdict string
 
 const (
@@ -117,7 +127,8 @@ type Input struct {
 	DeprecatedAPIRequests []DeprecatedAPIRequest
 	// DeprecatedAPIMetricsWindow is the observed API server process lifetime,
 	// formatted for display by the collector that read the metrics endpoint.
-	DeprecatedAPIMetricsWindow string
+	DeprecatedAPIMetricsWindow  string
+	DeprecatedAPIMetricsFailure APIMetricsFailure
 	// PrometheusRules is nil when the CRD exists but Radar could not inspect it.
 	// An empty slice with PrometheusRulesInstalled=false means not applicable.
 	PrometheusRules                     []*unstructured.Unstructured

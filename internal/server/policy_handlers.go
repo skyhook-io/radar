@@ -102,10 +102,10 @@ func (s *Server) handlePolicyResource(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	// Deliberately not parseNamespacesForUser: that folds in the header's view
-	// filter, a display preference, which would break this section for any
-	// resource reached by deep link from outside the current filter. A denial is
-	// a 403 rather than an empty list, which would read as "nothing is violated".
+	// Authorized for the subject's own namespace, never a namespace view filter,
+	// so a resource reached by deep link from outside the current view still
+	// shows its findings. A denial is a 403 rather than an empty list, which
+	// would read as "nothing is violated".
 	families := s.readablePolicyReportFamilies(r, namespace)
 	if len(families) == 0 {
 		s.writeError(w, http.StatusForbidden, "no access to policy reports in this namespace")

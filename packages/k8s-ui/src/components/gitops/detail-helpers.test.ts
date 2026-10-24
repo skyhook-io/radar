@@ -5,6 +5,7 @@ import {
   formatGitOpsSourceUrl,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  gitOpsDetailGroup,
   isDestinationRef,
   parseArgoRollbackID,
 } from './detail-helpers'
@@ -75,26 +76,47 @@ describe('formatGitOpsSourceUrl', () => {
 })
 
 describe('getGitOpsTool', () => {
-  // Group is the canonical discriminator.
-  test('Argo via group', () => {
+  // The API group decides, the same rule as the backend (pkg/gitops ToolFor).
+  test('Argo CD kinds in argoproj.io', () => {
     expect(getGitOpsTool('applications', 'argoproj.io')).toBe('argo')
     expect(getGitOpsTool('applicationsets', 'argoproj.io')).toBe('argo')
     expect(getGitOpsTool('appprojects', 'argoproj.io')).toBe('argo')
   })
-  // Argo kinds without an explicit group still route to 'argo'.
-  // Defends against a normalizer that drops `group` from the frontend payload.
-  test('Argo kinds without group still route to argo', () => {
-    expect(getGitOpsTool('applications', undefined)).toBe('argo')
-    expect(getGitOpsTool('applicationsets', '')).toBe('argo')
-  })
-  // Flux kinds with their canonical groups.
-  test('Flux via group', () => {
+  test('Flux groups', () => {
     expect(getGitOpsTool('kustomizations', 'kustomize.toolkit.fluxcd.io')).toBe('flux')
     expect(getGitOpsTool('helmreleases', 'helm.toolkit.fluxcd.io')).toBe('flux')
+    expect(getGitOpsTool('gitrepositories', 'source.toolkit.fluxcd.io')).toBe('flux')
   })
-  // Unknown kinds default to flux (matches the OSS fall-through).
-  test('unknown kind defaults to flux', () => {
-    expect(getGitOpsTool('somecustomresource', 'unknown.io')).toBe('flux')
+  // SIG Apps defines its own Application kind; offering Argo Sync on it
+  // would sync a same-named argoproj.io Application instead.
+  test('an Application outside argoproj.io is not Argo CD', () => {
+    expect(getGitOpsTool('applications', 'app.k8s.io')).toBeNull()
+    expect(getGitOpsTool('applications', 'source.toolkit.fluxcd.io')).toBeNull()
+    expect(getGitOpsTool('kustomizations', 'source.toolkit.fluxcd.io')).toBeNull()
+    expect(getGitOpsTool('helmreleases', 'kustomize.toolkit.fluxcd.io')).toBeNull()
+  })
+  // argoproj.io is shared with Argo Rollouts and Workflows.
+  test('other argoproj.io kinds are not Argo CD', () => {
+    expect(getGitOpsTool('rollouts', 'argoproj.io')).toBeNull()
+    expect(getGitOpsTool('workflows', 'argoproj.io')).toBeNull()
+  })
+  // The kind alone is not identity, and nothing defaults to Flux.
+  test('no group or an unknown group is not GitOps', () => {
+    expect(getGitOpsTool('applications', undefined)).toBeNull()
+    expect(getGitOpsTool('applicationsets', '')).toBeNull()
+    expect(getGitOpsTool('somecustomresource', 'unknown.io')).toBeNull()
+    expect(getGitOpsTool('applications', 'notargoproj.io')).toBeNull()
+    expect(getGitOpsTool('kustomizations', 'fake.kustomize.toolkit.fluxcd.io')).toBeNull()
+  })
+})
+
+describe('gitOpsDetailGroup', () => {
+  test('the loaded object\'s apiVersion wins over the route group', () => {
+    expect(gitOpsDetailGroup('argoproj.io', { apiVersion: 'app.k8s.io/v1beta1' })).toBe('app.k8s.io')
+  })
+  test('the route group stands in until the object loads', () => {
+    expect(gitOpsDetailGroup('app.k8s.io', undefined)).toBe('app.k8s.io')
+    expect(gitOpsDetailGroup('argoproj.io', {})).toBe('argoproj.io')
   })
 })
 
@@ -179,5 +201,28 @@ describe('isDestinationRef', () => {
   test('a ref the tree does not list is remote, even before the tree loads', () => {
     expect(isDestinationRef(tree, true, { kind: 'Deployment', name: 'billing' })).toBe(true)
     expect(isDestinationRef(null, true, { group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'billing' })).toBe(true)
+  })
+})
+
+describe('GitOps status identity', () => {
+  test.each([
+    ['applications', 'app.k8s.io/v1beta1'],
+    ['applicationsets', 'vendor.io/v1'],
+    ['kustomizations', 'source.toolkit.fluxcd.io/v1'],
+    ['helmreleases', 'vendor.helm.toolkit.fluxcd.io/v1'],
+  ])('does not interpret foreign %s status from %s', (kind, apiVersion) => {
+    expect(getGitOpsResourceStatus(kind, {
+      apiVersion,
+      status: { sync: { status: 'Synced' }, health: { status: 'Healthy' }, conditions: [{ type: 'Ready', status: 'True' }] },
+    })).toBeNull()
+  })
+
+  test('preserves existing controller-specific status-only callers', () => {
+    expect(getGitOpsResourceStatus('applications', { status: { sync: { status: 'Synced' }, health: { status: 'Healthy' } } })?.sync).toBe('Synced')
+    expect(getGitOpsResourceStatus('kustomizations', { status: { conditions: [{ type: 'Ready', status: 'True' }] } })?.health).toBe('Healthy')
+  })
+
+  test('does not interpret an AppProject as a Flux resource', () => {
+    expect(getGitOpsResourceStatus('appprojects', { apiVersion: 'argoproj.io/v1alpha1', status: { conditions: [{ type: 'Ready', status: 'True' }] } })).toBeNull()
   })
 })

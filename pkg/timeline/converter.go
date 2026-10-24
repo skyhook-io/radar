@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	corev1 "k8s.io/api/core/v1"
@@ -69,8 +70,7 @@ func K8sEventSubject(event *corev1.Event) resourceid.Reference {
 // the row reflects the latest revision instead of dropping the bump, while an
 // identical informer/historical relist dupe stays collapsed to the first row.
 func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
-	// Use lastTimestamp or firstTimestamp
-	ts := event.LastTimestamp.Time
+	ts := k8score.EventLastObservedTime(event)
 	if ts.IsZero() {
 		ts = event.FirstTimestamp.Time
 	}
@@ -97,7 +97,7 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 		Reason:     event.Reason,
 		Message:    event.Message,
 		Owner:      owner,
-		Count:      event.Count,
+		Count:      k8score.EventOccurrences(event),
 	}
 }
 

@@ -45,7 +45,10 @@ func normalizeMCPPackageSourceFilter(source string) string {
 }
 
 func handleListPackages(ctx context.Context, req *mcp.CallToolRequest, input listPackagesInput) (*mcp.CallToolResult, any, error) {
-	user, groups := userFromContext(ctx)
+	user, groups := "", []string(nil)
+	if u := userFromContext(ctx); u != nil {
+		user, groups = u.Username, u.Groups
+	}
 	var requested []string
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}

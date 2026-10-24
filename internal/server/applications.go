@@ -444,11 +444,7 @@ func (s *Server) helmHistoryAnchors(r *http.Request, source *appSourceRef) ([]ap
 	if client == nil {
 		return nil, []string{"Helm client is not initialized."}
 	}
-	username, groups := "", []string(nil)
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		username, groups = user.Username, user.Groups
-	}
-	release, err := client.GetReleaseAsUser(source.Namespace, source.Name, username, groups)
+	release, err := client.GetReleaseAsUser(source.Namespace, source.Name, auth.UserFromContext(r.Context()))
 	if err != nil {
 		if helm.IsForbiddenError(err) {
 			return nil, []string{"Insufficient permissions to read Helm release history."}

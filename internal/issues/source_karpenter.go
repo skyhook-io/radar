@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -37,6 +38,10 @@ type karpenterResourceInventory struct {
 	GVR      schema.GroupVersionResource
 	Items    []*unstructured.Unstructured
 	Coverage karpenterResourceCoverage
+	// Gap says why an installed kind's inventory is unknown, when that
+	// leaves its issues unchecked. Empty when the kind isn't installed, or
+	// Radar's own access excludes it by configuration.
+	Gap issuesapi.UncheckedReason
 }
 
 type karpenterIssueProvider interface {
@@ -54,7 +59,7 @@ type karpenterNodeClassReference struct {
 	pools []Ref
 }
 
-func detectKarpenterIssues(p Provider, f Filters) ([]Issue, map[string]bool) {
+func detectKarpenterIssues(p Provider, f Filters, unchecked *uncheckedSet) ([]Issue, map[string]bool) {
 	kp, ok := p.(karpenterIssueProvider)
 	if !ok || (len(f.Namespaces) > 0 && !f.IncludeClusterScopedKarpenter) || !canReadKarpenterKind(f, karpenter.Group, karpenter.NodePoolKind) {
 		return nil, nil
@@ -62,6 +67,9 @@ func detectKarpenterIssues(p Provider, f Filters) ([]Issue, map[string]bool) {
 
 	poolsInventory := kp.karpenterResources(karpenter.Group, karpenter.NodePoolKind)
 	if poolsInventory.Coverage != karpenterCoverageAuthoritative {
+		// Without the NodePools nothing else here is read, so the gap covers
+		// every Karpenter subject.
+		recordKarpenterGap(f, unchecked, poolsInventory, karpenter.Group, karpenter.NodePoolKind, isKarpenterSubject)
 		return nil, nil
 	}
 
@@ -103,7 +111,9 @@ func detectKarpenterIssues(p Provider, f Filters) ([]Issue, map[string]bool) {
 					}
 				}
 			}
-		case karpenterCoverageAuthoritative:
+		default:
+			// Authoritative, or unknown because discovery of the group was
+			// partial: the inventory read below reports the gap.
 			refs = readableNodeClassRefs(refs, f.CanReadRelated)
 			if len(refs) == 0 {
 				continue
@@ -113,6 +123,10 @@ func detectKarpenterIssues(p Provider, f Filters) ([]Issue, map[string]bool) {
 			}
 			inventory := kp.karpenterResources(refType.group, refType.kind)
 			if inventory.Coverage != karpenterCoverageAuthoritative {
+				// A missing NodeClass is reported on its NodePools.
+				recordKarpenterGap(f, unchecked, inventory, refType.group, refType.kind, func(k string) bool {
+					return strings.EqualFold(k, karpenter.NodePoolKind) || strings.EqualFold(k, refType.kind)
+				})
 				continue
 			}
 			classesByName := make(map[string]*unstructured.Unstructured, len(inventory.Items))
@@ -143,6 +157,9 @@ func detectKarpenterIssues(p Provider, f Filters) ([]Issue, map[string]bool) {
 
 	if canReadKarpenterKind(f, karpenter.Group, karpenter.NodeClaimKind) {
 		claimsInventory := kp.karpenterResources(karpenter.Group, karpenter.NodeClaimKind)
+		recordKarpenterGap(f, unchecked, claimsInventory, karpenter.Group, karpenter.NodeClaimKind, func(k string) bool {
+			return strings.EqualFold(k, karpenter.NodeClaimKind)
+		})
 		if claimsInventory.Coverage == karpenterCoverageAuthoritative {
 			for _, claim := range claimsInventory.Items {
 				if claim == nil || claim.GetName() == "" {
@@ -168,6 +185,25 @@ func detectKarpenterIssues(p Provider, f Filters) ([]Issue, map[string]bool) {
 	}
 
 	return out, owned
+}
+
+// recordKarpenterGap records an unread kind when the caller's kind filter
+// asks for a subject whose issues depend on it.
+func recordKarpenterGap(f Filters, unchecked *uncheckedSet, inventory karpenterResourceInventory, group, kind string, affects func(kind string) bool) {
+	if inventory.Coverage == karpenterCoverageAuthoritative || inventory.Gap == "" {
+		return
+	}
+	if len(f.Kinds) > 0 && !slices.ContainsFunc(f.Kinds, func(k string) bool { return affects(strings.TrimSpace(k)) }) {
+		return
+	}
+	unchecked.add(issuesapi.UncheckedSourceKarpenter, inventory.Gap, issuesapi.UncheckedKind{Group: group, Kind: kind})
+}
+
+// isKarpenterSubject reports a kind whose issues the Karpenter source emits:
+// NodePools, NodeClaims and the provider NodeClass kinds.
+func isKarpenterSubject(kind string) bool {
+	return strings.EqualFold(kind, karpenter.NodePoolKind) || strings.EqualFold(kind, karpenter.NodeClaimKind) ||
+		strings.HasSuffix(strings.ToLower(kind), "nodeclass")
 }
 
 func canReadKarpenterKind(f Filters, group, kind string) bool {
