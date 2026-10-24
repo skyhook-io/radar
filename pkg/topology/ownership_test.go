@@ -345,9 +345,7 @@ func (denyPods) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
 	}
 	return ownership.Allowed
 }
-func (denyPods) Namespaces() ([]string, bool)  { return nil, true }
-func (denyPods) CanReadEverything() bool       { return false }
-func (denyPods) CanReadAllKindsIn(string) bool { return false }
+func (denyPods) Namespaces() ([]string, bool) { return nil, true }
 
 func TestApplyOwnershipCapsChildren(t *testing.T) {
 	b := ownershiptest.NewBuilder()
@@ -462,9 +460,7 @@ func (d denyKind) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision 
 	}
 	return ownership.Allowed
 }
-func (denyKind) Namespaces() ([]string, bool)  { return nil, true }
-func (denyKind) CanReadEverything() bool       { return false }
-func (denyKind) CanReadAllKindsIn(string) bool { return false }
+func (denyKind) Namespaces() ([]string, bool) { return nil, true }
 
 // A Pod's Deployment is the one its ReplicaSet's controller reference names,
 // reached through the Pod's own controller reference.
@@ -540,8 +536,6 @@ func (n namespacesOnly) CanRead(_ resourceid.GroupKind, namespace string) owners
 	return ownership.Denied
 }
 func (n namespacesOnly) Namespaces() ([]string, bool) { return n, false }
-func (namespacesOnly) CanReadEverything() bool        { return false }
-func (namespacesOnly) CanReadAllKindsIn(string) bool  { return false }
 
 // A cluster-scoped owner's children are searched in each of the caller's
 // namespaces; a kind Radar doesn't collect is listed once, not once per
