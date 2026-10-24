@@ -227,6 +227,7 @@ export function formatGroupName(group: string): string {
     'kyverno.io': 'Kyverno',
     'policies.kyverno.io': 'Kyverno',
     'k8s.nginx.org': 'NGINX',
+    'k8s.cni.cncf.io': 'Multus',
     'networking.gke.io': 'GKE Networking',
     'warden.gke.io': 'GKE Warden',
     'cloud.google.com': 'Google Cloud',

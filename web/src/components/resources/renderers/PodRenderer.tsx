@@ -1,12 +1,15 @@
 import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
 import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
+import { getPodNetworks, uniqueNetworkAttachmentRefs } from '@skyhook-io/k8s-ui/utils/multus'
 import type { PodEnvironmentRevealResponse, ResolvedEnvFrom } from '@skyhook-io/k8s-ui'
+import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { useCapabilitiesContext, useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, usePodEnvironment, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus, useRevealPodEnvironment } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
 import { usePolicyResource } from '../../../api/policy'
+import { useNetworkAttachmentLookups } from '../../../api/networkAttachments'
 import { podLimitRangeNames, useNamespaceLimitRanges } from '../../../api/quotas'
 import { podAwaitsScheduling } from '../../capacity/podDemandGate'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
@@ -82,6 +85,9 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
 
   const { data: limitRanges, isSuccess: limitRangesReady } = useNamespaceLimitRanges(namespace ?? '', !!namespace)
 
+  const networkAttachmentRefs = useMemo(() => uniqueNetworkAttachmentRefs(getPodNetworks(data).rows), [data])
+  const networkAttachmentLookups = useNetworkAttachmentLookups(networkAttachmentRefs)
+
   return (
     <BasePodRenderer
       data={data}
@@ -114,6 +120,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       policyLoading={policyLoading}
       policyError={policyError as Error | null}
       namespaceLimitRangeNames={limitRangesReady ? podLimitRangeNames(limitRanges) : undefined}
+      networkAttachmentLookups={networkAttachmentLookups}
       canExec={canExec}
       canViewLogs={canViewLogs}
       canPortForward={showPortForward}

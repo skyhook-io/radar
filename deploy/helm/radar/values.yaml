@@ -207,6 +207,7 @@ rbac:
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
     lws: true               # leaderworkerset.x-k8s.io
     mariadb: true           # mariadb.mmontes.io
+    multus: true            # k8s.cni.cncf.io (Multus NetworkAttachmentDefinitions, read to link a Pod's secondary networks)
     networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
     nimOperator: true       # apps.nvidia.com (NVIDIA NIM: NIMServices, NIMCaches, NIMPipelines)

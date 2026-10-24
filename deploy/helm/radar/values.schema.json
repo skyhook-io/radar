@@ -101,6 +101,7 @@
             "kured": { "type": "boolean" },
             "kyverno": { "type": "boolean" },
             "mariadb": { "type": "boolean" },
+            "multus": { "type": "boolean" },
             "nginx": { "type": "boolean" },
             "openshift": { "type": "boolean" },
             "opentelemetry": { "type": "boolean" },
