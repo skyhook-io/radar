@@ -94,7 +94,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       'Open terminals and browse files in native sidecars',
       'Node drains keep results visible and name remaining Pods',
       'Audits recognize shared Pod CPU and memory budgets',
-      'Find public Helm chart sources through ArtifactHub',
+      'Helm upgrades need a confirmed source; find public sources on ArtifactHub',
       'Prometheus reconnects automatically when it appears',
       'Argo CD views confirm when a local resource is missing',
     ],
@@ -316,9 +316,8 @@ export function unreadReleases(
 export const RELEASE_WEIGHTS = [1, 0.75, 0.5]
 export const MAX_CARDS = 5
 export const MAX_LINES = 8
-// The dialog opens by itself only when the cards it shows add up to this.
-// A release of mostly 4-6s stays behind the unread dot; one with a few solid
-// features, or a skipped release with them, opens it.
+// A fuller set of useful improvements can merit an announcement even without
+// a single release-defining feature.
 export const AUTO_OPEN_SCORE = 25
 
 export interface ComposedHighlight extends ReleaseHighlight {
