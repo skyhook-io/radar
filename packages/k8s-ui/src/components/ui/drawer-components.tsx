@@ -823,9 +823,17 @@ import { formatRelativeAgeTime } from '../../utils/format'
 interface RelatedResourcesSectionProps {
   relationships: Relationships | undefined
   onNavigate?: (ref: ResourceRef) => void
+  /** The URL plural of the object shown (e.g. `deployments`). */
+  kind?: string
 }
 
-export function RelatedResourcesSection({ relationships, onNavigate }: RelatedResourcesSectionProps) {
+// Kinds whose objects usually own others. An empty Children list for one of
+// these is surprising, so it says it covered only the kinds Radar checked;
+// for any other kind an empty list stays hidden, or nearly every leaf object
+// would carry the note.
+const KINDS_WITH_CHILDREN = new Set(['deployments', 'replicasets', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'services', 'rollouts'])
+
+export function RelatedResourcesSection({ relationships, onNavigate, kind }: RelatedResourcesSectionProps) {
   if (!relationships) return null
 
   const configRefs = omitResourceRefs(relationships.configRefs ?? [], relationships.dependencies ?? [])
@@ -835,7 +843,11 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   const unanswered = ownershipUnanswered(relationships.ownership)
   const several = !relationships.owner && relationships.ownership?.primaryOwnerState === 'several'
   const ownerMissing = relationships.owner || several ? undefined : ownerNote(relationships.ownership)
-  const childrenCoverage = childrenNote(relationships.ownership)
+  let childrenCoverage = childrenNote(relationships.ownership)
+  const noChildren = !relationships.children?.length && !relationships.olderRevisions?.length
+  if (noChildren && childrenCoverage?.hint && !childrenCoverage.text && kind && KINDS_WITH_CHILDREN.has(kind)) {
+    childrenCoverage = { ...childrenCoverage, text: 'No children among the kinds Radar checked.' }
+  }
 
   const hasRelationships =
     relationships.owner ||

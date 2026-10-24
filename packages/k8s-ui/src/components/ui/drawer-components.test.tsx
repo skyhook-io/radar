@@ -166,6 +166,17 @@ describe('RelatedResourcesSection ownership', () => {
       <RelatedResourcesSection relationships={{ ownership: { children: { complete: false, notChecked: [{ kind: 'Lease', namespace: 'shop', reason: 'radar_kind_not_collected' }] } } }} />,
     )
     expect(routine).toBe('')
+    const leaf = renderToString(
+      <RelatedResourcesSection kind="configmaps" relationships={{ ownership: { children: { complete: false, notChecked: [{ kind: 'Lease', namespace: 'shop', reason: 'radar_kind_not_collected' }] } } }} />,
+    )
+    expect(leaf).toBe('')
+    const owner = renderToString(
+      <RelatedResourcesSection kind="services" relationships={{ ownership: { children: { complete: false, notChecked: [{ kind: 'EndpointSlice', namespace: 'shop', reason: 'radar_kind_not_collected' }] } } }} />,
+    )
+    expect(owner).toContain('Children')
+    expect(owner).toContain('No children among the kinds Radar checked.')
+    const ownerComplete = renderToString(<RelatedResourcesSection kind="services" relationships={{ ownership: { children: { complete: true } } }} />)
+    expect(ownerComplete).toBe('')
     const elsewhere = renderToString(
       <RelatedResourcesSection
         relationships={{ children: [rs], ownership: { children: { complete: false, notChecked: [{ kind: 'Pod', namespace: 'other', reason: 'radar_namespace_not_collected' }] } } }}
