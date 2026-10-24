@@ -69,7 +69,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         id: 'investigation-change-evidence',
         icon: GitCompareArrows,
         title: 'See more of what changed',
-        description: 'Investigations show more spec edits, NetworkPolicy and Pod label changes, Secret rotations and stale env readers, and flag incomplete history.',
+        description: 'Investigations show more spec edits, NetworkPolicy changes, Secret rotations and stale env readers, and flag incomplete history.',
         importance: 5,
       },
       {
