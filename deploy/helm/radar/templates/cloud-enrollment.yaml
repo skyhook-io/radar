@@ -1,0 +1,77 @@
+{{- if include "radar.cloudEnrollmentMode" . | eq "true" }}
+{{- $tokenSecret := include "radar.cloudTokenSecretName" . }}
+# Radar keeps the token it gets by joining in this Secret, so the chart
+# renders it with no data and never takes ownership of what Radar writes.
+# It survives uninstall and pruning: deleting it would make the cluster join
+# again as a new entry.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tokenSecret }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+type: Opaque
+{{- if .Values.cloud.enrollment.key }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "radar.cloudEnrollmentKeySecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+type: Opaque
+data:
+  key: {{ .Values.cloud.enrollment.key | b64enc | quote }}
+{{- end }}
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  # Read, watch and update Radar's own token Secret only. Radar never
+  # creates or deletes it.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $tokenSecret | quote }}]
+    verbs: ["get", "list", "watch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "radar.fullname" . }}-cloud-token
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "radar.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- if and .Values.cloud.enabled .Values.cloud.caBundle }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- .Values.cloud.caBundle | trimSuffix "\n" | nindent 4 }}
+{{- end }}

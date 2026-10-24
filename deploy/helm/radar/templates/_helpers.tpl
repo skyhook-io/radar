@@ -125,3 +125,39 @@ true
 false
 {{- end -}}
 {{- end -}}
+
+{{/*
+Enrollment mode: Radar joins cloud.hubURL with a shared enrollment key and
+keeps its own token in a chart-created Secret. A configured cloud.token or
+cloud.existingSecret wins, so a token install renders exactly as before.
+*/}}
+{{- define "radar.cloudEnrollmentMode" -}}
+{{- $c := .Values.cloud -}}
+{{- $e := $c.enrollment | default dict -}}
+{{- if and $c.enabled $c.hubURL (or $e.key $e.existingSecret) (not (or $c.token $c.existingSecret)) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "radar.cloudTokenSecretName" -}}
+{{- .Values.cloud.tokenSecretName | default (printf "%s-cloud-token" (include "radar.fullname" .)) -}}
+{{- end -}}
+
+{{- define "radar.cloudEnrollmentKeySecretName" -}}
+{{- $e := .Values.cloud.enrollment | default dict -}}
+{{- $e.existingSecret | default (printf "%s-cloud-enrollment-key" (include "radar.fullname" .)) -}}
+{{- end -}}
+
+{{/*
+Whether the cloud tunnel trusts an extra CA bundle, and which ConfigMap holds it.
+*/}}
+{{- define "radar.cloudCAConfigMap" -}}
+{{- $cm := .Values.cloud.caBundleConfigMap | default dict -}}
+{{- if .Values.cloud.caBundle -}}
+{{- printf "%s-cloud-ca" (include "radar.fullname" .) -}}
+{{- else if $cm.name -}}
+{{- $cm.name -}}
+{{- end -}}
+{{- end -}}

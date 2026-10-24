@@ -11,7 +11,20 @@
 {{- $mode := .Values.auth.mode -}}
 {{- $routed := or .Values.ingress.enabled .Values.httpRoute.enabled -}}
 {{- $proxyAuth := printf "Authentication: proxy (auth.mode=proxy). Users authenticate through the proxy,\nwhich forwards their identity to Radar via HTTP headers. The auth proxy should\nbe the only path to Radar.\nSetup: %s" $authDocs -}}
-{{- if .Values.cloud.enabled }}
+{{- if include "radar.cloudEnrollmentMode" . | eq "true" }}
+{{- $tokenSecret := include "radar.cloudTokenSecretName" . }}
+The Radar pod joins the Radar Hub (cloud.hubURL) with the enrollment key, then keeps
+its own token in Secret {{ $ns }}/{{ $tokenSecret }}.
+The pod's own listener serves only /api/health; Radar is served over the Cloud tunnel.
+
+Check that it joined:
+
+  radar cloud status --namespace {{ $ns }} --release {{ .Release.Name }}
+
+If the Hub refused it, enroll_error in that Secret says why. To make it join again:
+
+  radar cloud reset-enrollment --namespace {{ $ns }} --secret {{ $tokenSecret }}
+{{- else if .Values.cloud.enabled }}
 The Radar pod dials the Radar Cloud endpoint (cloud.url) over an outbound WebSocket.
 Once connected, the Radar Cloud install page redirects you into the cluster view.
 The pod's own listener serves only /api/health; Radar is served over the Cloud tunnel.

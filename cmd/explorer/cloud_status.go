@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -39,6 +40,10 @@ type hubTunnelResult struct {
 	openURL         string
 	reinstall       bool
 	openClusters    bool
+	// From the token Secret of a Radar that joined with an enrollment key.
+	enrollStatus string
+	enrollError  string
+	enrollAt     string
 }
 
 type agentStatusGetter interface {
@@ -50,13 +55,14 @@ func cloudStatus(args []string, out, errOut io.Writer) int {
 	var flagOutput bytes.Buffer
 	fs.SetOutput(&flagOutput)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: radar cloud status [--context NAME] [--namespace NS --release NAME]")
+		fmt.Fprintln(fs.Output(), "Usage: radar cloud status [--context NAME] [--namespace NS --release NAME] [--ca-file FILE]")
 		fmt.Fprintln(fs.Output(), "Without both --namespace and --release, Radar discovers installations across visible namespaces.")
 		fs.PrintDefaults()
 	}
 	namespace := fs.String("namespace", cloudinstall.DefaultInstallNamespace, "Exact namespace (requires --release)")
 	release := fs.String("release", cloudinstall.DefaultReleaseName, "Exact Helm release (requires --namespace)")
 	contextName := fs.String("context", "", "Kubernetes context to inspect (default: current context)")
+	caFile := fs.String("ca-file", "", "PEM file of CA certificates to trust for the Hub (default: the CA bundle the Radar Deployment mounts, when this account can read it)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, _ = io.Copy(out, &flagOutput)
@@ -134,7 +140,7 @@ func cloudStatus(args []string, out, errOut io.Writer) int {
 	targets := cloudinstall.DiscoveredTargets(result, exactTarget)
 	var tunnel hubTunnelResult
 	if len(targets) == 1 {
-		tunnel = checkHubTunnelStatus(ctx, clients.Kubernetes, targets[0])
+		tunnel = checkHubTunnelStatus(ctx, clients.Kubernetes, targets[0], strings.TrimSpace(*caFile))
 		if ctx.Err() != nil {
 			fmt.Fprintln(errOut, "cloud status: interrupted")
 			return 1
@@ -264,7 +270,13 @@ func printCloudStatusWithStyle(out io.Writer, target cloudinstall.RadarTarget, s
 	if runtime.CloudModeUnresolved {
 		fmt.Fprintln(out, "Cloud mode: configured from a referenced value (value not inspected)")
 	}
-	if runtime.CloudURL != "" {
+	if runtime.UsesEnrollment() {
+		if runtime.HubURL != "" {
+			fmt.Fprintf(out, "Hub: %s (joins with an enrollment key)\n", runtime.HubURL)
+		} else if runtime.HubURLUnresolved {
+			fmt.Fprintln(out, "Hub: configured from a referenced value (value not inspected)")
+		}
+	} else if runtime.CloudURL != "" {
 		fmt.Fprintf(out, "Hub: %s\n", runtime.CloudURL)
 	} else if runtime.CloudURLUnresolved {
 		fmt.Fprintln(out, "Hub: configured from a referenced value (value not inspected)")
@@ -386,6 +398,10 @@ func cloudTargetStatusHeadline(target cloudinstall.RadarTarget, tunnel hubTunnel
 			connection = "its connection Secret has no usable token"
 		case "failed — the configured Hub URL is invalid":
 			connection = "its configured Hub URL is invalid"
+		case "failed - Radar stopped joining the Hub":
+			connection = "it stopped joining the Hub and needs its enrollment reset"
+		case "failed - the token Secret was not found":
+			connection = "its token Secret is missing"
 		}
 		if agentHealthy {
 			return "Radar is installed, but " + connection + "."
@@ -416,6 +432,16 @@ func printHubTunnelStatusWithStyle(out io.Writer, target cloudinstall.RadarTarge
 		}
 		fmt.Fprintf(out, "%s: %s\n", label, result.lastConnectedAt.UTC().Format(time.RFC3339))
 	}
+	if result.enrollStatus != "" {
+		line := result.enrollStatus
+		if result.enrollAt != "" {
+			line += " (since " + result.enrollAt + ")"
+		}
+		fmt.Fprintf(out, "Enrollment: %s\n", line)
+	}
+	if result.enrollError != "" {
+		fmt.Fprintf(out, "Enrollment error: %s\n", result.enrollError)
+	}
 	if result.detail != "" {
 		fmt.Fprintf(out, "%s %s\n", style.Dim("Details:"), result.detail)
 	}
@@ -441,7 +467,7 @@ func hubTunnelTone(result hubTunnelResult) cliui.Tone {
 	}
 }
 
-func checkHubTunnelStatus(ctx context.Context, kc kubernetes.Interface, target cloudinstall.RadarTarget) hubTunnelResult {
+func checkHubTunnelStatus(ctx context.Context, kc kubernetes.Interface, target cloudinstall.RadarTarget, caFile string) hubTunnelResult {
 	runtime := target.Runtime
 	if !runtime.AlreadyCloud {
 		return hubTunnelResult{
@@ -456,13 +482,20 @@ func checkHubTunnelStatus(ctx context.Context, kc kubernetes.Interface, target c
 			next:    "complete the Cloud settings above, then run this command again.",
 		}
 	}
+	roots, caHint, caProblem := hubStatusCA(ctx, kc, target, caFile)
+	if caProblem != nil {
+		return *caProblem
+	}
+	if runtime.UsesEnrollment() {
+		return withCAHint(checkEnrolledTunnelStatus(ctx, kc, target, roots), caHint)
+	}
 	if runtime.CloudURL == "" {
 		return hubTunnelResult{
 			summary: "not checked — the Hub URL cannot be read from the Deployment",
 			next:    "make the Hub URL directly inspectable, then run this command again.",
 		}
 	}
-	client, err := cloud.NewAgentStatusClient(runtime.CloudURL)
+	client, err := cloud.NewAgentStatusClientWithCA(runtime.CloudURL, roots)
 	if err != nil {
 		return hubTunnelResult{
 			verdict: hubTunnelUnhealthy,
@@ -476,6 +509,56 @@ func checkHubTunnelStatus(ctx context.Context, kc kubernetes.Interface, target c
 		if frontendURL, ferr := client.GetFrontendURL(ctx); ferr == nil {
 			result = addHubFrontendLinks(result, frontendURL)
 		}
+	}
+	return withCAHint(result, caHint)
+}
+
+// hubStatusCA returns the CA pool to trust for the Hub status call: --ca-file
+// when given, else the ConfigMap the Deployment mounts at --cloud-ca-file.
+// caHint is set when Radar trusts a CA this command could not locate, for
+// use if the Hub call then fails.
+func hubStatusCA(ctx context.Context, kc kubernetes.Interface, target cloudinstall.RadarTarget, caFile string) (*x509.CertPool, string, *hubTunnelResult) {
+	if caFile != "" {
+		roots, err := cloud.LoadCAFile(caFile)
+		if err != nil {
+			return nil, "", &hubTunnelResult{
+				summary: "not checked - the --ca-file could not be used",
+				detail:  err.Error(),
+				next:    "pass a PEM file with the Hub's CA certificates, then run this command again.",
+			}
+		}
+		return roots, "", nil
+	}
+	runtime := target.Runtime
+	if runtime.CloudCAConfigMap == "" {
+		if runtime.CloudCAFile != "" {
+			return nil, fmt.Sprintf("Radar trusts an extra CA for the Hub (%s) that this command could not locate. If the Hub uses a private CA, pass it with --ca-file.", runtime.CloudCAFile), nil
+		}
+		return nil, "", nil
+	}
+	ref := target.Namespace + "/" + runtime.CloudCAConfigMap
+	cm, err := kc.CoreV1().ConfigMaps(target.Namespace).Get(ctx, runtime.CloudCAConfigMap, metav1.GetOptions{})
+	if err != nil {
+		return nil, "", &hubTunnelResult{
+			summary: "not checked - the Hub's CA bundle could not be read",
+			detail:  fmt.Sprintf("ConfigMap %q: %v", ref, err),
+			next:    "pass the Hub's CA with --ca-file, or run this command with an account that can read the ConfigMap.",
+		}
+	}
+	roots, err := cloud.CAPoolFromPEM([]byte(cm.Data[runtime.CloudCAConfigMapKey]))
+	if err != nil {
+		return nil, "", &hubTunnelResult{
+			summary: "not checked - the Hub's CA bundle could not be used",
+			detail:  fmt.Sprintf("ConfigMap %q, key %q %v", ref, runtime.CloudCAConfigMapKey, err),
+			next:    "pass the Hub's CA with --ca-file, then run this command again.",
+		}
+	}
+	return roots, "", nil
+}
+
+func withCAHint(result hubTunnelResult, hint string) hubTunnelResult {
+	if hint != "" && result.verdict == hubTunnelUnavailable && strings.Contains(result.summary, "request failed") {
+		result.next = hint
 	}
 	return result
 }
@@ -591,6 +674,9 @@ func evaluateHubTunnelStatus(status *cloud.AgentStatusResponse, err error) hubTu
 }
 
 func missingCloudConfiguration(runtime cloudinstall.DeploymentRuntime) []string {
+	if runtime.UsesEnrollment() {
+		return missingEnrollmentConfiguration(runtime)
+	}
 	var missing []string
 	if !runtime.CloudURLConfigured || (runtime.CloudURL == "" && !runtime.CloudURLUnresolved) {
 		missing = append(missing, "Hub URL")
@@ -642,4 +728,100 @@ func cloudOwnershipLabel(target cloudinstall.RadarTarget) string {
 	default:
 		return "unknown"
 	}
+}
+
+func missingEnrollmentConfiguration(runtime cloudinstall.DeploymentRuntime) []string {
+	var missing []string
+	if !runtime.HubURLConfigured || (runtime.HubURL == "" && !runtime.HubURLUnresolved) {
+		missing = append(missing, "Hub URL")
+	}
+	if !runtime.CloudModeConfigured {
+		missing = append(missing, "Cloud mode")
+	} else if !runtime.CloudMode && !runtime.CloudModeUnresolved {
+		missing = append(missing, "enabled Cloud mode")
+	}
+	if runtime.EnrollmentTokenSecret == "" {
+		missing = append(missing, "token Secret")
+	}
+	return missing
+}
+
+// checkEnrolledTunnelStatus reads the token Secret of a Radar that joined
+// with an enrollment key: its join state, then the live tunnel state from the
+// Hub when it holds a token.
+func checkEnrolledTunnelStatus(ctx context.Context, kc kubernetes.Interface, target cloudinstall.RadarTarget, roots *x509.CertPool) hubTunnelResult {
+	name := target.Runtime.EnrollmentTokenSecret
+	ref := target.Namespace + "/" + name
+	reset := fmt.Sprintf("run `radar cloud reset-enrollment --namespace %s --secret %s` to make Radar join again, then rerun this status command.", target.Namespace, name)
+	secret, err := kc.CoreV1().Secrets(target.Namespace).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsForbidden(err):
+		return hubTunnelResult{
+			summary: "not checked - Kubernetes denied access to the token Secret",
+			detail:  fmt.Sprintf("Secret %q", ref),
+			next:    "run this command with an account that can read the Secret.",
+		}
+	case apierrors.IsNotFound(err):
+		return hubTunnelResult{
+			verdict: hubTunnelUnhealthy,
+			summary: "failed - the token Secret was not found",
+			detail:  fmt.Sprintf("Secret %q. The Radar chart creates it; Radar never does", ref),
+			next:    "re-apply the Radar chart to recreate the Secret, then rerun this status command.",
+		}
+	case err != nil:
+		return hubTunnelResult{
+			summary: "not checked - the token Secret could not be read",
+			detail:  fmt.Sprintf("Secret %q: %v", ref, err),
+			next:    "resolve the Kubernetes error, then run this command again.",
+		}
+	}
+	get := func(k string) string { return string(secret.Data[k]) }
+	base := hubTunnelResult{
+		enrollStatus: get(cloud.SecretKeyStatus),
+		enrollError:  get(cloud.SecretKeyError),
+		enrollAt:     get(cloud.SecretKeyAt),
+	}
+	withEnrollment := func(r hubTunnelResult) hubTunnelResult {
+		r.enrollStatus, r.enrollError, r.enrollAt = base.enrollStatus, base.enrollError, base.enrollAt
+		return r
+	}
+	token := get(cloud.SecretKeyToken)
+	if base.enrollStatus == cloud.EnrollStatusRefused {
+		return withEnrollment(hubTunnelResult{
+			verdict: hubTunnelUnhealthy,
+			summary: "failed - Radar stopped joining the Hub",
+			next:    reset,
+		})
+	}
+	if token == "" {
+		summary := "not connected yet - Radar has not joined the Hub"
+		if base.enrollStatus == "" {
+			summary = "not connected yet - Radar has not started joining the Hub"
+		}
+		return withEnrollment(hubTunnelResult{
+			summary: summary,
+			next:    "check the Radar agent state above and its Cloud connection logs.",
+		})
+	}
+	client, err := cloud.NewAgentStatusClientWithCA(get(cloud.SecretKeyWSSURL), roots)
+	if err != nil {
+		return withEnrollment(hubTunnelResult{
+			verdict: hubTunnelUnhealthy,
+			summary: "failed - the token Secret holds an invalid Hub address",
+			detail:  err.Error(),
+			next:    reset,
+		})
+	}
+	status, err := client.Get(ctx, token)
+	result := evaluateHubTunnelStatus(status, err)
+	if errors.Is(err, cloud.ErrAgentStatusUnauthorized) {
+		result.detail = fmt.Sprintf("Kubernetes Secret %q, key %q", ref, cloud.SecretKeyToken)
+		result.next = reset
+	}
+	if ctx.Err() == nil && (result.verdict == hubTunnelHealthy || result.openClusters) {
+		if frontendURL, ferr := client.GetFrontendURL(ctx); ferr == nil {
+			result = addHubFrontendLinks(result, frontendURL)
+		}
+	}
+	return withEnrollment(result)
 }

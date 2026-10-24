@@ -6,6 +6,7 @@ package main
 //
 //	radar cloud install     install an in-cluster agent connected to Cloud
 //	radar cloud status      inspect an in-cluster Cloud installation
+//	radar cloud reset-enrollment  make an enrolled Radar join its Hub again
 //
 // Local-process preview connections are not available yet. The reserved
 // `connect` command exits before contacting the hub and points users to the
@@ -71,6 +72,8 @@ func runCloudSubcommand() {
 		os.Exit(0)
 	case "status":
 		os.Exit(cloudStatus(rest, os.Stdout, os.Stderr))
+	case "reset-enrollment":
+		os.Exit(cloudResetEnrollment(rest, os.Stdout, os.Stderr))
 	case "-h", "--help", "help":
 		cloudUsage(os.Stdout)
 		os.Exit(0)
@@ -86,7 +89,8 @@ func cloudUsage(w *os.File) {
 
 Usage:
   radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--adopt-existing] [--hub-url URL] [--name NAME] [--dry-run]
-  radar cloud status [--context NAME] [--namespace NS --release NAME]
+  radar cloud status [--context NAME] [--namespace NS --release NAME] [--ca-file FILE]
+  radar cloud reset-enrollment [--context NAME] [--namespace NS] [--release NAME] [--secret NAME]
 
 install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
          or offers a safe native-Helm adoption / GitOps handoff when detected.
@@ -96,6 +100,11 @@ install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
 status   Inspect the Radar installation in one kubeconfig cluster. Reports
          ownership, Cloud configuration, agent readiness, and Hub-reported
          tunnel health without changing Kubernetes.
+
+reset-enrollment
+         For a Radar that joined with an enrollment key: clear its token
+         Secret so it joins the Hub again. Use it after the Hub refused the
+         cluster's token or closed its join attempt.
 
 Flags (install):
   --context NAME   Kubernetes context to install into (default: current context)
@@ -119,6 +128,16 @@ Flags (status):
   --context NAME   Kubernetes context to inspect (default: current context)
   --namespace NS   Exact namespace (requires --release)
   --release NAME   Exact Helm release (requires --namespace)
+  --ca-file FILE   CA certificates (PEM) to trust for the Hub (default: the
+                   bundle the Radar Deployment mounts)
+
+Flags (reset-enrollment):
+  --context NAME   Kubernetes context to use (default: current context)
+  --namespace NS   Namespace Radar runs in (default: radar)
+  --release NAME   Helm release of the Radar to reset, when the namespace
+                   has more than one
+  --secret NAME    Token Secret to clear (default: the one Radar's
+                   Deployment names)
 `)
 }
 

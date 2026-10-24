@@ -129,6 +129,70 @@ applies to GitOps users: manage the Secret with SealedSecrets / SOPS /
 External Secrets and reference it via `cloud.existingSecret`; Helm never
 touches its contents.
 
+### Joining a Radar Hub with an enrollment key
+
+For a fleet, set one shared enrollment key in the values instead of a token
+per cluster. Every Radar installed with the same values shows up in the Hub as
+its own cluster, so the values can be the same for every cluster in a GitOps
+repository. The key only lets a cluster join. After joining, Radar keeps its
+own token and never sends the key again.
+
+```bash
+kubectl create secret generic radar-hub-enrollment -n radar \
+  --from-literal=key=$ENROLLMENT_KEY
+helm upgrade --install radar skyhook/radar -n radar \
+  --set cloud.enabled=true \
+  --set cloud.hubURL=https://hub.example.com \
+  --set cloud.enrollment.existingSecret=radar-hub-enrollment
+```
+
+| Value | Meaning |
+| --- | --- |
+| `cloud.hubURL` | The Hub's address. `https://`, or `http://` for localhost only. |
+| `cloud.enrollment.key` | The enrollment key (`rhe_...`) inline. Prefer `existingSecret`. |
+| `cloud.enrollment.existingSecret` / `existingSecretKey` | A Secret holding the key (key `key` by default). Radar reads it before every join attempt, so a new key needs no restart. |
+| `cloud.tokenSecretName` | The Secret Radar keeps its token in. Default `<fullname>-cloud-token`. |
+| `cloud.clusterName` | The exact name shown in the Hub. When empty, Radar uses the API server host from `kube-public/cluster-info`, or `cluster-<first 8 characters of the kube-system UID>`. |
+| `cloud.clusterNamePrefix` / `clusterNameSuffix` | Text around the name Radar picks. Ignored when `clusterName` is set. |
+| `cloud.caBundle` / `cloud.caBundleConfigMap` | Extra CA certificates (PEM) for a Hub with a private CA. Used for joining and for the tunnel, in token mode too. Radar re-reads the file, so a rotated bundle needs no restart. Needs Radar 1.19.0 or later. |
+
+How it behaves:
+
+- A configured `cloud.token` or `cloud.existingSecret` wins. The key is then
+  ignored, and the install renders exactly as a token install.
+- The chart creates the token Secret with no data. Radar fills it, and only
+  ever updates it: it never creates or deletes it. The Secret is kept on
+  `helm uninstall` (`helm.sh/resource-policy: keep`) and Argo CD never prunes
+  or deletes it (`Prune=false,Delete=false`), because losing it would make the
+  cluster join again as a new entry.
+- Changing `cloud.hubURL` moves the cluster to the new Hub on its own: Radar
+  drops the token and join attempt stored for the old Hub, without ever
+  sending them to the new one, and joins the new Hub.
+- Don't run `helm upgrade --force` on an enrollment install. `--force`
+  replaces the token Secret with the empty one the chart renders, so Radar
+  joins the Hub again. With the Hub's default `rejoin: new`, the cluster
+  comes back as a new entry.
+- The chart adds a Role that can read, watch and update that one Secret.
+- `replicaCount` must be 1, and the Deployment uses the `Recreate` strategy.
+- `cloud.insecureSkipVerify` is refused: use `cloud.caBundle` instead.
+- It needs Radar 1.19.0 or later.
+
+`enroll_status` and `enroll_error` in the token Secret say where joining
+stands: `joining`, `waiting` (Radar keeps retrying, for example while the Hub
+is at its cluster limit), `joined`, or `refused`. Radar stops at `refused`
+when the Hub closed its join attempt, or keeps rejecting the stored token.
+It does not join again on its own. To make it join again, clear the Secret;
+Radar notices and joins without a restart:
+
+```bash
+radar cloud reset-enrollment --namespace radar
+```
+
+The command finds Radar's token Secret in that namespace. Add `--release`
+when the namespace has more than one Radar.
+
+`radar cloud status` shows the same state.
+
 ### Radar Cloud default integration reads
 
 Radar Cloud's default viewer/member/owner bindings receive explicit `get/list/watch`

@@ -2,7 +2,6 @@ package cloud
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -21,6 +20,7 @@ const (
 	// authenticates user calls, so a control plane that relays user tokens
 	// never sends them to an agent that would ignore them and impersonate.
 	kubernetesCredentialsHeader = "X-Radar-Kubernetes-Credentials"
+	clusterUIDHeader            = "X-Radar-Cluster-UID"
 )
 
 // dial establishes a WebSocket to Radar Cloud, authenticates with the
@@ -40,13 +40,14 @@ func dial(ctx context.Context, cfg Config, selfUpgrade bool) (*yamux.Session, er
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
-	if cfg.InsecureSkipVerify {
-		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested via --cloud-insecure-skip-verify for a self-signed hub
-	}
+	dialer.TLSClientConfig = hubTLSConfig(cfg.CA.Pool(), cfg.InsecureSkipVerify)
 	ws, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {
 		if resp != nil {
 			defer resp.Body.Close()
+			if cfg.Enrolled && resp.StatusCode == http.StatusUnauthorized {
+				return nil, &handshakeStatusError{err: errEnrolledTokenRejected}
+			}
 			return nil, handshakeRejectionError(resp.StatusCode, err)
 		}
 		return nil, fmt.Errorf("ws dial: %w", err)
@@ -77,6 +78,9 @@ func cloudHandshakeHeaders(cfg Config, selfUpgrade bool) http.Header {
 	}
 	if cfg.Release != "" {
 		headers.Set("X-Radar-Release", cfg.Release)
+	}
+	if IsClusterUID(cfg.ClusterUID) {
+		headers.Set(clusterUIDHeader, cfg.ClusterUID)
 	}
 	// Validate before send — the value comes from a ConfigMap on the
 	// cluster, and a corrupted ConfigMap shouldn't be able to inject

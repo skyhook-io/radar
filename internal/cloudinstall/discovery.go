@@ -89,7 +89,19 @@ type DeploymentRuntime struct {
 	CloudTokenConfigured  bool
 	CloudTokenSecretName  string
 	CloudTokenSecretKey   string
-	AlreadyCloud          bool
+	// Enrollment mode: Radar joins with a shared key and keeps its own token
+	// in EnrollmentTokenSecret.
+	EnrollmentConfigured  bool
+	HubURL                string
+	HubURLConfigured      bool
+	HubURLUnresolved      bool
+	EnrollmentTokenSecret string
+	// CloudCAFile is --cloud-ca-file inside the pod. When it is mounted from
+	// a ConfigMap, CloudCAConfigMap and CloudCAConfigMapKey name the source.
+	CloudCAFile         string
+	CloudCAConfigMap    string
+	CloudCAConfigMapKey string
+	AlreadyCloud        bool
 }
 
 type DiscoveryOptions struct {
@@ -241,6 +253,12 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 	runtime.CloudURL, runtime.CloudURLConfigured = argumentValue(container.Args, "--cloud-url")
 	runtime.ClusterName, runtime.ClusterNameConfigured = argumentValue(container.Args, "--cluster-name")
 	cloudTokenValue, cloudTokenArg := argumentValue(container.Args, "--cloud-token")
+	runtime.HubURL, runtime.HubURLConfigured = argumentValue(container.Args, "--cloud-hub-url")
+	runtime.EnrollmentTokenSecret, _ = argumentValue(container.Args, "--cloud-token-secret")
+	if keyFile, ok := argumentValue(container.Args, "--cloud-enrollment-key-file"); ok && keyFile != "" {
+		runtime.EnrollmentConfigured = true
+	}
+	runtime.CloudCAFile, _ = argumentValue(container.Args, "--cloud-ca-file")
 
 	for _, env := range container.Env {
 		switch env.Name {
@@ -263,6 +281,24 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 				runtime.ClusterNameConfigured = env.Value != "" || env.ValueFrom != nil
 				runtime.ClusterNameUnresolved = env.ValueFrom != nil
 			}
+		case "RADAR_CLOUD_HUB_URL":
+			if !runtime.HubURLConfigured {
+				runtime.HubURL = env.Value
+				runtime.HubURLConfigured = env.Value != "" || env.ValueFrom != nil
+				runtime.HubURLUnresolved = env.ValueFrom != nil
+			}
+		case "RADAR_CLOUD_ENROLLMENT_KEY_FILE":
+			if env.Value != "" || env.ValueFrom != nil {
+				runtime.EnrollmentConfigured = true
+			}
+		case "RADAR_CLOUD_TOKEN_SECRET":
+			if runtime.EnrollmentTokenSecret == "" {
+				runtime.EnrollmentTokenSecret = env.Value
+			}
+		case "RADAR_CLOUD_CA_FILE":
+			if runtime.CloudCAFile == "" {
+				runtime.CloudCAFile = env.Value
+			}
 		case "RADAR_CLOUD_TOKEN":
 			runtime.CloudTokenConfigured = env.Value != "" || env.ValueFrom != nil
 			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
@@ -272,7 +308,8 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 		}
 	}
 	runtime.CloudTokenConfigured = runtime.CloudTokenConfigured || (cloudTokenArg && cloudTokenValue != "")
-	runtime.AlreadyCloud = runtime.CloudMode || runtime.CloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured
+	runtime.CloudCAConfigMap, runtime.CloudCAConfigMapKey = configMapSourceOf(deployment.Spec.Template.Spec.Volumes, container.VolumeMounts, runtime.CloudCAFile)
+	runtime.AlreadyCloud = runtime.CloudMode || runtime.CloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured || runtime.EnrollmentConfigured
 	return runtime
 }
 
@@ -549,4 +586,42 @@ func controllerGVRs(ref subject.Ref) []schema.GroupVersionResource {
 	default:
 		return nil
 	}
+}
+
+// UsesEnrollment reports a Radar that joins its Hub with an enrollment key
+// rather than a configured token. A configured token wins, as in the binary.
+func (r DeploymentRuntime) UsesEnrollment() bool {
+	return r.EnrollmentConfigured && !r.CloudTokenConfigured
+}
+
+// configMapSourceOf finds the ConfigMap key a file inside the container comes
+// from, when it is mounted from a ConfigMap volume.
+func configMapSourceOf(volumes []corev1.Volume, mounts []corev1.VolumeMount, file string) (name, key string) {
+	if file == "" {
+		return "", ""
+	}
+	for _, m := range mounts {
+		dir := strings.TrimSuffix(m.MountPath, "/") + "/"
+		rel, ok := strings.CutPrefix(file, dir)
+		if !ok || rel == "" {
+			continue
+		}
+		if m.SubPath != "" {
+			continue
+		}
+		for _, v := range volumes {
+			if v.Name != m.Name || v.ConfigMap == nil {
+				continue
+			}
+			for _, item := range v.ConfigMap.Items {
+				if item.Path == rel {
+					return v.ConfigMap.Name, item.Key
+				}
+			}
+			if len(v.ConfigMap.Items) == 0 && !strings.Contains(rel, "/") {
+				return v.ConfigMap.Name, rel
+			}
+		}
+	}
+	return "", ""
 }

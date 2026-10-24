@@ -386,7 +386,7 @@ func TestCheckHubTunnelStatusExplainsUnconfiguredAndIncompleteInstallations(t *t
 		{name: "incomplete", runtime: cloudinstall.DeploymentRuntime{AlreadyCloud: true}, want: "configuration is incomplete"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := checkHubTunnelStatus(context.Background(), fake.NewSimpleClientset(), cloudinstall.RadarTarget{Runtime: tc.runtime})
+			got := checkHubTunnelStatus(context.Background(), fake.NewSimpleClientset(), cloudinstall.RadarTarget{Runtime: tc.runtime}, "")
 			if !strings.Contains(got.summary, tc.want) || got.next == "" {
 				t.Fatalf("result = %#v", got)
 			}
@@ -401,7 +401,7 @@ func TestCheckHubTunnelStatusFailsForInvalidHubURL(t *testing.T) {
 		ClusterNameConfigured: true, ClusterName: "clus_123", CloudTokenConfigured: true,
 	}
 
-	got := checkHubTunnelStatus(context.Background(), fake.NewSimpleClientset(), cloudinstall.RadarTarget{Runtime: runtime})
+	got := checkHubTunnelStatus(context.Background(), fake.NewSimpleClientset(), cloudinstall.RadarTarget{Runtime: runtime}, "")
 	if got.verdict != hubTunnelUnhealthy || !strings.Contains(got.summary, "configured Hub URL is invalid") || got.next == "" {
 		t.Fatalf("result = %#v", got)
 	}

@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,12 +39,23 @@ type AgentStatusClient struct {
 }
 
 func NewAgentStatusClient(cloudURL string) (*AgentStatusClient, error) {
+	return NewAgentStatusClientWithCA(cloudURL, nil)
+}
+
+// NewAgentStatusClientWithCA is NewAgentStatusClient for a Hub whose
+// certificate is signed by a private CA; nil roots means the system roots.
+func NewAgentStatusClientWithCA(cloudURL string, roots *x509.CertPool) (*AgentStatusClient, error) {
 	hubOrigin, err := HubOriginFromWebSocketURL(cloudURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Hub agent URL: %w", err)
 	}
 	c := NewConnectClient(hubOrigin)
 	c.HTTP.Timeout = 5 * time.Second
+	if roots != nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = hubTLSConfig(roots, false)
+		c.HTTP.Transport = transport
+	}
 	return &AgentStatusClient{ConnectClient: c}, nil
 }
 
