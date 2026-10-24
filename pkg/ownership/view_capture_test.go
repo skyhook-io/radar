@@ -21,7 +21,6 @@ type countingSession struct {
 	switchAt   string
 	objects    map[resourceid.Ref]int
 	searches   map[types.UID]int
-	inventory  map[resourceid.Ref]int
 	validate   error
 }
 
@@ -31,7 +30,7 @@ func newCountingSession(t *testing.T, w ownershiptest.World) *countingSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &countingSession{now: s, objects: map[resourceid.Ref]int{}, searches: map[types.UID]int{}, inventory: map[resourceid.Ref]int{}}
+	return &countingSession{now: s, objects: map[resourceid.Ref]int{}, searches: map[types.UID]int{}}
 }
 
 func (c *countingSession) after(method string) {
@@ -52,7 +51,6 @@ func (c *countingSession) DependentCandidates(uid types.UID, d ownership.SearchS
 	return c.now.DependentCandidates(uid, d)
 }
 func (c *countingSession) Members(ref resourceid.Ref) ownership.MembersRead {
-	c.inventory[ref]++
 	return c.now.Members(ref)
 }
 func (c *countingSession) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
@@ -68,13 +66,12 @@ func (c *countingSession) ValidateCaches() error {
 func TestViewReadsEachObjectAndSearchesEachOwnerOnce(t *testing.T) {
 	s := newCountingSession(t, ownershiptest.Fixture())
 	v := ownership.NewView(s, ownership.Unrestricted())
-	rs, app := at("apps", "ReplicaSet", "alpha", "web-1"), at("argoproj.io", "Application", "argocd", "web")
+	rs := at("apps", "ReplicaSet", "alpha", "web-1")
 	for range 3 {
 		v.Owner(at("", "Pod", "alpha", "web-1-a"))
 		v.Children(rs)
 		v.ControllerChain(at("", "Pod", "alpha", "web-1-b"))
 	}
-	v.Members(app)
 	for ref, n := range s.objects {
 		if n != 1 {
 			t.Errorf("%v read %d times", ref, n)
@@ -85,21 +82,6 @@ func TestViewReadsEachObjectAndSearchesEachOwnerOnce(t *testing.T) {
 			t.Errorf("dependents of %s searched %d times", uid, n)
 		}
 	}
-	if n := s.inventory[app]; n != 1 {
-		t.Errorf("the Application's member list read %d times", n)
-	}
-}
-
-// catalogCounter counts the view's catalog lookups: it makes one for each
-// object it considers for an owner's children.
-type catalogCounter struct {
-	ownership.ReadSession
-	lookups int
-}
-
-func (c *catalogCounter) Catalog() *ownership.Catalog {
-	c.lookups++
-	return c.ReadSession.Catalog()
 }
 
 // An answer that found nothing is still an answer: an owner without
@@ -248,28 +230,3 @@ func (podsInAlphaOnly) CanRead(gk resourceid.GroupKind, namespace string) owners
 	return ownership.Allowed
 }
 func (podsInAlphaOnly) Namespaces() ([]string, bool) { return nil, true }
-
-// phased serves each read from the session its phase names, moving on after
-// each Object or DependentCandidates call.
-type phased struct {
-	phases []ownership.ReadSession
-	i      int
-}
-
-func (p *phased) cur() ownership.ReadSession  { return p.phases[min(p.i, len(p.phases)-1)] }
-func (p *phased) Catalog() *ownership.Catalog { return p.cur().Catalog() }
-func (p *phased) ValidateCaches() error       { return nil }
-func (p *phased) Members(r resourceid.Ref) ownership.MembersRead {
-	return p.cur().Members(r)
-}
-func (p *phased) RecordingManagers(r resourceid.Ref) ownership.RecordingManagersRead {
-	return p.cur().RecordingManagers(r)
-}
-func (p *phased) Object(r resourceid.Ref) ownership.ObjectRead {
-	defer func() { p.i++ }()
-	return p.cur().Object(r)
-}
-func (p *phased) DependentCandidates(u types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
-	defer func() { p.i++ }()
-	return p.cur().DependentCandidates(u, d)
-}

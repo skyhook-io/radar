@@ -25,8 +25,8 @@ type Caches struct {
 
 // Source reads from the caches current returns. It calls current when a
 // session begins and again when it validates. A host replaces all of its
-// caches together and its typed cache first, so a new typed cache marks a new
-// connection.
+// caches on a switch, the typed cache with them, so a new typed cache marks a
+// new connection.
 type Source struct {
 	current func() Caches
 }
