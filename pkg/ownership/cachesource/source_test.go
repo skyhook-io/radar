@@ -942,7 +942,7 @@ func TestViewWithoutTheDynamicCacheAnswers(t *testing.T) {
 	for _, r := range []resourceid.Ref{rs, ref("", "Pod", "alpha", "web-1-a"), ref("apps", "Deployment", "alpha", "web"), ref("", "Node", "", "n1"), widget} {
 		v.Owner(r)
 		v.References(r)
-		v.Children(r, 0)
+		v.Children(r)
 		v.ControllerChain(r)
 	}
 	if got := v.Owner(rs); got.Subject.Read.State != ownership.Present {
@@ -951,7 +951,7 @@ func TestViewWithoutTheDynamicCacheAnswers(t *testing.T) {
 	if got := v.Owner(widget); got.Subject.Read.State != ownership.Unavailable {
 		t.Errorf("a Widget without the dynamic cache reads %v", got.Subject.Read.State)
 	}
-	if err := v.ValidateAnswers(); err != nil {
+	if err := s.ValidateCaches(); err != nil {
 		t.Fatal(err)
 	}
 }

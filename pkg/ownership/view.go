@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -15,32 +14,18 @@ import (
 //
 // It captures each object once, whether it read the object or found it
 // searching an owner's dependents, and answers every question from that
-// capture, so its answers agree with each other even while the cluster
-// changes. It searches each owner's dependents and reads each manager's
-// member list at most once. An object it first reads after a search that
-// should have found it means the cluster changed in a way one capture can't
-// reconcile, and ValidateAnswers says so. It never reads an object the caller may
-// not read, and says nothing of whether there is one. Its answers hold only
-// if ValidateAnswers passes once they are built. They share the view's captures, so
-// they must not be modified. A View is not safe for concurrent use.
+// capture, so an object reads the same in every answer. Answers read the
+// cache as it is when asked, so one can be a moment older than another, as
+// any informer read can. It searches each owner's dependents at most once.
+// It never reads an object the caller may not read, and says nothing of
+// whether there is one. Its answers hold only if the session's
+// ValidateCaches passes once they are built. They share the view's captures,
+// so they must not be modified. A View is not safe for concurrent use.
 type View struct {
-	session ReadSession
-	access  Access
-	reads   map[resourceid.Ref]accessRead
-	// named holds the objects the view captured under each UID their owner
-	// references name.
-	named       map[types.UID][]resourceid.Ref
-	searches    map[resourceid.Ref]DependentCandidatesRead
-	searched    map[types.UID]searchScope
-	inventories map[resourceid.Ref]MembersRead
-	changed     bool
-}
-
-// searchScope is where the view answered for an owner's children, and the
-// gaps that answer reported.
-type searchScope struct {
-	domain SearchScope
-	gaps   []Gap
+	session  ReadSession
+	access   Access
+	reads    map[resourceid.Ref]accessRead
+	searches map[resourceid.Ref]DependentCandidatesRead
 }
 
 type accessRead struct {
@@ -51,28 +36,11 @@ type accessRead struct {
 // NewView answers for the caller access describes, from s.
 func NewView(s ReadSession, access Access) *View {
 	return &View{
-		session:     s,
-		access:      access,
-		reads:       map[resourceid.Ref]accessRead{},
-		named:       map[types.UID][]resourceid.Ref{},
-		searches:    map[resourceid.Ref]DependentCandidatesRead{},
-		searched:    map[types.UID]searchScope{},
-		inventories: map[resourceid.Ref]MembersRead{},
+		session:  s,
+		access:   access,
+		reads:    map[resourceid.Ref]accessRead{},
+		searches: map[resourceid.Ref]DependentCandidatesRead{},
 	}
-}
-
-// ValidateAnswers returns the session's ValidateCaches error, if any, and
-// ErrObjectsChanged if an object the view read contradicts a search it made, a
-// seed replaced a read an answer used, or a manager changed between its two
-// reads.
-func (v *View) ValidateAnswers() error {
-	if err := v.session.ValidateCaches(); err != nil {
-		return err
-	}
-	if v.changed {
-		return ErrObjectsChanged
-	}
-	return nil
 }
 
 // read reads ref for the caller, once.
@@ -83,63 +51,19 @@ func (v *View) read(ref resourceid.Ref) (ObjectRead, Decision) {
 	r := accessRead{may: v.access.CanRead(ref.GroupKind(), ref.Namespace)}
 	if r.may == Allowed {
 		r.read = v.session.Object(ref)
-		if r.read.State == Present {
-			v.captured(r.read.Object, true)
-		}
 	}
 	v.reads[ref] = r
 	return r.read, r.may
 }
 
-// captured records an object the view has just captured under the UIDs it
-// names, and checks it against the owners whose children it already answered
-// for. An answer counts only objects the view had captured, so one it names,
-// whose answer covered its kind and place, was answered for before the object
-// named it. collected says the session holds o's kind in o's namespace.
-func (v *View) captured(o Observation, collected bool) {
-	for i, r := range o.OwnerReferences {
-		if slices.ContainsFunc(o.OwnerReferences[:i], func(p metav1.OwnerReference) bool { return p.UID == r.UID }) {
-			continue
-		}
-		v.named[r.UID] = append(v.named[r.UID], o.Ref)
-		s, ok := v.searched[r.UID]
-		if !ok || !v.searchedIn(o.Ref, s.domain) {
-			continue
-		}
-		if slices.ContainsFunc(s.gaps, func(g Gap) bool { return covers(g, o.Ref, collected) }) {
-			continue
-		}
-		v.changed = true
-	}
-}
-
-// covers reports whether a search's gap left ref's kind and place unread. A
-// gap across all namespaces that stands for the namespaces Radar doesn't
-// collect leaves the ones it does collect read.
-func covers(g Gap, ref resourceid.Ref, collected bool) bool {
-	switch {
-	case g.Kind != ref.GroupKind():
-		return false
-	case g.Namespace == ref.Namespace:
-		return true
-	case g.Namespace != "":
-		return false
-	}
-	return !collected || g.Reason != readreason.RadarNamespaceNotCollected
-}
-
 // Seed reads o as its object when the session can't, as when the caller
 // fetched it from the API and Radar doesn't collect its kind. A read that
 // holds the object stands, as does an excluded one or one the caller may not
-// make. Seed an object before asking about it: replacing a read an earlier
-// answer used makes ValidateAnswers fail. The view keeps o, which must not be
-// modified afterwards.
+// make. Seed an object before asking about it, so every answer reads it the
+// same way. The view keeps o, which must not be modified afterwards.
 func (v *View) Seed(o Observation) {
-	_, answered := v.reads[o.Ref]
 	if read, may := v.read(o.Ref); may == Allowed && (read.State == Unavailable || read.State == Absent) {
 		v.reads[o.Ref] = accessRead{read: ObjectRead{State: Present, Object: o}, may: Allowed}
-		v.changed = v.changed || answered
-		v.captured(o, read.State == Absent)
 	}
 }
 
@@ -230,11 +154,8 @@ type ChildrenAnswer struct {
 	// read, and references to the subject's UID that may resolve to it but
 	// couldn't be resolved, such as one at a version discovery doesn't list.
 	Gaps []Gap
-	// Truncated: the limit cut Children short, so the caller may read more.
-	Truncated bool
-	// Narrowed: the caller may read only some of the places children could
-	// be, so Children are the ones it may read, and whether there are others
-	// isn't said.
+	// Narrowed: the caller's access is restricted, so Children are the ones
+	// it may read, and whether there are others isn't said.
 	Narrowed bool
 }
 
@@ -242,7 +163,7 @@ type ChildrenAnswer struct {
 // answer about an object the caller didn't read lists none and is never
 // complete.
 func (a ChildrenAnswer) Complete() bool {
-	return a.Subject.Present() && len(a.Gaps) == 0 && !a.Truncated
+	return a.Subject.Present() && len(a.Gaps) == 0
 }
 
 // Children finds the objects with an owner reference that resolves to ref's
@@ -250,10 +171,8 @@ func (a ChildrenAnswer) Complete() bool {
 // served version, and ref's UID. A namespaced owner's children are in its
 // namespace, where Kubernetes resolves their references; a cluster-scoped
 // owner's can be anywhere. A reference with the UID that names other
-// coordinates is not one Kubernetes resolves to ref. limit caps the children
-// returned, 0 for no limit; it counts only children the caller may read. It
-// caps the answer, not the work: every candidate is read and captured first.
-func (v *View) Children(ref resourceid.Ref, limit int) ChildrenAnswer {
+// coordinates is not one Kubernetes resolves to ref.
+func (v *View) Children(ref resourceid.Ref) ChildrenAnswer {
 	subject := v.subject(ref)
 	a := ChildrenAnswer{Subject: subject}
 	if !subject.Present() {
@@ -265,15 +184,14 @@ func (v *View) Children(ref resourceid.Ref, limit int) ChildrenAnswer {
 		namespaces, all = v.access.Namespaces()
 	}
 	domain := SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: ref.Namespace == ""}
-	a.Narrowed = v.narrows(ref)
 	found, searched := v.searches[ref]
 	if !searched {
 		found = v.session.DependentCandidates(owner.UID, domain)
 		v.searches[ref] = found
 	}
-	candidates, unread, undecided := v.candidates(found, owner.UID, domain)
+	candidates, unread, undecided := v.candidates(found)
 	// Saying a check failed would say a child may be there.
-	a.Narrowed = a.Narrowed || undecided
+	a.Narrowed = v.access != Unrestricted() || undecided
 	// unresolved are the gaps of references to the owner's UID that Radar
 	// can't resolve: the collector retries them, so their objects may be
 	// children.
@@ -296,10 +214,6 @@ func (v *View) Children(ref resourceid.Ref, limit int) ChildrenAnswer {
 			unresolved = append(unresolved, unknown...)
 			continue
 		}
-		if limit > 0 && len(a.Children) == limit {
-			a.Truncated = true
-			break
-		}
 		a.Children = append(a.Children, c)
 	}
 	for _, g := range found.Gaps {
@@ -307,12 +221,8 @@ func (v *View) Children(ref resourceid.Ref, limit int) ChildrenAnswer {
 			a.Gaps = append(a.Gaps, g)
 		}
 	}
-	if !searched {
-		v.searched[owner.UID] = searchScope{domain: domain, gaps: slices.Clone(a.Gaps)}
-	}
-	// Objects the view couldn't read (the caller may read them: the view read
-	// them for it) and references it couldn't resolve leave no kind or place
-	// unsearched, so they excuse no object the search should have found.
+	// Objects the view couldn't read: the caller may read them, the view read
+	// them for it.
 	a.Gaps = append(a.Gaps, unread...)
 	a.Gaps = append(a.Gaps, unresolved...)
 	slices.SortFunc(a.Gaps, compareGaps)
@@ -335,51 +245,34 @@ func mayResolveTo(res OwnerResolution, name string, ref resourceid.Ref) bool {
 	return res.Gap.Kind.Group == ref.Group
 }
 
-// candidates are the objects the caller may read that name uid in domain,
-// each as the view captured it: an object it already read answers as it was
-// read, whatever the search found since, and one the search found is
-// captured as found. Captured objects that still name uid are kept even if
-// the search no longer finds them, so every answer reflects one capture of
-// each object. unread are the gaps of found objects the view read before it
-// could tell whether they exist: the search says they name uid, so leaving
+// candidates are the objects the search found that the caller may read, each
+// as the view captured it: an object it already read answers as it was read,
+// whatever the search found since, and one the search found is captured as
+// found. unread are the gaps of found objects the view read before it could
+// tell whether they exist: the search says they name the owner, so leaving
 // them out says nothing of whether they are children. undecided reports a
 // candidate whose access check failed.
-func (v *View) candidates(found DependentCandidatesRead, uid types.UID, domain SearchScope) (out []Observation, unread []Gap, undecided bool) {
+func (v *View) candidates(found DependentCandidatesRead) (out []Observation, unread []Gap, undecided bool) {
 	for _, c := range found.Candidates {
 		r, read := v.reads[c.Ref]
 		if !read {
 			r = accessRead{may: v.access.CanRead(c.Ref.GroupKind(), c.Ref.Namespace)}
 			if r.may == Allowed {
 				r.read = ObjectRead{State: Present, Object: c}
-				v.captured(c, true)
 			}
 			v.reads[c.Ref] = r
 		}
-		undecided = undecided || r.may == Undecided
-		if r.may == Allowed && r.read.State == Unavailable {
+		switch {
+		case r.may == Undecided:
+			undecided = true
+		case r.may != Allowed:
+		case r.read.State == Present:
+			out = append(out, r.read.Object)
+		case r.read.State == Unavailable:
 			unread = append(unread, r.read.Gap)
 		}
 	}
-	for _, ref := range v.named[uid] {
-		if v.searchedIn(ref, domain) {
-			out = append(out, v.reads[ref].read.Object)
-		}
-	}
-	slices.SortFunc(out, func(a, b Observation) int { return compareRefs(a.Ref, b.Ref) })
 	return out, unread, undecided
-}
-
-// searchedIn reports whether a dependents search of domain covers ref's kind
-// and place.
-func (v *View) searchedIn(ref resourceid.Ref, domain SearchScope) bool {
-	k, known := v.session.Catalog().Kind(ref.GroupKind())
-	if !known || !k.HasGCVerbs || IsEvent(ref.GroupKind()) {
-		return false
-	}
-	if !k.Namespaced {
-		return domain.IncludeClusterScoped
-	}
-	return domain.AllNamespaces || slices.Contains(domain.Namespaces, ref.Namespace)
 }
 
 // coversReadable reports whether gap covers something the caller may read
@@ -401,16 +294,6 @@ func (v *View) coversReadable(g Gap, domain SearchScope) bool {
 		return v.access.CanRead(g.Kind, "") != Denied
 	}
 	return slices.ContainsFunc(domain.Namespaces, func(ns string) bool { return v.access.CanRead(g.Kind, ns) != Denied })
-}
-
-// narrows reports whether the caller may read less than every place ref's
-// children could be: anywhere for a cluster-scoped owner, its namespace for a
-// namespaced one.
-func (v *View) narrows(ref resourceid.Ref) bool {
-	if v.access.CanReadEverything() {
-		return false
-	}
-	return ref.Namespace == "" || !v.access.CanReadAllKindsIn(ref.Namespace)
 }
 
 // ControllerChainAnswer is the chain of controller references from an object
@@ -506,22 +389,14 @@ func (v *View) Members(manager resourceid.Ref) MembersAnswer {
 	if !subject.Present() || !IsRecordingManager(manager.GroupKind()) {
 		return a
 	}
-	inventory, read := v.inventories[manager]
-	if !read {
-		inventory = v.session.Members(manager)
-		v.inventories[manager] = inventory
-	}
-	captured := subject.Read.Object
+	inventory := v.session.Members(manager)
 	switch {
 	case inventory.Manager.State == Unavailable:
 		// As when the caller fetched a manager Radar doesn't collect.
 		a.Gaps = append(a.Gaps, inventory.Manager.Gap)
 		return a
-	case inventory.Manager.State != Present || inventory.Manager.Object.UID != captured.UID ||
-		captured.ResourceVersion != "" && inventory.Manager.Object.ResourceVersion != captured.ResourceVersion:
-		// The manager changed between the two reads, which one capture can't
-		// reconcile.
-		v.changed = true
+	case inventory.Manager.State != Present || inventory.Manager.Object.UID != subject.Read.Object.UID:
+		// The cache doesn't hold the incarnation the caller fetched yet.
 		a.Gaps = append(a.Gaps, Gap{Kind: manager.GroupKind(), Namespace: manager.Namespace, Reason: readreason.KindSyncPending})
 		return a
 	}

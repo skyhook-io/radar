@@ -59,7 +59,7 @@ func resolveAlike(t *testing.T, w ownershiptest.World, want, got ownership.ReadS
 
 // viewsAlike checks that a View gives every answer about every object in w
 // alike over both sessions, for a caller who may read everything and for one
-// who may read less, and that a quiet cache's view holds.
+// who may read less.
 func viewsAlike(t *testing.T, w ownershiptest.World, want, got ownership.ReadSession) {
 	t.Helper()
 	for _, caller := range []ownership.Access{ownership.Unrestricted(), alphaOnly{}} {
@@ -68,9 +68,6 @@ func viewsAlike(t *testing.T, w ownershiptest.World, want, got ownership.ReadSes
 			if x, y := fmt.Sprint(viewAnswers(a, o.Ref)), fmt.Sprint(viewAnswers(b, o.Ref)); x != y {
 				t.Errorf("%v for %T:\n scan  %s\n cache %s", o.Ref, caller, x, y)
 			}
-		}
-		if err := b.ValidateAnswers(); err != nil {
-			t.Errorf("a quiet cache's view for %T failed ValidateAnswers: %v", caller, err)
 		}
 	}
 }
@@ -92,11 +89,11 @@ func viewAnswers(v *ownership.View, ref resourceid.Ref) []any {
 	if r := owner.Reference; r != nil {
 		out = append(out, r.APIVersion, r.Kind, r.Name, r.UID, r.Controller != nil && *r.Controller)
 	}
-	children := v.Children(ref, 0)
+	children := v.Children(ref)
 	for _, c := range children.Children {
 		out = append(out, ident(c))
 	}
-	out = append(out, children.Gaps, children.Truncated, children.Narrowed)
+	out = append(out, children.Gaps, children.Narrowed)
 	root := v.ControllerChain(ref)
 	out = append(out, root.Chain, root.Cycle, root.Truncated)
 	if root.UnfollowedReference != nil {
@@ -122,10 +119,6 @@ func (alphaOnly) CanRead(gk resourceid.GroupKind, namespace string) ownership.De
 	return ownership.Allowed
 }
 func (alphaOnly) Namespaces() ([]string, bool) { return []string{"alpha"}, false }
-func (alphaOnly) CanReadEverything() bool      { return false }
-func (alphaOnly) CanReadAllKindsIn(namespace string) bool {
-	return namespace == "alpha"
-}
 
 // storedObjects deep-copies every object Radar's stores hold, by kind.
 func (r *rendered) storedObjects() map[string][]runtime.Object {

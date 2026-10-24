@@ -34,14 +34,6 @@ func (a access) CanRead(gk resourceid.GroupKind, namespace string) ownership.Dec
 
 func (a access) Namespaces() ([]string, bool) { return a.namespaces, a.namespaces == nil }
 
-func (a access) CanReadEverything() bool {
-	return a.namespaces == nil && len(a.denied) == 0 && len(a.undecided) == 0
-}
-
-func (a access) CanReadAllKindsIn(namespace string) bool {
-	return (a.namespaces == nil || slices.Contains(a.namespaces, namespace)) && len(a.denied) == 0 && len(a.undecided) == 0
-}
-
 func view(t *testing.T, w ownershiptest.World, a ownership.Access) *ownership.View {
 	t.Helper()
 	s, err := ownershiptest.Scan(w).Begin()
@@ -104,11 +96,11 @@ func TestViewSaysNothingOfAnObjectTheCallerMayNotRead(t *testing.T) {
 	if got := v.Owner(pod); got.Subject.Access != ownership.Denied || got.Subject.Read.State != ownership.Unavailable || got.Subject.Read.Object.UID != "" || got.Reference != nil {
 		t.Fatalf("Owner of a Pod the caller may not read = %+v", got)
 	}
-	if got := v.Children(pod, 0); got.Subject.Present() || got.Children != nil || got.Gaps != nil || got.Complete() {
+	if got := v.Children(pod); got.Subject.Present() || got.Children != nil || got.Gaps != nil || got.Complete() {
 		t.Fatalf("Children = %+v complete=%v", got, got.Complete())
 	}
 	unsure := view(t, ownershiptest.Fixture(), access{undecided: []resourceid.GroupKind{pods}})
-	if got := unsure.Children(pod, 0); got.Subject.Present() || got.Complete() {
+	if got := unsure.Children(pod); got.Subject.Present() || got.Complete() {
 		t.Fatalf("Children when the caller's access couldn't be checked = %+v complete=%v", got, got.Complete())
 	}
 	if got := v.ControllerChain(pod); got.Subject.Present() || len(got.Chain) != 0 || got.UnfollowedReference != nil {
@@ -165,9 +157,6 @@ func TestViewSeedsAnObjectTheCachesDoNotHold(t *testing.T) {
 	seeded.Seed(ownership.Observation{Ref: app, UID: "uid-argocd-web"})
 	if got := seeded.Members(app); got.Membership != ownership.MembersUnreadable || len(got.Gaps) != 1 || got.Gaps[0].Reason != readreason.RadarKindNotCollected {
 		t.Fatalf("members of an uncollected manager = %v gaps %+v; want unreadable, as Radar doesn't collect it", got.Membership, got.Gaps)
-	}
-	if err := seeded.ValidateAnswers(); err != nil {
-		t.Fatalf("ValidateAnswers = %v; a manager Radar doesn't collect changed nothing", err)
 	}
 
 	// Seeding grants no access.
@@ -230,7 +219,7 @@ func TestViewChildrenResolveToTheOwnersCurrentIncarnation(t *testing.T) {
 		{"none of a kind the caller may not read", access{denied: []resourceid.GroupKind{configMaps}}, at("example.io", "Widget", "alpha", "w1"), nil, true, unlistedWidget},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := view(t, w, tc.access).Children(tc.owner, 0)
+			got := view(t, w, tc.access).Children(tc.owner)
 			if !got.Subject.Present() || !slices.Equal(got.Gaps, tc.gaps) || got.Complete() != (len(tc.gaps) == 0) {
 				t.Fatalf("Children = %+v; want gaps %v", got, tc.gaps)
 			}
@@ -244,14 +233,14 @@ func TestViewChildrenResolveToTheOwnersCurrentIncarnation(t *testing.T) {
 func TestViewChildrenReportWhatTheSearchCouldNotRead(t *testing.T) {
 	w := ownershiptest.Fixture()
 	w.Collection[pods] = ownershiptest.Collection{State: ownershiptest.Loading}
-	got := view(t, w, ownership.Unrestricted()).Children(at("apps", "ReplicaSet", "alpha", "web-1"), 0)
+	got := view(t, w, ownership.Unrestricted()).Children(at("apps", "ReplicaSet", "alpha", "web-1"))
 	// One store serves every namespace, so its gap names none.
 	want := []ownership.Gap{{Kind: pods, Reason: readreason.KindSyncPending}}
 	if len(got.Children) != 0 || !slices.Equal(got.Gaps, want) || got.Complete() {
 		t.Fatalf("Children while Pods load = %q gaps %+v; want none and %+v", childRefs(got), got.Gaps, want)
 	}
 	// A caller who may not read Pods hears nothing of Radar's Pod stores.
-	got = view(t, w, access{denied: []resourceid.GroupKind{pods}}).Children(at("apps", "ReplicaSet", "alpha", "web-1"), 0)
+	got = view(t, w, access{denied: []resourceid.GroupKind{pods}}).Children(at("apps", "ReplicaSet", "alpha", "web-1"))
 	if len(got.Gaps) != 0 || !got.Narrowed {
 		t.Fatalf("Children for a caller denied Pods = gaps %+v narrowed=%v", got.Gaps, got.Narrowed)
 	}
@@ -384,14 +373,14 @@ func TestViewChildrenIgnoreReferencesThatCantNameTheOwner(t *testing.T) {
 	b.Add("", "Pod", "alpha", "elsewhere", elsewhere)
 	w := b.World()
 	w.Collection[resourceid.GroupKind{Kind: "Node"}] = ownershiptest.Collection{State: ownershiptest.Loading}
-	if got := view(t, w, ownership.Unrestricted()).Children(rs.Ref, 0); !got.Complete() || len(got.Children) != 1 {
+	if got := view(t, w, ownership.Unrestricted()).Children(rs.Ref); !got.Complete() || len(got.Children) != 1 {
 		t.Fatalf("children %q gaps %+v; a Node named web, or a reference to another name, can't be to the ReplicaSet", childRefs(got), got.Gaps)
 	}
 
 	unmapped := rs.OwnerRef(false)
 	unmapped.APIVersion = "apps/v9"
 	b.Add("", "Pod", "alpha", "unmapped", unmapped)
-	got := view(t, b.World(), ownership.Unrestricted()).Children(rs.Ref, 0)
+	got := view(t, b.World(), ownership.Unrestricted()).Children(rs.Ref)
 	if want := (ownership.Gap{Kind: rs.Ref.GroupKind(), Reason: readreason.KindUnknown}); !slices.Contains(got.Gaps, want) {
 		t.Fatalf("gaps %+v; want %+v for a reference to web at a version discovery doesn't list", got.Gaps, want)
 	}
@@ -404,7 +393,7 @@ func TestViewChildrenListAnObjectNamingItsOwnerTwiceOnce(t *testing.T) {
 	b.Add("", "Pod", "alpha", "dup", rs.OwnerRef(true), rs.OwnerRef(false))
 	v := view(t, b.World(), ownership.Unrestricted())
 	v.Owner(at("", "Pod", "alpha", "dup"))
-	if got := v.Children(rs.Ref, 0); len(got.Children) != 1 {
+	if got := v.Children(rs.Ref); len(got.Children) != 1 {
 		t.Fatalf("children = %q; want dup once", childRefs(got))
 	}
 }
@@ -449,7 +438,7 @@ func TestViewOwnersAndChildrenAgree(t *testing.T) {
 				if r.State != ownership.OwnerFound {
 					continue
 				}
-				children := v.Children(r.Ref, 0)
+				children := v.Children(r.Ref)
 				if !children.Complete() {
 					continue
 				}
@@ -457,7 +446,7 @@ func TestViewOwnersAndChildrenAgree(t *testing.T) {
 					t.Errorf("world %d: %v resolves its owner %v, which doesn't list it among %q", i, o.Ref, r.Ref, childRefs(children))
 				}
 			}
-			for _, c := range v.Children(o.Ref, 0).Children {
+			for _, c := range v.Children(o.Ref).Children {
 				_, theirs := v.References(c.Ref)
 				if !slices.ContainsFunc(theirs, func(r ownership.OwnerResolution) bool { return r.State == ownership.OwnerFound && r.Ref == o.Ref }) {
 					t.Errorf("world %d: %v lists %v, whose references don't resolve to it", i, o.Ref, c.Ref)
@@ -515,7 +504,7 @@ func checkNarrows(t *testing.T, where string, full, v *ownership.View, caller ac
 			t.Errorf("%s: reference %d = %v %v %+v, full %v %v %+v", where, i, got[i].State, got[i].Ref, got[i].Gap, want[i].State, want[i].Ref, want[i].Gap)
 		}
 	}
-	children, all := v.Children(ref, 0), full.Children(ref, 0)
+	children, all := v.Children(ref), full.Children(ref)
 	for _, c := range children.Children {
 		if !readable(c.Ref) || !slices.ContainsFunc(all.Children, func(f ownership.Observation) bool { return f.Ref == c.Ref }) {
 			t.Errorf("%s: child %v isn't one the full view has and the caller may read", where, c.Ref)
