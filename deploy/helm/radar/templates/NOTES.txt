@@ -10,7 +10,34 @@
 {{- $authDocs := "https://radarhq.io/docs/configuration/authentication" -}}
 {{- $mode := .Values.auth.mode -}}
 {{- $routed := or .Values.ingress.enabled .Values.httpRoute.enabled -}}
+{{- $exposed := or $routed (ne .Values.service.type "ClusterIP") -}}
+{{- $oidcURL := "" -}}
+{{- $localHost := "localhost" -}}
+{{- $localPort := "9280" -}}
+{{- if and (eq $mode "oidc") .Values.auth.oidc.redirectURL (not $routed) -}}
+{{- /* Parsed by regex, not urlParse: a malformed URL must not fail the render,
+       because Helm's error would print the whole value, userinfo included. */ -}}
+{{- $r := .Values.auth.oidc.redirectURL -}}
+{{- $scheme := regexFind "^https?://" $r -}}
+{{- $host := regexReplaceAll "^.*@" (regexReplaceAll "^https?://([^/?#]*).*$" $r "${1}") "" -}}
+{{- if and $scheme (regexMatch "^([A-Za-z0-9.-]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]+)?$" $host) -}}
+{{- $hostOnly := regexReplaceAll ":[0-9]+$" $host "" -}}
+{{- /* Only an http loopback redirect can be reached through a port-forward:
+       Radar's listener doesn't serve TLS. */ -}}
+{{- if and (eq $scheme "http://") (has $hostOnly (list "localhost" "127.0.0.1" "[::1]")) -}}
+{{- $localHost = $hostOnly -}}
+{{- $localPort = trimPrefix ":" (regexFind ":[0-9]+$" $host) | default "80" -}}
+{{- else -}}
+{{- $oidcURL = printf "%s%s%s/" $scheme $host $basePath -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $ingressAuth := false -}}
+{{- range $k, $_ := .Values.ingress.annotations -}}
+{{- if regexMatch "auth-(type|url)$" $k }}{{ $ingressAuth = true }}{{ end -}}
+{{- end -}}
 {{- $proxyAuth := printf "Authentication: proxy (auth.mode=proxy). Users authenticate through the proxy,\nwhich forwards their identity to Radar via HTTP headers. The auth proxy should\nbe the only path to Radar.\nSetup: %s" $authDocs -}}
+{{- $proxyWarning := printf "Warning: Radar accepts the %s and %s\nheaders from any client that can reach it. Your ingress must strip them from\nexternal requests to prevent spoofing." .Values.auth.proxy.userHeader .Values.auth.proxy.groupsHeader -}}
 {{- if .Values.cloud.enabled }}
 The Radar pod dials the Radar Cloud endpoint (cloud.url) over an outbound WebSocket.
 Once connected, the Radar Cloud install page redirects you into the cluster view.
@@ -23,18 +50,52 @@ If the install page times out, check the Radar pod logs:
 {{- /* No Service address or port-forward: the docs say the auth proxy should
        be the only path to Radar. */}}
 {{ $proxyAuth }}
+{{- if $exposed }}
+
+{{ $proxyWarning }}
+{{- end }}
 {{- else }}
 {{- if .Values.ingress.enabled }}
 {{- $urls := list }}
+{{- $regexURLs := list }}
+{{- $hostless := false }}
 {{- range $h := .Values.ingress.hosts }}
+{{- if not $h.host }}{{ $hostless = true }}{{ end }}
 {{- range $h.paths }}
-{{- $path := ternary (printf "%s/" $basePath) .path (ne $basePath "") }}
-{{- $urls = append $urls (printf "http%s://%s%s" (ternary "s" "" (not (empty $.Values.ingress.tls))) ($h.host | default "") $path) }}
+{{- $p := .path | default "/" }}
+{{- $scheme := ternary "https" "http" (not (empty $.Values.ingress.tls)) }}
+{{- /* A regex path (nginx use-regex + rewrite-target) isn't a URL. */}}
+{{- if and (eq (.pathType | default "") "ImplementationSpecific") (regexMatch "[][(){}*+?|^$\\\\]" $p) (eq $basePath "") }}
+{{- if $h.host }}
+{{- $regexURLs = append $regexURLs (printf "%s://%s  (path %s)" $scheme $h.host $p) }}
+{{- end }}
+{{- else if $h.host }}
+{{- $path := ternary (printf "%s/" $basePath) $p (ne $basePath "") }}
+{{- $urls = append $urls (printf "%s://%s%s" $scheme $h.host $path) }}
 {{- end }}
 {{- end }}
+{{- end }}
+{{- if $urls }}
 Open Radar at:
 {{- range uniq $urls }}
   {{ . }}
+{{- end }}
+{{- end }}
+{{- if $regexURLs }}
+{{- if $urls }}
+{{ end }}
+A regular expression path isn't a URL. Open Radar at a path it matches:
+{{- range uniq $regexURLs }}
+  {{ . }}
+{{- end }}
+{{- end }}
+{{- if $hostless }}
+{{- if or $urls $regexURLs }}
+{{ end }}
+An ingress host left empty matches every hostname. Open Radar at the ingress
+controller's address, shown by:
+
+  kubectl get ingress {{ $fullName }} -n {{ $ns }}
 {{- end }}
 {{- else if .Values.httpRoute.enabled }}
 {{- $gw := first .Values.httpRoute.parentRefs }}
@@ -45,20 +106,28 @@ Radar's HTTPRoute hostnames:
   {{ . }}{{ $basePath }}/
 {{- end }}
 {{- else }}
+{{- $listener := ternary (printf "[?(@.name=='%s')]" $gw.sectionName) "[0]" (not (empty $gw.sectionName)) }}
 Get the Gateway listener hostname:
 
-  export APP_HOSTNAME=$(kubectl get --namespace {{ $gwNs }} gateway/{{ $gw.name }} -o jsonpath="{.spec.listeners[0].hostname}")
+  export APP_HOSTNAME=$(kubectl get --namespace {{ $gwNs }} gateway/{{ $gw.name }} -o jsonpath="{.spec.listeners{{ $listener }}.hostname}")
+
+Then open $APP_HOSTNAME{{ $basePath }}/ in your browser, with https:// if that
+listener's protocol is HTTPS.
 {{- end }}
 
 Your HTTPRoute depends on the listener configuration of your gateway.
 You can check the gateway configuration with:
 
   kubectl get --namespace {{ $gwNs }} gateway/{{ $gw.name }} -o yaml
+{{- else if $oidcURL }}
+Open Radar at the redirect URL's host (auth.oidc.redirectURL):
+  {{ $oidcURL }}
 {{- else }}
 Access via port-forward:
 
-  kubectl port-forward svc/{{ $fullName }} 9280:{{ $port }} -n {{ $ns }}
-  open http://localhost:9280{{ $basePath }}{{ if $basePath }}/{{ end }}
+  kubectl port-forward svc/{{ $fullName }} {{ $localPort }}:{{ $port }} -n {{ $ns }}
+
+Then open http://{{ $localHost }}:{{ $localPort }}{{ $basePath }}{{ if $basePath }}/{{ end }} in your browser.
 {{- end }}
 {{- if eq $mode "oidc" }}
 
@@ -68,7 +137,15 @@ Setup: {{ $authDocs }}
 {{- else if eq $mode "proxy" }}
 
 {{ $proxyAuth }}
-{{- else if or $routed (ne .Values.service.type "ClusterIP") }}
+
+{{ $proxyWarning }}
+{{- else if and .Values.ingress.enabled $ingressAuth (not .Values.httpRoute.enabled) (eq .Values.service.type "ClusterIP") }}
+
+Radar's own authentication is off (auth.mode=none). Everyone who passes your
+ingress authentication can use the permissions granted to Radar's
+ServiceAccount. For per-user permissions, configure authentication:
+{{ $authDocs }}
+{{- else if $exposed }}
 
 Warning: no auth (auth.mode=none). Only use this behind a trusted private
 network boundary. Anyone who can reach Radar can use the permissions granted to
