@@ -110,25 +110,12 @@ describe('composeReleaseNotes', () => {
 })
 
 describe('whatsNewToOpen', () => {
-  it('announces an explicitly marked release without increasing its highlight scores', () => {
-    const list = [{ ...entry('v1.18.0', [3]), autoOpen: true }]
-    expect(whatsNewToOpen('v1.18.1', 'v1.17.0', true, list)?.score).toBe(3)
-    expect(whatsNewToOpen('v1.18.1', 'v1.18.0', true, list)).toBeNull()
-    expect(whatsNewToOpen('v1.18.1', null, false, list)).toBeNull()
-  })
-
   it.each(['v1.18.0', 'v1.18.1'])('announces the shipped v1.18 notes on upgrade to %s', version => {
-    expect(whatsNewToOpen(version, 'v1.17.0', true)?.versions).toEqual(['v1.18.0'])
+    const notes = whatsNewToOpen(version, 'v1.17.0', true)
+    expect(notes?.versions).toEqual(['v1.18.0'])
+    expect(notes?.score).toBeGreaterThanOrEqual(AUTO_OPEN_SCORE)
     expect(whatsNewToOpen(version, 'v1.18.0', true)).toBeNull()
     expect(whatsNewToOpen(version, null, false)).toBeNull()
-  })
-
-  it('does not announce a release outside the displayed three-release window', () => {
-    const list = [
-      entry('v1.21.0', [1]), entry('v1.20.0', [1]), entry('v1.19.0', [1]),
-      { ...entry('v1.18.0', [3]), autoOpen: true },
-    ]
-    expect(whatsNewToOpen('v1.21.0', 'v1.17.0', true, list)).toBeNull()
   })
 
   it('opens when the unseen releases show enough, and not for a quiet release', () => {

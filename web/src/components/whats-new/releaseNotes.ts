@@ -35,8 +35,6 @@ export interface ReleaseHighlight {
 
 export interface ReleaseNotes {
   version: string
-  /** Announce this release on upgrade regardless of its highlight score. */
-  autoOpen?: boolean
   highlights: ReleaseHighlight[]
   improvements: string[]
 }
@@ -51,7 +49,6 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 export const RELEASE_NOTES: ReleaseNotes[] = [
   {
     version: 'v1.18.0',
-    autoOpen: true,
     highlights: [
       {
         id: 'trivy-cve-search',
@@ -84,9 +81,15 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         path: '/issues',
         cta: 'Open Issues',
       },
+      {
+        id: 'log-viewer-improvements',
+        icon: ScrollText,
+        title: 'Log viewer improvements',
+        description: 'Keep your place in fast-moving logs, select text without auto-scroll, and wait for containers to start with clearer status messages.',
+        importance: 4,
+      },
     ],
     improvements: [
-      'Logs wait for containers to start and keep your reading position',
       'Resource tables remember your column order for each kind',
       'Open terminals and browse files in native sidecars',
       'Node drains keep results visible and name remaining Pods',

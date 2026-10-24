@@ -30,8 +30,8 @@ export const SHOW_WHATS_NEW_EVENT = 'radar:show-whats-new'
 
 /**
  * The notes to open automatically, if any: the unseen releases, composed, when
- * a shown release requests an announcement or the highlights meet the bar.
- * Unseen notes below the bar stay behind the nav rail's unread dot.
+ * what they'd show is worth an interruption. Unseen notes below the bar stay
+ * behind the nav rail's unread dot.
  */
 export function whatsNewToOpen(
   currentVersion: string,
@@ -42,8 +42,7 @@ export function whatsNewToOpen(
   const unread = unreadReleases(currentVersion, lastSeen, priorInstall, catalog)
   if (unread.length === 0) return null
   const notes = composeReleaseNotes(unread)
-  const announce = unread.some(release => release.autoOpen && notes.versions.includes(release.version))
-  return announce || notes.score >= AUTO_OPEN_SCORE ? notes : null
+  return notes.score >= AUTO_OPEN_SCORE ? notes : null
 }
 
 /**
