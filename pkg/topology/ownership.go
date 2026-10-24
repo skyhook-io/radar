@@ -30,7 +30,7 @@ const maxOwnershipRefs = 500
 //
 // fetched is the object rel describes, as the response shows it. It answers
 // for itself when Radar doesn't collect its kind; if the caches hold another
-// incarnation, rel answers nothing and says the object changed.
+// incarnation, rel answers nothing and reports a read error.
 func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Observation) {
 	if rel == nil || v == nil {
 		return
