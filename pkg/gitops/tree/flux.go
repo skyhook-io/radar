@@ -9,9 +9,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
-// HelmRelease, unlike Kustomization, doesn't maintain a status.inventory
-// listing because the Helm controller delegates tracking to Helm's own release
-// storage (a Secret in the release namespace). To recover the managed set at
+// Older helm-controllers keep no status.inventory on a HelmRelease: they leave
+// tracking to Helm's own release storage (a Secret in the release namespace),
+// and newer ones may not have written it yet. To recover the managed set at
 // query time we match on the labels Flux *itself* stamps onto every resource
 // it reconciles — these are universal across charts, unlike chart-author-
 // controlled labels (app.kubernetes.io/instance is recommended but many

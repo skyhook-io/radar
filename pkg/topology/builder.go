@@ -4497,7 +4497,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	warnings = append(warnings, fluxSourceWarnings...)
 
 	// 14. Create FluxCD HelmRelease edges to managed resources
-	// HelmReleases don't have inventory - match by labels:
+	// Older HelmReleases keep no inventory - match by labels:
 	// - helm.toolkit.fluxcd.io/name (FluxCD-specific, preferred)
 	// - app.kubernetes.io/instance (standard Helm label)
 	for hrKey, hrID := range helmReleaseIDs {
