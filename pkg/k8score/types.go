@@ -320,10 +320,11 @@ type DynamicResourceObservation struct {
 	Namespaces []string                `json:"namespaces,omitempty"`
 	Truncated  bool                    `json:"truncated,omitempty"`  // Incomplete namespace probing, beyond intentional scope limits.
 	ObservedAt *time.Time              `json:"observedAt,omitempty"` // Age of a retained probe decision, not resource freshness.
-	// These probe fields are cache/search bookkeeping, not HTTP observation fields.
-	// UnansweredNamespaces are namespaces whose access check got no
-	// answer (rate-limited or out of time): neither watched nor known to be
-	// outside Radar's access.
+	// The two fields below are for Radar's own readers and are not serialized.
+	// UnansweredNamespaces are namespaces where Radar's access check (a
+	// one-item list it makes before watching a kind there) got no answer:
+	// it timed out, or the client-side rate limiter held it back. They are
+	// neither watched nor known to be outside Radar's access.
 	UnansweredNamespaces []string `json:"-"`
 	// ProbeRetrying is true while the cache re-checks unanswered access
 	// checks (UnansweredNamespaces, or the whole kind when that is empty)
@@ -390,7 +391,8 @@ type DynamicCacheConfig struct {
 	NamespaceFallbacksTruncated bool
 
 	// ProbeRetryBackoff spaces the cache's re-checks of access checks that got
-	// no answer. Empty means four attempts; all share a 30 s budget with the first walk.
+	// no answer. Empty means four attempts, sharing a 30 s budget with the
+	// cache's first round of checks for the kind.
 	ProbeRetryBackoff []time.Duration
 
 	// ProbeRecoveryIntervals space the slower re-checks of access checks still

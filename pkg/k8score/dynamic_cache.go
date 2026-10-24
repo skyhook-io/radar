@@ -382,9 +382,10 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 	return d.EnsureWatchingContext(context.Background(), gvr, preferredNS)
 }
 
-// EnsureWatchingContext is ensureWatching with ctx bounding how long this
-// caller waits for discovery and for the permission probe. The probe and the
-// informers it starts belong to the cache, not to the requesting context.
+// EnsureWatchingContext starts watching gvr if no watch covers preferredNS yet
+// ("" for every namespace). ctx bounds only how long this caller waits for
+// discovery and for Radar's access check; the check and any watches it starts
+// belong to the cache and outlive ctx.
 func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr schema.GroupVersionResource, preferredNS string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -681,6 +682,8 @@ func (d *DynamicResourceCache) fanoutSettledLocked(gvr schema.GroupVersionResour
 	return ok
 }
 
+// FallbackNamespaces returns the namespaces the cache walks when its identity
+// cannot list a namespaced resource cluster-wide.
 func (d *DynamicResourceCache) FallbackNamespaces() []string {
 	if d == nil {
 		return nil
@@ -2078,7 +2081,11 @@ func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, nam
 	return d.ListBlockingContext(context.Background(), gvr, namespace, timeout)
 }
 
-// ListBlockingContext bounds this caller without owning the shared watch lifetime.
+// ListBlockingContext is ListBlocking with ctx also bounding this caller's
+// wait. Cancelling ctx ends the wait, not the shared watch. As with
+// ListBlocking, a wait that ends before the watch syncs returns whatever the
+// watch holds so far; callers that need a complete read check
+// IsNamespaceSynced afterwards.
 func (d *DynamicResourceCache) ListBlockingContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
@@ -2594,7 +2601,8 @@ func (d *DynamicResourceCache) WaitForSync(gvr schema.GroupVersionResource, time
 	return cache.WaitForCacheSync(ctx.Done(), syncFuncs...)
 }
 
-// WaitForSyncContext waits only for informers covering namespace, bounded by ctx.
+// WaitForSyncContext waits, at most until ctx ends, for the watches covering
+// namespace to sync, and reports whether they did.
 func (d *DynamicResourceCache) WaitForSyncContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string) bool {
 	entries := d.readEntries(gvr, namespace)
 	if len(entries) == 0 {
@@ -2817,6 +2825,9 @@ func (d *DynamicResourceCache) notifyCRDDiscoveryComplete() {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+// IsStopped reports whether Stop has been called. A stopped cache's answers
+// belong to the connection it was built for, so a reader that held it across
+// a context switch must not report them as current.
 func (d *DynamicResourceCache) IsStopped() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
