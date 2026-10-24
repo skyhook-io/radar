@@ -22,6 +22,7 @@ Not everything is in this file. The following files contain critical details tha
 
 | When you are... | Read this file FIRST |
 |-----------------|---------------------|
+| Preparing, editing, auditing or previewing **What's New** release notes | [.agents/skills/whats-new/SKILL.md](.agents/skills/whats-new/SKILL.md) — merged-work buckets, copy, scoring, preview, and opt-in docs/marketing changelog checks with safe sibling/worktree handling |
 | Adding or modifying **HTTP endpoints** | `internal/server/server.go` — all routes are defined here — **plus** the handler's doc comments (why the route is gated the way it is lives there; copy the gate of the closest sibling only after reading it) and the integration's section in [docs/integrations.md](docs/integrations.md) |
 | Adding or modifying **CLI flags** | `cmd/explorer/main.go` — flag definitions and defaults |
 | Adding a **new CRD integration** (renderer, topology, discovery) | [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) — full checklist with collision gotchas |

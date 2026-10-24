@@ -41,6 +41,7 @@ export interface ReleaseNotes {
 
 export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 
+// Read .agents/skills/whats-new/SKILL.md before authoring or regrouping notes.
 // One entry per release that has something to announce. A user sees the
 // entries for the releases they haven't seen yet, composed into one dialog, so
 // a patch upgrade, or one that skips releases, still gets them. Every minor and
