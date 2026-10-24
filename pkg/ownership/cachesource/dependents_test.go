@@ -41,30 +41,32 @@ func hasGap(r ownership.DependentCandidatesRead, want ownership.Gap) bool {
 	return slices.Contains(r.Gaps, want)
 }
 
-func TestDependentCandidatesNeedEveryWatchedVersionToAgree(t *testing.T) {
+// A resource watched at two versions is searched at the most stable version
+// that has loaded, whatever the other holds.
+func TestDependentCandidatesReadTheMostStableLoadedVersion(t *testing.T) {
 	w1 := ref("example.io", "Widget", "alpha", "w1")
 	for _, tc := range []struct {
 		name        string
 		v1, v1beta1 []runtime.Object
-		wantFound   bool
-		wantPending bool
+		wantUID     types.UID
 	}{
-		{name: "both hold it", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))}, wantFound: true},
-		{name: "only one holds it", v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))}, wantPending: true},
-		{name: "two incarnations", v1: []runtime.Object{widget("alpha", "w1", "uid-new")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-old"))}, wantPending: true},
+		{name: "both hold it", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))}, wantUID: "uid-widget"},
+		{name: "only the less stable one holds it", v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))}},
+		{name: "two incarnations", v1: []runtime.Object{widget("alpha", "w1", "uid-new")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-old"))}, wantUID: "uid-new"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := versionsFixture(t, tc.v1, tc.v1beta1, nil)
 			s := begin(t, f.source())
 			for _, domain := range []ownership.SearchScope{ownership.InNamespace("alpha"), ownership.Everywhere()} {
-				got := s.DependentCandidates("uid-deploy", domain, 0)
-				namespace := "alpha"
-				if domain.AllNamespaces {
-					namespace = ""
+				got := s.DependentCandidates("uid-deploy", domain)
+				var uid types.UID
+				for _, c := range got.Candidates {
+					if c.Ref == w1 {
+						uid = c.UID
+					}
 				}
-				pending := hasGap(got, ownership.Gap{Kind: widgetKind, Namespace: namespace, Reason: readreason.KindSyncPending})
-				if found := slices.Contains(candidateRefs(got), w1); found != tc.wantFound || pending != tc.wantPending {
-					t.Fatalf("%+v: found w1 %v, pending gap %v; want %v, %v (%+v)", domain, found, pending, tc.wantFound, tc.wantPending, got)
+				if uid != tc.wantUID || slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind }) {
+					t.Fatalf("%+v: w1 %q, gaps %+v; want %q and no Widget gap", domain, uid, got.Gaps, tc.wantUID)
 				}
 			}
 		})
@@ -105,10 +107,9 @@ func scopedVersionsFixture(t *testing.T, v1, v1beta1 []runtime.Object, v1Scope, 
 	return f
 }
 
-// A search of every namespace compares a version watched cluster-wide with
-// one watched only in some namespaces, there; and with no cluster-wide watch
-// it reads every version's namespaces.
-func TestDependentCandidatesCompareVersionsWatchedInDifferentScopes(t *testing.T) {
+// A search of every namespace reads a version watched cluster-wide for every
+// namespace; with no cluster-wide watch it reads every version's namespaces.
+func TestDependentCandidatesAcrossVersionsWatchedInDifferentScopes(t *testing.T) {
 	w1, w9 := ref("example.io", "Widget", "alpha", "w1"), ref("example.io", "Widget", "beta", "w9")
 	for _, tc := range []struct {
 		name               string
@@ -117,14 +118,10 @@ func TestDependentCandidatesCompareVersionsWatchedInDifferentScopes(t *testing.T
 		wantFound          []resourceid.Ref
 		wantGaps           []ownership.Gap
 	}{
-		{name: "they agree", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
+		{name: "both hold it", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
 			betaScope: []string{"alpha"}, wantFound: []resourceid.Ref{w1}},
-		{name: "only the namespace watch holds it", v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
-			betaScope: []string{"alpha"}, wantGaps: []ownership.Gap{{Kind: widgetKind, Namespace: "alpha", Reason: readreason.KindSyncPending}}},
-		{name: "two incarnations", v1: []runtime.Object{widget("alpha", "w1", "uid-new")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-old"))},
-			betaScope: []string{"alpha"}, wantGaps: []ownership.Gap{{Kind: widgetKind, Namespace: "alpha", Reason: readreason.KindSyncPending}}},
-		{name: "a disagreement keeps to its namespace", v1: []runtime.Object{widget("beta", "w9", "uid-w9")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
-			betaScope: []string{"alpha"}, wantFound: []resourceid.Ref{w9}, wantGaps: []ownership.Gap{{Kind: widgetKind, Namespace: "alpha", Reason: readreason.KindSyncPending}}},
+		{name: "the cluster-wide version answers everywhere", v1: []runtime.Object{widget("beta", "w9", "uid-w9")}, v1beta1: []runtime.Object{betaWidget(widget("alpha", "w1", "uid-widget"))},
+			betaScope: []string{"alpha"}, wantFound: []resourceid.Ref{w9}},
 		{name: "no cluster-wide watch", v1: []runtime.Object{widget("alpha", "w1", "uid-widget")}, v1beta1: []runtime.Object{betaWidget(widget("beta", "w9", "uid-w9"))},
 			v1Scope: []string{"alpha"}, betaScope: []string{"beta"}, wantFound: []resourceid.Ref{w1, w9},
 			wantGaps: []ownership.Gap{{Kind: widgetKind, Reason: readreason.RadarNamespaceNotCollected}}},
@@ -132,7 +129,7 @@ func TestDependentCandidatesCompareVersionsWatchedInDifferentScopes(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			f := scopedVersionsFixture(t, tc.v1, tc.v1beta1, tc.v1Scope, tc.betaScope)
 			s := begin(t, f.source())
-			got := s.DependentCandidates("uid-deploy", ownership.Everywhere(), 0)
+			got := s.DependentCandidates("uid-deploy", ownership.Everywhere())
 			var widgetGaps []ownership.Gap
 			for _, g := range got.Gaps {
 				if g.Kind == widgetKind {
@@ -164,17 +161,17 @@ func TestDependentCandidatesReportAnAmbiguousKind(t *testing.T) {
 	})
 	f.watch(t, widgets)
 	s := begin(t, f.source())
-	got := s.DependentCandidates("uid-deploy", ownership.Everywhere(), 0)
+	got := s.DependentCandidates("uid-deploy", ownership.Everywhere())
 	if !hasGap(got, ownership.Gap{Kind: widgetKind, Reason: readreason.ReadError}) || got.Complete() {
 		t.Fatalf("dependents with Widget served by two resources = %+v; want a Widget read_error gap", got)
 	}
 	if slices.Contains(candidateRefs(got), ref("example.io", "Widget", "alpha", "w1")) {
 		t.Fatal("an ambiguous kind's objects can't be named as one resource's")
 	}
-	if none := s.DependentCandidates("uid-deploy", ownership.SearchScope{}, 0); len(none.Gaps) != 0 {
+	if none := s.DependentCandidates("uid-deploy", ownership.SearchScope{}); len(none.Gaps) != 0 {
 		t.Fatalf("a search of nothing reports gaps: %+v", none.Gaps)
 	}
-	if clusterOnly := s.DependentCandidates("uid-deploy", ownership.SearchScope{IncludeClusterScoped: true}, 0); hasGap(clusterOnly, ownership.Gap{Kind: widgetKind, Reason: readreason.ReadError}) {
+	if clusterOnly := s.DependentCandidates("uid-deploy", ownership.SearchScope{IncludeClusterScoped: true}); hasGap(clusterOnly, ownership.Gap{Kind: widgetKind, Reason: readreason.ReadError}) {
 		t.Fatalf("a cluster-scoped search reports the namespaced Widget: %+v", clusterOnly.Gaps)
 	}
 }
@@ -196,7 +193,7 @@ func TestDependentCandidatesIgnoreAnAmbiguousKindNothingCollects(t *testing.T) {
 		t.Fatal("scenario: PendingWorkloadsSummary must be ambiguous")
 	}
 	for _, domain := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {IncludeClusterScoped: true}} {
-		got := s.DependentCandidates("uid-deploy", domain, 0)
+		got := s.DependentCandidates("uid-deploy", domain)
 		for _, g := range got.Gaps {
 			if g.Kind == summary {
 				t.Fatalf("search of %+v reports %+v; nothing can collect a summary", domain, g)
@@ -212,7 +209,7 @@ func TestDependentCandidatesThroughAPromotion(t *testing.T) {
 	f, p := newPromotionFixture(t)
 	source := f.source()
 	before := begin(t, source)
-	if got := before.DependentCandidates("uid-deploy", ownership.InNamespace("alpha"), 0); !slices.Contains(candidateRefs(got), ref("example.io", "Widget", "alpha", "w1")) {
+	if got := before.DependentCandidates("uid-deploy", ownership.InNamespace("alpha")); !slices.Contains(candidateRefs(got), ref("example.io", "Widget", "alpha", "w1")) {
 		t.Fatalf("from alpha's watch = %+v", got)
 	}
 	p.run(t, f, true)
@@ -221,7 +218,7 @@ func TestDependentCandidatesThroughAPromotion(t *testing.T) {
 	}
 	during := begin(t, source)
 	for _, domain := range []ownership.SearchScope{ownership.InNamespace("alpha"), ownership.Everywhere()} {
-		got := during.DependentCandidates("uid-deploy", domain, 0)
+		got := during.DependentCandidates("uid-deploy", domain)
 		if slices.ContainsFunc(got.Candidates, func(c ownership.Observation) bool { return c.Ref.GroupKind() == widgetKind }) ||
 			!slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind && g.Reason == readreason.KindSyncPending }) {
 			t.Fatalf("%+v from the unloaded replacement = %+v; want a Widget kind_sync_pending gap and no Widgets", domain, got)
@@ -232,7 +229,7 @@ func TestDependentCandidatesThroughAPromotion(t *testing.T) {
 		t.Fatal("the replacement did not sync")
 	}
 	after := begin(t, source)
-	got := after.DependentCandidates("uid-deploy", ownership.Everywhere(), 0)
+	got := after.DependentCandidates("uid-deploy", ownership.Everywhere())
 	if !slices.Contains(candidateRefs(got), ref("example.io", "Widget", "alpha", "w1")) ||
 		slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind }) {
 		t.Fatalf("from the loaded replacement = %+v", got)
@@ -258,19 +255,19 @@ func TestDependentCandidatesKeepTheSessionsNamespaceWatches(t *testing.T) {
 	}
 	waitUntil(t, "alpha's watch", func() bool { return f.caches.Dynamic.IsNamespaceSynced(widgets, "alpha") })
 	s := begin(t, f.source())
-	first := s.DependentCandidates("uid-deploy", ownership.Everywhere(), 0)
+	first := s.DependentCandidates("uid-deploy", ownership.Everywhere())
 	if _, err := f.caches.Dynamic.List(widgets, "beta"); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, "beta's watch", func() bool { return f.caches.Dynamic.IsNamespaceSynced(widgets, "beta") })
-	second := s.DependentCandidates("uid-deploy", ownership.Everywhere(), 0)
+	second := s.DependentCandidates("uid-deploy", ownership.Everywhere())
 	if !slices.Equal(candidateRefs(first), candidateRefs(second)) || !slices.Equal(first.Gaps, second.Gaps) {
 		t.Fatalf("a watch started mid-session changed the session's answer:\n first  %v %+v\n second %v %+v", candidateRefs(first), first.Gaps, candidateRefs(second), second.Gaps)
 	}
 	if !hasGap(first, ownership.Gap{Kind: widgetKind, Reason: readreason.RadarNamespaceNotCollected}) {
 		t.Fatalf("watched namespace by namespace, the rest must be a gap: %+v", first)
 	}
-	if fresh := begin(t, f.source()).DependentCandidates("uid-deploy", ownership.Everywhere(), 0); slices.Equal(candidateRefs(fresh), candidateRefs(first)) {
+	if fresh := begin(t, f.source()).DependentCandidates("uid-deploy", ownership.Everywhere()); slices.Equal(candidateRefs(fresh), candidateRefs(first)) {
 		t.Fatalf("a new session must see the new watch: %v", candidateRefs(fresh))
 	}
 }
@@ -284,7 +281,7 @@ func TestDependentCandidatesDoNoIO(t *testing.T) {
 	s := begin(t, f.source())
 	for _, domain := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", "gamma"}, IncludeClusterScoped: true}} {
 		for _, uid := range []types.UID{"uid-deploy", "uid-rs", "uid-node", "uid-none"} {
-			s.DependentCandidates(uid, domain, 0)
+			s.DependentCandidates(uid, domain)
 		}
 	}
 	if err := s.ValidateCaches(); err != nil {
@@ -327,14 +324,14 @@ func TestDependentCandidatesCostDoesNotGrowWithUnrelatedObjects(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := s.DependentCandidates("uid-rs", ownership.InNamespace("alpha"), 0); len(got.Candidates) != 1 {
+		if got := s.DependentCandidates("uid-rs", ownership.InNamespace("alpha")); len(got.Candidates) != 1 {
 			t.Fatalf("with %d unrelated Pods: %+v", unrelated, got)
 		}
 		const searches = 20
 		var before, after goruntime.MemStats
 		goruntime.ReadMemStats(&before)
 		for range searches {
-			s.DependentCandidates("uid-rs", ownership.InNamespace("alpha"), 0)
+			s.DependentCandidates("uid-rs", ownership.InNamespace("alpha"))
 		}
 		goruntime.ReadMemStats(&after)
 		return (after.TotalAlloc - before.TotalAlloc) / searches
@@ -350,7 +347,7 @@ func TestDependentCandidatesFromPagedInformers(t *testing.T) {
 	clientfeaturestesting.SetFeatureDuringTest(t, clientfeatures.WatchListClient, false)
 	f := newFixture(t, k8score.CacheConfig{ListPageSize: 2}, nil)
 	s := begin(t, f.source())
-	got := s.DependentCandidates("uid-deploy", ownership.InNamespace("alpha"), 0)
+	got := s.DependentCandidates("uid-deploy", ownership.InNamespace("alpha"))
 	if !slices.Contains(candidateRefs(got), ref("apps", "ReplicaSet", "alpha", "web-1")) ||
 		slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"} }) {
 		t.Fatalf("dependents through a paged ReplicaSet informer = %+v", got)
@@ -376,7 +373,7 @@ func TestDependentCandidatesOfATypedKindPastItsLoadDeadline(t *testing.T) {
 	// One informer serves every namespace, so its state is one gap whatever
 	// the search names.
 	for _, domain := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", "beta"}}} {
-		got := begin(t, f.source()).DependentCandidates("uid-deploy", domain, 0)
+		got := begin(t, f.source()).DependentCandidates("uid-deploy", domain)
 		if want := (ownership.Gap{Kind: secret, Reason: readreason.KindSyncTimedOut}); !slices.Contains(got.Gaps, want) {
 			t.Errorf("%+v: gaps %+v; want %+v", domain, got.Gaps, want)
 		}
@@ -395,7 +392,7 @@ func TestDependentCandidatesReportAWholeKindsStateOnce(t *testing.T) {
 		for i := range n {
 			namespaces = append(namespaces, fmt.Sprintf("ns-%03d", i))
 		}
-		return s.DependentCandidates("uid-node", ownership.SearchScope{Namespaces: namespaces, IncludeClusterScoped: true}, 0)
+		return s.DependentCandidates("uid-node", ownership.SearchScope{Namespaces: namespaces, IncludeClusterScoped: true})
 	}
 	one, hundred := search(1), search(100)
 	gadget := resourceid.GroupKind{Group: "example.io", Kind: "Gadget"}
@@ -406,7 +403,7 @@ func TestDependentCandidatesReportAWholeKindsStateOnce(t *testing.T) {
 	if !slices.Equal(hundred.Gaps, one.Gaps) {
 		t.Fatalf("a search of 100 namespaces has %d gaps, one of a single namespace %d: %+v", len(hundred.Gaps), len(one.Gaps), hundred.Gaps)
 	}
-	if got := s.DependentCandidates("uid-node", ownership.SearchScope{Namespaces: []string{""}}, 0); slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == gadget }) {
+	if got := s.DependentCandidates("uid-node", ownership.SearchScope{Namespaces: []string{""}}); slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == gadget }) {
 		t.Fatalf("a domain naming no namespace has gaps %+v; it looked nowhere", got.Gaps)
 	}
 }
@@ -440,7 +437,7 @@ func TestDependentCandidatesReportAClusterWideStoreLoadingOnce(t *testing.T) {
 		for i := range n {
 			namespaces = append(namespaces, fmt.Sprintf("ns-%03d", i))
 		}
-		return s.DependentCandidates("uid-node", ownership.SearchScope{Namespaces: namespaces, IncludeClusterScoped: true}, 0)
+		return s.DependentCandidates("uid-node", ownership.SearchScope{Namespaces: namespaces, IncludeClusterScoped: true})
 	}
 	one, hundred := search(1), search(100)
 	for _, want := range []ownership.Gap{
@@ -476,13 +473,13 @@ func TestDependentCandidatesReadAClusterWideStoreOncePerSearch(t *testing.T) {
 		f.watch(t, widgets)
 		s := begin(t, f.source())
 		domain := ownership.SearchScope{Namespaces: namespaces}
-		if got := s.DependentCandidates("uid-node", domain, 0); len(got.Candidates) != n {
+		if got := s.DependentCandidates("uid-node", domain); len(got.Candidates) != n {
 			t.Fatalf("%d namespaces: %d candidates, want one Widget in each", n, len(got.Candidates))
 		}
 		var before, after goruntime.MemStats
 		goruntime.ReadMemStats(&before)
 		for range 3 {
-			s.DependentCandidates("uid-node", domain, 0)
+			s.DependentCandidates("uid-node", domain)
 		}
 		goruntime.ReadMemStats(&after)
 		return (after.TotalAlloc - before.TotalAlloc) / 3
@@ -526,7 +523,7 @@ func TestDependentCandidatesSayTheRestLoadsWhileAClusterWideVersionLoads(t *test
 		t.Fatal(err)
 	}
 	waitUntil(t, "v1's held list", func() bool { return held.Load() > 1 })
-	got := begin(t, f.source()).DependentCandidates("uid-deploy", ownership.Everywhere(), 0)
+	got := begin(t, f.source()).DependentCandidates("uid-deploy", ownership.Everywhere())
 	var widgetGaps []ownership.Gap
 	for _, g := range got.Gaps {
 		if g.Kind == widgetKind {

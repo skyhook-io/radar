@@ -3,7 +3,6 @@ package cachesource
 
 import (
 	"slices"
-	"sync/atomic"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -24,33 +23,12 @@ type Caches struct {
 	Discovery *k8score.ResourceDiscovery
 }
 
-// retired reports whether a cache has stopped following the cluster.
-func (c Caches) retired() bool {
-	return c.Typed.Stopped() || c.Dynamic.Stopped()
-}
-
-// replacedBy reports whether now replaces a cache of c. A cache c lacks that
-// now has, as when Radar publishes its dynamic cache after its typed one,
-// replaces nothing: reads through the missing cache answered that it wasn't
-// there.
-func (c Caches) replacedBy(now Caches) bool {
-	return c.Typed != now.Typed ||
-		c.Dynamic != nil && c.Dynamic != now.Dynamic ||
-		c.Discovery != nil && c.Discovery != now.Discovery
-}
-
 // Source reads from the caches current returns. It calls current when a
-// session begins and again when it validates: what current returns must change
-// only when the host publishes a cache it lacked or replaces its caches.
+// session begins and again when it validates. A host replaces all of its
+// caches together and its typed cache first, so a new typed cache marks a new
+// connection.
 type Source struct {
 	current func() Caches
-	catalog atomic.Pointer[catalogEntry]
-}
-
-type catalogEntry struct {
-	discovery  *k8score.ResourceDiscovery
-	generation uint64
-	catalog    *ownership.Catalog
 }
 
 // New returns a source reading the caches current returns.
@@ -63,18 +41,13 @@ func New(current func() Caches) *Source {
 // watch, which costs milliseconds with thousands of watched namespaces.
 func (s *Source) Begin() (ownership.ReadSession, error) {
 	caches := s.current()
-	if caches.Typed == nil || caches.retired() {
+	if caches.Typed == nil {
 		return nil, ownership.ErrNotConnected
 	}
-	return &session{caches: caches, current: s.current, catalog: s.catalogFor(caches.Discovery)}, nil
+	return &session{caches: caches, current: s.current, catalog: catalogOf(caches.Discovery)}, nil
 }
 
-// catalogFor returns the catalog of discovery's current generation, building
-// it once per generation.
-func (s *Source) catalogFor(discovery *k8score.ResourceDiscovery) *ownership.Catalog {
-	if e := s.catalog.Load(); e != nil && e.discovery == discovery && e.generation == discovery.Generation() {
-		return e.catalog
-	}
+func catalogOf(discovery *k8score.ResourceDiscovery) *ownership.Catalog {
 	snapshot := discovery.Catalog()
 	served := make([]ownership.ServedResource, 0, len(snapshot.Resources))
 	for _, r := range snapshot.Resources {
@@ -82,9 +55,7 @@ func (s *Source) catalogFor(discovery *k8score.ResourceDiscovery) *ownership.Cat
 			Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs,
 		})
 	}
-	catalog := ownership.NewCatalog(served, snapshot.Complete)
-	s.catalog.Store(&catalogEntry{discovery: discovery, generation: snapshot.Generation, catalog: catalog})
-	return catalog
+	return ownership.NewCatalog(served, snapshot.Complete)
 }
 
 // typedKinds are the kinds the typed cache holds, keyed to the built-in that
@@ -106,8 +77,6 @@ type session struct {
 	// watched holds the versions each dynamically watched resource is watched
 	// at, as of the session's first dynamic read.
 	watched map[schema.GroupResource][]schema.GroupVersionResource
-	// versions holds the versions the session reads each resource at.
-	versions map[schema.GroupResource][]schema.GroupVersionResource
 	// byNamespace holds the namespaces each resource version is watched in
 	// when it is watched namespace by namespace (nil otherwise).
 	byNamespace map[schema.GroupVersionResource][]string
@@ -153,7 +122,7 @@ func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownershi
 	case !found:
 		return ownership.ObjectRead{State: ownership.Absent}
 	}
-	return observe(ref, b.APIVersion(), obj)
+	return observe(ref, obj)
 }
 
 func (s *session) dynamicObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
@@ -174,66 +143,48 @@ func (s *session) dynamicObject(ref resourceid.Ref, borrow func(*unstructured.Un
 	if s.caches.Dynamic == nil {
 		return unavailable(ref, readreason.RadarKindNotCollected)
 	}
+	// A resource watched at two versions answers from the most stable one
+	// that has loaded: every version receives the same objects, so another
+	// can only be a moment behind or ahead of it.
 	versions := s.servingVersions(kind)
-	var answer ownership.ObjectRead
-	var answeredFrom *unstructured.Unstructured
-	answered := false
 	for _, gvr := range versions {
 		obj, found, ok := s.caches.Dynamic.ReadableObject(gvr, ref.Namespace, ref.Name)
-		if !ok {
-			continue
-		}
-		read := ownership.ObjectRead{State: ownership.Absent}
-		if found {
-			read = observe(ref, gvr.GroupVersion().String(), obj)
-		}
 		switch {
-		case !answered:
-			answer, answeredFrom, answered = read, obj, true
-		case read.State != answer.State || read.Object.UID != answer.Object.UID || read.Object.ResourceVersion != answer.Object.ResourceVersion:
-			// Two version watches disagree: one hasn't caught up yet. An
-			// object's resourceVersion is the same at every API version, so
-			// a difference means one holds an update the other lacks.
-			return unavailable(ref, readreason.KindSyncPending)
+		case !ok:
+			continue
+		case !found:
+			return ownership.ObjectRead{State: ownership.Absent}
 		}
+		read := observe(ref, obj)
+		if borrow != nil && read.State == ownership.Present {
+			borrow(obj)
+		}
+		return read
 	}
-	if !answered {
-		return unavailable(ref, s.unansweredReason(versions, ref.Namespace))
-	}
-	if borrow != nil && answer.State == ownership.Present {
-		borrow(answeredFrom)
-	}
-	return answer
+	return unavailable(ref, s.unansweredReason(versions, ref.Namespace))
 }
 
-// unansweredReason says why none of versions answered in namespace. A version
-// watched there explains it better than one watched only elsewhere: once it
-// loads, a retry gets the answer.
+// unansweredReason says why none of versions answered in namespace: the first
+// version watched there, which answers once it loads, or else the first.
 func (s *session) unansweredReason(versions []schema.GroupVersionResource, namespace string) readreason.Code {
-	var serving, rest []readreason.Code
-	for _, gvr := range versions {
+	var first readreason.Code
+	for i, gvr := range versions {
 		o := s.caches.Dynamic.NamespaceObservation(gvr, namespace)
-		if o.State == k8score.DynamicObservationUnwatched {
-			rest = append(rest, dynamicReason(o))
-		} else {
-			serving = append(serving, dynamicReason(o))
+		if o.State != k8score.DynamicObservationUnwatched {
+			return dynamicReason(o)
+		}
+		if i == 0 {
+			first = dynamicReason(o)
 		}
 	}
-	if len(serving) > 0 {
-		return readreason.Primary(serving)
-	}
-	return readreason.Primary(rest)
+	return first
 }
 
 // servingVersions returns the versions the session reads kind's resource at,
 // most stable first: the watched versions the catalog serves. With none
 // watched it is the most stable served version, whose observation says why.
-// The list holds for the session.
 func (s *session) servingVersions(kind ownership.CatalogKind) []schema.GroupVersionResource {
 	gr := schema.GroupResource{Group: kind.Group, Resource: kind.Resource}
-	if versions, chosen := s.versions[gr]; chosen {
-		return versions
-	}
 	if s.watched == nil {
 		s.watched = map[schema.GroupResource][]schema.GroupVersionResource{}
 		for _, gvr := range s.caches.Dynamic.WatchedGVRs() {
@@ -250,15 +201,11 @@ func (s *session) servingVersions(kind ownership.CatalogKind) []schema.GroupVers
 	if len(versions) == 0 {
 		versions = []schema.GroupVersionResource{{Group: kind.Group, Version: mostStable(kind.Versions), Resource: kind.Resource}}
 	}
-	if s.versions == nil {
-		s.versions = map[schema.GroupResource][]schema.GroupVersionResource{}
-	}
-	s.versions[gr] = versions
 	return versions
 }
 
 func (s *session) ValidateCaches() error {
-	if s.caches.replacedBy(s.current()) || s.caches.retired() {
+	if s.caches.Typed != s.current().Typed {
 		return ownership.ErrCachesReplaced
 	}
 	return nil
@@ -340,12 +287,12 @@ func unavailable(ref resourceid.Ref, reason readreason.Code) ownership.ObjectRea
 
 // observe copies what ownership needs out of a cached object, which must not
 // be modified or kept.
-func observe(ref resourceid.Ref, apiVersion string, obj apiruntime.Object) ownership.ObjectRead {
+func observe(ref resourceid.Ref, obj apiruntime.Object) ownership.ObjectRead {
 	m, err := apimeta.Accessor(obj)
 	if err != nil {
 		return unavailable(ref, readreason.ReadError)
 	}
-	return ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(ref, apiVersion, m)}
+	return ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(ref, m)}
 }
 
 func mostStable(versions []string) string {

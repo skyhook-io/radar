@@ -35,10 +35,9 @@ type ReadSession interface {
 	// Object reads one object. It does no I/O and waits for nothing.
 	Object(ref resourceid.Ref) ObjectRead
 	// DependentCandidates finds the objects of the catalog's dependent kinds in
-	// domain whose owner references name uid, at most limit of them (0 for
-	// no limit). The limit caps what it returns, not the search: it gathers
-	// every match first. It does no I/O and waits for nothing.
-	DependentCandidates(uid types.UID, domain SearchScope, limit int) DependentCandidatesRead
+	// domain whose owner references name uid. It does no I/O and waits for
+	// nothing.
+	DependentCandidates(uid types.UID, domain SearchScope) DependentCandidatesRead
 	// Members reads the member list in a manager's status; a manager must
 	// be of a RecordingManagers kind. It does no I/O and waits for nothing.
 	Members(manager resourceid.Ref) MembersRead
@@ -47,7 +46,7 @@ type ReadSession interface {
 	// I/O and waits for nothing.
 	RecordingManagers(ref resourceid.Ref) RecordingManagersRead
 	// ValidateCaches returns ErrCachesReplaced if the caches the session read
-	// were stopped or replaced since it began, as when Radar switches clusters
+	// were replaced since it began, as when Radar switches clusters
 	// or rebuilds its cache, and nil otherwise. An answer built in a session
 	// must pass ValidateCaches before it is used: one read across a switch may
 	// mix two clusters. A store replaced within the caches, such as namespace
@@ -59,10 +58,8 @@ type ReadSession interface {
 var (
 	// ErrNotConnected: there are no caches to read.
 	ErrNotConnected = errors.New("ownership: no cluster connection to read")
-	// ErrCachesReplaced: the caches were stopped or replaced after the session
-	// began, as when Radar switches clusters or rebuilds its cache. A cache
-	// that was missing when the session began and is there now, as while
-	// Radar starts, replaced nothing the session read.
+	// ErrCachesReplaced: the caches were replaced after the session began, as
+	// when Radar switches clusters or rebuilds its cache.
 	ErrCachesReplaced = errors.New("ownership: the caches were replaced during the read")
 	// ErrObjectsChanged: the View's answers disagree, because an object it
 	// first read after searching an owner's dependents names that owner

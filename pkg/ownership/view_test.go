@@ -128,7 +128,7 @@ func TestViewSeedsAnObjectTheCachesDoNotHold(t *testing.T) {
 			o = x
 		}
 	}
-	observation := ownership.Observation{Ref: o.Ref, APIVersion: o.APIVersion, UID: o.UID, OwnerReferences: o.Owners}
+	observation := ownership.Observation{Ref: o.Ref, UID: o.UID, OwnerReferences: o.Owners}
 
 	v := view(t, w, ownership.Unrestricted())
 	if got := v.Owner(fetched); got.Subject.Present() {

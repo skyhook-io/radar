@@ -27,12 +27,12 @@ func BenchmarkDependentCandidatesWithManyUnwatchedKinds(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if got := s.DependentCandidates("uid-rs", ownership.Everywhere(), 0); len(got.Gaps) < 300 {
+	if got := s.DependentCandidates("uid-rs", ownership.Everywhere()); len(got.Gaps) < 300 {
 		b.Fatalf("%d gaps, want one per unwatched kind", len(got.Gaps))
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		s.DependentCandidates("uid-rs", ownership.Everywhere(), 0)
+		s.DependentCandidates("uid-rs", ownership.Everywhere())
 	}
 }

@@ -75,16 +75,10 @@ func argoMembers(app *unstructured.Unstructured, collect bool) (list MemberList,
 }
 
 // FluxMembers reads a Kustomization's or HelmRelease's status.inventory. ok is
-// false when there is no inventory, an entry's ID doesn't parse, or the
-// controller hasn't observed the current spec: Flux records no destination
-// with its inventory, so one written before a spec.kubeConfig change may list
-// another cluster's objects. That holds until the controller reconciles the
-// change, and while kustomize-controller's reconciles of it fail. A
-// controller can also record a generation as observed without applying it:
-// on suspension (helm-controller always, kustomize-controller while the
-// object is Ready), after a failure it won't retry, and while a HelmRelease
-// waits out a failed release's retry interval. A destination changed in such
-// a generation isn't noticed until a reconcile applies it.
+// false when there is no inventory or an entry's ID doesn't parse. Flux
+// records no destination with its inventory, so after a spec.kubeConfig
+// change the inventory lists the previous destination's objects until a
+// reconcile applies the change.
 func FluxMembers(obj *unstructured.Unstructured) (MemberList, bool) {
 	return fluxMembers(obj, true)
 }
@@ -97,9 +91,6 @@ func FluxMembersReadable(obj *unstructured.Unstructured) bool {
 }
 
 func fluxMembers(obj *unstructured.Unstructured, collect bool) (list MemberList, ok bool) {
-	if observed, found, err := unstructured.NestedInt64(obj.Object, "status", "observedGeneration"); err == nil && found && observed < obj.GetGeneration() {
-		return MemberList{}, false
-	}
 	raw, _, err := unstructured.NestedFieldNoCopy(obj.Object, "status", "inventory")
 	inventory, isMap := raw.(map[string]any)
 	if err != nil || !isMap {

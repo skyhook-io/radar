@@ -144,8 +144,8 @@ const answers = 2
 // matches that copy exactly; and it owes nothing (see owes).
 func (r *rechecking) candidatesHold(d ownershiptest.Difference) bool {
 	for range answers {
-		fresh := r.cache.DependentCandidates(d.UID, d.Domain, d.Limit)
-		if fresh.Truncated || !slices.Equal(fresh.Gaps, d.WantGaps) {
+		fresh := r.cache.DependentCandidates(d.UID, d.Domain)
+		if !slices.Equal(fresh.Gaps, d.WantGaps) {
 			return false
 		}
 		seen := map[resourceid.Ref]bool{}

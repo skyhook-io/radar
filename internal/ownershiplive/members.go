@@ -50,7 +50,7 @@ func liveMembership(gk resourceid.GroupKind, u *unstructured.Unstructured, scope
 	case ownership.ArgoApplication:
 		return argoMembership(spec, status, scope)
 	case ownership.FluxHelmRelease, ownership.FluxKustomization:
-		return fluxMembership(u.GetGeneration(), spec, status, scope)
+		return fluxMembership(spec, status, scope)
 	}
 	return ownership.MembersUnreadable, nil, ""
 }
@@ -131,16 +131,7 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 	return state, sortedRefs(members), namespace
 }
 
-func fluxMembership(generation int64, spec, status map[string]any, scope scopeOf) (ownership.MembershipState, []resourceid.Ref, string) {
-	// An inventory the controller wrote before it observed the current spec
-	// may be from another destination: spec.kubeConfig is where it applies
-	// now. A controller can record a generation as observed without applying
-	// it (on suspension, after a failure it won't retry, while a HelmRelease
-	// waits to retry), so this can't tell a destination changed in such a
-	// generation.
-	if observed, ok := status["observedGeneration"].(int64); ok && observed < generation {
-		return ownership.MembersUnreadable, nil, ""
-	}
+func fluxMembership(spec, status map[string]any, scope scopeOf) (ownership.MembershipState, []resourceid.Ref, string) {
 	state := ownership.MembersRecorded
 	if _, elsewhere := spec["kubeConfig"].(map[string]any); elsewhere {
 		state = ownership.MembersRemote

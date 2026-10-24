@@ -268,7 +268,7 @@ func (v *View) Children(ref resourceid.Ref, limit int) ChildrenAnswer {
 	a.Narrowed = v.narrows(ref)
 	found, searched := v.searches[ref]
 	if !searched {
-		found = v.session.DependentCandidates(owner.UID, domain, 0)
+		found = v.session.DependentCandidates(owner.UID, domain)
 		v.searches[ref] = found
 	}
 	candidates, unread, undecided := v.candidates(found, owner.UID, domain)

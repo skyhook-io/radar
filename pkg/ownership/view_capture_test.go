@@ -48,10 +48,10 @@ func (c *countingSession) Object(ref resourceid.Ref) ownership.ObjectRead {
 	defer c.after("Object")
 	return c.now.Object(ref)
 }
-func (c *countingSession) DependentCandidates(uid types.UID, d ownership.SearchScope, limit int) ownership.DependentCandidatesRead {
+func (c *countingSession) DependentCandidates(uid types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
 	c.searches[uid]++
 	defer c.after("DependentCandidates")
-	return c.now.DependentCandidates(uid, d, limit)
+	return c.now.DependentCandidates(uid, d)
 }
 func (c *countingSession) Members(ref resourceid.Ref) ownership.MembersRead {
 	c.inventory[ref]++
@@ -607,9 +607,9 @@ func (p *phased) Object(r resourceid.Ref) ownership.ObjectRead {
 	defer func() { p.i++ }()
 	return p.cur().Object(r)
 }
-func (p *phased) DependentCandidates(u types.UID, d ownership.SearchScope, l int) ownership.DependentCandidatesRead {
+func (p *phased) DependentCandidates(u types.UID, d ownership.SearchScope) ownership.DependentCandidatesRead {
 	defer func() { p.i++ }()
-	return p.cur().DependentCandidates(u, d, l)
+	return p.cur().DependentCandidates(u, d)
 }
 
 // A Pod the view read while Pods loaded, which the owner's search then found,

@@ -46,12 +46,10 @@ type DependentCandidatesRead struct {
 	// radar_namespace_not_collected, the namespaces of that kind Radar doesn't
 	// collect.
 	Gaps []Gap
-	// Truncated: the limit cut Candidates short, so more exist than are listed.
-	Truncated bool
 }
 
 // Complete reports whether Candidates are all of the UID's dependents in the
 // domain.
 func (r DependentCandidatesRead) Complete() bool {
-	return len(r.Gaps) == 0 && !r.Truncated
+	return len(r.Gaps) == 0
 }

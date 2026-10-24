@@ -51,9 +51,7 @@ type ObjectRead struct {
 // cache so it stays fixed while rules run.
 type Observation struct {
 	Ref resourceid.Ref
-	// APIVersion is the version the store holds the object at.
-	APIVersion string
-	UID        types.UID
+	UID types.UID
 	// ResourceVersion is opaque: compare it only for equality, between
 	// observations of the same object.
 	ResourceVersion string
@@ -61,12 +59,11 @@ type Observation struct {
 	OwnerReferences []metav1.OwnerReference
 }
 
-// Observe copies what ownership needs out of m, the object at ref read at
-// apiVersion, which may be a cached object that must not be kept.
-func Observe(ref resourceid.Ref, apiVersion string, m metav1.Object) Observation {
+// Observe copies what ownership needs out of m, the object at ref, which may
+// be a cached object that must not be kept.
+func Observe(ref resourceid.Ref, m metav1.Object) Observation {
 	o := Observation{
 		Ref:             ref,
-		APIVersion:      apiVersion,
 		UID:             m.GetUID(),
 		ResourceVersion: m.GetResourceVersion(),
 	}
