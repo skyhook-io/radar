@@ -102,7 +102,7 @@ describe("a list Radar read only in some of the namespaces it collects", () => {
     const projection = projectCase("partial and empty");
     expect(groupsOf(projection.groups, "inventory")).toEqual([]);
     expect(projection.limitations.map((item) => item.message)).toEqual([
-      'Radar found no services in namespace "alpha". Not read: namespace "gamma", because Radar is still loading services there. Services may exist there that this list doesn\'t show. Other namespaces weren\'t read either: Radar collects services only in namespaces "alpha", "gamma"; whoever installed Radar can add namespaces with --namespaces through the chart\'s extraArgs, if its service account can list services there.',
+      'Partial: no services in namespace "alpha". Unknown: namespace "gamma", because Radar is still loading services there. Other namespaces are unknown: Radar collects services only in namespaces "alpha", "gamma". Whoever runs Radar can widen its collection.',
     ]);
     expect(investigationEvidenceCoverageLimited(projection, "Service")).toBe(
       true,
@@ -197,7 +197,7 @@ describe("a list Radar read only in some of the namespaces it collects", () => {
   it("names the resource Radar read, not the alias the agent asked for", () => {
     const projection = projectCase("partial and empty, kind by alias");
     const [message] = projection.limitations.map((item) => item.message);
-    expect(message).toContain("Radar found no services in");
+    expect(message).toContain("no services in namespace");
     expect(message).not.toMatch(/svcs/i);
   });
 

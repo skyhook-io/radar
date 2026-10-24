@@ -136,7 +136,7 @@ func listResult(ctx context.Context, resource string, items []any, coverage reso
 	if items == nil {
 		items = []any{}
 	}
-	body, err := json.Marshal(listEnvelope{Summary: listSummary(ctx, resource, len(items), coverage), Next: listNext(coverage), Coverage: coverage, Items: items})
+	body, err := json.Marshal(listEnvelope{Summary: listSummary(ctx, resource, len(items), onlyRowKind(items), coverage), Next: listNext(coverage), Coverage: coverage, Items: items})
 	if err != nil {
 		log.Printf("[mcp] Failed to marshal result: %v", err)
 		return nil, nil, fmt.Errorf("failed to marshal result: %w", err)
@@ -462,7 +462,7 @@ func withListCoverage(ctx context.Context, err error, resource string, target re
 		}
 	}
 	if beyondCallerAccess(cov.NarrowedBy) && cov.Scope.Namespaces != nil {
-		s = append(s, fmt.Sprintf("Other namespaces weren't read either: %s%s.", narrowingCause(resource, cov.NarrowedBy, namespacePhrase(cov.Scope.Namespaces)), narrowingRemedy(resource, cov.NarrowedBy)))
+		s = append(s, otherNamespacesUnknown(ctx, resource, *cov))
 	}
 	explanation := re.err
 	if len(s) > 1 || s[0] != re.err.Error() {
@@ -493,57 +493,102 @@ func beyondCallerAccess(by []resourceapi.Narrowing) bool {
 	return false
 }
 
-// listSummary is what a model reads first: in words, what the rows cover, what
-// was not read and why, that a row missing from an unread part proves nothing,
-// and who can widen the read. Coverage carries the same facts as data for code
-// to branch on; an agent can't be expected to know that vocabulary.
-func listSummary(ctx context.Context, resource string, rows int, cov resourceapi.Coverage) string {
+// listSummary is what a model reads first: whether the rows are complete for
+// what was asked, which parts are unknown and why, and who can widen the read.
+// It leads with that verdict and keeps every part that went unread, because
+// readers drop caveats that come last; coverage carries the same facts as
+// data for code to branch on.
+func listSummary(ctx context.Context, resource string, rows int, rowKind string, cov resourceapi.Coverage) string {
+	count := countPhrase(rows, resource, rowKind)
 	narrowed := len(cov.NarrowedBy) > 0 && cov.Scope.Namespaces != nil
 	if cov.Status != resourceapi.CoveragePartial {
 		switch {
 		case narrowed:
-			where := namespacePhrase(cov.Scope.Namespaces)
-			lead := fmt.Sprintf("These are the %s in %s only", resource, where)
-			if rows == 0 {
-				lead = fmt.Sprintf("There are no %s in %s", resource, where)
-			}
-			these := "that namespace"
-			if cov.Scope.Namespaces.Count != 1 {
-				these = "those namespaces"
-			}
-			return fmt.Sprintf("%s: %s. Other namespaces may have %s this list doesn't show%s.", lead, narrowingCause(resource, cov.NarrowedBy, these), resource, narrowingRemedy(resource, cov.NarrowedBy))
+			return fmt.Sprintf("Complete within %s: %s in %s. Other namespaces are unknown.%s", narrowingScopeName(cov.NarrowedBy), count, namespacePhrase(cov.Scope.Namespaces), narrowingRemedy(cov.NarrowedBy))
 		case cov.Scope.Type == resourceapi.ScopeCluster:
-			return wholeScope(resource, rows, "the cluster", "the cluster")
+			return fmt.Sprintf("Complete: %s in the cluster.", count)
 		case cov.Scope.Namespaces != nil:
-			where := namespacePhrase(cov.Scope.Namespaces)
-			return wholeScope(resource, rows, where, where)
+			return fmt.Sprintf("Complete: %s in %s.", count, namespacePhrase(cov.Scope.Namespaces))
+		case rows == 0:
+			return fmt.Sprintf("Complete: no %s in any namespace.", resource)
 		default:
-			return wholeScope(resource, rows, "every namespace", "any namespace")
+			return fmt.Sprintf("Complete: %s across every namespace.", count)
 		}
 	}
 	where := "the part of the scope Radar could read"
 	if cov.Read != nil && cov.Read.Namespaces != nil {
 		where = namespacePhrase(cov.Read.Namespaces)
 	}
-	s := []string{fmt.Sprintf("These are the %s in %s only.", resource, where)}
+	s := []string{fmt.Sprintf("Partial: %s from %s.", count, where)}
 	if rows == 0 {
-		s[0] = fmt.Sprintf("Radar found no %s in %s.", resource, where)
+		s[0] = fmt.Sprintf("Partial: no %s in %s.", resource, where)
 	}
 	for _, gap := range cov.Gaps {
 		s = append(s, gapSentence(ctx, resource, gap))
 	}
-	s = append(s, fmt.Sprintf("%s may exist there that this list doesn't show.", upperFirst(resource)))
 	if narrowed {
-		s = append(s, fmt.Sprintf("Other namespaces weren't read either: %s%s.", narrowingCause(resource, cov.NarrowedBy, namespacePhrase(cov.Scope.Namespaces)), narrowingRemedy(resource, cov.NarrowedBy)))
+		s = append(s, otherNamespacesUnknown(ctx, resource, cov))
 	}
 	return strings.Join(s, " ")
 }
 
-func wholeScope(resource string, rows int, all, none string) string {
-	if rows == 0 {
-		return fmt.Sprintf("There are no %s in %s.", resource, none)
+// otherNamespacesUnknown says why namespaces outside a narrowed scope weren't
+// read, and who can widen it.
+func otherNamespacesUnknown(ctx context.Context, resource string, cov resourceapi.Coverage) string {
+	return fmt.Sprintf("Other namespaces are unknown: %s.%s", narrowingCause(resource, cov.NarrowedBy, namespacePhrase(cov.Scope.Namespaces)), narrowingRemedy(cov.NarrowedBy))
+}
+
+// countPhrase is "no services", "1 Service" or "3 services". A single row is
+// named by its Kind: resource plurals don't reliably singularize (Endpoints,
+// or a CRD's chosen plural).
+func countPhrase(n int, resource, rowKind string) string {
+	switch {
+	case n == 0:
+		return "no " + resource
+	case n == 1 && rowKind != "":
+		return "1 " + rowKind
 	}
-	return fmt.Sprintf("These are all the %s in %s.", resource, all)
+	return fmt.Sprintf("%d %s", n, resource)
+}
+
+// onlyRowKind is the Kind of a list's only row, or "" when it has more or none.
+func onlyRowKind(items []any) string {
+	if len(items) != 1 {
+		return ""
+	}
+	raw, err := json.Marshal(items[0])
+	if err != nil {
+		return ""
+	}
+	var row struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(raw, &row) != nil {
+		return ""
+	}
+	return row.Kind
+}
+
+// narrowingScopeName names what narrowed a complete list, as in "complete
+// within your access".
+func narrowingScopeName(by []resourceapi.Narrowing) string {
+	var names []string
+	for _, n := range by {
+		switch n {
+		case resourceapi.NarrowedByUserAccess:
+			names = append(names, "your access")
+		case resourceapi.NarrowedByNamespacePin:
+			names = append(names, "Radar's --namespace-scope setting")
+		case resourceapi.NarrowedByNamespaceSelection:
+			names = append(names, "your saved namespace selection")
+		case resourceapi.NarrowedByNamespaceCollection:
+			names = append(names, "Radar's collection")
+		}
+	}
+	if len(names) > 1 {
+		return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+	return strings.Join(names, "")
 }
 
 // narrowingCause says why an unscoped request covers only these namespaces.
@@ -581,15 +626,21 @@ func narrowingCause(resource string, by []resourceapi.Narrowing, these string) s
 	return fmt.Sprintf("the scope is where %s overlap", strings.Join(causes, ""))
 }
 
-// narrowingRemedy is who widens a narrowing that Radar's configuration made,
-// as a clause; the caller's own access and selection need none.
-func narrowingRemedy(resource string, by []resourceapi.Narrowing) string {
+// narrowingRemedy says, as sentences, who widens a narrowing. A saved
+// selection is the caller's own to change, so it needs none, and a Radar
+// Cloud role is named only for an actual denial, not for routine narrowing. It is short on
+// purpose: narrowing is routine, and the full remedy for what Radar collects
+// comes with a namespace the caller named that Radar doesn't collect.
+func narrowingRemedy(by []resourceapi.Narrowing) string {
 	var out string
+	if slices.Contains(by, resourceapi.NarrowedByUserAccess) {
+		out += " A cluster admin can widen your access."
+	}
 	if slices.Contains(by, resourceapi.NarrowedByNamespacePin) {
-		out += "; whoever runs Radar sets --namespace-scope"
+		out += " Whoever runs Radar sets --namespace-scope."
 	}
 	if slices.Contains(by, resourceapi.NarrowedByNamespaceCollection) {
-		out += "; " + collectionRemedy(resource)
+		out += " Whoever runs Radar can widen its collection."
 	}
 	return out
 }
@@ -604,9 +655,9 @@ func gapSentence(ctx context.Context, resource string, gap resourceapi.Gap) stri
 	}
 	why, who := gapReason(ctx, resource, gap.Code)
 	if who == "" {
-		return fmt.Sprintf("Not read: %s, because %s.", where, why)
+		return fmt.Sprintf("Unknown: %s, because %s.", where, why)
 	}
-	return fmt.Sprintf("Not read: %s, because %s (%s).", where, why, who)
+	return fmt.Sprintf("Unknown: %s, because %s (%s).", where, why, who)
 }
 
 // gapReason is why a code left part of a list unread, and who other than the

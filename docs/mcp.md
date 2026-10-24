@@ -587,7 +587,7 @@ truncation that keeps only the head of a long result:
 
 ```json
 {
-  "summary": "These are the services in namespace \"alpha\" only. Not read: namespace \"gamma\", because Radar is still loading services there. Services may exist there that this list doesn't show. Other namespaces weren't read either: your access covers only namespaces \"alpha\", \"gamma\".",
+  "summary": "Partial: 1 Service from namespace \"alpha\". Unknown: namespace \"gamma\", because Radar is still loading services there. Other namespaces are unknown: your access covers only namespaces \"alpha\", \"gamma\". A cluster admin can widen your access.",
   "next": "Retry in a few seconds to read namespace \"gamma\".",
   "coverage": {
     "status": "partial",
@@ -600,9 +600,11 @@ truncation that keeps only the head of a long result:
 }
 ```
 
-- **`summary`** is always present. A list that covers the whole scope says so
-  ("These are all the services in every namespace."); anything less names what
-  was not read, why, and who can widen it.
+- **`summary`** is always present and leads with its verdict: `Complete:` when
+  Radar read the whole scope ("Complete: 2 services across every namespace.",
+  or "Complete within your access: …" when the scope was narrowed), otherwise
+  `Partial:`, with each part it didn't read called unknown, why, and who can
+  widen it.
 
 - **`scope`** is what the answer is about: `cluster` for a cluster-scoped kind,
   `all_namespaces`, or a namespace set. A namespace you name stays the scope

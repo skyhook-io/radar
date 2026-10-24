@@ -637,8 +637,13 @@ func listBody(t *testing.T, result *mcpsdk.CallToolResult) ([]map[string]any, li
 	for _, n := range coverage.NarrowedBy {
 		out.NarrowedBy = append(out.NarrowedBy, string(n))
 	}
-	if (coverage.Status == resourceapi.CoveragePartial || len(coverage.NarrowedBy) > 0) && !strings.Contains(summary, "this list doesn't show") {
-		t.Fatalf("a partial or narrowed list must say what it can't show: %q", summary)
+	// The verdict leads, and every unread part is called unknown: readers
+	// keep a caveat that comes first and drop one that trails.
+	partial := coverage.Status == resourceapi.CoveragePartial
+	if partial && (!strings.HasPrefix(summary, "Partial: ") || strings.Count(summary, "Unknown: ") != len(coverage.Gaps)) ||
+		!partial && !strings.HasPrefix(summary, "Complete") ||
+		len(coverage.NarrowedBy) > 0 && !strings.Contains(summary, "Other namespaces are unknown") {
+		t.Fatalf("a list must lead with whether it is complete and call each part it didn't read unknown: %q", summary)
 	}
 	return rows, out
 }
@@ -647,7 +652,7 @@ func listBody(t *testing.T, result *mcpsdk.CallToolResult) ([]map[string]any, li
 func partialListBody(t *testing.T, result *mcpsdk.CallToolResult) ([]map[string]any, listWireCoverage) {
 	t.Helper()
 	rows, coverage := listBody(t, result)
-	if coverage.Status != "partial" || !strings.Contains(coverage.Summary, "may exist there that this list doesn't show") {
+	if coverage.Status != "partial" || !strings.Contains(coverage.Summary, "Unknown: ") {
 		t.Fatalf("want a partial list whose summary says it cannot establish absence, got %+v", coverage)
 	}
 	return rows, coverage
@@ -658,7 +663,7 @@ func partialListBody(t *testing.T, result *mcpsdk.CallToolResult) ([]map[string]
 func narrowedListBody(t *testing.T, result *mcpsdk.CallToolResult) ([]map[string]any, listWireCoverage) {
 	t.Helper()
 	rows, coverage := completeListBody(t, result)
-	if !slices.Contains(coverage.NarrowedBy, "namespace_collection") || coverage.ScopeType != "namespaces" || !strings.Contains(coverage.Summary, "Radar collects ") {
+	if !slices.Contains(coverage.NarrowedBy, "namespace_collection") || coverage.ScopeType != "namespaces" || !strings.Contains(coverage.Summary, "Radar's collection") && !strings.Contains(coverage.Summary, "Radar collects ") {
 		t.Fatalf("want a list narrowed by collection, got %+v", coverage)
 	}
 	return rows, coverage
@@ -1036,8 +1041,8 @@ func TestListSummaryBoundsNamespaceProse(t *testing.T) {
 			case count > 1:
 				where = "namespaces " + strings.Join(quoted, ", ")
 			}
-			want := fmt.Sprintf("These are the services in %s only. Not read: part of the scope, because Radar doesn't collect services there (%s). Services may exist there that this list doesn't show.", where, collectionRemedy("services"))
-			if got := listSummary(context.Background(), "services", 1, coverage); got != want || coverage.Status != resourceapi.CoveragePartial {
+			want := fmt.Sprintf("Partial: 1 Service from %s. Unknown: part of the scope, because Radar doesn't collect services there (%s).", where, collectionRemedy("services"))
+			if got := listSummary(context.Background(), "services", 1, "Service", coverage); got != want || coverage.Status != resourceapi.CoveragePartial {
 				t.Fatalf("summary = %q, want %q", got, want)
 			}
 			// The agent can't tell whether a namespace was read when the list
@@ -1088,20 +1093,16 @@ func TestListResourcesReportsCollectorCoverage(t *testing.T) {
 						if !slices.Equal(coverage.NarrowedBy, []string{"namespace_collection"}) || !slices.Equal(coverage.Read, []string{"alpha", "gamma"}) || !slices.Equal(coverage.Scope, []string{"alpha", "gamma"}) {
 							t.Fatalf("coverage = %+v, want narrowed by collection to alpha and gamma", coverage)
 						}
-						these := fmt.Sprintf(`These are the %s in namespaces "alpha", "gamma" only`, kind)
-						if len(rows) == 0 {
-							these = fmt.Sprintf(`There are no %s in namespaces "alpha", "gamma"`, kind)
-						}
-						if want := fmt.Sprintf(`%s: Radar collects %s only in those namespaces. Other namespaces may have %s this list doesn't show; %s.`, these, kind, kind, collectionRemedy(kind)); coverage.Summary != want {
+						if want := fmt.Sprintf(`Complete within Radar's collection: %s in namespaces "alpha", "gamma". Other namespaces are unknown. Whoever runs Radar can widen its collection.`, countPhrase(len(rows), kind, onlyRowKindOf(rows))); coverage.Summary != want {
 							t.Fatalf("summary must name the kind, the namespaces collected and who widens them, got %q", coverage.Summary)
 						}
 						assertNoCollectorLeak(t, errors.New(extractText(t, result)))
 					} else {
 						var coverage listWireCoverage
 						rows, coverage = completeListBody(t, result)
-						want := fmt.Sprintf("These are all the %s in every namespace.", kind)
+						want := fmt.Sprintf("Complete: %s across every namespace.", countPhrase(len(rows), kind, onlyRowKindOf(rows)))
 						if len(rows) == 0 {
-							want = fmt.Sprintf("There are no %s in any namespace.", kind)
+							want = fmt.Sprintf("Complete: no %s in any namespace.", kind)
 						}
 						if coverage.ScopeType != "all_namespaces" || coverage.ReadType != "all_namespaces" || coverage.Summary != want {
 							t.Fatalf("a complete unscoped list covers every namespace: %+v", coverage)
@@ -1617,7 +1618,7 @@ func TestListResourcesUnderNamespacePinIsNarrowed(t *testing.T) {
 				if got := rowNames(rows); !slices.Equal(got, []string{"alpha-object"}) {
 					t.Fatalf("pinned list = %v, want alpha-object", got)
 				}
-				if !slices.Equal(coverage.NarrowedBy, []string{"namespace_pin"}) || !slices.Equal(coverage.Scope, []string{"alpha"}) || !strings.Contains(coverage.Summary, "Radar is set to read only that namespace (--namespace-scope)") {
+				if !slices.Equal(coverage.NarrowedBy, []string{"namespace_pin"}) || !slices.Equal(coverage.Scope, []string{"alpha"}) || !strings.HasPrefix(coverage.Summary, "Complete within Radar's --namespace-scope setting: ") {
 					t.Fatalf("pinned list must say the pin narrowed it: %+v", coverage)
 				}
 			})
@@ -2100,7 +2101,7 @@ func TestFailedListKeepsCollectionScope(t *testing.T) {
 	}
 	body := result.StructuredContent.(mcpReadError)
 	if body.ErrorCode != readreason.KindSyncPending || body.Coverage != nil ||
-		!strings.Contains(body.Error, `Other namespaces weren't read either: Radar collects services only in namespaces "alpha", "gamma"`) {
+		!strings.Contains(body.Error, `Other namespaces are unknown: Radar collects services only in namespaces "alpha", "gamma"`) {
 		t.Fatalf("the error must say the list was narrowed to what Radar collects: %+v", body)
 	}
 	if body.Next != `Retry in a few seconds to read namespaces "alpha", "gamma".` {
@@ -2402,8 +2403,8 @@ func TestFailedListNamesEveryCause(t *testing.T) {
 	}
 	body := result.StructuredContent.(mcpReadError)
 	for _, want := range []string{
-		`Not read: namespace "alpha", because your Kubernetes access doesn't allow listing secrets there`,
-		`Not read: namespace "beta", because Radar's load of secrets there didn't finish in time`,
+		`Unknown: namespace "alpha", because your Kubernetes access doesn't allow listing secrets there`,
+		`Unknown: namespace "beta", because Radar's load of secrets there didn't finish in time`,
 	} {
 		if !strings.Contains(body.Error, want) {
 			t.Fatalf("missing %q in %q", want, body.Error)
@@ -2582,5 +2583,35 @@ func TestKindUnknownWithPartialDiscovery(t *testing.T) {
 	_, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: "gadgets", Group: "fine.test", Name: "x"})
 	if err == nil || strings.Contains(err.Error(), "refresh failed") {
 		t.Fatalf("a good refresh must clear the hedge: %v", err)
+	}
+}
+
+func onlyRowKindOf(rows []map[string]any) string {
+	if len(rows) != 1 {
+		return ""
+	}
+	kind, _ := rows[0]["kind"].(string)
+	return kind
+}
+
+// A single row is named by its Kind, so an irregular or CRD-chosen plural
+// never produces a guessed singular.
+func TestCountPhraseNamesASingleRowByKind(t *testing.T) {
+	for _, tc := range []struct {
+		n             int
+		resource, row string
+		want          string
+	}{
+		{0, "endpoints", "", "no endpoints"},
+		{1, "endpoints", "Endpoints", "1 Endpoints"},
+		{1, "caches", "Cache", "1 Cache"},
+		{2, "services", "", "2 services"},
+	} {
+		if got := countPhrase(tc.n, tc.resource, tc.row); got != tc.want {
+			t.Errorf("countPhrase(%d, %q, %q) = %q, want %q", tc.n, tc.resource, tc.row, got, tc.want)
+		}
+	}
+	if got := onlyRowKind([]any{map[string]any{"kind": "Endpoints", "name": "api"}}); got != "Endpoints" {
+		t.Errorf("onlyRowKind = %q", got)
 	}
 }
