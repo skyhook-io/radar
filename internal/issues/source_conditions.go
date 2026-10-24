@@ -28,7 +28,17 @@ import (
 // comparison mirrors applyFilters: lowercase for case-insensitive
 // match against the user's filter (which itself is canonicalized to
 // the singular form upstream).
-func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool) []Issue {
+//
+// Reads that could not give a complete answer are recorded in unchecked: a
+// list error, a kind whose cache is still loading, and CRD discovery still
+// running (so kinds it will watch aren't watched yet).
+func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool, unchecked *uncheckedSet) []Issue {
+	syncs, _ := p.(dynamicReadinessProvider)
+	// A kind filter can't say whether a requested kind is a CRD discovery
+	// hasn't reached yet, so only an unfiltered request reports discovery.
+	if syncs != nil && len(f.Kinds) == 0 && syncs.crdDiscoveryPending() {
+		unchecked.add(issuesapi.UncheckedSourceCustomResources, issuesapi.UncheckedReasonSyncPending, issuesapi.UncheckedKind{})
+	}
 	gvrs := p.WatchedDynamic()
 	if len(gvrs) == 0 {
 		return nil
@@ -71,19 +81,25 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		//    across every watched scope. A plain ListDynamic(gvr,"") would read only
 		//    a cluster-wide informer and silently miss namespace-scoped ones.
 		var items []*unstructured.Unstructured
+		uncheckedKind := issuesapi.UncheckedKind{Group: gvr.Group, Kind: kind}
+		var readScope []string // nil = every watched scope
 		switch {
 		case clusterScoped:
+			readScope = []string{""}
 			its, err := p.ListDynamic(gvr, "")
 			if err != nil {
 				log.Printf("[issues] Failed to list %s (%s): %s", logsafe.Sanitize(gvr.Resource), logsafe.Sanitize(gvr.Group), logsafe.Sanitize(err.Error()))
+				unchecked.add(issuesapi.UncheckedSourceCustomResources, issuesapi.UncheckedReasonReadFailed, uncheckedKind)
 				continue
 			}
 			items = its
 		case len(f.Namespaces) > 0:
+			readScope = f.Namespaces
 			for _, ns := range f.Namespaces {
 				its, err := p.ListDynamic(gvr, ns)
 				if err != nil {
 					log.Printf("[issues] Failed to list %s (%s) in %s: %s", logsafe.Sanitize(gvr.Resource), logsafe.Sanitize(gvr.Group), logsafe.Sanitize(ns), logsafe.Sanitize(err.Error()))
+					unchecked.add(issuesapi.UncheckedSourceCustomResources, issuesapi.UncheckedReasonReadFailed, uncheckedKind)
 					continue
 				}
 				items = append(items, its...)
@@ -92,9 +108,17 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			its, err := p.ListDynamicAllNamespaces(gvr)
 			if err != nil {
 				log.Printf("[issues] Failed to list %s (%s) across namespaces: %s", logsafe.Sanitize(gvr.Resource), logsafe.Sanitize(gvr.Group), logsafe.Sanitize(err.Error()))
+				unchecked.add(issuesapi.UncheckedSourceCustomResources, issuesapi.UncheckedReasonReadFailed, uncheckedKind)
 				continue
 			}
 			items = its
+		}
+		// Checked after the list, which may have just started an informer
+		// for a namespace no one had read before.
+		if syncs != nil {
+			if reason := syncs.dynamicSyncGap(gvr, readScope); reason != "" {
+				unchecked.add(issuesapi.UncheckedSourceCustomResources, reason, uncheckedKind)
+			}
 		}
 		// Velero is handled at list level, not per object: none of its CRDs
 		// carry status.conditions (so the loop below would find nothing), and

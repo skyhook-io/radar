@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -235,25 +236,30 @@ func cnpgSnapshotLogSources(pods []*corev1.Pod, selected string) []podlogs.Sourc
 }
 
 type cnpgStreamHandle struct {
-	uid    types.UID
-	cancel context.CancelFunc
+	uid        types.UID
+	cancel     context.CancelFunc
+	follow     int
+	generation int
+	opened     atomic.Bool
 }
 
 type cnpgLogSourceFailure struct {
-	key string
-	uid types.UID
+	key    string
+	uid    types.UID
+	follow int
+	reason string
 }
 
 type cnpgCompletedLogRun struct {
-	key string
-	uid types.UID
-	run string
+	key    string
+	uid    types.UID
+	run    string
+	follow int
 }
 
 // followCNPGContainerLogs reports whether it read the stream to its end, and
-// returns k8score.ErrLogsUnavailable when the node answers with its notice
-// instead of logs.
-func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, follow int, sourceLabel string, logCh chan<- podlogs.Entry) (bool, error) {
+// returns a node's read/follow notice as an error rather than log output.
+func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, follow int, sourceLabel string, logCh chan<- podlogs.Entry, onOpen func()) (bool, error) {
 	stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, &opts).Stream(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -262,14 +268,17 @@ func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, n
 		return false, nil
 	}
 	defer stream.Close()
+	if onOpen != nil {
+		onOpen()
+	}
 	reader := bufio.NewReader(stream)
 	for {
 		line, err := reader.ReadString('\n')
 		if line = strings.TrimSuffix(line, "\n"); line != "" && (err == nil || err == io.EOF) {
 			// The kubelet's notice for a container it no longer holds logs for
 			// arrives as the stream's only line. It is not output.
-			if k8score.IsLogsUnavailableNotice(line) {
-				return false, k8score.ErrLogsUnavailable
+			if followErr := k8score.LogFollowError(line); followErr != nil {
+				return false, followErr
 			}
 			ts, content := podlogs.ParseLine(line)
 			select {
@@ -514,6 +523,7 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 		delete(roles, podName)
 	}
 	follows := 0
+	generation := 0
 	start := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
 			if role := instanceRole(pod); role != "" {
@@ -556,22 +566,23 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 					sourceLabel += " · previous run"
 				}
 				streamCtx, streamCancel := context.WithCancel(ctx)
-				handle := &cnpgStreamHandle{uid: pod.UID, cancel: streamCancel}
+				handle := &cnpgStreamHandle{uid: pod.UID, cancel: streamCancel, follow: follow, generation: generation}
 				active.Store(key, handle)
 				go func(podName, key string) {
 					defer streamCancel()
 					defer active.CompareAndDelete(key, handle)
-					done, err := followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, follow, sourceLabel, logCh)
+					done, err := followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, follow, sourceLabel, logCh, func() { handle.opened.Store(true) })
+					active.CompareAndDelete(key, handle)
 					if err != nil {
 						select {
-						case unavailableCh <- cnpgLogSourceFailure{key: key, uid: handle.uid}:
+						case unavailableCh <- cnpgLogSourceFailure{key: key, uid: handle.uid, follow: follow, reason: err.Error()}:
 						case <-streamCtx.Done():
 						}
 						return
 					}
 					if done && terminated && streamCtx.Err() == nil {
 						select {
-						case completedCh <- cnpgCompletedLogRun{key: key, uid: handle.uid, run: run}:
+						case completedCh <- cnpgCompletedLogRun{key: key, uid: handle.uid, run: run, follow: follow}:
 						case <-streamCtx.Done():
 						}
 					}
@@ -598,21 +609,21 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 			// A stream canceled during pod removal can still deliver its report.
 			key := failure.key
 			podName, _, _ := strings.Cut(key, "/")
-			if uid, seen := known[podName]; seen && uid == failure.uid && unavailable.Add(key) {
+			if uid, seen := known[podName]; seen && uid == failure.uid && unavailable.Add(key, failure.follow, failure.reason) {
 				sendUnavailable()
 			}
 		case read := <-completedCh:
 			podName, _, _ := strings.Cut(read.key, "/")
 			if uid, seen := known[podName]; seen && uid == read.uid {
 				completed[read.key] = read
+				if unavailable.Remove(read.key, read.follow) {
+					sendUnavailable()
+				}
 			}
 		case entry := <-logCh:
 			key := entry.Pod + "/" + entry.Container
 			cursor := cursors[key]
 			fromCurrentPod := cursor != nil && cursor.FromCurrentPod(entry)
-			if fromCurrentPod && unavailable.Remove(key) {
-				sendUnavailable()
-			}
 			if cursor != nil && !cursor.Admit(entry) {
 				continue
 			}
@@ -628,6 +639,7 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 			annotateCNPGLogEntry(&entry)
 			send("log", entry)
 		case <-ticker.C:
+			generation++
 			current, err := target.currentCluster(ctx)
 			if err != nil {
 				continue
@@ -667,6 +679,14 @@ func (target *LogTarget) Follow(parent context.Context, query LogQuery, send fun
 				}
 				send("pod_removed", map[string]string{"pod": podName, "reason": "terminated"})
 			}
+			active.Range(func(key, value any) bool {
+				handle := value.(*cnpgStreamHandle)
+				podName, _, _ := strings.Cut(key.(string), "/")
+				if known[podName] == handle.uid && handle.generation < generation && handle.opened.Load() && unavailable.Remove(key.(string), handle.follow) {
+					sendUnavailable()
+				}
+				return true
+			})
 			start(currentPods)
 		}
 	}

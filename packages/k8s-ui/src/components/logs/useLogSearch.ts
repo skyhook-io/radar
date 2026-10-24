@@ -54,6 +54,7 @@ export function useLogSearch(
   virtuosoRef: React.RefObject<VirtuosoHandle | null>,
   /** Id of the record an entry belongs to (its first line's id); defaults to the entry itself */
   recordIdOf?: (entry: LogEntry) => number,
+  onNavigate?: () => void,
 ): UseLogSearchReturn {
   const [query, setQuery] = useState('')
   const [isRegex, setIsRegex] = useState(false)
@@ -122,6 +123,7 @@ export function useLogSearch(
   const scrollToMatch = useCallback((matchIdx: number) => {
     if (matchIdx < 0 || matchIdx >= matchIndices.length) return
     if (mode === 'hide') return
+    onNavigate?.()
     if (mode === 'only') {
       // The list holds whole matching records, so find the matched line within it
       const index = filteredIndexById?.get(entries[matchIndices[matchIdx]].id)
@@ -139,7 +141,7 @@ export function useLogSearch(
         behavior: 'smooth',
       })
     }
-  }, [entries, matchIndices, mode, filteredIndexById, virtuosoRef])
+  }, [entries, matchIndices, mode, filteredIndexById, virtuosoRef, onNavigate])
 
   const goToNext = useCallback(() => {
     if (matchIndices.length === 0 || mode === 'hide') return

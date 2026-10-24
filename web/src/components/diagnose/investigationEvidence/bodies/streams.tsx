@@ -1,13 +1,16 @@
 import { VISIBLE_LOG_EVIDENCE_LINES } from "../excerpt";
-import { useContext } from "react";
+import { Fragment, useContext } from "react";
 import {
+  AlertBanner,
   Badge,
   DiffViewer,
   TerminalBlock,
   formatRelativeAgeTime,
+  pluralize,
   ResourceLink,
   stripAnsi,
 } from "@skyhook-io/k8s-ui";
+import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { apiVersionToGroup } from "../../../../utils/navigation";
 import { Tooltip } from "../../../ui/Tooltip";
 import { EvidenceNavigationContext } from "../navigation";
@@ -133,6 +136,49 @@ export function EventsBody({ data }: { data: EvidenceDataOf<"events"> }) {
   );
 }
 
+// The producer caps consumed_by and running_previous_value.workloads at five
+// (maxConsumersPerEntry), so a full list may not be the whole set.
+const REFERENCE_LIST_CAP = 5;
+
+function ChangeReferences({
+  references,
+  namespace,
+}: {
+  references: string[];
+  namespace?: string;
+}) {
+  const { onOpenResource } = useContext(EvidenceNavigationContext);
+  return references.map((reference) => {
+    const slash = reference.indexOf("/");
+    const kind = reference.slice(0, slash);
+    const name = reference.slice(slash + 1);
+    // The producer names only Kind/name, so a link is safe only for kinds
+    // whose group is known and a row with a namespace; a CRD owner such as a
+    // CNPG Cluster stays text.
+    const group =
+      kind === "Rollout" ? "argoproj.io" : builtinGroupForKind(kind);
+    return (
+      <span
+        key={reference}
+        className="min-w-0 max-w-full font-mono [overflow-wrap:anywhere]"
+      >
+        {group === undefined || !namespace ? (
+          reference
+        ) : (
+          <ResourceLink
+            name={name}
+            kind={kind}
+            namespace={namespace}
+            group={group}
+            label={reference}
+            onNavigate={onOpenResource}
+          />
+        )}
+      </span>
+    );
+  });
+}
+
 export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
   const { onOpenResource } = useContext(EvidenceNavigationContext);
   return (
@@ -145,13 +191,13 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
       {data.changes.map((change, index) => (
         <div
           key={`${change.kind}-${change.namespace ?? ""}-${change.name}-${change.timestamp}-${index}`}
-          className="rounded-md border border-theme-border/70 bg-theme-base/30 p-2.5"
+          className="min-w-0 rounded-md border border-theme-border/70 bg-theme-base/30 p-2.5 [overflow-wrap:anywhere]"
         >
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge tone="structural" size="sm">
               {change.kind}
             </Badge>
-            <span className="font-mono text-xs">
+            <span className="min-w-0 max-w-full font-mono text-xs">
               <ResourceLink
                 name={change.name}
                 kind={change.kind}
@@ -172,24 +218,107 @@ export function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
             <Badge tone="note" size="sm">
               {change.changeType.replaceAll("_", " ")}
             </Badge>
-            <Tooltip
-              content={new Date(change.timestamp).toLocaleString()}
-              delay={150}
-              position="left"
-              wrapperClassName="ml-auto"
-            >
-              <time
-                dateTime={change.timestamp}
-                className="text-xs text-theme-text-tertiary"
+            <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">
+              {(change.updates_in_window ?? 0) > 1 ? (
+                <Badge
+                  tone="structural"
+                  size="sm"
+                  className="max-w-full whitespace-normal"
+                >
+                  {change.updates_in_window} updates
+                  {change.first_update_at
+                    ? `, first ${formatRelativeAgeTime(change.first_update_at)}`
+                    : ""}
+                </Badge>
+              ) : null}
+              <Tooltip
+                content={new Date(change.timestamp).toLocaleString()}
+                delay={150}
+                position="left"
               >
-                {formatRelativeAgeTime(change.timestamp)}
-              </time>
-            </Tooltip>
+                <time
+                  dateTime={change.timestamp}
+                  className="text-xs text-theme-text-tertiary"
+                >
+                  {formatRelativeAgeTime(change.timestamp)}
+                </time>
+              </Tooltip>
+            </div>
           </div>
           {change.summary ? (
             <p className="mt-1.5 text-xs text-theme-text-secondary">
               {change.summary}
             </p>
+          ) : null}
+          {change.running_previous_value ? (
+            <AlertBanner
+              variant="warning"
+              className="mt-2"
+              title={`${pluralize(change.running_previous_value.pods, "Pod")} likely still ${change.running_previous_value.pods === 1 ? "holds" : "hold"} the earlier value`}
+            >
+              <div className="mt-1 space-y-1.5 text-xs text-theme-text-secondary">
+                <p>
+                  Changed keys read as env:{" "}
+                  {change.running_previous_value.keys.map((key, keyIndex) => (
+                    <Fragment key={key}>
+                      {keyIndex > 0 ? ", " : null}
+                      <Badge
+                        tone="structural"
+                        size="sm"
+                        className="max-w-full whitespace-normal font-mono [overflow-wrap:anywhere]"
+                      >
+                        {key}
+                      </Badge>
+                    </Fragment>
+                  ))}
+                </p>
+                {(change.running_previous_value.workloads ?? []).length > 0 ? (
+                  <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1">
+                    <span>In workloads you can view:</span>
+                    <ChangeReferences
+                      references={change.running_previous_value.workloads ?? []}
+                      namespace={change.namespace}
+                    />
+                    {(change.running_previous_value.workloads ?? []).length >=
+                    REFERENCE_LIST_CAP ? (
+                      <span>(first {REFERENCE_LIST_CAP})</span>
+                    ) : null}
+                    {change.running_previous_value.withheld ? (
+                      <span>
+                        +{change.running_previous_value.withheld.count} more
+                        you can&apos;t view
+                      </span>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p>
+                    {change.running_previous_value.withheld
+                      ? `In ${pluralize(change.running_previous_value.withheld.count, "workload")} you can't view`
+                      : "workload names hidden by your permissions"}
+                  </p>
+                )}
+                <p>{change.running_previous_value.note}</p>
+              </div>
+            </AlertBanner>
+          ) : null}
+          {change.consumed_by?.length || change.consumed_by_withheld ? (
+            <div className="mt-1.5 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-theme-text-secondary">
+              <span>Referenced by</span>
+              <ChangeReferences
+                references={change.consumed_by ?? []}
+                namespace={change.namespace}
+              />
+              {(change.consumed_by?.length ?? 0) >= REFERENCE_LIST_CAP ? (
+                <span>(first {REFERENCE_LIST_CAP})</span>
+              ) : null}
+              {change.consumed_by_withheld ? (
+                <span>
+                  {change.consumed_by?.length
+                    ? `+${change.consumed_by_withheld.count} more you can't view`
+                    : `${pluralize(change.consumed_by_withheld.count, "workload")} you can't view`}
+                </span>
+              ) : null}
+            </div>
           ) : null}
           {change.fields?.length ? (
             <div className="mt-2">

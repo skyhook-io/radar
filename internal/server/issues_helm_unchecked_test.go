@@ -188,3 +188,97 @@ func TestIssuesSayHelmUncheckedWhenRadarCredentialsAreRejected(t *testing.T) {
 		t.Errorf("unchecked_sources = %s, want %s", got, helmUncheckedWire)
 	}
 }
+
+// useHelmStorageFailingIn points Radar's Helm client at an API server whose
+// release Secret lists fail with a 500 in the failing namespaces and return
+// an empty list elsewhere.
+func useHelmStorageFailingIn(t *testing.T, failing ...string) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/version":
+			_, _ = io.WriteString(w, `{"major":"1","minor":"30","gitVersion":"v1.30.0"}`)
+		case strings.HasSuffix(r.URL.Path, "/secrets") && strings.Contains(r.URL.RawQuery, "owner"):
+			for _, ns := range failing {
+				if strings.Contains(r.URL.Path, "/namespaces/"+ns+"/") {
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"etcdserver: request timed out","code":500}`)
+					return
+				}
+			}
+			_, _ = io.WriteString(w, `{"apiVersion":"v1","kind":"SecretList","items":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	config := &rest.Config{Host: server.URL}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousClient := k8s.SetTestClient(client)
+	helm.ResetClient()
+	if err := helm.InitializeWithRESTConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		helm.ResetClient()
+		k8s.SetTestClient(previousClient)
+	})
+}
+
+// When only some namespaces fail, the entry names them, so a consumer knows
+// Helm issues from the other namespaces are complete.
+func TestIssuesNameTheNamespacesWhereHelmCouldNotBeChecked(t *testing.T) {
+	useHelmStorageFailingIn(t, "pay")
+
+	recorder := httptest.NewRecorder()
+	testServerSrv.handleIssues(recorder, httptest.NewRequest(http.MethodGet, "/api/issues?namespaces=shop,pay", nil))
+
+	want := `[{"namespaces":["pay"],"reason":"read_failed","source":"helm"}]`
+	if got := uncheckedSourcesWire(t, issuesWire(t, recorder)); got != want {
+		t.Errorf("unchecked_sources = %s, want %s", got, want)
+	}
+}
+
+// Home's Helm card must not call a failed read "Access Restricted": that is
+// reserved for the caller's own permissions.
+func TestDashboardHelmSummarySeparatesDeniedFromFailed(t *testing.T) {
+	cases := []struct {
+		name           string
+		status         int
+		body           string
+		wantRestricted bool
+	}{
+		{
+			name:           "caller may not list release Secrets",
+			status:         http.StatusForbidden,
+			body:           `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"secrets is forbidden: User \"dev\" cannot list resource \"secrets\" in API group \"\" in the namespace \"shop\"","reason":"Forbidden","code":403}`,
+			wantRestricted: true,
+		},
+		{
+			name:   "API server rejects Radar's credentials",
+			status: http.StatusUnauthorized,
+			body:   `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"Unauthorized","reason":"Unauthorized","code":401}`,
+		},
+		{
+			name:   "Radar may not impersonate the caller",
+			status: http.StatusForbidden,
+			body:   `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"users \"dev\" is forbidden: User \"system:serviceaccount:radar:radar\" cannot impersonate resource \"users\" in API group \"\" at the cluster scope","reason":"Forbidden","code":403}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			useHelmStorageAnswering(t, tc.status, tc.body)
+			got := testServerSrv.getDashboardHelmSummary(httptest.NewRequest(http.MethodGet, "/api/dashboard/helm", nil), []string{"shop"})
+			if got.Restricted != tc.wantRestricted {
+				t.Fatalf("restricted = %v, want %v (summary: %+v)", got.Restricted, tc.wantRestricted, got)
+			}
+			if !tc.wantRestricted && got.Error == "" {
+				t.Fatalf("a failed read must carry its error, got %+v", got)
+			}
+		})
+	}
+}

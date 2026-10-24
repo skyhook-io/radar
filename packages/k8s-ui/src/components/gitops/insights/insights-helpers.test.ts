@@ -3,6 +3,7 @@ import { SEVERITY_DOT } from '../../../utils/badge-colors'
 import type { GitOpsChange } from '../../../types'
 import {
   changeMatchesFacets,
+  changeHealth,
   changeMatchesSearch,
   compactSource,
   entryTone,
@@ -10,6 +11,7 @@ import {
   healthStatusRank,
   isArgoResourceSyncEligible,
   messageToPhase,
+  missingResourceMessage,
   phaseToTone,
   resourceStatusCounts,
   syncStatusRank,
@@ -18,6 +20,22 @@ import {
 function change(partial: Partial<GitOpsChange> & { ref: GitOpsChange['ref'] }): GitOpsChange {
   return { category: 'Unknown', hasDesired: true, hasLive: true, partial: false, ...partial }
 }
+
+describe('confirmed missing resources', () => {
+  it('counts, filters and enables sync independently of stale health and sync', () => {
+    const item = change({ ref: { kind: 'Secret', name: 'values' }, missing: true, hasLive: false, health: 'Healthy', sync: 'Synced' })
+    expect(changeHealth(item)).toBe('Missing')
+    expect(resourceStatusCounts([item]).missing).toBe(1)
+    expect(changeMatchesFacets(item, new Set(['missing']))).toBe(true)
+    expect(isArgoResourceSyncEligible(item, true)).toBe(true)
+  })
+
+  it('asks for a refresh when Argo still reports Synced', () => {
+    expect(missingResourceMessage('Synced')).toContain('Refresh')
+    expect(missingResourceMessage('Synced')).not.toContain('Sync the application')
+    expect(missingResourceMessage('OutOfSync')).toContain('Sync the application')
+  })
+})
 
 describe('gitopsToSeverity', () => {
   it.each([

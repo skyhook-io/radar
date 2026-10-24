@@ -23,7 +23,7 @@ import {
   healthStatusRank,
   isArgoResourceSyncEligible,
   messageToPhase,
-  normalizeHealthStatus,
+  missingResourceMessage,
   normalizeSyncStatus,
   resourceStatusCounts,
   syncStatusRank,
@@ -237,7 +237,8 @@ function buildHealthSummary(allChanges: GitOpsChange[]): { text: string; tone: s
     // Count HEALTH, not sync — a Synced resource can still be Degraded, so check
     // degraded/missing FIRST and never let a Synced sync-state mask it. A Synced
     // resource with no assessed health (ConfigMaps etc.) still reads as fine.
-    if (c.health === 'Degraded' || c.category === 'Degraded') degraded++
+    if (c.missing) missing++
+    else if (c.health === 'Degraded' || c.category === 'Degraded') degraded++
     else if (c.health === 'Missing' || c.category === 'Missing') missing++
     else if (c.health === 'Healthy' || c.category === 'Synced') healthy++
     else if (c.category === 'OutOfSync') outOfSync++
@@ -1096,9 +1097,11 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
                 const waveSet = !!planItem?.waveSet
                 const rowKey = refKey(change.ref)
                 const focused = focusKey === rowKey
-                const explanation = !change.syncError && !change.message
-                  ? explainChangeStatus(change.sync, change.health, insight.summary)
-                  : ''
+                const explanation = change.missing
+                  ? missingResourceMessage(change.sync)
+                  : !change.syncError && !change.message
+                    ? explainChangeStatus(change.sync, change.health, insight.summary)
+                    : ''
                 const hasInlineDetail = !!(
                   (change.drift && change.drift.entries.length > 0) ||
                   (change.recentEvents && change.recentEvents.length > 0)
@@ -1245,7 +1248,8 @@ function buildTreeExtras(nodes: GitOpsTreeNode[], declared: GitOpsChange[]): Git
       // had a controller verdict to be distinguished from.
       message: n.healthMessage,
       hasDesired: false,
-      hasLive: true,
+      hasLive: !n.missing,
+      missing: n.missing,
       partial: true,
       partialNote: 'Generated resource — not directly tracked by the GitOps controller (no drift / event diagnostics).',
     })
@@ -1365,8 +1369,10 @@ function ChangeRow({
   // differently: hide the Open pill, suppress the drawer-open click path,
   // and offer "View in Git →" instead so the operator can read the
   // declared source instead of a non-existent live object.
-  const isAbsent = change.health === 'Missing' && !change.hasLive
-  const radarNote = radarHealthNote({ health: change.health, healthSource: change.healthSource, healthMessage: change.message })
+  const isAbsent = change.missing || (change.health === 'Missing' && !change.hasLive)
+  const radarNote = change.missing
+    ? 'Radar confirmed that this resource is not present in the cluster.'
+    : radarHealthNote({ health: change.health, healthSource: change.healthSource, healthMessage: change.message })
   const handleRowClick = () => {
     if (expandable) {
       setExpanded((v) => !v)
@@ -1463,7 +1469,7 @@ function ChangeRow({
             </Tooltip>
           )}
           {change.message && !change.syncError && <div className="ml-[18px] mt-1 line-clamp-2 text-xs text-theme-text-secondary">{change.message}</div>}
-          {!change.syncError && !change.message && explanation && (
+          {!change.syncError && (change.missing || !change.message) && explanation && (
             <div className="ml-[18px] mt-1 text-xs text-theme-text-tertiary">{explanation}</div>
           )}
         </button>
@@ -1477,7 +1483,7 @@ function ChangeRow({
           )}
         </div>
         <div className="flex flex-col items-start gap-1 self-start">
-          <HealthStatusBadge health={normalizeHealthStatus(change.health)} />
+          <HealthStatusBadge health={changeHealth(change)} />
           {radarNote && (
             <Tooltip content={radarNote} delay={200} wrapperClassName="inline-flex">
               <span className="cursor-help select-none rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">

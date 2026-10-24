@@ -251,3 +251,9 @@ func classifyIssue(i *Issue) {
 // ---------------------------------------------------------------------------
 // Filter + sort helpers
 // ---------------------------------------------------------------------------
+
+// TimingSummary recomputes an issue's timing_summary from its current timing
+// fields, for callers that revise them after compose.
+func TimingSummary(i Issue) string {
+	return timingSummary(i)
+}

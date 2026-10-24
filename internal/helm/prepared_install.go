@@ -203,6 +203,9 @@ func (p *PreparedInstall) Install(ctx context.Context, values map[string]any) (*
 	install.Timeout = 120 * time.Second
 	install.Version = p.version
 	install.Labels = chartSourceLabels(request.resolvedSource)
+	if request.resolvedSource != nil {
+		install.Labels[chartSourceBindingLabel] = chartSourceBinding(p.chart)
+	}
 	// action.Install.RunWithContext returns on cancellation while Helm continues
 	// mutating the cluster in a background goroutine. That is unsafe here because
 	// the caller would interpret the return as failure and clean up its token

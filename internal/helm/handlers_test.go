@@ -67,6 +67,9 @@ func TestChartSourceRoutesAndWriteAuthorization(t *testing.T) {
 		body   string
 	}{
 		{http.MethodPut, "/helm/releases/default/example/source", `{"type":"repository","reference":"repo","url":"https://example.test"}`},
+		{http.MethodPost, "/helm/releases/default/example/source/upgrade", `{}`},
+		{http.MethodPost, "/helm/releases/default/example/source/upgrade-stream", `{}`},
+		{http.MethodPost, "/helm/releases/default/example/source/preview", `{}`},
 		{http.MethodPost, "/helm/repositories", `{"name":"repo","url":"https://example.test","namespace":"default","releaseName":"example"}`},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))

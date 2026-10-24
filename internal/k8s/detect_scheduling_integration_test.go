@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -840,4 +841,168 @@ func TestDetectAdmissionProblems_WebhookCallFailures(t *testing.T) {
 			t.Errorf("raw error lost: %+v", problem)
 		}
 	}
+}
+
+// The duplicate_pvc rollout deadlock: a single-replica Deployment with a zonal
+// ReadWriteOnce volume rolls out under RollingUpdate. The old ReplicaSet's pod
+// holds the volume and the only node in its zone, so the new pod can't be placed.
+func TestDetectSchedulingProblems_PersistentVolumeRolloutDeadlock(t *testing.T) {
+	const zoneKey = "topology.kubernetes.io/zone"
+	verdict := "0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity. " +
+		"preemption: 0/3 nodes are available: 1 No preemption victims found for incoming pod, 2 Preemption is not helpful for scheduling."
+	node := func(name, zone string) *corev1.Node {
+		return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{zoneKey: zone}}}
+	}
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-1234"},
+		Spec: corev1.PersistentVolumeSpec{NodeAffinity: &corev1.VolumeNodeAffinity{Required: &corev1.NodeSelector{
+			NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
+				Key: zoneKey, Operator: corev1.NodeSelectorOpIn, Values: []string{"us-east-1a"},
+			}}}},
+		}}},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "prod"},
+		Spec:       corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, VolumeName: "pvc-1234"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}},
+	}
+	controller := true
+	deployment := func(strategy appsv1.DeploymentStrategyType) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "prod", UID: "dep-uid"},
+			Spec:       appsv1.DeploymentSpec{Replicas: ptr32(1), Strategy: appsv1.DeploymentStrategy{Type: strategy}},
+		}
+	}
+	rs := func(name, revision string) *appsv1.ReplicaSet {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "prod",
+			Labels:      map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: name},
+			Annotations: map[string]string{"deployment.kubernetes.io/revision": revision},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "db", UID: "dep-uid", Controller: &controller,
+			}},
+		}}
+	}
+	pod := func(name, rsName string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod", UID: types.UID(name),
+				Labels: map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: rsName, "app": "db"},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rsName, Controller: &controller,
+				}}},
+			Spec: corev1.PodSpec{
+				Affinity: antiAffinityTo("db"),
+				Volumes: []corev1.Volume{{
+					Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}},
+				}},
+			},
+		}
+	}
+	oldPod := pod("db-old-x1", "db-old")
+	oldPod.Spec.Affinity = nil // the new pod's own term is enough
+	oldPod.Spec.NodeName = "node-a"
+	oldPod.Status.Phase = corev1.PodRunning
+	newPod := pod("db-new-y2", "db-new")
+	newPod.Status = corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{
+		Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: verdict,
+	}}}
+
+	run := func(t *testing.T, strategy appsv1.DeploymentStrategyType, newRevision string, mutate ...func(*corev1.Pod)) Detection {
+		t.Helper()
+		defer ResetTestState()
+		pending := newPod.DeepCopy()
+		for _, m := range mutate {
+			m(pending)
+		}
+		if err := InitTestResourceCache(fake.NewClientset(
+			node("node-a", "us-east-1a"), node("node-b", "us-east-1b"), node("node-c", "us-east-1c"),
+			pv, pvc, deployment(strategy), rs("db-old", "1"), rs("db-new", newRevision), oldPod, pending,
+		)); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		for _, p := range DetectSchedulingProblems(GetResourceCache(), "prod") {
+			if p.Name == "db-new-y2" {
+				return p
+			}
+		}
+		t.Fatal("no Unschedulable row for the new pod")
+		return Detection{}
+	}
+
+	t.Run("RollingUpdate names the deadlock", func(t *testing.T) {
+		p := run(t, appsv1.RollingUpdateDeploymentStrategyType, "2")
+		for _, want := range []string{
+			`Rollout deadlock: pod db-old-x1 from the previous ReplicaSet db-old still holds ReadWriteOnce PVC "data"`,
+			"; its PersistentVolume pvc-1234 only attaches on nodes with topology.kubernetes.io/zone=us-east-1a; ",
+			"2 node(s) volume node-affinity conflict, 1 node(s) pod anti-affinity conflict (0/3 nodes available)",
+		} {
+			if !strings.Contains(p.Message, want) {
+				t.Errorf("message %q missing %q", p.Message, want)
+			}
+		}
+		for _, want := range []string{"strategy: Recreate", "scale ReplicaSet db-old to 0", "Deleting the old pod doesn't help"} {
+			if !strings.Contains(p.Action, want) {
+				t.Errorf("action %q missing %q", p.Action, want)
+			}
+		}
+		if strings.Contains(p.Message, "selector") || strings.Contains(p.Action, "nodeSelector") {
+			t.Errorf("volume pin read as a node selector mismatch: %+v", p)
+		}
+	})
+
+	// Recreate never runs old and new pods together, so the same verdict is a
+	// plain volume-placement problem: name the PV, no deadlock claim.
+	t.Run("Recreate names only the volume", func(t *testing.T) {
+		p := run(t, appsv1.RecreateDeploymentStrategyType, "2")
+		if strings.Contains(p.Message, "deadlock") || strings.Contains(p.Action, "Recreate") {
+			t.Errorf("deadlock claimed without RollingUpdate: %+v", p)
+		}
+		if !strings.HasPrefix(p.Message, `PVC "data": PersistentVolume pvc-1234 only attaches on nodes with topology.kubernetes.io/zone=us-east-1a`) {
+			t.Errorf("message %q should lead with the PV's zone", p.Message)
+		}
+		if !strings.Contains(p.Action, "PV's nodeAffinity") {
+			t.Errorf("action %q should point at the PV's nodeAffinity", p.Action)
+		}
+	})
+
+	// The pending pod is from the OLDER revision (its ReplicaSet re-created it
+	// mid-rollout) and the running holder is the current one: don't tell the
+	// user to scale the current ReplicaSet down.
+	// The new pod's anti-affinity targets another app on the volume's node:
+	// removing the old db pod wouldn't clear it.
+	t.Run("anti-affinity against an unrelated pod", func(t *testing.T) {
+		p := run(t, appsv1.RollingUpdateDeploymentStrategyType, "2", func(p *corev1.Pod) { p.Spec.Affinity = antiAffinityTo("cache") })
+		if strings.Contains(p.Message, "deadlock") || strings.Contains(p.Action, "Recreate") {
+			t.Errorf("deadlock claimed for an anti-affinity the old pod doesn't cause: %+v", p)
+		}
+	})
+
+	t.Run("pending pod from an older revision", func(t *testing.T) {
+		p := run(t, appsv1.RollingUpdateDeploymentStrategyType, "0")
+		if strings.Contains(p.Message, "deadlock") {
+			t.Errorf("deadlock claimed for a pod outside the current ReplicaSet: %+v", p)
+		}
+	})
+}
+
+// The pod's own new selector excludes the volume's zone: removing the old pod
+// wouldn't help, so the verdict isn't a rollout deadlock.
+func TestHolderCanBlock(t *testing.T) {
+	_, own := parseSchedulerMessage("0/3 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 2 node(s) didn't match PersistentVolume's node affinity.")
+	_, held := parseSchedulerMessage("0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity.")
+	_, onlyVolume := parseSchedulerMessage("0/3 nodes are available: 3 node(s) didn't match PersistentVolume's node affinity.")
+	_, memory := parseSchedulerMessage("0/3 nodes are available: 1 Insufficient memory, 2 node(s) didn't match PersistentVolume's node affinity.")
+	if holderCanBlock(own) || !holderCanBlock(held) || holderCanBlock(onlyVolume) || holderCanBlock(memory) {
+		t.Errorf("holderCanBlock own=%v held=%v onlyVolume=%v memory=%v, want false true false false",
+			holderCanBlock(own), holderCanBlock(held), holderCanBlock(onlyVolume), holderCanBlock(memory))
+	}
+}
+
+func antiAffinityTo(app string) *corev1.Affinity {
+	return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": app}},
+			TopologyKey:   "kubernetes.io/hostname",
+		}},
+	}}
 }

@@ -673,6 +673,35 @@ async function openSettings(page: Page, tab: string) {
   return page.getByRole('dialog', { name: 'Settings', exact: true })
 }
 
+test('MCP mode uses the running read-only endpoint when saved defaults differ', async ({ page }) => {
+  const state = await fixture(page)
+  await page.route('**/api/capabilities', async route => {
+    const capabilities = await (await route.fetch()).json()
+    await route.fulfill({ json: { ...capabilities, mcpEnabled: true, mcpReadOnly: true, configManagement: 'local' } })
+  })
+  const dialog = await openSettings(page, 'Advanced')
+  await expect(dialog.getByRole('switch', { name: 'Read-only MCP', exact: true })).not.toBeChecked()
+  await expect(dialog.locator('code').filter({ hasText: '/mcp-readonly' })).toBeVisible()
+  await dialog.getByRole('switch', { name: 'Read-only MCP', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Save startup settings', exact: true }).click()
+  await expect.poll(() => state.file().mcpReadOnly).toBe(true)
+  await dialog.getByRole('switch', { name: 'MCP Server', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Save startup settings', exact: true }).click()
+  await expect.poll(() => state.file().mcp).toBe(false)
+  expect(state.file().mcpReadOnly).toBe(false)
+})
+
+test('MCP mode does not offer an endpoint before a disabled server restarts', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/capabilities', async route => {
+    const capabilities = await (await route.fetch()).json()
+    await route.fulfill({ json: { ...capabilities, mcpEnabled: false, mcpReadOnly: false, configManagement: 'local' } })
+  })
+  const dialog = await openSettings(page, 'Advanced')
+  await expect(dialog.getByRole('switch', { name: 'MCP Server', exact: true })).toBeChecked()
+  await expect(dialog.getByText('Running MCP Endpoint', { exact: true })).toHaveCount(0)
+})
+
 test('headers edit directly, preserve untouched values, and support undo and discard', async ({ page }) => {
   const state = await fixture(page)
   state.profiles.metrics.headerKeys = ['Authorization', 'X-Scope-OrgID']
@@ -1502,7 +1531,7 @@ test('contextual Argo health and diff preserve benefits and open Argo settings',
   const state = await contextualFixture(page)
   const resource = { apiVersion: 'argoproj.io/v1alpha1', kind: 'Application', metadata: { name: 'storefront', namespace: 'argocd' }, spec: { destination: { namespace: 'default' } }, status: { health: { status: 'Degraded' }, sync: { status: 'OutOfSync' } } }
   const root = { id: 'app/storefront', ref: { kind: 'Application', namespace: 'argocd', name: 'storefront' }, role: 'root', tool: 'argocd', resource }
-  await page.route('**/api/resources/applications/argocd/storefront*', route => route.fulfill({ json: resource }))
+  await page.route('**/api/resources/applications/argocd/storefront*', route => route.fulfill({ json: { resource, relationships: {} } }))
   await page.route('**/api/gitops/tree/applications/argocd/storefront*', route => route.fulfill({ json: { root, nodes: [root], edges: [] } }))
   await page.route('**/api/gitops/insights/applications/argocd/storefront*', route => route.fulfill({ json: {
     summary: { tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'storefront', health: 'Degraded', resourceHealthMode: 'appTree' },

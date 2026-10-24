@@ -108,6 +108,13 @@ describe('DrainPlanContent', () => {
     expect(html).toContain('About this estimate')
   })
 
+  it('distinguishes expected exclusions from protected workloads before draining', () => {
+    const html = render({ plan: plan([pod('agent', 'skip', { expectedSkip: true }), pod('bare', 'skip', { expectedSkip: false })]) })
+    expect(html).toContain('left by design')
+    expect(html).toContain('requires attention')
+    expect(html).toContain('bare reason')
+  })
+
   it('offers a refresh only when the host can recompute the plan', () => {
     const p = plan([pod('web', 'evict')])
     expect(render({ plan: p, onRefreshPlan: noop })).toContain('Recompute the plan')

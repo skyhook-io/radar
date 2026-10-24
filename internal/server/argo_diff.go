@@ -195,7 +195,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 
 	fieldEntries, truncated := []gitopsinsights.DriftEntry{}, false
 	if len(desiredObj) > 0 && len(liveObj) > 0 {
-		fieldEntries, truncated = gitopsinsights.DiffObjects(desiredObj, liveObj)
+		fieldEntries, truncated = gitopsinsights.DiffObjectsTruncated(desiredObj, liveObj)
 	}
 
 	s.writeJSON(w, argoResourceDiffResponse{

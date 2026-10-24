@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/settings"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -383,68 +385,158 @@ func restoreHelmNamespaceFallbackState(t *testing.T) {
 // The shared TestMain cache holds exactly two namespaces: "default" and
 // "broken". Anything else counts as deleted from the cluster.
 
-func TestParseNamespacesForUser_EvictsDeletedSavedPick(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	s := newTestServer(t)
-
-	// A pick saved in a previous session names a namespace that has since
-	// been deleted from the cluster.
-	if _, err := settings.Update(func(st *settings.Settings) {
-		st.ActiveNamespaces = map[string][]string{"test-ctx": {"ghost"}}
-	}); err != nil {
-		t.Fatalf("settings.Update: %v", err)
-	}
-
-	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
-	if got := s.parseNamespacesForUser(req); got != nil {
-		t.Fatalf("parseNamespacesForUser = %v, want nil (unfiltered) after stale-pick eviction", got)
-	}
-	if picks := s.getActiveNamespaceForUser(reqAs("")); len(picks) != 0 {
-		t.Errorf("stale pick survived in memory: %v", picks)
-	}
-	// The eviction must reach settings.json — otherwise loadSavedNamespace-
-	// Preference re-seeds the stale pick on the next request. The entry must
-	// be deleted, not emptied: an empty entry is the explicit-All marker,
-	// which would wrongly suppress the kubeconfig-namespace default.
-	if saved, ok := settings.Load().ActiveNamespaces["test-ctx"]; ok {
-		t.Errorf("stale pick survived in settings (entry = %v, want deleted)", saved)
-	}
-}
-
-func TestParseNamespacesForUser_TrimsPartiallyDeletedPick(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	s := newTestServer(t)
-
-	if _, err := settings.Update(func(st *settings.Settings) {
-		st.ActiveNamespaces = map[string][]string{"test-ctx": {"default", "ghost"}}
-	}); err != nil {
-		t.Fatalf("settings.Update: %v", err)
-	}
-
-	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
-	if got := s.parseNamespacesForUser(req); !slices.Equal(got, []string{"default"}) {
-		t.Fatalf("parseNamespacesForUser = %v, want [default]", got)
-	}
-	if picks := s.getActiveNamespaceForUser(reqAs("")); !slices.Equal(picks, []string{"default"}) {
-		t.Errorf("in-memory pick = %v, want [default]", picks)
-	}
-	if saved := settings.Load().ActiveNamespaces["test-ctx"]; !slices.Equal(saved, []string{"default"}) {
-		t.Errorf("saved pick = %v, want [default]", saved)
-	}
-}
-
-func TestParseNamespacesForUser_ValidSavedPickStillFilters(t *testing.T) {
+// A data read never inherits the stored pick: the picker's selection is a UI
+// preference that the UI sends explicitly, so a read naming no namespaces
+// covers everything the caller may see.
+func TestParseNamespacesForUser_IgnoresSavedPick(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s := newTestServer(t)
 	s.setActiveNamespaceForUser(reqAs(""), []string{"default"})
 
-	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
-	if got := s.parseNamespacesForUser(req); !slices.Equal(got, []string{"default"}) {
-		t.Fatalf("parseNamespacesForUser = %v, want [default]", got)
+	if got := s.parseNamespacesForUser(httptest.NewRequest("GET", "/api/resources/pods", nil)); got != nil {
+		t.Fatalf("plain read = %v, want nil (all namespaces) despite the saved pick", got)
+	}
+	if got := s.parseNamespacesForUser(httptest.NewRequest("GET", "/api/resources/pods?namespaces=broken", nil)); !slices.Equal(got, []string{"broken"}) {
+		t.Fatalf("explicit filter = %v, want [broken]", got)
 	}
 	if picks := s.getActiveNamespaceForUser(reqAs("")); !slices.Equal(picks, []string{"default"}) {
-		t.Errorf("valid pick was disturbed: %v", picks)
+		t.Errorf("a data read disturbed the saved pick: %v", picks)
 	}
+}
+
+// Ignoring the pick drops only the view filter: the caller's RBAC still bounds
+// a plain read, and an explicit filter outside it is still denied.
+func TestParseNamespacesForUser_IgnoresPickKeepsRBAC(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := newTestServer(t)
+	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"default", "broken"}})
+	s.permCache.Set("carol", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"broken"}})
+	s.setActiveNamespaceForUser(reqAs("alice"), []string{"broken"})
+	s.setActiveNamespaceForUser(reqAs("carol"), []string{"broken"})
+
+	asUser := func(user, target string) *http.Request {
+		r := httptest.NewRequest("GET", target, nil)
+		return r.WithContext(pkgauth.ContextWithUser(r.Context(), &pkgauth.User{Username: user}))
+	}
+
+	if got := s.parseNamespacesForUser(asUser("alice", "/api/resources/pods")); !slices.Equal(got, []string{"default", "broken"}) {
+		t.Fatalf("alice plain read = %v, want her RBAC ceiling [default broken], not her pick", got)
+	}
+	if got := s.parseNamespacesForUser(asUser("alice", "/api/resources/pods?namespaces=broken")); !slices.Equal(got, []string{"broken"}) {
+		t.Fatalf("alice explicit filter = %v, want [broken]", got)
+	}
+	if got := s.parseNamespacesForUser(asUser("carol", "/api/resources/pods")); !slices.Equal(got, []string{"broken"}) {
+		t.Fatalf("carol plain read = %v, want her RBAC ceiling [broken]", got)
+	}
+	if got := s.parseNamespacesForUser(asUser("carol", "/api/resources/pods?namespace=default")); !readscope.NoNamespaceAccess(got) {
+		t.Fatalf("carol naming a denied namespace = %v, want no access", got)
+	}
+}
+
+// Data reads neither seed nor rewrite the stored pick. A stale saved pick is
+// left for the preference read (GET /api/cluster/namespace-scope), which is
+// what prunes it — in memory and in settings.json — before the UI adopts it.
+func TestNamespaceScope_PrunesStalePickThatDataReadsLeaveAlone(t *testing.T) {
+	cases := []struct {
+		name        string
+		saved       []string
+		wantActives []string
+		wantSaved   []string // nil = entry deleted
+	}{
+		// The entry must be deleted, not emptied: an empty entry is the
+		// explicit-All marker, which would suppress the kubeconfig default.
+		{name: "fully deleted", saved: []string{"ghost"}, wantActives: []string{}, wantSaved: nil},
+		{name: "partially deleted", saved: []string{"default", "ghost"}, wantActives: []string{"default"}, wantSaved: []string{"default"}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			prevCtx := k8s.SetTestContextName("test-ctx")
+			t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+			if _, err := settings.Update(func(st *settings.Settings) {
+				st.ActiveNamespaces = map[string][]string{"test-ctx": tt.saved}
+			}); err != nil {
+				t.Fatalf("settings.Update: %v", err)
+			}
+			srv := New(Config{DevMode: true})
+			t.Cleanup(srv.Stop)
+
+			if got := srv.parseNamespacesForUser(httptest.NewRequest("GET", "/api/resources/pods", nil)); got != nil {
+				t.Fatalf("plain read = %v, want nil (all namespaces)", got)
+			}
+			if picks := srv.getActiveNamespaceForUser(reqAs("")); picks != nil {
+				t.Fatalf("a data read seeded the pick: %v", picks)
+			}
+			if saved := settings.Load().ActiveNamespaces["test-ctx"]; !slices.Equal(saved, tt.saved) {
+				t.Fatalf("a data read rewrote the saved pick: %v, want %v", saved, tt.saved)
+			}
+
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/cluster/namespace-scope", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("namespace-scope status = %d: %s", rec.Code, rec.Body.String())
+			}
+			var scope NamespaceScopeResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &scope); err != nil {
+				t.Fatalf("decode namespace-scope: %v", err)
+			}
+			if !slices.Equal(scope.Actives, tt.wantActives) {
+				t.Errorf("actives = %v, want %v", scope.Actives, tt.wantActives)
+			}
+			if picks := srv.getActiveNamespaceForUser(reqAs("")); !slices.Equal(picks, tt.wantSaved) {
+				t.Errorf("in-memory pick = %v, want %v", picks, tt.wantSaved)
+			}
+			saved, ok := settings.Load().ActiveNamespaces["test-ctx"]
+			if tt.wantSaved == nil && ok {
+				t.Errorf("stale pick survived in settings (entry = %v, want deleted)", saved)
+			}
+			if tt.wantSaved != nil && !slices.Equal(saved, tt.wantSaved) {
+				t.Errorf("saved pick = %v, want %v", saved, tt.wantSaved)
+			}
+		})
+	}
+}
+
+// The initial selection (kubeconfig namespace locally, the --namespaces list
+// for any user) is seeded only by the preference read. A data read that came
+// first must neither seed it nor burn its eligibility.
+func TestParseNamespacesForUser_DoesNotSeedInitialSelection(t *testing.T) {
+	t.Run("kubeconfig namespace", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		s := newTestServer(t)
+		prevNs := k8s.SetTestContextNamespace("default")
+		t.Cleanup(func() { k8s.SetTestContextNamespace(prevNs) })
+
+		if got := s.parseNamespacesForUser(httptest.NewRequest("GET", "/api/resources/pods", nil)); got != nil {
+			t.Fatalf("plain read = %v, want nil (all namespaces)", got)
+		}
+		if picks := s.getActiveNamespaceForUser(reqAs("")); picks != nil {
+			t.Fatalf("a data read seeded the kubeconfig namespace: %v", picks)
+		}
+		s.loadSavedNamespacePreference(reqAs(""))
+		if picks := s.getActiveNamespaceForUser(reqAs("")); !slices.Equal(picks, []string{"default"}) {
+			t.Fatalf("preference read seed = %v, want [default]", picks)
+		}
+	})
+	t.Run("configured namespaces", func(t *testing.T) {
+		s := newTestServer(t)
+		k8s.SetFallbackNamespaces([]string{"broken"})
+		t.Cleanup(func() { k8s.SetFallbackNamespace("") })
+		system := reqAs("radar:system:alerts:test")
+
+		if got := s.parseNamespacesForUser(system); got != nil {
+			t.Fatalf("system read = %v, want nil (all namespaces), not the configured list", got)
+		}
+		if picks := s.getActiveNamespaceForUser(system); picks != nil {
+			t.Fatalf("a data read seeded the configured list: %v", picks)
+		}
+		alice := reqAs("alice")
+		s.loadSavedNamespacePreference(alice)
+		if picks := s.getActiveNamespaceForUser(alice); !slices.Equal(picks, []string{"broken"}) {
+			t.Fatalf("preference read seed = %v, want [broken]", picks)
+		}
+	})
 }
 
 func TestPruneToExistingNamespaces(t *testing.T) {

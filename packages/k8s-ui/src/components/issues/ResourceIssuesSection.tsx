@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { kindToPluralWithGroup } from '../../utils/navigation'
-import { IssueRow } from './IssuesView'
+import { IssueRow, type IssueRowSlotContext } from './IssuesView'
 import { compareIssues, subjectRef, type Issue, type IssueResourceRef } from './types'
 
 export function ResourceIssuesSection({
@@ -9,8 +9,10 @@ export function ResourceIssuesSection({
   onResourceClick,
   subjectResource,
   compact,
+  renderDetailSection,
 }: {
   compact?: boolean
+  renderDetailSection?: (ctx: IssueRowSlotContext) => ReactNode
   issues: Issue[] | undefined
   /** When provided, related resources in a causal link become clickable. */
   onResourceClick?: (ref: IssueResourceRef) => void
@@ -39,6 +41,7 @@ export function ResourceIssuesSection({
               key={key}
               issue={issue}
               compact={compact}
+              renderDetailSection={renderDetailSection}
               open={openId === key}
               onToggle={() => setOpenId((cur) => (cur === key ? null : key))}
               onResourceClick={onResourceClick}

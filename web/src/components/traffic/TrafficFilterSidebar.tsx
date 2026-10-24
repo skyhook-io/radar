@@ -11,6 +11,7 @@ import {
   Info,
   Puzzle,
   Boxes,
+  ShieldAlert,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE } from '@skyhook-io/k8s-ui/utils/badge-colors'
@@ -57,7 +58,7 @@ interface TrafficFilterSidebarProps {
   timeRange: string
   setTimeRange: (v: string) => void
 
-  // L7 filters (Hubble-only)
+  // L7 filters
   /** Whether the flows carry any L7 detail at all. Not "is this Hubble": Beyla and
    *  Istio report L7 too, and gating on the source name hid these filters from them. */
   showL7Filters?: boolean
@@ -77,8 +78,8 @@ interface TrafficFilterSidebarProps {
   onToggleL7Method: (method: string) => void
   l7StatusRanges: Set<string>
   onToggleL7StatusRange: (range: string) => void
-  l7Verdicts: Set<string>
-  onToggleL7Verdict: (verdict: string) => void
+  verdicts: Set<string>
+  onToggleVerdict: (verdict: string) => void
   dnsPattern: string
   setDnsPattern: (v: string) => void
 
@@ -178,8 +179,8 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
   onToggleL7Method,
   l7StatusRanges,
   onToggleL7StatusRange,
-  l7Verdicts,
-  onToggleL7Verdict,
+  verdicts,
+  onToggleVerdict,
   dnsPattern,
   setDnsPattern,
   namespaces,
@@ -284,6 +285,42 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
               ))}
             </div>
           </div>
+
+          {/* Verdict. Shown whenever the flows say something other than forwarded,
+              whether or not they carry L7 detail: Hubble reports drops on plain
+              L4 flows. */}
+          {availableVerdicts.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-theme-border/50">
+              <div className="flex items-center gap-2 mb-1.5">
+                <ShieldAlert className="w-3.5 h-3.5 text-theme-text-tertiary" />
+                <span className="text-xs text-theme-text-primary">Verdict</span>
+                <Tooltip content="What happened to the traffic, as the traffic source reports it. Pick one or more to show only those flows." position="right">
+                  <Info className="w-3 h-3 text-theme-text-tertiary hover:text-theme-text-secondary cursor-help" />
+                </Tooltip>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {([
+                  { label: 'forwarded', active: SEVERITY_BADGE.success },
+                  { label: 'dropped', active: SEVERITY_BADGE.error },
+                  { label: 'error', active: SEVERITY_BADGE.warning },
+                ] as const).filter(({ label }) => availableVerdicts.includes(label)).map(({ label, active }) => (
+                  <button
+                    key={label}
+                    onClick={() => onToggleVerdict(label)}
+                    aria-pressed={verdicts.has(label)}
+                    className={clsx(
+                      'px-1.5 py-0.5 rounded text-[10px] font-medium capitalize transition-colors',
+                      verdicts.has(label)
+                        ? active
+                        : 'bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-secondary'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Display */}
@@ -439,32 +476,6 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
               </div>
             )}
 
-            {/* Verdict, limited to the verdicts the data actually contains. */}
-            {availableVerdicts.length > 0 && (
-            <div>
-              <div className="text-[10px] text-theme-text-tertiary mb-1">Verdict</div>
-              <div className="flex flex-wrap gap-1">
-                {([
-                  { label: 'forwarded', active: SEVERITY_BADGE.success },
-                  { label: 'dropped', active: SEVERITY_BADGE.error },
-                  { label: 'error', active: SEVERITY_BADGE.warning },
-                ] as const).filter(({ label }) => availableVerdicts.includes(label)).map(({ label, active }) => (
-                  <button
-                    key={label}
-                    onClick={() => onToggleL7Verdict(label)}
-                    className={clsx(
-                      'px-1.5 py-0.5 rounded text-[10px] font-medium capitalize transition-colors',
-                      l7Verdicts.has(label)
-                        ? active
-                        : 'bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-secondary'
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            )}
           </div>
         )}
 

@@ -1087,3 +1087,52 @@ it('uses RayJob native detail only for the supported exact API', () => {
     if (apiVersion !== 'ray.io/v1') { expect(html).toContain('native-fallback'); expect(getResourceStatus('rayjobs', data)).toBeNull() }
   }
 })
+
+describe('API group identity', () => {
+  it.each([
+    ['applications', 'app.k8s.io/v1beta1', 'Application'],
+    ['applications', 'notargoproj.io/v1alpha1', 'Application'],
+    ['services', 'vendor.serving.knative.dev/v1', 'Service'],
+    ['ingresses', 'vendor.networking.internal.knative.dev/v1alpha1', 'Ingress'],
+    ['certificates', 'vendor.networking.internal.knative.dev/v1alpha1', 'Certificate'],
+    ['gateways', 'vendor.networking.istio.io/v1', 'Gateway'],
+  ])('keeps %s in %s generic', (plural, apiVersion, kind) => {
+    const data = { apiVersion, kind, metadata: { name: 'foreign', namespace: 'test' }, spec: { vendorSetting: 'custom-value' }, status: { phase: 'VendorReady' } }
+    expect(renderKind(plural, data, 'test')).toContain('custom-value')
+    expect(getResourceStatus(plural, data)?.text).toBe('VendorReady')
+  })
+
+  it('retains Argo CD status for its exact Application group', () => {
+    const data = { apiVersion: 'argoproj.io/v1alpha1', kind: 'Application', metadata: { name: 'real' }, status: { sync: { status: 'Synced' }, health: { status: 'Healthy' } } }
+    expect(renderKind('applications', data)).toContain('Synced')
+    expect(getResourceStatus('applications', data)?.text).toBe('Healthy')
+  })
+
+  it('retains Knative Service status and core Service presentation', () => {
+    expect(getResourceStatus('services', { apiVersion: 'serving.knative.dev/v1', status: { conditions: [{ type: 'Ready', status: 'True' }] } })?.text).toBe('Ready')
+    expect(renderKind('services', { apiVersion: 'v1', metadata: { name: 'core' }, spec: { type: 'ClusterIP', clusterIP: '10.0.0.1' } })).toContain('10.0.0.1')
+  })
+})
+
+describe('Flux kind collisions', () => {
+  it.each([
+    ['gitrepositories', 'source.toolkit.fluxcd.io'],
+    ['ocirepositories', 'source.toolkit.fluxcd.io'],
+    ['helmrepositories', 'source.toolkit.fluxcd.io'],
+    ['kustomizations', 'kustomize.toolkit.fluxcd.io'],
+    ['helmreleases', 'helm.toolkit.fluxcd.io'],
+    ['alerts', 'notification.toolkit.fluxcd.io'],
+  ])('keeps foreign %s generic and preserves its real Flux renderer', (kind, group) => {
+    const resource = {
+      apiVersion: `${group}/v1`, metadata: { name: 'example', namespace: 'test' },
+      spec: { vendorSetting: 'custom-value' }, status: { phase: 'VendorReady' },
+    }
+    expect(renderKind(kind, resource, 'test')).not.toContain('custom-value')
+    expect(getResourceStatus(kind, resource)?.text).not.toBe('VendorReady')
+    for (const apiVersion of ['vendor.io/v1', `foreign.${group}/v1`, 'argoproj.io/v1alpha1']) {
+      const foreign = { ...resource, apiVersion }
+      expect(renderKind(kind, foreign, 'test')).toContain('custom-value')
+      expect(getResourceStatus(kind, foreign)?.text).toBe('VendorReady')
+    }
+  })
+})

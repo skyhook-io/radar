@@ -278,6 +278,10 @@ spec:
             # startup-config fields that don't apply under hosted Radar Cloud.
             - name: RADAR_CLOUD_MODE
               value: "true"
+            {{- if include "radar.userTokenMode" . | eq "true" }}
+            - name: RADAR_AUTH_K8S_CREDENTIALS
+              value: "user-token"
+            {{- end }}
             {{- if or .Values.cloud.token .Values.cloud.existingSecret }}
             - name: RADAR_CLOUD_TOKEN
               {{- if .Values.cloud.existingSecret }}

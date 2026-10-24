@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+
+	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -293,5 +295,64 @@ func TestCapabilitiesAdvertiseLocalTerminalAvailability(t *testing.T) {
 				t.Fatalf("localTerminal = %v, want %v", response.LocalTerminal, tt.want)
 			}
 		})
+	}
+}
+
+// --disable-exec must refuse every route that runs a command in a Pod or
+// starts a debug shell, not merely hide the controls in the UI.
+func TestDisableExecRejectsExecRoutes(t *testing.T) {
+	previousForceDisableExec := k8s.ForceDisableExec
+	t.Cleanup(func() { k8s.ForceDisableExec = previousForceDisableExec })
+	k8s.ForceDisableExec = true
+
+	s := &Server{}
+	s.authConfig.Defaults()
+	router := chi.NewRouter()
+	s.setupAppRoutes(router)
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/api/pods/team/app/exec"},
+		{http.MethodGet, "/api/pods/team/app/files?path=/"},
+		{http.MethodGet, "/api/pods/team/app/file?path=/etc/hostname"},
+		{http.MethodGet, "/api/pods/team/app/files/download?path=/etc/hostname"},
+		{http.MethodPost, "/api/pods/team/app/files/save"},
+		{http.MethodPost, "/api/pods/team/app/debug"},
+		{http.MethodPost, "/api/nodes/node-1/debug"},
+	} {
+		r := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "--disable-exec") {
+			t.Errorf("%s %s = %d %s, want 403 naming --disable-exec", route.method, route.path, w.Code, w.Body.String())
+		}
+	}
+}
+
+// Features that ask for the exec grant before running commands in Pods (the
+// database views, for example) must see a definite denial under --disable-exec,
+// with or without a signed-in user.
+func TestDisableExecDeniesExecGrant(t *testing.T) {
+	previousForceDisableExec := k8s.ForceDisableExec
+	t.Cleanup(func() { k8s.ForceDisableExec = previousForceDisableExec })
+	k8s.ForceDisableExec = true
+
+	s := &Server{permCache: auth.NewPermissionCache()}
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	perms.SetCanI("create", "", "pods/exec", "team", true)
+	s.permCache.Set("alice", nil, perms)
+	grant := Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: "team"}
+	for _, r := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/", nil),
+		requestWithUser(http.MethodGet, "/", &auth.User{Username: "alice"}),
+	} {
+		if allowed, authoritative := s.grantDecision(r, grant); allowed || !authoritative {
+			t.Fatalf("grantDecision = (%v, %v), want a definite denial", allowed, authoritative)
+		}
+	}
+}
+
+func TestErrExecDisabledReadsAsForbidden(t *testing.T) {
+	if !strings.Contains(strings.ToLower(errExecDisabled.Error()), "forbidden") {
+		t.Fatalf("%q must classify as a permission denial", errExecDisabled)
 	}
 }

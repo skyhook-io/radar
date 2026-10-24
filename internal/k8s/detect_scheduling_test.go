@@ -46,6 +46,7 @@ func TestParseSchedulerMessage_Classes(t *testing.T) {
 		{"existing anti-affinity", "3 node(s) didn't satisfy existing pods anti-affinity rules", SchedPodAntiAffinity, "", "", ""},
 		{"topology spread", "3 node(s) didn't match pod topology spread constraints", SchedTopologySpread, "", "", ""},
 		{"volume node affinity", "3 node(s) had volume node affinity conflict", SchedVolumeNodeAffinity, "", "", ""},
+		{"PersistentVolume node affinity", "3 node(s) didn't match PersistentVolume's node affinity", SchedVolumeNodeAffinity, "", "", ""},
 		{"volume count", "3 node(s) exceed max volume count", SchedVolumeCount, "", "", ""},
 		{"no free ports", "3 node(s) didn't have free ports for the requested pod ports", SchedNoPorts, "", "", ""},
 		{"cordoned", "3 node(s) were unschedulable", SchedNodeUnschedulable, "", "", ""},
@@ -361,6 +362,11 @@ func TestClassifyAdmissionFailure(t *testing.T) {
 		{`Error creating job: admission webhook "jobs.example.com" denied the request: nope`, "WebhookDenied", true},
 		{`Error creating job: Internal error occurred: failed calling webhook "jobs.example.com": context deadline exceeded`, "WebhookUnavailable", true},
 		{`some unrelated message`, "", false},
+		// client-go's event aggregation prefixes a burst of similar events.
+		{`(combined from similar events): Error creating: admission webhook "vpod.example.com" denied the request: nope`, "WebhookDenied", true},
+		{`(combined from similar events): Error creating: admission webhook "policy.example.com" denied the request: exceeded quota`, "WebhookDenied", true},
+		{`(combined from similar events): Error creating: Internal error occurred: failed calling webhook "validate.example.com": failed to call webhook: Post "https://policy-webhook.hooks.svc:443/validate?timeout=10s": no endpoints available for service "policy-webhook"`, "WebhookUnavailable", true},
+		{`(combined from similar events): Error creating: pods "x" is forbidden: failed quota: memory-limit-quota: must specify memory for: app`, "QuotaExceeded", true},
 	}
 	for _, c := range cases {
 		reason, ok := classifyAdmissionFailure(c.msg)
@@ -515,5 +521,45 @@ func TestDiagnoseUnschedulableSharesOneParse(t *testing.T) {
 	_, fallback := diagnoseUnschedulable(&corev1.Pod{}, "something the parser doesn't recognize", nil)
 	if fallback != genericUnschedulableAction {
 		t.Errorf("unrecognized verdict should fall back to generic action, got %q", fallback)
+	}
+}
+
+func TestParseAdmissionBlocker(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want AdmissionBlocker
+		ok   bool
+	}{
+		{"failed quota", `pod creation blocked: pods "search-x" is forbidden: failed quota: memory-limit-quota: must specify memory for: hotel-reserv-search`, AdmissionBlocker{Kind: "ResourceQuota", Name: "memory-limit-quota"}, true},
+		{"exceeded quota", `Error creating: pods "web-x" is forbidden: exceeded quota: compute.team-a, requested: pods=1, used: pods=3, limited: pods=3`, AdmissionBlocker{Kind: "ResourceQuota", Name: "compute.team-a"}, true},
+		{"limit range", `pods "api-x" is forbidden: maximum memory usage per Container is 512Mi, but limit is 1Gi`, AdmissionBlocker{Kind: "LimitRange"}, true},
+		{"webhook denial", `pod creation blocked: Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`, AdmissionBlocker{WebhookName: "deny-root.policy.example.com"}, true},
+		{"webhook call failure", `Internal error occurred: failed calling webhook "inject.mesh.example.com": Post "https://mesh.mesh-system.svc:443/inject": no endpoints available for service "mesh"`, AdmissionBlocker{WebhookName: "inject.mesh.example.com"}, true},
+		{"aggregated webhook denial", `pod creation blocked: (combined from similar events): Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`, AdmissionBlocker{WebhookName: "deny-root.policy.example.com"}, true},
+		{"aggregated failed quota", `pod creation blocked: (combined from similar events): Error creating: pods "search-x" is forbidden: failed quota: memory-limit-quota: must specify memory for: hotel-reserv-search`, AdmissionBlocker{Kind: "ResourceQuota", Name: "memory-limit-quota"}, true},
+		{"pod security names no object", `pods "x" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false`, AdmissionBlocker{}, false},
+		{"not an admission failure", `object is being deleted: replicasets.apps "x" already exists`, AdmissionBlocker{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseAdmissionBlocker(tc.msg)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("ParseAdmissionBlocker(%q) = %+v, %v; want %+v, %v", tc.msg, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+// A PersistentVolume's zone pin is not the Pod's nodeSelector: the advice must
+// point at the volume, never at relabelling nodes.
+func TestDiagnoseUnschedulable_PersistentVolumeNodeAffinity(t *testing.T) {
+	msg := "0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity."
+	message, action := diagnoseUnschedulable(&corev1.Pod{}, msg, nil)
+	if strings.Contains(message, "node affinity/selector mismatch") || strings.Contains(action, "nodeSelector") || strings.Contains(action, "label (or add) a matching node") {
+		t.Fatalf("PV node affinity read as a Pod selector mismatch: message=%q action=%q", message, action)
+	}
+	if !strings.Contains(message, "2 node(s) volume node-affinity conflict") || !strings.Contains(action, "PersistentVolume") {
+		t.Fatalf("message=%q action=%q, want the volume conflict named", message, action)
 	}
 }

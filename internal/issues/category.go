@@ -205,7 +205,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	case "DuplicateEnvVar", "StaleSecretEnv":
 		return issuesapi.CategoryInvalidConfiguration
 	case k8s.NetworkPolicyDenyAllIngressReason:
-		return issuesapi.CategoryNetworkPolicyBlock
+		return issuesapi.CategoryNetworkPolicyDenied
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":
@@ -325,10 +325,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryJobFailed
 
 	case "CronJob":
-		// CronJob schedule-level failures: no recent run, no run at all, or
-		// repeated schedules without a recorded success.
-		switch in.Reason {
-		case "stale", "never-scheduled", "repeated-without-success":
+		if isBatchFailureProblem(in.Kind, in.Reason) {
 			return issuesapi.CategoryCronJobFailed
 		}
 		return issuesapi.CategoryUnknown
@@ -389,7 +386,7 @@ func isBatchFailureProblem(kind, reason string) bool {
 	if kind == "Job" {
 		return true
 	}
-	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled" || reason == "repeated-without-success")
+	return kind == "CronJob" && (reason == "stale" || reason == "never-scheduled" || reason == "repeated-without-success" || k8s.IsCronJobScheduleFailureReason(reason))
 }
 
 // classifyGitOpsReason maps a GitOps detector/condition reason to a specific

@@ -58,6 +58,10 @@ To find them, Radar first lists only the labels of the Helm release Secrets the 
 
 When that read fails, for example because the API server returns an error or Radar's 60-second request limit runs out, `/api/issues` still answers, with `"unchecked_sources": [{"source": "helm", "reason": "read_failed"}]`: failed or stuck Helm releases may be missing from the response. The MCP `issues` tool returns the same field. A caller that may not list release Secrets gets no Helm issues and no `helm` entry, the same as for any other kind it can't list.
 
+When the read covers several namespaces and only some fail, the issues from the others are kept, and the entry names the ones that failed: `{"source": "helm", "reason": "read_failed", "namespaces": ["payments"]}`. When Radar's ServiceAccount is not allowed to impersonate the user, every user is refused the same way. That is Radar's own access failing, not the user's permissions, so the entry says `"reason": "collector_access_denied"` instead of the read counting as a denial.
+
+The Home Helm card and the MCP `get_dashboard` tool make the same split: they say access is restricted only when Kubernetes denied the caller's own read. Rejected credentials (401) and a missing `impersonate` permission show as a failed read, with the error.
+
 ## Failed Upgrades And Rollback Inference
 
 Helm history does not persist whether `helm upgrade --atomic` was set. Radar infers an atomic-style rollback from the revision sequence:
@@ -124,3 +128,27 @@ Use `issues` for currently broken native Helm releases: active failed and stuck 
 - Hook evidence can disappear after Helm records the failure. Radar reports the absence and likely reasons, but cannot reconstruct deleted Job/Pod logs unless Kubernetes or Helm retained them.
 - Flux-managed releases should be changed through Flux. Radar links them to the owning `HelmRelease` and warns that direct `helm upgrade` changes may be reconciled back.
 - Upgrade source detection depends on source data available to the running Radar environment. Local OSS can use local Helm repo/OCI configuration; Radar Cloud should not assume that local repo config exists, so unresolved source states are reported explicitly.
+
+
+## Chart sources and upgrades
+
+Radar identifies a chart by its repository URL and chart name. Local repository aliases can differ between machines. OCI sources use the full registry/chart path. Charts with the same name or version in different repositories are separate choices.
+
+Normal upgrades use the saved source. If no source is confirmed, use **Choose chart source** in the release drawer. The picker shows the last recorded source first, followed by other configured sources. A name match is a suggestion, not proof of where the release was installed from.
+
+Use **ArtifactHub** to find a public source, then click **Search ArtifactHub**. Only the installed chart name is sent, after the click. Results show exact chart-name matches, publisher details and addresses. Select a result and add its repository or OCI prefix. This saves configuration without changing the release. Private sources can be entered through **Add manually**.
+
+**Check and record source** compares the chart information Helm saved. Matching copies can come from more than one publisher. To use a source for an upgrade, select it and review the existing version, settings and resource preview before applying. Search badges do not prove the installed chart's origin.
+
+You can associate an original source when its installed package matches the chart Helm stored. Older source records may need confirmation again if they lack a chart binding or a later Helm command changed the chart. This comparison cannot establish the origin of identical copies or verify subchart bodies Helm omitted from release storage.
+
+Values-only edits can use the chart Helm stored. If Helm omitted dependencies from an umbrella chart, record its original source so Radar can restore the exact installed package before editing values.
+
+To use another repository, select it for the next upgrade. Choose an available version, review your settings and preview the rendered resource changes. The old installed version does not need to remain in the selected repository. Preview and apply use the same selected package and settings; if either changes, preview again.
+
+A preview does not guarantee compatibility of hooks, data or immutable fields. Helm does not upgrade CRDs from a chart's `crds/` directory. A failed source change records the attempted source on the failed revision and preserves earlier revision history. Select a source and preview again before retrying; a values-only edit cannot finish the source change.
+
+Programmatic upgrades require a confirmed saved source or an explicit source selection with the preview digest and expected release revision. Name-only inference never authorizes an upgrade. New source-selection controls require the backend's `helmSourceIdentity` capability. Flux-managed releases should be changed through their owning Flux configuration.
+
+
+Explicit source changes use `POST /api/helm/releases/{namespace}/{name}/source/preview`, followed by `/source/upgrade` or `/source/upgrade-stream`. These routes require the `sourceUpgrade` selection, explicit values and an exact version (body `version` for preview, query `version` for upgrade). Preview returns `previewDigest`; send it back in the selection when applying. The selection also carries `expectedRevision` and `expectedSource` from source status. Older backends return 404 for these routes instead of ignoring the selected source. Ordinary upgrade routes reject source-change fields.

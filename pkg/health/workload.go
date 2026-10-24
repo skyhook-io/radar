@@ -157,7 +157,8 @@ func cronJobVerdict(cj *batchv1.CronJob, now time.Time) Verdict {
 	if now.Sub(cj.Status.LastScheduleTime.Time) > cronsched.StaleThreshold(cj.Spec.Schedule) {
 		return Verdict{Level: LevelDegraded, Reason: "Stale"}
 	}
-	return Verdict{Level: LevelHealthy}
+	// LastScheduleTime records a past scheduling attempt, not current schedule health.
+	return Verdict{Level: LevelNeutral, Reason: "Enabled"}
 }
 
 func pvcVerdict(pvc *corev1.PersistentVolumeClaim) Verdict {

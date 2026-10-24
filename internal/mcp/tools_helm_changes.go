@@ -21,8 +21,8 @@ func helmRecentChangesForContext(ctx context.Context, input getChangesInput, sin
 	if helmClient == nil {
 		return nil, nil
 	}
-	username, groups := userFromContext(ctx)
-	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, resolveHelmListNamespaces(ctx, input.Namespace), username, groups)
+	user := userFromContext(ctx)
+	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, resolveHelmListNamespaces(ctx, input.Namespace), user)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Helm releases: %w", err)
 	}

@@ -127,7 +127,7 @@ interface PodFilesystemModalProps {
   podName: string
   containers: string[]
   initialContainer?: string
-  onSwitchToImageFiles?: () => void
+  onSwitchToImageFiles?: (containerName: string) => void
 }
 
 export function PodFilesystemModal({
@@ -389,7 +389,7 @@ export function PodFilesystemModal({
           )}
           {onSwitchToImageFiles && (
             <button
-              onClick={() => { onClose(); onSwitchToImageFiles() }}
+              onClick={() => { onClose(); onSwitchToImageFiles(selectedContainer) }}
               className="ml-auto text-blue-400 hover:text-blue-300 hover:underline"
             >
               Browse static image from registry &rarr;

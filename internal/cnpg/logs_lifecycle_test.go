@@ -56,6 +56,77 @@ func cnpgFollowPod(uid string) *corev1.Pod {
 	return pod
 }
 
+func TestCNPGLogsWatcherFailureRecovery(t *testing.T) {
+	for _, mode := range []string{"repeated", "idle", "pending", "finished"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			var opens atomic.Int32
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ordinal := opens.Add(1)
+				if ordinal == 1 || mode == "repeated" {
+					fmt.Fprintf(w, "2026-10-20T10:00:%02dZ catch-up %d\n", ordinal, ordinal)
+					w.(http.Flusher).Flush()
+					select {
+					case <-time.After(100 * time.Millisecond):
+					case <-r.Context().Done():
+						return
+					}
+					io.WriteString(w, "failed to create fsnotify watcher: too many open files\n")
+					return
+				}
+				if mode != "pending" {
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				if mode != "finished" {
+					<-r.Context().Done()
+				}
+			}))
+			t.Cleanup(api.Close)
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pod := cnpgFollowPod("one")
+			if mode == "finished" {
+				pod.Status.ContainerStatuses[0].State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{}}
+			}
+			target, _ := cnpgFollowTarget(t, client, pod)
+			events, _ := cnpgFollowEvents(t, target, LogQuery{Container: "postgres", TailLines: 100}, nil)
+			timer := time.NewTimer(12 * time.Second)
+			defer timer.Stop()
+			warnings := 0
+			for {
+				select {
+				case event := <-events:
+					if event.kind != "notice" {
+						continue
+					}
+					body, ok := event.data.(map[string]string)
+					if !ok {
+						t.Fatalf("unexpected notice: %T", event.data)
+					}
+					if body["notice"] == "" {
+						if mode == "pending" || mode == "repeated" {
+							t.Fatalf("warning cleared during %s", mode)
+						}
+						if warnings == 0 {
+							t.Fatal("recovered without reporting the failure")
+						}
+						return
+					}
+					warnings++
+				case <-timer.C:
+					if (mode != "pending" && mode != "repeated") || warnings != 1 || opens.Load() < 2 {
+						t.Fatalf("mode=%s, warnings=%d, opens=%d", mode, warnings, opens.Load())
+					}
+					return
+				}
+			}
+		})
+	}
+}
+
 func cnpgFollowEvents(t *testing.T, target *LogTarget, query LogQuery, beforeSend func(string, any)) (<-chan cnpgLogEvent, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

@@ -31,7 +31,7 @@ func TestNetworkPolicyIssueRelatesToIsolatedResources(t *testing.T) {
 	readAll := RelatedIssueOptions{CanReadRelated: func(Ref) bool { return true }}
 	for _, ref := range append([]Ref{{Group: "networking.k8s.io", Kind: "NetworkPolicy", Namespace: "shop", Name: "deny-all"}}, netpolAffected...) {
 		got := RelatedIssues(p, readAll, ref.Group, ref.Kind, ref.Namespace, ref.Name)
-		if len(got) != 1 || got[0].Kind != "NetworkPolicy" || got[0].Category != issuesapi.CategoryNetworkPolicyBlock {
+		if len(got) != 1 || got[0].Kind != "NetworkPolicy" || got[0].Category != issuesapi.CategoryNetworkPolicyDenied {
 			t.Errorf("RelatedIssues(%s %s) = %+v, want the NetworkPolicy issue", ref.Kind, ref.Name, got)
 		}
 	}

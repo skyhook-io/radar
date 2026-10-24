@@ -42,17 +42,29 @@ func setConnectedForTest(t *testing.T) {
 	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
 }
 
-// A store that has only just started observing must emit NO markers — in
-// either direction — rather than claim an hour-long window it never watched.
-func TestAttachIssueChangeCorrelation_SkipsOnShortObservation(t *testing.T) {
-	initCorrelationStore(t)
+// A store that has only just started observing must not claim "no recent
+// changes", but the changes it did record are still evidence.
+func TestAttachIssueChangeCorrelation_ShortObservation(t *testing.T) {
+	store := initCorrelationStore(t)
 	timeline.SetObservationStartForTest(time.Now().Add(-90 * time.Second))
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "web-spec", Timestamp: time.Now().Add(-30 * time.Second),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.template.spec.containers[web].image", OldValue: "web:1", NewValue: "web:2"}}, Summary: "image web:1→web:2"},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
 
-	resp := issues.ListResponse{Issues: []issuesapi.Issue{criticalIssue("Deployment", "web")}}
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{criticalIssue("Deployment", "web"), criticalIssue("Deployment", "api")}}
 	attachIssueChangeCorrelation(context.Background(), &resp)
 
-	if resp.Issues[0].NoRecentChanges != nil || len(resp.Issues[0].CorrelatedChanges) > 0 {
-		t.Fatalf("90s-old store must not claim anything: %+v", resp.Issues[0])
+	if web := resp.Issues[0]; len(web.CorrelatedChanges) != 1 || web.NoRecentChanges != nil {
+		t.Fatalf("recorded change must be attached: %+v", web)
+	}
+	if api := resp.Issues[1]; api.NoRecentChanges != nil || len(api.CorrelatedChanges) > 0 {
+		t.Fatalf("90s-old store must not claim no recent changes: %+v", api)
 	}
 }
 
@@ -156,7 +168,7 @@ func TestCorrelationWindow_ClampsToObservation(t *testing.T) {
 	}{
 		{"observed longer than default window", 2 * time.Hour, meaningfulchanges.DefaultSince},
 		{"clamped to observation time", 30 * time.Minute, 30 * time.Minute},
-		{"below minimum observation", 4 * time.Minute, 0},
+		{"below minimum observation", 4 * time.Minute, 4 * time.Minute},
 		{"zero observation start", 0, 0},
 	}
 	for _, tt := range cases {

@@ -10,8 +10,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -75,6 +77,18 @@ func recentChangeReadFilter(ctx context.Context) func(issuesapi.RecentChange) bo
 	}
 	return func(c issuesapi.RecentChange) bool {
 		return c.Source == helmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authorize)
+	}
+}
+
+// recentChangeViewer gates the Pod and workload names change rows carry.
+// The zero Viewer when auth is off.
+func recentChangeViewer(ctx context.Context) meaningfulchanges.Viewer {
+	if pkgauth.UserFromContext(ctx) == nil {
+		return meaningfulchanges.Viewer{}
+	}
+	return meaningfulchanges.Viewer{
+		CanReadPods:     func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "get") },
+		CanReadConsumer: recentChangeReadFilter(ctx),
 	}
 }
 
@@ -404,6 +418,24 @@ func filterNamespacesByCanRead(ctx context.Context, group, resource, verb string
 	wg.Wait()
 	slices.Sort(out)
 	return out
+}
+
+// readableTrivyNamespaces is the MCP-side mirror of
+// Server.readableTrivyNamespaces: it narrows namespaces (nil = every
+// namespace) to those where the caller may list the Trivy report resource
+// gvr. all reports that no narrowing is needed; otherwise the result is the
+// readable subset, empty when there is none. A caller reading every
+// namespace needs the cluster-wide grant, as with Secrets.
+func readableTrivyNamespaces(ctx context.Context, gvr schema.GroupVersionResource, namespaces []string) (allowed []string, all bool) {
+	if canReadInNamespace(ctx, gvr.Group, gvr.Resource, "", "list") {
+		return namespaces, true
+	}
+	readable := filterNamespacesByCanRead(ctx, gvr.Group, gvr.Resource, "list", namespaces)
+	if readable == nil {
+		// nil means every namespace to the callers; nothing readable is empty.
+		readable = []string{}
+	}
+	return readable, false
 }
 
 // retainAllowedObjects post-filters cache results for namespace-restricted users.

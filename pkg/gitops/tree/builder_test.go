@@ -876,3 +876,68 @@ func TestHelmReleaseRootKeepsInstalledChartOverTopologyRevision(t *testing.T) {
 		t.Fatalf("root revision = %#v", tree.Root.Data["revision"])
 	}
 }
+
+func TestBuildDecidesToolByAPIGroup(t *testing.T) {
+	root := func(apiVersion, kind string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": apiVersion,
+			"kind":       kind,
+			"metadata":   map[string]any{"name": "web", "namespace": "apps"},
+			"spec":       map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+		}}
+	}
+	cases := []struct {
+		name, apiVersion, kind, requestKind, requestGroup string
+		want                                              Tool
+	}{
+		{"argo application", "argoproj.io/v1alpha1", "Application", "applications", "argoproj.io", ToolArgoCD},
+		{"flux kustomization", "kustomize.toolkit.fluxcd.io/v1", "Kustomization", "kustomizations", "kustomize.toolkit.fluxcd.io", ToolFluxCD},
+		{"sig apps application", "app.k8s.io/v1beta1", "Application", "applications", "app.k8s.io", ""},
+		{"query group cannot override object identity", "app.k8s.io/v1beta1", "Application", "applications", "argoproj.io", ""},
+		// Without ?group= the cache resolves the kind on its own; the object's
+		// apiVersion still decides.
+		{"sig apps application, no group requested", "app.k8s.io/v1beta1", "Application", "applications", "", ""},
+		{"vendor kind containing application", "some.vendor/v1", "FooApplication", "fooapplications", "some.vendor", ""},
+		{"argo rollout", "argoproj.io/v1alpha1", "Rollout", "rollouts", "argoproj.io", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := root(tc.apiVersion, tc.kind)
+			dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+				refKey(ResourceRef{Group: tc.requestGroup, Kind: tc.requestKind, Namespace: "apps", Name: "web"}): obj,
+			}}
+			tree, _, err := NewBuilder(dynamic, &topology.Topology{}).Build(context.Background(), tc.requestKind, "apps", "web", tc.requestGroup)
+			if tc.want == "" {
+				if !errors.Is(err, ErrNotGitOpsResource) {
+					t.Fatalf("Build error = %v, want ErrNotGitOpsResource", err)
+				}
+				if tree != nil {
+					t.Fatalf("Build returned a tree for a non-GitOps root: %+v", tree)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if got := tree.Nodes[0].Tool; got != tc.want {
+				t.Fatalf("root tool = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildNotGitOpsErrorNamesTheResource(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "app.k8s.io/v1beta1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"name": "wordpress", "namespace": "shop"},
+	}}
+	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "app.k8s.io", Kind: "applications", Namespace: "shop", Name: "wordpress"}): obj,
+	}}
+	_, _, err := NewBuilder(dynamic, &topology.Topology{}).Build(context.Background(), "applications", "shop", "wordpress", "app.k8s.io")
+	want := "Application.app.k8s.io shop/wordpress is not a supported Argo CD or Flux resource, so it has no GitOps view"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}

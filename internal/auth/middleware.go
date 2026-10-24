@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 // cloudMode reports whether Radar is running under Radar Cloud. Reads
@@ -120,6 +121,16 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 								groups = append(groups, trimmed)
 							}
 						}
+					}
+
+					if cloudProxyMode && pkgauth.UserTokenMode() {
+						user, ok := userTokenIdentity(w, r, cfg, username, groups)
+						if !ok {
+							return
+						}
+						logAcceptedForwardedIdentity(user)
+						next.ServeHTTP(w, r.WithContext(ContextWithUser(r.Context(), user)))
+						return
 					}
 
 					// Never impersonate reserved K8s principals (system:masters etc.);

@@ -242,7 +242,8 @@ func TestAPIRoutesAreGuardedOnTheRealRouter(t *testing.T) {
 			}
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "cross_origin_refused") {
+			// HTTP servers omit response bodies for HEAD, including refusals.
+			if resp.StatusCode != http.StatusForbidden || (method != http.MethodHead && !strings.Contains(string(body), "cross_origin_refused")) {
 				t.Errorf("base path %q: cross-site %s %s got %d %s, want the cross-origin refusal", basePath, method, route, resp.StatusCode, body)
 			}
 			if read {

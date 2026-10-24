@@ -3,21 +3,26 @@ package images
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 const (
@@ -41,6 +46,9 @@ type layerCacheMetadata struct {
 type Inspector struct {
 	cacheDir string
 	cacheMu  sync.RWMutex
+	// newGuard builds the transport for a guarded request, one per request so
+	// connections never carry over between them.
+	newGuard func() *guardedTransport
 }
 
 // NewInspector creates a new image inspector
@@ -49,6 +57,7 @@ func NewInspector() *Inspector {
 
 	i := &Inspector{
 		cacheDir: cacheDir,
+		newGuard: func() *guardedTransport { return newLayerTransport(k8s.IsInCluster()) },
 	}
 
 	// Clean cache directory on startup
@@ -120,19 +129,27 @@ func (i *Inspector) cleanupExpired() {
 	}
 }
 
-// getCacheKey returns a filesystem-safe cache key from an image digest
-func getCacheKey(digest string) string {
-	// Digest format: sha256:abc123...
-	// Replace : with - for filesystem safety
-	return strings.ReplaceAll(digest, ":", "-")
+// getCacheKey returns a filesystem-safe cache key for an image digest in its
+// repository. The cache is shared by every caller, and a digest alone is not
+// proof of access: anyone holding a copy of a private image's manifest can
+// serve it, under the same digest, from a registry of their own. Keyed by
+// repository too, a cache hit needs the caller to have just read that
+// manifest from the image's own repository.
+func getCacheKey(imageRef, digest string) string {
+	repository := imageRef
+	if ref, err := name.ParseReference(imageRef); err == nil {
+		repository = ref.Context().Name()
+	}
+	sum := sha256.Sum256([]byte(repository + "@" + digest))
+	return hex.EncodeToString(sum[:])
 }
 
 // getCachedLayers returns paths to cached layer files if available and not expired
-func (i *Inspector) getCachedLayers(digest string) ([]string, *layerCacheMetadata, bool) {
+func (i *Inspector) getCachedLayers(imageRef, digest string) ([]string, *layerCacheMetadata, bool) {
 	i.cacheMu.RLock()
 	defer i.cacheMu.RUnlock()
 
-	cacheKey := getCacheKey(digest)
+	cacheKey := getCacheKey(imageRef, digest)
 	imageDir := filepath.Join(i.cacheDir, cacheKey)
 	metadataPath := filepath.Join(imageDir, "metadata.json")
 
@@ -176,7 +193,7 @@ func (i *Inspector) cacheLayers(ctx context.Context, img v1.Image, imageRef stri
 		return nil, nil, fmt.Errorf("failed to get image digest: %w", err)
 	}
 
-	cacheKey := getCacheKey(digest.String())
+	cacheKey := getCacheKey(imageRef, digest.String())
 	imageDir := filepath.Join(i.cacheDir, cacheKey)
 	layersDir := filepath.Join(imageDir, "layers")
 
@@ -191,7 +208,10 @@ func (i *Inspector) cacheLayers(ctx context.Context, img v1.Image, imageRef stri
 	}
 
 	// Get platform info
-	configFile, _ := img.ConfigFile()
+	configFile, err := img.ConfigFile()
+	if isRefused(err) {
+		return nil, nil, err
+	}
 	platform := ""
 	if configFile != nil {
 		platform = fmt.Sprintf("%s/%s", configFile.OS, configFile.Architecture)
@@ -311,10 +331,11 @@ func (i *Inspector) evictOldEntries() error {
 // GetMetadata retrieves lightweight metadata about an image without downloading layers
 func (i *Inspector) GetMetadata(ctx context.Context, req InspectRequest) (*ImageMetadata, error) {
 	// Try to fetch image reference to get digest
-	img, authMethod, err := i.fetchImageBruteForce(ctx, req)
+	img, authMethod, release, err := i.fetchImageBruteForce(ctx, req)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	digest, err := img.Digest()
 	if err != nil {
@@ -322,7 +343,7 @@ func (i *Inspector) GetMetadata(ctx context.Context, req InspectRequest) (*Image
 	}
 
 	// Check if layers are cached
-	layerPaths, meta, cached := i.getCachedLayers(digest.String())
+	layerPaths, meta, cached := i.getCachedLayers(req.Image, digest.String())
 	if cached {
 		// Build filesystem from cached layers
 		fs, err := i.buildFilesystemFromCache(ctx, layerPaths, meta, req.Image)
@@ -343,7 +364,10 @@ func (i *Inspector) GetMetadata(ctx context.Context, req InspectRequest) (*Image
 	}
 
 	// Get image config for platform info
-	configFile, _ := img.ConfigFile()
+	configFile, err := img.ConfigFile()
+	if isRefused(err) {
+		return nil, err
+	}
 	platform := ""
 	if configFile != nil {
 		platform = fmt.Sprintf("%s/%s", configFile.OS, configFile.Architecture)
@@ -373,11 +397,15 @@ func (i *Inspector) GetMetadata(ctx context.Context, req InspectRequest) (*Image
 }
 
 // fetchImageBruteForce tries to fetch an image using anonymous auth first,
-// then falls back to authenticated access if anonymous fails
-func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest) (v1.Image, string, error) {
+// then falls back to authenticated access if anonymous fails. release closes
+// the connections the returned image reads its layers through.
+func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest) (v1.Image, string, func(), error) {
 	ref, err := name.ParseReference(req.Image)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid image reference: %w", err)
+		return nil, "", nil, fmt.Errorf("invalid image reference: %w", err)
+	}
+	if req.guarded {
+		return i.fetchGuarded(ctx, ref, req)
 	}
 
 	// Try anonymous first
@@ -387,33 +415,98 @@ func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest
 	)
 	if err == nil {
 		log.Printf("Image %s accessible with anonymous auth", req.Image)
-		return img, "anonymous", nil
+		return img, "anonymous", func() {}, nil
 	}
 
 	// Anonymous failed, try with credentials
-	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", req.Image, err)
+	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
 
-	keychain := GetAuthenticatedKeychain(req.Image, req.Namespace, req.PullSecretNames)
+	keychain := req.keychain
+	if keychain == nil {
+		keychain = GetAuthenticatedKeychain(req.Image, req.Namespace, req.PullSecretNames)
+	}
 	img, err = remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(keychain),
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
 	}
 
 	registryType := DetectRegistryType(req.Image)
 	log.Printf("Image %s accessible with %s credentials", req.Image, registryType)
-	return img, string(registryType), nil
+	return img, string(registryType), func() {}, nil
+}
+
+// newLayerTransport is the network guard for whole-image reads.
+func newLayerTransport(inCluster bool) *guardedTransport {
+	g := newGuardedTransport(inCluster)
+	g.uncapped = true
+	g.anyPrivate = true
+	g.tlsForCredentials = true
+	g.pinnedOnly = true
+	return g
+}
+
+// fetchGuarded is fetchImageBruteForce for an authenticated caller. The image
+// comes from a Pod spec, which anyone who can create a Pod controls, so every
+// request, redirects and token endpoints included, goes through the network
+// guard the runtime inventory uses, and credentials are only sent over HTTPS,
+// as the node's container runtime does by default.
+func (i *Inspector) fetchGuarded(ctx context.Context, ref name.Reference, req InspectRequest) (v1.Image, string, func(), error) {
+	ctx = withRegistryHost(ctx, ref.Context().RegistryStr())
+	anonymous, release := i.guardFor()
+	img, err := remote.Image(ref,
+		remote.WithContext(ctx),
+		remote.WithTransport(anonymous),
+		remote.WithAuth(authn.Anonymous),
+	)
+	if err == nil {
+		return img, "anonymous", release, nil
+	}
+	release()
+	if isRefused(err) || req.keychain == nil {
+		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+	}
+	auth, kerr := req.keychain.Resolve(ref.Context())
+	if kerr != nil {
+		return nil, "", nil, fmt.Errorf("failed to resolve registry credentials: %w", kerr)
+	}
+	if auth == authn.Anonymous {
+		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+	}
+	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
+	credentialed, release := i.guardFor()
+	img, err = remote.Image(ref,
+		remote.WithContext(ctx),
+		remote.WithTransport(credentialed),
+		remote.WithAuth(auth),
+	)
+	if err != nil {
+		release()
+		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+	}
+	return img, string(DetectRegistryType(req.Image)), release, nil
+}
+
+// guardFor returns a fresh guarded transport and the func that closes its
+// connections.
+func (i *Inspector) guardFor() (http.RoundTripper, func()) {
+	if testRegistryTransport != nil && testing.Testing() {
+		return testRegistryTransport, func() {}
+	}
+	g := i.newGuard()
+	return g, g.closeIdle
 }
 
 // Inspect retrieves the filesystem tree for a container image
 func (i *Inspector) Inspect(ctx context.Context, req InspectRequest) (*ImageFilesystem, error) {
 	// Fetch image to get digest
-	img, _, err := i.fetchImageBruteForce(ctx, req)
+	img, _, release, err := i.fetchImageBruteForce(ctx, req)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	digest, err := img.Digest()
 	if err != nil {
@@ -421,7 +514,7 @@ func (i *Inspector) Inspect(ctx context.Context, req InspectRequest) (*ImageFile
 	}
 
 	// Check if layers are cached
-	layerPaths, meta, cached := i.getCachedLayers(digest.String())
+	layerPaths, meta, cached := i.getCachedLayers(req.Image, digest.String())
 	if cached {
 		fs, err := i.buildFilesystemFromCache(ctx, layerPaths, meta, req.Image)
 		if err == nil {
@@ -644,10 +737,11 @@ func sortFileTree(node *FileNode) {
 // GetFileContent retrieves the content of a specific file from an image
 func (i *Inspector) GetFileContent(ctx context.Context, req InspectRequest, filePath string) ([]byte, string, error) {
 	// Fetch image to get digest
-	img, _, err := i.fetchImageBruteForce(ctx, req)
+	img, _, release, err := i.fetchImageBruteForce(ctx, req)
 	if err != nil {
 		return nil, "", err
 	}
+	defer release()
 
 	digest, err := img.Digest()
 	if err != nil {
@@ -655,7 +749,7 @@ func (i *Inspector) GetFileContent(ctx context.Context, req InspectRequest, file
 	}
 
 	// Check if layers are cached
-	layerPaths, _, cached := i.getCachedLayers(digest.String())
+	layerPaths, _, cached := i.getCachedLayers(req.Image, digest.String())
 	if !cached {
 		// Cache layers first
 		layerPaths, _, err = i.cacheLayers(ctx, img, req.Image)

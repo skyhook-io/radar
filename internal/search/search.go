@@ -15,6 +15,8 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -120,6 +122,10 @@ type Options struct {
 	// predicate; nil preserves auth-mode=none behavior where the service
 	// account's cache permissions are the only gate.
 	CanReadClusterScoped func(kind, group, resource string) bool
+	// KindAccess authorizes namespaced kinds in kindRBACGroups by the
+	// caller's own list permission on that kind, on top of Namespaces. nil
+	// disables the gate (auth off: the cache's own RBAC is the only filter).
+	KindAccess *KindAccess
 	// Filter is an optional compiled CEL predicate. When set, each
 	// candidate that passed the modifier+token match is also evaluated
 	// against the filter; non-truthy results (including eval errors)
@@ -135,6 +141,71 @@ type Options struct {
 	SummaryBuilder SummaryBuilderFunc
 }
 
+// KindAccess answers per-kind list permission for the caller. Both checks
+// are handler-supplied SubjectAccessReviews; they are only asked about kinds
+// search gates (kindRBACGroups).
+type KindAccess struct {
+	// ClusterWide reports whether the caller may list the resource in every
+	// namespace.
+	ClusterWide func(group, resource string) bool
+	// InNamespaces splits namespaces into those where the caller may list
+	// the resource and those it could not decide (check budget spent, or the
+	// check failed). Namespaces in neither are denied.
+	InNamespaces func(group, resource string, namespaces []string) (allowed, unchecked []string)
+}
+
+// MaxAccessChecks bounds the uncached SubjectAccessReviews one search may
+// send for KindAccess. They share Radar's client rate limit with every other
+// screen, and a caller can see hundreds of namespaces.
+const MaxAccessChecks = 64
+
+// CheckNamespaces implements KindAccess.InNamespaces over a caller's cached
+// decisions and fresh checks. cached returns a remembered decision; check
+// runs one and reports whether the apiserver answered. budget is shared by
+// one search's calls. A namespace past the budget, or whose check failed,
+// comes back unchecked rather than denied.
+func CheckNamespaces(namespaces []string, budget *atomic.Int32, cached func(ns string) (allowed, ok bool), check func(ns string) (allowed, answered bool)) (allowed, unchecked []string) {
+	var pending []string
+	for _, ns := range namespaces {
+		if v, ok := cached(ns); ok {
+			if v {
+				allowed = append(allowed, ns)
+			}
+			continue
+		}
+		if budget.Add(-1) < 0 {
+			unchecked = append(unchecked, ns)
+			continue
+		}
+		pending = append(pending, ns)
+	}
+	const maxConcurrent = 16
+	sem := make(chan struct{}, maxConcurrent)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, ns := range pending {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ns string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			v, answered := check(ns)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case !answered:
+				unchecked = append(unchecked, ns)
+			case v:
+				allowed = append(allowed, ns)
+			}
+		}(ns)
+	}
+	wg.Wait()
+	sort.Strings(allowed)
+	sort.Strings(unchecked)
+	return allowed, unchecked
+}
+
 // Search runs the parsed query against the provider and returns ranked hits.
 // pendingHit pairs a Hit with the source object that produced it, so the
 // SummaryBuilder (topology lookups, issue-index reads) can be deferred
@@ -148,6 +219,7 @@ type pendingHit struct {
 }
 
 func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, error) {
+	findings := newFindingsScan(ctx)
 	if opts.Limit <= 0 {
 		opts.Limit = DefaultLimit
 	}
@@ -282,8 +354,10 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		}
 		// Namespaced CRDs honor namespace constraints. Cluster-scoped CRDs
 		// always list at cluster scope after the SAR predicate above.
+		listNs := opts.Namespaces
+		gated := !clusterScoped && opts.KindAccess != nil && kindRBACGroups[gvr.Group]
 		var items []*unstructured.Unstructured
-		if clusterScoped || len(opts.Namespaces) == 0 {
+		if clusterScoped || len(listNs) == 0 {
 			its, err := p.ListDynamic(ctx, gvr, "")
 			if err != nil {
 				coverage.add(UnsearchedKind{Kind: kind, Group: gvr.Group, Reason: UnsearchedUnreadable})
@@ -292,7 +366,10 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			items = its
 		} else {
 			var unreadable []string
-			for _, ns := range opts.Namespaces {
+			for _, ns := range listNs {
+				if err := ctx.Err(); err != nil {
+					return Result{}, err
+				}
 				its, err := p.ListDynamic(ctx, gvr, ns)
 				if err != nil {
 					unreadable = append(unreadable, ns)
@@ -300,20 +377,63 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 				items = append(items, its...)
 			}
+			// A gap only counts where the caller could have read the kind.
+			if gated && len(unreadable) > 0 {
+				var unchecked []string
+				unreadable, unchecked = opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, unreadable)
+				res.AccessIncomplete = res.AccessIncomplete || len(unchecked) > 0
+			}
 			if len(unreadable) > 0 {
 				coverage.add(UnsearchedKind{Kind: kind, Group: gvr.Group, Reason: UnsearchedUnreadable, Namespaces: unreadable})
 			}
 		}
+		// A gated kind is authorized per namespace, over every namespace
+		// holding its objects and never over the query's matches, so what
+		// the caller is told about unconfirmed access can't depend on report
+		// contents they may not read. Fresh checks are capped per search
+		// (MaxAccessChecks); objects the caller may not list are dropped
+		// before they are counted, filtered or returned.
+		if gated && len(q.NSFilter) > 0 {
+			// The caller's own ns: filter narrows what is worth authorizing.
+			kept := make([]*unstructured.Unstructured, 0, len(items))
+			for _, u := range items {
+				if sliceContainsFold(q.NSFilter, u.GetNamespace()) {
+					kept = append(kept, u)
+				}
+			}
+			items = kept
+		}
+		if gated && len(items) > 0 {
+			if !opts.KindAccess.ClusterWide(gvr.Group, gvr.Resource) {
+				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespacesOf(items))
+				items = itemsInNamespaces(items, allowed)
+				res.AccessIncomplete = res.AccessIncomplete || len(unchecked) > 0
+			}
+		}
 		res.Searched += len(items)
 		for _, u := range items {
-			c := fromUnstructured(u, kind, gvr.Group)
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
+			c := identityFromUnstructured(u, kind, gvr.Group)
 			c.Resource = gvr.Resource
+			if !matchesModifiers(q, c) {
+				continue
+			}
+			if len(q.Tokens) > 0 {
+				addUnstructuredContent(&c, u, findings)
+			}
 			score, matched, snippets, ok := match(q, c)
 			if !ok {
 				continue
 			}
 			if opts.Filter != nil {
-				act := unstructuredActivation(u, kind)
+				act, complete := unstructuredActivation(u, kind, gvr.Group, findings)
+				if !complete {
+					// Findings limit reached: left out, reported through
+					// IncompleteFindings.
+					continue
+				}
 				if act == nil {
 					// Defensive: u or u.Object was nil. Shouldn't
 					// happen for cache-listed objects but a log
@@ -341,6 +461,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			})
 		}
 	}
+
+	res.IncompleteFindings = findings.reason
 
 	if filterErrCount > 0 {
 		log.Printf("[search] CEL filter eval errors: %d rows; first=%v", filterErrCount, firstFilterErr)
@@ -540,4 +662,31 @@ func buildHit(score int, matched []MatchedField, snippets []MatchSnippet, c cand
 		}
 	}
 	return h
+}
+
+func namespacesOf(items []*unstructured.Unstructured) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, u := range items {
+		if ns := u.GetNamespace(); ns != "" && !seen[ns] {
+			seen[ns] = true
+			out = append(out, ns)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func itemsInNamespaces(items []*unstructured.Unstructured, namespaces []string) []*unstructured.Unstructured {
+	allowed := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		allowed[ns] = true
+	}
+	out := items[:0:0]
+	for _, u := range items {
+		if allowed[u.GetNamespace()] {
+			out = append(out, u)
+		}
+	}
+	return out
 }

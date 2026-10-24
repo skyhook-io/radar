@@ -48,6 +48,8 @@ func fakeSARServer(t *testing.T, decide func(authv1.ResourceAttributes) bool) *[
 	client, err := kubernetes.NewForConfig(&rest.Config{
 		Host:          apiServer.URL,
 		ContentConfig: rest.ContentConfig{ContentType: "application/json"},
+		// client-go's default 5/s limit turns a few dozen reviews into seconds.
+		QPS: -1,
 	})
 	if err != nil {
 		t.Fatalf("build Kubernetes client: %v", err)

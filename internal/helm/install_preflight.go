@@ -207,7 +207,7 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 		upgrade.MaxHistory = 10
 		upgrade.Version = req.Version
 		if previous, err := actionConfig.Releases.Last(req.ReleaseName); err == nil {
-			upgrade.Labels = chartSourceUpgradeLabels(previous.Labels, req.resolvedSource)
+			upgrade.Labels = boundChartSourceLabels(previous.Labels, req.resolvedSource, ch)
 		} else {
 			return nil, fmt.Errorf("load previous release labels: %w", err)
 		}
@@ -224,6 +224,9 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 	install.Version = req.Version
 	install.Replace = mode == installReplace
 	install.Labels = chartSourceLabels(req.resolvedSource)
+	if req.resolvedSource != nil {
+		install.Labels[chartSourceBindingLabel] = chartSourceBinding(ch)
+	}
 	return install.Run(ch, req.Values)
 }
 

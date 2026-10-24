@@ -80,6 +80,9 @@ func CloudRoleFromContext(ctx context.Context) CloudRole {
 	if user == nil {
 		return RoleNone
 	}
+	if user.HubGroups != nil {
+		return CloudRoleFromGroups(user.HubGroups)
+	}
 	return CloudRoleFromGroups(user.Groups)
 }
 

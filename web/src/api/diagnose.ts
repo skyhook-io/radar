@@ -25,7 +25,7 @@ export interface AgentsResponse {
   agents: AgentInfo[];
   enabled: boolean;
   // eligible: this run mode supports local BYO-agent investigations (no proxy/OIDC
-  // auth, /mcp mounted) — true even when no agent is installed. Lets the UI tell
+  // auth, investigation MCP mounted) - true even when no agent is installed. Lets the UI tell
   // "install an agent to enable this" (eligible && !enabled) apart from "not
   // available here" (auth/cloud/--no-mcp). Absent on older servers / embed hosts.
   eligible?: boolean;

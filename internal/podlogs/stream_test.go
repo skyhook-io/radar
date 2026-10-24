@@ -9,6 +9,48 @@ func cursorLine(follow int, ts, content string) Entry {
 	return Entry{Timestamp: ts, Content: content, Follow: follow}
 }
 
+func TestUnavailableSourceRequiresLaterFollowToRecover(t *testing.T) {
+	unavailable := UnavailableSources{}
+	if !unavailable.Add("pod/app", 2, "unavailable") {
+		t.Fatal("first failure must publish a notice")
+	}
+	if unavailable.Remove("pod/app", 1) || unavailable.Remove("pod/app", 2) {
+		t.Fatal("queued output from a failed follow must not clear its notice")
+	}
+	if unavailable.Add("pod/app", 3, "unavailable") || unavailable.Add("pod/app", 2, "older reason") {
+		t.Fatal("repeated failures must not republish the same notice")
+	}
+	if unavailable.Remove("pod/app", 3) {
+		t.Fatal("an older failure must not replace the latest failed follow")
+	}
+	if !unavailable.Remove("pod/app", 4) || unavailable.Notice() != "" {
+		t.Fatal("output from a later follow must clear the notice")
+	}
+}
+
+func TestUnavailableSourceReasonChangesAreFollowOrdered(t *testing.T) {
+	unavailable := UnavailableSources{}
+	unavailable.Add("pod/app", 2, "first failure")
+	if !unavailable.Add("pod/app", 3, "different failure") {
+		t.Fatal("a new reason must update the notice")
+	}
+	if unavailable.Add("pod/app", 2, "stale failure") || unavailable.Notice() != "1 source could not be read: pod/app: different failure" {
+		t.Fatalf("an older report replaced the current reason: %s", unavailable.Notice())
+	}
+	if unavailable.Add("pod/app", 4, "different failure") {
+		t.Fatal("an identical reason must not republish the notice")
+	}
+	if unavailable.Remove("pod/app", 4) || !unavailable.Remove("pod/app", 5) {
+		t.Fatal("recovery must come from a later follow")
+	}
+	if unavailable.Add("pod/app", 4, "late failure") || unavailable.Notice() != "" {
+		t.Fatal("an older queued failure must not undo recovery")
+	}
+	if !unavailable.Add("pod/app", 5, "later interruption") {
+		t.Fatal("a recovered follow can subsequently fail")
+	}
+}
+
 func TestStreamCursorResumesWithoutReplay(t *testing.T) {
 	cursors := map[string]*StreamCursor{}
 	c := CursorFor(cursors, "pg-1/postgres", "uid-1", 1)

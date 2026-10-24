@@ -1,8 +1,8 @@
 // Builds the shell command that hands an investigation off to the user's own
 // interactive agent CLI, pointed at Radar's MCP. This is the "escape hatch" to the
 // full agent (their config, their other MCPs, interactive approvals) — distinct
-// from the contained in-panel engine. The launched agent gets the full /mcp mount
-// (read+write); its own per-tool approval prompts gate any changes.
+// from the contained in-panel engine. The endpoint follows the server MCP mode.
+// In full mode, the client approval prompts gate changes.
 import { type RunSummary } from "../../api/diagnose";
 
 // sq POSIX-single-quotes a string so it's a safe single shell argument regardless

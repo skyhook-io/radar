@@ -1,0 +1,42 @@
+name: Helm refresh (Windows)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/helm/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'pkg/go.mod'
+      - 'pkg/go.sum'
+      - '.github/workflows/helm-refresh-windows.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/helm/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'pkg/go.mod'
+      - 'pkg/go.sum'
+      - '.github/workflows/helm-refresh-windows.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  refresh:
+    name: Helm refresh on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: go.sum
+      - name: Test Windows cache file sharing
+        run: go test ./internal/helm/repository_cache_windows.go ./internal/helm/repository_cache_windows_test.go -count=1 -timeout 30s

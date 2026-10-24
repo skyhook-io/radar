@@ -2624,7 +2624,7 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 	// be listed. detectGenericCRDIssues lowercases the kind comparison
 	// (mirrors applyFilters), so the canonical "ScaledObject" matches the
 	// emitted Kind for the keda.sh GVR.
-	_ = detectGenericCRDIssues(p, Filters{Kinds: []string{"ScaledObject"}}, nil)
+	_ = detectGenericCRDIssues(p, Filters{Kinds: []string{"ScaledObject"}}, nil, nil)
 
 	if got := p.listCalls[podGVR]; got != 0 {
 		t.Errorf("Pod GVR ListDynamic calls = %d, want 0 (kind filter must skip non-matching GVRs)", got)
@@ -2640,7 +2640,7 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 	// when caller didn't ask for one). Pins that the fix is filter-aware
 	// rather than always-skip.
 	p.listCalls = nil
-	_ = detectGenericCRDIssues(p, Filters{}, nil)
+	_ = detectGenericCRDIssues(p, Filters{}, nil, nil)
 	for gvr, want := range map[schema.GroupVersionResource]bool{podGVR: true, soGVR: true, npGVR: true} {
 		if got := p.listCalls[gvr] > 0; got != want {
 			t.Errorf("no kind filter: GVR %s called=%v, want %v", gvr.Resource, got, want)

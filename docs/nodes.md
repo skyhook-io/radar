@@ -20,3 +20,15 @@ NotReady retains its identity. Pressure/network issues have separate identities 
 UI/REST/MCP share a read-only current pod/PDB estimate. MCP `get_resource include=drain-plan` returns at most 100 pods with total/truncation, complete summary counts and explicit options. Read errors and incomplete budget checks are visible.
 
 It is not an eviction history or progress measure. DaemonSet/static/completed pods are *skipped by the estimate*; controller-specific do-not-disrupt/safe-to-evict policies are unevaluated. Known removal hides scheduling actions and uncordon advice.
+
+## Drain completion
+
+Drain waits by default until the Pods whose evictions were accepted are deleted.
+An accepted eviction alone is not completion. DaemonSet, static and completed
+Pods excluded by the operation do not prevent completion.
+
+A deadline can leave Pods pending deletion. If Radar cannot verify deletion,
+it reports unconfirmed Pods and a verification error instead of claiming the
+node is drained. REST outcomes distinguish `complete`, `incomplete`,
+`unconfirmed` and `started`; `waitForDeletion: false` returns after evictions
+are accepted. Review the per-Pod results before proceeding with node removal.

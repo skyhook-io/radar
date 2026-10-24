@@ -1,8 +1,8 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
-import { apiFetch, type SyncStatusSnapshot } from '../api/client'
+import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
 
@@ -50,6 +50,17 @@ const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 const AUTO_RETRY_INITIAL_DELAY_MS = 10000
 const AUTO_RETRY_MAX_DELAY_MS = 60000
 const CONNECTION_STATUS_FALLBACK_POLL_MS = 30000
+
+export function refreshQueriesAfterReconnect(queryClient: QueryClient, previousContext: string, nextContext: string) {
+  queryClient.removeQueries({
+    predicate: query => {
+      if (query.queryKey[0] !== 'node-drain-activity') return true
+      const activity = queryClient.getQueryData<NodeDrainActivity | null>(query.queryKey)
+      return activity?.contextName ? activity.contextName !== nextContext : previousContext !== nextContext
+    },
+  })
+  queryClient.invalidateQueries()
+}
 
 export function shouldAutoRetryConnection(errorType?: string): boolean {
   // Auth-shaped failures are excluded: the server runs its own backoff
@@ -274,6 +285,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }))
     },
     onSuccess: (result) => {
+      const previousContext = connectionRef.current.context
       setConnection(result)
       if (result.state === 'connected') {
         // Keep the first-connect bookkeeping and the double-refresh window
@@ -281,9 +293,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         hasConnectedRef.current = true
         lastCacheRefreshAtRef.current = Date.now()
       }
-      // Clear all query cache to get fresh data from new connection
-      queryClient.removeQueries()
-      queryClient.invalidateQueries()
+      refreshQueriesAfterReconnect(queryClient, previousContext, result.context)
     },
     onError: (error: Error) => {
       const retryError = error as ConnectionRetryError
@@ -342,13 +352,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             recovered = true
             autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
             sseActiveRef.current = false
+            const previousContext = connectionRef.current.context
             setConnection(result)
             if (result.state === 'connected') {
               hasConnectedRef.current = true
               lastCacheRefreshAtRef.current = Date.now()
             }
-            queryClient.removeQueries()
-            queryClient.invalidateQueries()
+            refreshQueriesAfterReconnect(queryClient, previousContext, result.context)
           })
           .catch((error: Error) => {
             if (stopped) return

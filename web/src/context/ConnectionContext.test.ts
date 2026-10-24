@@ -1,6 +1,32 @@
 import { describe, expect, it } from 'vitest'
+import { QueryClient } from '@tanstack/react-query'
 
-import { shouldApplyPolledConnection, shouldAutoRetryConnection } from './ConnectionContext'
+import { shouldApplyPolledConnection, shouldAutoRetryConnection, refreshQueriesAfterReconnect } from './ConnectionContext'
+
+it('retains local drain activity during same-context reconnects, but clears it for another context', () => {
+  const client = new QueryClient()
+  const drainKey = ['node-drain-activity', '/api', 'worker', 'node-uid']
+  client.setQueryData(drainKey, { status: 'pending' })
+  client.setQueryData(['resources', 'nodes'], ['stale-node'])
+  refreshQueriesAfterReconnect(client, 'original', 'original')
+  expect(client.getQueryData(drainKey)).toEqual({ status: 'pending' })
+  expect(client.getQueryData(['resources', 'nodes'])).toBeUndefined()
+  refreshQueriesAfterReconnect(client, 'original', 'other')
+  expect(client.getQueryData(drainKey)).toBeUndefined()
+  client.clear()
+})
+
+it('uses the recorded context when SSE has already updated the connection state', () => {
+  const client = new QueryClient()
+  const drainKey = ['node-drain-activity', '/api', 'worker', 'node-uid']
+  client.setQueryData(drainKey, { status: 'pending', contextName: 'original' })
+  refreshQueriesAfterReconnect(client, 'other', 'other')
+  expect(client.getQueryData(drainKey)).toBeUndefined()
+  client.setQueryData(drainKey, { status: 'pending', contextName: 'same' })
+  refreshQueriesAfterReconnect(client, '', 'same')
+  expect(client.getQueryData(drainKey)).toMatchObject({ status: 'pending' })
+  client.clear()
+})
 
 describe('shouldAutoRetryConnection', () => {
   it('retries transient failures', () => {

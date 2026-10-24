@@ -7,6 +7,7 @@ import (
 	"log"
 	"maps"
 	"strings"
+	"sync"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/v1/google"
@@ -207,6 +208,44 @@ func GetAuthenticatedKeychain(imageRef string, namespace string, secretNames []s
 	return authn.NewMultiKeychain(keychains...)
 }
 
+// getPodKeychain scopes an authenticated caller's registry credentials to the
+// Pod they can read: the Pod's pull secrets the caller may use, plus, with
+// useAmbient (an exec holder fetching the digest the kubelet pulled), Radar's
+// own credentials, which node-identity pulls such as Artifact Registry on GKE
+// need.
+func getPodKeychain(namespace string, pod *corev1.Pod, useAmbient bool, canUseSecret func(string) bool) authn.Keychain {
+	return &podKeychain{namespace: namespace, pod: pod, useAmbient: useAmbient, canUseSecret: canUseSecret}
+}
+
+type podKeychain struct {
+	namespace    string
+	pod          *corev1.Pod
+	useAmbient   bool
+	canUseSecret func(string) bool
+	once         sync.Once
+	keychain     authn.Keychain
+}
+
+func (k *podKeychain) Resolve(target authn.Resource) (authn.Authenticator, error) {
+	k.once.Do(func() {
+		var secretNames []string
+		for _, ref := range k.pod.Spec.ImagePullSecrets {
+			if ref.Name != "" && k.canUseSecret(ref.Name) {
+				secretNames = append(secretNames, ref.Name)
+			}
+		}
+		if k.useAmbient {
+			k.keychain = GetAuthenticatedKeychain(target.String(), k.namespace, secretNames)
+			return
+		}
+		k.keychain = getKeychainFromSecrets(k.namespace, secretNames)
+		if k.keychain == nil {
+			k.keychain = &pullSecretKeychain{}
+		}
+	})
+	return k.keychain.Resolve(target)
+}
+
 // GetKeychainForImage creates an authn.Keychain for fetching an image
 // Deprecated: Use GetAuthenticatedKeychain for brute-force auth flow
 func GetKeychainForImage(imageRef string, namespace string, secretNames []string) authn.Keychain {
@@ -325,4 +364,18 @@ func entryToAuthenticator(entry DockerConfigEntry) authn.Authenticator {
 	}
 
 	return authn.Anonymous
+}
+
+// pullSecretIdentity names a pull secret's exact contents: its UID and
+// resourceVersion change when it is recreated or rotated.
+func pullSecretIdentity(namespace, name string) (string, bool) {
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Secrets() == nil {
+		return "", false
+	}
+	secret, err := cache.Secrets().Secrets(namespace).Get(name)
+	if err != nil {
+		return "", false
+	}
+	return string(secret.UID) + "/" + secret.ResourceVersion, true
 }

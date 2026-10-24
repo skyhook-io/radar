@@ -82,7 +82,7 @@ func TestDiffObjects(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			entries, truncated := DiffObjects(tc.desired, tc.live)
+			entries, truncated := DiffObjectsTruncated(tc.desired, tc.live)
 			if truncated {
 				t.Errorf("truncated = true for %d entries", len(entries))
 			}
@@ -124,7 +124,7 @@ func TestDiffObjectsSortedAndCapped(t *testing.T) {
 		lSpec[key] = "live"
 	}
 
-	entries, truncated := DiffObjects(desired, live)
+	entries, truncated := DiffObjectsTruncated(desired, live)
 	if len(entries) != driftEntryCap {
 		t.Fatalf("entry count = %d, want cap %d", len(entries), driftEntryCap)
 	}
@@ -150,19 +150,22 @@ func TestDiffObjectsSortedAndCapped(t *testing.T) {
 // read its length.
 func TestDiffObjectsNoDifferencesIsEmptyNotNil(t *testing.T) {
 	obj := map[string]any{"spec": map[string]any{"replicas": int64(1)}}
-	entries, truncated := DiffObjects(obj, obj)
+	entries, truncated := DiffObjectsTruncated(obj, obj)
 	if entries == nil {
 		t.Fatal("entries = nil, want an empty slice")
 	}
 	if len(entries) != 0 || truncated {
 		t.Errorf("entries = %v, truncated = %v; want empty, false", entries, truncated)
 	}
+	if DiffObjects(obj, obj) == nil {
+		t.Fatal("DiffObjects = nil, want an empty slice")
+	}
 }
 
 // TestDiffObjectsValuesNotHTMLEscaped pins that values render as typed: a
 // redaction marker or a shell command must not show up as <...>.
 func TestDiffObjectsValuesNotHTMLEscaped(t *testing.T) {
-	entries, _ := DiffObjects(
+	entries := DiffObjects(
 		map[string]any{"data": map[string]any{"password": "<redacted:desired>", "cmd": "a && b > c"}},
 		map[string]any{"data": map[string]any{"password": "<redacted:live>", "cmd": "a"}},
 	)

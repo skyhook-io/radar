@@ -144,6 +144,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	var manifestParseErrors int
 	var deprecatedRequests []upgradereadiness.DeprecatedAPIRequest
 	var deprecatedMetricsWindow string
+	var deprecatedMetricsFailure upgradereadiness.APIMetricsFailure
 	var prometheusRules []*unstructured.Unstructured
 	var prometheusUnavailableNamespaces []string
 	var prometheusInstalled, discoveryAvailable bool
@@ -179,7 +180,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 				copy(helmScopedNamespaces, helmNamespaces)
 			}
 		}
-		deprecatedRequests, deprecatedMetricsWindow = collectDeprecatedAPIRequests(ctx)
+		deprecatedRequests, deprecatedMetricsWindow, deprecatedMetricsFailure = collectDeprecatedAPIRequests(ctx)
 		prometheusRules, prometheusInstalled, discoveryAvailable, prometheusUnavailableNamespaces = collectUpgradePrometheusRules(ctx, authz, namespaces)
 		sourceObjectCtx, cancelSourceObjectCollection := context.WithTimeout(ctx, upgradeSourceObjectCollectionTimeout)
 		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(sourceObjectCtx, namespaces)
@@ -220,6 +221,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 		ManifestParseErrors:                  manifestParseErrors,
 		DeprecatedAPIRequests:                deprecatedRequests,
 		DeprecatedAPIMetricsWindow:           deprecatedMetricsWindow,
+		DeprecatedAPIMetricsFailure:          deprecatedMetricsFailure,
 		PrometheusRules:                      prometheusRules,
 		PrometheusRulesInstalled:             prometheusInstalled,
 		PrometheusRulesDiscoveryAvailable:    discoveryAvailable,

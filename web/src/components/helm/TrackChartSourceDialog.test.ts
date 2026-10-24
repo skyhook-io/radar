@@ -5,7 +5,7 @@ describe('chart source recovery presentation', () => {
   it('keeps recorded, configured, and available states distinct', () => {
     expect(sourceStateLabel(false, false, false)).toBe('Not recorded')
     expect(sourceStateLabel(true, false, false)).toBe('Recorded · not configured here')
-    expect(sourceStateLabel(true, true, false)).toBe('Recorded and configured · unavailable or version missing')
+    expect(sourceStateLabel(true, true, false)).toBe('Recorded and configured · source unavailable')
     expect(sourceStateLabel(true, true, true)).toBe('Recorded · configured · available')
   })
 
@@ -17,7 +17,8 @@ describe('chart source recovery presentation', () => {
   })
 
   it('makes ambiguity explicit rather than selecting a source', () => {
-    expect(getSourceIssueCopy('ambiguous_source')?.body).toContain('will not guess')
+    expect(getSourceIssueCopy('ambiguous_source')?.title).toBe('Chart source unresolved')
+    expect(getSourceIssueCopy('ambiguous_source')?.body).toContain('choose a source for the next upgrade')
   })
 
   it('accepts only HTTP repository URLs', () => {

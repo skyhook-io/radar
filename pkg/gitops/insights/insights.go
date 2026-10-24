@@ -220,6 +220,7 @@ type Change struct {
 	HookPhase  string `json:"hookPhase,omitempty"`
 	HasDesired bool   `json:"hasDesired"`
 	HasLive    bool   `json:"hasLive"`
+	Missing    bool   `json:"missing,omitempty"`
 	// Drift is the per-field diff between desired (parsed from the
 	// kubectl.kubernetes.io/last-applied-configuration annotation) and live
 	// spec. Nil when the diff isn't computable: SSA / Helm-installed
@@ -388,8 +389,16 @@ type EventSummary struct {
 	ReportingComponent string `json:"reportingComponent,omitempty"`
 }
 
+// Build derives the detail-page insight for an Argo CD or Flux root. A root
+// that is neither gets only its identity: no tool, operations or history.
 func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, resolver Resolver) Insight {
 	tool := detectTool(root)
+	if tool == "" {
+		if root == nil {
+			return Insight{}
+		}
+		return Insight{Summary: Summary{Kind: root.GetKind(), Namespace: root.GetNamespace(), Name: root.GetName()}}
+	}
 	out := Insight{
 		Summary:      buildSummary(root, tool),
 		Issues:       buildIssues(root, resourceTree, tool, resolver),
@@ -423,17 +432,16 @@ func pluralizeResourcesAre(n int) string {
 }
 
 func BuildHistory(root *unstructured.Unstructured) []HistoryItem {
-	return buildHistory(root, detectTool(root))
+	tool := detectTool(root)
+	if tool == "" {
+		return nil
+	}
+	return buildHistory(root, tool)
 }
 
+// detectTool returns "argocd", "fluxcd", or "" for a root that is neither.
 func detectTool(root *unstructured.Unstructured) string {
-	if root == nil {
-		return ""
-	}
-	if strings.EqualFold(root.GetKind(), "Application") || strings.Contains(root.GetAPIVersion(), "argoproj.io/") {
-		return "argocd"
-	}
-	return "fluxcd"
+	return gitops.ToolOf(root)
 }
 
 func buildSummary(root *unstructured.Unstructured, tool string) Summary {
@@ -649,7 +657,9 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			if change.Ref.Namespace != "" && suppressedNamespaces[change.Ref.Namespace] {
 				continue
 			}
-			if change.Health == "Degraded" || change.Health == "Missing" {
+			if change.Missing {
+				out = append(out, resourceHealthIssue(change, nil))
+			} else if change.Health == "Degraded" || change.Health == "Missing" {
 				// Argo calling the app Healthy is its verdict on every resource
 				// it assesses; Radar's own read of a resource must not contradict
 				// that with an Issue (the node chip still shows it).
@@ -809,6 +819,21 @@ func degradedResourceFromEvents(root *unstructured.Unstructured, resolver Resolv
 // warning-tier finding never gets promoted to a critical Issue by the Argo
 // path's framing.
 func resourceHealthIssue(change Change, resolver Resolver) Issue {
+	if change.Missing {
+		action := "Sync the application to create the resource."
+		if change.Sync == "Synced" {
+			action = "Refresh the application to check its status."
+		}
+		return Issue{
+			Severity: SeverityWarning,
+			Scope:    ScopeResource,
+			Reason:   "Missing",
+			Message:  fmt.Sprintf("%s %s is not present in the cluster", change.Ref.Kind, change.Ref.Name),
+			Refs:     []Ref{change.Ref},
+			Action:   action,
+			Source:   string(gitopstree.HealthSourceRadar),
+		}
+	}
 	if change.HealthSource == string(gitopstree.HealthSourceRadar) && change.HealthReason != "" {
 		severity := SeverityWarning
 		if change.HealthSeverity == "critical" {
@@ -1210,12 +1235,10 @@ func argoResourceChanges(root *unstructured.Unstructured, resourceTree *gitopstr
 	// drift computation can filter out operator-declared exemptions before
 	// they reach the UI.
 	ignoreRules := parseArgoIgnoreDifferences(root)
-	treeHealth := map[string]gitopstree.Node{}
+	treeNodes := map[string]gitopstree.Node{}
 	if resourceTree != nil {
 		for _, n := range resourceTree.Nodes {
-			if n.Health != "" {
-				treeHealth[healthRefKey(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name)] = n
-			}
+			treeNodes[healthRefKey(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name)] = n
 		}
 	}
 	out := make([]Change, 0, len(raw))
@@ -1247,7 +1270,7 @@ func argoResourceChanges(root *unstructured.Unstructured, resourceTree *gitopstr
 		}
 		if health != "" {
 			healthSource = string(gitopstree.HealthSourceController)
-		} else if n, ok := treeHealth[healthRefKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)]; ok {
+		} else if n, ok := treeNodes[healthRefKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)]; ok {
 			health = n.Health
 			healthSource = string(n.HealthSource)
 			healthReason = n.HealthReason
@@ -1255,6 +1278,7 @@ func argoResourceChanges(root *unstructured.Unstructured, resourceTree *gitopstr
 			message = fallback(n.HealthMessage, message)
 		}
 		sync := gitops.StringValue(m["status"])
+		missing := treeNodes[healthRefKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)].Missing
 		category := categorizeArgoChange(sync, health)
 		// Argo records per-resource sync failures under a syncResult sibling
 		// (set during/after a failed sync attempt). Surface the message as
@@ -1284,7 +1308,8 @@ func argoResourceChanges(root *unstructured.Unstructured, resourceTree *gitopstr
 			RawSyncError:   rawSyncError,
 			HookPhase:      hookPhase,
 			HasDesired:     false,
-			HasLive:        true,
+			HasLive:        !missing,
+			Missing:        missing,
 			Partial:        true,
 			PartialNote:    "Argo reports resource status here; desired manifest content is not available in Radar yet.",
 		}
@@ -1295,6 +1320,7 @@ func argoResourceChanges(root *unstructured.Unstructured, resourceTree *gitopstr
 		// FailedScheduling that the GitOps CR never sees.
 		if resolver != nil {
 			if live := resolver.GetLive(ref.Group, ref.Kind, ref.Namespace, ref.Name); live != nil {
+				change.Missing, change.HasLive = false, true
 				if drift := computeDriftFromLastApplied(live, ignoreRules.pointersFor(ref)); drift != nil {
 					change.Drift = drift
 				}
@@ -1479,6 +1505,9 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 
 func buildCapabilities(root *unstructured.Unstructured, tool string) Capabilities {
 	if tool == "argocd" {
+		if root.GetKind() != "Application" {
+			return Capabilities{UnsupportedReason: "GitOps actions are only available for Argo CD Applications."}
+		}
 		hasHistory := false
 		raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
 		for _, item := range raw {

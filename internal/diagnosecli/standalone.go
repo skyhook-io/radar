@@ -17,6 +17,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/app"
 	"github.com/skyhook-io/radar/internal/cliui"
+	"github.com/skyhook-io/radar/internal/config"
 )
 
 // bootEphemeral starts a temporary in-process Radar for one investigation:
@@ -26,6 +27,17 @@ import (
 // to a tail buffer and surfaced only on failure; the terminal shows a single
 // connecting spinner instead.
 func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) {
+	fileCfg, err := config.LoadForStartup()
+	if err != nil {
+		return "", nil, err
+	}
+	mode, err := config.RegisterMCPFlags(flag.NewFlagSet("standalone", flag.ContinueOnError), fileCfg).Resolve()
+	if err != nil {
+		return "", nil, err
+	}
+	if !mode.Enabled {
+		return "", nil, fmt.Errorf("MCP is disabled; enable MCP in startup configuration to run a standalone investigation")
+	}
 	tail := &tailBuffer{limit: 64 << 10}
 	log.SetOutput(tail) // for the whole process — request logs would drown the transcript
 	// client-go logs through klog, which writes DIRECTLY to stderr by default
@@ -53,6 +65,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 		NoBrowser:       true,
 		HistoryLimit:    1000, // in-memory timeline floor; this instance lives minutes
 		MCPEnabled:      true,
+		MCPReadOnly:     mode.ReadOnly,
 		AIHistory:       true,
 		TimelineStorage: "memory",
 	}

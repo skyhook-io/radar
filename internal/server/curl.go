@@ -17,6 +17,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 const (
@@ -98,21 +99,40 @@ func (s *Server) authorizeCurl(ctx context.Context, r *http.Request, namespace, 
 	if user == nil {
 		return true, nil
 	}
+	attrs := &authv1.ResourceAttributes{
+		Namespace:   namespace,
+		Verb:        "get",
+		Resource:    "services",
+		Subresource: "proxy",
+		Name:        name,
+	}
+	if pkgauth.UserTokenMode() && !user.System {
+		// No impersonation to fall back on: a person reaches a Service only
+		// with their own token, and the API server answers as them.
+		if user.Token == "" {
+			return false, nil
+		}
+		client, err := k8s.UserClient(user)
+		if err != nil {
+			return false, err
+		}
+		result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{
+			Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: attrs},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			return false, err
+		}
+		return result.Status.Allowed, nil
+	}
 	client := k8s.GetClient()
 	if client == nil {
 		return false, fmt.Errorf("k8s client not initialized")
 	}
 	review := &authv1.SubjectAccessReview{
 		Spec: authv1.SubjectAccessReviewSpec{
-			User:   user.Username,
-			Groups: user.Groups,
-			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace:   namespace,
-				Verb:        "get",
-				Resource:    "services",
-				Subresource: "proxy",
-				Name:        name,
-			},
+			User:               user.Username,
+			Groups:             user.Groups,
+			ResourceAttributes: attrs,
 		},
 	}
 	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})

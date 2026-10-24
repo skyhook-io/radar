@@ -113,3 +113,15 @@ true
 false
 {{- end -}}
 {{- end -}}
+
+{{/*
+Whether Radar calls Kubernetes with each person's own token instead of
+impersonating them (auth.kubernetesCredentials=user-token).
+*/}}
+{{- define "radar.userTokenMode" -}}
+{{- if eq (.Values.auth.kubernetesCredentials | default "impersonate") "user-token" -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}

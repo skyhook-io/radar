@@ -113,7 +113,7 @@ func TestPodLogStreamEmitsFinalLineBeforeEnd(t *testing.T) {
 func TestWorkloadLogReaderEmitsFinalLine(t *testing.T) {
 	client := logAPIServer(t, http.StatusOK, "", "2026-10-13T10:00:00Z hi")
 	entries := make(chan podlogs.Entry, 2)
-	if err := streamPodLogs(context.Background(), client, "default", "p", corev1.PodLogOptions{Container: "app", Timestamps: true, Follow: true}, 1, entries); err != nil {
+	if _, err := streamPodLogs(context.Background(), client, "default", "p", corev1.PodLogOptions{Container: "app", Timestamps: true, Follow: true}, 1, entries, nil); err != nil {
 		t.Fatal(err)
 	}
 	select {
