@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -411,35 +412,9 @@ func filterNamespacesByCanReadDecision(ctx context.Context, group, resource, ver
 // SAR: allowed, denied, and unchecked (the check itself failed). Each part is
 // sorted and non-nil.
 func partitionNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) (allowed, denied, unchecked []string) {
-	const maxConcurrent = 16
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	allowed, denied, unchecked = []string{}, []string{}, []string{}
-	for _, ns := range namespaces {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(ns string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			ok, checked := canReadInNamespaceDecision(ctx, group, resource, ns, verb)
-			mu.Lock()
-			switch {
-			case ok:
-				allowed = append(allowed, ns)
-			case checked:
-				denied = append(denied, ns)
-			default:
-				unchecked = append(unchecked, ns)
-			}
-			mu.Unlock()
-		}(ns)
-	}
-	wg.Wait()
-	slices.Sort(allowed)
-	slices.Sort(denied)
-	slices.Sort(unchecked)
-	return allowed, denied, unchecked
+	return readscope.PartitionAccess(namespaces, func(ns string) (bool, bool) {
+		return canReadInNamespaceDecision(ctx, group, resource, ns, verb)
+	})
 }
 
 // retainAllowedObjects post-filters cache results for namespace-restricted users.

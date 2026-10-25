@@ -162,91 +162,48 @@ type readTarget struct {
 func resolveReadTarget(ctx context.Context, requested []string) (readTarget, error) {
 	target := readTarget{explicit: requested != nil}
 	user, perms, checked := resolveUserPermsDecision(ctx)
-	if !checked {
-		return target, readErrorf(readreason.UserPermissionCheckFailed, "Radar couldn't check which namespaces you can access, so it read nothing.")
+	ceiling := pkgauth.FilterNamespacesForUser(nil, user, perms)
+	var pin *string
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		pin = &target
 	}
-	// The pin is judged only against namespaces the caller can see: one they
-	// can't is answered the same whether or not Radar is pinned to it, so
-	// guessing names can't find the pin.
-	clamped, ok := clampToNamespacePin(requested)
-	outside := requested
-	if visible := pkgauth.FilterNamespacesForUser(requested, user, perms); requested != nil && visible != nil {
-		if len(visible) == 0 {
-			// Nothing named is visible: answered below as not visible.
-			clamped, ok = requested, true
-		} else {
-			clamped, ok = clampToNamespacePin(visible)
-			outside = visible
-		}
+	var missing []string
+	if checked && ceiling == nil && requested != nil {
+		missing = k8s.GetResourceCache().KnownMissingNamespaces(requested)
 	}
-	// Only a caller who can see every namespace learns that one doesn't
-	// exist; anyone else is answered below without telling the two apart. It
-	// comes before the pin: a mistyped name is the likelier cause, and "outside
-	// the pin" would send them to widen the pin to a namespace that isn't there.
-	unrestricted := pkgauth.FilterNamespacesForUser(nil, user, perms) == nil
-	if target.explicit && unrestricted {
-		if err := namespacesNotFound(requested); err != nil {
-			return target, err
-		}
+	selection, code := readscope.ResolveNamespaces(requested, readscope.NamespaceAccess{Namespaces: ceiling, Checked: checked}, pin, missing)
+	if code == readreason.UserPermissionCheckFailed {
+		return target, readErrorf(code, "Radar couldn't check which namespaces you can access, so it read nothing.")
 	}
-	if !ok {
-		return target, readErrorf(readreason.OutsideNamespacePin, "Radar is limited to other namespaces by its --namespace-scope setting, so it can't read namespace %q. Whoever runs Radar sets --namespace-scope.", namespaceForError(outside))
+	if code == readreason.UserNoNamespaceAccess {
+		return target, readErrorf(code, "You can't access any namespace in this request's scope, so Radar read nothing. %s %s", withCloudRole(ctx, "A cluster admin can grant access"), namespaceAccessRule)
 	}
-	allowed := pkgauth.FilterNamespacesForUser(clamped, user, perms)
-	if allowed != nil && len(allowed) == 0 {
-		// A namespace the caller named and can't see may not exist either;
-		// the code doesn't say which. Unscoped, clamped is the
-		// --namespace-scope target, which this caller cannot read: name only
-		// what the caller asked for.
-		if target.explicit {
-			scope := fmt.Sprintf("Namespace %q doesn't exist or you can't access it", clamped[0])
-			if len(clamped) > 1 {
-				scope = fmt.Sprintf("Namespaces %q don't exist or you can't access them", namespaceForError(clamped))
+	if len(selection.Gaps) > 0 {
+		gap := selection.Gaps[0]
+		switch gap.Code {
+		case readreason.NamespaceNotFound:
+			scope := fmt.Sprintf("Namespace %q doesn't exist in this cluster", gap.Namespaces[0])
+			if len(gap.Namespaces) > 1 {
+				scope = fmt.Sprintf("Namespaces %q don't exist in this cluster", namespaceForError(gap.Namespaces))
 			}
-			err := &readError{code: readreason.UserNamespaceNotVisible, err: fmt.Errorf("%s, so Radar can't say what's in it. If the name is right, %s %s", scope, withCloudRole(ctx, "a cluster admin can grant access"), namespaceAccessRule)}
-			// list_namespaces needs Radar to list Namespaces, which an identity
-			// limited to some namespaces may not be allowed to.
+			return target, &readError{code: gap.Code, err: fmt.Errorf("%s, so there is nothing to read there.", scope), next: "Call list_namespaces to see the namespaces that exist."}
+		case readreason.OutsideNamespacePin:
+			return target, readErrorf(gap.Code, "Radar is limited to other namespaces by its --namespace-scope setting, so it can't read namespace %q. Whoever runs Radar sets --namespace-scope.", namespaceForError(gap.Namespaces))
+		case readreason.UserNamespaceNotVisible:
+			scope := fmt.Sprintf("Namespace %q doesn't exist or you can't access it", gap.Namespaces[0])
+			if len(gap.Namespaces) > 1 {
+				scope = fmt.Sprintf("Namespaces %q don't exist or you can't access them", namespaceForError(gap.Namespaces))
+			}
+			err := &readError{code: gap.Code, err: fmt.Errorf("%s, so Radar can't say what's in it. If the name is right, %s %s", scope, withCloudRole(ctx, "a cluster admin can grant access"), namespaceAccessRule)}
 			if cache := k8s.GetResourceCache(); cache != nil && cache.Namespaces() != nil {
 				err.next = "Call list_namespaces to see the namespaces you can access."
 			}
 			return target, err
 		}
-		return target, readErrorf(readreason.UserNoNamespaceAccess, "You can't access any namespace in this request's scope, so Radar read nothing. %s %s", withCloudRole(ctx, "A cluster admin can grant access"), namespaceAccessRule)
 	}
-	// Every narrowing that applied to a request that named no namespace, as
-	// REST and search report it: the caller's access when it is restricted,
-	// and the pin.
-	if !target.explicit {
-		if !unrestricted {
-			target.narrowedBy = append(target.narrowedBy, resourceapi.NarrowedByUserAccess)
-		}
-		if clamped != nil {
-			target.narrowedBy = append(target.narrowedBy, resourceapi.NarrowedByNamespacePin)
-		}
-	}
-	target.namespaces = allowed
+	target.namespaces, target.narrowedBy = selection.Namespaces, selection.NarrowedBy
 	return target, nil
-}
-
-// namespacesNotFound is the error for a request whose named namespaces Radar
-// knows don't exist, or nil when any of them may.
-func namespacesNotFound(namespaces []string) error {
-	missing := missingNamespaces(namespaces)
-	if len(missing) == 0 || len(missing) != len(namespaces) {
-		return nil
-	}
-	scope := fmt.Sprintf("Namespace %q doesn't exist in this cluster", missing[0])
-	if len(missing) > 1 {
-		scope = fmt.Sprintf("Namespaces %q don't exist in this cluster", namespaceForError(missing))
-	}
-	return &readError{code: readreason.NamespaceNotFound, err: fmt.Errorf("%s, so there is nothing to read there.", scope), next: "Call list_namespaces to see the namespaces that exist."}
-}
-
-// missingNamespaces returns the namespaces Radar knows don't exist: its
-// Namespace informer has synced and holds none by that name. Without a synced
-// informer, none is known to be missing.
-func missingNamespaces(namespaces []string) []string {
-	return k8s.GetResourceCache().KnownMissingNamespaces(namespaces)
 }
 
 // narrowedToCollection is t narrowed to what plan's kind is collected in. A
@@ -930,7 +887,7 @@ func resourceReadCache(ctx context.Context, kind, group string, namespaces []str
 	}
 	result := cache.PermissionResult()
 	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
-	facts := readplan.Typed(cache, result, gvr.Resource, readscope.Target{Namespaces: namespaces, Explicit: explicit}, clusterScoped)
+	facts := readplan.Typed(cache, result, gvr.Resource, namespaces, clusterScoped)
 	plan := &typedRead{resource: gvr.Resource, whole: facts.WholeKindReady, read: []string{}}
 	var intended, outside []string
 	readable := namespaces != nil && len(namespaces) == 0 && !clusterScoped
@@ -1140,10 +1097,11 @@ func collectorName() string {
 // collectorAuthError is the caller-facing error for the API server refusing a
 // read Radar made with its own identity, or nil when err is not a refusal.
 func collectorAuthError(ctx context.Context, err error, target collectorTarget, namespace string) error {
-	switch {
-	case apierrors.IsUnauthorized(err):
+	code, _ := readplan.CollectorErrorCode(err)
+	switch code {
+	case readreason.RadarCredentialsRejected:
 		return collectorUnauthorizedError(target.resource, err)
-	case apierrors.IsForbidden(err):
+	case readreason.RadarForbidden:
 		var uncovered []string
 		if namespace != "" {
 			uncovered = []string{namespace}
@@ -1188,10 +1146,11 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 	if errors.As(readErr, &classified) {
 		return false, readErr
 	}
-	if errors.Is(readErr, k8s.ErrUnknownDynamicKind) {
+	code, _ := readplan.CollectorErrorCode(readErr)
+	switch code {
+	case readreason.KindUnknown:
 		return false, errKindUnknown(kind, group, readErr)
-	}
-	if errors.Is(readErr, k8s.ErrDynamicNotReady) {
+	case readreason.KindSyncPending:
 		return false, errDynamicUnavailable(kind, readErr)
 	}
 	direct := ok && directRead(gvr, verb)
@@ -1207,9 +1166,9 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 	}
 	if readErr != nil && !isObjectNotFound(readErr) {
 		if ok && dynamicCache != nil && !direct {
-			target := readscope.Target{}
+			var target []string
 			if namespace != "" {
-				target.Namespaces = []string{namespace}
+				target = []string{namespace}
 			}
 			clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
 			facts := readplan.Dynamic(dynamicCache, gvr, target, clusterScoped)
@@ -1238,9 +1197,9 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 			}
 		}
 	}
-	target := readscope.Target{}
+	var target []string
 	if namespace != "" {
-		target.Namespaces = []string{namespace}
+		target = []string{namespace}
 	}
 	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
 	facts := readplan.Dynamic(dynamicCache, gvr, target, clusterScoped)
@@ -1407,24 +1366,6 @@ func readDynamicScope[T any](ctx context.Context, kind, group, namespace, verb s
 
 func isObjectNotFound(err error) bool {
 	return apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)
-}
-
-// exactAccessResource names the resource, and its API group, that a read of
-// kind needs the caller's own permission for, beyond seeing the namespace:
-// Secrets, LimitRanges, and Trivy Operator reports, whose findings can quote
-// a leaked credential. resource is "" for any other kind.
-func exactAccessResource(kind, group string) (string, string) {
-	if gvr, ok := k8s.TrivyReportGVR(kind, group); ok {
-		return gvr.Group, gvr.Resource
-	}
-	if group != "" {
-		return "", ""
-	}
-	switch kind {
-	case "secrets", "limitranges":
-		return "", kind
-	}
-	return "", ""
 }
 
 // narrowByExactAccess keeps the namespaces of target where the caller can

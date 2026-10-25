@@ -95,23 +95,24 @@ func permissionFailure(checked bool, denial string) *resourceReadFailure {
 var errReadHandlesChanged = errors.New("Radar's cluster connection changed during this read; confirm which cluster Radar is connected to, then retry")
 
 func collectionFailure(resource string, err error) *resourceReadFailure {
+	code, _ := readplan.CollectorErrorCode(err)
 	switch {
 	case errors.Is(err, errReadHandlesChanged):
 		return readFailuref(readreason.ConnectionChanged, "%s", err.Error())
-	case errors.Is(err, k8score.ErrResourceListTooLarge):
-		return readFailuref(readreason.ListTooLarge, "Too many resources to load; select fewer namespaces")
-	case errors.Is(err, k8score.ErrCollectionNotSupported):
-		return readFailuref(readreason.KindNotWatchable, "%s cannot be collected with list/watch", resource)
+	case code == readreason.ListTooLarge:
+		return readFailuref(code, "Too many resources to load; select fewer namespaces")
+	case code == readreason.KindNotWatchable:
+		return readFailuref(code, "%s cannot be collected with list/watch", resource)
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
 		return readFailuref(readreason.ReadError, "Kubernetes read did not finish within the request budget; retry with fewer namespaces")
-	case apierrors.IsUnauthorized(err):
-		return readFailuref(readreason.RadarCredentialsRejected, "Kubernetes rejected Radar's collector credentials")
-	case apierrors.IsForbidden(err):
-		return readFailuref(readreason.RadarForbidden, "Radar's collector cannot read %s in the requested scope", resource)
-	case errors.Is(err, k8s.ErrUnknownDynamicKind):
-		return readFailuref(readreason.KindUnknown, "%s", err.Error())
-	case errors.Is(err, k8s.ErrDynamicNotReady):
-		return readFailuref(readreason.KindSyncPending, "Resource discovery is still loading")
+	case code == readreason.RadarCredentialsRejected:
+		return readFailuref(code, "Kubernetes rejected Radar's collector credentials")
+	case code == readreason.RadarForbidden:
+		return readFailuref(code, "Radar's collector cannot read %s in the requested scope", resource)
+	case code == readreason.KindUnknown:
+		return readFailuref(code, "%s", err.Error())
+	case code == readreason.KindSyncPending:
+		return readFailuref(code, "Resource discovery is still loading")
 	default:
 		return readFailuref(readreason.ReadError, "Radar could not read %s", resource)
 	}
@@ -203,73 +204,38 @@ func (t listTarget) coverage(read []string, gaps []resourceapi.Gap) resourceapi.
 	return cov
 }
 
-// resourceListTarget resolves a list's target from the request. visible is
-// parseNamespacesForUser's answer (nil: every namespace) and kindGaps what
+// resourceListTarget resolves a list's target from the request and the gaps
 // exact kind authorization withholds of it.
-func (s *Server) resourceListTarget(r *http.Request, visible []string, kindGaps []resourceapi.Gap, clusterScoped bool) listTarget {
+func (s *Server) resourceListTarget(r *http.Request, kindGaps []resourceapi.Gap, clusterScoped bool) listTarget {
 	if clusterScoped {
 		return listTarget{clusterScoped: true}
 	}
-	return s.requestListTarget(r, visible).withGaps(kindGaps)
+	return s.requestListTarget(r).withGaps(kindGaps)
 }
 
 // requestListTarget is the part of a list's target that depends only on the
 // request, not on the kind.
-func (s *Server) requestListTarget(r *http.Request, visible []string) listTarget {
-	t := listTarget{namespaces: visible}
-	if named := parseNamespaces(r.URL.Query()); named != nil {
-		t.explicit = true
-		// A named namespace the caller can't see is a gap, named back: it is
-		// what they asked for, and namespace_not_visible reads the same whether
-		// that namespace exists or not.
-		t.named = slices.Compact(slices.Sorted(slices.Values(named)))
-		var missing, pinned, hidden []string
-		t.namespaces = []string{}
-		// Only a caller who can see every namespace learns one doesn't exist,
-		// and before the pin: a mistyped name is the likelier cause, and
-		// "outside the pin" would send them to widen it to a namespace that
-		// isn't there.
-		var notFound []string
-		if s.getUserNamespaces(r, nil) == nil {
-			notFound = readCache().KnownMissingNamespaces(t.named)
-		}
-		// "Outside the pin" is said only about a namespace the caller can
-		// see. A hidden one gets the same answer inside or outside the pin, or
-		// guessing names would reveal which namespace Radar is pinned to.
-		var accessible []string
-		if k8s.ForceNamespaceScope {
-			accessible = s.getUserNamespaces(r, t.named)
-		}
-		for _, ns := range t.named {
-			switch {
-			case slices.Contains(notFound, ns):
-				missing = append(missing, ns)
-			case visible == nil || slices.Contains(visible, ns):
-				t.namespaces = append(t.namespaces, ns)
-			case k8s.ForceNamespaceScope && ns != k8s.GetNamespaceScopeTarget() && (accessible == nil || slices.Contains(accessible, ns)):
-				pinned = append(pinned, ns)
-			default:
-				hidden = append(hidden, ns)
-			}
-		}
-		if len(missing) > 0 {
-			t.gaps = append(t.gaps, gapOf(readreason.NamespaceNotFound, missing))
-		}
-		if len(pinned) > 0 {
-			t.gaps = append(t.gaps, gapOf(readreason.OutsideNamespacePin, pinned))
-		}
-		if len(hidden) > 0 {
-			t.gaps = append(t.gaps, gapOf(readreason.UserNamespaceNotVisible, hidden))
-		}
-	} else if visible != nil {
-		if s.getUserNamespaces(r, nil) != nil {
-			t.narrowedBy = append(t.narrowedBy, resourceapi.NarrowedByUserAccess)
-		}
-		if k8s.ForceNamespaceScope {
-			t.narrowedBy = append(t.narrowedBy, resourceapi.NarrowedByNamespacePin)
-		}
+func (s *Server) requestListTarget(r *http.Request) listTarget {
+	selection, _ := s.requestNamespaceSelection(r, parseNamespaces(r.URL.Query()))
+	t := listTarget{namespaces: selection.Namespaces, named: selection.Named, explicit: selection.Named != nil, narrowedBy: selection.NarrowedBy}
+	for _, gap := range selection.Gaps {
+		t.gaps = append(t.gaps, gapOf(gap.Code, gap.Namespaces))
 	}
 	return t
+}
+
+func (s *Server) requestNamespaceSelection(r *http.Request, requested []string) (readscope.Selection, readreason.Code) {
+	ceiling, failed := s.getUserNamespacesWithStatus(r, nil)
+	var pin *string
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		pin = &target
+	}
+	var missing []string
+	if !failed && ceiling == nil && requested != nil {
+		missing = readCache().KnownMissingNamespaces(requested)
+	}
+	return readscope.ResolveNamespaces(requested, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !failed}, pin, missing)
 }
 
 // readCache is the typed cache a read would use now. A handler captures it
@@ -286,8 +252,12 @@ func readCache() *k8s.ResourceCache {
 // outsideNamespacePin refuses a read of one namespace Radar's --namespace-scope
 // pin excludes: its cache holds nothing there, so a miss would read as absence.
 func outsideNamespacePin(namespace string) *resourceReadFailure {
-	if namespace != "" && k8s.ForceNamespaceScope && namespace != k8s.GetNamespaceScopeTarget() {
-		return readFailuref(readreason.OutsideNamespacePin, "namespace %q is outside Radar's --namespace-scope pin", namespace)
+	if namespace != "" && k8s.ForceNamespaceScope {
+		pin := k8s.GetNamespaceScopeTarget()
+		selection, _ := readscope.ResolveNamespaces([]string{namespace}, readscope.NamespaceAccess{Checked: true}, &pin, nil)
+		if len(selection.Gaps) > 0 {
+			return readFailuref(selection.Gaps[0].Code, "namespace %q is outside Radar's --namespace-scope pin", namespace)
+		}
 	}
 	return nil
 }
@@ -426,7 +396,7 @@ func typedReadCoverage(cache *k8s.ResourceCache, resource string, namespaces []s
 }
 
 func typedReadCoverageFrom(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, resource string, namespaces []string, clusterScoped, explicit bool) (typedRead, error) {
-	facts := readplan.Typed(cache, permissions, resource, readscope.Target{Namespaces: namespaces, Explicit: explicit}, clusterScoped)
+	facts := readplan.Typed(cache, permissions, resource, namespaces, clusterScoped)
 	plan := typedRead{whole: facts.WholeKindReady}
 	readable := namespaces != nil && len(namespaces) == 0 && !clusterScoped
 	if readable {
@@ -640,9 +610,9 @@ func dynamicReadHandles(cache *k8s.ResourceCache, kind, group string) (*k8s.Dyna
 }
 
 func namespaceReadFailure(dynamicCache *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, namespace string) *resourceReadFailure {
-	target := readscope.Target{}
+	var target []string
 	if namespace != "" {
-		target.Namespaces = []string{namespace}
+		target = []string{namespace}
 	}
 	plan := readplan.Dynamic(dynamicCache, gvr, target, false)
 	for _, part := range plan.Partitions {
@@ -783,7 +753,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			}
 			targets = observation.Namespaces
 			unanswered = observation.UnansweredNamespaces
-			facts := readplan.Dynamic(dynamicCache, gvr, readscope.Target{}, clusterScoped)
+			facts := readplan.Dynamic(dynamicCache, gvr, nil, clusterScoped)
 			for _, part := range facts.Partitions {
 				if part.Verdict.State == readplan.Gap && slices.ContainsFunc(part.Namespaces, func(ns string) bool { return slices.Contains(unanswered, ns) }) {
 					unansweredCode = part.Verdict.Code
@@ -914,7 +884,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 // Radar doesn't collect narrows a scope the request didn't name (collected
 // for every namespace, uncovered for a finite one) and is a gap in one it did.
 func dynamicCountCoverage(cache *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, namespaces []string, clusterScoped, explicit bool) (read, collected, uncovered []string, gaps []resourceapi.Gap, ok bool) {
-	facts := readplan.Dynamic(cache, gvr, readscope.Target{Namespaces: namespaces, Explicit: explicit}, clusterScoped)
+	facts := readplan.Dynamic(cache, gvr, namespaces, clusterScoped)
 	read = []string{}
 	var intended, outside []string
 	for _, part := range facts.Partitions {

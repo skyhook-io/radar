@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -54,14 +53,14 @@ func TestDynamicEmptyAndWholeExtents(t *testing.T) {
 	cache := &k8s.DynamicResourceCache{}
 	// A nil embedded cache's observation is an unwatched kind.
 	for _, tc := range []struct {
-		target  readscope.Target
+		target  []string
 		cluster bool
 		extent  Extent
 		parts   int
 	}{
-		{readscope.Target{Namespaces: []string{}}, false, NamespaceSet, 0},
-		{readscope.Target{}, false, UnknownNamespaces, 1},
-		{readscope.Target{}, true, Cluster, 1},
+		{[]string{}, false, NamespaceSet, 0},
+		{nil, false, UnknownNamespaces, 1},
+		{nil, true, Cluster, 1},
 	} {
 		p := Dynamic(cache, schema.GroupVersionResource{}, tc.target, tc.cluster)
 		if len(p.Partitions) != tc.parts || tc.parts > 0 && p.Partitions[0].Extent != tc.extent {
@@ -78,22 +77,20 @@ func TestTypedPartitionsRetainCredentialGaps(t *testing.T) {
 	t.Cleanup(core.Stop)
 	cache := &k8s.ResourceCache{ResourceCache: core}
 	permissions := &k8s.PermissionCheckResult{NamespaceProbeErrors: map[string]map[string]error{"configmaps": {"b": apierrors.NewUnauthorized("rejected")}}}
-	for _, explicit := range []bool{false, true} {
-		p := Typed(cache, permissions, "configmaps", readscope.Target{Namespaces: []string{"c", "b", "a", "b"}, Explicit: explicit}, false)
-		want := []Partition{
-			{Extent: NamespaceSet, Namespaces: []string{"b"}, Verdict: Verdict{Gap, readreason.RadarCredentialsRejected}},
-			{Extent: NamespaceSet, Namespaces: []string{"c"}, Verdict: Verdict{OutsideCollection, readreason.RadarNamespaceNotCollected}},
-			{Extent: NamespaceSet, Namespaces: []string{"a"}, Verdict: Verdict{Gap, readreason.KindSyncPending}},
-		}
-		if !reflect.DeepEqual(p.Partitions, want) {
-			t.Fatalf("%+v", p)
-		}
+	p := Typed(cache, permissions, "configmaps", []string{"c", "b", "a", "b"}, false)
+	want := []Partition{
+		{Extent: NamespaceSet, Namespaces: []string{"b"}, Verdict: Verdict{Gap, readreason.RadarCredentialsRejected}},
+		{Extent: NamespaceSet, Namespaces: []string{"c"}, Verdict: Verdict{OutsideCollection, readreason.RadarNamespaceNotCollected}},
+		{Extent: NamespaceSet, Namespaces: []string{"a"}, Verdict: Verdict{Gap, readreason.KindSyncPending}},
 	}
-	p := Typed(cache, permissions, "configmaps", readscope.Target{}, false)
+	if !reflect.DeepEqual(p.Partitions, want) {
+		t.Fatalf("%+v", p)
+	}
+	p = Typed(cache, permissions, "configmaps", nil, false)
 	if !p.CollectionLimited || len(p.Partitions) != 2 {
 		t.Fatalf("all: %+v", p)
 	}
-	if p := Typed(cache, permissions, "missing", readscope.Target{Namespaces: []string{}}, false); len(p.Partitions) != 0 {
+	if p := Typed(cache, permissions, "missing", []string{}, false); len(p.Partitions) != 0 {
 		t.Fatalf("empty: %+v", p)
 	}
 	for _, tc := range []struct {
@@ -101,7 +98,7 @@ func TestTypedPartitionsRetainCredentialGaps(t *testing.T) {
 		code     readreason.Code
 	}{{"missing", readreason.RadarKindNotCollected}, {"pods", readreason.RadarForbidden}} {
 		permissions.Scopes = map[string]k8score.ResourceScope{"pods": {Enabled: false}}
-		p := Typed(cache, permissions, tc.resource, readscope.Target{}, false)
+		p := Typed(cache, permissions, tc.resource, nil, false)
 		if len(p.Partitions) != 1 || p.Partitions[0].Verdict.Code != tc.code {
 			t.Fatalf("unavailable: %+v", p)
 		}
@@ -137,7 +134,7 @@ func TestDynamicBroadPlanKeepsUnansweredNeighbor(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	before := len(dyn.Actions())
-	p := Dynamic(cache, gvr, readscope.Target{}, false)
+	p := Dynamic(cache, gvr, nil, false)
 	if !p.CollectionLimited || len(p.Partitions) != 2 {
 		t.Fatalf("%+v", p)
 	}
@@ -175,7 +172,7 @@ func (o *countingObserver) NamespaceObservation(_ schema.GroupVersionResource, n
 
 func TestDynamicObservesEachTargetOnce(t *testing.T) {
 	observer := &countingObserver{}
-	p := Dynamic(observer, schema.GroupVersionResource{}, readscope.Target{Namespaces: []string{"a", "a"}}, false)
+	p := Dynamic(observer, schema.GroupVersionResource{}, []string{"a", "a"}, false)
 	if observer.calls != 1 || len(p.Partitions) != 1 || p.Partitions[0].Verdict.Code != readreason.KindSyncPending {
 		t.Fatalf("duplicate target observed %d times: %+v", observer.calls, p)
 	}

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -76,29 +75,30 @@ func (p *Plan) add(extent Extent, namespaces []string, state State, code readrea
 	p.Partitions = append(p.Partitions, Partition{Extent: extent, Namespaces: slices.Compact(slices.Sorted(slices.Values(namespaces))), Verdict: verdict})
 }
 
-func targetExtent(target readscope.Target, clusterScoped bool) Extent {
+func targetExtent(target []string, clusterScoped bool) Extent {
 	if clusterScoped {
 		return Cluster
 	}
-	if target.Namespaces == nil {
+	if target == nil {
 		return AllNamespaces
 	}
 	return NamespaceSet
 }
 
 // Typed assesses cache facts only; callers authorize, read, and project them.
-func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, resource string, target readscope.Target, clusterScoped bool) Plan {
+// A nil target means all namespaces; non-nil empty means nothing.
+func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, resource string, target []string, clusterScoped bool) Plan {
 	p := Plan{}
-	if !clusterScoped && target.Namespaces != nil && len(target.Namespaces) == 0 {
+	if !clusterScoped && target != nil && len(target) == 0 {
 		return p
 	}
-	requested := slices.Clone(target.Namespaces)
+	requested := slices.Clone(target)
 	slices.Sort(requested)
 	requested = slices.Compact(requested)
 	a := cache.AssessKindRead(resource, requested)
 	p.WholeKindReady = a.Readiness == k8s.KindReady
 	extent := targetExtent(target, clusterScoped)
-	rejected := permissions.CredentialRejectedNamespaces(resource, target.Namespaces)
+	rejected := permissions.CredentialRejectedNamespaces(resource, target)
 	if a.Readiness == k8s.KindUnavailable {
 		code := readreason.RadarKindNotCollected
 		if permissions != nil {
@@ -108,17 +108,17 @@ func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, res
 				code = readreason.RadarForbidden
 			}
 		}
-		p.add(extent, target.Namespaces, Gap, code)
+		p.add(extent, target, Gap, code)
 		return p
 	}
-	if clusterScoped || a.AllNamespaces && target.Namespaces == nil {
+	if clusterScoped || a.AllNamespaces && target == nil {
 		switch a.Readiness {
 		case k8s.KindReady:
-			p.add(extent, target.Namespaces, Readable, "")
+			p.add(extent, target, Readable, "")
 		case k8s.KindFailed:
-			p.add(extent, target.Namespaces, Gap, readreason.KindSyncTimedOut)
+			p.add(extent, target, Gap, readreason.KindSyncTimedOut)
 		default:
-			p.add(extent, target.Namespaces, Gap, readreason.KindSyncPending)
+			p.add(extent, target, Gap, readreason.KindSyncPending)
 		}
 		return p
 	}
@@ -132,7 +132,7 @@ func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, res
 		rejections[ns] = true
 	}
 	outside := slices.DeleteFunc(slices.Clone(a.Uncovered), func(ns string) bool { return rejections[ns] })
-	p.CollectionLimited = target.Namespaces == nil && !a.AllNamespaces
+	p.CollectionLimited = target == nil && !a.AllNamespaces
 	p.add(NamespaceSet, a.Read, Readable, "")
 	p.add(NamespaceSet, rejected, Gap, readreason.RadarCredentialsRejected)
 	p.add(NamespaceSet, outside, OutsideCollection, readreason.RadarNamespaceNotCollected)
@@ -146,14 +146,15 @@ type NamespaceObserver interface {
 }
 
 // Dynamic never starts watches or probes. On-demand readers replan after I/O.
-func Dynamic(observations NamespaceObserver, gvr schema.GroupVersionResource, target readscope.Target, clusterScoped bool) Plan {
+// A nil target means all namespaces; non-nil empty means nothing.
+func Dynamic(observations NamespaceObserver, gvr schema.GroupVersionResource, target []string, clusterScoped bool) Plan {
 	p := Plan{}
-	if !clusterScoped && target.Namespaces != nil && len(target.Namespaces) == 0 {
+	if !clusterScoped && target != nil && len(target) == 0 {
 		return p
 	}
 	whole := observations.NamespaceObservation(gvr, "")
 	extent := targetExtent(target, clusterScoped)
-	targets := slices.Clone(target.Namespaces)
+	targets := slices.Clone(target)
 	slices.Sort(targets)
 	targets = slices.Compact(targets)
 	if !clusterScoped && targets == nil && whole.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
@@ -193,7 +194,7 @@ func Dynamic(observations NamespaceObserver, gvr schema.GroupVersionResource, ta
 		}
 		return strings.Compare(string(a.Verdict.Code), string(b.Verdict.Code))
 	})
-	if target.Namespaces == nil && whole.ReasonCode == "scope_probe_incomplete" && len(whole.UnansweredNamespaces) == 0 {
+	if target == nil && whole.ReasonCode == "scope_probe_incomplete" && len(whole.UnansweredNamespaces) == 0 {
 		p.add(UnknownNamespaces, nil, Gap, readreason.ReadError)
 	}
 	return p

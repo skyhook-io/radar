@@ -1,0 +1,25 @@
+package k8s
+
+import (
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// RequiresExactNamespaceAccess reports whether namespace visibility alone is
+// insufficient to read the resolved resource. Trivy findings can quote secrets.
+func RequiresExactNamespaceAccess(gvr schema.GroupVersionResource) bool {
+	return gvr.Group == aicontext.TrivyGroup || gvr.Group == "" && (gvr.Resource == "secrets" || gvr.Resource == "limitranges")
+}
+
+// ExactNamespaceAccessResource resolves the resource needing the caller's own
+// permission beyond namespace visibility. An empty resource means no exact gate.
+func ExactNamespaceAccessResource(kind, group string) (string, string) {
+	gvr, ok := BuiltinGVR(kind, group)
+	if !ok {
+		gvr, ok = TrivyReportGVR(kind, group)
+	}
+	if ok && RequiresExactNamespaceAccess(gvr) {
+		return gvr.Group, gvr.Resource
+	}
+	return "", ""
+}

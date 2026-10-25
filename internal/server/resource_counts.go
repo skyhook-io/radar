@@ -8,7 +8,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -67,7 +66,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	namespaces, accessCheckFailed := s.parseNamespacesForUserWithStatus(r)
 	// countTarget is a kind's target: the request's, with the gaps exact kind
 	// authorization left in it.
-	requestTarget := s.requestListTarget(r, namespaces)
+	requestTarget := s.requestListTarget(r)
 	// A named namespace Radar knows doesn't exist is a gap and is never
 	// counted: a zero there would say it holds nothing.
 	if requestTarget.explicit && namespaces != nil {
@@ -363,7 +362,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 				// Trivy reports need the caller's own permission on the report
 				// kind: an ExposedSecretReport quotes the leaked credential.
 				var denied []string
-				if crd.namespaced && crd.group == aicontext.TrivyGroup {
+				if crd.namespaced && k8s.RequiresExactNamespaceAccess(crd.gvr) {
 					readable, all, complete := trivyAccess.scope(crd.gvr, namespaces)
 					switch {
 					case !complete:

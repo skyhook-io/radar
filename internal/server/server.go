@@ -1855,41 +1855,9 @@ func (s *Server) filterNamespacesByCanReadDecision(r *http.Request, group, resou
 // (group, resource, verb): allowed, denied, and unchecked (the check itself
 // failed). Each part is sorted and non-nil.
 func (s *Server) partitionNamespacesByCanRead(r *http.Request, group, resource, verb string, namespaces []string) (allowed, denied, unchecked []string) {
-	// Bounded-parallel: each canRead miss is a SAR round-trip, so a serial loop
-	// over a large candidate set (e.g. a cluster-wide reader's full namespace
-	// list in resolveHelmNamespaces) would block the request for N round-trips.
-	// canRead memoizes on the mutex-guarded UserPermissions.canI, mirroring the
-	// parallel SAR probing in internal/k8s/capabilities.go. Results are sorted so
-	// the output is deterministic regardless of goroutine completion order.
-	const maxConcurrent = 16
-	sem := make(chan struct{}, maxConcurrent)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	allowed, denied, unchecked = []string{}, []string{}, []string{}
-	for _, ns := range namespaces {
-		wg.Add(1)
-		go func(ns string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			ok, checked := s.canReadDecision(r, group, resource, ns, verb)
-			mu.Lock()
-			switch {
-			case ok:
-				allowed = append(allowed, ns)
-			case checked:
-				denied = append(denied, ns)
-			default:
-				unchecked = append(unchecked, ns)
-			}
-			mu.Unlock()
-		}(ns)
-	}
-	wg.Wait()
-	sort.Strings(allowed)
-	sort.Strings(denied)
-	sort.Strings(unchecked)
-	return allowed, denied, unchecked
+	return readscope.PartitionAccess(namespaces, func(ns string) (bool, bool) {
+		return s.canReadDecision(r, group, resource, ns, verb)
+	})
 }
 
 // deniedClusterScopedTopoKinds returns the set of cluster-scoped topology
@@ -2288,18 +2256,13 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 	// gate the read. LimitRanges and Trivy Operator reports (an
 	// ExposedSecretReport quotes the leaked credential) get the same exact
 	// gate. Other namespaced kinds use namespace visibility.
-	var resourceGroup, resource string
-	switch {
-	case kind == "secrets" || kind == "secret":
-		resource = "secrets"
-	case (kind == "limitranges" || kind == "limitrange") && group == "":
-		resource = "limitranges"
-	default:
-		gvr, ok := k8s.TrivyReportGVR(kind, group)
-		if !ok {
-			return listAuthorization{namespaces: namespaces}, nil
-		}
-		resourceGroup, resource = gvr.Group, gvr.Resource
+	exactGroup := group
+	if kind == "secrets" || kind == "secret" {
+		exactGroup = ""
+	}
+	resourceGroup, resource := k8s.ExactNamespaceAccessResource(kind, exactGroup)
+	if resource == "" {
+		return listAuthorization{namespaces: namespaces}, nil
 	}
 	if namespaces == nil {
 		// A caller with cluster-wide namespace access (e.g. picked up via
@@ -2353,10 +2316,9 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// DiscoverNamespaces if needed). canRead below relies on it.
 	namespaces, accessCheckFailed := s.parseNamespacesForUserWithStatus(r)
 
-	visible := namespaces
 	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
 	authz, failure := s.preflightResourceList(r, kind, group, namespaces)
-	target := s.resourceListTarget(r, visible, authz.gaps, clusterScoped)
+	target := s.resourceListTarget(r, authz.gaps, clusterScoped)
 	if failure != nil {
 		s.writeReadFailure(w, kind, noAccessFailure(failure, target, accessCheckFailed), &target)
 		return
@@ -2972,35 +2934,24 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 			return permissionFailure(checked, fmt.Sprintf("no access to %s (cluster-scoped resource requires explicit RBAC)", kind))
 		}
 	case namespace != "":
-		// Namespaced kind: verify namespace access. A namespace the caller
-		// can't see may not exist either; the answer doesn't say which.
-		allowed, checkFailed := s.getUserNamespacesWithStatus(r, []string{namespace})
-		if readscope.NoNamespaceAccess(allowed) {
-			if checkFailed {
-				return readFailuref(readreason.UserPermissionCheckFailed, "Radar could not determine your namespace access; retry when the permission check is available")
-			}
-			return readFailuref(readreason.UserNamespaceNotVisible, "namespace %q is not among the namespaces you can see, or does not exist", namespace)
+		selection, code := s.requestNamespaceSelection(r, []string{namespace})
+		if code == readreason.UserPermissionCheckFailed {
+			return readFailuref(code, "Radar could not determine your namespace access; retry when the permission check is available")
 		}
-		// Only a caller who can see every namespace learns one doesn't exist.
-		// The handlers check the --namespace-scope pin after this.
-		if s.getUserNamespaces(r, nil) == nil && len(readCache().KnownMissingNamespaces([]string{namespace})) > 0 {
-			return readFailuref(readreason.NamespaceNotFound, "namespace %q doesn't exist in this cluster", namespace)
-		}
-		// Per-kind RBAC inside the namespace for Secrets — the chart can
-		// grant the SA cluster-wide secrets (Helm release visibility), so
-		// namespace-list discovery is not a sufficient gate here. The list
-		// handler has the matching list-SAR.
-		if kind == "secrets" || kind == "secret" {
-			if allowed, checked := s.canReadDecision(r, "", "secrets", namespace, "get"); !allowed {
-				return permissionFailure(checked, fmt.Sprintf("no access to secrets in namespace %q", namespace))
+		if len(selection.Gaps) > 0 {
+			switch selection.Gaps[0].Code {
+			case readreason.UserNamespaceNotVisible:
+				return readFailuref(readreason.UserNamespaceNotVisible, "namespace %q is not among the namespaces you can see, or does not exist", namespace)
+			case readreason.NamespaceNotFound:
+				return readFailuref(readreason.NamespaceNotFound, "namespace %q doesn't exist in this cluster", namespace)
 			}
 		}
-		if (kind == "limitranges" || kind == "limitrange") && group == "" {
-			if allowed, checked := s.canReadDecision(r, "", "limitranges", namespace, "get"); !allowed {
-				return permissionFailure(checked, fmt.Sprintf("no access to limitranges in namespace %q", namespace))
+		if gvr, ok := k8s.BuiltinGVR(kind, ""); ok && k8s.RequiresExactNamespaceAccess(gvr) && (group == "" || gvr.Resource == "secrets") {
+			if allowed, checked := s.canReadDecision(r, gvr.Group, gvr.Resource, namespace, "get"); !allowed {
+				return permissionFailure(checked, fmt.Sprintf("no access to %s in namespace %q", gvr.Resource, namespace))
 			}
 		}
-		if gvr, ok := k8s.TrivyReportGVR(kind, group); ok {
+		if gvr, ok := k8s.TrivyReportGVR(kind, group); ok && k8s.RequiresExactNamespaceAccess(gvr) {
 			if allowed, checked := s.canReadDecision(r, gvr.Group, gvr.Resource, namespace, "get"); !allowed {
 				return permissionFailure(checked, fmt.Sprintf("no access to %s in namespace %q", kind, namespace))
 			}

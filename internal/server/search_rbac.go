@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/search"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
@@ -148,21 +149,21 @@ func (s *Server) computeSearchSecretsRBAC(r *http.Request, scanNamespaces []stri
 // searchKindAccess authorizes the kinds search gates per kind (Trivy reports)
 // by the caller's own list permission. nil when auth is off. Decisions are
 // memoized per user; uncached ones are capped per request
-// (search.MaxAccessChecks), and namespaces past the cap come back unchecked.
+// (readscope.MaxAccessChecks), and namespaces past the cap come back unchecked.
 func (s *Server) searchKindAccess(r *http.Request) *search.KindAccess {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
 		return nil
 	}
 	budget := new(atomic.Int32)
-	budget.Store(search.MaxAccessChecks)
+	budget.Store(readscope.MaxAccessChecks)
 	return &search.KindAccess{
 		ClusterWide: func(group, resource string) bool {
 			return s.canRead(r, group, resource, "", "list")
 		},
 		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
 			perms := s.permCache.Get(user.Username, user.Groups)
-			return search.CheckNamespaces(namespaces, budget,
+			return readscope.CheckNamespaceAccess(namespaces, budget,
 				func(ns string) (bool, bool) {
 					if perms == nil {
 						return false, false

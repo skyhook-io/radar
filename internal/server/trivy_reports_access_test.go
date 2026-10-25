@@ -19,7 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/search"
+	"github.com/skyhook-io/radar/internal/readscope"
 )
 
 var exposedSecretReportGVR = schema.GroupVersionResource{Group: "aquasecurity.github.io", Version: "v1alpha1", Resource: "exposedsecretreports"}
@@ -236,8 +236,8 @@ func TestProxyAuth_TrivyReportCountsBoundChecks(t *testing.T) {
 	if !slices.Contains(counts.Unavailable, key) {
 		t.Fatalf("first load: %s not unavailable (count %d)", key, counts.Counts[key])
 	}
-	if n := reportChecks(); n > search.MaxAccessChecks {
-		t.Fatalf("first load sent %d namespace checks, cap is %d", n, search.MaxAccessChecks)
+	if n := reportChecks(); n > readscope.MaxAccessChecks {
+		t.Fatalf("first load sent %d namespace checks, cap is %d", n, readscope.MaxAccessChecks)
 	}
 
 	resp = env.authGet(t, "/api/resource-counts", "reader", "")

@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/internal/search"
+	"github.com/skyhook-io/radar/internal/readscope"
 )
 
 // trivyCountAccess decides where the caller may list a Trivy report kind, for
@@ -16,7 +16,7 @@ import (
 // ExposedSecretReport quotes the leaked credential. A caller reading every
 // namespace needs the cluster-wide grant: checking each namespace would cost
 // one check per namespace per report kind. Fresh per-namespace checks share one
-// request's budget (search.MaxAccessChecks); complete is false when a
+// request's budget (readscope.MaxAccessChecks); complete is false when a
 // namespace went unchecked, so the caller reports the count as unavailable
 // instead of a partial number. Later loads reuse the remembered decisions.
 type trivyCountAccess struct {
@@ -27,7 +27,7 @@ type trivyCountAccess struct {
 
 func (s *Server) newTrivyCountAccess(r *http.Request) *trivyCountAccess {
 	budget := new(atomic.Int32)
-	budget.Store(search.MaxAccessChecks)
+	budget.Store(readscope.MaxAccessChecks)
 	return &trivyCountAccess{s: s, r: r, budget: budget}
 }
 
@@ -43,7 +43,7 @@ func (a *trivyCountAccess) scope(gvr schema.GroupVersionResource, namespaces []s
 	// A denied canRead means auth is on, so there is a user and a cache.
 	user := auth.UserFromContext(a.r.Context())
 	perms := a.s.permCache.Get(user.Username, user.Groups)
-	allowed, unchecked := search.CheckNamespaces(namespaces, a.budget,
+	allowed, unchecked := readscope.CheckNamespaceAccess(namespaces, a.budget,
 		func(ns string) (bool, bool) {
 			if perms == nil {
 				return false, false

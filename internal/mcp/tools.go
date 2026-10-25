@@ -904,7 +904,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		}
 	}
 	readable := target.namespaces
-	if exactGroup, resource := exactAccessResource(kind, group); resource != "" && !clusterScoped {
+	if exactGroup, resource := k8s.ExactNamespaceAccessResource(kind, group); resource != "" && !clusterScoped {
 		var secretGaps gapSet
 		var err error
 		if readable, secretGaps, err = narrowByExactAccess(ctx, readable, exactGroup, resource, "list"); err != nil {
@@ -1071,7 +1071,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			return nil, nil, errConnectionChanged()
 		}
 		observation := dynamicCache.Observation(gvr)
-		facts := readplan.Dynamic(dynamicCache, gvr, readscope.Target{}, false)
+		facts := readplan.Dynamic(dynamicCache, gvr, nil, false)
 		unanswered := make(map[string]bool, len(observation.UnansweredNamespaces))
 		for _, ns := range observation.UnansweredNamespaces {
 			unanswered[ns] = true
@@ -1269,7 +1269,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		if _, err := resourceReadNamespaces(ctx, []string{namespace}); err != nil {
 			return nil, nil, err
 		}
-		if exactGroup, resource := exactAccessResource(kind, group); resource != "" {
+		if exactGroup, resource := k8s.ExactNamespaceAccessResource(kind, group); resource != "" {
 			granted, checked := canReadInNamespaceDecision(ctx, exactGroup, resource, namespace, "get")
 			if !granted {
 				return nil, nil, resourcePermissionError(ctx, checked, "get", exactGroup, resource, namespace)
@@ -3620,13 +3620,13 @@ func mcpSearchKindAccess(ctx context.Context) *search.KindAccess {
 		return nil
 	}
 	budget := new(atomic.Int32)
-	budget.Store(search.MaxAccessChecks)
+	budget.Store(readscope.MaxAccessChecks)
 	return &search.KindAccess{
 		ClusterWide: func(group, resource string) bool {
 			return canReadInNamespace(ctx, group, resource, "", "list")
 		},
 		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
-			return search.CheckNamespaces(namespaces, budget,
+			return readscope.CheckNamespaceAccess(namespaces, budget,
 				func(ns string) (bool, bool) {
 					if perms == nil {
 						return false, false

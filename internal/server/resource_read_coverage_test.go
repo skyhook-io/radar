@@ -19,7 +19,6 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -995,7 +994,7 @@ func TestUnansweredProbeCodePrefersRejectedCredentials(t *testing.T) {
 		{k8score.DynamicResourceObservation{ProbeRetrying: true, UnansweredNamespaces: []string{"beta"}}, readreason.KindSyncPending},
 		{k8score.DynamicResourceObservation{UnansweredNamespaces: []string{"beta"}}, readreason.ReadError},
 	} {
-		plan := readplan.Dynamic(testNamespaceObserver{tc.observation}, schema.GroupVersionResource{}, readscope.Target{Namespaces: []string{"beta"}}, false)
+		plan := readplan.Dynamic(testNamespaceObserver{tc.observation}, schema.GroupVersionResource{}, []string{"beta"}, false)
 		if got := plan.Partitions[0].Verdict.Code; got != tc.want {
 			t.Errorf("%+v: got %s, want %s", tc.observation, got, tc.want)
 		}

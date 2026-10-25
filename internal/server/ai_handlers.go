@@ -173,7 +173,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	namespaces, accessCheckFailed := s.parseNamespacesForUserWithStatus(r)
 	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
 	authz, failure := s.preflightResourceList(r, kind, group, namespaces)
-	target := s.resourceListTarget(r, namespaces, authz.gaps, clusterScoped)
+	target := s.resourceListTarget(r, authz.gaps, clusterScoped)
 	if failure != nil {
 		s.writeReadFailure(w, kind, noAccessFailure(failure, target, accessCheckFailed), &target)
 		return
