@@ -157,6 +157,8 @@ func (s KindSet) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire(s))
 }
 
+// Kinds builds a KindSet from kinds, as Names does from names: sorted by kind
+// then group, without duplicates, listed only up to limit.
 func Kinds(kinds []KindRef, limit int) *KindSet {
 	kinds = slices.Clone(kinds)
 	slices.SortFunc(kinds, func(a, b KindRef) int {
@@ -166,6 +168,7 @@ func Kinds(kinds []KindRef, limit int) *KindSet {
 	return &KindSet{Count: len(kinds), Names: listed(kinds, len(kinds), limit)}
 }
 
+// Capped is the set as a response with a smaller cap would carry it.
 func (s *KindSet) Capped(limit int) *KindSet {
 	if s == nil || s.Extent != "" {
 		return s
@@ -182,15 +185,15 @@ type ObjectRef struct {
 	Name      string `json:"name"`
 }
 
-// ObjectSet is a NameSet of objects.
+// ObjectSet is a listed set of objects, as NameSet without the extent form.
 type ObjectSet struct {
 	Count int         `json:"count"`
 	Names []ObjectRef `json:"names,omitzero"`
 }
 
-// Objects builds an ObjectSet of count members. known holds the ones the
-// caller collected, which may be fewer than count; the set lists them, sorted,
-// only when they are all of it.
+// Objects builds an ObjectSet of count members (at least as many as known
+// holds). known holds the ones the caller collected, which may be fewer; the
+// set lists them, sorted, only when they are all of it.
 func Objects(known []ObjectRef, count, limit int) *ObjectSet {
 	known = slices.Clone(known)
 	slices.SortFunc(known, func(a, b ObjectRef) int {
@@ -202,6 +205,7 @@ func Objects(known []ObjectRef, count, limit int) *ObjectSet {
 	return &ObjectSet{Count: count, Names: listed(known, count, limit)}
 }
 
+// Capped is the set as a response with a smaller cap would carry it.
 func (s *ObjectSet) Capped(limit int) *ObjectSet {
 	if s == nil {
 		return nil
@@ -283,7 +287,8 @@ type Coverage struct {
 }
 
 // Validate reports the first way c breaks the contract above, for producers'
-// tests: status agrees with the gaps; scope and read carry a set exactly when
+// tests. It checks status and the namespace partition, not scope type values
+// or a gap's kinds and objects: status agrees with the gaps; scope and read carry a set exactly when
 // their type is namespaces; a namespaced scope's gaps all state namespaces
 // and a cluster scope's none; listed sets are sorted, unique and as large as
 // their count; gaps and read don't overlap; and, where everything is listed,
@@ -416,9 +421,9 @@ func (c Coverage) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w)
 }
 
-// ReadError is the body of a failed resource read on every surface: REST
-// responses, and MCP results (structuredContent and the text block, where
-// `next` follows error_code). A read fails when it returns no usable
+// ReadError is the body of a failed resource read: REST responses send it as
+// is, and MCP results (structuredContent and the text block) add `next` after
+// error_code. A read fails when it returns no usable
 // inventory: Radar read nothing in its scope, the answer would be too large,
 // or its connection changed mid-read. A failed list's Coverage keeps every
 // reason and where it applies, including the ones ErrorCode does not name, and

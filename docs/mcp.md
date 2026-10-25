@@ -562,15 +562,16 @@ says in words what the codes and coverage say as data, in two parts:
   admin for your access, or whoever runs Radar for what it collects. Findings
   shows this to people too.
 - **What the agent can do**: `next`, present only when the agent itself can
-  change the answer, naming the exact tool and argument. It is absent when the
-  answer is complete, and when only a person can change it.
+  change the answer, naming the exact tool and argument. It is absent when only
+  a person can change the answer, and when the answer is complete and names
+  every namespace it read.
 
 `next` appears for three situations, because only these reliably change an
 agent's next move:
 
 | Situation | `next` |
 |---|---|
-| Part of the answer clears on its own: still loading, a permission check that failed, a watch that failed to start, an unexpected error | Retry, and when: "Retry in a few seconds to read namespace \"gamma\"." (a minute for a load that missed its deadline) |
+| Part of the answer clears on its own: still loading, a permission check that failed, a watch that failed to start, an unexpected error | Retry, and when: "Retry in a few seconds to read namespace \"gamma\"." (a minute for a load that missed its deadline). While Radar is still connecting to the cluster, the error itself says to retry |
 | The answer counts namespaces it can't name, so the agent can't tell whether the one it cares about was read | "To check one namespace, call list_resources again with namespace set to it." |
 | The request can't be answered as asked: a get with no namespace, a kind Radar doesn't know, a namespace you can't see, an object that isn't there | The narrower or different call: set `namespace`; `search` for `kind:<kind> <name>` (naming the kind reaches kinds a broad search skips); `list_resources kind=customresourcedefinitions`; `list_namespaces`, when Radar can list namespaces; or the same name under another kind or namespace |
 

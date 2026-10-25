@@ -42,8 +42,8 @@ type ResourceDiscovery struct {
 	lastRefresh time.Time
 	partial     bool
 	failedGroup map[string]bool
-	// refreshFailed: the last refresh returned no resources at all, so the
-	// ones held are from an earlier refresh.
+	// refreshFailed: the last refresh failed without usable resource data, so
+	// the ones held, if any, are from an earlier refresh.
 	refreshFailed bool
 	cacheTTL      time.Duration
 	refreshMu     sync.Mutex
@@ -288,9 +288,10 @@ func (d *ResourceDiscovery) HasPartialDiscovery() bool {
 	return d.partial
 }
 
-// LastRefreshFailed reports whether the last refresh returned no resources at
-// all. The resources held are then from an earlier refresh, so an API
-// installed since is missing from them.
+// LastRefreshFailed reports whether the last refresh failed without usable
+// resource data. The resources held, if any, are then from an earlier
+// refresh, so an API installed since is missing from them. A partial
+// refresh does not set it; see HasPartialDiscovery.
 func (d *ResourceDiscovery) LastRefreshFailed() bool {
 	if d == nil {
 		return false

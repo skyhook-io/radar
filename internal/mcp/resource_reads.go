@@ -1324,9 +1324,9 @@ func readDynamicScope[T any](ctx context.Context, kind, group, namespace, verb s
 			out, err := read()
 			return out, false, err
 		}
-		before, syncedBefore := dynamicCache.ReadServer(gvr, namespace)
+		before, syncedBefore := dynamicCache.ReadSource(gvr, namespace)
 		out, err := read()
-		after, syncedAfter := dynamicCache.ReadServer(gvr, namespace)
+		after, syncedAfter := dynamicCache.ReadSource(gvr, namespace)
 		return out, syncedBefore && syncedAfter && before.Same(after), err
 	}
 	out, settled, err := bracketed()

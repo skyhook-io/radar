@@ -130,7 +130,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"rows plus summaryContext by default (managedBy, health, issueCount) so you can " +
 			"compare many similar resources and pick suspects before calling get_resource. " +
 			"Returns {summary, next?, coverage, items}: summary says in words what the rows cover and what was not read; " +
-			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?}. " +
+			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
 			"get_dashboard or issues first.",
 		Annotations: readOnly,
@@ -155,7 +155,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"kinds such as Knative Service vs core Service. When recentChanges entries " +
 			"carry `application_configuration_change: true`, it is a factual edit " +
 			"classification and narrow ranking hint, not a causal or universal relevance verdict. " +
-			"Failures return {error, error_code}; only object_not_found means it is absent.",
+			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent.",
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 

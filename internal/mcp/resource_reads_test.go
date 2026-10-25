@@ -2393,7 +2393,7 @@ func readErrorNext(t *testing.T, err error) string {
 // names the most actionable, and next still offers the retry that can recover
 // another part.
 // A list whose namespaces failed for different reasons names every cause in
-// its error, since an MCP error carries no coverage; its code is the most
+// its error as well as in its coverage; its code is the most
 // actionable one and next still covers the cause that clears by itself.
 func TestFailedListNamesEveryCause(t *testing.T) {
 	var gaps gapSet

@@ -202,9 +202,10 @@ var precedence = []Code{
 }
 
 // Primary returns the code an error reports when several codes apply, such
-// as a read whose every namespace failed for a different reason. A REST
-// error's coverage keeps the rest; an MCP error names them in its sentence.
-// It returns "" for no codes.
+// as a read whose every namespace failed for a different reason. The error's
+// coverage keeps the rest, and its sentence names them. A declared code
+// outranks an undeclared one; among equals the first wins. It returns "" for
+// no codes.
 func Primary(codes []Code) Code {
 	best, rank := Code(""), len(precedence)+1
 	for _, c := range codes {
