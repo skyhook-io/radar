@@ -109,7 +109,7 @@ func TestCheckNamespaces(t *testing.T) {
 	}
 	budget := new(atomic.Int32)
 	budget.Store(3)
-	allowed, unchecked := readscope.CheckNamespaceAccess([]string{"cached-yes", "cached-no", "fresh", "denied", "fails", "over-budget"}, budget, cached, check)
+	allowed, unchecked := readscope.BudgetedNamespaceAccess([]string{"cached-yes", "cached-no", "fresh", "denied", "fails", "over-budget"}, budget, cached, check)
 	if !slices.Equal(allowed, []string{"cached-yes", "fresh"}) {
 		t.Fatalf("allowed = %v", allowed)
 	}
@@ -120,7 +120,7 @@ func TestCheckNamespaces(t *testing.T) {
 		t.Fatalf("fresh checks = %d, want the budget of 3", checks.Load())
 	}
 	// The budget is shared: a second call in the same search sends nothing.
-	_, unchecked = readscope.CheckNamespaceAccess([]string{"fresh2"}, budget, cached, check)
+	_, unchecked = readscope.BudgetedNamespaceAccess([]string{"fresh2"}, budget, cached, check)
 	if !slices.Equal(unchecked, []string{"fresh2"}) || checks.Load() != 3 {
 		t.Fatalf("unchecked = %v, checks = %d", unchecked, checks.Load())
 	}

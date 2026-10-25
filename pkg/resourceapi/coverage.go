@@ -50,7 +50,7 @@ const (
 type Narrowing string
 
 const (
-	// NarrowedByUserAccess: the namespaces the user may read.
+	// NarrowedByUserAccess: the kinds or namespaces the caller may read.
 	NarrowedByUserAccess Narrowing = "user_access"
 	// NarrowedByNamespacePin: Radar's --namespace-scope pin.
 	NarrowedByNamespacePin Narrowing = "namespace_pin"

@@ -163,7 +163,7 @@ func (s *Server) searchKindAccess(r *http.Request) *search.KindAccess {
 		},
 		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
 			perms := s.permCache.Get(user.Username, user.Groups)
-			return readscope.CheckNamespaceAccess(namespaces, budget,
+			return readscope.BudgetedNamespaceAccess(namespaces, budget,
 				func(ns string) (bool, bool) {
 					if perms == nil {
 						return false, false

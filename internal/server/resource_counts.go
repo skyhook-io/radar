@@ -67,7 +67,11 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	namespaces, accessCheckFailed := s.parseNamespacesForUserWithStatus(r)
 	// countTarget is a kind's target: the request's, with the gaps exact kind
 	// authorization left in it.
-	requestTarget := s.requestListTarget(r)
+	requestTarget := s.requestListTarget(r, started)
+	if readCache() != started {
+		s.writeCollectionFailure(w, "resource counts", errReadHandlesChanged)
+		return
+	}
 	// A named namespace Radar knows doesn't exist is a gap and is never
 	// counted: a zero there would say it holds nothing.
 	if requestTarget.explicit && namespaces != nil {
@@ -345,6 +349,11 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			gvrs := make([]schema.GroupVersionResource, 0, len(crdOrder))
+			for _, key := range crdOrder {
+				gvrs = append(gvrs, crds[key].gvr)
+			}
+			observations := dynamicCache.NewObservationView(gvrs)
 			trivyAccess := s.newTrivyCountAccess(r)
 			for _, key := range crdOrder {
 				crd := crds[key]
@@ -377,7 +386,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 						target = readable
 					}
 				}
-				inventory := readplan.ForInventory(readplan.Dynamic(dynamicCache, crd.gvr, target, !crd.namespaced), target, requestTarget.explicit, !crd.namespaced)
+				inventory := readplan.ForInventory(readplan.Dynamic(observations, crd.gvr, target, !crd.namespaced), target, requestTarget.explicit, !crd.namespaced)
 				read := inventory.Namespaces
 				if inventory.All {
 					read = nil
@@ -396,7 +405,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 					gaps = append(gaps, gapOf(readreason.UserForbidden, denied))
 				}
 				// Count treats an empty namespace filter as every namespace.
-				if inventory.AnyReadable && (inventory.All || len(inventory.Namespaces) > 0) {
+				if inventory.CanReadTarget && (inventory.All || len(inventory.Namespaces) > 0) {
 					countIn := read
 					if countIn == nil {
 						countIn = target
@@ -410,7 +419,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 						countCoverage[key] = coverageTarget.coverage(read, gaps)
 						continue
 					}
-					inventory = readplan.ForInventory(readplan.Dynamic(dynamicCache, crd.gvr, target, !crd.namespaced), target, requestTarget.explicit, !crd.namespaced)
+					inventory = readplan.ForInventory(readplan.Dynamic(observations, crd.gvr, target, !crd.namespaced), target, requestTarget.explicit, !crd.namespaced)
 					gaps = inventoryGaps(inventory)
 					collected, uncovered = nil, nil
 					if inventory.Collection != nil {

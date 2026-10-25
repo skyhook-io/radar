@@ -31,6 +31,9 @@ type Selection struct {
 }
 
 // ResolveNamespaces classifies a request within the caller's access and pin.
+// A nil pin means no pin; &"" pins to nothing readable; &"ns" pins to ns.
+// Nil requested means implicit all; non-nil empty normally means no members,
+// except that a restricted caller without a pin gets its full access ceiling.
 // Missing names are considered only for unrestricted callers, before the pin;
 // hidden names never disclose either existence or the pin. The returned code
 // describes a scope-level failure; rejected named namespaces remain in Gaps.
@@ -92,8 +95,8 @@ func ResolveNamespaces(requested []string, access NamespaceAccess, pin *string, 
 			s.Gaps = append(s.Gaps, gap)
 		}
 	}
-	// Auth filtering treats an empty request as the full ceiling for a
-	// restricted caller. Never repeat that default on a filtered empty set.
+	// Only an originally empty request inherits a restricted caller's ceiling;
+	// a nonempty request filtered to nothing must stay empty.
 	if len(requested) == 0 && pin == nil {
 		s.Namespaces = slices.Clone(SelectNamespaces(access.Namespaces, requested))
 	}

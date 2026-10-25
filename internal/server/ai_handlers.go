@@ -173,7 +173,11 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	namespaces, accessCheckFailed := s.parseNamespacesForUserWithStatus(r)
 	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
 	authz, failure := s.preflightResourceList(r, kind, group, namespaces)
-	target := s.resourceListTarget(r, authz.gaps, clusterScoped)
+	target := s.resourceListTarget(r, started, authz.gaps, clusterScoped)
+	if readCache() != started {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	if failure != nil {
 		s.writeReadFailure(w, kind, noAccessFailure(failure, target, accessCheckFailed), &target)
 		return
@@ -392,11 +396,14 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 	// no `get secrets` SAR could read Secret values via /api/ai/resources/…
 	// even though /api/resources/… correctly returns 403. Runs BEFORE the
 	// fetch so cluster-scoped denies don't leak existence by status code.
-	if failure := s.preflightResourceGet(r, kind, namespace, name, group); failure != nil {
+	if failure := s.preflightResourceGetFrom(r, started, kind, namespace, name, group); failure != nil {
 		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
 	if failure := outsideNamespacePin(namespace); failure != nil {
+		if readCache() != started {
+			failure = readFailuref(readreason.ConnectionChanged, "%s", errReadHandlesChanged)
+		}
 		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
@@ -416,22 +423,26 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		if clusterScoped {
 			target = nil
 		}
-		plan, err := typedReadCoverage(cache, key, target, clusterScoped, true)
-		if err != nil {
-			s.writeCollectionFailure(w, kind, err)
-			return
-		}
-		if !plan.wholeKindReady {
-			obj, found, ok := cache.ReadableObject(key, namespace, name)
-			switch {
-			case !ok:
-				s.writeCollectionFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key))
-				return
-			case !found:
-				s.writeAIFetchError(w, kind, apierrors.NewNotFound(schema.GroupResource{Resource: key}, name))
+		if obj, found := cache.CachedObject(key, namespace, name); found {
+			readable = obj
+		} else {
+			plan, err := typedReadCoverage(cache, key, target, clusterScoped, true)
+			if err != nil {
+				s.writeCollectionFailure(w, kind, err)
 				return
 			}
-			readable = obj
+			if !plan.wholeKindReady {
+				obj, found, ok := cache.ReadableObject(key, namespace, name)
+				if !ok {
+					s.writeCollectionFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key))
+					return
+				}
+				if !found {
+					s.writeAIFetchError(w, kind, apierrors.NewNotFound(schema.GroupResource{Resource: key}, name))
+					return
+				}
+				readable = obj
+			}
 		}
 	}
 

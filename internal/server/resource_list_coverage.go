@@ -70,17 +70,17 @@ func (t listTarget) coverage(read []string, gaps []resourceapi.Gap) resourceapi.
 
 // resourceListTarget resolves a list's target from the request and the gaps
 // exact kind authorization withholds of it.
-func (s *Server) resourceListTarget(r *http.Request, kindGaps []resourceapi.Gap, clusterScoped bool) listTarget {
+func (s *Server) resourceListTarget(r *http.Request, cache *k8s.ResourceCache, kindGaps []resourceapi.Gap, clusterScoped bool) listTarget {
 	if clusterScoped {
 		return listTarget{clusterScoped: true}
 	}
-	return s.requestListTarget(r).withGaps(kindGaps)
+	return s.requestListTarget(r, cache).withGaps(kindGaps)
 }
 
 // requestListTarget is the part of a list's target that depends only on the
 // request, not on the kind.
-func (s *Server) requestListTarget(r *http.Request) listTarget {
-	selection, _ := s.requestNamespaceSelection(r, parseNamespaces(r.URL.Query()))
+func (s *Server) requestListTarget(r *http.Request, cache *k8s.ResourceCache) listTarget {
+	selection, _ := s.requestNamespaceSelection(r, cache, parseNamespaces(r.URL.Query()))
 	t := listTarget{namespaces: selection.Namespaces, named: selection.Named, explicit: selection.Named != nil, narrowedBy: selection.NarrowedBy}
 	for _, gap := range selection.Gaps {
 		t.gaps = append(t.gaps, gapOf(gap.Code, gap.Namespaces))
@@ -164,14 +164,14 @@ func typedReadCoverageFrom(cache *k8s.ResourceCache, permissions *k8s.Permission
 	facts := readplan.Typed(cache, permissions, resource, namespaces, clusterScoped)
 	inventory := readplan.ForInventory(facts, namespaces, explicit, clusterScoped)
 	plan := typedRead{wholeKindReady: inventory.WholeKindReady}
-	if inventory.AnyReadable && !inventory.All {
+	if inventory.CanReadTarget && !inventory.All {
 		plan.read = inventory.Namespaces
 	}
 	if inventory.Collection != nil {
 		plan.collected, plan.uncovered = inventory.Collection.Namespaces, inventory.Collection.Outside
 	}
 	for _, part := range inventory.Gaps {
-		gap := gapOf(part.Verdict.Code, part.Namespaces)
+		gap := partitionGap(part)
 		if part.Verdict.State == readplan.OutsideCollection {
 			at := 0
 			for at < len(plan.gaps) && plan.gaps[at].Code == readreason.RadarCredentialsRejected {
@@ -185,7 +185,7 @@ func typedReadCoverageFrom(cache *k8s.ResourceCache, permissions *k8s.Permission
 	if inventory.Collection != nil && len(plan.collected) == 0 {
 		plan.gaps = append(plan.gaps, gapOf(readreason.RadarNamespaceNotCollected, plan.uncovered))
 	}
-	if inventory.AnyReadable {
+	if inventory.CanReadTarget {
 		return plan, nil
 	}
 	codes := make([]readreason.Code, 0, len(plan.gaps))
@@ -265,9 +265,10 @@ func (t listTarget) placeGaps(gaps []resourceapi.Gap, read []string) []resourcea
 		case scope != nil && remainderKnown:
 			rest := slices.DeleteFunc(slices.Clone(scope), func(ns string) bool { return claimed[ns] })
 			if len(rest) == 0 {
-				continue
+				gap.Namespaces = resourceapi.UnknownNames()
+			} else {
+				gap.Namespaces = resourceapi.Names(rest, resourceapi.RESTSetLimit)
 			}
-			gap.Namespaces = resourceapi.Names(rest, resourceapi.RESTSetLimit)
 		default:
 			gap.Namespaces = resourceapi.UnknownNames()
 		}
@@ -284,10 +285,21 @@ func gapOf(code readreason.Code, namespaces []string) resourceapi.Gap {
 	return gap
 }
 
+func partitionGap(part readplan.Partition) resourceapi.Gap {
+	gap := gapOf(part.Verdict.Code, part.Namespaces)
+	switch part.Extent {
+	case readplan.UnknownNamespaces:
+		gap.Namespaces = resourceapi.UnknownNames()
+	case readplan.AllNamespaces:
+		gap.Namespaces = resourceapi.AllNames()
+	}
+	return gap
+}
+
 func inventoryGaps(inventory readplan.Inventory) []resourceapi.Gap {
 	var gaps []resourceapi.Gap
 	for _, part := range inventory.Gaps {
-		gaps = append(gaps, gapOf(part.Verdict.Code, part.Namespaces))
+		gaps = append(gaps, partitionGap(part))
 	}
 	if c := inventory.Collection; c != nil && len(c.Namespaces) == 0 && len(c.Outside) > 0 {
 		gaps = append(gaps, gapOf(readreason.RadarNamespaceNotCollected, c.Outside))

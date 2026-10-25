@@ -896,7 +896,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	var gaps gapSet
 	if !clusterScoped {
 		var err error
-		if target, err = resolveReadTarget(ctx, requested); err != nil {
+		if target, err = resolveReadTargetFrom(ctx, started, requested); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -1044,7 +1044,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 			return nil, nil, &readError{code: readreason.NamespaceRequired, err: fmt.Errorf("%s live in namespaces, so get_resource needs one.", upperFirst(kind)),
 				next: fmt.Sprintf("Call get_resource again with namespace set. If you don't know it, call search with query %q to find it.", "kind:"+kind+" "+name)}
 		}
-		if _, err := resourceReadNamespaces(ctx, []string{namespace}); err != nil {
+		if _, err := resolveReadTargetFrom(ctx, started, []string{namespace}); err != nil {
 			return nil, nil, err
 		}
 		if exactGroup, resource := k8s.ExactNamespaceAccessResource(kind, group); resource != "" {
@@ -1058,12 +1058,27 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	if !clusterScoped {
 		namespaces = []string{namespace}
 	}
-	cache, plan, err := planResourceInventory(ctx, kind, group, namespaces, true)
-	if err != nil {
-		return nil, nil, err
-	}
+	cache := currentReadCache()
 	if cache != started {
 		return nil, nil, errConnectionChanged()
+	}
+	if cache == nil {
+		return nil, nil, errNotConnected()
+	}
+	var loaded runtime.Object
+	if gvr, builtin := k8s.BuiltinGVRAnyGroup(kind); builtin && (group == "" || group == gvr.Group) && k8s.TypedKindOwnsGroup(kind, gvr.Group) {
+		loaded, _ = cache.CachedObject(gvr.Resource, namespace, name)
+	}
+	var plan *typedRead
+	if loaded == nil {
+		var err error
+		cache, plan, err = planResourceInventory(ctx, kind, group, namespaces, true)
+		if !resourceReadCacheIsCurrent(started) {
+			return nil, nil, errConnectionChanged()
+		}
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Fetch the resource. When group is set, skip the typed cache and route
@@ -1083,7 +1098,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	} else {
 		var obj runtime.Object
 		var err error
-		if plan != nil && !plan.wholeKindReady {
+		if loaded != nil {
+			obj = loaded
+		} else if plan != nil && !plan.wholeKindReady {
 			// The kind is still loading elsewhere; this namespace's own
 			// informer has synced, so its store answers, including a miss.
 			if readable, found, ok := cache.ReadableObject(plan.resource, namespace, name); !ok {
@@ -3404,7 +3421,7 @@ func mcpSearchKindAccess(ctx context.Context) *search.KindAccess {
 			return canReadInNamespace(ctx, group, resource, "", "list")
 		},
 		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
-			return readscope.CheckNamespaceAccess(namespaces, budget,
+			return readscope.BudgetedNamespaceAccess(namespaces, budget,
 				func(ns string) (bool, bool) {
 					if perms == nil {
 						return false, false

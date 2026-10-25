@@ -10,6 +10,7 @@ import (
 // informers served its scope before and after it. The value and error are
 // returned unchanged even when the read is not authoritative: a caller may
 // accept a found object before sync, but a miss or list needs complete stores.
+// With a nil cache the read still runs, but is never authoritative.
 // It does not warm, wait, retry or validate the caller's access or connection.
 func ReadWithSourceCheck[T any](cache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace string, read func() (T, error)) (value T, authoritative bool, err error) {
 	before, syncedBefore := cache.ReadSource(gvr, namespace)
@@ -45,6 +46,7 @@ func (s DynamicReadSource) Same(other DynamicReadSource) bool {
 // whether they answer authoritatively, by IsNamespaceSynced's rules: namespace
 // "" is a cluster-wide read, which only a cluster-wide informer answers. Both
 // come from the same informers, so a replacement between them cannot mix them.
+// A nil cache returns an empty source and false: never authoritative.
 func (d *DynamicResourceCache) ReadSource(gvr schema.GroupVersionResource, namespace string) (DynamicReadSource, bool) {
 	entries, ok := d.servedEntries(gvr, namespace)
 	return DynamicReadSource{entries: entries}, ok

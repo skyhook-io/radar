@@ -9,7 +9,7 @@
 // remedy, the prefix names that identity: user_ for the access of the user
 // asking (a person, or an agent acting as one), radar_ for Radar's own
 // Kubernetes identity and what it collects. kind_
-// codes are a kind's loading lifecycle; namespace_ and outside_ codes are how
+// codes cover kind resolution, support and loading; namespace_ and outside_ codes are how
 // the request targeted namespaces; cluster_ and connection_ are Radar's
 // cluster connection; the rest describe the request or the answer itself.
 // Each code's Action says what resolves it.

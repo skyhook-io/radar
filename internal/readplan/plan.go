@@ -38,11 +38,14 @@ const (
 	UnknownNamespaces
 )
 
+// Verdict codes are empty for Readable and required for Gap or OutsideCollection.
 type Verdict struct {
 	State State
 	Code  readreason.Code
 }
 
+// Partition names members only for NamespaceSet. Other extents describe the
+// namespace axis without enumerating it; Namespaces is empty for those extents.
 type Partition struct {
 	Extent     Extent
 	Namespaces []string
@@ -86,7 +89,9 @@ func targetExtent(target []string, clusterScoped bool) Extent {
 }
 
 // Typed assesses cache facts only; callers authorize, read, and project them.
-// A nil target means all namespaces; non-nil empty means nothing.
+// A nil target means all namespaces; non-nil empty means nothing. A nil cache
+// has no readable inventory. Nil permissions means no recorded permission
+// evidence, not an authorization grant; callers authorize separately.
 func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, resource string, target []string, clusterScoped bool) Plan {
 	p := Plan{}
 	if !clusterScoped && target != nil && len(target) == 0 {
@@ -141,6 +146,8 @@ func Typed(cache *k8s.ResourceCache, permissions *k8s.PermissionCheckResult, res
 	return p
 }
 
+// NamespaceObserver reports live cache facts without I/O. Namespace "" asks
+// about the whole kind; other values ask about that namespace's serving store.
 type NamespaceObserver interface {
 	NamespaceObservation(schema.GroupVersionResource, string) k8score.DynamicResourceObservation
 }
@@ -194,8 +201,13 @@ func Dynamic(observations NamespaceObserver, gvr schema.GroupVersionResource, ta
 		}
 		return strings.Compare(string(a.Verdict.Code), string(b.Verdict.Code))
 	})
-	if target == nil && whole.ReasonCode == "scope_probe_incomplete" && len(whole.UnansweredNamespaces) == 0 {
-		p.add(UnknownNamespaces, nil, Gap, readreason.ReadError)
+	if target == nil && len(whole.UnansweredNamespaces) == 0 {
+		if whole.ProbeRetrying {
+			_, code := dynamicVerdict(whole, false)
+			p.add(UnknownNamespaces, nil, Gap, code)
+		} else if whole.ReasonCode == "scope_probe_incomplete" {
+			p.add(UnknownNamespaces, nil, Gap, readreason.ReadError)
+		}
 	}
 	return p
 }

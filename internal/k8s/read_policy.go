@@ -12,11 +12,11 @@ func RequiresExactNamespaceAccess(gvr schema.GroupVersionResource) bool {
 }
 
 // ExactNamespaceAccessResource resolves the resource needing the caller's own
-// permission beyond namespace visibility. An empty resource means no exact gate.
-func ExactNamespaceAccessResource(kind, group string) (string, string) {
-	gvr, ok := BuiltinGVR(kind, group)
+// permission beyond namespace visibility. Only resource == "" means no exact gate; an empty group names the core API.
+func ExactNamespaceAccessResource(kind, requestedGroup string) (group, resource string) {
+	gvr, ok := BuiltinGVR(kind, requestedGroup)
 	if !ok {
-		gvr, ok = TrivyReportGVR(kind, group)
+		gvr, ok = TrivyReportGVR(kind, requestedGroup)
 	}
 	if ok && RequiresExactNamespaceAccess(gvr) {
 		return gvr.Group, gvr.Resource

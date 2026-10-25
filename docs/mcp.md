@@ -544,8 +544,9 @@ Both tools return `guidance` as an array of interpretation notes; read notes abo
 
 ## Resource reads: coverage and errors
 
-Every `list_resources` result says what it covers. A list that served nothing,
-and any `get_resource` failure, is an MCP tool error with a code. Workload and
+Every `list_resources` result says what it covers. A list with no usable
+inventory (nothing readable, an oversized result, or a changed connection), and
+any `get_resource` failure, is an MCP tool error with a code. Workload and
 GitOps `diagnose` root reads apply the same readiness checks. Codes are defined
 in `pkg/readreason`, and the coverage types in `pkg/resourceapi`; REST resource
 reads and search use the same codes.

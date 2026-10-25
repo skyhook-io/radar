@@ -122,6 +122,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 	targets := namespaces
 	var collected, unanswered []string
 	var unansweredCode readreason.Code
+	var unknownGaps []resourceapi.Gap
 	if namespaces == nil {
 		if direct {
 			items, listErr := dynamicCache.ListDirectBounded(r.Context(), gvr, "", limit)
@@ -172,6 +173,9 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			unanswered = observation.UnansweredNamespaces
 			facts := readplan.Dynamic(dynamicCache, gvr, nil, clusterScoped)
 			for _, part := range facts.Partitions {
+				if part.Verdict.State == readplan.Gap && part.Extent == readplan.UnknownNamespaces {
+					unknownGaps = append(unknownGaps, partitionGap(part))
+				}
 				if part.Verdict.State == readplan.Gap && slices.ContainsFunc(part.Namespaces, func(ns string) bool { return slices.Contains(unanswered, ns) }) {
 					unansweredCode = part.Verdict.Code
 				}
@@ -272,7 +276,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			failureByCode[unansweredCode] = readFailuref(unansweredCode, "Radar has not established whether it can collect %s in some namespaces", gvr.Resource)
 		}
 	}
-	var gaps []resourceapi.Gap
+	gaps := unknownGaps
 	for _, code := range slices.Sorted(maps.Keys(failures)) {
 		gaps = append(gaps, gapOf(code, failures[code]))
 	}

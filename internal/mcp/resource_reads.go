@@ -137,6 +137,10 @@ type readTarget struct {
 }
 
 func resolveReadTarget(ctx context.Context, requested []string) (readTarget, error) {
+	return resolveReadTargetFrom(ctx, currentReadCache(), requested)
+}
+
+func resolveReadTargetFrom(ctx context.Context, cache *k8s.ResourceCache, requested []string) (readTarget, error) {
 	target := readTarget{explicit: requested != nil}
 	user, perms, checked := resolveUserPermsDecision(ctx)
 	ceiling := pkgauth.FilterNamespacesForUser(nil, user, perms)
@@ -147,9 +151,12 @@ func resolveReadTarget(ctx context.Context, requested []string) (readTarget, err
 	}
 	var missing []string
 	if checked && ceiling == nil && requested != nil {
-		missing = k8s.GetResourceCache().KnownMissingNamespaces(requested)
+		missing = cache.KnownMissingNamespaces(requested)
 	}
 	selection, code := readscope.ResolveNamespaces(requested, readscope.NamespaceAccess{Namespaces: ceiling, Checked: checked}, pin, missing)
+	if currentReadCache() != cache {
+		return target, errConnectionChanged()
+	}
 	if code == readreason.UserPermissionCheckFailed {
 		return target, readErrorf(code, "Radar couldn't check which namespaces you can access, so it read nothing.")
 	}
@@ -548,7 +555,7 @@ func planResourceInventory(ctx context.Context, kind, group string, namespaces [
 	if inventory.Collection != nil && len(plan.collected) == 0 {
 		plan.gaps.add(readreason.RadarNamespaceNotCollected, coverageError(ctx, target, plan.uncovered, cache.KindNamespaces(gvr.Resource), nil))
 	}
-	if !inventory.AnyReadable {
+	if !inventory.CanReadTarget {
 		if len(facts.Partitions) == 1 && facts.Partitions[0].Extent != readplan.NamespaceSet {
 			return nil, nil, plan.gaps.failure()
 		}
@@ -937,6 +944,12 @@ func readDynamicScope[T any](ctx context.Context, kind, group, namespace, verb s
 	ready, err := checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, err, dynamicCache, gvr, ok)
 	if ready && !settled && (err == nil || isObjectNotFound(err)) {
 		out, settled, err = bracketed()
+		if !current() {
+			return out, errConnectionChanged()
+		}
+		if verb == "get" && err == nil && ok && dynamicCache != nil {
+			return out, nil
+		}
 		if err != nil {
 			_, err = checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, err, dynamicCache, gvr, ok)
 		}

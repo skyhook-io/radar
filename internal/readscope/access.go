@@ -7,7 +7,8 @@ import (
 
 // PartitionAccess splits namespaces into sorted, non-nil allowed, denied and
 // unchecked sets. At most sixteen checks run concurrently; a failed check is
-// unknown rather than a denial. The caller supplies the check's context.
+// unknown rather than a denial. Nil and empty inputs mean no members. There is
+// no budget; cancellation is the callback's job.
 func PartitionAccess(namespaces []string, check func(namespace string) (allowed, checked bool)) (allowed, denied, unchecked []string) {
 	sem := make(chan struct{}, 16)
 	var wg sync.WaitGroup

@@ -177,3 +177,33 @@ func TestDynamicObservesEachTargetOnce(t *testing.T) {
 		t.Fatalf("duplicate target observed %d times: %+v", observer.calls, p)
 	}
 }
+
+type wholeRetryObserver struct{ retry bool }
+
+func (o wholeRetryObserver) NamespaceObservation(_ schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
+	result := k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{"read-a"}}
+	if ns == "" {
+		result.ProbeRetrying = o.retry
+		if !o.retry {
+			result.ReasonCode = "scope_probe_incomplete"
+		}
+	}
+	return result
+}
+func TestDynamicWholeProbeKeepsUnknownRemainder(t *testing.T) {
+	for _, retry := range []bool{true, false} {
+		observer := wholeRetryObserver{retry: retry}
+		plan := Dynamic(observer, schema.GroupVersionResource{}, nil, false)
+		code := readreason.ReadError
+		if retry {
+			code = readreason.KindSyncPending
+		}
+		if len(plan.Partitions) != 2 || plan.Partitions[0].Verdict.State != Readable || plan.Partitions[1].Extent != UnknownNamespaces || plan.Partitions[1].Verdict.Code != code {
+			t.Fatalf("retry=%v: %+v", retry, plan)
+		}
+		explicit := Dynamic(observer, schema.GroupVersionResource{}, []string{"read-a"}, false)
+		if len(explicit.Partitions) != 1 || explicit.Partitions[0].Verdict.State != Readable {
+			t.Fatalf("explicit: %+v", explicit)
+		}
+	}
+}

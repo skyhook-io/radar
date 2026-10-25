@@ -2222,7 +2222,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 
 	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
 	authz, failure := s.preflightResourceList(r, kind, group, namespaces)
-	target := s.resourceListTarget(r, authz.gaps, clusterScoped)
+	target := s.resourceListTarget(r, started, authz.gaps, clusterScoped)
+	if readCache() != started {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	if failure != nil {
 		s.writeReadFailure(w, kind, noAccessFailure(failure, target, accessCheckFailed), &target)
 		return
@@ -2829,11 +2833,14 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// "namespaces" is cluster-scoped at the K8s API but exposed as a per-user
 	// filtered list — gate the GET via the user's namespace access for the
 	// requested name, not via cluster-scoped SAR.
-	if failure := s.preflightResourceGet(r, kind, namespace, name, group); failure != nil {
+	if failure := s.preflightResourceGetFrom(r, started, kind, namespace, name, group); failure != nil {
 		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
 	if failure := outsideNamespacePin(namespace); failure != nil {
+		if readCache() != started {
+			failure = readFailuref(readreason.ConnectionChanged, "%s", errReadHandlesChanged)
+		}
 		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
@@ -2851,8 +2858,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Radar-Resource-Read", "true")
 	}
 
-	// A kind still loading elsewhere is read from this namespace's own store
-	// once its informer has synced; a miss there is a confirmed absence.
+	// A found object proves existence before its store can prove a miss.
 	var readable any
 	if key := informerKeyForKind(kind); key != "" && (group == "" || k8s.TypedKindOwnsGroup(kind, group)) {
 		clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
@@ -2860,25 +2866,34 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		if clusterScoped {
 			target = nil
 		}
-		plan, err := typedReadCoverage(cache, key, target, clusterScoped, true)
-		if err != nil {
-			s.writeCollectionFailure(w, kind, err)
-			return
-		}
-		if !plan.wholeKindReady {
-			obj, found, ok := cache.ReadableObject(key, namespace, name)
-			switch {
-			case !ok:
-				s.writeCollectionFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key))
-				return
-			case !found:
-				s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), fmt.Sprintf("%s %q not found", key, name))
-				return
-			}
+		if obj, found := cache.CachedObject(key, namespace, name); found {
 			readable = obj
 			if secret, ok := obj.(*corev1.Secret); ok {
 				if readable, ok = s.servedSecret(w, r, secret); !ok {
 					return
+				}
+			}
+		} else {
+			plan, err := typedReadCoverage(cache, key, target, clusterScoped, true)
+			if err != nil {
+				s.writeCollectionFailure(w, kind, err)
+				return
+			}
+			if !plan.wholeKindReady {
+				obj, found, ok := cache.ReadableObject(key, namespace, name)
+				if !ok {
+					s.writeCollectionFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key))
+					return
+				}
+				if !found {
+					s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), fmt.Sprintf("%s %q not found", key, name))
+					return
+				}
+				readable = obj
+				if secret, ok := obj.(*corev1.Secret); ok {
+					if readable, ok = s.servedSecret(w, r, secret); !ok {
+						return
+					}
 				}
 			}
 		}

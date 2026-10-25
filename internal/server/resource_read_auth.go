@@ -122,6 +122,16 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 //     namespace_not_found for a caller who can see every namespace, then
 //     per-namespace get SAR for Secrets, LimitRanges and Trivy reports
 func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) *resourceReadFailure {
+	return s.preflightResourceGetFrom(r, readCache(), kind, namespace, name, group)
+}
+
+func (s *Server) preflightResourceGetFrom(r *http.Request, cache *k8s.ResourceCache, kind, namespace, name, group string) (failure *resourceReadFailure) {
+	defer func() {
+		if readCache() != cache {
+			failure = readFailuref(readreason.ConnectionChanged, "%s", errReadHandlesChanged)
+		}
+	}()
+
 	isNamespacesKind := kind == "namespaces" || kind == "namespace"
 	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
 	switch {
@@ -138,7 +148,7 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 			return permissionFailure(checked, fmt.Sprintf("no access to %s (cluster-scoped resource requires explicit RBAC)", kind))
 		}
 	case namespace != "":
-		selection, code := s.requestNamespaceSelection(r, []string{namespace})
+		selection, code := s.requestNamespaceSelection(r, cache, []string{namespace})
 		if code == readreason.UserPermissionCheckFailed {
 			return readFailuref(code, "Radar could not determine your namespace access; retry when the permission check is available")
 		}
@@ -177,7 +187,7 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 	return nil
 }
 
-func (s *Server) requestNamespaceSelection(r *http.Request, requested []string) (readscope.Selection, readreason.Code) {
+func (s *Server) requestNamespaceSelection(r *http.Request, cache *k8s.ResourceCache, requested []string) (readscope.Selection, readreason.Code) {
 	ceiling, failed := s.getUserNamespacesWithStatus(r, nil)
 	var pin *string
 	if k8s.ForceNamespaceScope {
@@ -186,7 +196,7 @@ func (s *Server) requestNamespaceSelection(r *http.Request, requested []string) 
 	}
 	var missing []string
 	if !failed && ceiling == nil && requested != nil {
-		missing = readCache().KnownMissingNamespaces(requested)
+		missing = cache.KnownMissingNamespaces(requested)
 	}
 	return readscope.ResolveNamespaces(requested, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !failed}, pin, missing)
 }

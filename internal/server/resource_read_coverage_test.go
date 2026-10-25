@@ -371,7 +371,7 @@ func TestResourceCountsKeepPartialScopeCountUsable(t *testing.T) {
 }
 
 func TestResourceCountsShareMetadataBudgetAcrossKinds(t *testing.T) {
-	names := make([]string, 80)
+	names := make([]string, 64)
 	for i := range names {
 		names[i] = fmt.Sprintf("ns-%03d", i)
 	}
@@ -380,6 +380,18 @@ func TestResourceCountsShareMetadataBudgetAcrossKinds(t *testing.T) {
 	assertOK(t, get(t, "/api/resource-counts?namespaces="+strings.Join(names, ",")), &counts)
 	if len(counts.Counts) < 20 || len(counts.Coverage) != len(counts.Counts) {
 		t.Fatalf("expected coverage for every normal count: %+v", counts)
+	}
+	uncappedNames := 0
+	for _, coverage := range counts.Coverage {
+		if coverage.Scope.Namespaces != nil {
+			uncappedNames += coverage.Scope.Namespaces.Count
+		}
+		if coverage.Read != nil && coverage.Read.Namespaces != nil {
+			uncappedNames += coverage.Read.Namespaces.Count
+		}
+	}
+	if uncappedNames <= resourceCountsNamespaceBudget {
+		t.Fatalf("fixture has only %d uncapped names", uncappedNames)
 	}
 	previewNames := 0
 	for key, coverage := range counts.Coverage {
@@ -394,7 +406,7 @@ func TestResourceCountsShareMetadataBudgetAcrossKinds(t *testing.T) {
 			if set == nil {
 				continue
 			}
-			if set.Count != 80 || len(set.Names) > 64 {
+			if set.Count != 64 || (len(set.Names) != 0 && len(set.Names) != set.Count) {
 				t.Fatalf("%s invalid metadata preview: %+v", key, set)
 			}
 			previewNames += len(set.Names)
@@ -415,6 +427,14 @@ func TestResourceCountsShareMetadataBudgetAcrossKinds(t *testing.T) {
 	}
 	if string(firstJSON) != string(againJSON) {
 		t.Fatal("metadata budget allocation varies across identical count snapshots")
+	}
+
+	var small ResourceCountsResponse
+	assertOK(t, get(t, "/api/resource-counts?namespaces="+strings.Join(names[:2], ",")), &small)
+	for key, coverage := range small.Coverage {
+		if coverage.Scope.Namespaces != nil && (!slices.Equal(coverage.Scope.Namespaces.Names, names[:2]) || !slices.Equal(coverage.Read.Namespaces.Names, names[:2])) {
+			t.Fatalf("small scope %s lost names: %+v", key, coverage)
+		}
 	}
 }
 
@@ -962,7 +982,7 @@ func TestPlaceGapsStatesEveryGapsNamespaces(t *testing.T) {
 		{"the rest of every namespace is unknown", listTarget{}, []resourceapi.Gap{denied, pending}, nil, []*resourceapi.NameSet{denied.Namespaces, resourceapi.UnknownNames()}},
 		{"a capped gap leaves the rest unknown", listTarget{namespaces: append(slices.Clone(many), "zz")}, []resourceapi.Gap{gapOf(readreason.UserForbidden, many), pending}, nil,
 			[]*resourceapi.NameSet{resourceapi.Names(many, resourceapi.RESTSetLimit), resourceapi.UnknownNames()}},
-		{"nothing left drops the gap", listTarget{namespaces: []string{"alpha", "beta"}}, []resourceapi.Gap{denied, pending}, []string{"alpha"}, []*resourceapi.NameSet{denied.Namespaces}},
+		{"nothing left keeps the gap unknown", listTarget{namespaces: []string{"alpha", "beta"}}, []resourceapi.Gap{denied, pending}, []string{"alpha"}, []*resourceapi.NameSet{denied.Namespaces, resourceapi.UnknownNames()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tc.target.placeGaps(tc.gaps, tc.read)

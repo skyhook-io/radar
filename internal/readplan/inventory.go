@@ -26,12 +26,13 @@ func (c CollectionScope) Narrow(target []string) []string {
 
 // Inventory is planned execution, not evidence that a read happened. All
 // distinguishes a whole-scope read from finite Namespaces (always non-nil).
-// AnyReadable includes an empty finite target. Gaps preserve planner extents
-// until a transport projects them; Collection is non-nil only for narrowing.
+// CanReadTarget is true when any partition is readable or the finite target is
+// empty. Gaps preserve planner extents until a transport projects them;
+// Collection is non-nil only for narrowing.
 type Inventory struct {
 	Namespaces     []string
 	All            bool
-	AnyReadable    bool
+	CanReadTarget  bool
 	WholeKindReady bool
 	Gaps           []Partition
 	Collection     *CollectionScope
@@ -43,7 +44,7 @@ type Inventory struct {
 // precedence, wording and completed read coverage belong to the caller.
 func ForInventory(plan Plan, target []string, explicit, clusterScoped bool) Inventory {
 	out := Inventory{Namespaces: []string{}, WholeKindReady: plan.WholeKindReady,
-		AnyReadable: target != nil && len(target) == 0 && !clusterScoped}
+		CanReadTarget: target != nil && len(target) == 0 && !clusterScoped}
 	var intended, outside []string
 	for _, part := range plan.Partitions {
 		part.Namespaces = slices.Clone(part.Namespaces)
@@ -56,7 +57,7 @@ func ForInventory(plan Plan, target []string, explicit, clusterScoped bool) Inve
 		}
 		intended = append(intended, part.Namespaces...)
 		if part.Verdict.State == Readable {
-			out.AnyReadable = true
+			out.CanReadTarget = true
 			if part.Extent == NamespaceSet {
 				out.Namespaces = append(out.Namespaces, part.Namespaces...)
 			} else {

@@ -11,12 +11,15 @@ import (
 // can see hundreds of namespaces.
 const MaxAccessChecks = 64
 
-// CheckNamespaceAccess partitions namespace access over a caller's cached
-// decisions and fresh checks. cached returns a remembered decision; check
-// runs one and reports whether the apiserver answered. budget is shared by
-// one request's calls. A namespace past the budget, or whose check failed,
-// comes back unchecked rather than denied.
-func CheckNamespaceAccess(namespaces []string, budget *atomic.Int32, cached func(ns string) (allowed, ok bool), check func(ns string) (allowed, answered bool)) (allowed, unchecked []string) {
+// BudgetedNamespaceAccess partitions a finite namespace set using cached
+// decisions and fresh checks. Nil and empty inputs both mean no members; empty
+// outputs may be nil. Denied members are omitted from both outputs. Results
+// contain namespace names, never the "" whole-scope sentinel.
+// budget is a per-request counter seeded with MaxAccessChecks and shared across
+// kinds. Cached decisions cost nothing; exhausted or unanswered checks return
+// unchecked. Both callbacks return (false, false) for no answer. Fresh callbacks
+// run concurrently (at most 16) and must honor the request context they capture.
+func BudgetedNamespaceAccess(namespaces []string, budget *atomic.Int32, cached func(ns string) (allowed, ok bool), check func(ns string) (allowed, answered bool)) (allowed, unchecked []string) {
 	var pending []string
 	for _, ns := range namespaces {
 		if v, ok := cached(ns); ok {
