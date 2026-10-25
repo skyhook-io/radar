@@ -218,6 +218,51 @@ describe('RelatedResourcesSection ownership', () => {
     expect(html).toContain("Its destination isn&#x27;t this cluster as far as Radar can tell, so its members aren&#x27;t listed.")
   })
 
+  it('says which direction Managed By comes from', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ managers: [app] }} onNavigate={() => {}} />)
+    expect(html).toContain('Argo CD Applications or Flux objects whose status lists this resource.')
+  })
+
+  it("says outright what it couldn't check about this resource when it lists none", () => {
+    const html = renderToString(
+      <RelatedResourcesSection relationships={{ ownership: { children: { complete: true }, managedBy: { remote: 1, notChecked: [{ group: 'argoproj.io', kind: 'Application', reason: 'kind_sync_pending' }] } } }} />,
+    )
+    expect(html).toContain('Managed By')
+    expect(html).toContain('1 manager lists it for a cluster Radar can&#x27;t confirm is this one; couldn&#x27;t check Application (still loading).')
+  })
+
+  it("keeps it to the hint beside a listed manager", () => {
+    const html = renderToString(
+      <RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managedBy: { remote: 1 } } }} onNavigate={() => {}} />,
+    )
+    expect(html).toMatch(/aria-label="[^"]*1 manager lists it for a cluster Radar can&#x27;t confirm is this one/)
+    expect(html).not.toMatch(/>1 Manager lists it/)
+  })
+
+  it('keeps an unreadable list to the hint, since it may name any resource', () => {
+    const none = renderToString(<RelatedResourcesSection relationships={{ children: [rs], ownership: { children: { complete: true }, managedBy: { unreadable: 1 } } }} onNavigate={() => {}} />)
+    expect(none).not.toContain('Managed By')
+    const listed = renderToString(<RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managedBy: { unreadable: 2 } } }} onNavigate={() => {}} />)
+    expect(listed).toMatch(/aria-label="[^"]*2 managers&#x27; member lists can&#x27;t be read/)
+  })
+
+  it('says when more than one manager lists a resource', () => {
+    const other = { ...app, name: 'other' }
+    const html = renderToString(<RelatedResourcesSection relationships={{ managers: [app, other] }} onNavigate={() => {}} />)
+    expect(html).toContain('More than one manager lists or links to it.')
+  })
+
+  it('shows no Managed By when nothing lists the resource and the search was settled', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ children: [rs], ownership: { children: { complete: true } } }} onNavigate={() => {}} />)
+    expect(html).not.toContain('Managed By')
+  })
+
+  it('says a recorded member list with nothing to show records none', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ ownership: { children: { complete: true }, manages: { membership: 'recorded' } } }} />)
+    expect(html).toContain('Manages')
+    expect(html).toContain('Its status records no members to show.')
+  })
+
   it('counts recorded members it does not list', () => {
     const html = renderToString(
       <RelatedResourcesSection relationships={{ manages: [rs], ownership: { children: { complete: true }, manages: { membership: 'recorded', missing: 1, withheld: 2 } } }} />,

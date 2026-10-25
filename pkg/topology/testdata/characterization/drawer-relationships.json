@@ -40,6 +40,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -84,6 +87,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -128,6 +134,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "pods": [
@@ -175,6 +184,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -222,6 +234,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "pods": [
@@ -273,6 +288,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -317,6 +335,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -364,6 +385,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "services": [
@@ -414,6 +438,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -465,6 +492,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "services": [
@@ -538,6 +568,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -595,6 +628,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -646,6 +682,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -697,6 +736,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -748,6 +790,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -800,6 +845,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -847,6 +895,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -894,6 +945,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -946,6 +1000,9 @@
         },
         "manages": {
           "membership": "recorded"
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -990,6 +1047,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -1034,6 +1094,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -1078,6 +1141,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -1122,6 +1188,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1173,6 +1242,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1217,6 +1289,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "scaleTarget": {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
@@ -1262,6 +1337,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1310,6 +1388,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -1354,6 +1435,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1402,6 +1486,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1453,6 +1540,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1504,6 +1594,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1551,6 +1644,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -1595,6 +1691,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -1641,6 +1740,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -1689,6 +1791,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1737,6 +1842,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1788,6 +1896,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1839,6 +1950,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1887,6 +2001,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -1934,6 +2051,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -2016,6 +2136,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -2063,6 +2186,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -2108,6 +2234,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -2190,6 +2319,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -2234,6 +2366,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "backends": [
@@ -2281,6 +2416,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "gateways": [
@@ -2344,6 +2482,9 @@
         },
         "manages": {
           "membership": "unreadable"
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -2430,6 +2571,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -2512,6 +2656,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -2556,6 +2703,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -2636,6 +2786,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -2686,6 +2839,9 @@
         },
         "manages": {
           "membership": "recorded"
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -2743,6 +2899,9 @@
         },
         "manages": {
           "membership": "recorded"
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -2794,6 +2953,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -2841,6 +3003,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -2888,6 +3053,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -2929,6 +3097,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "protects": [
@@ -2980,6 +3151,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -3031,6 +3205,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -3079,6 +3256,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "managedBy": [
@@ -3127,6 +3307,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       }
     }
@@ -3168,6 +3351,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "consumers": [
@@ -3222,6 +3408,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "consumers": [
@@ -3272,6 +3461,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -3354,6 +3546,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "pods": [
@@ -3451,6 +3646,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "pods": [
@@ -3503,6 +3701,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "consumers": [
@@ -3585,6 +3786,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -3636,6 +3840,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},
@@ -3685,6 +3892,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-b"},
@@ -3734,6 +3944,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},
@@ -3784,6 +3997,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"}
@@ -3831,6 +4047,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"}
@@ -3878,6 +4097,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"}
@@ -3925,6 +4147,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"}
@@ -3972,6 +4197,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"}
@@ -4019,6 +4247,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"}
@@ -4066,6 +4297,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"}
@@ -4113,6 +4347,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},
@@ -4162,6 +4399,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-b"},
@@ -4211,6 +4451,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-b"},
@@ -4261,6 +4504,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -4316,6 +4562,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -4370,6 +4619,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "configRefs": [
@@ -4425,6 +4677,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},
@@ -4474,6 +4729,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-b"},
@@ -4523,6 +4781,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-b"},
@@ -4568,6 +4829,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "consumers": [
@@ -4617,6 +4881,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "consumers": [
@@ -4670,6 +4937,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "consumers": [
@@ -4721,6 +4991,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "backends": [
@@ -4771,6 +5044,9 @@
               "reason": "radar_kind_not_collected"
             }
           ]
+        },
+        "managedBy": {
+          "unreadable": 1
         }
       },
       "ingresses": [

@@ -1,6 +1,6 @@
 import { GitBranch, Package } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { GitOpsOwnerRef } from '../../utils/gitops-owner'
+import type { GitOpsOwnerRef, ManagerListing } from '../../utils/gitops-owner'
 import type { GitOpsStatus } from '../../types/gitops'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
@@ -11,7 +11,10 @@ export type HelmOwnerRef = {
 }
 
 // ManagedByChip renders the "Managed by <ArgoCD/FluxCD app>" affordance for
-// resources detected (via labels/annotations) to be GitOps-managed. The chip
+// resources detected (via labels/annotations) to be GitOps-managed. `listing`
+// compares that claim with the managers whose status lists the resource: a
+// manager that doesn't list it while another does is shown as "Tracked by"
+// with a warning, since the claim is all that names it. The chip
 // is clickable when the host wires `onOpen`; integrators that don't surface
 // a GitOps tab can omit the handler and the chip degrades to a passive badge
 // so the relationship is still visible.
@@ -26,6 +29,7 @@ export function ManagedByChip({
   verified = true,
   pending = false,
   source,
+  listing,
   variant = 'inline',
 }: {
   owner: GitOpsOwnerRef
@@ -34,13 +38,15 @@ export function ManagedByChip({
   verified?: boolean
   pending?: boolean
   source?: string | null
+  listing?: ManagerListing
   variant?: 'inline' | 'block'
 }) {
   const toolLabel = owner.tool === 'argocd' ? 'ArgoCD' : 'FluxCD'
   const ownerKindLabel = gitOpsOwnerKindLabel(owner)
   const label = owner.namespace ? `${owner.namespace}/${owner.name}` : owner.name
   const statusLabel = status ? gitOpsStatusLabel(status) : null
-  const prefix = pending ? 'Resolving' : verified ? 'Managed by' : 'Tracked by'
+  const conflict = listing?.state === 'conflict' ? listing.listedBy : null
+  const prefix = pending ? 'Resolving' : verified && !conflict ? 'Managed by' : 'Tracked by'
   const tooltipContent = (
     <span className="flex flex-col gap-1">
       <span>
@@ -48,10 +54,23 @@ export function ManagedByChip({
           <>
             Looking up matching {ownerKindLabel} <TooltipCode>{label}</TooltipCode> in this cluster.
           </>
+        ) : conflict ? (
+          <>
+            This resource's {toolLabel} tracking metadata names <TooltipCode>{label}</TooltipCode>, but that {ownerKindLabel}'s status doesn't list it.{' '}
+            {conflict.length === 1 ? 'The status of ' : 'The statuses of '}
+            {conflict.map((m, i) => (
+              <span key={`${m.namespace}/${m.name}`}>
+                {i > 0 && ', '}
+                <TooltipCode>{m.namespace ? `${m.namespace}/${m.name}` : m.name}</TooltipCode>
+              </span>
+            ))}{' '}
+            {conflict.length === 1 ? 'does.' : 'do.'}
+          </>
         ) : verified ? (
           <>
             Managed by {toolLabel} · <TooltipCode>{label}</TooltipCode>
             {statusLabel && <> · {statusLabel}{status?.message ? `: ${status.message}` : ''}</>}
+            {listing?.state === 'confirmed' && <>. Its status lists this resource too.</>}
           </>
         ) : (
           <>
@@ -80,6 +99,7 @@ export function ManagedByChip({
         )}
       >
         <GitBranch className="h-3 w-3 shrink-0" />
+        {conflict && <StatusDot tone="degraded" size="xs" />}
         <span className="shrink-0 text-theme-text-tertiary">{prefix}</span>
         <span className="truncate max-w-[180px]">{label}</span>
         {statusLabel && (

@@ -726,6 +726,14 @@ export interface OwnershipCoverage {
     unknown?: number
     truncated?: boolean
   }
+  /** Set when the search for the GitOps managers whose status lists this resource couldn't settle every one the viewer may read. */
+  managedBy?: {
+    /** Managers with a member list Radar can't read, any of which may list this resource. */
+    unreadable?: number
+    /** Managers listing this resource's coordinates for a cluster Radar can't confirm is this one. */
+    remote?: number
+    notChecked?: OwnershipGap[]
+  }
   /** A readreason code when Radar couldn't answer at all. */
   unavailableReason?: string
 }

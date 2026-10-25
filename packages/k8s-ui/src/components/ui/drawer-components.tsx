@@ -840,6 +840,8 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind }: Rel
   const consumers = omitResourceRefs(relationships.consumers ?? [], relationships.dependents ?? [])
   const alsoOwnedBy = omitResourceRefs(relationships.owners ?? [], relationships.owner ? [relationships.owner] : [])
   const managesNote = membersNote(relationships.ownership?.manages, (relationships.manages?.length ?? 0) > 0)
+  const managers = dedupeResourceRefs(relationships.managers ?? [])
+  const managedByNote = managersNote(relationships.ownership, managers.length)
   const unanswered = ownershipUnanswered(relationships.ownership)
   const several = !relationships.owner && relationships.ownership?.primaryOwnerState === 'several'
   const ownerMissing = relationships.owner || several ? undefined : ownerNote(relationships.ownership)
@@ -857,7 +859,8 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind }: Rel
     childrenCoverage?.text ||
     (relationships.olderRevisions && relationships.olderRevisions.length > 0) ||
     alsoOwnedBy.length > 0 ||
-    (relationships.managers && relationships.managers.length > 0) ||
+    managers.length > 0 ||
+    managedByNote.text ||
     (relationships.manages && relationships.manages.length > 0) ||
     managesNote ||
     relationships.deployment ||
@@ -903,8 +906,8 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind }: Rel
             note={several ? { text: alsoOwnedBy.length > 0 ? 'None of them is its controller.' : 'None of the owners it names can be shown.' } : undefined}
           />
         )}
-        {relationships.managers && relationships.managers.length > 0 && (
-          <RelationshipGroup label="Managed By" refs={dedupeResourceRefs(relationships.managers)} onNavigate={onNavigate} note={MANAGED_BY_NOTE} />
+        {(managers.length > 0 || managedByNote.text) && (
+          <RelationshipGroup label="Managed By" refs={managers} onNavigate={onNavigate} note={managedByNote} />
         )}
         {relationships.deployment && (
           <RelationshipGroup label="Deployment" refs={[relationships.deployment]} onNavigate={onNavigate} />
@@ -1121,6 +1124,7 @@ function membersNote(manages: OwnershipCoverage['manages'] | undefined, listed: 
   const parts: string[] = []
   if (extra.length > 0) parts.push(`Its status also lists ${extra.join(', ')}.`)
   if (manages.truncated) parts.push('More members than shown.')
+  if (parts.length === 0 && !listed) parts.push('Its status records no members to show.')
   return parts.length > 0 ? { text: parts.join(' ') } : undefined
 }
 
@@ -1163,12 +1167,50 @@ function olderRevisions(refs: ResourceRef[] | undefined): MoreRefs | undefined {
 
 const RELATIONSHIP_TRUNCATE_LIMIT = 10
 
-// Managed By sits next to Owner and reads like it, so it says how they differ.
-const MANAGED_BY_NOTE: RelationshipNote = {
-  hint: [
-    "What applies or controls this resource without an owner reference, such as an Argo CD Application or Flux object whose status lists it.",
-    "Kubernetes' garbage collector follows owner references, not these links.",
-  ],
+// Managed By sits next to Owner and reads like it, so it says how they differ
+// and which direction its answer comes from.
+const MANAGED_BY_HINT = [
+  'Argo CD Applications or Flux objects whose status lists this resource.',
+  "Kubernetes' garbage collector follows owner references, not these links.",
+]
+
+// managersNote explains Managed By: where it comes from, more than one
+// manager, and the managers the search couldn't settle. With none listed, a
+// remote list naming the resource or a manager kind Radar couldn't search is
+// said outright, so an empty group doesn't read as "no GitOps manager". An
+// unreadable list stays in the hint: it may name any resource, so it would
+// otherwise show beside every one, and the controllers stamp tracking
+// metadata on what they apply, through which the topology names such a
+// manager anyway.
+function managersNote(coverage: OwnershipCoverage | undefined, listed: number): RelationshipNote {
+  const hint = [...MANAGED_BY_HINT]
+  const open: string[] = []
+  const managedBy = coverage?.managedBy
+  if (managedBy?.unreadable) {
+    const n = managedBy.unreadable
+    hint.push(n === 1 ? "1 manager's member list can't be read, so it may also list this resource." : `${n} managers' member lists can't be read, so they may also list this resource.`)
+  }
+  if (managedBy?.remote) {
+    const n = managedBy.remote
+    open.push(`${n} ${n === 1 ? 'manager lists' : 'managers list'} it for a cluster Radar can't confirm is this one`)
+  }
+  const pressing = new Map<string, string>()
+  for (const g of managedBy?.notChecked ?? []) {
+    if (!g.kind) hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
+    else if (g.reason === 'radar_kind_not_collected') hint.push(`Radar doesn't collect ${g.kind} objects, so those managers aren't checked.`)
+    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
+  }
+  if (pressing.size > 0) open.push(`couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}`)
+  const note: RelationshipNote = { hint }
+  const text: string[] = []
+  if (open.length > 0) {
+    const sentence = `${capitalize(open.join('; '))}.`
+    if (listed === 0) text.push(sentence)
+    else hint.push(sentence)
+  }
+  if (listed > 1) text.push('More than one manager lists or links to it.')
+  if (text.length > 0) note.text = text.join(' ')
+  return note
 }
 
 export function RelationshipGroup({ label, refs, onNavigate, note, more }: RelationshipGroupProps) {

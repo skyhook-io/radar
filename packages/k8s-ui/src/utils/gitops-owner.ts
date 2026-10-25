@@ -54,3 +54,22 @@ export function gitOpsOwnerFromRef(ref: ResourceRef): GitOpsOwnerRef | null {
       return null
   }
 }
+
+/**
+ * How the managers whose status lists a resource (relationships.managers) bear
+ * on the GitOps owner its own tracking metadata names. `confirmed`: that owner
+ * is the only manager listing it. `conflict`: GitOps managers list it and the
+ * owner isn't one of them. Undefined when there is nothing to compare or the
+ * owner is one of several.
+ */
+export type ManagerListing = { state: 'confirmed' } | { state: 'conflict'; listedBy: GitOpsOwnerRef[] }
+
+export function managerListing(owner: GitOpsOwnerRef | null | undefined, managers: ResourceRef[] | undefined): ManagerListing | undefined {
+  if (!owner || !managers?.length) return undefined
+  const listed = managers.map(gitOpsOwnerFromRef).filter((m): m is GitOpsOwnerRef => m !== null)
+  if (listed.length === 0) return undefined
+  // An Argo CD owner named only by its instance label has no namespace yet.
+  const isOwner = (m: GitOpsOwnerRef) => m.tool === owner.tool && m.kind === owner.kind && m.name === owner.name && (!owner.namespace || m.namespace === owner.namespace)
+  if (!listed.some(isOwner)) return { state: 'conflict', listedBy: listed }
+  return listed.length === 1 && managers.length === 1 ? { state: 'confirmed' } : undefined
+}
