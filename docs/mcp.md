@@ -915,10 +915,10 @@ What gets reported follows from that:
   without a permission check.
 - **While discovery is loading** (API discovery, or the CRD discovery that decides
   which custom kinds Radar watches), the response carries a `kind_sync_pending`
-  gap with no kinds (the set isn't known yet) and no `kind_unknown`: a `kind:`
+  gap whose kinds are `{"extent": "unknown"}` (the set isn't known yet) and no `kind_unknown`: a `kind:`
   term that matched nothing may simply not be discovered yet. When API discovery
   failed for some groups, an unmatched `kind:` term is still `kind_unknown`, beside
-  a `read_error` gap with no kinds: the kind may live in a group Radar couldn't
+  a `read_error` gap whose kinds are unknown: the kind may live in a group Radar couldn't
   discover. Broad searches don't report failed groups.
 - **A kind Radar doesn't watch yet narrows a broad search** (`kind_collection`),
   for example one too large to watch eagerly; a `kind:` term warms it and reports
@@ -939,7 +939,7 @@ What gets reported follows from that:
   gap for the kind, and the namespaces that are ready still contribute hits.
 - **When your namespace access couldn't be determined**, namespaced kinds are not
   searched (fail closed) and the result reports `user_permission_check_failed` (per named
-  kind, or one gap with no kinds), never a namespace code.
+  kind, or one gap whose kinds are unknown), never a namespace code.
 
 | Code | Reported | Meaning | Next step |
 |---|---|---|---|
@@ -981,11 +981,11 @@ search with no hits carries one too, saying it doesn't rule out matches outside
 your access and Radar's collection. REST never carries it.
 
 ```json
-{"coverage": {"status": "partial", "gaps": [{"code": "kind_sync_pending", "kinds": {"count": 37}}]},
+{"coverage": {"status": "partial", "gaps": [{"code": "kind_sync_pending", "action": "retry", "kinds": {"count": 37}, "namespaces": {"extent": "all"}}]},
  "coverageHint": "37 kinds were still loading; retry in a few seconds before concluding absence.", …}
-{"coverage": {"status": "partial", "gaps": [{"code": "user_forbidden", "kinds": {"count": 1, "names": [{"kind": "Secret"}]}}]},
+{"coverage": {"status": "partial", "gaps": [{"code": "user_forbidden", "action": "user_access", "kinds": {"count": 1, "names": [{"kind": "Secret"}]}, "namespaces": {"extent": "all"}}]},
  "coverageHint": "Your access doesn't include all Secrets; this result says nothing about the rest.", …}
-{"coverage": {"status": "partial", "gaps": [{"code": "namespace_not_found", "namespaces": {"count": 1, "names": ["payments-prd"]}}]},
+{"coverage": {"status": "partial", "gaps": [{"code": "namespace_not_found", "action": "change_request", "kinds": {"extent": "all"}, "namespaces": {"count": 1, "names": ["payments-prd"]}}]},
  "coverageHint": "Namespace 'payments-prd' doesn't exist on this cluster.", …}
 {"coverage": {"status": "complete", "narrowedBy": ["user_access"], "gaps": []},
  "coverageHint": "No matches within what your access and Radar's collection cover; that does not rule out matches outside them.", …}

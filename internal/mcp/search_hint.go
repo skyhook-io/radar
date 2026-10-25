@@ -36,13 +36,13 @@ func hintEntries(cov resourceapi.SearchCoverage) []hintEntry {
 		switch {
 		case gap.Objects != nil:
 			// Filter failures are explained from filter_errors.
-		case gap.Kinds != nil && gap.Kinds.Names == nil:
+		case gap.Kinds != nil && gap.Kinds.Extent == "" && gap.Kinds.Names == nil:
 			out = append(out, hintEntry{Kind: "*", Reason: gap.Code, Count: gap.Kinds.Count})
-		case gap.Kinds != nil:
+		case gap.Kinds != nil && gap.Kinds.Extent == "":
 			for _, k := range gap.Kinds.Names {
 				out = append(out, hintEntry{Kind: k.Kind, Group: k.Group, Reason: gap.Code})
 			}
-		case gap.Namespaces != nil:
+		case gap.Namespaces != nil && gap.Namespaces.Extent == "":
 			out = append(out, hintEntry{Kind: "*", Reason: gap.Code, Namespaces: gap.Namespaces.Names})
 		default:
 			out = append(out, hintEntry{Kind: "*", Reason: gap.Code})
@@ -94,6 +94,10 @@ var coverageTemplates = []coverageTemplate{
 		return fmt.Sprintf("Radar can't collect %s: the API doesn't support both list and watch, so search can't cover them; read them from the Kubernetes API directly.", joinKinds(e, "and", kindPlural))
 	}},
 	filterErrors,
+	// A findings gap names report kinds; CEL failures name objects instead.
+	{[]readreason.Code{readreason.FilterEvalFailed}, func(e, _ []hintEntry) string {
+		return fmt.Sprintf("Radar ran out of time searching the findings of %s, so a CVE or package missing from the hits may be in a report it left out; narrow with kind:, ns: or image: to search them all.", joinKinds(e, "and", kindPlural))
+	}},
 	{[]readreason.Code{readreason.KindSyncPending}, func(e, _ []hintEntry) string {
 		label, n := kindsLabel(e)
 		return fmt.Sprintf("%s %s still loading; retry in a few seconds before concluding absence.", capitalize(label), pluralWord(n, "was", "were"))

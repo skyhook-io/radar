@@ -106,6 +106,12 @@ describe('searchCoverageNote', () => {
     )
   })
 
+  it('says when the findings search ran out of time', () => {
+    const text = searchCoverageNote([{ kind: 'VulnerabilityReport', group: 'aquasecurity.github.io', reason: 'filter_eval_failed' }], {})?.text
+    expect(text).toContain('ran out of time searching the findings of')
+    expect(text).toContain('may be in a report it left out')
+  })
+
   it('says why a namespace the query named was not searched', () => {
     const ns = (reason: string, namespaces: string[]) => ({ kind: '*', group: '', reason, namespaces })
     expect(searchCoverageNote([ns('radar_namespace_not_collected', ['rel-owner'])], {})?.text).toBe("Namespace 'rel-owner' wasn't searched: Radar here watches only some namespaces.")
