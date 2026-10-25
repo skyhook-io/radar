@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -87,12 +88,13 @@ func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string)
 
 // checkedInNamespace reports the namespaced kinds authorized per namespace
 // beyond namespace access: Secrets and Calico's policies, as the relationship
-// graph strips them, and LimitRanges, as a resource GET checks them.
+// graph strips them, and LimitRanges and Trivy's reports, as a resource GET
+// checks them.
 func checkedInNamespace(kind resourceid.GroupKind) bool {
 	switch kind.Group {
 	case "":
 		return kind.Kind == "Secret" || kind.Kind == "LimitRange"
-	case "projectcalico.org", "crd.projectcalico.org":
+	case "projectcalico.org", "crd.projectcalico.org", aicontext.TrivyGroup:
 		return true
 	}
 	return false
@@ -141,13 +143,17 @@ func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string,
 	if cachedTopo == nil {
 		return nil
 	}
-	if auth.UserFromContext(r.Context()) != nil {
+	user := auth.UserFromContext(r.Context()) != nil
+	if user {
 		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
 		relIdx = nil
 	}
 	rel := topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 		k8s.NewTopologyResourceProvider(cache),
 		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+	if user && rel != nil {
+		s.withholdDirectLookups(r, rel)
+	}
 	fetched, ok := k8s.OwnershipObservation(resource)
 	if !ok {
 		return rel
@@ -158,4 +164,19 @@ func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string,
 	owner, _ := apimeta.Accessor(resource)
 	k8s.AnswerOwnership(rel, fetched, owner, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 	return rel
+}
+
+// withholdDirectLookups drops what the user may not list from the
+// relationships read straight from the shared caches rather than the
+// user's graph: a StorageClass's volumes and the Pods on a Node.
+func (s *Server) withholdDirectLookups(r *http.Request, rel *topology.Relationships) {
+	if len(rel.Pods) > 0 {
+		if namespaces := s.getUserNamespaces(r, nil); namespaces != nil {
+			rel.Pods = slices.DeleteFunc(rel.Pods, func(p topology.ResourceRef) bool { return !slices.Contains(namespaces, p.Namespace) })
+		}
+	}
+	isVolume := func(c topology.ResourceRef) bool { return c.Kind == "PersistentVolume" && c.Group == "" }
+	if slices.ContainsFunc(rel.Consumers, isVolume) && !s.canRead(r, "", "persistentvolumes", "", "list") {
+		rel.Consumers = slices.DeleteFunc(rel.Consumers, isVolume)
+	}
 }

@@ -590,7 +590,7 @@ type OwnershipCoverage struct {
 	// Manages is set for a GitOps manager whose status lists its members.
 	Manages *MembersCoverage `json:"manages,omitempty"`
 	// ManagedBy is set when the search for the GitOps managers whose status
-	// lists the resource couldn't read every one the caller may read.
+	// lists the resource couldn't settle every one the caller may read.
 	ManagedBy *ManagersCoverage `json:"managedBy,omitempty"`
 	// UnavailableReason is a reason code when Radar couldn't answer at all.
 	UnavailableReason string `json:"unavailableReason,omitempty"`

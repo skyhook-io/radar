@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -177,9 +178,10 @@ func TestResourceGetOwnershipForAUserWhoMayReadLess(t *testing.T) {
 	}
 }
 
-// Related Resources reads by the rules the per-user relationship graph
-// applies, so ownership answers can't name what that graph strips: Calico
-// policies and Secrets the user may not list in their namespace, kinds
+// Related Resources reads by the rules the per-user relationship graph and a
+// resource GET apply, so ownership answers can't name what either withholds:
+// Calico policies, Secrets and Trivy reports the user may not list in their
+// namespace, kinds
 // outside the user's namespaces, and cluster-scoped kinds the user may not
 // list.
 func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
@@ -190,6 +192,8 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 	perms.SetCanI("list", "crd.projectcalico.org", "networkpolicies", "alpha", true)
 	perms.SetCanI("list", "", "secrets", "alpha", false)
 	perms.SetCanI("list", "", "limitranges", "alpha", true)
+	perms.SetCanI("list", "aquasecurity.github.io", "exposedsecretreports", "alpha", false)
+	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "alpha", true)
 	perms.SetCanI("list", "", "nodes", "", false)
 	perms.SetCanI("list", "", "persistentvolumes", "", true)
 	perms.SetCanI("list", "*", "*", "", false)
@@ -199,6 +203,8 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 		{Group: "crd.projectcalico.org", Version: "v1", Kind: "NetworkPolicy", Resource: "networkpolicies", Namespaced: true, Verbs: gc},
 		{Group: "aggregated.io", Version: "v1", Kind: "Foo", Resource: "foos", Namespaced: true, Verbs: gc},
 		{Group: "aggregated.io", Version: "v1", Kind: "Foo", Resource: "otherfoos", Namespaced: true, Verbs: gc},
+		{Group: "aquasecurity.github.io", Version: "v1alpha1", Kind: "ExposedSecretReport", Resource: "exposedsecretreports", Namespaced: true, Verbs: gc},
+		{Group: "aquasecurity.github.io", Version: "v1alpha1", Kind: "VulnerabilityReport", Resource: "vulnerabilityreports", Namespaced: true, Verbs: gc},
 	}, true)
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice"}))
@@ -211,6 +217,9 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 		{resourceid.GroupKind{Group: "projectcalico.org", Kind: "NetworkPolicy"}, "alpha", ownership.Denied},
 		{resourceid.GroupKind{Group: "crd.projectcalico.org", Kind: "NetworkPolicy"}, "alpha", ownership.Allowed},
 		{resourceid.GroupKind{Kind: "Secret"}, "alpha", ownership.Denied},
+		// A resource GET checks Trivy's reports per kind, so ownership does too.
+		{resourceid.GroupKind{Group: "aquasecurity.github.io", Kind: "ExposedSecretReport"}, "alpha", ownership.Denied},
+		{resourceid.GroupKind{Group: "aquasecurity.github.io", Kind: "VulnerabilityReport"}, "alpha", ownership.Allowed},
 		{resourceid.GroupKind{Kind: "ConfigMap"}, "alpha", ownership.Allowed},
 		{resourceid.GroupKind{Kind: "ConfigMap"}, "beta", ownership.Denied},
 		{resourceid.GroupKind{Kind: "Node"}, "", ownership.Denied},
@@ -272,6 +281,36 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 	} {
 		if got := tc.a.CanRead(tc.kind, ""); got != tc.want {
 			t.Errorf("%s: Read(%v) in any namespace = %v, want %v", tc.name, tc.kind, got, tc.want)
+		}
+	}
+}
+
+// A StorageClass's volumes and a Node's Pods are read from the shared caches,
+// not the user's graph, so the user's access decides which are listed.
+func TestDirectLookupsWithholdWhatTheUserMayNotList(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
+	env.srv.permCache.Get("alice", nil).SetCanI("list", "", "persistentvolumes", "", false)
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{})
+	env.srv.permCache.Get("bob", nil).SetCanI("list", "", "persistentvolumes", "", true)
+	for _, tc := range []struct {
+		user          string
+		pods, volumes []string
+	}{
+		{"alice", []string{"Pod alpha/a"}, []string{"PersistentVolumeClaim alpha/claim"}},
+		{"bob", []string{"Pod alpha/a", "Pod beta/b"}, []string{"PersistentVolume /pv-1", "PersistentVolumeClaim alpha/claim"}},
+	} {
+		rel := &topology.Relationships{
+			Pods:      []topology.ResourceRef{{Kind: "Pod", Namespace: "alpha", Name: "a"}, {Kind: "Pod", Namespace: "beta", Name: "b"}},
+			Consumers: []topology.ResourceRef{{Kind: "PersistentVolume", Name: "pv-1"}, {Kind: "PersistentVolumeClaim", Namespace: "alpha", Name: "claim"}},
+		}
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		env.srv.withholdDirectLookups(r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: tc.user})), rel)
+		if got := ownershipRefNames(rel.Pods); !slices.Equal(got, tc.pods) {
+			t.Errorf("%s: pods = %v, want %v", tc.user, got, tc.pods)
+		}
+		if got := ownershipRefNames(rel.Consumers); !slices.Equal(got, tc.volumes) {
+			t.Errorf("%s: consumers = %v, want %v", tc.user, got, tc.volumes)
 		}
 	}
 }
