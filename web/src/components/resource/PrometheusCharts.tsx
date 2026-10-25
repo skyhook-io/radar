@@ -209,7 +209,7 @@ function collectRuntimeContainers(podSpec: any): any[] {
 const CPU_SUFFIXES: Record<string, number> = { n: 1e-9, u: 1e-6, m: 1e-3 }
 const MEMORY_SUFFIXES: Record<string, number> = {
   Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, Pi: 1024 ** 5, Ei: 1024 ** 6,
-  K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18,
+  n: 1e-9, u: 1e-6, m: 1e-3, k: 1e3, K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18,
 }
 
 // NOT a duplicate of @skyhook-io/k8s-ui/utils/format's parseCPUToNanocores /
@@ -232,7 +232,7 @@ function readQuantity(raw: unknown, category: 'cpu' | 'memory'): number | null {
   for (const suffix of ['Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei']) {
     if (s.endsWith(suffix)) return scaleOrNull(s, MEMORY_SUFFIXES[suffix])
   }
-  for (const suffix of ['K', 'M', 'G', 'T', 'P', 'E']) {
+  for (const suffix of ['n', 'u', 'm', 'k', 'K', 'M', 'G', 'T', 'P', 'E']) {
     if (s.endsWith(suffix)) return scaleOrNull(s, MEMORY_SUFFIXES[suffix])
   }
   const v = parseFloat(s)
