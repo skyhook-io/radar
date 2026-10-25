@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -290,4 +291,25 @@ func TestTypedFailureRetainsNarrowedCollection(t *testing.T) {
 	if !slices.Equal(cov.Scope.Namespaces.Names, []string{"gamma"}) || !slices.Contains(cov.NarrowedBy, resourceapi.NarrowedByNamespaceCollection) || len(cov.Gaps) != 1 || cov.Gaps[0].Code != readreason.KindSyncPending {
 		t.Fatalf("count coverage: %+v", cov)
 	}
+}
+
+func TestAIGetCodesConfirmedAbsence(t *testing.T) {
+	t.Run("whole kind ready", func(t *testing.T) {
+		useTestResourceCache(t, fake.NewClientset(testNamespaces("alpha")...))
+		assertResourceReadError(t, get(t, "/api/ai/resources/services/alpha/absent?context=none"), http.StatusNotFound, "object_not_found")
+	})
+	t.Run("namespace ready", func(t *testing.T) {
+		useLoadingConfigMaps(t)
+		assertResourceReadError(t, get(t, "/api/ai/resources/configmaps/alpha/absent?context=none"), http.StatusNotFound, "object_not_found")
+	})
+}
+
+func TestAIGetCodesUnknownKind(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(testNamespaces("alpha")...))
+	dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	if err := k8s.InitTestDynamicResourceCache(dyn, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	assertResourceReadError(t, get(t, "/api/ai/resources/unknownwidgets/alpha/absent?group=example.test&context=none"), http.StatusBadRequest, "kind_unknown")
 }

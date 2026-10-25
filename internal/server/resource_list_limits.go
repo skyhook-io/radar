@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 const resourceListHardLimit = 50000
@@ -28,13 +29,15 @@ func parseResourceListLimit(r *http.Request, summary bool) (int, error) {
 	return limit, nil
 }
 
-func (s *Server) checkResourceListSize(w http.ResponseWriter, count, limit int) bool {
+func (s *Server) checkResourceListSize(w http.ResponseWriter, count, limit int, target listTarget, gaps []resourceapi.Gap) bool {
 	if count <= limit {
 		return true
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
-	s.writeJSON(w, map[string]any{"error": "Too many resources to load; select fewer namespaces", "error_code": readreason.ListTooLarge, "count": count, "limit": limit})
+	s.writeReadFailure(w, "", &resourceReadFailure{
+		code:    readreason.ListTooLarge,
+		message: "Too many resources to load; select fewer namespaces",
+		gaps:    gaps, count: count, limit: limit,
+	}, &target)
 	return false
 }
 

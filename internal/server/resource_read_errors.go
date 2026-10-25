@@ -57,9 +57,10 @@ func readStatusFor(code readreason.Code) int {
 // resourceReadFailure is a read that served nothing. gaps keeps every reason
 // when namespaces failed for different ones; code is the most actionable.
 type resourceReadFailure struct {
-	code    readreason.Code
-	message string
-	gaps    []resourceapi.Gap
+	code         readreason.Code
+	message      string
+	gaps         []resourceapi.Gap
+	count, limit int
 }
 
 func (e *resourceReadFailure) Error() string { return e.message }
@@ -126,7 +127,11 @@ func (s *Server) writeReadFailure(w http.ResponseWriter, resource string, err er
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(readStatusFor(failure.code))
-	s.writeJSON(w, body)
+	s.writeJSON(w, struct {
+		resourceapi.ReadError
+		Count int `json:"count,omitempty"`
+		Limit int `json:"limit,omitempty"`
+	}{ReadError: body, Count: failure.count, Limit: failure.limit})
 }
 
 // writeCollectionFailure answers a failed read that has no list target.

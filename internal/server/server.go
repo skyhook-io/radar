@@ -2263,7 +2263,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			target = target.narrowedByCollection(list.collected, list.uncovered)
 		}
 		coverage := target.coverage(list.read, list.gaps)
-		if !s.checkResourceListSize(w, len(list.rows), limit) {
+		if !s.checkResourceListSize(w, len(list.rows), limit, target, list.gaps) {
 			return
 		}
 		var result any = list.rows
@@ -2305,7 +2305,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		}
 		count = len(partialRows)
 	}
-	if !s.checkResourceListSize(w, count, limit) {
+	if !s.checkResourceListSize(w, count, limit, target, plan.gaps) {
 		return
 	}
 	var result any
@@ -2634,7 +2634,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.checkResourceListSize(w, listSize(result), limit) {
+	if !s.checkResourceListSize(w, listSize(result), limit, target, plan.gaps) {
 		return
 	}
 	if includeSummary {

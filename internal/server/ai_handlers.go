@@ -268,7 +268,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.checkResourceListSize(w, listSize(objs), resourceListHardLimit) {
+	if !s.checkResourceListSize(w, listSize(objs), resourceListHardLimit, target, nil) {
 		return
 	}
 	results, err := aicontext.MinifyList(objs, level)
@@ -336,7 +336,7 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 		return
 	}
 	allItems := list.rows
-	if !s.checkResourceListSize(w, len(allItems), resourceListHardLimit) {
+	if !s.checkResourceListSize(w, len(allItems), resourceListHardLimit, target, list.gaps) {
 		return
 	}
 
@@ -524,9 +524,9 @@ func (s *Server) fetchAIResource(ctx context.Context, cache *k8s.ResourceCache, 
 func (s *Server) writeAIFetchError(w http.ResponseWriter, kind string, err error) {
 	switch {
 	case apierrors.IsNotFound(err), errors.Is(err, k8score.ErrResourceNotFound):
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeErrorCode(w, http.StatusNotFound, string(readreason.ObjectNotFound), err.Error())
 	case errors.Is(err, k8s.ErrUnknownDynamicKind):
-		s.writeError(w, http.StatusBadRequest, err.Error())
+		s.writeErrorCode(w, http.StatusBadRequest, string(readreason.KindUnknown), err.Error())
 	case strings.HasPrefix(err.Error(), "forbidden:"):
 		s.writeErrorCode(w, readStatusFor(readreason.RadarForbidden), string(readreason.RadarForbidden), fmt.Sprintf("Radar's collector cannot read %s", kind))
 	default:

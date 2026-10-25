@@ -135,6 +135,9 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			if !current() {
 				return dynamicList{}, errReadHandlesChanged
 			}
+			if errors.Is(listErr, k8score.ErrResourceListTooLarge) {
+				return dynamicList{}, &resourceReadFailure{code: readreason.ListTooLarge, message: "Too many resources to load; select fewer namespaces", count: limit + 1, limit: limit}
+			}
 			if !apierrors.IsForbidden(listErr) || clusterScoped {
 				return dynamicList{}, listErr
 			}
@@ -143,13 +146,13 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			items, settled, listErr := readCachedDynamicList(dynamicCache, gvr, "", func(bool) ([]*unstructured.Unstructured, error) {
 				return dynamicCache.ListContext(r.Context(), gvr, "")
 			})
-			if listErr != nil {
-				if !current() {
-					return dynamicList{}, errReadHandlesChanged
-				}
-				return dynamicList{}, probeRetryFailure(dynamicCache, gvr, listErr)
+			if !current() {
+				return dynamicList{}, errReadHandlesChanged
 			}
-			if settled {
+			if listErr != nil && collectionFailure(gvr.Resource, listErr).code == readreason.ListTooLarge {
+				return dynamicList{}, &resourceReadFailure{code: readreason.ListTooLarge, message: "Too many resources to load; select fewer namespaces", count: limit + 1, limit: limit}
+			}
+			if listErr == nil && settled {
 				if !current() {
 					return dynamicList{}, errReadHandlesChanged
 				}
@@ -160,6 +163,9 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			}
 			observation := dynamicCache.Observation(gvr)
 			if observation.Scope != k8score.DynamicObservationScopeExplicitNamespaces {
+				if listErr != nil {
+					return dynamicList{}, probeRetryFailure(dynamicCache, gvr, listErr)
+				}
 				failure := namespaceReadFailure(dynamicCache, gvr, "")
 				if failure == nil {
 					// The store finished loading after the read: a retry
@@ -193,7 +199,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 	read := []string{}
 	failures := make(map[readreason.Code][]string)
 	failureByCode := make(map[readreason.Code]*resourceReadFailure)
-	tooLarge := false
+	count := 0
 	var groupReads errgroup.Group
 	groupReads.SetLimit(8)
 	for _, namespace := range targets {
@@ -225,6 +231,10 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			mu.Lock()
 			defer mu.Unlock()
 			if readErr != nil {
+				if errors.Is(readErr, k8score.ErrResourceListTooLarge) {
+					// Bounded direct reads prove at least one item beyond the limit.
+					count += limit + 1
+				}
 				var failure *resourceReadFailure
 				if !errors.As(readErr, &failure) {
 					failure = collectionFailure(gvr.Resource, readErr)
@@ -236,10 +246,8 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 				return nil
 			}
 			read = append(read, namespace)
-			if len(rows)+len(items) > limit {
-				tooLarge = true
-				cancel()
-			} else {
+			count += len(items)
+			if count <= limit {
 				rows = append(rows, items...)
 			}
 			return nil
@@ -249,13 +257,10 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 	if !current() {
 		return dynamicList{}, errReadHandlesChanged
 	}
-	if tooLarge || len(failures[readreason.ListTooLarge]) > 0 {
-		return dynamicList{}, readFailuref(readreason.ListTooLarge, "Too many resources to load; select fewer namespaces")
-	}
 	// Radar not collecting, or being refused, a namespace the request didn't
 	// name narrows it, once something was read.
 	var uncovered []string
-	if !explicit && !clusterScoped && len(read) > 0 {
+	if count <= limit && !explicit && !clusterScoped && len(read) > 0 {
 		for _, code := range []readreason.Code{readreason.RadarNamespaceNotCollected, readreason.RadarForbidden} {
 			uncovered = append(uncovered, failures[code]...)
 			delete(failures, code)
@@ -278,7 +283,12 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 	}
 	gaps := unknownGaps
 	for _, code := range slices.Sorted(maps.Keys(failures)) {
-		gaps = append(gaps, gapOf(code, failures[code]))
+		if code != readreason.ListTooLarge {
+			gaps = append(gaps, gapOf(code, failures[code]))
+		}
+	}
+	if count > limit {
+		return dynamicList{}, &resourceReadFailure{code: readreason.ListTooLarge, message: "Too many resources to load; select fewer namespaces", gaps: gaps, count: count, limit: limit}
 	}
 	if len(read) == 0 {
 		codes := slices.Collect(maps.Keys(failures))
