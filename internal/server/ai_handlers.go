@@ -773,6 +773,6 @@ func (s *Server) writeIncompleteAIList(w http.ResponseWriter, target listTarget,
 	s.writeJSON(w, resourceapi.ReadError{
 		Error:     message,
 		ErrorCode: code,
-		Coverage:  &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: gaps},
+		Coverage:  &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: target.placeGaps(gaps, nil)},
 	})
 }

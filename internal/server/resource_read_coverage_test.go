@@ -980,8 +980,8 @@ func TestPlaceGapsStatesEveryGapsNamespaces(t *testing.T) {
 		{"the rest of a listed scope", listTarget{namespaces: []string{"alpha", "beta", "gamma"}}, []resourceapi.Gap{denied, pending}, []string{"alpha"},
 			[]*resourceapi.NameSet{denied.Namespaces, resourceapi.Names([]string{"gamma"}, resourceapi.RESTSetLimit)}},
 		{"the rest of every namespace is unknown", listTarget{}, []resourceapi.Gap{denied, pending}, nil, []*resourceapi.NameSet{denied.Namespaces, resourceapi.UnknownNames()}},
-		{"a capped gap leaves the rest unknown", listTarget{namespaces: append(slices.Clone(many), "zz")}, []resourceapi.Gap{gapOf(readreason.UserForbidden, many), pending}, nil,
-			[]*resourceapi.NameSet{resourceapi.Names(many, resourceapi.RESTSetLimit), resourceapi.UnknownNames()}},
+		{"a large gap leaves an exact remainder", listTarget{namespaces: append(slices.Clone(many), "zz")}, []resourceapi.Gap{gapOf(readreason.UserForbidden, many), pending}, nil,
+			[]*resourceapi.NameSet{resourceapi.Names(many, resourceapi.RESTSetLimit), resourceapi.Names([]string{"zz"}, resourceapi.RESTSetLimit)}},
 		{"nothing left keeps the gap unknown", listTarget{namespaces: []string{"alpha", "beta"}}, []resourceapi.Gap{denied, pending}, []string{"alpha"}, []*resourceapi.NameSet{denied.Namespaces, resourceapi.UnknownNames()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

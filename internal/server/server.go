@@ -1622,11 +1622,6 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 	// namespace discovery and wrongly drop a namespace where the caller has
 	// secrets but no pod access. A denied namespace surfaces as a 403 from the
 	// per-namespace list rather than a silent empty result.
-	//
-	// Guard on len > 0, not != nil: parseNamespaces returns an empty non-nil
-	// slice for a degenerate query like ?namespaces=,, — treat that as "no
-	// explicit filter" and fall through, rather than short-circuiting to a
-	// zero-namespace (empty) result.
 	if explicit := parseNamespaces(r.URL.Query()); len(explicit) > 0 {
 		// Under --namespace-scope the informer cache holds only the pinned
 		// namespace; keep Helm consistent with the rest of the UI by clamping an
@@ -1946,11 +1941,12 @@ func (s *Server) applyClusterScopedTopologyRBAC(r *http.Request, topo *topology.
 
 // parseNamespaces parses the namespace filter from query parameters.
 // Supports both "namespaces" (comma-separated, preferred) and "namespace" (single, backward compat).
+// A list with no names is an omitted filter.
 func parseNamespaces(query url.Values) []string {
 	// Prefer "namespaces" (plural, comma-separated)
 	if ns := query.Get("namespaces"); ns != "" {
 		parts := strings.Split(ns, ",")
-		result := make([]string, 0, len(parts))
+		var result []string
 		for _, p := range parts {
 			if trimmed := strings.TrimSpace(p); trimmed != "" {
 				result = append(result, trimmed)

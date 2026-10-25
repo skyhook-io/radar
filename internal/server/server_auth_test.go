@@ -124,6 +124,9 @@ func TestParseNamespaces(t *testing.T) {
 		wantNil bool
 	}{
 		{"no params", "", nil, true},
+		{"empty list", "namespaces=,,", nil, true},
+		{"blank list", "namespaces= , , ", nil, true},
+		{"empty plural still takes precedence", "namespaces=,,&namespace=prod", nil, true},
 		{"single namespace param", "namespace=prod", []string{"prod"}, false},
 		{"plural namespaces param", "namespaces=dev,staging,prod", []string{"dev", "staging", "prod"}, false},
 		{"plural takes precedence", "namespaces=dev&namespace=prod", []string{"dev"}, false},

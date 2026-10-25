@@ -256,6 +256,7 @@ func (t listTarget) placeGaps(gaps []resourceapi.Gap, read []string) []resourcea
 	}
 	for _, gap := range gaps {
 		if !unplaced(gap) {
+			gap.Namespaces = gap.Namespaces.Capped(resourceapi.RESTSetLimit)
 			out = append(out, gap)
 			continue
 		}
@@ -280,7 +281,8 @@ func (t listTarget) placeGaps(gaps []resourceapi.Gap, read []string) []resourcea
 func gapOf(code readreason.Code, namespaces []string) resourceapi.Gap {
 	gap := resourceapi.Gap{Code: code}
 	if len(namespaces) > 0 {
-		gap.Namespaces = resourceapi.Names(namespaces, resourceapi.RESTSetLimit)
+		// Membership stays exact until placeGaps projects the response.
+		gap.Namespaces = resourceapi.Names(namespaces, len(namespaces))
 	}
 	return gap
 }
