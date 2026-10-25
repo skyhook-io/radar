@@ -530,7 +530,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					return
 				}
 			}
-			cov.kind(kind, gvr.Group, reason)
+			cov.kindIn(kind, gvr.Group, reason, ns)
 		}
 		namespaces := opts.Namespaces
 		if clusterScoped || len(namespaces) == 0 {

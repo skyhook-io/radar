@@ -517,3 +517,17 @@ type hintResult struct {
 func hintOf(r hintResult, namedKinds bool) string {
 	return entriesHint(r.Unsearched, r.FilterErrors, r.FilterErrorSample, namedKinds)
 }
+
+// A findings search cut short by its time budget is reported from the search's
+// coverage, gap axes and all, and says how to search the rest.
+func TestSearchHintReportsFindingsCutShort(t *testing.T) {
+	cov := resourceapi.SearchCoverage{Status: resourceapi.CoveragePartial, Gaps: []resourceapi.Gap{{
+		Code:       readreason.FilterEvalFailed,
+		Kinds:      resourceapi.Kinds([]resourceapi.KindRef{{Kind: "VulnerabilityReport", Group: "aquasecurity.github.io"}}, 1),
+		Namespaces: resourceapi.UnknownNames(),
+	}}}
+	hint := entriesHint(hintEntries(cov), 0, "", false)
+	if !strings.Contains(hint, "ran out of time searching the findings of VulnerabilityReports") || !strings.Contains(hint, "narrow with kind:") {
+		t.Fatalf("hint = %q", hint)
+	}
+}

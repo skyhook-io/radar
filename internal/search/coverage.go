@@ -100,13 +100,18 @@ func readableWithin(listNs, readable []string) []string {
 // coverage collects one search's gaps and applies the reporting rules: scope
 // reasons only for what the query names (on a broad query they narrow the
 // search instead), every transient and failure reason, folded so the response
-// never grows with the number of kinds on the cluster. A gap names either
-// kinds or namespaces, never both, so folding never invents a combination.
+// never grows with the number of kinds on the cluster. A gap lists either
+// kinds or namespaces and gives the other axis as an extent, so folding never
+// invents a listed combination: a kind gap reaches all namespaces, or an
+// unknown part of them when a kind failed only in some.
 type coverage struct {
 	namedKinds      bool
 	namedNamespaces map[string]bool
 	kinds           map[readreason.Code][]resourceapi.KindRef
 	kindSeen        map[coverageKey]bool
+	// someNamespaces marks reasons recorded for a kind in only some
+	// namespaces.
+	someNamespaces map[readreason.Code]bool
 	nsGaps          map[readreason.Code][]string
 	namespaceSeen   map[readreason.Code]map[string]bool
 	// unbounded marks reasons that reach an unknown set of kinds (the catalog
@@ -130,6 +135,7 @@ func newCoverage(q Query) *coverage {
 		namedNamespaces: namespaces,
 		kinds:           map[readreason.Code][]resourceapi.KindRef{},
 		kindSeen:        map[coverageKey]bool{},
+		someNamespaces:  map[readreason.Code]bool{},
 		nsGaps:          map[readreason.Code][]string{},
 		namespaceSeen:   map[readreason.Code]map[string]bool{},
 		unbounded:       map[readreason.Code]bool{},
@@ -153,10 +159,20 @@ func (c *coverage) quiet(reason readreason.Code) bool {
 	return true
 }
 
-// kind records a kind-level reason for one scanned kind.
+// kind records a kind-level reason for one scanned kind, in every namespace
+// searched.
 func (c *coverage) kind(kind, group string, reason readreason.Code) {
+	c.kindIn(kind, group, reason, "")
+}
+
+// kindIn records a kind-level reason for one scanned kind in namespace ns,
+// "" for every namespace searched.
+func (c *coverage) kindIn(kind, group string, reason readreason.Code, ns string) {
 	if c.quiet(reason) {
 		return
+	}
+	if ns != "" {
+		c.someNamespaces[reason] = true
 	}
 	key := coverageKey{kind, group, reason}
 	if c.kindSeen[key] {
@@ -220,13 +236,17 @@ func (c *coverage) result() []resourceapi.Gap {
 		case transient:
 			limit = 0
 		}
-		out = append(out, resourceapi.Gap{Code: reason, Kinds: resourceapi.Kinds(kinds, limit)})
+		where := resourceapi.AllNames()
+		if c.someNamespaces[reason] {
+			where = resourceapi.UnknownNames()
+		}
+		out = append(out, resourceapi.Gap{Code: reason, Kinds: resourceapi.Kinds(kinds, limit), Namespaces: where})
 	}
 	for reason, namespaces := range c.nsGaps {
-		out = append(out, resourceapi.Gap{Code: reason, Namespaces: resourceapi.Names(namespaces, len(namespaces))})
+		out = append(out, resourceapi.Gap{Code: reason, Kinds: resourceapi.AllKinds(), Namespaces: resourceapi.Names(namespaces, len(namespaces))})
 	}
 	for reason := range c.unbounded {
-		out = append(out, resourceapi.Gap{Code: reason})
+		out = append(out, resourceapi.Gap{Code: reason, Kinds: resourceapi.UnknownKinds(), Namespaces: resourceapi.AllNames()})
 	}
 	sortGaps(out)
 	return out
@@ -248,14 +268,15 @@ func (c *coverage) narrowedBy(namespaces []resourceapi.Narrowing) []resourceapi.
 	return out
 }
 
-// sortGaps orders gaps by readreason precedence, then kinds before namespaces
-// before an unknown extent, so a response is stable for equal input.
+// sortGaps orders gaps by readreason precedence, then gaps listing kinds
+// before gaps listing namespaces before an unknown set of kinds, so a
+// response is stable for equal input.
 func sortGaps(gaps []resourceapi.Gap) {
 	dimension := func(g resourceapi.Gap) int {
 		switch {
-		case g.Kinds != nil:
+		case g.Kinds != nil && g.Kinds.Extent == "":
 			return 0
-		case g.Namespaces != nil:
+		case g.Namespaces != nil && g.Namespaces.Extent == "":
 			return 1
 		default:
 			return 2

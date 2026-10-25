@@ -11,6 +11,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -84,9 +85,9 @@ func TestCoverageDeduplicatesByIdentityAndReason(t *testing.T) {
 	c.catalog(readreason.ReadError)
 	c.catalog(readreason.ReadError)
 	got := c.result()
-	// read_error over both Widgets, kind_sync_failed over one, and read_error
-	// over an unknown set of kinds: one gap per reason and dimension.
-	if len(got) != 3 || got[0].Code != readreason.KindSyncTimedOut || got[1].Kinds == nil || got[1].Kinds.Count != 2 || got[2].Kinds != nil {
+	// read_error over both Widgets, kind_sync_timed_out over one, and
+	// read_error over an unknown set of kinds: one gap per reason and axis.
+	if len(got) != 3 || got[0].Code != readreason.KindSyncTimedOut || got[1].Kinds == nil || got[1].Kinds.Count != 2 || got[2].Kinds == nil || got[2].Kinds.Extent != resourceapi.ExtentUnknown {
 		t.Fatalf("gaps = %+v", got)
 	}
 }

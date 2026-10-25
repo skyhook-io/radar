@@ -43,13 +43,16 @@ export function searchCoverageEntries(coverage: SearchCoverage | undefined): Sea
   const out: SearchCoverageEntry[] = []
   for (const gap of coverage?.gaps ?? []) {
     if (gap.objects) continue
-    if (gap.kinds?.names) {
-      for (const k of gap.kinds.names) out.push({ kind: k.kind, group: k.group ?? '', reason: gap.code })
-    } else if (gap.kinds) {
-      out.push({ kind: '*', group: '', reason: gap.code, count: gap.kinds.count })
-    } else if (gap.namespaces) {
+    // A gap lists one axis and gives the other as an extent.
+    const kinds = gap.kinds && gap.kinds.extent === undefined ? gap.kinds : undefined
+    const namespaces = gap.namespaces && gap.namespaces.extent === undefined ? gap.namespaces : undefined
+    if (kinds?.names) {
+      for (const k of kinds.names) out.push({ kind: k.kind, group: k.group ?? '', reason: gap.code })
+    } else if (kinds) {
+      out.push({ kind: '*', group: '', reason: gap.code, count: kinds.count })
+    } else if (namespaces) {
       // A search names every namespace its query asked for.
-      out.push({ kind: '*', group: '', reason: gap.code, namespaces: gap.namespaces.names ?? [] })
+      out.push({ kind: '*', group: '', reason: gap.code, namespaces: namespaces.names ?? [] })
     } else {
       out.push({ kind: '*', group: '', reason: gap.code })
     }
@@ -177,6 +180,8 @@ export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: S
   if (pinned.length) namespaceSentence(pinned, "wasn't searched: Radar is pinned to another namespace", "weren't searched: Radar is pinned to another namespace")
   const uncollected = namespaces(['radar_namespace_not_collected'])
   if (uncollected.length) namespaceSentence(uncollected, "wasn't searched: Radar here watches only some namespaces", "weren't searched: Radar here watches only some namespaces")
+  const findings = named('filter_eval_failed')
+  if (findings.length) say(`Radar ran out of time searching the findings of ${names(findings, 'and')}, so a CVE or package missing here may be in a report it left out.`)
   const denied = named('user_forbidden')
   if (denied.length) say(`Your access doesn't include all ${names(denied, 'or')}.`)
   const collector = named('radar_forbidden')
