@@ -148,7 +148,7 @@ func TestSearch_ReportsKindsItCouldNotAnswerFor(t *testing.T) {
 		}
 	})
 	t.Run("a named kind the caller may not list", func(t *testing.T) {
-		res, _ := Search(context.Background(), &fakeProvider{}, Parse("kind:Secret"), Options{Include: IncludeNone, NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+		res, _ := Search(context.Background(), &fakeProvider{}, Parse("kind:Secret"), Options{Include: IncludeNone, TypedKindAccess: func(ns []string, group, resource string) ([]string, []string, []string) {
 			if resource == "secrets" {
 				return []string{}, []string{""}, nil
 			}

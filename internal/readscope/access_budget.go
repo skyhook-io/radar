@@ -15,7 +15,8 @@ const MaxAccessChecks = 64
 // BudgetedNamespaceAccess partitions a finite namespace set using cached
 // decisions and fresh checks. Nil and empty inputs both mean no members; empty
 // outputs may be nil. Denied members are omitted from both outputs. Results
-// contain namespace names, never the "" whole-scope sentinel.
+// contain input members; ClusterFirstNamespaceAccess also uses this helper
+// for its preliminary "" whole-scope probe.
 // budget is a per-request counter seeded with MaxAccessChecks and shared across
 // kinds. Cached decisions cost nothing; exhausted or unanswered checks return
 // unchecked. Both callbacks return (false, false) for no answer. Fresh callbacks
@@ -79,10 +80,18 @@ func BudgetedNamespaceAccess(ctx context.Context, namespaces []string, budget *a
 	return allowed, unchecked
 }
 
-// CheckNamespacedAccess checks exact-kind access with one shared fresh-check
-// budget. Cached cluster grants avoid namespace checks altogether. An empty
-// namespace denotes a whole-scope decision when the scope cannot be enumerated.
-func CheckNamespacedAccess(ctx context.Context, namespaces []string, budget *atomic.Int32, cached func(string) (bool, bool), check func(string) (bool, bool)) (allowed, denied, unchecked []string) {
+// ClusterFirstNamespaceAccess partitions exact-kind list access, checking the
+// whole scope first. Nil namespaces means an unenumerated whole scope; a
+// non-nil empty slice has no members. A whole-scope grant returns the input
+// unchanged, including nil. For an unenumerated scope, denied or unchecked
+// contains "" when the whole-scope check denies or cannot answer, respectively.
+// Other empty outputs may be nil; finite denied/unchecked outputs name members.
+// budget must be seeded once per request with MaxAccessChecks and shared across
+// kinds and both access gates. Cached decisions are free. Both callbacks return
+// (false, false) for no answer and must be safe for concurrent use; fresh checks
+// run at most 16 at once and must honor ctx. After an unanswered whole-scope
+// check only cached namespace decisions are used; the rest remain unchecked.
+func ClusterFirstNamespaceAccess(ctx context.Context, namespaces []string, budget *atomic.Int32, cached func(ns string) (allowed, ok bool), check func(ns string) (allowed, answered bool)) (allowed, denied, unchecked []string) {
 	all, unknown := BudgetedNamespaceAccess(ctx, []string{""}, budget, cached, check)
 	if len(all) > 0 {
 		return namespaces, nil, nil

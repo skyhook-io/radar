@@ -3327,7 +3327,7 @@ func mcpSearchKindRBAC(ctx context.Context) func([]string, string, string) ([]st
 		if user == nil {
 			return namespaces, nil, nil
 		}
-		return readscope.CheckNamespacedAccess(ctx, namespaces, budget,
+		return readscope.ClusterFirstNamespaceAccess(ctx, namespaces, budget,
 			func(ns string) (bool, bool) {
 				if perms == nil {
 					return false, false
@@ -3342,11 +3342,11 @@ func mcpSearchKindRBAC(ctx context.Context) func([]string, string, string) ([]st
 
 // mcpSearchKindAccess mirrors Server.searchKindAccess for MCP. nil when auth
 // is off.
-func mcpSearchKindAccess(ctx context.Context, gate func([]string, string, string) ([]string, []string, []string)) *search.KindAccess {
+func mcpSearchKindAccess(ctx context.Context, gate func([]string, string, string) ([]string, []string, []string)) *search.DynamicKindAccess {
 	if user, _ := resolveUserPerms(ctx); user == nil {
 		return nil
 	}
-	return &search.KindAccess{
+	return &search.DynamicKindAccess{
 		ClusterWide: func(group, resource string) (bool, bool) {
 			_, denied, unchecked := gate(nil, group, resource)
 			return len(denied) == 0 && len(unchecked) == 0, len(unchecked) == 0
@@ -3387,13 +3387,13 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 
 	kindRBAC := mcpSearchKindRBAC(ctx)
 	opts := search.Options{
-		NamespacedRBAC: kindRBAC,
-		Limit:          input.Limit,
-		Include:        include,
+		TypedKindAccess: kindRBAC,
+		Limit:           input.Limit,
+		Include:         include,
 		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			return canReadInNamespaceDecision(ctx, group, resource, "", "list")
 		},
-		KindAccess: mcpSearchKindAccess(ctx, kindRBAC),
+		DynamicKindAccess: mcpSearchKindAccess(ctx, kindRBAC),
 	}
 	var pin *string
 	if k8s.ForceNamespaceScope {
@@ -3447,11 +3447,12 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 
 // searchResponseMCP embeds search.Result so the JSON shape stays identical
 // except for the added hints: narrowHint when the hit limit cut the result,
-// coverageHint whenever it is partial.
+// coverageHint whenever it is partial or empty and narrowed. Hints serialize
+// before hits so agents read the limits before interpreting the matches.
 type searchResponseMCP struct {
-	search.Result
-	NarrowHint   string `json:"narrowHint,omitempty"`
 	CoverageHint string `json:"coverageHint,omitempty"`
+	NarrowHint   string `json:"narrowHint,omitempty"`
+	search.Result
 }
 
 // toJSONResult marshals data into a text content MCP result.

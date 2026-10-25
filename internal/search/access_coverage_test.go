@@ -31,7 +31,7 @@ func TestTrivyAccessCoverageIndependentOfDeniedObjects(t *testing.T) {
 				p := trivyProvider(vulnGVR, "VulnerabilityReport", reports...)
 				p.filterDynamicByNamespace = true
 				access := &kindAccess{namespaces: []string{"read-a"}}
-				res, err := Search(t.Context(), p, Parse(query), Options{Selection: readscope.Selection{Namespaces: []string{"read-a", "read-b"}}, KindAccess: access.options()})
+				res, err := Search(t.Context(), p, Parse(query), Options{Selection: readscope.Selection{Namespaces: []string{"read-a", "read-b"}}, DynamicKindAccess: access.options()})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -72,7 +72,7 @@ func TestTrivyAccessPartitionsAndUnenumeratedScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := trivyProvider(vulnGVR, "VulnerabilityReport", vulnReport("read-a", "db-report", "php", "8", nil))
 			access := &kindAccess{namespaces: tc.allowed, unchecked: tc.unchecked}
-			res, err := Search(t.Context(), p, Parse("kind:VulnerabilityReport"), Options{Selection: readscope.Selection{Namespaces: tc.scope}, KindAccess: access.options()})
+			res, err := Search(t.Context(), p, Parse("kind:VulnerabilityReport"), Options{Selection: readscope.Selection{Namespaces: tc.scope}, DynamicKindAccess: access.options()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +95,7 @@ func TestTrivyAccessPrecedesCollectorStateAndWarming(t *testing.T) {
 				p := trivyProvider(vulnGVR, "VulnerabilityReport")
 				p.observations = map[schema.GroupVersionResource]k8score.DynamicResourceObservation{vulnGVR: {State: state, Scope: k8score.DynamicObservationScopeCluster}}
 				access := &kindAccess{}
-				res, err := Search(t.Context(), p, Parse(query), Options{Selection: readscope.Selection{Namespaces: scope}, KindAccess: access.options()})
+				res, err := Search(t.Context(), p, Parse(query), Options{Selection: readscope.Selection{Namespaces: scope}, DynamicKindAccess: access.options()})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -147,7 +147,7 @@ func TestTypedGapsPreserveSearchedExtent(t *testing.T) {
 		p := &fakeProvider{typed: map[string][]runtime.Object{"secrets": {&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "read-a", Name: "db-creds"}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "read-b", Name: "db-hidden"}}}}}
 		for _, query := range []string{"kind:Secret db", "db"} {
 			opts := Options{Selection: readscope.Selection{Namespaces: []string{"read-a", "read-b"}}}
-			opts.NamespacedRBAC = func([]string, string, string) ([]string, []string, []string) {
+			opts.TypedKindAccess = func([]string, string, string) ([]string, []string, []string) {
 				return []string{"read-a"}, []string{"read-b"}, nil
 			}
 
@@ -174,7 +174,7 @@ func TestTypedGapsPreserveSearchedExtent(t *testing.T) {
 		if narrowed {
 			allowed = scope[:1]
 		}
-		res, err := Search(t.Context(), p, Parse("kind:Secret"), Options{Selection: readscope.Selection{Namespaces: scope}, NamespacedRBAC: func([]string, string, string) ([]string, []string, []string) {
+		res, err := Search(t.Context(), p, Parse("kind:Secret"), Options{Selection: readscope.Selection{Namespaces: scope}, TypedKindAccess: func([]string, string, string) ([]string, []string, []string) {
 			return allowed, scope[len(allowed):], nil
 		}})
 		if err != nil {
@@ -208,12 +208,12 @@ func TestCheckNamespacesStopsSchedulingOnCancellation(t *testing.T) {
 	for i := range namespaces {
 		namespaces[i] = fmt.Sprint(i)
 	}
-	allowed, unchecked := readscope.CheckNamespaceAccess(ctx, namespaces, budget, func(string) (bool, bool) { return false, false }, func(string) (bool, bool) { checks.Add(1); cancel(); return true, true })
+	allowed, unchecked := readscope.BudgetedNamespaceAccess(ctx, namespaces, budget, func(string) (bool, bool) { return false, false }, func(string) (bool, bool) { checks.Add(1); cancel(); return true, true })
 	if checks.Load() > 16 || len(allowed)+len(unchecked) != len(namespaces) || len(unchecked) == 0 {
 		t.Fatalf("checks=%d allowed=%d unchecked=%d", checks.Load(), len(allowed), len(unchecked))
 	}
 	before := checks.Load()
-	_, unchecked = readscope.CheckNamespaceAccess(ctx, namespaces, budget, func(string) (bool, bool) { return false, false }, func(string) (bool, bool) { checks.Add(1); return true, true })
+	_, unchecked = readscope.BudgetedNamespaceAccess(ctx, namespaces, budget, func(string) (bool, bool) { return false, false }, func(string) (bool, bool) { checks.Add(1); return true, true })
 	if checks.Load() != before || len(unchecked) != len(namespaces) {
 		t.Fatalf("cancelled scheduling: checks=%d unchecked=%d", checks.Load(), len(unchecked))
 	}
@@ -225,7 +225,7 @@ func TestSearchSensitiveKindsLiveCoverageContract(t *testing.T) {
 	p.typed = map[string][]runtime.Object{"secrets": {&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "read-a", Name: "db-creds"}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "read-b", Name: "db-hidden"}}}}
 	for _, query := range []string{"kind:Secret db", "kind:VulnerabilityReport", "db"} {
 		access := &kindAccess{namespaces: []string{"read-a"}}
-		opts := Options{Selection: readscope.Selection{Namespaces: []string{"read-a", "read-b"}}, KindAccess: access.options(), NamespacedRBAC: func([]string, string, string) ([]string, []string, []string) {
+		opts := Options{Selection: readscope.Selection{Namespaces: []string{"read-a", "read-b"}}, DynamicKindAccess: access.options(), TypedKindAccess: func([]string, string, string) ([]string, []string, []string) {
 			return []string{"read-a"}, []string{"read-b"}, nil
 		}}
 		res, err := Search(t.Context(), p, Parse(query), opts)
@@ -260,7 +260,7 @@ func TestTrivyAccessBoundsFailureAndWarmScope(t *testing.T) {
 		p := trivyProvider(vulnGVR, "VulnerabilityReport")
 		p.dynamicErrors = map[string]error{"": fmt.Errorf("collector failed"), "read-a": fmt.Errorf("collector failed")}
 		access := &kindAccess{namespaces: []string{"read-a"}}
-		res, err := Search(t.Context(), p, Parse("kind:VulnerabilityReport"), Options{Selection: readscope.Selection{Namespaces: scope}, KindAccess: access.options()})
+		res, err := Search(t.Context(), p, Parse("kind:VulnerabilityReport"), Options{Selection: readscope.Selection{Namespaces: scope}, DynamicKindAccess: access.options()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -281,7 +281,7 @@ func TestTrivyAccessBoundsFailureAndWarmScope(t *testing.T) {
 	p.observations = map[schema.GroupVersionResource]k8score.DynamicResourceObservation{vulnGVR: {State: k8score.DynamicObservationUnwatched}}
 	p.filterDynamicByNamespace = true
 	access := &kindAccess{namespaces: []string{"read-a"}}
-	res, err := Search(t.Context(), p, Parse("kind:VulnerabilityReport"), Options{Selection: readscope.Selection{Namespaces: []string{"read-a", "read-b"}}, KindAccess: access.options()})
+	res, err := Search(t.Context(), p, Parse("kind:VulnerabilityReport"), Options{Selection: readscope.Selection{Namespaces: []string{"read-a", "read-b"}}, DynamicKindAccess: access.options()})
 	if err != nil {
 		t.Fatal(err)
 	}

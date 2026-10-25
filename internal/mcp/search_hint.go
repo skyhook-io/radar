@@ -29,7 +29,8 @@ type hintEntry struct {
 	Namespaces  []string
 	Count       int
 	// SomeKinds: a namespace gap that missed only some of the kinds searched.
-	SomeKinds bool
+	SomeKinds           bool
+	WholeNamespaceScope bool
 }
 
 func hintEntries(cov resourceapi.SearchCoverage) []hintEntry {
@@ -42,7 +43,7 @@ func hintEntries(cov resourceapi.SearchCoverage) []hintEntry {
 			out = append(out, hintEntry{Kind: "*", Reason: gap.Code, Count: gap.Kinds.Count})
 		case gap.Kinds != nil && gap.Kinds.Extent == "":
 			for _, k := range gap.Kinds.Names {
-				out = append(out, hintEntry{Kind: k.Kind, Group: k.Group, Reason: gap.Code})
+				out = append(out, hintEntry{Kind: k.Kind, Group: k.Group, Reason: gap.Code, WholeNamespaceScope: gap.Namespaces != nil && gap.Namespaces.Extent == resourceapi.ExtentAll})
 			}
 		case gap.Namespaces != nil && gap.Namespaces.Extent == "":
 			out = append(out, hintEntry{Kind: "*", Reason: gap.Code, Namespaces: gap.Namespaces.Names, SomeKinds: gap.Kinds != nil && gap.Kinds.Extent != resourceapi.ExtentAll})
@@ -120,7 +121,11 @@ var coverageTemplates = []coverageTemplate{
 		return fmt.Sprintf("Couldn't read %s; matches of %s may be missing.", label, pluralWord(n, "that kind", "those kinds"))
 	}},
 	{[]readreason.Code{readreason.UserForbidden}, func(e, _ []hintEntry) string {
-		return fmt.Sprintf("Your access doesn't include all %s; this result says nothing about the rest.", joinKinds(e, "or", kindPlural))
+		hint := fmt.Sprintf("Your access doesn't include all %s; this result says nothing about the rest.", joinKinds(e, "or", kindPlural))
+		if slices.ContainsFunc(e, func(entry hintEntry) bool { return entry.WholeNamespaceScope }) {
+			hint += " Try narrowing with ns:<namespace>."
+		}
+		return hint
 	}},
 	{[]readreason.Code{readreason.UserNamespaceNotVisible}, func(e, _ []hintEntry) string {
 		return namespaceSentence(e, "it isn't among the namespaces you can see, or doesn't exist", "they aren't among the namespaces you can see, or don't exist")

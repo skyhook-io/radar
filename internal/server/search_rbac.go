@@ -20,7 +20,7 @@ func (s *Server) computeSearchKindRBAC(r *http.Request) func([]string, string, s
 			return namespaces, nil, nil
 		}
 		perms := s.permCache.Get(user.Username, user.Groups)
-		return readscope.CheckNamespacedAccess(r.Context(), namespaces, budget,
+		return readscope.ClusterFirstNamespaceAccess(r.Context(), namespaces, budget,
 			func(ns string) (bool, bool) {
 				if perms == nil {
 					return false, false
@@ -37,11 +37,11 @@ func (s *Server) computeSearchKindRBAC(r *http.Request) func([]string, string, s
 // by the caller's own list permission. nil when auth is off. Decisions are
 // memoized per user; uncached ones are capped per request
 // (readscope.MaxAccessChecks), and namespaces past the cap come back unchecked.
-func (s *Server) searchKindAccess(r *http.Request, gate func([]string, string, string) ([]string, []string, []string)) *search.KindAccess {
+func (s *Server) searchKindAccess(r *http.Request, gate func([]string, string, string) ([]string, []string, []string)) *search.DynamicKindAccess {
 	if auth.UserFromContext(r.Context()) == nil {
 		return nil
 	}
-	return &search.KindAccess{
+	return &search.DynamicKindAccess{
 		ClusterWide: func(group, resource string) (bool, bool) {
 			_, denied, unchecked := gate(nil, group, resource)
 			return len(denied) == 0 && len(unchecked) == 0, len(unchecked) == 0

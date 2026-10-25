@@ -58,11 +58,11 @@ func (f *fakeProvider) KnownMissingNamespaces(names []string) []string {
 	return slices.DeleteFunc(slices.Clone(names), func(ns string) bool { return slices.Contains(f.existingNamespaces, ns) })
 }
 
-func (f *fakeProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
-	if err := f.typedErr[kind]; err != nil {
+func (f *fakeProvider) ListTyped(resource string, namespaces []string) ([]runtime.Object, error) {
+	if err := f.typedErr[resource]; err != nil {
 		return nil, err
 	}
-	return f.typed[kind], f.listErrors[kind]
+	return f.typed[resource], f.listErrors[resource]
 }
 
 func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -664,5 +666,59 @@ func TestSearchPartialNamespaceHint(t *testing.T) {
 	res := search.Result{Coverage: resourceapi.SearchCoverage{Status: resourceapi.CoveragePartial, Gaps: []resourceapi.Gap{{Code: readreason.RadarNamespaceNotCollected, Kinds: resourceapi.UnknownKinds(), Namespaces: resourceapi.Names([]string{"alpha"}, 1)}}}}
 	if got := coverageHint(res, true); got != "Some kinds weren't searched in namespace alpha: Radar here watches only some namespaces." {
 		t.Fatalf("hint: %q", got)
+	}
+}
+
+func TestCoverageHintSuggestsNamespaceForWholeKindDenial(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		namespaces *resourceapi.NameSet
+		want       string
+	}{
+		{"whole namespace scope", resourceapi.AllNames(), "Your access doesn't include all Secrets; this result says nothing about the rest. Try narrowing with ns:<namespace>."},
+		{"unknown namespace subset", resourceapi.UnknownNames(), "Your access doesn't include all Secrets; this result says nothing about the rest."},
+		{"cluster scoped", nil, "Your access doesn't include all Nodes; this result says nothing about the rest."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kind := "Secret"
+			if tc.namespaces == nil {
+				kind = "Node"
+			}
+			res := search.Result{Coverage: resourceapi.SearchCoverage{Status: resourceapi.CoveragePartial, Gaps: []resourceapi.Gap{{Code: readreason.UserForbidden, Kinds: resourceapi.Kinds([]resourceapi.KindRef{{Kind: kind}}, 1), Namespaces: tc.namespaces}}}}
+			if got := coverageHint(res, true); got != tc.want {
+				t.Fatalf("hint=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSearchResponseHintsPrecedeHits(t *testing.T) {
+	response := searchResponseMCP{
+		CoverageHint: "Some kinds are still loading.",
+		NarrowHint:   "Narrow the query.",
+		Result:       search.Result{Coverage: resourceapi.SearchCoverage{Status: resourceapi.CoveragePartial, Gaps: []resourceapi.Gap{}}, Hits: []search.Hit{{Kind: "Pod", Name: "needle"}}, Total: 1, TotalMatched: 2},
+	}
+	result, _, err := toJSONResult(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("content blocks=%d", len(result.Content))
+	}
+	text := result.Content[0].(*mcpsdk.TextContent).Text
+	if !json.Valid([]byte(text)) {
+		t.Fatalf("not one JSON value: %s", text)
+	}
+	for _, field := range []string{`"coverageHint":`, `"narrowHint":`} {
+		if pos := strings.Index(text, field); pos < 0 || pos >= strings.Index(text, `"hits":`) {
+			t.Fatalf("%s must precede hits: %s", field, text)
+		}
+	}
+	var decoded searchResponseMCP
+	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded, response) {
+		t.Fatalf("round trip=%+v want=%+v", decoded, response)
 	}
 }

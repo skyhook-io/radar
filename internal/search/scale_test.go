@@ -29,12 +29,12 @@ type cancelSearchProvider struct {
 	lists  int
 }
 
-func (p *cancelSearchProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
+func (p *cancelSearchProvider) ListTyped(resource string, namespaces []string) ([]runtime.Object, error) {
 	if p.stage == "typed" {
 		p.lists++
 		p.cancel()
 	}
-	return p.fakeProvider.ListTyped(kind, namespaces)
+	return p.fakeProvider.ListTyped(resource, namespaces)
 }
 func (p *cancelSearchProvider) NamespaceObservation(gvr schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
 	if p.stage == "kind" {

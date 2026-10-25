@@ -29,7 +29,7 @@ func TestSearchDeniedSecretIsNeverReturned(t *testing.T) {
 	}
 	opts := Options{
 		Include: IncludeNone,
-		NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+		TypedKindAccess: func(ns []string, group, resource string) ([]string, []string, []string) {
 			if resource == "secrets" {
 				return []string{}, []string{""}, nil
 			}
@@ -60,7 +60,7 @@ func TestSearchDeniedKindsPreserveReadableKinds(t *testing.T) {
 	}
 	res, _ := Search(context.Background(), p, Parse("redis"), Options{
 		Include: IncludeNone,
-		NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+		TypedKindAccess: func(ns []string, group, resource string) ([]string, []string, []string) {
 			if resource == "secrets" {
 				return []string{}, []string{""}, nil
 			}
@@ -85,12 +85,12 @@ type recordingProvider struct {
 	listedWith map[string][]string // kind → namespaces last passed
 }
 
-func (r *recordingProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
+func (r *recordingProvider) ListTyped(resource string, namespaces []string) ([]runtime.Object, error) {
 	if r.listedWith == nil {
 		r.listedWith = make(map[string][]string)
 	}
-	r.listedWith[kind] = append([]string(nil), namespaces...)
-	return r.fakeProvider.ListTyped(kind, namespaces)
+	r.listedWith[resource] = append([]string(nil), namespaces...)
+	return r.fakeProvider.ListTyped(resource, namespaces)
 }
 
 func TestSearchSecretAccessNarrowsOnlySecrets(t *testing.T) {
@@ -113,7 +113,7 @@ func TestSearchSecretAccessNarrowsOnlySecrets(t *testing.T) {
 	res, _ := Search(context.Background(), rec, Parse("redis"), Options{
 		Include:   IncludeNone,
 		Selection: readscope.Selection{Namespaces: []string{"ns-a", "ns-b"}},
-		NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+		TypedKindAccess: func(ns []string, group, resource string) ([]string, []string, []string) {
 			if resource == "secrets" {
 				return []string{"ns-a"}, []string{"ns-b"}, nil
 			}

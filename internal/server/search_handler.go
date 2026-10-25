@@ -57,13 +57,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	kindRBAC := s.computeSearchKindRBAC(r)
 	opts := search.Options{
-		NamespacedRBAC: kindRBAC,
-		Limit:          parseLimit(r.URL.Query().Get("limit")),
-		Include:        include,
+		TypedKindAccess: kindRBAC,
+		Limit:           parseLimit(r.URL.Query().Get("limit")),
+		Include:         include,
 		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			return s.canReadDecision(r, group, resource, "", "list")
 		},
-		KindAccess: s.searchKindAccess(r, kindRBAC),
+		DynamicKindAccess: s.searchKindAccess(r, kindRBAC),
 	}
 	var pin *string
 	if k8s.ForceNamespaceScope {
