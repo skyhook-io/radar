@@ -12,9 +12,11 @@ import (
 
 // View answers ownership questions for one caller from one session.
 //
-// It captures each object once, whether it read the object or found it
-// searching an owner's dependents, and answers every question from that
-// capture, so an object reads the same in every answer. Answers read the
+// It captures each object's metadata once, whether it read the object or
+// found it searching an owner's dependents, and answers every question from
+// that capture, so an object reads the same in every answer. Member lists
+// aren't captured: Members and RecordingManagers read the managers' status
+// each time they are asked. Answers read the
 // cache as it is when asked, so one can be a moment older than another, as
 // any informer read can. It searches each owner's dependents at most once.
 // It never reads an object the caller may not read, and says nothing of
@@ -110,8 +112,9 @@ func (v *View) References(ref resourceid.Ref) (Subject, []OwnerResolution) {
 type OwnerAnswer struct {
 	Subject Subject
 	// Reference is the owner reference chosen, one of the subject's own. It is
-	// nil when there is none: no owner references at all, or several without
-	// a controller (Several).
+	// nil when there is none: the subject wasn't read, it has no owner
+	// references, or several without a controller (Several). Resolution means
+	// something only when Reference is set.
 	Reference  *metav1.OwnerReference
 	Resolution OwnerResolution
 	Several    bool
@@ -366,8 +369,8 @@ func compareRefs(a, b resourceid.Ref) int {
 type MembersAnswer struct {
 	Subject Subject
 	// Membership is what the manager's status records; Members and the counts
-	// are set only when it is MembersRecorded. A remote manager's list names
-	// objects of another cluster.
+	// are set only when it is MembersRecorded. A remote manager's destination
+	// isn't confirmed to be this cluster, so none of its list is shown here.
 	Membership MembershipState
 	// Members are the recorded objects Radar holds that the caller may read,
 	// sorted.
