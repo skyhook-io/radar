@@ -1287,3 +1287,31 @@ An empty list is a complete negative only without `error`, `incomplete` or
 `truncated`.
 Webhooks unchanged in the window are not listed; the Pod/template candidates
 above cover them. List order does not indicate likelihood.
+
+### Shared deletion preview
+
+`GET /api/resources/{kind}/{namespace}/{name}/cascade-preview` fetches the root
+as the caller and reads a caller-scoped ownership session. It does not build or
+walk display topology. `basis: ownerReferences` distinguishes it from the older
+related-resource list. `dependents` lists observed objects expected to be garbage
+collected once their owners are removed; `possibleDependents` has an unresolved
+owner or chain. A live owner outside that closure preserves its dependents.
+Neither list promises completion: finalizers, admission and reconciliation can
+change or delay the result.
+
+`coverage` reuses the ownership coverage contract: complete among readable,
+collectable kinds, `narrowed` for restricted visibility, `notChecked` for cache
+or discovery gaps, `truncated` at the 1,000-object traversal cap or deadline.
+`rootResolved: false` and `unavailableReason` refuse a stale root or cache swap.
+The root UID and resourceVersion must match the session before projection.
+
+The preview preserves pending foreground/orphan propagation; an orphan preview
+lists no garbage-collected dependents. Namespace contents and CRD instances are
+not enumerated and are removed independently of owner references. Other
+controller cleanup is also not enumerated. `controllerTeardown`, when recognized
+on the root, describes Argo CD pruning or Flux pruning/Helm uninstall through a
+finalizer. Recorded local members are caller-filtered and carry membership
+coverage. Remote/unknown destinations list no local inventory. Controller
+opt-outs and Helm release manifests can differ from the recorded member list.
+Force deletion strips finalizers and can skip remaining cleanup; it cannot undo
+cleanup that already started.

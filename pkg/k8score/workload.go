@@ -606,18 +606,14 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 	if opts.Namespace != "" {
 		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
 	}
-	if obj, err := client.Get(ctx, opts.Name, metav1.GetOptions{}); err == nil {
-		// Only GC finalizers record a policy to preserve; Background has no finalizer.
-		// Omitting the policy otherwise can orphan a terminating Job's Pods.
-		for _, finalizer := range obj.GetFinalizers() {
-			if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
-				deleteOpts.PropagationPolicy = nil
-				break
-			}
+	current, readErr := client.Get(ctx, opts.Name, metav1.GetOptions{})
+	if readErr == nil {
+		if _, pending := PendingDeletionPolicy(current.GetFinalizers()); pending {
+			deleteOpts.PropagationPolicy = nil
 		}
 	}
 
-	if opts.Force {
+	if opts.Force && (readErr != nil || len(current.GetFinalizers()) > 0) {
 		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
 		var patchErr error
 		if opts.Namespace != "" {
@@ -629,11 +625,12 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 			if apierrors.IsForbidden(patchErr) {
 				return fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
 			}
-			log.Printf("[delete] Failed to strip finalizers from %s %s/%s: %v", opts.Kind, opts.Namespace, opts.Name, patchErr)
+			return fmt.Errorf("force delete could not strip finalizers: %w", patchErr)
 		}
 	}
 
 	if opts.Force {
+		deleteOpts.PropagationPolicy = &background
 		gracePeriod := int64(0)
 		deleteOpts.GracePeriodSeconds = &gracePeriod
 	}
