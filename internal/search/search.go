@@ -163,12 +163,10 @@ type Options struct {
 	// seesAllNamespaces records that the caller's RBAC covers every namespace
 	// (ScopeNamespaces' ceiling was nil).
 	seesAllNamespaces bool
-	// NamespacedRBAC gates sensitive typed kinds before their readiness is
-	// read. Decisions are empty (allowed), override (scoped subset), skip
-	// (denied), or permission_check_failed (non-authoritative permission
-	// check). The scoped subset may accompany permission_check_failed to
-	// preserve successfully authorized namespaces.
-	NamespacedRBAC func(namespaces []string, group, resource string) (decision string, scoped []string)
+	// NamespacedRBAC partitions exact-kind access before reading collector state.
+	// A nil allowed list means every namespace; denied and unchecked use ""
+	// for a whole-scope decision when namespaces cannot be enumerated.
+	NamespacedRBAC func(namespaces []string, group, resource string) (allowed, denied, unchecked []string)
 	// CanReadClusterScoped authorizes cluster-scoped resources before the
 	// cache walker scans them. Handlers provide a per-user SAR-backed
 	// decision; authoritative distinguishes denial from check failure. nil
@@ -313,7 +311,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			continue
 		}
 		plan := p.PlanTyped(tk.Kind, opts.Namespaces)
-		if len(plan.Partitions) == 1 && plan.Partitions[0].Verdict.State == readplan.Gap && cov.quiet(plan.Partitions[0].Verdict.Code) {
+		sensitive := opts.NamespacedRBAC != nil && slices.ContainsFunc(NamespacedSearchKinds, func(k struct{ Kind, Group, Resource string }) bool { return k.Kind == tk.Kind })
+		if !sensitive && len(plan.Partitions) == 1 && plan.Partitions[0].Verdict.State == readplan.Gap && cov.quiet(plan.Partitions[0].Verdict.Code) {
 			continue
 		}
 		if opts.SkipKinds[tk.Kind] {
@@ -326,6 +325,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		// allowed namespaces); fall back to Options.Namespaces otherwise.
 		listNs := opts.Namespaces
 		narrowed := false
+		scopeNarrowed := false
 		if clusterScoped {
 			if opts.CanReadClusterScoped != nil {
 				if allowed, authoritative := opts.CanReadClusterScoped(tk.Kind, tk.Group, tk.Plural); !allowed {
@@ -339,8 +339,9 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			// this guard a nil entry would set listNs=nil and trigger a
 			// cluster-wide list — silent bypass of the namespace constraint
 			// in security-sensitive code.
-			if len(override) < len(opts.Namespaces) {
-				cov.kind(tk.Kind, tk.Group, readreason.UserForbidden)
+			if opts.Namespaces == nil || len(override) < len(opts.Namespaces) {
+				scopeNarrowed = true
+				cov.kindScope(tk.Kind, tk.Group, readreason.UserForbidden, len(override) > 0)
 			}
 			listNs, narrowed = override, true
 			if len(listNs) == 0 {
@@ -348,19 +349,16 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				continue
 			}
 		}
-		if opts.NamespacedRBAC != nil && slices.ContainsFunc(NamespacedSearchKinds, func(k struct{ Kind, Group, Resource string }) bool { return k.Kind == tk.Kind }) {
-			decision, scoped := opts.NamespacedRBAC(listNs, tk.Group, tk.Plural)
-			switch decision {
-			case "skip":
-				cov.kind(tk.Kind, tk.Group, readreason.UserForbidden)
-				continue
-			case "override", "permission_check_failed":
-				reason := readreason.UserForbidden
-				if decision == "permission_check_failed" {
-					reason = readreason.UserPermissionCheckFailed
-				}
-				cov.kind(tk.Kind, tk.Group, reason)
-				listNs, narrowed = scoped, true
+		if sensitive {
+			allowed, denied, unchecked := opts.NamespacedRBAC(listNs, tk.Group, tk.Plural)
+			if len(denied) > 0 {
+				cov.kindScope(tk.Kind, tk.Group, readreason.UserForbidden, scopeNarrowed || len(allowed) > 0 || len(unchecked) > 0)
+			}
+			if len(unchecked) > 0 {
+				cov.kindScope(tk.Kind, tk.Group, readreason.UserPermissionCheckFailed, scopeNarrowed || len(allowed) > 0 || len(denied) > 0)
+			}
+			if len(denied) > 0 || len(unchecked) > 0 {
+				listNs, narrowed, scopeNarrowed = allowed, true, true
 				if len(listNs) == 0 {
 					continue
 				}
@@ -385,7 +383,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				cov.namespaces(readreason.RadarNamespaceNotCollected, part.Namespaces...)
 			case readplan.Gap:
 				hasGap = true
-				cov.kind(tk.Kind, tk.Group, part.Verdict.Code)
+				cov.kindScope(tk.Kind, tk.Group, part.Verdict.Code, scopeNarrowed || partOfScope(plan, part.Verdict.Code))
 			}
 		}
 		if hasGap {
@@ -398,7 +396,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		// Partial results are better than blanking the whole search; an
 		// explicit kind: filter is told what wasn't read.
 		if err != nil {
-			cov.kind(tk.Kind, tk.Group, listErrorReason(err))
+			cov.kindScope(tk.Kind, tk.Group, listErrorReason(err), scopeNarrowed || hasGap || plan.CollectionLimited)
 			continue
 		}
 		res.Searched += len(objs)
@@ -445,6 +443,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	incompleteDiscovery := errors.Is(catalogErr, errIncompleteDiscovery)
 	if catalogErr != nil && !incompleteDiscovery {
 		cov.catalog(listErrorReason(catalogErr))
+	} else if incompleteDiscovery && len(q.KindFilter) == 0 {
+		cov.narrowed[resourceapi.NarrowedByKindCollection] = true
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
@@ -482,7 +482,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		warm := !observation.ProbeRetrying && len(q.KindFilter) > 0 && (probeGap || observation.State == k8score.DynamicObservationUnwatched || observation.State == k8score.DynamicObservationDeferred)
 		perNamespace := probeGap || observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces
 		settled := reason != "" && !warm && !perNamespace
-		if settled && cov.quiet(reason) {
+		gated := !clusterScoped && opts.KindAccess != nil && kindRBACGroups[gvr.Group]
+		if settled && !gated && cov.quiet(reason) {
 			continue
 		}
 		if clusterScoped && skipClusterScoped {
@@ -491,7 +492,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if !clusterScoped && !namespaced(kind, gvr.Group) {
 			continue
 		}
-		if settled && reason == readreason.KindNotWatchable {
+		if reason == readreason.KindNotWatchable || reason == readreason.KindNotSearchable {
 			cov.kind(kind, gvr.Group, reason)
 			continue
 		}
@@ -501,29 +502,54 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				continue
 			}
 		}
-		if settled {
-			cov.kind(kind, gvr.Group, reason)
-			continue
+		namespaces := opts.Namespaces
+		if gated && len(q.NSFilter) > 0 {
+			namespaces = readableWithin(namespaces, q.NSFilter)
 		}
-		gated := !clusterScoped && opts.KindAccess != nil && kindRBACGroups[gvr.Group]
-		// A gated kind's failure in a namespace is a gap only where the
-		// caller could have listed the kind; elsewhere it would tell them
-		// about objects they may not read. Where their access couldn't be
-		// confirmed, that is the gap instead.
-		kindGap := func(ns string, reason readreason.Code) {
-			if gated && ns != "" && !opts.KindAccess.ClusterWide(gvr.Group, gvr.Resource) {
-				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, []string{ns})
-				switch {
-				case len(unchecked) > 0:
-					reason = readreason.UserPermissionCheckFailed
-				case len(allowed) == 0:
-					return
+		accessNarrowed := false
+		checkItems := gated && !opts.KindAccess.ClusterWide(gvr.Group, gvr.Resource)
+		unknownAccessScope := checkItems && namespaces == nil
+		if checkItems {
+			if namespaces == nil {
+				// Namespace membership cannot enumerate a cluster-wide reader's
+				// exact-kind scope. Only individually authorized items can be kept.
+				cov.kindScope(kind, gvr.Group, readreason.UserForbidden, true)
+				accessNarrowed = true
+			} else {
+				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespaces)
+				denied := len(namespaces) - len(allowed) - len(unchecked)
+				if denied > 0 {
+					cov.kindScope(kind, gvr.Group, readreason.UserForbidden, denied < len(namespaces))
+				}
+				if len(unchecked) > 0 {
+					cov.kindScope(kind, gvr.Group, readreason.UserPermissionCheckFailed, len(unchecked) < len(namespaces))
+				}
+				accessNarrowed = len(allowed) < len(namespaces)
+				namespaces = allowed
+				if len(namespaces) == 0 {
+					continue
 				}
 			}
-			cov.kindIn(kind, gvr.Group, reason, ns)
 		}
-		namespaces := opts.Namespaces
-		if clusterScoped || len(namespaces) == 0 {
+		kindGap := func(ns string, reason readreason.Code) {
+			if unknownAccessScope {
+				if ns == "" {
+					return
+				}
+				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, []string{ns})
+				if len(unchecked) > 0 {
+					reason = readreason.UserPermissionCheckFailed
+				} else if len(allowed) == 0 {
+					reason = readreason.UserForbidden
+				}
+			}
+			cov.kindScope(kind, gvr.Group, reason, ns != "" || accessNarrowed)
+		}
+		if settled {
+			kindGap("", reason)
+			continue
+		}
+		if clusterScoped || namespaces == nil {
 			namespaces = []string{""}
 		}
 		byNamespace := map[string]readplan.Verdict{}
@@ -548,7 +574,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			outsideScope := nsObservation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && (ns == "" || !covered)
 			var warmErr error
 			warmed := false
-			if len(q.KindFilter) > 0 && !nsObservation.ProbeRetrying && (warm || outsideScope) {
+			if len(q.KindFilter) > 0 && !unknownAccessScope && !nsObservation.ProbeRetrying && (warm || outsideScope) {
 				warmed = true
 				warmErr = p.WarmDynamic(warmCtx, gvr, ns)
 				nsObservation = p.NamespaceObservation(gvr, ns)
@@ -634,14 +660,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 		}
-		// A gated kind is authorized per namespace, over every namespace
-		// holding its objects and never over the query's matches, so what
-		// the caller is told about unconfirmed access can't depend on report
-		// contents they may not read. Fresh checks are capped per search
-		// (MaxAccessChecks); objects the caller may not list are dropped
-		// before they are counted, filtered or returned.
 		if gated && len(q.NSFilter) > 0 {
-			// The caller's own ns: filter narrows what is worth authorizing.
 			kept := make([]*unstructured.Unstructured, 0, len(items))
 			for _, u := range items {
 				if sliceContainsFold(q.NSFilter, u.GetNamespace()) {
@@ -650,15 +669,13 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			}
 			items = kept
 		}
-		if gated && len(items) > 0 {
-			if !opts.KindAccess.ClusterWide(gvr.Group, gvr.Resource) {
-				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespacesOf(items))
-				items = itemsInNamespaces(items, allowed)
-				// Objects in a namespace whose access couldn't be confirmed
-				// were left out, so the kind wasn't fully searched.
-				if len(unchecked) > 0 {
-					cov.kind(kind, gvr.Group, readreason.UserPermissionCheckFailed)
-				}
+		if checkItems && !unknownAccessScope {
+			items = itemsInNamespaces(items, namespaces)
+		} else if checkItems && len(items) > 0 {
+			allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespacesOf(items))
+			items = itemsInNamespaces(items, allowed)
+			if len(unchecked) > 0 {
+				cov.kindScope(kind, gvr.Group, readreason.UserPermissionCheckFailed, accessNarrowed || len(allowed) > 0)
 			}
 		}
 		res.Searched += len(items)

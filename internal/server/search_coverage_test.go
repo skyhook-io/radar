@@ -1,7 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -21,6 +24,8 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/search"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 func TestSearchNewNamespacedKindsReportCallerDenial(t *testing.T) {
@@ -140,17 +145,18 @@ func TestSearchKindRBACClusterFirstAndFailureReason(t *testing.T) {
 	user := &auth.User{Username: "search-checks"}
 	s.permCache.Set(user.Username, nil, &auth.UserPermissions{AllowedNamespaces: []string{"a", "b"}})
 	r := requestWithUser("GET", "/api/search", user)
-	decision, scoped := s.computeSearchKindRBAC(r, []string{"a", "b"}, "", "allowed")
-	if decision != "" || scoped != nil || checks.Load() != 1 {
-		t.Fatalf("cluster-first: %s %v; checks %d", decision, scoped, checks.Load())
+	gate := s.computeSearchKindRBAC(r)
+	allowed, denied, unchecked := gate([]string{"a", "b"}, "", "allowed")
+	if !slices.Equal(allowed, []string{"a", "b"}) || len(denied) != 0 || len(unchecked) != 0 || checks.Load() != 1 {
+		t.Fatalf("cluster-first: %v %v %v; checks %d", allowed, denied, unchecked, checks.Load())
 	}
-	decision, scoped = s.computeSearchKindRBAC(r, []string{"a", "b"}, "", "secrets")
-	if decision != "permission_check_failed" || len(scoped) != 1 || scoped[0] != "a" || checks.Load() != 4 {
-		t.Fatalf("partial permission failure: %s %v; checks %d", decision, scoped, checks.Load())
+	allowed, denied, unchecked = gate([]string{"a", "b"}, "", "secrets")
+	if !slices.Equal(allowed, []string{"a"}) || len(denied) != 0 || !slices.Equal(unchecked, []string{"b"}) || checks.Load() != 4 {
+		t.Fatalf("partial permission failure: %v %v %v; checks %d", allowed, denied, unchecked, checks.Load())
 	}
-	decision, scoped = s.computeSearchKindRBAC(r, []string{"a"}, "", "broken")
-	if decision != "permission_check_failed" || len(scoped) != 0 || checks.Load() != 5 {
-		t.Fatalf("cluster check failure: %s %v; checks %d", decision, scoped, checks.Load())
+	allowed, denied, unchecked = gate([]string{"a"}, "", "broken")
+	if len(allowed) != 0 || len(denied) != 0 || !slices.Equal(unchecked, []string{"a"}) || checks.Load() != 5 {
+		t.Fatalf("cluster check failure: %v %v %v; checks %d", allowed, denied, unchecked, checks.Load())
 	}
 }
 
@@ -181,10 +187,11 @@ func TestSearchKindRBACDeniedClusterCountsAndCachesNamespaceChecks(t *testing.T)
 	s.permCache.Set(user.Username, nil, &auth.UserPermissions{AllowedNamespaces: namespaces})
 	r := requestWithUser("GET", "/api/search", user)
 	for range 2 {
+		gate := s.computeSearchKindRBAC(r)
 		for _, kind := range search.NamespacedSearchKinds {
-			decision, scoped := s.computeSearchKindRBAC(r, namespaces, kind.Group, kind.Resource)
-			if decision != "override" || len(scoped) != 3 {
-				t.Fatalf("%s denied-cluster scope: %s %v", kind.Kind, decision, scoped)
+			allowed, denied, unchecked := gate(namespaces, kind.Group, kind.Resource)
+			if !slices.Equal(allowed, []string{"a", "b", "c"}) || !slices.Equal(denied, []string{"denied"}) || len(unchecked) != 0 {
+				t.Fatalf("%s denied-cluster scope: %v %v %v", kind.Kind, allowed, denied, unchecked)
 			}
 		}
 		if got, want := checks.Load(), int32(len(search.NamespacedSearchKinds)*(len(namespaces)+1)); got != want {
@@ -389,6 +396,125 @@ func TestSearchAttributesNamedNamespacesToThePin(t *testing.T) {
 	for _, query := range []string{"q=ns:payments-prd+robusta", "q=ns:payments-prd+robusta&globalNs=1"} {
 		if got := namespaceGaps(searchAs(t, env, "search-pinned", query)); !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s: namespace coverage %+v, want %+v", query, got, want)
+		}
+	}
+}
+
+func TestSearchKindRBACBudgetAndCancellation(t *testing.T) {
+	var checks atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checks.Add(1)
+		var review authorizationv1.SubjectAccessReview
+		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+			t.Error(err)
+			http.Error(w, "decode", 400)
+			return
+		}
+		review.Status.Allowed = true
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(review)
+	}))
+	t.Cleanup(api.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json", AcceptContentTypes: "application/json"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	user := &auth.User{Username: "search-budget"}
+	perms := &auth.UserPermissions{}
+	s.permCache.Set(user.Username, nil, perms)
+	namespaces := make([]string, 70)
+	for i := range namespaces {
+		namespaces[i] = fmt.Sprintf("ns-%03d", i)
+	}
+	namespaces = append(namespaces, "cached")
+	slices.Sort(namespaces)
+	for _, kind := range search.NamespacedSearchKinds {
+		if kind.Kind != "LimitRange" {
+			perms.SetCanI("list", kind.Group, kind.Resource, "", false)
+		}
+		perms.SetCanI("list", kind.Group, kind.Resource, "cached", true)
+	}
+	r := requestWithUser("GET", "/api/search", user)
+	gate := s.computeSearchKindRBAC(r)
+	totalAllowed, totalUnchecked := 0, 0
+	for _, kind := range search.NamespacedSearchKinds {
+		allowed, denied, unchecked := gate(namespaces, kind.Group, kind.Resource)
+		if len(denied) != 0 || !slices.Contains(allowed, "cached") || len(allowed)+len(unchecked) != len(namespaces) {
+			t.Fatalf("%s: %v %v %v", kind.Kind, allowed, denied, unchecked)
+		}
+		totalAllowed += len(allowed)
+		totalUnchecked += len(unchecked)
+	}
+	if checks.Load() != readscope.MaxAccessChecks || totalAllowed != readscope.MaxAccessChecks+len(search.NamespacedSearchKinds) || totalUnchecked != 70*len(search.NamespacedSearchKinds)-readscope.MaxAccessChecks {
+		t.Fatalf("checks=%d allowed=%d unchecked=%d", checks.Load(), totalAllowed, totalUnchecked)
+	}
+	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "", false)
+	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "cached", true)
+	trivy := s.searchKindAccess(r, gate)
+	if trivy.ClusterWide("aquasecurity.github.io", "vulnerabilityreports") {
+		t.Fatal("denied Trivy cluster grant")
+	}
+	trivyAllowed, trivyUnchecked := trivy.InNamespaces("aquasecurity.github.io", "vulnerabilityreports", namespaces)
+	if !slices.Equal(trivyAllowed, []string{"cached"}) || len(trivyUnchecked) != 70 || checks.Load() != readscope.MaxAccessChecks {
+		t.Fatalf("budget not shared with Trivy: %v %v checks=%d", trivyAllowed, trivyUnchecked, checks.Load())
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	cancel()
+	allowed, denied, unchecked := s.computeSearchKindRBAC(r.WithContext(ctx))(namespaces, "", "uncached")
+	if len(allowed) != 0 || len(denied) != 0 || !slices.Equal(unchecked, namespaces) || checks.Load() != readscope.MaxAccessChecks {
+		t.Fatalf("cancelled: %v %v %v checks=%d", allowed, denied, unchecked, checks.Load())
+	}
+}
+
+func TestSearchKindRBACMixedPartitionsReachCoverage(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "db-creds"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "beta", Name: "db-denied"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "gamma", Name: "db-unchecked"}},
+	))
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var review authorizationv1.SubjectAccessReview
+		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+			t.Error(err)
+			http.Error(w, "decode", 400)
+			return
+		}
+		ns := review.Spec.ResourceAttributes.Namespace
+		if ns == "gamma" {
+			http.Error(w, "SAR unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		review.Status.Allowed = ns == "alpha"
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(review)
+	}))
+	t.Cleanup(api.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json", AcceptContentTypes: "application/json"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	env := newAuthTestServer(t)
+	user := &auth.User{Username: "search-mixed"}
+	env.srv.permCache.Set(user.Username, nil, &auth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta", "gamma"}})
+	r := requestWithUser("GET", "/api/search", user)
+	allowed, denied, unchecked := env.srv.computeSearchKindRBAC(r)([]string{"alpha", "beta", "gamma"}, "", "secrets")
+	if !slices.Equal(allowed, []string{"alpha"}) || !slices.Equal(denied, []string{"beta"}) || !slices.Equal(unchecked, []string{"gamma"}) {
+		t.Fatalf("partitions: %v %v %v", allowed, denied, unchecked)
+	}
+	body := searchAs(t, env, user.Username, "q=kind:Secret+db")
+	if !slices.Equal(hitKeys(body), []string{"Secret/alpha/db-creds"}) {
+		t.Fatalf("hits: %+v", body.Hits)
+	}
+	for _, code := range []readreason.Code{readreason.UserForbidden, readreason.UserPermissionCheckFailed} {
+		if !slices.ContainsFunc(body.Coverage.Gaps, func(gap resourceapi.Gap) bool {
+			return gap.Code == code && gap.Kinds != nil && slices.Contains(gap.Kinds.Names, resourceapi.KindRef{Kind: "Secret"}) && reflect.DeepEqual(gap.Namespaces, resourceapi.UnknownNames())
+		}) {
+			t.Fatalf("missing %s partial gap: %+v", code, body.Coverage)
 		}
 	}
 }

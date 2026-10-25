@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -155,6 +156,20 @@ func (c *coverage) quiet(reason readreason.Code) bool {
 // searched.
 func (c *coverage) kind(kind, group string, reason readreason.Code) {
 	c.kindIn(kind, group, reason, "")
+}
+
+// kindScope preserves whether a reason reaches only part of the searched scope.
+func (c *coverage) kindScope(kind, group string, reason readreason.Code, partial bool) {
+	c.kind(kind, group, reason)
+	if partial {
+		c.someNamespaces[reason] = true
+	}
+}
+
+func partOfScope(plan readplan.Plan, reason readreason.Code) bool {
+	return plan.CollectionLimited || slices.ContainsFunc(plan.Partitions, func(p readplan.Partition) bool {
+		return p.Extent == readplan.UnknownNamespaces || p.Verdict.State != readplan.Gap || p.Verdict.Code != reason
+	})
 }
 
 // kindIn records a kind-level reason for one scanned kind in namespace ns,

@@ -14,7 +14,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -154,11 +153,11 @@ func (p *CacheProvider) UnlistableKinds() []k8score.APIResource {
 }
 
 func (p *CacheProvider) PlanTyped(kind string, namespaces []string) readplan.Plan {
-	return readplan.Typed(p.cache, p.permissions, k8s.CanonicalBuiltinKind(kind), readscope.Target{Namespaces: namespaces}, isClusterScopedKind(kind))
+	return readplan.Typed(p.cache, p.permissions, k8s.CanonicalBuiltinKind(kind), namespaces, isClusterScopedKind(kind))
 }
 
 func (p *CacheProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces []string, clusterScoped bool) readplan.Plan {
-	plan := readplan.Dynamic(p, gvr, readscope.Target{Namespaces: namespaces}, clusterScoped)
+	plan := readplan.Dynamic(p, gvr, namespaces, clusterScoped)
 	for i := range plan.Partitions {
 		part := &plan.Partitions[i]
 		if part.Verdict.Code == readreason.KindNotWatchable && k8s.ShouldBypassDynamicInformer(gvr) {

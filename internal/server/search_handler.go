@@ -58,16 +58,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	kindRBAC := s.computeSearchKindRBAC(r)
 	opts := search.Options{
-		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
-			return s.computeSearchKindRBAC(r, namespaces, group, resource)
-		},
-		Limit:   parseLimit(r.URL.Query().Get("limit")),
-		Include: include,
+		NamespacedRBAC: kindRBAC,
+		Limit:          parseLimit(r.URL.Query().Get("limit")),
+		Include:        include,
 		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			return s.canReadDecision(r, group, resource, "", "list")
 		},
-		KindAccess: s.searchKindAccess(r),
+		KindAccess: s.searchKindAccess(r, kindRBAC),
 	}
 	opts.Pinned = k8s.ForceNamespaceScope
 	opts.ScopeNamespaces(parsed, visible, ceiling)
@@ -110,10 +109,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		// Log before writing per radar's CLAUDE.md convention. Today
-		// Search() never returns an error, but the moment that
-		// changes we want context — the query string itself is the
-		// most useful fingerprint.
 		log.Printf("[search] failed q=%q filter=%q: %v", parsed.Raw, r.URL.Query().Get("filter"), err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
