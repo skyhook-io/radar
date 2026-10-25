@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -33,12 +34,12 @@ func (p *cancelSearchProvider) ListTyped(kind string, namespaces []string) ([]ru
 	}
 	return p.fakeProvider.ListTyped(kind, namespaces)
 }
-func (p *cancelSearchProvider) DynamicObservation(gvr schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
+func (p *cancelSearchProvider) NamespaceObservation(gvr schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
 	if p.stage == "kind" {
 		p.lists++
 		p.cancel()
 	}
-	return p.fakeProvider.DynamicObservation(gvr, ns)
+	return p.fakeProvider.NamespaceObservation(gvr, ns)
 }
 func (p *cancelSearchProvider) ListDynamic(ctx context.Context, gvr schema.GroupVersionResource, ns string) ([]*unstructured.Unstructured, error) {
 	if p.stage == "namespace" {
@@ -111,12 +112,17 @@ func BenchmarkCoverageScale(b *testing.B) {
 
 type clusterObservationProvider struct {
 	*fakeProvider
-	observations, reads int
+	observations, reads, plans int
 }
 
-func (p *clusterObservationProvider) DynamicObservation(gvr schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
+func (p *clusterObservationProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces []string, clusterScoped bool) readplan.Plan {
+	p.plans++
+	return p.fakeProvider.PlanDynamic(gvr, namespaces, clusterScoped)
+}
+
+func (p *clusterObservationProvider) NamespaceObservation(gvr schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
 	p.observations++
-	return p.fakeProvider.DynamicObservation(gvr, ns)
+	return p.fakeProvider.NamespaceObservation(gvr, ns)
 }
 func (p *clusterObservationProvider) ListDynamic(context.Context, schema.GroupVersionResource, string) ([]*unstructured.Unstructured, error) {
 	p.reads++
@@ -140,6 +146,25 @@ func TestSearchReusesSyncedClusterWideObservation(t *testing.T) {
 	}
 	if p.observations != 500 || p.reads != 500*5000 {
 		t.Fatalf("observations=%d reads=%d", p.observations, p.reads)
+	}
+}
+
+func TestSearchPlansNamespaceFanoutOnce(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	namespaces := make([]string, 5000)
+	for i := range namespaces {
+		namespaces[i] = fmt.Sprintf("ns-%05d", i)
+	}
+	p := &clusterObservationProvider{fakeProvider: &fakeProvider{
+		kinds:      map[schema.GroupVersionResource]string{gvr: "Widget"},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: true},
+		observations: map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: {
+			State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: namespaces,
+		}},
+	}}
+	res, err := Search(t.Context(), p, Parse("test"), Options{Namespaces: namespaces})
+	if err != nil || partial(res) || p.plans != 1 || p.reads != len(namespaces) || len(p.warmed) != 0 {
+		t.Fatalf("plans=%d reads=%d warm=%d result=%+v err=%v", p.plans, p.reads, len(p.warmed), res, err)
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -53,38 +54,18 @@ type Provider interface {
 	// DynamicResources lists the dynamic kinds to search. A non-nil error
 	// means the list may be incomplete; any kinds returned are still searched.
 	DynamicResources() ([]schema.GroupVersionResource, error)
-	TypedCoverage(kind string, namespaces []string) readreason.Code
+	PlanTyped(kind string, namespaces []string) readplan.Plan
+	PlanDynamic(gvr schema.GroupVersionResource, namespaces []string, clusterScoped bool) readplan.Plan
 	DynamicCacheStopped() bool
 	// PrepareDynamicObservations indexes informer scopes for this search.
 	PrepareDynamicObservations(gvrs []schema.GroupVersionResource)
-	// DynamicObservation reports the kind's observation, with readiness taken
+	// NamespaceObservation reports the kind's observation, with readiness taken
 	// from the informer serving namespace; "" means the whole kind.
-	DynamicObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation
+	NamespaceObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation
 	WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error
 	KindForGVR(gvr schema.GroupVersionResource) string
-	// NamespaceExists reports whether a namespace exists on the cluster; known
-	// is false when Radar can't tell (it doesn't watch Namespaces cluster-wide).
-	NamespaceExists(name string) (exists, known bool)
-}
-
-// typedReadiness assesses a typed kind over namespaces: the reason it can't
-// be read, if any, and whether Radar collects it in only some of them, which
-// narrows the search while the rest is still searched. A kind watched
-// namespace by namespace can be searched where its informers have synced
-// while others still load, so readable names those namespaces.
-func typedReadiness(p Provider, kind string, clusterScoped bool, namespaces []string) (readiness readreason.Code, limited bool, readable []string) {
-	readiness = p.TypedCoverage(kind, namespaces)
-	limited = readiness == readreason.RadarNamespaceNotCollected
-	if limited {
-		readiness = ""
-	}
-	if !clusterScoped && (readiness == readreason.KindSyncPending || readiness == readreason.KindSyncTimedOut) {
-		if r, ok := p.(typedNamespaceReader); ok {
-			readable = r.TypedReadable(kind, namespaces)
-			limited = r.TypedCollectionLimited(kind, namespaces)
-		}
-	}
-	return readiness, limited, readable
+	// KnownMissingNamespaces is called only for callers who can see every namespace.
+	KnownMissingNamespaces(names []string) []string
 }
 
 type dynamicScopeProvider interface {
@@ -331,8 +312,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if !clusterScoped && !namespaced(tk.Kind, tk.Group) {
 			continue
 		}
-		readiness, limited, readable := typedReadiness(p, tk.Kind, clusterScoped, opts.Namespaces)
-		if readiness != "" && cov.quiet(readiness) {
+		plan := p.PlanTyped(tk.Kind, opts.Namespaces)
+		if len(plan.Partitions) == 1 && plan.Partitions[0].Verdict.State == readplan.Gap && cov.quiet(plan.Partitions[0].Verdict.Code) {
 			continue
 		}
 		if opts.SkipKinds[tk.Kind] {
@@ -385,30 +366,31 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 		}
-		// Namespaces the caller can't list this kind in say nothing about it.
 		if narrowed {
-			readiness, limited, readable = typedReadiness(p, tk.Kind, clusterScoped, listNs)
-			if readiness != "" && cov.quiet(readiness) {
-				continue
-			}
+			plan = p.PlanTyped(tk.Kind, listNs)
 		}
-		// A namespace the query names that Radar doesn't collect is a gap;
-		// otherwise what Radar doesn't collect narrowed the search.
-		if !clusterScoped && len(q.NSFilter) > 0 {
-			for _, ns := range listNs {
-				if err := ctx.Err(); err != nil {
-					return Result{}, err
-				}
-				if p.TypedCoverage(tk.Kind, []string{ns}) == readreason.RadarNamespaceNotCollected {
-					cov.namespaces(readreason.RadarNamespaceNotCollected, ns)
-				}
-			}
-		} else if !clusterScoped && limited {
+		if plan.CollectionLimited && !clusterScoped {
 			cov.narrow(readreason.RadarNamespaceNotCollected)
 		}
-		if readiness != "" {
-			cov.kind(tk.Kind, tk.Group, readiness)
-			if listNs = readableWithin(listNs, readable); len(listNs) == 0 {
+		readable := []string{}
+		hasGap := false
+		for _, part := range plan.Partitions {
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
+			switch part.Verdict.State {
+			case readplan.Readable:
+				readable = append(readable, part.Namespaces...)
+			case readplan.OutsideCollection:
+				cov.namespaces(readreason.RadarNamespaceNotCollected, part.Namespaces...)
+			case readplan.Gap:
+				hasGap = true
+				cov.kind(tk.Kind, tk.Group, part.Verdict.Code)
+			}
+		}
+		if hasGap {
+			listNs = readableWithin(listNs, readable)
+			if len(listNs) == 0 {
 				continue
 			}
 		}
@@ -480,21 +462,29 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if k8s.TypedKindOwnsGroup(kind, gvr.Group) || (k8score.IsBuiltInAPIGroup(gvr.Group) && slices.ContainsFunc(typedKinds, func(tk struct{ Kind, Plural, Group string }) bool { return tk.Kind == kind })) {
 			continue
 		}
-		observation := p.DynamicObservation(gvr, "")
-		reason := dynamicObservationReason(observation)
-		// A kind: term warms a kind Radar isn't watching, including one whose
-		// deferred probe or watch start failed, instead of reporting it.
+		if p.DynamicCacheStopped() {
+			return Result{}, ErrConnectionChanged
+		}
+		observation := p.NamespaceObservation(gvr, "")
+		clusterScoped, gvrGroup, gvrResource := classifyDynamicScope(p, gvr, kind)
 		probeGap := observation.ProbeRetrying || len(observation.UnansweredNamespaces) > 0 || observation.ReasonCode == "scope_probe_incomplete"
-		warm := !observation.ProbeRetrying && len(q.KindFilter) > 0 && (probeGap || reason == readreason.RadarKindNotCollected || observation.State == k8score.DynamicObservationDeferred)
-		// Namespace informers sync independently, so while one is still
-		// loading the others can answer: their readiness is judged per
-		// namespace below.
-		perNamespace := probeGap || (observation.State == k8score.DynamicObservationSyncing || observation.State == k8score.DynamicObservationDenied) && observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces
+		clusterWideSynced := observation.Scope == k8score.DynamicObservationScopeCluster && observation.State == k8score.DynamicObservationSynced && !probeGap
+		planNamespaces := opts.Namespaces
+		if clusterWideSynced {
+			planNamespaces = nil
+		}
+		plan := p.PlanDynamic(gvr, planNamespaces, clusterScoped)
+		var codes []readreason.Code
+		for _, part := range plan.Partitions {
+			codes = append(codes, part.Verdict.Code)
+		}
+		reason := readreason.Primary(codes)
+		warm := !observation.ProbeRetrying && len(q.KindFilter) > 0 && (probeGap || observation.State == k8score.DynamicObservationUnwatched || observation.State == k8score.DynamicObservationDeferred)
+		perNamespace := probeGap || observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces
 		settled := reason != "" && !warm && !perNamespace
 		if settled && cov.quiet(reason) {
 			continue
 		}
-		clusterScoped, gvrGroup, gvrResource := classifyDynamicScope(p, gvr, kind)
 		if clusterScoped && skipClusterScoped {
 			continue
 		}
@@ -536,84 +526,111 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if clusterScoped || len(namespaces) == 0 {
 			namespaces = []string{""}
 		}
+		byNamespace := map[string]readplan.Verdict{}
+		for _, part := range plan.Partitions {
+			for _, ns := range part.Namespaces {
+				byNamespace[ns] = part.Verdict
+			}
+		}
 		var items []*unstructured.Unstructured
-		read := func(ns string, nsObservation k8score.DynamicResourceObservation) {
-			if reason := dynamicObservationReason(nsObservation); reason != "" {
-				kindGap(ns, reason)
-				return
-			}
-			its, err := p.ListDynamic(ctx, gvr, ns)
-			if err != nil {
-				kindGap(ns, listErrorReason(err))
-				return
-			}
-			items = append(items, its...)
-		}
-		outside := func(ns string, nsObservation k8score.DynamicResourceObservation) bool {
-			_, covered := slices.BinarySearch(nsObservation.Namespaces, ns)
-			return nsObservation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && (ns == "" || !covered)
-		}
-		// A synced cluster-wide informer covers every namespace and cannot be
-		// replaced by namespace informers. Probe gaps still need namespace-specific answers.
-		clusterWideSynced := observation.Scope == k8score.DynamicObservationScopeCluster && observation.State == k8score.DynamicObservationSynced && !probeGap
 		for _, ns := range namespaces {
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
-			if clusterWideSynced && p.DynamicCacheStopped() {
+			if p.DynamicCacheStopped() {
 				return Result{}, ErrConnectionChanged
 			}
 			nsObservation := observation
 			if !clusterWideSynced {
-				nsObservation = p.DynamicObservation(gvr, ns)
+				nsObservation = p.NamespaceObservation(gvr, ns)
 			}
-			outsideScope := outside(ns, nsObservation)
+			_, covered := slices.BinarySearch(nsObservation.Namespaces, ns)
+			outsideScope := nsObservation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && (ns == "" || !covered)
+			var warmErr error
+			warmed := false
 			if len(q.KindFilter) > 0 && !nsObservation.ProbeRetrying && (warm || outsideScope) {
-				err := p.WarmDynamic(warmCtx, gvr, ns)
-				nsObservation = p.DynamicObservation(gvr, ns)
-				outsideScope = outside(ns, nsObservation)
-				if err != nil {
-					reason := dynamicObservationReason(nsObservation)
-					if reason == "" || reason == readreason.RadarKindNotCollected {
-						reason = listErrorReason(err)
-					}
-					// Radar's collector being refused one more namespace of a
-					// kind it already watches elsewhere is its collection
-					// scope, not a denial of the kind.
-					if outsideScope && reason == readreason.RadarForbidden {
-						cov.namespaces(readreason.RadarNamespaceNotCollected, ns)
-					} else {
-						kindGap(ns, reason)
-					}
-					if ns != "" || !outsideScope {
-						continue
-					}
-				}
+				warmed = true
+				warmErr = p.WarmDynamic(warmCtx, gvr, ns)
+				nsObservation = p.NamespaceObservation(gvr, ns)
+				_, covered = slices.BinarySearch(nsObservation.Namespaces, ns)
+				outsideScope = nsObservation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && (ns == "" || !covered)
 			}
-			if nsObservation.ProbeRetrying || len(nsObservation.UnansweredNamespaces) > 0 || nsObservation.ReasonCode == "scope_probe_incomplete" {
-				kindGap(ns, dynamicObservationReason(nsObservation))
+			current := plan
+			if verdict, ok := byNamespace[ns]; ok {
+				current = readplan.Plan{Partitions: []readplan.Partition{{Extent: readplan.NamespaceSet, Namespaces: []string{ns}, Verdict: verdict}}}
+			}
+			if warmed {
+				target := []string{ns}
+				if ns == "" {
+					target = nil
+				}
+				current = p.PlanDynamic(gvr, target, clusterScoped)
+			}
+			if ns == "" && current.CollectionLimited && !nsObservation.ProbeRetrying && len(nsObservation.UnansweredNamespaces) == 0 && nsObservation.ReasonCode != "scope_probe_incomplete" {
+				cov.namespaces(readreason.RadarNamespaceNotCollected, "")
+			}
+			if warmErr != nil {
+				var codes []readreason.Code
+				for _, part := range current.Partitions {
+					codes = append(codes, part.Verdict.Code)
+				}
+				code := readreason.Primary(codes)
+				if code == "" || code == readreason.RadarKindNotCollected || code == readreason.RadarNamespaceNotCollected {
+					code = listErrorReason(warmErr)
+				}
+				if code == readreason.ConnectionChanged {
+					return Result{}, ErrConnectionChanged
+				}
+				if outsideScope && code == readreason.RadarForbidden {
+					cov.namespaces(readreason.RadarNamespaceNotCollected, ns)
+				} else {
+					kindGap(ns, code)
+				}
 				if ns != "" || !outsideScope {
 					continue
 				}
-				for _, watchedNS := range nsObservation.Namespaces {
-					if err := ctx.Err(); err != nil {
-						return Result{}, err
-					}
-					read(watchedNS, p.DynamicObservation(gvr, watchedNS))
+			}
+			for _, part := range current.Partitions {
+				if err := ctx.Err(); err != nil {
+					return Result{}, err
 				}
-				continue
-			}
-			if !outsideScope {
-				read(ns, nsObservation)
-				continue
-			}
-			cov.namespaces(readreason.RadarNamespaceNotCollected, ns)
-			if ns == "" {
-				for _, watchedNS := range nsObservation.Namespaces {
+				code := part.Verdict.Code
+				state := part.Verdict.State
+				if code == readreason.ConnectionChanged {
+					return Result{}, ErrConnectionChanged
+				}
+				targets := part.Namespaces
+				if part.Extent != readplan.NamespaceSet {
+					targets = []string{ns}
+				}
+				for _, target := range targets {
 					if err := ctx.Err(); err != nil {
 						return Result{}, err
 					}
-					read(watchedNS, p.DynamicObservation(gvr, watchedNS))
+					if p.DynamicCacheStopped() {
+						return Result{}, ErrConnectionChanged
+					}
+					switch state {
+					case readplan.OutsideCollection:
+						cov.namespaces(readreason.RadarNamespaceNotCollected, target)
+					case readplan.Gap:
+						if code == readreason.RadarForbidden && outsideScope && !slices.Contains(nsObservation.Namespaces, target) {
+							cov.namespaces(readreason.RadarNamespaceNotCollected, target)
+							continue
+						}
+						gapNS := target
+						if ns == "" && !slices.Contains(nsObservation.Namespaces, target) {
+							gapNS = ""
+						}
+						kindGap(gapNS, code)
+					case readplan.Readable:
+						its, err := p.ListDynamic(ctx, gvr, target)
+						if err != nil {
+							kindGap(target, listErrorReason(err))
+							continue
+						}
+						items = append(items, its...)
+					}
 				}
 			}
 		}

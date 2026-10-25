@@ -276,9 +276,9 @@ type existenceProbe struct {
 	asked []string
 }
 
-func (p *existenceProbe) NamespaceExists(name string) (bool, bool) {
-	p.asked = append(p.asked, name)
-	return p.fakeProvider.NamespaceExists(name)
+func (p *existenceProbe) KnownMissingNamespaces(names []string) []string {
+	p.asked = append(p.asked, names...)
+	return p.fakeProvider.KnownMissingNamespaces(names)
 }
 
 // A named namespace that doesn't exist is reported as not found to a caller

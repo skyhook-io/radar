@@ -7,6 +7,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	appsv1 "k8s.io/api/apps/v1"
@@ -48,11 +50,11 @@ type fakeProvider struct {
 	existingNamespaces []string
 }
 
-func (f *fakeProvider) NamespaceExists(name string) (bool, bool) {
+func (f *fakeProvider) KnownMissingNamespaces(names []string) []string {
 	if f.existingNamespaces == nil {
-		return false, false
+		return nil
 	}
-	return slices.Contains(f.existingNamespaces, name), true
+	return slices.DeleteFunc(slices.Clone(names), func(ns string) bool { return slices.Contains(f.existingNamespaces, ns) })
 }
 
 func (f *fakeProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
@@ -97,23 +99,62 @@ func (f *fakeProvider) DynamicResources() ([]schema.GroupVersionResource, error)
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out, nil
 }
-func (f *fakeProvider) TypedCoverage(kind string, namespaces []string) readreason.Code {
-	for _, ns := range namespaces {
-		if reason := f.typedNamespaceReasons[kind][ns]; reason != "" {
-			return readreason.Code(reason)
+func (f *fakeProvider) PlanTyped(kind string, namespaces []string) readplan.Plan {
+	extent := readplan.NamespaceSet
+	if namespaces == nil {
+		extent = readplan.AllNamespaces
+	}
+	if isClusterScopedKind(kind) {
+		extent = readplan.Cluster
+	}
+	plan := readplan.Plan{}
+	targets := namespaces
+	if extent != readplan.NamespaceSet {
+		targets = []string{""}
+	}
+	for _, ns := range targets {
+		reason := readreason.Code(f.typedNamespaceReasons[kind][ns])
+		if reason == "" {
+			reason = readreason.Code(f.typedReasons[kind])
+		}
+		state := readplan.Readable
+		if reason == readreason.RadarNamespaceNotCollected {
+			state = readplan.OutsideCollection
+		} else if reason != "" {
+			state = readplan.Gap
+		}
+		part := readplan.Partition{Extent: extent, Verdict: readplan.Verdict{State: state, Code: reason}}
+		if extent == readplan.NamespaceSet {
+			part.Namespaces = []string{ns}
+		}
+		if reason == readreason.RadarNamespaceNotCollected && namespaces == nil {
+			plan.CollectionLimited = true
+		}
+		plan.Partitions = append(plan.Partitions, part)
+	}
+	return plan
+}
+func (f *fakeProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces []string, clusterScoped bool) readplan.Plan {
+	plan := readplan.Dynamic(f, gvr, readscope.Target{Namespaces: namespaces}, clusterScoped)
+	for i := range plan.Partitions {
+		if plan.Partitions[i].Verdict.Code == readreason.KindNotWatchable && f.NamespaceObservation(gvr, "").ReasonCode == "direct_read_only" {
+			plan.Partitions[i].Verdict.Code = readreason.KindNotSearchable
 		}
 	}
-	return readreason.Code(f.typedReasons[kind])
+	return plan
 }
 func (f *fakeProvider) UnlistableKinds() []k8score.APIResource                     { return f.unlistable }
 func (f *fakeProvider) PrepareDynamicObservations(_ []schema.GroupVersionResource) {}
 func (f *fakeProvider) DynamicCacheStopped() bool                                  { return false }
 
-func (f *fakeProvider) DynamicObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation {
+func (f *fakeProvider) NamespaceObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation {
 	if o, ok := f.namespaceObservations[gvr][namespace]; ok && namespace != "" {
 		return o
 	}
 	if o, ok := f.observations[gvr]; ok {
+		if namespace != "" && o.Scope == k8score.DynamicObservationScopeExplicitNamespaces && !slices.Contains(o.Namespaces, namespace) && !slices.Contains(o.UnansweredNamespaces, namespace) {
+			o.State, o.ReasonCode = k8score.DynamicObservationUnwatched, "not_observed"
+		}
 		return o
 	}
 	return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced}
