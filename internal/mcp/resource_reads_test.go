@@ -39,6 +39,7 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/investigation"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -618,6 +619,9 @@ func listBody(t *testing.T, result *mcpsdk.CallToolResult) ([]map[string]any, li
 		(coverage.Status == resourceapi.CoveragePartial) != (len(coverage.Gaps) > 0) {
 		t.Fatalf("invalid coverage: %s", top["coverage"])
 	}
+	if err := coverage.Validate(); err != nil {
+		t.Fatalf("coverage breaks the contract: %v: %s", err, top["coverage"])
+	}
 	out := listWireCoverage{Status: string(coverage.Status), GapNamespaces: map[string][]string{}, ReadType: string(coverage.Read.Type), ScopeType: string(coverage.Scope.Type), Summary: summary, Next: next}
 	for _, gap := range coverage.Gaps {
 		out.Codes = append(out.Codes, string(gap.Code))
@@ -847,10 +851,9 @@ func TestResourceReadsCollectorCoverageRule(t *testing.T) {
 					}
 					assertNoCollectorLeak(t, err, tc.hidden...)
 					rendered, ok := readErrorResult(err)
-					mcpBody, _ := rendered.StructuredContent.(mcpReadError)
-					body := mcpBody.ReadError
-					if !ok || string(body.ErrorCode) != coverageReason(class) || body.Coverage != nil {
-						t.Fatalf("an MCP read error says what wasn't read in words, without coverage: %+v", body)
+					body, _ := rendered.StructuredContent.(mcpReadError)
+					if !ok || string(body.ErrorCode) != coverageReason(class) || body.Coverage != nil && (body.Coverage.Read != nil || body.Coverage.Validate() != nil) {
+						t.Fatalf("an MCP read error says what wasn't read in words, and any coverage it sends is valid and has no read: %+v", body)
 					}
 					return
 				}
@@ -1021,7 +1024,7 @@ func TestListSummaryBoundsNamespaceProse(t *testing.T) {
 				read[i] = fmt.Sprintf("team-%04d", count-i)
 			}
 			original := slices.Clone(read)
-			gaps := []resourceapi.Gap{{Code: readreason.RadarNamespaceNotCollected}}
+			gaps := []resourceapi.Gap{{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()}}
 			coverage := listCoverageFor(false, readTarget{}, read, false, gaps)
 			expected := slices.Clone(read)
 			slices.Sort(expected)
@@ -1041,16 +1044,14 @@ func TestListSummaryBoundsNamespaceProse(t *testing.T) {
 			case count > 1:
 				where = "namespaces " + strings.Join(quoted, ", ")
 			}
-			want := fmt.Sprintf("Partial: 1 Service from %s. Unknown: part of the scope, because Radar doesn't collect services there (%s).", where, collectionRemedy("services"))
+			want := fmt.Sprintf("Partial: 1 Service from %s. Unknown: some namespaces Radar can't name, because Radar doesn't collect services there (%s).", where, collectionRemedy("services"))
 			if got := listSummary(context.Background(), "services", 1, "Service", coverage); got != want || coverage.Status != resourceapi.CoveragePartial {
 				t.Fatalf("summary = %q, want %q", got, want)
 			}
-			// The agent can't tell whether a namespace was read when the list
-			// counts namespaces it doesn't name.
-			wantNext := ""
-			if !listed {
-				wantNext = "To check one namespace, call list_resources again with namespace set to it."
-			}
+			// The agent can't tell whether a namespace outside the read was
+			// read or skipped: the gap's extent is unknown, so naming one
+			// settles it.
+			wantNext := "To check one namespace, call list_resources again with namespace set to it."
 			if got := listNext(coverage); got != wantNext {
 				t.Fatalf("next = %q, want %q", got, wantNext)
 			}
@@ -2070,8 +2071,10 @@ func TestResourceReadErrorDetails(t *testing.T) {
 	if !ok {
 		t.Fatal(err)
 	}
-	if body := result.StructuredContent.(mcpReadError); body.ErrorCode != readreason.UserForbidden || body.Coverage != nil {
-		t.Fatalf("an exact-access failure says where in words, without coverage: %+v", body)
+	body := result.StructuredContent.(mcpReadError)
+	if body.ErrorCode != readreason.UserForbidden || body.Coverage == nil || body.Coverage.Read != nil || len(body.Coverage.Gaps) != 1 ||
+		body.Coverage.Gaps[0].Code != readreason.UserForbidden || body.Coverage.Gaps[0].Namespaces.Count != 15 {
+		t.Fatalf("an exact-access failure says where in words and as coverage: %+v", body)
 	}
 }
 
@@ -2100,7 +2103,7 @@ func TestFailedListKeepsCollectionScope(t *testing.T) {
 		t.Fatalf("want a read failure, got %v", err)
 	}
 	body := result.StructuredContent.(mcpReadError)
-	if body.ErrorCode != readreason.KindSyncPending || body.Coverage != nil ||
+	if body.ErrorCode != readreason.KindSyncPending || body.Coverage == nil || !slices.Equal(body.Coverage.NarrowedBy, []resourceapi.Narrowing{resourceapi.NarrowedByNamespaceCollection}) ||
 		!strings.Contains(body.Error, `Other namespaces are unknown: Radar collects services only in namespaces "alpha", "gamma"`) {
 		t.Fatalf("the error must say the list was narrowed to what Radar collects: %+v", body)
 	}
@@ -2410,8 +2413,14 @@ func TestFailedListNamesEveryCause(t *testing.T) {
 			t.Fatalf("missing %q in %q", want, body.Error)
 		}
 	}
-	if body.ErrorCode != readreason.UserForbidden || body.Coverage != nil || body.Next != `Retry in a minute to read namespace "beta".` {
+	if body.ErrorCode != readreason.UserForbidden || body.Next != `Retry in a minute to read namespace "beta".` {
 		t.Fatalf("body = %+v", body)
+	}
+	// error_code names only the most actionable cause; coverage keeps the
+	// other one, and where each applies, for a program to act on.
+	raw, _ := json.Marshal(body.Coverage)
+	if want := `{"status":"partial","scope":{"type":"namespaces","namespaces":{"count":2,"names":["alpha","beta"]}},"gaps":[{"code":"user_forbidden","action":"user_access","namespaces":{"count":1,"names":["alpha"]}},{"code":"kind_sync_timed_out","action":"wait","namespaces":{"count":1,"names":["beta"]}}]}`; string(raw) != want {
+		t.Fatalf("coverage = %s, want %s", raw, want)
 	}
 }
 
@@ -2613,5 +2622,40 @@ func TestCountPhraseNamesASingleRowByKind(t *testing.T) {
 	}
 	if got := onlyRowKind([]any{map[string]any{"kind": "Endpoints", "name": "api"}}); got != "Endpoints" {
 		t.Errorf("onlyRowKind = %q", got)
+	}
+}
+
+// A caller who can't see a namespace gets the same answer for it whether or
+// not Radar is pinned there, so guessing names can't find the pin. Only a
+// namespace the caller can see is reported as outside the pin.
+func TestNamespacePinIsNotRevealedToGuesses(t *testing.T) {
+	kind := setupListCoverageFixture(t, coverageTyped, true, "alpha", "payroll", "finance")
+	oldPin, oldTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("payroll")
+	t.Cleanup(func() { k8s.ForceNamespaceScope = oldPin; k8s.SetNamespaceScopeOverride(oldTarget) })
+	ctx := withRestrictedUser(t, "pin-guesser", []string{"alpha"})
+	codeFor := func(namespace string) readreason.Code {
+		_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: kind, Namespace: namespace, Context: "none"})
+		var re *readError
+		if !errors.As(err, &re) {
+			t.Fatalf("%s: want a read error, got %v", namespace, err)
+		}
+		return re.code
+	}
+	if got, other := codeFor("payroll"), codeFor("finance"); got != readreason.UserNamespaceNotVisible || other != got {
+		t.Fatalf("hidden namespaces: payroll %q, finance %q; want both %q", got, other, readreason.UserNamespaceNotVisible)
+	}
+	if got := codeFor("alpha"); got != readreason.OutsideNamespacePin {
+		t.Fatalf("a visible namespace outside the pin: %q", got)
+	}
+	// The tools that report a reason instead of a code follow the same rule.
+	for _, guess := range []string{"payroll", "finance"} {
+		if got := deniedScopeReason(ctx, []string{guess}); got != pkgopencost.ReasonAccessDenied {
+			t.Fatalf("deniedScopeReason(%s) = %q, want access denied", guess, got)
+		}
+	}
+	if got := deniedScopeReason(ctx, []string{"alpha"}); got != ReasonOutsideNamespacePin {
+		t.Fatalf("deniedScopeReason(alpha) = %q", got)
 	}
 }

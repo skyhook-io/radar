@@ -375,15 +375,20 @@ export function adaptListResources(
       ]
         .filter(Boolean)
         .join(" · "),
-      data: namespacesRead
-        ? {
-            type: "inventory",
-            resources,
-            scope,
-            namespacesRead,
-            namespacesReadOmitted: coverage!.namespacesReadOmitted,
-          }
-        : { type: "inventory", resources, scope },
+      data: {
+        type: "inventory",
+        resources,
+        scope,
+        ...(namespacesRead
+          ? {
+              namespacesRead,
+              namespacesReadOmitted: coverage!.namespacesReadOmitted,
+            }
+          : {}),
+        ...(coverage && (coverage.partial || coverage.narrowed)
+          ? { coverageNote: coverage.summary }
+          : {}),
+      },
     },
   );
 }

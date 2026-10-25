@@ -186,7 +186,7 @@ export function InventoryBody({
     ...lead,
     ...data.resources.filter((resource) => !lead.includes(resource)),
   ];
-  return (
+  const list = (
     <div className="max-h-72 overflow-y-auto rounded-md border border-theme-border">
       {rows.map((resource, index) => (
         <InventoryRow
@@ -196,6 +196,13 @@ export function InventoryBody({
           cited={lead.includes(resource)}
         />
       ))}
+    </div>
+  );
+  if (!data.coverageNote) return list;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-theme-text-secondary">{data.coverageNote}</p>
+      {list}
     </div>
   );
 }

@@ -469,6 +469,11 @@ export type InvestigationEvidenceData =
        * many to list; they were read, so they are not a gap.
        */
       namespacesReadOmitted?: number;
+      /**
+       * Radar's own sentence for a partial or narrowed list: what it didn't
+       * read and why, shown with the rows so they never read as everything.
+       */
+      coverageNote?: string;
     }
   | {
       type: "ranking";

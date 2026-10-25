@@ -13,7 +13,7 @@ import { InvestigationEvidencePane } from "../../InvestigationEvidencePane";
 import { resolveInvestigationCase } from "../../investigationCase";
 import { investigationEvidenceCoverageLimited } from "../../investigationState";
 import { StoryExcerpt } from "../../StoryExcerpt";
-import { namedInventoryRows } from "../bodies/inventory";
+import { InventoryBody, namedInventoryRows } from "../bodies/inventory";
 import type { InvestigationEvidenceTimelineItem } from "../types";
 import { evidenceRef, groupsOf, project, tool } from "../evidenceFixtures";
 
@@ -75,6 +75,16 @@ describe("a list Radar read only in some of the namespaces it collects", () => {
       inventory.latest.data.resources.map((row) => [row.namespace, row.name]),
     ).toEqual([["alpha", "alpha-object"]]);
     expect(inventory.latest.summary).toBe("1 returned · only alpha read");
+    // The rows carry Radar's own sentence: why gamma is missing, and who can
+    // widen the read, not just which namespace was read.
+    expect(inventory.latest.data.coverageNote).toBe(
+      'Partial: 1 Service from namespace "alpha". Unknown: namespace "gamma", because Radar is still loading services there. Other namespaces are unknown: Radar collects services only in namespaces "alpha", "gamma". Whoever runs Radar can widen its collection.',
+    );
+    expect(
+      renderToStaticMarkup(
+        createElement(InventoryBody, { data: inventory.latest.data }),
+      ),
+    ).toContain("because Radar is still loading services there");
     expect(inventory.latest.data.namespacesRead).toEqual(["alpha"]);
     expect(projection.limitations).toEqual([]);
     const coverageLimited = investigationEvidenceCoverageLimited(

@@ -282,7 +282,7 @@ func rightsizingWorkloadScope(ctx context.Context, input getRightsizingInput) (*
 		return nil, nil, errUnsupportedRightsizingKind(kind)
 	}
 
-	if !namespaceWithinPin(namespace) {
+	if pinExcludesVisible(ctx, []string{namespace}) {
 		return toJSONResult(rightsizingUnavailable("workload", ReasonOutsideNamespacePin))
 	}
 
@@ -412,10 +412,10 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 	}
 	var excluded []excludedNamespace
 	if listForm {
-		excluded = excludedRequestedNamespaces(requested, allowed)
+		excluded = excludedRequestedNamespaces(ctx, requested, allowed)
 	}
 	if allowed != nil && len(allowed) == 0 {
-		out := rightsizingScanUnavailable(scope, namespace, deniedScopeReason(requested))
+		out := rightsizingScanUnavailable(scope, namespace, deniedScopeReason(ctx, requested))
 		out.ExcludedNamespaces = excluded
 		setRightsizingScanGuidance(&out, input)
 		return toJSONResult(out)
@@ -669,7 +669,7 @@ func quotedList(values []string) string {
 // excludedRequestedNamespaces names each requested namespace the scope filter
 // removed. The pin is checked per name: a pin and an RBAC denial produce the
 // same missing entry, and only the pin is a startup flag rather than access.
-func excludedRequestedNamespaces(requested, allowed []string) []excludedNamespace {
+func excludedRequestedNamespaces(ctx context.Context, requested, allowed []string) []excludedNamespace {
 	if allowed == nil {
 		return nil
 	}
@@ -683,7 +683,7 @@ func excludedRequestedNamespaces(requested, allowed []string) []excludedNamespac
 			continue
 		}
 		reason := reasonNamespaceAccessDenied
-		if !namespaceWithinPin(name) {
+		if pinExcludesVisible(ctx, []string{name}) {
 			reason = ReasonOutsideNamespacePin
 		}
 		excluded = append(excluded, excludedNamespace{Name: name, Reason: reason})

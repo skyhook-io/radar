@@ -237,12 +237,30 @@ func namespaceWithinPin(namespace string) bool {
 // deniedScopeReason names why a namespace request resolved to nothing. The pin
 // and an RBAC denial are indistinguishable in the resulting namespace list, so
 // the cause has to be re-derived from configuration: "you cannot read this"
-// and "radar was started with --namespace-scope" need different answers.
-func deniedScopeReason(requested []string) string {
-	if _, ok := clampToNamespacePin(requested); !ok {
+// and "radar was started with --namespace-scope" need different answers. The
+// pin is the answer only for namespaces the caller can see: one they can't is
+// an access denial either way, so guessing names can't find the pin.
+func deniedScopeReason(ctx context.Context, requested []string) string {
+	if pinExcludesVisible(ctx, requested) {
 		return ReasonOutsideNamespacePin
 	}
 	return pkgopencost.ReasonAccessDenied
+}
+
+// pinExcludesVisible reports whether the --namespace pin excludes a request
+// once it is limited to the namespaces the caller can see.
+func pinExcludesVisible(ctx context.Context, requested []string) bool {
+	if requested == nil {
+		return false
+	}
+	if visible := filterNamespacesForUser(ctx, requested); visible != nil {
+		if len(visible) == 0 {
+			return false
+		}
+		requested = visible
+	}
+	_, ok := clampToNamespacePin(requested)
+	return !ok
 }
 
 // ReasonOutsideNamespacePin marks a request the --namespace pin excluded,

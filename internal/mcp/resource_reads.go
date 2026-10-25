@@ -31,9 +31,9 @@ type readError struct {
 	code   readreason.Code
 	err    error
 	unread *gapSet
-	// coverage is attached by a list, which knows the read's scope. An MCP
-	// error doesn't send it: the error sentence says the same in words, and
-	// next is computed from its gaps.
+	// coverage is attached by a list, which knows the read's scope. It is
+	// sent beside the sentence, so a program sees every cause and the
+	// namespaces each affects, not only the most actionable code.
 	coverage *resourceapi.Coverage
 	// next is what the agent can do itself to get an answer, when it depends
 	// on the request; otherwise the code decides (errorNext).
@@ -66,7 +66,7 @@ func readErrorResult(err error) (*mcp.CallToolResult, bool) {
 	if next == "" {
 		next = errorNext(re.code)
 	}
-	body := mcpReadError{ReadError: resourceapi.ReadError{Error: re.err.Error(), ErrorCode: re.code}, Next: next}
+	body := mcpReadError{Error: re.err.Error(), ErrorCode: re.code, Next: next, Coverage: re.coverage}
 	text, marshalErr := json.Marshal(body)
 	if marshalErr != nil {
 		return nil, false
@@ -79,11 +79,14 @@ func readErrorResult(err error) (*mcp.CallToolResult, bool) {
 	return result, true
 }
 
-// mcpReadError is the shared failure body plus `next`, which only MCP sends:
-// it is addressed to the agent, which REST's readers are not.
+// mcpReadError is resourceapi.ReadError plus `next`, which only MCP sends: it
+// is addressed to the agent, which REST's readers are not. next comes before
+// coverage so a client that keeps only the head of a long result keeps it.
 type mcpReadError struct {
-	resourceapi.ReadError
-	Next string `json:"next,omitempty"`
+	Error     string                `json:"error"`
+	ErrorCode readreason.Code       `json:"error_code"`
+	Next      string                `json:"next,omitempty"`
+	Coverage  *resourceapi.Coverage `json:"coverage,omitempty"`
 }
 
 // errorNext is what an agent can do itself after a failure with code, or ""
@@ -157,13 +160,26 @@ type readTarget struct {
 
 func resolveReadTarget(ctx context.Context, requested []string) (readTarget, error) {
 	target := readTarget{explicit: requested != nil}
-	clamped, ok := clampToNamespacePin(requested)
-	if !ok {
-		return target, readErrorf(readreason.OutsideNamespacePin, "Radar is limited to other namespaces by its --namespace-scope setting, so it can't read namespace %q. Whoever runs Radar sets --namespace-scope.", namespaceForError(requested))
-	}
 	user, perms, checked := resolveUserPermsDecision(ctx)
 	if !checked {
 		return target, readErrorf(readreason.UserPermissionCheckFailed, "Radar couldn't check which namespaces you can access, so it read nothing.")
+	}
+	// The pin is judged only against namespaces the caller can see: one they
+	// can't is answered the same whether or not Radar is pinned to it, so
+	// guessing names can't find the pin.
+	clamped, ok := clampToNamespacePin(requested)
+	outside := requested
+	if visible := pkgauth.FilterNamespacesForUser(requested, user, perms); requested != nil && visible != nil {
+		if len(visible) == 0 {
+			// Nothing named is visible: answered below as not visible.
+			clamped, ok = requested, true
+		} else {
+			clamped, ok = clampToNamespacePin(visible)
+			outside = visible
+		}
+	}
+	if !ok {
+		return target, readErrorf(readreason.OutsideNamespacePin, "Radar is limited to other namespaces by its --namespace-scope setting, so it can't read namespace %q. Whoever runs Radar sets --namespace-scope.", namespaceForError(outside))
 	}
 	allowed := pkgauth.FilterNamespacesForUser(clamped, user, perms)
 	unrestricted := pkgauth.FilterNamespacesForUser(nil, user, perms) == nil
@@ -312,7 +328,7 @@ func resourcePermissionErrorNext(ctx context.Context, checked bool, verb, group,
 }
 
 // gapSet collects the namespaces a read could not serve, by code. A code
-// recorded with no namespaces reaches an unknown part of the scope.
+// recorded with no namespaces reaches the whole scope.
 type gapSet struct {
 	namespaces map[readreason.Code][]string
 	unknown    map[readreason.Code]bool
@@ -376,17 +392,24 @@ func (g *gapSet) codes() []readreason.Code {
 	return codes
 }
 
-// gaps renders the set, most actionable first. Namespaces are projected to
-// what the caller may see; a code whose every namespace is hidden keeps its
-// gap with no namespaces, because the gap is real but its extent is not
-// theirs to learn.
-func (g *gapSet) gaps(ctx context.Context, limit int) []resourceapi.Gap {
+// gaps renders the set, most actionable first, each with the namespaces it
+// reaches: all of the scope for a code recorded without namespaces, otherwise
+// the ones the caller may see. A code whose every namespace is hidden keeps
+// its gap with an unknown extent, because the gap is real but where it lies
+// is not theirs to learn. A cluster-scoped kind's gaps have no namespaces.
+func (g *gapSet) gaps(ctx context.Context, limit int, clusterScoped bool) []resourceapi.Gap {
 	out := []resourceapi.Gap{}
 	for _, code := range g.codes() {
 		gap := resourceapi.Gap{Code: code}
-		if !g.unknown[code] {
+		switch {
+		case clusterScoped:
+		case g.unknown[code]:
+			gap.Namespaces = resourceapi.AllNames()
+		default:
 			if visible := callerVisibleNamespaces(ctx, g.namespaces[code]); len(visible) > 0 {
 				gap.Namespaces = resourceapi.Names(visible, limit)
+			} else {
+				gap.Namespaces = resourceapi.UnknownNames()
 			}
 		}
 		out = append(out, gap)
@@ -450,7 +473,7 @@ func withListCoverage(ctx context.Context, err error, resource string, target re
 	if !errors.As(err, &re) || re.unread == nil {
 		return err
 	}
-	cov := &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: listScope(target, clusterScoped), Gaps: re.unread.gaps(ctx, resourceapi.MCPSetLimit)}
+	cov := &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: listScope(target, clusterScoped), Gaps: re.unread.gaps(ctx, resourceapi.MCPSetLimit, clusterScoped)}
 	if !clusterScoped {
 		cov.NarrowedBy = target.narrowedBy
 	}
@@ -649,7 +672,7 @@ func narrowingRemedy(by []resourceapi.Narrowing) string {
 // other than the agent can change that. What the agent can do itself is
 // listNext's.
 func gapSentence(ctx context.Context, resource string, gap resourceapi.Gap) string {
-	where := "part of the scope"
+	where := "all of it"
 	if gap.Namespaces != nil {
 		where = namespacePhrase(gap.Namespaces)
 	}
@@ -749,7 +772,9 @@ func retryAfter(code readreason.Code) string {
 // countsUnnamedNamespaces reports a list whose scope, read or gaps count more
 // namespaces than they name.
 func countsUnnamedNamespaces(cov resourceapi.Coverage) bool {
-	unnamed := func(set *resourceapi.NameSet) bool { return set != nil && set.Names == nil }
+	unnamed := func(set *resourceapi.NameSet) bool {
+		return set != nil && (set.Extent == resourceapi.ExtentUnknown || set.Extent == "" && set.Names == nil)
+	}
 	if unnamed(cov.Scope.Namespaces) || (cov.Read != nil && unnamed(cov.Read.Namespaces)) {
 		return true
 	}
@@ -759,6 +784,12 @@ func countsUnnamedNamespaces(cov resourceapi.Coverage) bool {
 // namespacePhrase names a set of namespaces, or counts them when the set is
 // too large to list.
 func namespacePhrase(set *resourceapi.NameSet) string {
+	switch set.Extent {
+	case resourceapi.ExtentAll:
+		return "every namespace asked about"
+	case resourceapi.ExtentUnknown:
+		return "some namespaces Radar can't name"
+	}
 	if set.Names == nil {
 		return fmt.Sprintf("%d namespaces", set.Count)
 	}

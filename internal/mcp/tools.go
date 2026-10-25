@@ -1007,7 +1007,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	if !resourceReadCacheIsCurrent(cache) {
 		return nil, nil, errConnectionChanged()
 	}
-	return listResult(ctx, kind, results, listCoverageFor(clusterScoped, target, read, readAll, gaps.gaps(ctx, resourceapi.MCPSetLimit)))
+	return listResult(ctx, kind, results, listCoverageFor(clusterScoped, target, read, readAll, gaps.gaps(ctx, resourceapi.MCPSetLimit, clusterScoped)))
 }
 
 // listDynamicResources lists a kind the dynamic cache serves. namespaces is
@@ -1177,7 +1177,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 	if !current() {
 		return nil, nil, errConnectionChanged()
 	}
-	return listResult(ctx, collector.resource, allItems, listCoverageFor(clusterScoped, target, read, readAll, gaps.gaps(ctx, resourceapi.MCPSetLimit)))
+	return listResult(ctx, collector.resource, allItems, listCoverageFor(clusterScoped, target, read, readAll, gaps.gaps(ctx, resourceapi.MCPSetLimit, clusterScoped)))
 }
 
 // readErrorCodeOf classifies one namespace's failed dynamic read. An API

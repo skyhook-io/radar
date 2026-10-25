@@ -526,7 +526,7 @@ A partial response carries a `reason`, and `guidance` names the causes that are 
 
 ### The `--namespace-scope` pin is not an access denial
 
-A pin and an RBAC restriction produce the same namespace list. A request the pin excludes returns `reason: outside_namespace_pin` and a `remediation` naming the flag — never `access_denied`, which would tell a cluster-admin their permissions are the problem.
+A pin and an RBAC restriction produce the same namespace list. A request the pin excludes returns `reason: outside_namespace_pin` and a `remediation` naming the flag — never `access_denied`, which would tell a cluster-admin their permissions are the problem. That applies to namespaces the caller can see; one they can't is `access_denied` whether or not Radar is pinned to it, so guessing names can't find the pin.
 
 ### Trend responses are pre-summarized
 
@@ -594,7 +594,7 @@ truncation that keeps only the head of a long result:
     "scope": {"type": "namespaces", "namespaces": {"count": 2, "names": ["alpha", "gamma"]}},
     "narrowedBy": ["user_access"],
     "read": {"type": "namespaces", "namespaces": {"count": 1, "names": ["alpha"]}},
-    "gaps": [{"code": "kind_sync_pending", "namespaces": {"count": 1, "names": ["gamma"]}}]
+    "gaps": [{"code": "kind_sync_pending", "action": "retry", "namespaces": {"count": 1, "names": ["gamma"]}}]
   },
   "items": [{"kind": "Service", "name": "api", "namespace": "alpha"}]
 }
@@ -617,17 +617,38 @@ truncation that keeps only the head of a long result:
 - **`status`** is relative to `scope`: `complete` means Radar's watch of every
   namespace in it has loaded, so missing rows are absent from what Radar
   observes *within that scope*; `partial` means `gaps` names what it did not
-  read. A complete list with `narrowedBy` is still not the cluster.
-- **`read`** is what Radar read within `scope`.
-- **`gaps[]`** each carry a `code` and, when known, the `namespaces` affected.
-  A gap without namespaces reaches an unknown part of the scope — for example,
-  the namespaces a namespace-limited Radar doesn't collect — never "none".
+  read. A complete list with `narrowedBy` is still not the cluster. `status`
+  keeps this meaning: watch freshness or paging, if added, get fields of their
+  own.
+- **`read`** is what Radar read within `scope`. `read` and the gaps don't
+  overlap and together make up `scope`, so on a complete answer `read` equals
+  `scope`.
+- **`gaps[]`** are the reasons the answer isn't complete. Each has a `code`,
+  the `action` that code calls for (the same table as below, so a client that
+  doesn't know a newer code still knows whether to retry), and where it
+  applies. For a namespaced kind every gap states its `namespaces`: a set, or
+  `{"extent": "all"}` for every namespace in scope (the kind is still loading
+  everywhere, say), or `{"extent": "unknown"}` when Radar can't say which. A
+  cluster-scoped kind's gaps have no `namespaces`. A namespace is in at most
+  one gap.
 
-Namespace sets are `{count, names}`. `names` lists every member, sorted, when
-there are at most sixteen (64 on REST); above that it is absent and only `count`
-says how many, so a reader knows a namespace's membership from `names` or not
-at all. The same holds for a gap's `kinds` and `objects`. `items` is `[]` when
-the namespaces read hold nothing.
+Namespace sets are `{count, names}`. `count` is exact. `names`, when present,
+lists every member, sorted; it is absent when there are more than the answer
+can carry (sixteen on MCP, fewer on REST when one response carries many sets),
+and then only `count` says how many. A reader knows a namespace's membership
+from `names` or not at all. The same holds for a gap's `kinds` and `objects`.
+`items` is `[]` when the namespaces read hold nothing.
+
+What Radar doesn't collect shows up in one of two ways. When it knows the
+namespaces it collects a kind in, an unscoped request is narrowed to them
+(`narrowedBy: namespace_collection`) and can be complete within them. A
+namespace you name that Radar doesn't collect stays in scope as a
+`radar_namespace_not_collected` gap.
+
+A client meeting a value it doesn't know treats it conservatively: an unknown
+`code` as an incomplete answer, with no remedy beyond its `action`; an unknown
+`narrowedBy` as narrowed; an unknown `scope` type as grounds for no
+completeness or absence claim.
 
 Each namespace is read on its own. A namespace whose informer is still loading
 becomes a gap, and the other namespaces' rows are still returned. This holds
@@ -654,7 +675,8 @@ The browser namespace picker does not scope MCP requests.
 A list fails only when it returns no usable inventory: Radar read nothing in
 its scope, its cluster connection changed mid-read, or the answer was over its
 size budget. A failed read's `structuredContent` and its only text block are
-the same body, `{error, error_code, next?}`:
+the same body, `{error, error_code, next?, coverage?}`. A list's error carries
+the `coverage` Radar assessed, without `read`: an error returns no rows.
 
 ```json
 {
@@ -668,11 +690,11 @@ as on lists (`namespace_required`: set `namespace`, or `search` for
 `kind:<kind> <name>`; `object_not_found`: the same name under another kind or
 namespace, else that `search`). A list that read nothing takes its `next` from
 every gap, so a retry that would recover one namespace is offered even when
-the code names a denial. An MCP error carries no `coverage`; its sentence says
-what coverage would: when namespaces failed for different reasons it names every
-cause and the namespaces each affects, with `error_code` the most actionable of
-them, and when something other than your own access narrowed an unscoped
-request (what Radar collects, or its pin) it says that too. A get of an object that isn't there is
+the code names a denial. `error_code` is the most actionable cause; when
+namespaces failed for different reasons, `coverage` has a gap for each, and the
+sentence names every cause and the namespaces each affects. When something
+other than your own access narrowed an unscoped request (what Radar collects,
+or its pin), the sentence says that too. A get of an object that isn't there is
 `object_not_found`, and only once Radar has confirmed it read that namespace;
 otherwise the code says why it couldn't look.
 
@@ -691,7 +713,7 @@ otherwise the code says why it couldn't look.
 | `radar_kind_not_collected` | Radar's setup leaves the kind out. | Radar's collection configuration |
 | `kind_not_watchable` | The API can't be list/watched. | Use another tool; retrying won't help |
 | `kind_unknown` | The kind isn't in the catalog or discovery. Before answering this, Radar refreshes discovery (at most every 30 seconds), so a custom resource installed since the last refresh resolves. When discovery failed for the group the request named, or Radar's last discovery refresh failed outright, the answer is `read_error` instead: the kind may exist behind an API that isn't answering. | Check spelling, `group`, and installation |
-| `outside_namespace_pin` | The namespace is outside Radar's `--namespace-scope` pin. | Radar's `--namespace-scope` setting |
+| `outside_namespace_pin` | The namespace, one you can see, is outside Radar's `--namespace-scope` pin. A namespace you can't see is `user_namespace_not_visible` whether or not Radar is pinned to it, so guessing names can't find the pin. | Radar's `--namespace-scope` setting |
 | `namespace_required` | A namespaced `get_resource` needs a namespace. | Pass `namespace` |
 | `object_not_found` | The object is absent from a namespace Radar read in full. | — it is an answer |
 | `cluster_connecting` | Radar is still connecting. | Retry shortly |

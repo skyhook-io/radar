@@ -8,6 +8,7 @@ package resourceapi
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -68,13 +69,44 @@ const (
 	NarrowedByKindCollection Narrowing = "kind_collection"
 )
 
-// NameSet is a known, finite set of names. Names, when present, is all of
-// them, sorted; it is absent when there are more than the response's cap, and
-// then only Count says how many. A reader learns membership from Names or not
-// at all.
+// Extent says how much of the answer's scope a gap reaches along one axis
+// when the gap can't list it.
+type Extent string
+
+const (
+	// ExtentAll: every member of the scope along that axis.
+	ExtentAll Extent = "all"
+	// ExtentUnknown: some members, and Radar can't say which.
+	ExtentUnknown Extent = "unknown"
+)
+
+// NameSet is a set of names. Either it is listed: Count says exactly how many
+// members there are, and Names, when present, is all of them, sorted (absent
+// when there are more than the response can carry, at any size; a reader
+// learns membership from Names or not at all). Or Extent says the gap reaches
+// all of the scope, or an unknown part of it, and carries no count.
 type NameSet struct {
-	Count int      `json:"count"`
-	Names []string `json:"names,omitzero"`
+	Count  int      `json:"count"`
+	Names  []string `json:"names,omitzero"`
+	Extent Extent   `json:"extent,omitempty"`
+}
+
+// AllNames is a gap's namespaces when it reaches every namespace in scope.
+func AllNames() *NameSet { return &NameSet{Extent: ExtentAll} }
+
+// UnknownNames is a gap's namespaces when it reaches some, Radar can't say
+// which.
+func UnknownNames() *NameSet { return &NameSet{Extent: ExtentUnknown} }
+
+// MarshalJSON writes an extent set as {"extent": …} alone: it has no count.
+func (s NameSet) MarshalJSON() ([]byte, error) {
+	if s.Extent != "" {
+		return json.Marshal(struct {
+			Extent Extent `json:"extent"`
+		}{s.Extent})
+	}
+	type wire NameSet
+	return json.Marshal(wire(s))
 }
 
 // Names builds a NameSet from names, which must already be safe to show the
@@ -88,8 +120,8 @@ func Names(names []string, limit int) *NameSet {
 
 // Capped is the set as a response with a smaller cap would carry it.
 func (s *NameSet) Capped(limit int) *NameSet {
-	if s == nil {
-		return nil
+	if s == nil || s.Extent != "" {
+		return s
 	}
 	return &NameSet{Count: s.Count, Names: listed(s.Names, s.Count, limit)}
 }
@@ -102,8 +134,27 @@ type KindRef struct {
 
 // KindSet is a NameSet of kinds.
 type KindSet struct {
-	Count int       `json:"count"`
-	Names []KindRef `json:"names,omitzero"`
+	Count  int       `json:"count"`
+	Names  []KindRef `json:"names,omitzero"`
+	Extent Extent    `json:"extent,omitempty"`
+}
+
+// AllKinds is a gap's kinds when it reaches every kind in scope.
+func AllKinds() *KindSet { return &KindSet{Extent: ExtentAll} }
+
+// UnknownKinds is a gap's kinds when it reaches some, Radar can't say which:
+// the catalog of kinds itself couldn't be read.
+func UnknownKinds() *KindSet { return &KindSet{Extent: ExtentUnknown} }
+
+// MarshalJSON writes an extent set as {"extent": …} alone, as NameSet does.
+func (s KindSet) MarshalJSON() ([]byte, error) {
+	if s.Extent != "" {
+		return json.Marshal(struct {
+			Extent Extent `json:"extent"`
+		}{s.Extent})
+	}
+	type wire KindSet
+	return json.Marshal(wire(s))
 }
 
 func Kinds(kinds []KindRef, limit int) *KindSet {
@@ -116,8 +167,8 @@ func Kinds(kinds []KindRef, limit int) *KindSet {
 }
 
 func (s *KindSet) Capped(limit int) *KindSet {
-	if s == nil {
-		return nil
+	if s == nil || s.Extent != "" {
+		return s
 	}
 	return &KindSet{Count: s.Count, Names: listed(s.Names, s.Count, limit)}
 }
@@ -177,35 +228,155 @@ type Scope struct {
 	Namespaces *NameSet  `json:"namespaces,omitempty"`
 }
 
-// Gap is part of the scope Radar did not read, and why. It covers every
-// combination of its present dimensions: kinds × namespaces, or the objects
-// named. Objects never appears with Kinds or Namespaces. An absent dimension
-// is not narrowed — the gap may reach any kind or namespace of the answer, to
-// an unknown extent — never "none".
+// Gap is one reason the answer isn't complete, and where it applies. It
+// covers every combination of its axes: kinds × namespaces, or the objects
+// named. An axis that applies is always present, listed or as an Extent; an
+// absent axis doesn't apply to the gap. Which axes apply depends on the
+// surface: a list of a namespaced kind gives every gap its namespaces, a list
+// of a cluster-scoped kind none, a search kinds or namespaces, and a filter
+// failure only objects. Within one Coverage a namespace is in at most one gap.
+//
+// Action is what the code calls for, from the same table as readreason, so a
+// client that doesn't know a newer code still knows what to do. Producers
+// leave it empty; marshaling fills it.
 type Gap struct {
-	Code       readreason.Code `json:"code"`
-	Kinds      *KindSet        `json:"kinds,omitempty"`
-	Namespaces *NameSet        `json:"namespaces,omitempty"`
-	Objects    *ObjectSet      `json:"objects,omitempty"`
+	Code       readreason.Code   `json:"code"`
+	Action     readreason.Action `json:"action,omitempty"`
+	Kinds      *KindSet          `json:"kinds,omitempty"`
+	Namespaces *NameSet          `json:"namespaces,omitempty"`
+	Objects    *ObjectSet        `json:"objects,omitempty"`
+}
+
+// MarshalJSON writes the code's action beside it.
+func (g Gap) MarshalJSON() ([]byte, error) {
+	if g.Action == "" {
+		g.Action, _ = readreason.ActionFor(g.Code)
+	}
+	type wire Gap
+	return json.Marshal(wire(g))
 }
 
 // Coverage qualifies a single-kind read: a list, or the per-kind entries of a
-// count. Status is relative to Scope. An explicit target (namespaces the
-// request named) stays the scope, and what of it could not be read is a gap;
-// an implicitly broad request's scope is what remained after NarrowedBy, so
-// "complete" there means complete within that narrowed scope only. It does
-// not assert continuous watch health.
+// count. Status is relative to Scope: complete means Radar's initial read of
+// all of it has loaded, and will keep meaning that; freshness or paging, if
+// added, come as separate fields. An explicit target (namespaces the request
+// named) stays the scope, and what of it could not be read is a gap; an
+// implicitly broad request's scope is what remained after NarrowedBy, so
+// "complete" there means complete within that narrowed scope only.
 //
-// Read is what Radar read within Scope. Every successful answer has it; on an
-// error it is absent: the error returns no rows, though Radar may have read
-// some and discarded them (its connection changed mid-read, or the answer was
-// over its size budget).
+// Read is what Radar read within Scope, on every successful answer. Read and
+// the gaps don't overlap and together make up Scope, so a complete answer's
+// Read equals its Scope. An error body never has Read: it returns no rows,
+// though Radar may have read some and discarded them (its connection changed
+// mid-read, or the answer was over its size budget).
+//
+// A client meeting a value it doesn't know treats it conservatively: an
+// unknown code as an incomplete answer with no remedy guessed beyond its
+// Action, an unknown narrowing as a narrowed one, and an unknown scope type as
+// grounds for no completeness or absence claim.
 type Coverage struct {
 	Status     CoverageStatus `json:"status"`
 	Scope      Scope          `json:"scope"`
 	NarrowedBy []Narrowing    `json:"narrowedBy,omitempty"`
 	Read       *Scope         `json:"read,omitempty"`
 	Gaps       []Gap          `json:"gaps"`
+}
+
+// Validate reports the first way c breaks the contract above, for producers'
+// tests: status agrees with the gaps; scope and read carry a set exactly when
+// their type is namespaces; a namespaced scope's gaps all state namespaces
+// and a cluster scope's none; listed sets are sorted, unique and as large as
+// their count; gaps and read don't overlap; and, where everything is listed,
+// read and the gaps make up scope.
+func (c Coverage) Validate() error {
+	if (c.Status == CoverageComplete) != (len(c.Gaps) == 0) || (c.Status != CoverageComplete && c.Status != CoveragePartial) {
+		return fmt.Errorf("status %q with %d gaps", c.Status, len(c.Gaps))
+	}
+	for _, sc := range []*Scope{&c.Scope, c.Read} {
+		if sc == nil {
+			continue
+		}
+		if (sc.Type == ScopeNamespaces) != (sc.Namespaces != nil) {
+			return fmt.Errorf("scope type %q with namespaces %v", sc.Type, sc.Namespaces)
+		}
+		if err := sc.Namespaces.validListed(); err != nil {
+			return err
+		}
+	}
+	if c.Read != nil && c.Read.Type != c.Scope.Type && !(c.Scope.Type == ScopeAllNamespaces && c.Read.Type == ScopeNamespaces) {
+		return fmt.Errorf("read type %q within scope type %q", c.Read.Type, c.Scope.Type)
+	}
+	seen := map[string]bool{}
+	if c.Read != nil && c.Read.Namespaces != nil {
+		for _, ns := range c.Read.Namespaces.Names {
+			seen[ns] = true
+		}
+	}
+	listedTotal := 0
+	allListed := c.Read == nil || c.Read.Type == ScopeNamespaces
+	if c.Read != nil && c.Read.Namespaces != nil {
+		listedTotal = c.Read.Namespaces.Count
+	}
+	for _, gap := range c.Gaps {
+		if gap.Code == "" {
+			return fmt.Errorf("gap without a code")
+		}
+		if gap.Objects != nil {
+			if gap.Kinds != nil || gap.Namespaces != nil {
+				return fmt.Errorf("gap %s: objects with kinds or namespaces", gap.Code)
+			}
+			continue
+		}
+		switch {
+		case c.Scope.Type == ScopeCluster && gap.Namespaces != nil:
+			return fmt.Errorf("gap %s: namespaces on a cluster-scoped answer", gap.Code)
+		case c.Scope.Type != ScopeCluster && gap.Namespaces == nil:
+			return fmt.Errorf("gap %s: no namespaces on a namespaced answer", gap.Code)
+		}
+		if gap.Namespaces == nil {
+			continue
+		}
+		if gap.Namespaces.Extent != "" {
+			if gap.Namespaces.Extent != ExtentAll && gap.Namespaces.Extent != ExtentUnknown || gap.Namespaces.Count != 0 || gap.Namespaces.Names != nil {
+				return fmt.Errorf("gap %s: extent set %+v", gap.Code, *gap.Namespaces)
+			}
+			allListed = false
+			continue
+		}
+		if err := gap.Namespaces.validListed(); err != nil {
+			return fmt.Errorf("gap %s: %w", gap.Code, err)
+		}
+		listedTotal += gap.Namespaces.Count
+		for _, ns := range gap.Namespaces.Names {
+			if seen[ns] {
+				return fmt.Errorf("namespace %q is in two of read and the gaps", ns)
+			}
+			seen[ns] = true
+		}
+	}
+	if allListed && c.Read != nil && c.Scope.Namespaces != nil && listedTotal != c.Scope.Namespaces.Count {
+		return fmt.Errorf("read and gaps count %d namespaces, scope %d", listedTotal, c.Scope.Namespaces.Count)
+	}
+	if allListed && c.Read != nil && c.Scope.Namespaces != nil && c.Scope.Namespaces.Names != nil && len(seen) == c.Scope.Namespaces.Count {
+		for _, ns := range c.Scope.Namespaces.Names {
+			if !seen[ns] {
+				return fmt.Errorf("scope namespace %q is in neither read nor a gap", ns)
+			}
+		}
+	}
+	return nil
+}
+
+// validListed checks a listed set: count not negative, names (when present)
+// sorted, unique and exactly count of them. A nil set or an extent set passes.
+func (s *NameSet) validListed() error {
+	if s == nil || s.Extent != "" {
+		return nil
+	}
+	if s.Count < 0 || s.Names != nil && (len(s.Names) != s.Count || !slices.IsSorted(s.Names) || len(slices.Compact(slices.Clone(s.Names))) != len(s.Names)) {
+		return fmt.Errorf("set %+v isn't a sorted list of its %d members", *s, s.Count)
+	}
+	return nil
 }
 
 // MarshalJSON writes no gaps as [], never null: consumers can rely on gaps
