@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -29,7 +30,7 @@ func TestExplicitSearchWarmsRequestedNamespace(t *testing.T) {
 			if fail {
 				p.warmError = errors.New("watch failed")
 			}
-			res, err := Search(context.Background(), p, Parse("kind:Widget"), Options{Namespaces: []string{"a", "b"}})
+			res, err := Search(context.Background(), p, Parse("kind:Widget"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}})
 			if err != nil || partial(res) != fail || !reflect.DeepEqual(p.warmNamespaces, []string{"b"}) {
 				t.Fatalf("result=%+v err=%v warmed=%v", res, err, p.warmNamespaces)
 			}

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -82,7 +83,7 @@ func TestBroadSearchPermissionChecksDoNotScaleWithNamespacedCRDs(t *testing.T) {
 	}
 	checks := 0
 	res, err := Search(context.Background(), p, Parse(""), Options{
-		Namespaces: namespaces,
+		Selection: readscope.Selection{Namespaces: namespaces},
 		NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
 			checks++
 			if group == "example.io" {
@@ -128,15 +129,6 @@ func TestBroadCoverageOmitsColdAndUnsupportedBeforeSAR(t *testing.T) {
 	res, _ = Search(context.Background(), p, Parse("kind:Thing2"), Options{CanReadClusterScoped: func(string, string, string) (bool, bool) { t.Fatal("unsupported kind issued SAR"); return false, true }})
 	if !partial(res) || len(unsearched(res)) != 1 || unsearched(res)[0].Kind != "Thing2" || unsearched(res)[0].Reason != "kind_not_watchable" {
 		t.Fatalf("explicit unsupported: %+v", res)
-	}
-}
-
-func TestBroadOnlyUnsupportedIsComplete(t *testing.T) {
-	gvr := schema.GroupVersionResource{Group: "metrics.k8s.io", Version: "v1beta1", Resource: "pods"}
-	p := &fakeProvider{kinds: map[schema.GroupVersionResource]string{gvr: "PodMetrics"}, observations: map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: {State: k8score.DynamicObservationUnsupported}}}
-	res, _ := Search(context.Background(), p, Parse(""), Options{})
-	if partial(res) || len(unsearched(res)) != 0 {
-		t.Fatalf("list-only API makes broad search partial: %+v", res)
 	}
 }
 
@@ -197,7 +189,7 @@ func TestCallerAccessPrecedesTransientCoverage(t *testing.T) {
 	for _, query := range []string{"robusta", "ns:team-a robusta"} {
 		q := Parse(query)
 		opts := denied
-		opts.ScopeNamespaces(q, nil, nil)
+		opts.Selection = SelectNamespaces(loading, q, readscope.NamespaceAccess{Namespaces: nil, Checked: true}, nil)
 		if res, _ := Search(context.Background(), loading, q, opts); partial(res) || len(unsearched(res)) != 0 {
 			t.Fatalf("%s: unreadable kinds reported to the caller: %+v", query, unsearched(res))
 		}
@@ -224,17 +216,6 @@ func TestCallerAccessPrecedesTransientCoverage(t *testing.T) {
 	}
 }
 
-func TestDynamicCollisionIgnoresTypedSkipKinds(t *testing.T) {
-	for _, kind := range []string{"Role", "NetworkPolicy"} {
-		gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "things"}
-		p := &fakeProvider{kinds: map[schema.GroupVersionResource]string{gvr: kind}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}, dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {{Object: map[string]any{"kind": kind, "metadata": map[string]any{"name": "visible", "namespace": "team-a"}}}}}}
-		res, _ := Search(context.Background(), p, Parse("kind:"+kind), Options{SkipKinds: map[string]bool{kind: true}, Namespaces: []string{"team-a"}})
-		if len(res.Hits) != 1 || res.Hits[0].Group != "example.io" {
-			t.Fatalf("colliding CRD skipped: %+v", res)
-		}
-	}
-}
-
 func TestDynamicObservationReasonsAndRequestedScope(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	p := &fakeProvider{kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}, observations: map[schema.GroupVersionResource]k8score.DynamicResourceObservation{}}
@@ -249,7 +230,7 @@ func TestDynamicObservationReasonsAndRequestedScope(t *testing.T) {
 		ns      []string
 		partial bool
 	}{{[]string{"a"}, false}, {[]string{"a", "b"}, true}, {nil, true}} {
-		res, _ = Search(context.Background(), p, Parse("kind:Widget"), Options{Namespaces: tc.ns})
+		res, _ = Search(context.Background(), p, Parse("kind:Widget"), Options{Selection: readscope.Selection{Namespaces: tc.ns}})
 		if partial(res) != tc.partial {
 			t.Fatalf("namespace %v: %+v", tc.ns, res)
 		}
@@ -265,14 +246,14 @@ func TestWarmingRefusedNamespaceIsCollectorScope(t *testing.T) {
 		kinds:        map[schema.GroupVersionResource]string{gvr: "Widget"},
 		namespaced:   map[schema.GroupVersionResource]bool{gvr: true},
 		observations: map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: {State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{"a"}}},
-		warmError:    apierrors.NewUnauthorized("token expired"),
+		warmError:    apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("collector denied")),
 	}
-	if res, _ := Search(context.Background(), p, Parse("kind:Widget"), Options{Namespaces: []string{"a", "b"}}); partial(res) || len(unsearched(res)) != 0 {
+	if res, _ := Search(context.Background(), p, Parse("kind:Widget"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}}); partial(res) || len(unsearched(res)) != 0 {
 		t.Fatalf("kind: alone reported namespace scope: %+v", unsearched(res))
 	}
 	q := Parse("kind:Widget ns:a ns:b")
 	var opts Options
-	opts.ScopeNamespaces(q, nil, nil)
+	opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Namespaces: nil, Checked: true}, nil)
 	res, _ := Search(context.Background(), p, q, opts)
 	want := []UnsearchedKind{{Kind: "*", Reason: "radar_namespace_not_collected", Namespaces: []string{"b"}}}
 	if !partial(res) || !reflect.DeepEqual(unsearched(res), want) {

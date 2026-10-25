@@ -9,6 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -48,10 +49,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// pin, gated per kind. globalNs=1 (the omnibar's ⌘K and Radar Hub's fleet
 	// search) is accepted and asks for exactly this.
 	ceiling, namespaceCheckFailed := s.getUserNamespacesWithStatus(r, parseNamespaces(r.URL.Query()))
-	visible := ceiling
-	if !namespaceCheckFailed {
-		visible = s.parseNamespacesForUser(r)
-	}
 
 	include, err := parseInclude(r.URL.Query().Get("include"))
 	if err != nil {
@@ -68,10 +65,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		},
 		KindAccess: s.searchKindAccess(r, kindRBAC),
 	}
-	opts.Pinned = k8s.ForceNamespaceScope
-	opts.ScopeNamespaces(parsed, visible, ceiling)
+	var pin *string
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		pin = &target
+	}
+	opts.Selection = search.SelectNamespaces(provider, parsed, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !namespaceCheckFailed}, pin)
 	opts.NamespaceCheckFailed = namespaceCheckFailed
-	scanNamespaces := opts.Namespaces
+	scanNamespaces := opts.Selection.Namespaces
 	// summaryContext attaches managedBy/health/issueCount per hit. Build
 	// the per-request closure once (one Compose call + cached topology
 	// snapshot) and let the search executor invoke it per kept hit.

@@ -10,10 +10,8 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
-// unsearchedEntry is a test's view of one kind or namespace a search couldn't
-// cover, flattened from the result's gaps: a named kind, or "*" for
-// namespaces, for kinds counted beyond the gap's sample (Count), or for an
-// unknown set (Count 0).
+// unsearchedEntry compares gap membership only. Extents and output order must be
+// asserted on Coverage.Gaps directly.
 type unsearchedEntry struct {
 	Kind       string
 	Group      string

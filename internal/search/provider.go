@@ -74,16 +74,17 @@ func (p *CacheProvider) ListDynamic(ctx context.Context, gvr schema.GroupVersion
 	// it lists; TestSearch_LeavesListedObjectsUnchanged guards that.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	source, ready := p.dynamic.ReadSource(gvr, namespace)
+	_, ready := p.dynamic.ReadSource(gvr, namespace)
 	if !ready {
 		return nil, fmt.Errorf("%w: initial sync", k8s.ErrDynamicNotReady)
 	}
-	items, err := p.dynamic.ListReadOnlyContext(ctx, gvr, namespace)
+	items, authoritative, err := k8score.ReadWithSourceCheck(p.dynamic.DynamicResourceCache, gvr, namespace, func() ([]*unstructured.Unstructured, error) {
+		return p.dynamic.ListReadOnlyContext(ctx, gvr, namespace)
+	})
 	if err != nil {
 		return nil, err
 	}
-	after, ready := p.dynamic.ReadSource(gvr, namespace)
-	if !ready || !source.Same(after) {
+	if !authoritative {
 		return nil, fmt.Errorf("%w: serving informers changed", k8s.ErrDynamicNotReady)
 	}
 	return items, nil

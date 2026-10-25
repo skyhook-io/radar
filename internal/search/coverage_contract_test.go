@@ -6,13 +6,16 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/readreason"
-	"github.com/skyhook-io/radar/pkg/resourceapi"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
+
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 // A broad query searches only what the caller and Radar can read without
@@ -34,8 +37,12 @@ func TestBroadSearchSaysHowItWasNarrowed(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := Parse(tc.query)
-			opts := Options{Include: IncludeNone, Pinned: tc.pinned}
-			opts.ScopeNamespaces(q, tc.visible, tc.ceiling)
+			opts := Options{Include: IncludeNone}
+			var pin *string
+			if tc.pinned {
+				pin = &tc.visible[0]
+			}
+			opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Namespaces: tc.ceiling, Checked: true}, pin)
 			res, _ := Search(context.Background(), namespaceFixture(), q, opts)
 			if !reflect.DeepEqual(res.Coverage.NarrowedBy, tc.want) || partial(res) {
 				t.Fatalf("coverage = %+v, want complete narrowed by %v", res.Coverage, tc.want)
@@ -48,7 +55,7 @@ func TestBroadSearchSaysHowItWasNarrowed(t *testing.T) {
 func TestQuietScopeReasonsNarrowTheSearch(t *testing.T) {
 	p := namespaceFixture()
 	p.typedReasons = map[string]string{"Node": string(readreason.RadarForbidden)}
-	res, _ := Search(context.Background(), p, Parse("robusta"), Options{Include: IncludeNone, SkipKinds: map[string]bool{"ClusterRole": true}})
+	res, _ := Search(context.Background(), p, Parse("robusta"), Options{Include: IncludeNone, CanReadClusterScoped: func(kind, group, resource string) (bool, bool) { return kind != "ClusterRole", true }})
 	want := []resourceapi.Narrowing{resourceapi.NarrowedByKindCollection, resourceapi.NarrowedByUserAccess}
 	if partial(res) || !reflect.DeepEqual(res.Coverage.NarrowedBy, want) {
 		t.Fatalf("coverage = %+v, want complete narrowed by %v", res.Coverage, want)
@@ -68,8 +75,8 @@ func TestNamedNamespaceOutsideThePin(t *testing.T) {
 		{[]string{"a"}, readreason.UserNamespaceNotVisible},
 	} {
 		q := Parse("ns:b robusta")
-		opts := Options{Include: IncludeNone, Pinned: true}
-		opts.ScopeNamespaces(q, []string{"a"}, tc.ceiling)
+		opts := Options{Include: IncludeNone}
+		opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Namespaces: tc.ceiling, Checked: true}, ptr.To("a"))
 		res, _ := Search(context.Background(), namespaceFixture(), q, opts)
 		if got := unsearched(res); len(got) != 1 || got[0].Reason != tc.want || !slices.Equal(got[0].Namespaces, []string{"b"}) {
 			t.Fatalf("ceiling %v: %+v, want %s", tc.ceiling, got, tc.want)
@@ -114,7 +121,7 @@ func TestSearchReadsSyncedNamespacesOfALoadingKind(t *testing.T) {
 	p.typedReasons = map[string]string{"Pod": string(readreason.KindSyncPending)}
 	q := Parse("kind:Pod robusta")
 	opts := Options{Include: IncludeNone}
-	opts.ScopeNamespaces(q, []string{"a", "b"}, nil)
+	opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Namespaces: []string{"a", "b"}, Checked: true}, nil)
 	res, _ := Search(context.Background(), p, q, opts)
 	if !slices.Equal(hitNames(res), []string{"Pod/a/robusta-a"}) || !reflect.DeepEqual(p.listed, [][]string{{"a"}}) {
 		t.Fatalf("hits %v listed %v", hitNames(res), p.listed)
@@ -135,9 +142,14 @@ func TestPerKindAccessBoundsTheKindsReadiness(t *testing.T) {
 		typedNamespaceReasons: map[string]map[string]string{"Secret": {"b": string(readreason.KindSyncTimedOut)}},
 	}
 	res, _ := Search(context.Background(), p, Parse("robusta"), Options{
-		Include:          IncludeNone,
-		Namespaces:       []string{"a", "b"},
-		NamespacesByKind: map[string][]string{"Secret": {"a"}},
+		Include:   IncludeNone,
+		Selection: readscope.Selection{Namespaces: []string{"a", "b"}},
+		NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+			if resource == "secrets" {
+				return []string{"a"}, []string{"b"}, nil
+			}
+			return ns, nil, nil
+		},
 	})
 	if !slices.Equal(hitNames(res), []string{"Secret/a/robusta-a"}) {
 		t.Fatalf("hits %v", hitNames(res))
