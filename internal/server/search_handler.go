@@ -22,6 +22,7 @@ import (
 //	q       — search string (free tokens + modifiers: kind:, ns:, label:k=v, image:, cluster:)
 //	limit   — max hits returned (default 50, capped at 500)
 //	include — "summary" (default), "raw", or "none"
+//	namespace, namespaces — explicit namespace names, unioned with ns: terms
 //
 // The returned shape is a search.Result. Per-cluster, no cross-cluster
 // concerns — radar-hub is responsible for fan-out and re-ranking.
@@ -31,6 +32,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query().Get("q")
 	parsed := search.Parse(q)
+	parsed.NSFilter = append(parsed.NSFilter, parseNamespaces(r.URL.Query())...)
 
 	provider := search.NewCacheProvider()
 	if provider == nil {
@@ -44,11 +46,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	//
 	// A search never inherits the stored namespace pick: it scans the user's
 	// RBAC ceiling within the --namespace-scope pin, narrowed only by the
-	// query's own `ns:` terms. An `ns:` term outside the pin is reported as
-	// outside_namespace_pin; cluster-scoped kinds are still searched under the
+	// explicit namespace names in query terms or URL parameters. A named
+	// namespace outside the pin is reported as outside_namespace_pin;
+	// cluster-scoped kinds are still searched under the
 	// pin, gated per kind. globalNs=1 (the omnibar's ⌘K and Radar Hub's fleet
 	// search) is accepted and asks for exactly this.
-	ceiling, namespaceCheckFailed := s.getUserNamespacesWithStatus(r, parseNamespaces(r.URL.Query()))
+	ceiling, namespaceCheckFailed := s.getUserNamespacesWithStatus(r, nil)
 
 	include, err := parseInclude(r.URL.Query().Get("include"))
 	if err != nil {

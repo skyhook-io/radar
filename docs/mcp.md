@@ -862,6 +862,12 @@ of typed kinds are skipped, so `kind:Event` does not duplicate core Events throu
 `events.k8s.io`. Third-party CRDs named Event are searched normally; only built-in
 Events are excluded from broad searches.
 
+REST `GET /api/search` accepts `namespaces` (comma-separated) or `namespace`
+(single); the plural parameter takes precedence. These are explicit namespace
+names, combined as a union with any `ns:` terms in `q`. Hidden, missing and
+outside-pin names produce the same coverage gaps as their `ns:` spelling. An
+empty parsed list adds no names.
+
 Every response includes `coverage`: `{status, narrowedBy?, gaps}`, built from the
 same [gaps and codes](#resource-reads-coverage-and-errors) as resource lists. A
 gap is either about kinds or about namespaces, and states both axes: `kinds`
@@ -896,9 +902,9 @@ What gets reported follows from that:
   kind-level access, setup or query reason (`user_forbidden`, `radar_forbidden`,
   `kind_unknown`) is a gap only for a kind a `kind:` term names; on a broad query
   it adds to `narrowedBy` instead. A namespace reason is a gap only for a
-  namespace an `ns:` term (or the MCP `namespace` argument) names. So `ns:` alone
-  never yields per-kind gaps, and `kind:` alone never yields namespace or
-  collection-scope gaps. A named kind Radar's setup leaves out is
+  namespace an `ns:` term, a REST namespace parameter, or the MCP `namespace`
+  argument names. So `ns:` alone never yields per-kind gaps, and `kind:` alone
+  never yields namespace or collection-scope gaps. A named kind Radar's setup leaves out is
   `radar_kind_not_collected`. Kinds search never covers are outside every search,
   so on a broad query they don't add to `narrowedBy`: Endpoints, EndpointSlices and
   Leases, which Radar reads directly instead of watching, are `kind_not_searchable`
