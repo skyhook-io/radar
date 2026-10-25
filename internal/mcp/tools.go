@@ -33,6 +33,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/search"
@@ -1065,18 +1066,49 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			return nil, nil, err
 		}
 	} else if unrestrictedAll && found && dynamicCache != nil {
-		if err := dynamicCache.EnsureWatching(gvr); err != nil {
-			// The probe behind the error may have run against caches a
-			// context switch has since replaced.
-			if k8s.GetDynamicResourceCache() != dynamicCache || currentReadCache() != cache {
-				return nil, nil, errConnectionChanged()
-			}
-			_, err = checkDynamicResourceRead(ctx, kind, group, "", "list", err)
-			return nil, nil, err
+		ensureErr := dynamicCache.EnsureWatching(gvr)
+		if !current() || dynamicCache.IsStopped() {
+			return nil, nil, errConnectionChanged()
 		}
-		if observation := dynamicCache.Observation(gvr); observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
-			namespaces = observation.Namespaces
-			target = target.narrowedByNamespaceCollection(namespaces, nil)
+		observation := dynamicCache.Observation(gvr)
+		facts := readplan.Dynamic(dynamicCache, dynamicCache, gvr, readscope.Target{}, false)
+		unanswered := make(map[string]bool, len(observation.UnansweredNamespaces))
+		for _, ns := range observation.UnansweredNamespaces {
+			unanswered[ns] = true
+		}
+		var intended []string
+		for _, part := range facts.Partitions {
+			if part.Verdict.State != readplan.OutsideCollection {
+				intended = append(intended, part.Namespaces...)
+			}
+			if part.Verdict.State != readplan.Gap {
+				continue
+			}
+			unresolved := slices.DeleteFunc(slices.Clone(part.Namespaces), func(ns string) bool { return !unanswered[ns] })
+			unknown := part.Extent == readplan.UnknownNamespaces && (observation.ProbeRetrying || part.Verdict.Code == readreason.ReadError || part.Verdict.Code == readreason.RadarCredentialsRejected)
+			if len(unresolved) > 0 || unknown {
+				gaps.add(part.Verdict.Code, dynamicPlanError(ctx, kind, group, "", "list", part.Verdict.Code), unresolved...)
+				if unknown {
+					if gaps.unknownExtent == nil {
+						gaps.unknownExtent = map[readreason.Code]bool{}
+					}
+					gaps.unknownExtent[part.Verdict.Code] = true
+				}
+			}
+		}
+		if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
+			namespaces = slices.Clone(observation.Namespaces)
+			if namespaces == nil {
+				namespaces = []string{}
+			}
+			target = target.narrowedByNamespaceCollection(intended, nil)
+		}
+		if ensureErr != nil && (len(namespaces) == 0 || gaps.empty()) {
+			if !gaps.empty() {
+				return nil, nil, withListCoverage(ctx, gaps.failure(), collector.resource, target, clusterScoped)
+			}
+			_, err := checkDynamicResourceReadFrom(ctx, kind, group, "", "list", ensureErr, dynamicCache, gvr, found)
+			return nil, nil, err
 		}
 	}
 

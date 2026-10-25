@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +13,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -330,9 +331,10 @@ func resourcePermissionErrorNext(ctx context.Context, checked bool, verb, group,
 // gapSet collects the namespaces a read could not serve, by code. A code
 // recorded with no namespaces reaches the whole scope.
 type gapSet struct {
-	namespaces map[readreason.Code][]string
-	unknown    map[readreason.Code]bool
-	firstErr   map[readreason.Code]error
+	namespaces    map[readreason.Code][]string
+	unknown       map[readreason.Code]bool
+	unknownExtent map[readreason.Code]bool
+	firstErr      map[readreason.Code]error
 }
 
 func (g *gapSet) add(code readreason.Code, err error, namespaces ...string) {
@@ -353,6 +355,12 @@ func (g *gapSet) merge(other gapSet) {
 		g.add(code, other.firstErr[code], namespaces...)
 		if other.unknown[code] {
 			g.unknown[code] = true
+		}
+		if other.unknownExtent[code] {
+			if g.unknownExtent == nil {
+				g.unknownExtent = map[readreason.Code]bool{}
+			}
+			g.unknownExtent[code] = true
 		}
 	}
 }
@@ -404,6 +412,8 @@ func (g *gapSet) gaps(ctx context.Context, limit int, clusterScoped bool) []reso
 		gap := resourceapi.Gap{Code: code}
 		switch {
 		case clusterScoped:
+		case g.unknownExtent[code]:
+			gap.Namespaces = resourceapi.UnknownNames()
 		case g.unknown[code]:
 			gap.Namespaces = resourceapi.AllNames()
 		default:
@@ -917,70 +927,79 @@ func resourceReadCache(ctx context.Context, kind, group string, namespaces []str
 		return nil, nil, errNotConnected()
 	}
 	result := cache.PermissionResult()
-	rejected, rejectedCause := recordedCredentialRejections(result, gvr.Resource, namespaces)
-	a := cache.AssessKindRead(gvr.Resource, namespaces)
-	if a.Readiness == k8s.KindUnavailable {
-		if len(rejected) > 0 {
-			return nil, nil, errRecordedCredentialsRejected(gvr.Resource, rejected, rejectedCause)
-		}
-		if result != nil {
-			if scope, probed := result.Scopes[gvr.Resource]; probed && !scope.Enabled {
-				if apierrors.IsUnauthorized(result.ProbeErrors[gvr.Resource]) {
-					return nil, nil, errRecordedCredentialsRejected(gvr.Resource, nil, result.ProbeErrors[gvr.Resource])
-				}
-				where := " in the namespaces you need"
-				if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {
-					where = ""
-				}
-				name := qualifiedResource(gvr.Group, gvr.Resource)
-				return nil, nil, readErrorf(readreason.RadarForbidden, "Kubernetes doesn't allow %s to list/watch %s, so Radar has none to show and can't say which exist. %s.%s", collectorName(), name, upperFirst(identityRemedy(name, where, "list/watch")), notYourAccess(ctx))
-			}
-		}
-		return nil, nil, errKindNotCollected(qualifiedResource(gvr.Group, gvr.Resource))
-	}
-	pending := errKindLoading(gvr.Resource)
-	failed := errKindLoadFailed(gvr.Resource)
-	plan := &typedRead{resource: gvr.Resource, whole: a.Readiness == k8s.KindReady}
-	if a.AllNamespaces && namespaces == nil {
-		switch a.Readiness {
-		case k8s.KindReady:
-			plan.all = true
-			return cache, plan, nil
-		case k8s.KindFailed:
-			plan.gaps.add(readreason.KindSyncTimedOut, failed)
-		default:
-			plan.gaps.add(readreason.KindSyncPending, pending)
-		}
-		return nil, nil, plan.gaps.failure()
-	}
+	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+	facts := readplan.Typed(cache, result, gvr.Resource, readscope.Target{Namespaces: namespaces, Explicit: explicit}, clusterScoped)
+	plan := &typedRead{resource: gvr.Resource, whole: facts.WholeKindReady, read: []string{}}
+	var intended, outside []string
+	readable := namespaces != nil && len(namespaces) == 0 && !clusterScoped
 	target := collectorTarget{resource: gvr.Resource, group: gvr.Group, action: "list/watch"}
-	notCollected := slices.DeleteFunc(slices.Clone(a.Uncovered), func(ns string) bool { return slices.Contains(rejected, ns) })
-	uncovered := len(notCollected) > 0 || (namespaces == nil && !a.AllNamespaces)
-	switch {
-	case explicit && len(notCollected) > 0:
-		plan.gaps.add(readreason.RadarNamespaceNotCollected, coverageError(ctx, target, notCollected, cache.KindNamespaces(gvr.Resource), nil), notCollected...)
-	case uncovered:
-		plan.collected = slices.Concat(a.Read, a.Loading, a.Failed, rejected)
-		slices.Sort(plan.collected)
-		plan.collected = slices.Compact(plan.collected)
-		plan.uncovered = notCollected
+	unavailable := cache.KindReadinessFor(gvr.Resource) == k8s.KindUnavailable
+	for _, part := range facts.Partitions {
+		if part.Verdict.State == readplan.OutsideCollection {
+			outside = append(outside, part.Namespaces...)
+			continue
+		}
+		intended = append(intended, part.Namespaces...)
+		if part.Verdict.State == readplan.Readable {
+			readable = true
+			if part.Extent != readplan.NamespaceSet {
+				plan.all = true
+			} else {
+				plan.read = append(plan.read, part.Namespaces...)
+			}
+			continue
+		}
+		var err error
+		switch part.Verdict.Code {
+		case readreason.RadarCredentialsRejected:
+			rejected := result.CredentialRejectedNamespaces(gvr.Resource, namespaces)
+			var cause error
+			if len(rejected) > 0 {
+				cause = result.NamespaceProbeErrors[gvr.Resource][rejected[0]]
+			} else if result != nil {
+				cause = result.ProbeErrors[gvr.Resource]
+			}
+			if !unavailable {
+				rejected = part.Namespaces
+			}
+			err = errRecordedCredentialsRejected(gvr.Resource, rejected, cause)
+		case readreason.RadarForbidden:
+			where := " in the namespaces you need"
+			if clusterScoped {
+				where = ""
+			}
+			name := qualifiedResource(gvr.Group, gvr.Resource)
+			err = readErrorf(part.Verdict.Code, "Kubernetes doesn't allow %s to list/watch %s, so Radar has none to show and can't say which exist. %s.%s", collectorName(), name, upperFirst(identityRemedy(name, where, "list/watch")), notYourAccess(ctx))
+		case readreason.RadarKindNotCollected:
+			err = errKindNotCollected(qualifiedResource(gvr.Group, gvr.Resource))
+		case readreason.KindSyncTimedOut:
+			err = errKindLoadFailed(gvr.Resource)
+		default:
+			err = errKindLoading(gvr.Resource)
+		}
+		if unavailable {
+			return nil, nil, err
+		}
+		plan.gaps.add(part.Verdict.Code, err, part.Namespaces...)
+	}
+	if explicit && len(outside) > 0 {
+		plan.gaps.add(readreason.RadarNamespaceNotCollected, coverageError(ctx, target, outside, cache.KindNamespaces(gvr.Resource), nil), outside...)
+	} else if facts.CollectionLimited || len(outside) > 0 {
+		plan.collected = slices.Compact(slices.Sorted(slices.Values(intended)))
+		if plan.collected == nil {
+			plan.collected = []string{}
+		}
+		plan.uncovered = outside
 		if len(plan.collected) == 0 {
-			plan.gaps.add(readreason.RadarNamespaceNotCollected, coverageError(ctx, target, notCollected, cache.KindNamespaces(gvr.Resource), nil))
+			plan.gaps.add(readreason.RadarNamespaceNotCollected, coverageError(ctx, target, outside, cache.KindNamespaces(gvr.Resource), nil))
 		}
 	}
-	if len(a.Loading) > 0 {
-		plan.gaps.add(readreason.KindSyncPending, pending, a.Loading...)
-	}
-	if len(a.Failed) > 0 {
-		plan.gaps.add(readreason.KindSyncTimedOut, failed, a.Failed...)
-	}
-	if len(rejected) > 0 {
-		plan.gaps.add(readreason.RadarCredentialsRejected, errRecordedCredentialsRejected(gvr.Resource, rejected, rejectedCause), rejected...)
-	}
-	if len(a.Read) == 0 {
+	if !readable {
+		if len(facts.Partitions) == 1 && facts.Partitions[0].Extent != readplan.NamespaceSet {
+			return nil, nil, plan.gaps.failure()
+		}
 		return nil, plan, plan.gaps.failure()
 	}
-	plan.read = a.Read
 	return cache, plan, nil
 }
 
@@ -1185,10 +1204,24 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 		return false, err
 	}
 	if readErr != nil && !isObjectNotFound(readErr) {
-		// A kind discovery lists without watch fails the read before any
-		// informer exists; the observation says so without parsing the error.
-		if ok && dynamicCache != nil && !direct && dynamicCache.Observation(gvr).State == k8score.DynamicObservationUnsupported {
-			return false, readErrorf(readreason.KindNotWatchable, "Radar can't collect %s: its API doesn't support both list and watch, which Radar needs. Retrying won't help; read it directly from the Kubernetes API instead.", kind)
+		if ok && dynamicCache != nil && !direct {
+			target := readscope.Target{}
+			if namespace != "" {
+				target.Namespaces = []string{namespace}
+			}
+			clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+			facts := readplan.Dynamic(dynamicCache, dynamicCache, gvr, target, clusterScoped)
+			for _, part := range facts.Partitions {
+				switch part.Verdict.Code {
+				case readreason.KindSyncPending:
+					if !dynamicCache.Observation(gvr).ProbeRetrying {
+						continue
+					}
+					return false, dynamicPlanError(ctx, kind, group, namespace, verb, part.Verdict.Code)
+				case readreason.KindNotWatchable, readreason.ConnectionChanged, readreason.RadarCredentialsRejected:
+					return false, dynamicPlanError(ctx, kind, group, namespace, verb, part.Verdict.Code)
+				}
+			}
 		}
 		return false, readErrorf(readreason.ReadError, "Radar failed to %s %s, so it can't say what exists (%w).", verb, kind, readErr)
 	}
@@ -1203,25 +1236,41 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 			}
 		}
 	}
-	observation := dynamicCache.Observation(gvr)
-	switch observation.State {
-	case k8score.DynamicObservationSyncing:
-		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
-			// Stalled is this namespace's informer, not the oldest one any
-			// request started for the kind.
-			if dynamicCache.NamespaceObservation(gvr, namespace).ReasonCode == "sync_stalled" {
-				return false, errKindLoadFailed(kind)
-			}
-			return false, errKindLoading(kind)
+	target := readscope.Target{}
+	if namespace != "" {
+		target.Namespaces = []string{namespace}
+	}
+	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+	facts := readplan.Dynamic(dynamicCache, dynamicCache, gvr, target, clusterScoped)
+	for _, part := range facts.Partitions {
+		if part.Verdict.State != readplan.Readable {
+			return false, dynamicPlanError(ctx, kind, group, namespace, verb, part.Verdict.Code)
 		}
-	case k8score.DynamicObservationSynced:
-		if namespace != "" && !dynamicCache.IsNamespaceSynced(gvr, namespace) {
-			return false, readErrorf(readreason.RadarNamespaceNotCollected, "Radar doesn't collect %s in namespace %q, so it can't say what exists there. %s.%s", kind, namespace, upperFirst(collectionRemedy(kind)), notYourAccess(ctx))
-		}
-	case k8score.DynamicObservationUnsupported:
-		return false, readErrorf(readreason.KindNotWatchable, "Radar can't collect %s: its API doesn't support both list and watch, which Radar needs. Retrying won't help; read it directly from the Kubernetes API instead.", kind)
 	}
 	return dynamicCache.IsNamespaceSynced(gvr, namespace), readErr
+}
+
+func dynamicPlanError(ctx context.Context, kind, group, namespace, verb string, code readreason.Code) error {
+	switch code {
+	case readreason.ConnectionChanged:
+		return errConnectionChanged()
+	case readreason.KindSyncPending:
+		return errKindLoading(kind)
+	case readreason.KindSyncTimedOut:
+		return errKindLoadFailed(kind)
+	case readreason.KindNotWatchable:
+		return readErrorf(code, "Radar can't collect %s: its API doesn't support both list and watch, which Radar needs. Retrying won't help; read it directly from the Kubernetes API instead.", kind)
+	case readreason.RadarNamespaceNotCollected:
+		return readErrorf(code, "Radar doesn't collect %s in namespace %q, so it can't say what exists there. %s.%s", kind, namespace, upperFirst(collectionRemedy(kind)), notYourAccess(ctx))
+	case readreason.RadarForbidden:
+		return readErrorf(code, "Radar's collector cannot read %s in the requested scope.", kind)
+	case readreason.RadarCredentialsRejected:
+		return collectorUnauthorizedError(kind, nil)
+	case readreason.RadarKindNotCollected:
+		return errKindNotCollected(kind)
+	default:
+		return readErrorf(code, "Radar failed to %s %s, so it can't say what exists.", verb, kind)
+	}
 }
 
 // dynamicSyncWait bounds a read's wait for a cold informer. A variable so tests
@@ -1308,7 +1357,7 @@ func readDynamicScope[T any](ctx context.Context, kind, group, namespace, verb s
 	cache := k8s.GetResourceCache()
 	gvr, ok := dynamicReadGVR(kind, group)
 	current := func() bool {
-		return dynamicCache == k8s.GetDynamicResourceCache() && discovery == k8s.GetResourceDiscovery() && cache == k8s.GetResourceCache()
+		return dynamicCache == k8s.GetDynamicResourceCache() && discovery == k8s.GetResourceDiscovery() && cache == k8s.GetResourceCache() && (dynamicCache == nil || !dynamicCache.IsStopped())
 	}
 	// bracketed reads once and reports whether the same synced informers
 	// served the scope throughout.
@@ -1463,26 +1512,6 @@ func fetchMCPDynamicResource(ctx context.Context, cache *k8s.ResourceCache, kind
 		return obj, resourceGetError(ctx, err, kind, namespace, name)
 	}
 	return obj, err
-}
-
-// recordedCredentialRejections returns the namespaces of the request (nil:
-// all) whose access probe Kubernetes answered with a 401 when this cache was
-// built, sorted, and the first one's error.
-func recordedCredentialRejections(result *k8s.PermissionCheckResult, resource string, namespaces []string) ([]string, error) {
-	if result == nil {
-		return nil, nil
-	}
-	errs := map[string]error{}
-	for ns, probeErr := range result.NamespaceProbeErrors[resource] {
-		if apierrors.IsUnauthorized(probeErr) && (namespaces == nil || slices.Contains(namespaces, ns)) {
-			errs[ns] = probeErr
-		}
-	}
-	rejected := slices.Sorted(maps.Keys(errs))
-	if len(rejected) == 0 {
-		return nil, nil
-	}
-	return rejected, errs[rejected[0]]
 }
 
 // errRecordedCredentialsRejected reports a 401 Radar recorded when it built
