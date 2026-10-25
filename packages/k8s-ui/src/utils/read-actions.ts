@@ -23,7 +23,6 @@ export const READ_ACTIONS: Record<string, ReadAction> = {
   namespace_required: 'change_request',
   object_not_found: 'none',
   outside_namespace_pin: 'radar_config',
-  outside_namespace_selection: 'change_request',
   radar_credentials_rejected: 'radar_config',
   radar_forbidden: 'radar_config',
   radar_kind_not_collected: 'radar_config',

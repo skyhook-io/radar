@@ -51,7 +51,7 @@ export interface ReadGap {
 }
 
 /** Why an implicitly broad read covers less than everything. */
-export type ReadNarrowing = 'user_access' | 'namespace_pin' | 'namespace_selection' | 'namespace_collection' | 'kind_collection' | (string & {})
+export type ReadNarrowing = 'user_access' | 'namespace_pin' | 'namespace_collection' | 'kind_collection' | (string & {})
 
 /**
  * A search's coverage: `partial` when something the query named couldn't be

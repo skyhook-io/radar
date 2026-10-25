@@ -513,7 +513,7 @@ func (e *explainedError) Error() string { return e.msg }
 func (e *explainedError) Unwrap() error { return e.cause }
 
 // beyondCallerAccess reports a narrowing the caller's own access doesn't
-// explain: what Radar collects, its namespace pin, or a saved selection. A
+// explain: what Radar collects, or its namespace pin. A
 // denial already names the caller's namespaces.
 func beyondCallerAccess(by []resourceapi.Narrowing) bool {
 	for _, n := range by {
@@ -610,8 +610,6 @@ func narrowingScopeName(by []resourceapi.Narrowing) string {
 			names = append(names, "your access")
 		case resourceapi.NarrowedByNamespacePin:
 			names = append(names, "Radar's --namespace-scope setting")
-		case resourceapi.NarrowedByNamespaceSelection:
-			names = append(names, "your saved namespace selection")
 		case resourceapi.NarrowedByNamespaceCollection:
 			names = append(names, "Radar's collection")
 		}
@@ -632,8 +630,6 @@ func narrowingCause(resource string, by []resourceapi.Narrowing, these string) s
 			return "your access covers only " + these
 		case resourceapi.NarrowedByNamespacePin:
 			return "Radar is set to read only " + these + " (--namespace-scope)"
-		case resourceapi.NarrowedByNamespaceSelection:
-			return "your saved namespace selection covers only " + these
 		case resourceapi.NarrowedByNamespaceCollection:
 			return fmt.Sprintf("Radar collects %s only in %s", resource, these)
 		}
@@ -645,8 +641,6 @@ func narrowingCause(resource string, by []resourceapi.Narrowing, these string) s
 			causes = append(causes, "your access")
 		case resourceapi.NarrowedByNamespacePin:
 			causes = append(causes, "Radar's --namespace-scope setting")
-		case resourceapi.NarrowedByNamespaceSelection:
-			causes = append(causes, "your saved namespace selection")
 		case resourceapi.NarrowedByNamespaceCollection:
 			causes = append(causes, "what Radar collects")
 		}
@@ -657,8 +651,7 @@ func narrowingCause(resource string, by []resourceapi.Narrowing, these string) s
 	return fmt.Sprintf("the scope is where %s overlap", strings.Join(causes, ""))
 }
 
-// narrowingRemedy says, as sentences, who widens a narrowing. A saved
-// selection is the caller's own to change, so it needs none, and a Radar
+// narrowingRemedy says, as sentences, who widens a narrowing. A Radar
 // Cloud role is named only for an actual denial, not for routine narrowing. It is short on
 // purpose: narrowing is routine, and the full remedy for what Radar collects
 // comes with a namespace the caller named that Radar doesn't collect.

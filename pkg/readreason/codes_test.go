@@ -23,7 +23,6 @@ func TestCodeWireValues(t *testing.T) {
 		KindUnknown:                "kind_unknown",
 		KindNotWatchable:           "kind_not_watchable",
 		OutsideNamespacePin:        "outside_namespace_pin",
-		OutsideNamespaceSelection:  "outside_namespace_selection",
 		UserNamespaceNotVisible:    "user_namespace_not_visible",
 		NamespaceNotFound:          "namespace_not_found",
 		NamespaceRequired:          "namespace_required",

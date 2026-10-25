@@ -48,7 +48,7 @@ describe('narrowed coverage note', () => {
     expect(resourceNarrowedNotice({ ...collected, scope: { type: 'namespaces', namespaces: { names: ['alpha'], count: 1 } } })).toBe('Radar collects this kind only in 1 namespace: alpha.')
   })
   it('is shown only for collection, which the namespace picker does not show', () => {
-    for (const narrowing of ['user_access', 'namespace_pin', 'namespace_selection']) {
+    for (const narrowing of ['user_access', 'namespace_pin']) {
       expect(resourceNarrowedNotice({ ...collected, narrowedBy: [narrowing] })).toBeUndefined()
     }
     expect(resourceNarrowedNotice({ ...collected, narrowedBy: ['user_access', 'namespace_collection'] })).toBe('Radar collects this kind only in 12 of your namespaces: alpha, beta, gamma and 9 more.')

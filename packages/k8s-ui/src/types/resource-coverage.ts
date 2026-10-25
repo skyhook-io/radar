@@ -8,7 +8,7 @@ export interface ResourceReadScope {
 /**
  * A single-kind read's coverage. `status` is relative to `scope`: the
  * namespaces the request named, or what remained of every namespace after
- * `narrowedBy` (the caller's access, Radar's pin, the saved pick) narrowed it.
+ * `narrowedBy` (the caller's access, Radar's pin, what Radar collects) narrowed it.
  */
 export interface ResourceReadCoverage {
   status: 'complete' | 'partial'

@@ -46,7 +46,6 @@ var readStatus = map[readreason.Code]int{
 	readreason.KindUnknown:                http.StatusBadRequest,
 	readreason.KindNotWatchable:           http.StatusBadRequest,
 	readreason.OutsideNamespacePin:        http.StatusConflict,
-	readreason.OutsideNamespaceSelection:  http.StatusConflict,
 	readreason.NamespaceNotFound:          http.StatusNotFound,
 	readreason.NamespaceRequired:          http.StatusBadRequest,
 	readreason.ObjectNotFound:             http.StatusNotFound,
