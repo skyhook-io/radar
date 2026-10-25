@@ -9,10 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/readreason"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,9 +17,17 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 type probeRetryProvider struct{ *CacheProvider }
+
+func (*probeRetryProvider) ListTyped(string, []string) ([]runtime.Object, error) { return nil, nil }
 
 func (*probeRetryProvider) PlanTyped(string, []string) readplan.Plan { return readplan.Plan{} }
 
@@ -112,10 +116,6 @@ func TestSearchProbeRetryKeepsVisibleHitsAndRecovers(t *testing.T) {
 	if !dc.WaitForSync(gvr, time.Second) {
 		t.Fatal("a did not sync")
 	}
-	skipTyped := map[string]bool{}
-	for _, kind := range typedKinds {
-		skipTyped[kind.Kind] = true
-	}
 	p := &probeRetryProvider{&CacheProvider{dynamic: &k8s.DynamicResourceCache{DynamicResourceCache: dc}, discovery: &k8s.ResourceDiscovery{ResourceDiscovery: discovery}}}
 	for _, tc := range []struct {
 		query string
@@ -126,7 +126,7 @@ func TestSearchProbeRetryKeepsVisibleHitsAndRecovers(t *testing.T) {
 		{"kind:Widget robusta", nil, []UnsearchedKind{{Kind: "Widget", Group: gvr.Group, Reason: readreason.KindSyncPending}}},
 		{"robusta", []string{"a"}, []UnsearchedKind{}},
 	} {
-		res, err := Search(t.Context(), p, Parse(tc.query), Options{Namespaces: tc.ns, Include: IncludeNone, SkipKinds: skipTyped})
+		res, err := Search(t.Context(), p, Parse(tc.query), Options{Selection: readscope.Selection{Namespaces: tc.ns}, Include: IncludeNone})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +141,7 @@ func TestSearchProbeRetryKeepsVisibleHitsAndRecovers(t *testing.T) {
 	if dc.Observation(gvr).ProbeRetrying || !dc.WaitForSync(gvr, time.Second) {
 		t.Fatal("retry did not recover")
 	}
-	res, err := Search(t.Context(), p, Parse("robusta"), Options{Include: IncludeNone, SkipKinds: skipTyped})
+	res, err := Search(t.Context(), p, Parse("robusta"), Options{Include: IncludeNone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestSearchProbeRetryForbiddenBecomesCollectorScope(t *testing.T) {
 		{"ns:b robusta", []string{"b"}, []UnsearchedKind{{Kind: "*", Reason: readreason.RadarNamespaceNotCollected, Namespaces: []string{"b"}}}},
 	} {
 		p.warmError = apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("collector scope"))
-		res, err := Search(t.Context(), p, Parse(tc.query), Options{Namespaces: tc.ns})
+		res, err := Search(t.Context(), p, Parse(tc.query), Options{Selection: readscope.Selection{Namespaces: tc.ns}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -211,11 +211,7 @@ func TestSearchExhaustedNamedKindRecovers(t *testing.T) {
 		t.Fatalf("retry did not exhaust: %+v", o)
 	}
 	p := &probeRetryProvider{&CacheProvider{dynamic: &k8s.DynamicResourceCache{DynamicResourceCache: dc}, discovery: &k8s.ResourceDiscovery{ResourceDiscovery: discovery}}}
-	skipTyped := map[string]bool{}
-	for _, kind := range typedKinds {
-		skipTyped[kind.Kind] = true
-	}
-	opts := Options{Include: IncludeNone, SkipKinds: skipTyped}
+	opts := Options{Include: IncludeNone}
 	before := lists.Load()
 	allowed.Store(true)
 	res, err := Search(t.Context(), p, Parse("robusta"), opts)
@@ -277,11 +273,7 @@ func TestSearchExhaustedNamedKindSyncTimeoutRefreshesCoverage(t *testing.T) {
 		t.Fatalf("retry did not exhaust: %+v", o)
 	}
 	p := &probeRetryProvider{&CacheProvider{dynamic: &k8s.DynamicResourceCache{DynamicResourceCache: dc}, discovery: &k8s.ResourceDiscovery{ResourceDiscovery: discovery}}}
-	skipTyped := map[string]bool{}
-	for _, kind := range typedKinds {
-		skipTyped[kind.Kind] = true
-	}
-	opts := Options{Include: IncludeNone, SkipKinds: skipTyped}
+	opts := Options{Include: IncludeNone}
 	bAllowed.Store(true)
 	res, err := Search(t.Context(), p, Parse("kind:Widget robusta"), opts)
 	if o := dc.Observation(gvr); !dc.HasCoveringInformer(gvr, "b") || o.State != k8score.DynamicObservationSyncing || len(o.UnansweredNamespaces) != 0 {
@@ -345,11 +337,7 @@ func TestSearchExplicitNamespaceRetryScope(t *testing.T) {
 		t.Fatal("b did not recover")
 	}
 	p := &probeRetryProvider{&CacheProvider{dynamic: &k8s.DynamicResourceCache{DynamicResourceCache: dc}, discovery: &k8s.ResourceDiscovery{ResourceDiscovery: discovery}}}
-	skipTyped := map[string]bool{}
-	for _, kind := range typedKinds {
-		skipTyped[kind.Kind] = true
-	}
-	opts := Options{Include: IncludeNone, SkipKinds: skipTyped}
+	opts := Options{Include: IncludeNone}
 	res, err := Search(t.Context(), p, Parse("robusta"), opts)
 	if err != nil || !partial(res) || !reflect.DeepEqual(hitNames(res), []string{"Widget/b/robusta-b"}) {
 		t.Fatalf("scope settled while a remained unwatched: %+v err=%v", res, err)

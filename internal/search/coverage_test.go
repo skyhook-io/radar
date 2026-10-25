@@ -18,21 +18,13 @@ import (
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
-func TestSearchCoverageAndNewKinds(t *testing.T) {
-	for _, tk := range typedKinds {
-		t.Run(tk.Kind, func(t *testing.T) {
-			p := &fakeProvider{}
-			res, err := Search(context.Background(), p, Parse("kind:"+tk.Kind), Options{SkipKinds: map[string]bool{tk.Kind: true}})
-			if err != nil || !partial(res) || len(unsearched(res)) != 1 || unsearched(res)[0].Reason != "user_forbidden" || res.Searched != 0 {
-				t.Fatalf("denial coverage: %+v %v", res, err)
-			}
-		})
-	}
+func TestSearchRoleBindingFilter(t *testing.T) {
 	p := &fakeProvider{typed: map[string][]runtime.Object{"rolebindings": {&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "binding", Namespace: "team-a"}, Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: "worker"}}}}}}
 	f, err := filter.CompileObjectFilter(`has(object.subjects) && object.subjects.exists(s, s.name == "worker")`)
 	if err != nil {
@@ -104,7 +96,7 @@ func TestSearchCoverageReadFailuresAndPartialNamespaces(t *testing.T) {
 	}
 	q := Parse("kind:Pod ns:a")
 	opts := Options{}
-	opts.ScopeNamespaces(q, nil, nil)
+	opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Namespaces: nil, Checked: true}, nil)
 	want := []UnsearchedKind{{Kind: "*", Reason: "radar_namespace_not_collected", Namespaces: []string{"a"}}}
 	if res, _ := Search(context.Background(), p, q, opts); !partial(res) || !reflect.DeepEqual(unsearched(res), want) || len(res.Hits) != 0 {
 		t.Fatalf("named namespace outside collection: %+v, want %+v", unsearched(res), want)
@@ -114,7 +106,7 @@ func TestSearchCoverageReadFailuresAndPartialNamespaces(t *testing.T) {
 		reason string
 	}{
 		{fmt.Errorf("forbidden: pods"), "radar_forbidden"},
-		{apierrors.NewUnauthorized("token expired"), "radar_forbidden"},
+		{apierrors.NewUnauthorized("token expired"), "radar_credentials_rejected"},
 		{fmt.Errorf("broken list"), "read_error"},
 	} {
 		p := &fakeProvider{listErrors: map[string]error{"pods": tc.err}}
@@ -124,11 +116,13 @@ func TestSearchCoverageReadFailuresAndPartialNamespaces(t *testing.T) {
 		}
 	}
 	rec := &recordingProvider{fakeProvider: &fakeProvider{}}
-	res, _ := Search(context.Background(), rec, Parse("kind:Role"), Options{Namespaces: []string{"a", "b"}, NamespacesByKind: map[string][]string{"Role": {"a"}}})
+	res, _ := Search(context.Background(), rec, Parse("kind:Role"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}, NamespacedRBAC: func([]string, string, string) ([]string, []string, []string) {
+		return []string{"a"}, []string{"b"}, nil
+	}})
 	if !partial(res) || len(unsearched(res)) != 1 || unsearched(res)[0].Reason != "user_forbidden" || len(rec.listedWith["roles"]) != 1 || rec.listedWith["roles"][0] != "a" {
 		t.Fatalf("namespace narrowing: %+v lists=%v", res, rec.listedWith)
 	}
-	res, _ = Search(context.Background(), rec, Parse("kind:Role"), Options{NamespacesByKind: map[string][]string{"Role": {}}})
+	res, _ = Search(context.Background(), rec, Parse("kind:Role"), Options{NamespacedRBAC: func([]string, string, string) ([]string, []string, []string) { return []string{}, []string{""}, nil }})
 	if !partial(res) || res.Searched != 0 {
 		t.Fatalf("empty override: %+v", res)
 	}
@@ -173,7 +167,7 @@ func TestSearchDynamicCoverageDoesNotWarmDeniedAndRetainsGoodNamespaces(t *testi
 	p.observations[gvr] = k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced}
 	p.namespaced[gvr] = true
 	p.dynamicErrors = map[string]error{"a": fmt.Errorf("broken list")}
-	res, _ = Search(context.Background(), p, Parse("kind:Widget"), Options{Namespaces: []string{"a", "b"}})
+	res, _ = Search(context.Background(), p, Parse("kind:Widget"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}})
 	if !partial(res) || len(p.dynamicListNamespaces) != 2 || unsearched(res)[0].Reason != "read_error" {
 		t.Fatalf("dynamic partial list: %+v lists=%v", res, p.dynamicListNamespaces)
 	}
@@ -285,7 +279,7 @@ func TestBroadSearchFoldsTransientAndFailureReasons(t *testing.T) {
 		t.Fatalf("folded coverage (%d entries): %+v\nwant %+v", len(unsearched(res)), unsearched(res), want)
 	}
 	again, _ := Search(context.Background(), p, Parse("robusta"), Options{})
-	if !reflect.DeepEqual(unsearched(again), unsearched(res)) {
+	if !reflect.DeepEqual(again.Coverage, res.Coverage) {
 		t.Fatalf("repeat search changed coverage: %+v", unsearched(again))
 	}
 
@@ -311,16 +305,22 @@ func TestFailureFoldOrdersByKindThenGroup(t *testing.T) {
 		for _, i := range order {
 			cov.kind(all[i].Kind, all[i].Group, all[i].Reason)
 		}
-		if got := unsearched(Result{Coverage: resourceapi.SearchCoverage{Gaps: cov.result()}}); !reflect.DeepEqual(got, all[:5]) {
-			t.Fatalf("input order %v: %+v", order, got)
+		wantKinds := make([]resourceapi.KindRef, 5)
+		for i, k := range all[:5] {
+			wantKinds[i] = resourceapi.KindRef{Kind: k.Kind, Group: k.Group}
 		}
+		want := []resourceapi.Gap{{Code: readreason.ReadError, Kinds: &resourceapi.KindSet{Count: 5, Names: wantKinds}, Namespaces: resourceapi.AllNames()}}
+		if got := cov.result(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("input order %v: %+v, want %+v", order, got, want)
+		}
+
 	}
 	// Past five, the reason counts its kinds and names none.
 	cov := newCoverage(Parse("robusta"))
 	for _, k := range all {
 		cov.kind(k.Kind, k.Group, k.Reason)
 	}
-	if got := unsearched(Result{Coverage: resourceapi.SearchCoverage{Gaps: cov.result()}}); !reflect.DeepEqual(got, []UnsearchedKind{{Kind: "*", Reason: readreason.ReadError, Count: 7}}) {
+	if got := cov.result(); !reflect.DeepEqual(got, []resourceapi.Gap{{Code: readreason.ReadError, Kinds: &resourceapi.KindSet{Count: 7}, Namespaces: resourceapi.AllNames()}}) {
 		t.Fatalf("over the limit: %+v", got)
 	}
 }

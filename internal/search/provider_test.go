@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -218,7 +219,7 @@ func TestDynamicReadinessIsJudgedPerNamespace(t *testing.T) {
 		{[]string{"a"}, []UnsearchedKind{}},
 		{[]string{"a", "b"}, []UnsearchedKind{{Kind: "Widget", Group: "example.io", Reason: "kind_sync_pending"}}},
 	} {
-		res, err := Search(ctx, p, Parse("kind:Widget robusta"), Options{Include: IncludeNone, Namespaces: tc.namespaces})
+		res, err := Search(ctx, p, Parse("kind:Widget robusta"), Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: tc.namespaces}})
 		if err != nil {
 			t.Fatal(err)
 		}

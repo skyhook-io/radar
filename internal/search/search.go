@@ -25,6 +25,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -114,86 +115,9 @@ var typedKinds = []struct {
 	{"LimitRange", "limitranges", ""},
 }
 
-// Options configures a Search call.
-type Options struct {
-	Limit   int
-	Include IncludeMode
-	// Namespaces, when non-nil, scopes typed/dynamic listers to those
-	// namespaces, and namespaced hits must fall inside it. Handlers set it
-	// through ScopeNamespaces: the caller's visible namespaces intersected
-	// with any `ns:` modifier, so listers never read namespaces the user
-	// can't see. Cluster-scoped kinds ignore this namespace list; SkipKinds
-	// and CanReadClusterScoped below are the gates for those resources.
-	Namespaces []string
-	// SkipKinds suppresses typed kinds by name. Dynamic kinds with colliding
-	// names are unaffected; their exact cluster-scope gate applies instead.
-	SkipKinds map[string]bool
-	// NamespacesByKind, when set for a typed kind, replaces Options.Namespaces
-	// for that kind only. Use this when per-kind RBAC narrows access below
-	// the namespace-discovery boundary (e.g. user can list pods cluster-wide
-	// but secrets only in `team-a`). Cluster-scoped kinds and dynamic CRDs
-	// ignore this map. nil entries fall back to Options.Namespaces.
-	NamespacesByKind map[string][]string
-	// NamespaceExcluded prevents namespaced scans when no requested namespace is visible.
-	NamespaceExcluded bool
-	// NamespaceCheckFailed means the caller's namespace access couldn't be
-	// determined: namespaced kinds are not searched (fail closed), and the
-	// result reports permission_check_failed rather than any namespace as
-	// excluded.
-	NamespaceCheckFailed bool
-	// ExcludedNamespaces are namespaces ns: terms named that the caller's RBAC
-	// leaves out; reported as namespace_not_visible.
-	ExcludedNamespaces []string
-	// MissingNamespaces are namespaces ns: terms named that don't exist,
-	// found only for a caller who can see every namespace; reported as
-	// namespace_not_found.
-	MissingNamespaces []string
-	// PinExcludedNamespaces are namespaces ns: terms named that the caller
-	// may see but Radar's --namespace-scope pin leaves out; reported as
-	// outside_namespace_pin. A namespace the caller can't see is
-	// ExcludedNamespaces whether or not the pin leaves it out, so guesses
-	// don't reveal the pin.
-	PinExcludedNamespaces []string
-	// Pinned says Radar runs with --namespace-scope. Handlers set it before
-	// ScopeNamespaces.
-	Pinned bool
-	// namespaceNarrowing is how the caller's access or the pin narrowed a
-	// query that named no namespace.
-	namespaceNarrowing []resourceapi.Narrowing
-	// seesAllNamespaces records that the caller's RBAC covers every namespace
-	// (ScopeNamespaces' ceiling was nil).
-	seesAllNamespaces bool
-	// NamespacedRBAC partitions exact-kind access before reading collector state.
-	// A nil allowed list means every namespace; denied and unchecked use ""
-	// for a whole-scope decision when namespaces cannot be enumerated.
-	NamespacedRBAC func(namespaces []string, group, resource string) (allowed, denied, unchecked []string)
-	// CanReadClusterScoped authorizes cluster-scoped resources before the
-	// cache walker scans them. Handlers provide a per-user SAR-backed
-	// decision; authoritative distinguishes denial from check failure. nil
-	// preserves auth-mode=none behavior, where collector RBAC is the only gate.
-	CanReadClusterScoped func(kind, group, resource string) (allowed, authoritative bool)
-	// KindAccess authorizes namespaced kinds in kindRBACGroups by the
-	// caller's own list permission on that kind, on top of Namespaces. nil
-	// disables the gate (auth off: the cache's own RBAC is the only filter).
-	KindAccess *KindAccess
-	// Filter is an optional compiled CEL predicate. When set, each
-	// candidate that passed the modifier+token match is also evaluated
-	// against the filter; non-truthy results (including eval errors)
-	// drop the candidate. Compile happens in the handler; this layer
-	// just runs the program.
-	Filter *CELFilter
-	// SummaryBuilder, when non-nil, is invoked per matched hit to
-	// attach the compact summaryContext (managedBy + health +
-	// issueCount). Handlers provide a closure that wraps the
-	// request-scoped topology + per-namespace issue index so the
-	// per-row cost stays flat. Pass nil to opt out (context=none) —
-	// the field is omitempty and consumers must tolerate its absence.
-	SummaryBuilder SummaryBuilderFunc
-}
-
 // KindAccess answers per-kind list permission for the caller. Both checks
 // are handler-supplied SubjectAccessReviews; they are only asked about kinds
-// search gates (kindRBACGroups).
+// search gates for exact access.
 type KindAccess struct {
 	// ClusterWide reports whether the caller may list the resource in every
 	// namespace, and whether the check answered.
@@ -232,7 +156,6 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	defer cancelWarm()
 	res := Result{}
 	cov := newCoverage(q)
-	opts.excludeMissingNamespaces(p, q)
 	covered := map[string]bool{}
 	markKnown := func(kind, group, plural string) {
 		for _, requested := range q.KindFilter {
@@ -255,10 +178,10 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			}
 			return false
 		}
-		cov.namespaces(readreason.UserNamespaceNotVisible, opts.ExcludedNamespaces...)
-		cov.namespaces(readreason.NamespaceNotFound, opts.MissingNamespaces...)
-		cov.namespaces(readreason.OutsideNamespacePin, opts.PinExcludedNamespaces...)
-		return !opts.NamespaceExcluded
+		for _, gap := range opts.Selection.Gaps {
+			cov.namespaces(gap.Code, gap.Namespaces...)
+		}
+		return !readscope.NoNamespaceAccess(opts.Selection.Namespaces)
 	}
 	// A broad ns: query asks for objects in those namespaces, which no
 	// cluster-scoped object is. A cluster-scoped kind named by kind: ignores
@@ -312,20 +235,12 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if !clusterScoped && !namespaced(tk.Kind, tk.Group) {
 			continue
 		}
-		plan := p.PlanTyped(tk.Kind, opts.Namespaces)
-		sensitive := opts.NamespacedRBAC != nil && slices.ContainsFunc(NamespacedSearchKinds, func(k struct{ Kind, Group, Resource string }) bool { return k.Kind == tk.Kind })
+		plan := p.PlanTyped(tk.Kind, opts.Selection.Namespaces)
+		sensitive := opts.NamespacedRBAC != nil && (k8s.RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: tk.Group, Resource: tk.Plural}) || requiresSearchRoleAccess(tk.Group, tk.Plural))
 		if !sensitive && len(plan.Partitions) == 1 && plan.Partitions[0].Verdict.State == readplan.Gap && cov.quiet(plan.Partitions[0].Verdict.Code) {
 			continue
 		}
-		if opts.SkipKinds[tk.Kind] {
-			cov.kind(tk.Kind, tk.Group, readreason.UserForbidden)
-			continue
-		}
-		// Cluster-scoped kinds ignore the namespace constraint — they're
-		// orthogonal to namespace RBAC. Namespaced kinds may have a per-kind
-		// override (e.g. user has list-secrets only in a subset of their
-		// allowed namespaces); fall back to Options.Namespaces otherwise.
-		listNs := opts.Namespaces
+		listNs := opts.Selection.Namespaces
 		narrowed := false
 		scopeNarrowed := false
 		if clusterScoped {
@@ -336,28 +251,14 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 			listNs = nil
-		} else if override, ok := opts.NamespacesByKind[tk.Kind]; ok && override != nil {
-			// nil overrides fall back to Options.Namespaces (per doc): without
-			// this guard a nil entry would set listNs=nil and trigger a
-			// cluster-wide list — silent bypass of the namespace constraint
-			// in security-sensitive code.
-			if opts.Namespaces == nil || len(override) < len(opts.Namespaces) {
-				scopeNarrowed = true
-				cov.kindScope(tk.Kind, tk.Group, readreason.UserForbidden, len(override) > 0)
-			}
-			listNs, narrowed = override, true
-			if len(listNs) == 0 {
-				cov.kind(tk.Kind, tk.Group, readreason.UserForbidden)
-				continue
-			}
 		}
 		if sensitive {
 			allowed, denied, unchecked := opts.NamespacedRBAC(listNs, tk.Group, tk.Plural)
 			if len(denied) > 0 {
-				cov.kindScope(tk.Kind, tk.Group, readreason.UserForbidden, scopeNarrowed || len(allowed) > 0 || len(unchecked) > 0)
+				cov.kindGap(tk.Kind, tk.Group, readreason.UserForbidden, scopeNarrowed || len(allowed) > 0 || len(unchecked) > 0)
 			}
 			if len(unchecked) > 0 {
-				cov.kindScope(tk.Kind, tk.Group, readreason.UserPermissionCheckFailed, scopeNarrowed || len(allowed) > 0 || len(denied) > 0)
+				cov.kindGap(tk.Kind, tk.Group, readreason.UserPermissionCheckFailed, scopeNarrowed || len(allowed) > 0 || len(denied) > 0)
 			}
 			if len(denied) > 0 || len(unchecked) > 0 {
 				listNs, narrowed, scopeNarrowed = allowed, true, true
@@ -386,7 +287,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				cov.kindNamespaces(readreason.RadarNamespaceNotCollected, part.Namespaces...)
 			case readplan.Gap:
 				hasGap = true
-				cov.kindScope(tk.Kind, tk.Group, part.Verdict.Code, scopeNarrowed || partOfScope(plan, part.Verdict.Code))
+				cov.kindGap(tk.Kind, tk.Group, part.Verdict.Code, scopeNarrowed || partOfScope(plan, part.Verdict.Code))
 			}
 		}
 		if hasGap {
@@ -399,7 +300,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		// Partial results are better than blanking the whole search; an
 		// explicit kind: filter is told what wasn't read.
 		if err != nil {
-			cov.kindScope(tk.Kind, tk.Group, listErrorReason(err), scopeNarrowed || hasGap || plan.CollectionLimited)
+			cov.kindGap(tk.Kind, tk.Group, listErrorReason(err), scopeNarrowed || hasGap || plan.CollectionLimited)
 			continue
 		}
 		res.Searched += len(objs)
@@ -472,7 +373,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		clusterScoped, gvrGroup, gvrResource := classifyDynamicScope(p, gvr, kind)
 		probeGap := observation.ProbeRetrying || len(observation.UnansweredNamespaces) > 0 || observation.ReasonCode == "scope_probe_incomplete"
 		clusterWideSynced := observation.Scope == k8score.DynamicObservationScopeCluster && observation.State == k8score.DynamicObservationSynced && !probeGap
-		planNamespaces := opts.Namespaces
+		planNamespaces := opts.Selection.Namespaces
 		if clusterWideSynced {
 			planNamespaces = nil
 		}
@@ -485,7 +386,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		warm := !observation.ProbeRetrying && len(q.KindFilter) > 0 && (probeGap || observation.State == k8score.DynamicObservationUnwatched || observation.State == k8score.DynamicObservationDeferred)
 		perNamespace := probeGap || observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces
 		settled := reason != "" && !warm && !perNamespace
-		gated := !clusterScoped && opts.KindAccess != nil && kindRBACGroups[gvr.Group]
+		gated := !clusterScoped && opts.KindAccess != nil && k8s.RequiresExactNamespaceAccess(gvr)
 		if settled && !gated && cov.quiet(reason) {
 			continue
 		}
@@ -505,7 +406,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				continue
 			}
 		}
-		namespaces := opts.Namespaces
+		namespaces := opts.Selection.Namespaces
 		if gated && len(q.NSFilter) > 0 {
 			namespaces = readableWithin(namespaces, q.NSFilter)
 		}
@@ -520,16 +421,16 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			if namespaces == nil {
 				// Namespace membership cannot enumerate a cluster-wide reader's
 				// exact-kind scope. Only individually authorized items can be kept.
-				cov.kindScope(kind, gvr.Group, deniedReason(clusterAuthoritative), true)
+				cov.kindGap(kind, gvr.Group, deniedReason(clusterAuthoritative), true)
 				accessNarrowed = true
 			} else {
 				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespaces)
 				denied := len(namespaces) - len(allowed) - len(unchecked)
 				if denied > 0 {
-					cov.kindScope(kind, gvr.Group, readreason.UserForbidden, denied < len(namespaces))
+					cov.kindGap(kind, gvr.Group, readreason.UserForbidden, denied < len(namespaces))
 				}
 				if len(unchecked) > 0 {
-					cov.kindScope(kind, gvr.Group, readreason.UserPermissionCheckFailed, len(unchecked) < len(namespaces))
+					cov.kindGap(kind, gvr.Group, readreason.UserPermissionCheckFailed, len(unchecked) < len(namespaces))
 				}
 				accessNarrowed = len(allowed) < len(namespaces)
 				namespaces = allowed
@@ -558,11 +459,11 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		}
 		recordKindFailures := func() {
 			for reason, failed := range kindFailures {
-				partial := accessNarrowed || plan.CollectionLimited || slices.ContainsFunc(plan.Partitions, func(part readplan.Partition) bool { return part.Extent == readplan.UnknownNamespaces })
+				someNamespaces := accessNarrowed || plan.CollectionLimited || slices.ContainsFunc(plan.Partitions, func(part readplan.Partition) bool { return part.Extent == readplan.UnknownNamespaces })
 				if !failed[""] {
-					partial = partial || namespaces == nil || len(failed) != len(namespaces)
+					someNamespaces = someNamespaces || namespaces == nil || len(failed) != len(namespaces)
 				}
-				cov.kindScope(kind, gvr.Group, reason, partial)
+				cov.kindGap(kind, gvr.Group, reason, someNamespaces)
 			}
 		}
 		if settled {
@@ -697,13 +598,13 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespacesOf(items))
 			items = itemsInNamespaces(items, allowed)
 			if len(unchecked) > 0 {
-				cov.kindScope(kind, gvr.Group, readreason.UserPermissionCheckFailed, accessNarrowed || len(allowed) > 0)
+				cov.kindGap(kind, gvr.Group, readreason.UserPermissionCheckFailed, accessNarrowed || len(allowed) > 0)
 			}
 		}
 		res.Searched += len(items)
 		var inScope map[string]bool
 		if !clusterScoped {
-			inScope = namespaceSet(opts.Namespaces)
+			inScope = namespaceSet(opts.Selection.Namespaces)
 		}
 		for _, u := range items {
 			if err := ctx.Err(); err != nil {
@@ -809,7 +710,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		gaps = append(gaps, resourceapi.Gap{Code: readreason.FilterEvalFailed, Objects: resourceapi.Objects(filterFailed, res.FilterErrors, maxFilterFailedObjects)})
 		sortGaps(gaps)
 	}
-	res.Coverage = resourceapi.SearchCoverage{Status: resourceapi.CoverageComplete, NarrowedBy: cov.narrowedBy(opts.namespaceNarrowing), Gaps: gaps}
+	res.Coverage = resourceapi.SearchCoverage{Status: resourceapi.CoverageComplete, NarrowedBy: cov.narrowedBy(opts.Selection.NarrowedBy), Gaps: gaps}
 	if len(gaps) > 0 {
 		res.Coverage.Status = resourceapi.CoveragePartial
 	}
@@ -901,9 +802,6 @@ func classifyDynamicScope(p Provider, gvr schema.GroupVersionResource, kind stri
 	return k8s.ClassifyKindScope(kind, gvr.Group)
 }
 
-// shouldScanTyped also consults Options.SkipKinds via the closure below
-// when invoked from Search; the standalone form here only honors the
-// query-derived kind filter.
 func shouldScanTyped(kind, group, resource string, q Query) bool {
 	if len(q.KindFilter) > 0 {
 		return kindMatches(kind, group, resource, q.KindFilter)

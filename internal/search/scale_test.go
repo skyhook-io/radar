@@ -8,16 +8,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/readreason"
-	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 type cancelSearchProvider struct {
@@ -65,7 +67,7 @@ func TestSearchStopsOnCancellation(t *testing.T) {
 			if stage == "before" {
 				cancel()
 			}
-			_, err := Search(ctx, p, Parse("test"), Options{Namespaces: namespaces})
+			_, err := Search(ctx, p, Parse("test"), Options{Selection: readscope.Selection{Namespaces: namespaces}})
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("error = %v", err)
 			}
@@ -140,7 +142,7 @@ func TestSearchReusesSyncedClusterWideObservation(t *testing.T) {
 	for i := range namespaces {
 		namespaces[i] = fmt.Sprintf("ns-%05d", i)
 	}
-	_, err := Search(context.Background(), p, Parse("test"), Options{Namespaces: namespaces})
+	_, err := Search(context.Background(), p, Parse("test"), Options{Selection: readscope.Selection{Namespaces: namespaces}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +164,7 @@ func TestSearchPlansNamespaceFanoutOnce(t *testing.T) {
 			State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: namespaces,
 		}},
 	}}
-	res, err := Search(t.Context(), p, Parse("test"), Options{Namespaces: namespaces})
+	res, err := Search(t.Context(), p, Parse("test"), Options{Selection: readscope.Selection{Namespaces: namespaces}})
 	if err != nil || partial(res) || p.plans != 1 || p.reads != len(namespaces) || len(p.warmed) != 0 {
 		t.Fatalf("plans=%d reads=%d warm=%d result=%+v err=%v", p.plans, p.reads, len(p.warmed), res, err)
 	}
@@ -218,7 +220,7 @@ func TestSearchClusterWideCacheStopsBetweenNamespaces(t *testing.T) {
 	}}}
 	// A cache stopped mid-search belongs to a connection Radar left: the
 	// search fails rather than answering with part of it.
-	_, err = Search(t.Context(), p, Parse("kind:Widget robusta"), Options{Namespaces: []string{"a", "b"}, Include: IncludeNone})
+	_, err = Search(t.Context(), p, Parse("kind:Widget robusta"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}, Include: IncludeNone})
 	if !errors.Is(err, ErrConnectionChanged) {
 		t.Fatalf("err = %v, want ErrConnectionChanged", err)
 	}
@@ -237,7 +239,7 @@ func TestSearchClusterWideProbeGapRemainsNamespaceSpecific(t *testing.T) {
 			"b": {State: k8score.DynamicObservationDeferred, Scope: k8score.DynamicObservationScopeCluster, ReasonCode: "scope_probe_incomplete", UnansweredNamespaces: []string{"b"}, ProbeRetrying: true},
 		}},
 	}}
-	got, err := Search(context.Background(), p, Parse("test"), Options{Namespaces: []string{"a", "b"}})
+	got, err := Search(context.Background(), p, Parse("test"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

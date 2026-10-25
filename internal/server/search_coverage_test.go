@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -23,10 +22,18 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
+
+var expectedExactSearchKinds = []struct{ Kind, Group, Resource string }{
+	{"Secret", "", "secrets"},
+	{"Role", "rbac.authorization.k8s.io", "roles"},
+	{"RoleBinding", "rbac.authorization.k8s.io", "rolebindings"},
+	{"LimitRange", "", "limitranges"},
+}
 
 func TestSearchNewNamespacedKindsReportCallerDenial(t *testing.T) {
 	useTestResourceCache(t, fake.NewClientset(
@@ -41,7 +48,7 @@ func TestSearchNewNamespacedKindsReportCallerDenial(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
 	env.srv.permCache.Set("search-kind-reader", nil, perms)
-	for _, kind := range search.NamespacedSearchKinds {
+	for _, kind := range expectedExactSearchKinds {
 		t.Run(kind.Kind, func(t *testing.T) {
 			perms.SetCanI("list", kind.Group, kind.Resource, "", false)
 			perms.SetCanI("list", kind.Group, kind.Resource, "default", false)
@@ -188,13 +195,13 @@ func TestSearchKindRBACDeniedClusterCountsAndCachesNamespaceChecks(t *testing.T)
 	r := requestWithUser("GET", "/api/search", user)
 	for range 2 {
 		gate := s.computeSearchKindRBAC(r)
-		for _, kind := range search.NamespacedSearchKinds {
+		for _, kind := range expectedExactSearchKinds {
 			allowed, denied, unchecked := gate(namespaces, kind.Group, kind.Resource)
 			if !slices.Equal(allowed, []string{"a", "b", "c"}) || !slices.Equal(denied, []string{"denied"}) || len(unchecked) != 0 {
 				t.Fatalf("%s denied-cluster scope: %v %v %v", kind.Kind, allowed, denied, unchecked)
 			}
 		}
-		if got, want := checks.Load(), int32(len(search.NamespacedSearchKinds)*(len(namespaces)+1)); got != want {
+		if got, want := checks.Load(), int32(len(expectedExactSearchKinds)*(len(namespaces)+1)); got != want {
 			t.Fatalf("SAR calls = %d, want %d (one cluster check plus visible namespaces per sensitive kind, cached on repeat)", got, want)
 		}
 	}
@@ -431,7 +438,7 @@ func TestSearchKindRBACBudgetAndCancellation(t *testing.T) {
 	}
 	namespaces = append(namespaces, "cached")
 	slices.Sort(namespaces)
-	for _, kind := range search.NamespacedSearchKinds {
+	for _, kind := range expectedExactSearchKinds {
 		if kind.Kind != "LimitRange" {
 			perms.SetCanI("list", kind.Group, kind.Resource, "", false)
 		}
@@ -440,7 +447,7 @@ func TestSearchKindRBACBudgetAndCancellation(t *testing.T) {
 	r := requestWithUser("GET", "/api/search", user)
 	gate := s.computeSearchKindRBAC(r)
 	totalAllowed, totalUnchecked := 0, 0
-	for _, kind := range search.NamespacedSearchKinds {
+	for _, kind := range expectedExactSearchKinds {
 		allowed, denied, unchecked := gate(namespaces, kind.Group, kind.Resource)
 		if len(denied) != 0 || !slices.Contains(allowed, "cached") || len(allowed)+len(unchecked) != len(namespaces) {
 			t.Fatalf("%s: %v %v %v", kind.Kind, allowed, denied, unchecked)
@@ -448,7 +455,7 @@ func TestSearchKindRBACBudgetAndCancellation(t *testing.T) {
 		totalAllowed += len(allowed)
 		totalUnchecked += len(unchecked)
 	}
-	if checks.Load() != readscope.MaxAccessChecks || totalAllowed != readscope.MaxAccessChecks+len(search.NamespacedSearchKinds) || totalUnchecked != 70*len(search.NamespacedSearchKinds)-readscope.MaxAccessChecks {
+	if checks.Load() != readscope.MaxAccessChecks || totalAllowed != readscope.MaxAccessChecks+len(expectedExactSearchKinds) || totalUnchecked != 70*len(expectedExactSearchKinds)-readscope.MaxAccessChecks {
 		t.Fatalf("checks=%d allowed=%d unchecked=%d", checks.Load(), totalAllowed, totalUnchecked)
 	}
 	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "", false)

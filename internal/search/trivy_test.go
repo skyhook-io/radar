@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
@@ -314,7 +315,7 @@ func TestSearch_TrivyKindsNeedTheCallersListPermission(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := trivyProvider(vulnGVR, "VulnerabilityReport", reports...)
-			opts := Options{Include: IncludeNone, Namespaces: tc.namespaces}
+			opts := Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: tc.namespaces}}
 			if tc.access != nil {
 				opts.KindAccess = tc.access.options()
 			}
@@ -341,7 +342,7 @@ func TestSearch_TrivyCoverageGapsOnlyWhereTheCallerMayList(t *testing.T) {
 		p.filterDynamicByNamespace = true
 		p.dynamicErrNamespaces = map[string]bool{tc.failing: true}
 		access := &kindAccess{namespaces: []string{"team-b"}}
-		res, err := Search(context.Background(), p, Parse("kind:VulnerabilityReport"), Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+		res, err := Search(context.Background(), p, Parse("kind:VulnerabilityReport"), Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}}, KindAccess: access.options()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -360,7 +361,7 @@ func TestSearch_KindAccessLeavesOtherCRDsAlone(t *testing.T) {
 	}}
 	p := trivyProvider(gvr, "Application", app)
 	access := &kindAccess{}
-	res, err := Search(context.Background(), p, Parse("shop"), Options{Include: IncludeNone, Namespaces: []string{"argocd"}, KindAccess: access.options()})
+	res, err := Search(context.Background(), p, Parse("shop"), Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"argocd"}}, KindAccess: access.options()})
 	if err != nil {
 		t.Fatal(err)
 	}

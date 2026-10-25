@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/readreason"
-
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // limitsProvider holds one matching report plus a Pod, so a test can tell
@@ -100,7 +100,7 @@ func TestSearch_UnconfirmedAccessIsReportedNotDropped(t *testing.T) {
 	}
 	access := &kindAccess{namespaces: []string{"team-a"}, unchecked: []string{"team-b"}}
 	res, err := Search(context.Background(), trivyProvider(vulnGVR, "VulnerabilityReport", reports...), Parse("CVE-2026-109618"),
-		Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+		Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}}, KindAccess: access.options()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestSearch_AccessIncompleteDoesNotDependOnTheQuery(t *testing.T) {
 	for _, q := range []string{"CVE-2026-109618", "zzz-no-such-thing"} {
 		access := &kindAccess{namespaces: []string{"team-a"}, unchecked: []string{"team-b"}}
 		res, err := Search(context.Background(), trivyProvider(vulnGVR, "VulnerabilityReport", reports...), Parse(q),
-			Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+			Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}}, KindAccess: access.options()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -172,7 +172,7 @@ func TestSearch_UnconfirmedAccessToAnUnreadableNamespaceIsReported(t *testing.T)
 	p.dynamicErrNamespaces = map[string]bool{"team-a": true, "team-b": true}
 	access := &kindAccess{namespaces: []string{"team-a"}, unchecked: []string{"team-b"}}
 	res, err := Search(context.Background(), p, Parse("kind:VulnerabilityReport"),
-		Options{Include: IncludeNone, Namespaces: []string{"team-a", "team-b"}, KindAccess: access.options()})
+		Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}}, KindAccess: access.options()})
 	if err != nil {
 		t.Fatal(err)
 	}

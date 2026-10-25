@@ -7,9 +7,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/readreason"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -17,6 +14,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 type fakeProvider struct {
@@ -466,8 +468,8 @@ func TestSearch_DynamicClusterScopedCRDListsAtClusterScopeWhenAllowed(t *testing
 		namespaced: map[schema.GroupVersionResource]bool{gvr: false},
 	}
 	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
-		Include:    IncludeNone,
-		Namespaces: []string{"team-a", "team-b"},
+		Include:   IncludeNone,
+		Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}},
 		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools", true
 		},

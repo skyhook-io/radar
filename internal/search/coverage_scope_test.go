@@ -10,11 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readscope"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/readreason"
-	"github.com/skyhook-io/radar/pkg/resourceapi"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,6 +18,12 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 func TestTrivyClusterCheckFailureIsNotADenial(t *testing.T) {
@@ -75,7 +76,7 @@ func TestTrivyClusterCheckFailureIsNotADenial(t *testing.T) {
 func TestDynamicFailureInEveryNamedNamespaceReachesAll(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	p := &fakeProvider{kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}, observations: map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: {State: k8score.DynamicObservationSyncing, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{"alpha", "beta"}}}}
-	res, err := Search(t.Context(), p, Parse("kind:Widget ns:alpha ns:beta"), Options{Namespaces: []string{"alpha", "beta"}})
+	res, err := Search(t.Context(), p, Parse("kind:Widget ns:alpha ns:beta"), Options{Selection: readscope.Selection{Namespaces: []string{"alpha", "beta"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +95,7 @@ func TestNamespaceGapNamesAllKindsOnlyWhenAllWereMissed(t *testing.T) {
 				reasons["Pod"] = map[string]string{"alpha": string(readreason.RadarNamespaceNotCollected)}
 			}
 			p := &fakeProvider{typedNamespaceReasons: reasons, typed: map[string][]runtime.Object{"pods": {newPod("alpha", "db", "image", nil)}}}
-			res, err := Search(t.Context(), p, Parse("kind:Pod kind:ConfigMap ns:alpha"), Options{Namespaces: []string{"alpha"}})
+			res, err := Search(t.Context(), p, Parse("kind:Pod kind:ConfigMap ns:alpha"), Options{Selection: readscope.Selection{Namespaces: []string{"alpha"}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,7 +133,7 @@ func TestTypedSearchKeepsReadyNamespaceBesideUncollectedOne(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	p := &typedPlanProvider{Provider: &CacheProvider{cache: &k8s.ResourceCache{ResourceCache: core}}}
-	res, err := Search(t.Context(), p, Parse("kind:ConfigMap ns:alpha ns:beta db"), Options{Namespaces: []string{"alpha", "beta"}})
+	res, err := Search(t.Context(), p, Parse("kind:ConfigMap ns:alpha ns:beta db"), Options{Selection: readscope.Selection{Namespaces: []string{"alpha", "beta"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +300,7 @@ func TestDynamicNamespaceListFailureExtents(t *testing.T) {
 				failures["alpha"] = errors.New("list failed")
 			}
 			p := &fakeProvider{kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}, dynamicErrors: failures, observations: map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: {State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{"alpha", "beta"}}}}
-			res, err := Search(t.Context(), p, Parse("kind:Widget ns:alpha ns:beta"), Options{Namespaces: []string{"alpha", "beta"}})
+			res, err := Search(t.Context(), p, Parse("kind:Widget ns:alpha ns:beta"), Options{Selection: readscope.Selection{Namespaces: []string{"alpha", "beta"}}})
 			want := resourceapi.ExtentUnknown
 			if whole {
 				want = resourceapi.ExtentAll

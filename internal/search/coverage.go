@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -16,14 +14,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
-// NamespacedSearchKinds lists the typed kinds that need the caller's exact
-// list permission, not namespace visibility alone — LimitRanges as on the
-// resource list and get routes.
-var NamespacedSearchKinds = []struct{ Kind, Group, Resource string }{
-	{"Secret", "", "secrets"},
-	{"Role", "rbac.authorization.k8s.io", "roles"},
-	{"RoleBinding", "rbac.authorization.k8s.io", "rolebindings"},
-	{"LimitRange", "", "limitranges"},
+// Search gates typed role metadata because it can expose permissions beyond namespace visibility.
+func requiresSearchRoleAccess(group, resource string) bool {
+	return group == "rbac.authorization.k8s.io" && (resource == "roles" || resource == "rolebindings")
 }
 
 // reasonClass groups coverage reasons by how a search reports them.
@@ -163,10 +156,10 @@ func (c *coverage) kind(kind, group string, reason readreason.Code) {
 	c.kindIn(kind, group, reason, "")
 }
 
-// kindScope preserves whether a reason reaches only part of the searched scope.
-func (c *coverage) kindScope(kind, group string, reason readreason.Code, partial bool) {
+// kindGap preserves whether a reason reaches only part of the searched scope.
+func (c *coverage) kindGap(kind, group string, reason readreason.Code, someNamespaces bool) {
 	c.kind(kind, group, reason)
-	if partial {
+	if someNamespaces {
 		c.someNamespaces[reason] = true
 	}
 }
@@ -329,75 +322,6 @@ func sortGaps(gaps []resourceapi.Gap) {
 	})
 }
 
-// ScopeNamespaces sets the namespace fields of o for q. visible is what the
-// caller may search within the --namespace-scope pin: nil means every
-// namespace, empty means none. ceiling is the caller's RBAC visibility without
-// the pin. A namespace an ns: term names but visible leaves out is the
-// caller's RBAC when ceiling excludes it too, and the pin otherwise.
-func (o *Options) ScopeNamespaces(q Query, visible, ceiling []string) {
-	o.Namespaces = visible
-	o.ExcludedNamespaces = nil
-	o.PinExcludedNamespaces = nil
-	o.seesAllNamespaces = ceiling == nil
-	if len(q.NSFilter) > 0 {
-		o.Namespaces = make([]string, 0, len(q.NSFilter))
-		for _, ns := range q.NSFilter {
-			into := &o.ExcludedNamespaces
-			switch {
-			case visible == nil || slices.Contains(visible, ns):
-				into = &o.Namespaces
-			case o.Pinned && (ceiling == nil || slices.Contains(ceiling, ns)):
-				into = &o.PinExcludedNamespaces
-			}
-			if !slices.Contains(*into, ns) {
-				*into = append(*into, ns)
-			}
-		}
-	}
-	o.NamespaceExcluded = o.Namespaces != nil && len(o.Namespaces) == 0
-	// Every narrowing that applied to a search that named no namespace, as REST
-	// and MCP lists report it: the caller's access when it is restricted, and
-	// the pin.
-	o.namespaceNarrowing = nil
-	if len(q.NSFilter) == 0 {
-		if ceiling != nil {
-			o.namespaceNarrowing = append(o.namespaceNarrowing, resourceapi.NarrowedByUserAccess)
-		}
-		if o.Pinned {
-			o.namespaceNarrowing = append(o.namespaceNarrowing, resourceapi.NarrowedByNamespacePin)
-		}
-	}
-}
-
-// excludeMissingNamespaces reports a namespace an ns: term names that doesn't
-// exist on the cluster as namespace_not_found, instead of searching it to a
-// silent empty answer or blaming the namespace selection. Only for a caller
-// whose RBAC covers every namespace: for anyone else, which namespaces exist
-// is not theirs to learn, and a missing namespace stays namespace_not_visible.
-func (o *Options) excludeMissingNamespaces(p Provider, q Query) {
-	if len(q.NSFilter) == 0 || !o.seesAllNamespaces {
-		return
-	}
-	missing := p.KnownMissingNamespaces(q.NSFilter)
-	split := func(namespaces []string) (kept []string) {
-		if namespaces == nil {
-			return nil
-		}
-		kept = make([]string, 0, len(namespaces))
-		for _, ns := range namespaces {
-			if slices.Contains(missing, ns) {
-				o.MissingNamespaces = append(o.MissingNamespaces, ns)
-			} else {
-				kept = append(kept, ns)
-			}
-		}
-		return kept
-	}
-	o.Namespaces = split(o.Namespaces)
-	o.PinExcludedNamespaces = split(o.PinExcludedNamespaces)
-	o.NamespaceExcluded = o.Namespaces != nil && len(o.Namespaces) == 0
-}
-
 // errIncompleteDiscovery marks a dynamic catalog missing the API groups whose
 // discovery failed.
 var errIncompleteDiscovery = errors.New("some API groups could not be discovered")
@@ -406,19 +330,22 @@ var errIncompleteDiscovery = errors.New("some API groups could not be discovered
 // its hits could mix two clusters.
 var ErrConnectionChanged = errors.New("Radar's cluster connection changed during this search (a context switch or reconnect); confirm which cluster Radar is connected to, then retry")
 
-// listErrorReason classifies a failed collector list or warm-up. The typed
-// cache reports a probe-disabled kind as a "forbidden:" error, and
-// ErrUnknownKind marks a kind Radar reads directly instead of watching. A 401
-// stays radar_forbidden: the probes and retained observations behind most
-// collector denials do not keep 401 apart from 403.
+// listErrorReason keeps warm-up budget exhaustion pending: retrying search
+// can finish collection without changing Radar's setup.
 func listErrorReason(err error) readreason.Code {
-	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || strings.HasPrefix(err.Error(), "forbidden:") {
+	if code, ok := readplan.CollectorErrorCode(err); ok {
+		switch code {
+		case readreason.RadarCredentialsRejected, readreason.RadarForbidden, readreason.KindSyncPending:
+			return code
+		}
+	}
+	if strings.HasPrefix(err.Error(), "forbidden:") {
 		return readreason.RadarForbidden
 	}
 	if errors.Is(err, k8s.ErrUnknownKind) {
 		return readreason.KindNotWatchable
 	}
-	if errors.Is(err, k8s.ErrDynamicNotReady) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || k8score.IsClientRateLimited(err) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || k8score.IsClientRateLimited(err) {
 		return readreason.KindSyncPending
 	}
 	return readreason.ReadError

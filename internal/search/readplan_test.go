@@ -9,11 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/pkg/k8score"
-	"github.com/skyhook-io/radar/pkg/readreason"
-	"github.com/skyhook-io/radar/pkg/resourceapi"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +18,13 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 type typedPlanProvider struct {
@@ -59,7 +61,7 @@ func TestSearchTypedNamespaceCredentialRejection(t *testing.T) {
 	for _, query := range []string{"robusta", "kind:ConfigMap robusta", "kind:ConfigMap ns:alpha ns:beta robusta"} {
 		q := Parse(query)
 		opts := Options{Include: IncludeNone}
-		opts.ScopeNamespaces(q, []string{"alpha", "beta"}, nil)
+		opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Namespaces: []string{"alpha", "beta"}, Checked: true}, nil)
 		res, err := Search(t.Context(), p, q, opts)
 		if err != nil {
 			t.Fatal(err)
@@ -88,7 +90,7 @@ func TestSearchTypedPlanKeepsEveryReadinessReason(t *testing.T) {
 	for _, query := range []string{"robusta", "kind:ConfigMap robusta", "kind:ConfigMap ns:alpha ns:beta ns:gamma robusta"} {
 		q := Parse(query)
 		opts := Options{Include: IncludeNone}
-		opts.ScopeNamespaces(q, []string{"alpha", "beta", "gamma"}, nil)
+		opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Namespaces: []string{"alpha", "beta", "gamma"}, Checked: true}, nil)
 		res, err := Search(t.Context(), p, q, opts)
 		if err != nil {
 			t.Fatal(err)
@@ -173,7 +175,7 @@ func TestSearchNamespaceSourceReplacementAndStop(t *testing.T) {
 				if plan := p.PlanDynamic(gvr, []string{"alpha"}, false); !slices.Equal(planCodes(plan), []readreason.Code{readreason.ConnectionChanged}) {
 					t.Fatalf("stopped namespace plan: %+v", plan)
 				}
-				if _, err := Search(t.Context(), p, Parse("kind:Widget robusta"), Options{Namespaces: []string{"alpha"}}); !errors.Is(err, ErrConnectionChanged) {
+				if _, err := Search(t.Context(), p, Parse("kind:Widget robusta"), Options{Selection: readscope.Selection{Namespaces: []string{"alpha"}}}); !errors.Is(err, ErrConnectionChanged) {
 					t.Fatalf("stopped namespace cache: %v", err)
 				}
 				return
@@ -185,7 +187,7 @@ func TestSearchNamespaceSourceReplacementAndStop(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			opts := Options{Namespaces: []string{"alpha"}, Include: IncludeNone}
+			opts := Options{Selection: readscope.Selection{Namespaces: []string{"alpha"}}, Include: IncludeNone}
 			res, err := Search(t.Context(), p, Parse("kind:Widget robusta"), opts)
 			if err != nil || !partial(res) || len(res.Hits) != 0 || len(res.Coverage.Gaps) != 1 || res.Coverage.Gaps[0].Code != readreason.KindSyncPending {
 				t.Fatalf("unloaded replacement became an empty complete result: %+v %v", res, err)
@@ -225,7 +227,7 @@ func TestSearchPlansKeepFailureExtents(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &fakeProvider{kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}, observations: map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: tc.whole}, namespaceObservations: map[schema.GroupVersionResource]map[string]k8score.DynamicResourceObservation{gvr: tc.namespaces}}
-			res, err := Search(t.Context(), p, Parse("kind:Widget"), Options{Namespaces: []string{"alpha", "beta"}})
+			res, err := Search(t.Context(), p, Parse("kind:Widget"), Options{Selection: readscope.Selection{Namespaces: []string{"alpha", "beta"}}})
 			if err != nil || len(res.Coverage.Gaps) != 1 || res.Coverage.Gaps[0].Code != readreason.KindSyncPending || !reflect.DeepEqual(res.Coverage.Gaps[0].Namespaces, tc.want) {
 				t.Fatalf("coverage=%+v err=%v want namespaces=%+v", res.Coverage, err, tc.want)
 			}

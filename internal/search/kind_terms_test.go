@@ -148,7 +148,12 @@ func TestSearch_ReportsKindsItCouldNotAnswerFor(t *testing.T) {
 		}
 	})
 	t.Run("a named kind the caller may not list", func(t *testing.T) {
-		res, _ := Search(context.Background(), &fakeProvider{}, Parse("kind:Secret"), Options{Include: IncludeNone, SkipKinds: map[string]bool{"Secret": true}})
+		res, _ := Search(context.Background(), &fakeProvider{}, Parse("kind:Secret"), Options{Include: IncludeNone, NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+			if resource == "secrets" {
+				return []string{}, []string{""}, nil
+			}
+			return ns, nil, nil
+		}})
 		if got := unsearched(res); len(got) != 1 || got[0].Reason != readreason.UserForbidden {
 			t.Fatalf("coverage = %+v, want the caller's access gap", got)
 		}

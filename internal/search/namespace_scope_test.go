@@ -12,37 +12,47 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
-func TestScopeNamespaces(t *testing.T) {
+func TestSelectNamespaces(t *testing.T) {
 	for _, tc := range []struct {
-		name              string
-		query             string
-		visible, ceiling  []string
-		wantScan          []string
-		wantExcluded      []string
-		wantPin           []string
-		wantNoNamespaceOK bool
+		name, query                     string
+		ceiling                         []string
+		pin                             *string
+		wantScan, wantExcluded, wantPin []string
+		wantNoNamespaceOK               bool
 	}{
 		{name: "unrestricted", query: "x"},
-		{name: "rbac ceiling is not a gap", query: "x", visible: []string{"a", "b"}, ceiling: []string{"b", "a"}, wantScan: []string{"a", "b"}},
-		{name: "pin narrows silently", query: "x", visible: []string{"b", "a"}, ceiling: nil, wantScan: []string{"b", "a"}},
-		{name: "terms within pin", query: "x ns:a", visible: []string{"a"}, ceiling: nil, wantScan: []string{"a"}},
-		{name: "terms outside pin", query: "x ns:a ns:b ns:b", visible: []string{"a"}, ceiling: nil, wantScan: []string{"a"}, wantPin: []string{"b"}},
-		{name: "terms outside rbac", query: "x ns:b ns:c", visible: []string{"a"}, ceiling: []string{"a"}, wantScan: []string{}, wantExcluded: []string{"b", "c"}, wantNoNamespaceOK: true},
-		{name: "rbac and pin", query: "x ns:a ns:b ns:c", visible: []string{"a"}, ceiling: []string{"a", "b"}, wantScan: []string{"a"}, wantExcluded: []string{"c"}, wantPin: []string{"b"}},
+		{name: "rbac ceiling is not a gap", query: "x", ceiling: []string{"a", "b"}, wantScan: []string{"a", "b"}},
+		{name: "pin narrows silently", query: "x", pin: ptr.To("a"), wantScan: []string{"a"}},
+		{name: "terms within pin", query: "x ns:a", pin: ptr.To("a"), wantScan: []string{"a"}},
+		{name: "terms outside pin", query: "x ns:a ns:b ns:b", pin: ptr.To("a"), wantScan: []string{"a"}, wantPin: []string{"b"}},
+		{name: "terms outside rbac", query: "x ns:b ns:c", ceiling: []string{"a"}, wantScan: []string{}, wantExcluded: []string{"b", "c"}, wantNoNamespaceOK: true},
+		{name: "rbac and pin", query: "x ns:a ns:b ns:c", ceiling: []string{"a", "b"}, pin: ptr.To("a"), wantScan: []string{"a"}, wantExcluded: []string{"c"}, wantPin: []string{"b"}},
 		{name: "unrestricted terms", query: "x ns:b", wantScan: []string{"b"}},
-		{name: "no namespace access", query: "x", visible: []string{}, ceiling: []string{}, wantScan: []string{}, wantNoNamespaceOK: true},
+		{name: "no namespace access", query: "x", ceiling: []string{}, wantScan: []string{}, wantNoNamespaceOK: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := Options{Pinned: true}
-			opts.ScopeNamespaces(Parse(tc.query), tc.visible, tc.ceiling)
-			if !reflect.DeepEqual(opts.Namespaces, tc.wantScan) || !reflect.DeepEqual(opts.ExcludedNamespaces, tc.wantExcluded) ||
-				!reflect.DeepEqual(opts.PinExcludedNamespaces, tc.wantPin) || opts.NamespaceExcluded != tc.wantNoNamespaceOK {
-				t.Fatalf("got scan=%#v excluded=%#v pin=%#v noNamespace=%v", opts.Namespaces, opts.ExcludedNamespaces, opts.PinExcludedNamespaces, opts.NamespaceExcluded)
+			selection := SelectNamespaces(&fakeProvider{}, Parse(tc.query), readscope.NamespaceAccess{Namespaces: tc.ceiling, Checked: true}, tc.pin)
+			var excluded, outside []string
+			for _, gap := range selection.Gaps {
+				switch gap.Code {
+				case readreason.UserNamespaceNotVisible:
+					excluded = gap.Namespaces
+				case readreason.OutsideNamespacePin:
+					outside = gap.Namespaces
+				default:
+					t.Fatalf("unexpected gap: %+v", gap)
+				}
+			}
+			if !reflect.DeepEqual(selection.Namespaces, tc.wantScan) || !reflect.DeepEqual(excluded, tc.wantExcluded) || !reflect.DeepEqual(outside, tc.wantPin) || readscope.NoNamespaceAccess(selection.Namespaces) != tc.wantNoNamespaceOK {
+				t.Fatalf("selection=%+v excluded=%v outside=%v", selection, excluded, outside)
 			}
 		})
 	}
@@ -89,7 +99,7 @@ func TestClusterScopedHitsIgnoreNamespaceVisibilityAndSelection(t *testing.T) {
 			opts := Options{Include: IncludeNone, CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 				return resource != "nodes", true
 			}}
-			opts.ScopeNamespaces(q, tc.visible, tc.ceiling)
+			opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Namespaces: tc.visible, Checked: true}, nil)
 			res, _ := Search(context.Background(), namespaceFixture(), q, opts)
 			if got, want := hitNames(res), []string{"ClusterRole//robusta-cr", "Pod/a/robusta-a"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("hits = %v, want %v", got, want)
@@ -98,7 +108,7 @@ func TestClusterScopedHitsIgnoreNamespaceVisibilityAndSelection(t *testing.T) {
 				t.Fatalf("a broad search reported the caller's scope: %+v", unsearched(res))
 			}
 			q = Parse("kind:Node robusta")
-			opts.ScopeNamespaces(q, tc.visible, tc.ceiling)
+			opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Namespaces: tc.visible, Checked: true}, nil)
 			res, _ = Search(context.Background(), namespaceFixture(), q, opts)
 			if denied := gapsWithReason(res, "user_forbidden"); len(res.Hits) != 0 || len(denied) != 1 || denied[0].Kind != "Node" {
 				t.Fatalf("cluster-scoped gate: %+v", unsearched(res))
@@ -114,7 +124,7 @@ func TestExplicitNamespaceTermsAndClusterScopedKinds(t *testing.T) {
 	}
 	q := Parse("ns:a robusta")
 	opts := Options{Include: IncludeNone, CanReadClusterScoped: refuse}
-	opts.ScopeNamespaces(q, nil, nil)
+	opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Checked: true}, nil)
 	res, _ := Search(context.Background(), namespaceFixture(), q, opts)
 	if got, want := hitNames(res), []string{"Pod/a/robusta-a"}; !reflect.DeepEqual(got, want) || partial(res) {
 		t.Fatalf("broad ns: query = %v %+v, want %v", got, unsearched(res), want)
@@ -122,7 +132,7 @@ func TestExplicitNamespaceTermsAndClusterScopedKinds(t *testing.T) {
 
 	q = Parse("kind:ClusterRole kind:Pod ns:a robusta")
 	opts = Options{Include: IncludeNone}
-	opts.ScopeNamespaces(q, nil, nil)
+	opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Checked: true}, nil)
 	res, _ = Search(context.Background(), namespaceFixture(), q, opts)
 	if got, want := hitNames(res), []string{"ClusterRole//robusta-cr", "Pod/a/robusta-a"}; !reflect.DeepEqual(got, want) || partial(res) {
 		t.Fatalf("named cluster-scoped kind with ns: = %v %+v, want %v", got, unsearched(res), want)
@@ -160,8 +170,12 @@ func TestNamespaceCoverageNamesOnlyNamedNamespaces(t *testing.T) {
 				p.typedReasons = map[string]string{"Pod": "radar_namespace_not_collected", "ConfigMap": "radar_namespace_not_collected", "Secret": "radar_namespace_not_collected"}
 			}
 			q := Parse(tc.query)
-			opts := Options{Include: IncludeNone, Pinned: true}
-			opts.ScopeNamespaces(q, tc.visible, tc.ceiling)
+			opts := Options{Include: IncludeNone}
+			var pin *string
+			if tc.visible != nil && len(tc.visible) == 1 {
+				pin = &tc.visible[0]
+			}
+			opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Namespaces: tc.ceiling, Checked: true}, pin)
 			res, _ := Search(context.Background(), p, q, opts)
 			if !reflect.DeepEqual(unsearched(res), tc.want) || partial(res) != (len(tc.want) > 0) || len(res.Hits) != tc.hits {
 				t.Fatalf("coverage %+v hits %v, want %+v and %d hits", unsearched(res), hitNames(res), tc.want, tc.hits)
@@ -198,8 +212,8 @@ func TestDynamicNamespaceCoveragePrecedesReadiness(t *testing.T) {
 		{"kind:Widget ns:b", []UnsearchedKind{{Kind: "*", Reason: "outside_namespace_pin", Namespaces: []string{"b"}}}},
 	} {
 		q := Parse(tc.query)
-		opts := Options{Pinned: true}
-		opts.ScopeNamespaces(q, []string{"a"}, nil)
+		opts := Options{}
+		opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Checked: true}, ptr.To("a"))
 		res, _ := Search(context.Background(), p, q, opts)
 		if !reflect.DeepEqual(unsearched(res), tc.want) || len(p.warmed) != 0 {
 			t.Fatalf("%s: coverage %+v, want %+v (warmed %v)", tc.query, unsearched(res), tc.want, p.warmed)
@@ -237,7 +251,7 @@ func TestDynamicNamespaceReadinessInEveryScope(t *testing.T) {
 				}},
 				dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {{Object: map[string]any{"metadata": map[string]any{"name": "robusta-a", "namespace": "a"}}}}},
 			}
-			res, _ := Search(context.Background(), p, Parse(tc.query), Options{Include: IncludeNone, Namespaces: tc.namespaces})
+			res, _ := Search(context.Background(), p, Parse(tc.query), Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: tc.namespaces}})
 			if !reflect.DeepEqual(unsearched(res), tc.want) || !reflect.DeepEqual(p.dynamicListNamespaces, []string{"a"}) || len(p.warmed) != 0 {
 				t.Fatalf("coverage %+v lists %v warmed %v, want %+v listing only a", unsearched(res), p.dynamicListNamespaces, p.warmed, tc.want)
 			}
@@ -263,7 +277,7 @@ func TestFailedNamespaceCheckIsAFailureNotADenial(t *testing.T) {
 	} {
 		q := Parse(tc.query)
 		opts := Options{Include: IncludeNone, NamespaceCheckFailed: true}
-		opts.ScopeNamespaces(q, []string{}, []string{})
+		opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Namespaces: []string{}, Checked: false}, nil)
 		res, _ := Search(context.Background(), namespaceFixture(), q, opts)
 		if !partial(res) || !reflect.DeepEqual(unsearched(res), tc.want) || !reflect.DeepEqual(hitNames(res), tc.hits) {
 			t.Fatalf("%s: coverage %+v hits %v, want %+v and %v", tc.query, unsearched(res), hitNames(res), tc.want, tc.hits)
@@ -308,8 +322,12 @@ func TestNamedNamespaceThatDoesNotExist(t *testing.T) {
 			fixture.existingNamespaces = []string{"a", "b"}
 			p := &existenceProbe{fakeProvider: fixture}
 			q := Parse(tc.query)
-			opts := Options{Include: IncludeNone, Pinned: tc.visible != nil}
-			opts.ScopeNamespaces(q, tc.visible, tc.ceiling)
+			opts := Options{Include: IncludeNone}
+			var pin *string
+			if tc.visible != nil {
+				pin = &tc.visible[0]
+			}
+			opts.Selection = SelectNamespaces(p, q, readscope.NamespaceAccess{Namespaces: tc.ceiling, Checked: true}, pin)
 			res, _ := Search(context.Background(), p, q, opts)
 			if !reflect.DeepEqual(unsearched(res), tc.want) || !reflect.DeepEqual(hitNames(res), tc.hits) || !reflect.DeepEqual(p.asked, tc.asked) {
 				t.Fatalf("coverage %+v hits %v asked %v, want %+v, %v, %v", unsearched(res), hitNames(res), p.asked, tc.want, tc.hits, tc.asked)
@@ -320,7 +338,7 @@ func TestNamedNamespaceThatDoesNotExist(t *testing.T) {
 	// named namespace is simply searched.
 	q := Parse("ns:payments robusta")
 	var opts Options
-	opts.ScopeNamespaces(q, nil, nil)
+	opts.Selection = SelectNamespaces(namespaceFixture(), q, readscope.NamespaceAccess{Checked: true}, nil)
 	if res, _ := Search(context.Background(), namespaceFixture(), q, opts); partial(res) {
 		t.Fatalf("unknown existence reported: %+v", unsearched(res))
 	}

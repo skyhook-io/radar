@@ -193,7 +193,7 @@ func TestSearchCoverageMatchesAcrossRESTAndMCP(t *testing.T) {
 		if !reflect.DeepEqual(unsearched(restResult), tc.want) || partial(restResult) != (len(tc.want) > 0) {
 			t.Fatalf("%s: REST coverage %+v (partial=%v), want %+v", tc.query, unsearched(restResult), partial(restResult), tc.want)
 		}
-		if !reflect.DeepEqual(unsearched(restResult), unsearched(viaMCP.Result)) || partial(restResult) != partial(viaMCP.Result) {
+		if !reflect.DeepEqual(restResult.Coverage, viaMCP.Coverage) {
 			t.Fatalf("%s: REST coverage %+v differs from MCP %+v", tc.query, unsearched(restResult), unsearched(viaMCP.Result))
 		}
 		// A partial result always explains itself; so does a narrowed broad

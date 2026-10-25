@@ -14,9 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/resourceid"
-	"github.com/skyhook-io/radar/pkg/timeutil"
-
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -45,8 +42,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
 	"github.com/skyhook-io/radar/pkg/servinginsight"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -3373,10 +3372,6 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		parsed.NSFilter = []string{input.Namespace}
 	}
 	ceiling, namespaceCheckFailed := filterNamespacesForUserWithStatus(ctx, nil)
-	visible := ceiling
-	if !namespaceCheckFailed {
-		visible = scopedNamespacesForUser(ctx, nil)
-	}
 
 	var include search.IncludeMode
 	switch input.Include {
@@ -3400,10 +3395,14 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		},
 		KindAccess: mcpSearchKindAccess(ctx, kindRBAC),
 	}
-	opts.Pinned = k8s.ForceNamespaceScope
-	opts.ScopeNamespaces(parsed, visible, ceiling)
+	var pin *string
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		pin = &target
+	}
+	opts.Selection = search.SelectNamespaces(provider, parsed, readscope.NamespaceAccess{Namespaces: ceiling, Checked: !namespaceCheckFailed}, pin)
 	opts.NamespaceCheckFailed = namespaceCheckFailed
-	scanNamespaces := opts.Namespaces
+	scanNamespaces := opts.Selection.Namespaces
 	if input.Filter != "" {
 		f, err := filter.CachedObjectFilter(input.Filter)
 		if err != nil {
