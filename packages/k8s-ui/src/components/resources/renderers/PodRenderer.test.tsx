@@ -21,6 +21,70 @@ const pod = {
   status: { phase: 'Running' },
 }
 
+describe('PodRenderer completed readiness conditions', () => {
+  const completionConditions = [
+    { type: 'PodReadyToStartContainers', status: 'False' },
+    { type: 'Initialized', status: 'True', reason: 'PodCompleted' },
+    { type: 'Ready', status: 'False', reason: 'PodCompleted' },
+    { type: 'ContainersReady', status: 'False', reason: 'PodCompleted' },
+    { type: 'PodScheduled', status: 'True' },
+  ]
+  const renderConditions = (phase: string | undefined, conditions = completionConditions) => renderToString(
+    <PodRenderer
+      data={{ ...pod, status: { phase, conditions } }}
+      onCopy={() => undefined}
+      copied={null}
+    />,
+  )
+
+  it('keeps completed readiness observations visible without counting them as failing', () => {
+    const html = renderConditions('Succeeded')
+
+    expect(html).toContain('Conditions (5)')
+    expect(html).not.toContain('failing')
+    expect(html).toContain('PodReadyToStartContainers')
+    expect(html).toContain('ContainersReady')
+    expect(html).toContain('PodCompleted')
+  })
+
+  it('uses successful completion even when readiness reasons are stale or absent', () => {
+    const html = renderConditions('Succeeded', [
+      { type: 'PodReadyToStartContainers', status: 'False' },
+      { type: 'Ready', status: 'False', reason: 'ContainersNotReady' },
+      { type: 'ContainersReady', status: 'False' },
+    ])
+
+    expect(html).toContain('Conditions (3)')
+    expect(html).not.toContain('failing')
+    expect(html).toContain('ContainersNotReady')
+  })
+
+  it.each(['Running', 'Failed', undefined])('retains readiness failures when phase is %s', (phase) => {
+    const html = renderConditions(phase, [
+      { type: 'PodReadyToStartContainers', status: 'False' },
+      { type: 'Ready', status: 'False', reason: 'PodFailed' },
+      { type: 'ContainersReady', status: 'False' },
+    ])
+
+    expect(html).toContain('Conditions (3) · 3 failing')
+  })
+
+  it('does not let a completion reason hide readiness failures on a failed Pod', () => {
+    expect(renderConditions('Failed')).toContain('Conditions (5) · 3 failing')
+  })
+
+  it('retains unrelated false conditions after successful completion', () => {
+    const html = renderConditions('Succeeded', [
+      ...completionConditions,
+      { type: 'example.com/controller-ready', status: 'False', reason: 'ControllerFailed' },
+    ])
+
+    expect(html).toContain('Conditions (6) · 1 failing')
+    expect(html).toContain('example.com/controller-ready')
+    expect(html).toContain('ControllerFailed')
+  })
+})
+
 describe('PodRenderer envFrom expansion', () => {
   it('keeps same-name ConfigMap and Secret values separate', () => {
     const resolvedEnvFrom: ResolvedEnvFrom = {
