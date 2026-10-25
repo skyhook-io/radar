@@ -91,6 +91,53 @@ func TestGenericConditionSelectionKeepsActionableFailures(t *testing.T) {
 	}
 }
 
+func TestGenericConditionsRespectExplicitCrossplanePause(t *testing.T) {
+	for _, tc := range []struct {
+		name, annotation, condType, reason, want string
+		failureFirst                             bool
+		independentFailure                       bool
+	}{
+		{name: "intentional pause", annotation: "true", condType: "Synced", reason: "ReconcilePaused"},
+		{name: "missing annotation", condType: "Synced", reason: "ReconcilePaused", want: "Synced: ReconcilePaused"},
+		{name: "false annotation", annotation: "false", condType: "Synced", reason: "ReconcilePaused", want: "Synced: ReconcilePaused"},
+		{name: "noncanonical annotation", annotation: "True", condType: "Synced", reason: "ReconcilePaused", want: "Synced: ReconcilePaused"},
+		{name: "different condition", annotation: "true", condType: "Ready", reason: "ReconcilePaused", want: "Ready: ReconcilePaused"},
+		{name: "error while paused", annotation: "true", condType: "Synced", reason: "ReconcileError", want: "Synced: ReconcileError"},
+		{name: "independent error after pause", annotation: "true", condType: "Synced", reason: "ReconcilePaused", independentFailure: true, want: "Ready: Unavailable"},
+		{name: "independent error before pause", annotation: "true", condType: "Synced", reason: "ReconcilePaused", independentFailure: true, failureFirst: true, want: "Ready: Unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conds := []map[string]any{{"type": tc.condType, "status": "False", "reason": tc.reason}}
+			if tc.independentFailure {
+				failure := map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable"}
+				if tc.failureFirst {
+					conds = append([]map[string]any{failure}, conds...)
+				} else {
+					conds = append(conds, failure)
+				}
+			}
+			u := rolloutWithConditions(conds)
+			u.SetName("example")
+			u.SetNamespace("test")
+			u.SetAnnotations(map[string]string{"crossplane.io/paused": tc.annotation})
+			gvr := schema.GroupVersionResource{Group: "platform.example.com", Version: "v1", Resource: "databases"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Database"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			for _, grouped := range []bool{false, true} {
+				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
+				if tc.want == "" {
+					if len(got) != 0 {
+						t.Fatalf("expected quiet pause, got %+v", got)
+					}
+					continue
+				}
+				if len(got) != 1 || got[0].Reason != tc.want || got[0].Severity != SeverityWarning {
+					t.Fatalf("want warning %q, got %+v", tc.want, got)
+				}
+			}
+		})
+	}
+}
+
 func TestCuratedConditionsContinueAfterAnExpectedCondition(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
 	u := rolloutWithConditions([]map[string]any{

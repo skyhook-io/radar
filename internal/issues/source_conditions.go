@@ -281,7 +281,8 @@ func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) 
 			break
 		}
 		current, _ := conditions.Find(u, condition.Type)
-		if current.Status == "False" && !isTransientCRDCondition(u, condition.Reason) {
+		paused := condition.Type == "Synced" && condition.Reason == "ReconcilePaused" && u.GetAnnotations()["crossplane.io/paused"] == "true"
+		if current.Status == "False" && !paused && !isTransientCRDCondition(u, condition.Reason) {
 			if u.GetGeneration() <= 0 || condition.ObservedGeneration <= 0 || condition.ObservedGeneration >= u.GetGeneration() {
 				return condition, true
 			}
