@@ -35,6 +35,7 @@ var readStatus = map[readreason.Code]int{
 	readreason.RadarKindNotCollected:      http.StatusServiceUnavailable,
 	readreason.KindUnknown:                http.StatusBadRequest,
 	readreason.KindNotWatchable:           http.StatusBadRequest,
+	readreason.KindNotSearchable:          http.StatusBadRequest,
 	readreason.OutsideNamespacePin:        http.StatusConflict,
 	readreason.NamespaceNotFound:          http.StatusNotFound,
 	readreason.NamespaceRequired:          http.StatusBadRequest,
