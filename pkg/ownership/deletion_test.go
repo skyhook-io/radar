@@ -64,3 +64,31 @@ func TestDeletionBoundAndCancellation(t *testing.T) {
 		t.Fatalf("canceled = %+v", got)
 	}
 }
+
+func TestDeletionCyclesInvalidReferencesAndUnvisitedCoOwner(t *testing.T) {
+	for _, mode := range []string{"cap", "cycle", "unserved", "invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			r := ownershiptest.Object{Ref: at("", "ConfigMap", "alpha", "root"), APIVersion: "v1", UID: "root"}
+			a := ownershiptest.Object{Ref: at("", "ConfigMap", "alpha", "a"), APIVersion: "v1", UID: "a", OwnerReferences: []metav1.OwnerReference{r.OwnerRef(false)}}
+			b := ownershiptest.Object{Ref: at("", "ConfigMap", "alpha", "z"), APIVersion: "v1", UID: "b", OwnerReferences: []metav1.OwnerReference{a.OwnerRef(false)}}
+			c := ownershiptest.Object{Ref: at("", "ConfigMap", "alpha", "c"), APIVersion: "v1", UID: "c", OwnerReferences: []metav1.OwnerReference{a.OwnerRef(false), b.OwnerRef(false)}}
+			limit, certain, possible := 100, 0, 3
+			switch mode {
+			case "cap":
+				limit, certain, possible = 3, 1, 1
+			case "cycle":
+				a.OwnerReferences = append(a.OwnerReferences, b.OwnerRef(false))
+			case "unserved":
+				a.OwnerReferences = append(a.OwnerReferences, metav1.OwnerReference{APIVersion: "missing.io/v1", Kind: "Ghost", Name: "ghost", UID: "ghost"})
+			case "invalid":
+				a.OwnerReferences = append(a.OwnerReferences, metav1.OwnerReference{APIVersion: "bad//v1", Kind: "Ghost", Name: "ghost", UID: "ghost"})
+				possible = 0
+			}
+			w := ownershiptest.World{Resources: []ownership.ServedResource{{Version: "v1", Kind: "ConfigMap", Resource: "configmaps", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}, Objects: []ownershiptest.Object{r, a, b, c}}
+			got := view(t, w, ownership.Unrestricted()).Deletion(context.Background(), r.Ref, limit)
+			if len(got.Dependents) != certain || len(got.Possible) != possible || got.Truncated != (mode == "cap") {
+				t.Fatalf("projection %+v", got)
+			}
+		})
+	}
+}

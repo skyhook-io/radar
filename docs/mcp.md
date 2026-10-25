@@ -1303,10 +1303,9 @@ change or delay the result.
 collectable kinds, `narrowed` for restricted visibility, `notChecked` for cache
 or discovery gaps, `truncated` at the 1,000-object traversal cap or deadline.
 `rootResolved: false` and `unavailableReason` refuse a stale root or cache swap.
-The root UID and resourceVersion must match the session before projection.
+The root UID must match the session before projection; ordinary resourceVersion lag does not hide the preview.
 
-The preview preserves pending foreground/orphan propagation; an orphan preview
-lists no garbage-collected dependents. Namespace contents and CRD instances are
+The preview preserves pending foreground/orphan propagation; the dependent lists always describe cascading collection. An orphan delete preserves them; the dialog hides those lists until force is selected. Force strips the orphan finalizer and explicitly requests Background. Namespace contents and CRD instances are
 not enumerated and are removed independently of owner references. Other
 controller cleanup is also not enumerated. `controllerTeardown`, when recognized
 on the root, describes Argo CD pruning or Flux pruning/Helm uninstall through a

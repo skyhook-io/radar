@@ -75,3 +75,13 @@ describe('Deletion preview states', () => {
   expect(document.body.textContent).toContain('cannot undo it')
   expect(document.body.textContent).not.toContain('Resources stay')
  })
+
+ it('changes the pending-orphan warning when force is selected', async () => {
+  await act(async () => root.render(<ForceDeleteConfirmDialog {...base} cascadeRootResolved cascadeDependents={[{kind:'Pod', namespace:'demo', name:'child'}]} cascadeDetail={{basis:'ownerReferences', propagation:'Orphan'}} />))
+  expect(document.body.textContent).toContain('dependents are orphaned')
+  expect(document.body.textContent).not.toContain('Garbage collection is expected')
+  await act(async () => (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click())
+  expect(document.body.textContent).not.toContain('dependents are orphaned')
+  expect(document.body.textContent).toContain('Force delete removes the orphan finalizer')
+  expect(document.body.textContent).toContain('Garbage collection is expected')
+ })
