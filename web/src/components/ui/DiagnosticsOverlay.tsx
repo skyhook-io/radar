@@ -622,6 +622,7 @@ function ConfigSection({ data }: { data: DiagnosticsSnapshot }) {
     <Section title="Config">
       <Row label="Port" value={cfg.port} />
       <Row label="Dev Mode" value={cfg.devMode ? 'Yes' : 'No'} />
+      <Row label="Profiling (pprof)" value={cfg.pprof === undefined ? 'Unknown' : cfg.pprof ? 'Yes' : 'No'} />
       {cfg.namespace && <Row label="Namespace Filter" value={cfg.namespace} />}
       <Row label="Timeline Storage" value={cfg.timelineStorage} />
       <Row label="History Limit" value={cfg.historyLimit.toLocaleString()} />
@@ -864,7 +865,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.config) {
     const cfg = data.config
     lines.push(`### Config`)
-    lines.push(`- Port: ${cfg.port} | Dev: ${cfg.devMode} | Timeline: \`${cfg.timelineStorage}\` | History: ${cfg.historyLimit} | MCP: ${cfg.mcpEnabled} | Prometheus URL: ${cfg.hasPrometheusURL ? 'manual' : 'auto'}`)
+    lines.push(`- Port: ${cfg.port} | Dev: ${cfg.devMode} | Pprof: ${cfg.pprof ?? 'unknown'} | Timeline: \`${cfg.timelineStorage}\` | History: ${cfg.historyLimit} | MCP: ${cfg.mcpEnabled} | Prometheus URL: ${cfg.hasPrometheusURL ? 'manual' : 'auto'}`)
     lines.push(``)
   }
 

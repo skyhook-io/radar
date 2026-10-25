@@ -52,8 +52,10 @@ Write-Host "Installing Radar v$Version..." -ForegroundColor Cyan
 # Download
 $Filename = "radar_v${Version}_windows_${Arch}.zip"
 $DownloadUrl = "https://github.com/$Repo/releases/download/v$Version/$Filename"
+$ChecksumsUrl = "https://github.com/$Repo/releases/download/v$Version/checksums.txt"
 $TmpDir = Join-Path $env:TEMP "radar-install-$(Get-Random)"
 $ZipPath = Join-Path $TmpDir $Filename
+$ChecksumsPath = Join-Path $TmpDir "checksums.txt"
 
 New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 
@@ -62,6 +64,41 @@ try {
     Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath -UseBasicParsing
 } catch {
     Write-Host "Failed to download: $_" -ForegroundColor Red
+    Remove-Item -Path $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+Write-Host "Downloading $ChecksumsUrl..." -ForegroundColor Cyan
+try {
+    Invoke-WebRequest -Uri $ChecksumsUrl -OutFile $ChecksumsPath -UseBasicParsing
+} catch {
+    Write-Host "Failed to download checksums: $_" -ForegroundColor Red
+    Remove-Item -Path $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+Write-Host "Verifying SHA-256 checksum..." -ForegroundColor Cyan
+$ChecksumContent = Get-Content -Path $ChecksumsPath -Raw
+$ExpectedHash = $null
+foreach ($line in ($ChecksumContent -split "`r?`n")) {
+    $parts = $line.Trim() -split '\s+'
+    if ($parts.Count -ge 2 -and ($parts[1] -eq $Filename -or $parts[1] -eq "*$Filename")) {
+        $ExpectedHash = $parts[0]
+        break
+    }
+}
+
+if (-not $ExpectedHash) {
+    Write-Host "Failed to find checksum for $Filename in checksums.txt" -ForegroundColor Red
+    Remove-Item -Path $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+$ActualHash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($ActualHash -ne $ExpectedHash.ToLowerInvariant()) {
+    Write-Host "Checksum verification failed for $Filename" -ForegroundColor Red
+    Write-Host "Expected: $ExpectedHash" -ForegroundColor Red
+    Write-Host "Actual:   $ActualHash" -ForegroundColor Red
     Remove-Item -Path $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }

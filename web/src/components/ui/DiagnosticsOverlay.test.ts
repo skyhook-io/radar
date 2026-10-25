@@ -27,6 +27,31 @@ const desktop: NonNullable<DiagnosticsSnapshot['desktop']> = {
   gpuPolicy: 'on-demand',
 }
 
+describe('formatForGitHub profiling state', () => {
+  it.each([
+    [true, 'true'],
+    [false, 'false'],
+    [undefined, 'unknown'],
+  ] as const)('reports %s as %s', (pprof, expected) => {
+    const md = formatForGitHub({
+      ...baseSnapshot,
+      config: {
+        port: 9280,
+        devMode: false,
+        timelineStorage: 'memory',
+        historyLimit: 10000,
+        debugEvents: false,
+        mcpEnabled: true,
+        mcpReadOnly: false,
+        hasPrometheusURL: false,
+        hasPrometheusHeaders: false,
+        pprof,
+      },
+    }, undefined, false)
+    expect(md).toContain(`Pprof: ${expected}`)
+  })
+})
+
 describe('formatEnvValue', () => {
   it('separates a variable that was never set from one set to empty', () => {
     // Only the second suppresses the desktop app's own WebKit defaults, so

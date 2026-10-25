@@ -57,8 +57,8 @@ func TestDependentCandidatesReadTheMostStableLoadedVersion(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := versionsFixture(t, tc.v1, tc.v1beta1, nil)
 			s := begin(t, f.source())
-			for _, domain := range []ownership.SearchScope{ownership.InNamespace("alpha"), ownership.Everywhere()} {
-				got := s.DependentCandidates("uid-deploy", domain)
+			for _, scope := range []ownership.SearchScope{ownership.InNamespace("alpha"), ownership.Everywhere()} {
+				got := s.DependentCandidates("uid-deploy", scope)
 				var uid types.UID
 				for _, c := range got.Candidates {
 					if c.Ref == w1 {
@@ -66,7 +66,7 @@ func TestDependentCandidatesReadTheMostStableLoadedVersion(t *testing.T) {
 					}
 				}
 				if uid != tc.wantUID || slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind }) {
-					t.Fatalf("%+v: w1 %q, gaps %+v; want %q and no Widget gap", domain, uid, got.Gaps, tc.wantUID)
+					t.Fatalf("%+v: w1 %q, gaps %+v; want %q and no Widget gap", scope, uid, got.Gaps, tc.wantUID)
 				}
 			}
 		})
@@ -192,11 +192,11 @@ func TestDependentCandidatesIgnoreAnAmbiguousKindNothingCollects(t *testing.T) {
 	if !s.Catalog().Ambiguous(summary) {
 		t.Fatal("scenario: PendingWorkloadsSummary must be ambiguous")
 	}
-	for _, domain := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {IncludeClusterScoped: true}} {
-		got := s.DependentCandidates("uid-deploy", domain)
+	for _, scope := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {IncludeClusterScoped: true}} {
+		got := s.DependentCandidates("uid-deploy", scope)
 		for _, g := range got.Gaps {
 			if g.Kind == summary {
-				t.Fatalf("search of %+v reports %+v; nothing can collect a summary", domain, g)
+				t.Fatalf("search of %+v reports %+v; nothing can collect a summary", scope, g)
 			}
 		}
 	}
@@ -217,11 +217,11 @@ func TestDependentCandidatesThroughAPromotion(t *testing.T) {
 		t.Fatalf("ValidateCaches after a watch replacement = %v; only replaced caches fail it", err)
 	}
 	during := begin(t, source)
-	for _, domain := range []ownership.SearchScope{ownership.InNamespace("alpha"), ownership.Everywhere()} {
-		got := during.DependentCandidates("uid-deploy", domain)
+	for _, scope := range []ownership.SearchScope{ownership.InNamespace("alpha"), ownership.Everywhere()} {
+		got := during.DependentCandidates("uid-deploy", scope)
 		if slices.ContainsFunc(got.Candidates, func(c ownership.Observation) bool { return c.Ref.GroupKind() == widgetKind }) ||
 			!slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == widgetKind && g.Reason == readreason.KindSyncPending }) {
-			t.Fatalf("%+v from the unloaded replacement = %+v; want a Widget kind_sync_pending gap and no Widgets", domain, got)
+			t.Fatalf("%+v from the unloaded replacement = %+v; want a Widget kind_sync_pending gap and no Widgets", scope, got)
 		}
 	}
 	p.hold.Store(false)
@@ -279,9 +279,9 @@ func TestDependentCandidatesDoNoIO(t *testing.T) {
 	waitForWatches(t, &f.dynamic.Fake, "widgets")
 	before := len(f.typed.Actions()) + len(f.dynamic.Actions())
 	s := begin(t, f.source())
-	for _, domain := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", "gamma"}, IncludeClusterScoped: true}} {
+	for _, scope := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", "gamma"}, IncludeClusterScoped: true}} {
 		for _, uid := range []types.UID{"uid-deploy", "uid-rs", "uid-node", "uid-none"} {
-			s.DependentCandidates(uid, domain)
+			s.DependentCandidates(uid, scope)
 		}
 	}
 	if err := s.ValidateCaches(); err != nil {
@@ -372,10 +372,10 @@ func TestDependentCandidatesOfATypedKindPastItsLoadDeadline(t *testing.T) {
 	secret := resourceid.GroupKind{Kind: "Secret"}
 	// One informer serves every namespace, so its state is one gap whatever
 	// the search names.
-	for _, domain := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", "beta"}}} {
-		got := begin(t, f.source()).DependentCandidates("uid-deploy", domain)
+	for _, scope := range []ownership.SearchScope{ownership.Everywhere(), ownership.InNamespace("alpha"), {Namespaces: []string{"alpha", "beta"}}} {
+		got := begin(t, f.source()).DependentCandidates("uid-deploy", scope)
 		if want := (ownership.Gap{Kind: secret, Reason: readreason.KindSyncTimedOut}); !slices.Contains(got.Gaps, want) {
-			t.Errorf("%+v: gaps %+v; want %+v", domain, got.Gaps, want)
+			t.Errorf("%+v: gaps %+v; want %+v", scope, got.Gaps, want)
 		}
 	}
 }
@@ -404,7 +404,7 @@ func TestDependentCandidatesReportAWholeKindsStateOnce(t *testing.T) {
 		t.Fatalf("a search of 100 namespaces has %d gaps, one of a single namespace %d: %+v", len(hundred.Gaps), len(one.Gaps), hundred.Gaps)
 	}
 	if got := s.DependentCandidates("uid-node", ownership.SearchScope{Namespaces: []string{""}}); slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == gadget }) {
-		t.Fatalf("a domain naming no namespace has gaps %+v; it looked nowhere", got.Gaps)
+		t.Fatalf("a scope naming no namespace has gaps %+v; it looked nowhere", got.Gaps)
 	}
 }
 
@@ -472,14 +472,14 @@ func TestDependentCandidatesReadAClusterWideStoreOncePerSearch(t *testing.T) {
 		})
 		f.watch(t, widgets)
 		s := begin(t, f.source())
-		domain := ownership.SearchScope{Namespaces: namespaces}
-		if got := s.DependentCandidates("uid-node", domain); len(got.Candidates) != n {
+		scope := ownership.SearchScope{Namespaces: namespaces}
+		if got := s.DependentCandidates("uid-node", scope); len(got.Candidates) != n {
 			t.Fatalf("%d namespaces: %d candidates, want one Widget in each", n, len(got.Candidates))
 		}
 		var before, after goruntime.MemStats
 		goruntime.ReadMemStats(&before)
 		for range 3 {
-			s.DependentCandidates("uid-node", domain)
+			s.DependentCandidates("uid-node", scope)
 		}
 		goruntime.ReadMemStats(&after)
 		return (after.TotalAlloc - before.TotalAlloc) / 3
@@ -535,5 +535,50 @@ func TestDependentCandidatesSayTheRestLoadsWhileAClusterWideVersionLoads(t *test
 	}
 	if !slices.Contains(candidateRefs(got), ref("example.io", "Widget", "alpha", "w1")) {
 		t.Fatalf("alpha's Widget, through its loaded namespace watch, is missing: %+v", got)
+	}
+}
+
+// A typed kind watched namespace by namespace answers from the namespaces that
+// have loaded while another is still loading: their dependents are found, and
+// only the loading namespace is a gap.
+func TestDependentCandidatesOfATypedKindLoadingInSomeNamespaces(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{
+		ResourceScopes:          map[string]k8score.ResourceScope{k8score.ReplicaSets: {Enabled: true, Namespace: "alpha"}},
+		ResourceScopeNamespaces: map[string][]string{k8score.ReplicaSets: {"alpha", "beta"}},
+		// A critical kind would hold the cache's start until beta loads.
+		DeferredTypes: map[string]bool{k8score.ReplicaSets: true},
+	}, func(f *fixture) {
+		f.typed.PrependReactor("list", "replicasets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if a.GetNamespace() == "beta" {
+				return true, nil, errors.New("initial list held")
+			}
+			return false, nil, nil
+		})
+	})
+	waitUntil(t, "alpha's ReplicaSets", func() bool {
+		_, ok := f.caches.Typed.ReadableObjects(k8score.ReplicaSets, []string{"alpha"})
+		return ok
+	})
+	rs := resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}
+	for _, tc := range []struct {
+		scope ownership.SearchScope
+		want  []ownership.Gap
+	}{
+		{ownership.SearchScope{Namespaces: []string{"alpha", "beta"}}, []ownership.Gap{{Kind: rs, Namespace: "beta", Reason: readreason.KindSyncPending}}},
+		{ownership.Everywhere(), []ownership.Gap{{Kind: rs, Reason: readreason.RadarNamespaceNotCollected}, {Kind: rs, Namespace: "beta", Reason: readreason.KindSyncPending}}},
+	} {
+		got := begin(t, f.source()).DependentCandidates("uid-deploy", tc.scope)
+		if !slices.ContainsFunc(got.Candidates, func(c ownership.Observation) bool { return c.Ref.GroupKind() == rs && c.Ref.Namespace == "alpha" }) {
+			t.Errorf("%+v: candidates %+v; want alpha's ReplicaSet", tc.scope, got.Candidates)
+		}
+		var rsGaps []ownership.Gap
+		for _, g := range got.Gaps {
+			if g.Kind == rs {
+				rsGaps = append(rsGaps, g)
+			}
+		}
+		if !slices.Equal(rsGaps, tc.want) {
+			t.Errorf("%+v: ReplicaSet gaps %+v; want %+v", tc.scope, rsGaps, tc.want)
+		}
 	}
 }

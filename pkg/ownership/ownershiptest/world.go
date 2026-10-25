@@ -33,22 +33,23 @@ type Object struct {
 	APIVersion        string
 	UID               types.UID
 	ResourceVersion   string
-	Owners            []metav1.OwnerReference
+	OwnerReferences   []metav1.OwnerReference
 	DeletionTimestamp *metav1.Time
 	Finalizers        []string
 	// Membership and Members are what a recording manager's status says of
-	// its members, as the objects it means. Destination is an Argo CD
-	// Application's destination namespace.
-	Membership  ownership.MembershipState
-	Members     []resourceid.Ref
-	Destination string
+	// its members, as the objects it means. DestinationNamespace is an Argo
+	// CD Application's destination namespace.
+	Membership           ownership.MembershipState
+	Members              []resourceid.Ref
+	DestinationNamespace string
 	// Form picks one of the ways a status can say the same thing, such as
 	// an empty list written or left out; a renderer must vary only that,
 	// and Scan ignores it.
 	Form uint8
 }
 
-// OwnerRef returns a reference to o, as a controller when controller is set.
+// OwnerRef returns a reference to o. With controller set, it is the
+// controller reference and blocks o's deletion, as controllers set it.
 func (o Object) OwnerRef(controller bool) metav1.OwnerReference {
 	ref := metav1.OwnerReference{APIVersion: o.APIVersion, Kind: o.Ref.Kind, Name: o.Ref.Name, UID: o.UID}
 	if controller {

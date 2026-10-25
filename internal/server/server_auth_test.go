@@ -372,8 +372,7 @@ func TestProxyAuth_UnauthenticatedBlocked(t *testing.T) {
 		"/api/dashboard",
 		"/api/connection",
 		"/mcp",
-		// pprof is mounted on non-cloud builds; the auth middleware must
-		// still gate it (leaks the in-memory K8s cache otherwise).
+		// Process diagnostics require authentication when profiling is mounted.
 		"/debug/pprof/heap",
 	}
 

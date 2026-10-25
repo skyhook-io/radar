@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -22,7 +24,13 @@ var vulnReportGVR = schema.GroupVersionResource{Group: "aquasecurity.github.io",
 
 func setupTrivyReports(t *testing.T) {
 	t.Helper()
-	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+	// The reports' namespaces exist, so a caller who sees every namespace and
+	// names one is read rather than told it doesn't exist.
+	namespaces := []runtime.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-b"}},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(namespaces...)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)

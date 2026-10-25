@@ -35,9 +35,13 @@ type ReadSession interface {
 	// Object reads one object. It does no I/O and waits for nothing.
 	Object(ref resourceid.Ref) ObjectRead
 	// DependentCandidates finds the objects of the catalog's dependent kinds in
-	// domain whose owner references name uid. It does no I/O and waits for
-	// nothing.
-	DependentCandidates(uid types.UID, domain SearchScope) DependentCandidatesRead
+	// scope whose owner references name uid. It does no I/O and waits for
+	// nothing. Which versions of a kind are watched, and, for an
+	// all-namespaces search, the namespaces each is watched in one by one,
+	// are fixed at the session's first look, so those searches agree on what
+	// they could read. A search of named namespaces reads each one's watch as
+	// it is now, and the objects are always read as they are now.
+	DependentCandidates(uid types.UID, scope SearchScope) DependentCandidatesRead
 	// Members reads the member list in a manager's status; a manager must
 	// be of a RecordingManagers kind. It does no I/O and waits for nothing.
 	Members(manager resourceid.Ref) MembersRead

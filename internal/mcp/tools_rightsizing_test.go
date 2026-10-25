@@ -507,7 +507,7 @@ func TestNarrowedClusterScopeRemediationNamesTheRealCause(t *testing.T) {
 	}
 
 	// The pin is a startup flag, not a permissions problem.
-	pinned := rightsizingRemediation("cluster", ReasonOutsideNamespaceScope)
+	pinned := rightsizingRemediation("cluster", ReasonOutsideNamespacePin)
 	if !strings.Contains(pinned, "--namespace") || !strings.Contains(pinned, "not a permissions problem") {
 		t.Errorf("a pin-excluded scope must be attributed to the flag: %q", pinned)
 	}
@@ -722,7 +722,7 @@ func TestEveryScanReasonCarriesRemediation(t *testing.T) {
 		reasonRowEvidenceIncomplete,
 		reasonNamespaceScopeLimited,
 		reasonNamespacesExcluded,
-		ReasonOutsideNamespaceScope,
+		ReasonOutsideNamespacePin,
 		"access_denied",
 		"scan_deadline_exceeded",
 		"prometheus_unavailable",
@@ -1028,10 +1028,10 @@ func TestRightsizingScanNamespacesValidation(t *testing.T) {
 }
 
 func TestExcludedRequestedNamespacesNamesEachDroppedName(t *testing.T) {
-	if got := excludedRequestedNamespaces([]string{"dev"}, nil); got != nil {
+	if got := excludedRequestedNamespaces(context.Background(), []string{"dev"}, nil); got != nil {
 		t.Errorf("an unrestricted identity excludes nothing, got %+v", got)
 	}
-	got := excludedRequestedNamespaces([]string{"dev", "autopush", "staging"}, []string{"dev", "staging"})
+	got := excludedRequestedNamespaces(context.Background(), []string{"dev", "autopush", "staging"}, []string{"dev", "staging"})
 	if !reflect.DeepEqual(got, []excludedNamespace{{Name: "autopush", Reason: "access_denied"}}) {
 		t.Errorf("excluded = %+v", got)
 	}

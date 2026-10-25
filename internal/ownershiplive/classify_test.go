@@ -54,7 +54,7 @@ func (f falseAbsence) Object(ref resourceid.Ref) ownership.ObjectRead {
 }
 
 // extraCandidate adds an object to every search's candidates, as an index
-// that ignores the domain would.
+// that ignores the scope would.
 type extraCandidate struct {
 	ownership.ReadSession
 	extra ownership.Observation
@@ -238,22 +238,22 @@ func begin(t *testing.T, w ownershiptest.World) ownership.ReadSession {
 
 func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 	rs := ownershiptest.Object{Ref: resourceid.Ref{Group: "apps", Kind: "ReplicaSet", Namespace: "alpha", Name: "rs"}, APIVersion: "apps/v1", UID: "uid-rs", ResourceVersion: "1"}
-	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "p"}, APIVersion: "v1", UID: "uid-p", ResourceVersion: "10", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
+	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "p"}, APIVersion: "v1", UID: "uid-p", ResourceVersion: "10", OwnerReferences: []metav1.OwnerReference{rs.OwnerRef(true)}}
 	updated := pod
 	updated.ResourceVersion = "11"
 	orphaned := updated
-	orphaned.Owners = nil
-	elsewhere := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "beta", Name: "q"}, APIVersion: "v1", UID: "uid-q", ResourceVersion: "20", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
-	sibling := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "sibling"}, APIVersion: "v1", UID: "uid-sibling", ResourceVersion: "30", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
+	orphaned.OwnerReferences = nil
+	elsewhere := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "beta", Name: "q"}, APIVersion: "v1", UID: "uid-q", ResourceVersion: "20", OwnerReferences: []metav1.OwnerReference{rs.OwnerRef(true)}}
+	sibling := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "sibling"}, APIVersion: "v1", UID: "uid-sibling", ResourceVersion: "30", OwnerReferences: []metav1.OwnerReference{rs.OwnerRef(true)}}
 	stranger := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "stranger"}, APIVersion: "v1", UID: "uid-stranger", ResourceVersion: "40"}
 	adopted := stranger
-	adopted.ResourceVersion, adopted.Owners = "41", []metav1.OwnerReference{rs.OwnerRef(true)}
+	adopted.ResourceVersion, adopted.OwnerReferences = "41", []metav1.OwnerReference{rs.OwnerRef(true)}
 	partial := world(rs, updated)
 	partial.Partial = true
 
 	listed := world(rs, pod)
 	behindList, listedWithSibling, listedWithStranger := world(rs, orphaned), world(rs, pod, sibling), world(rs, pod, stranger)
-	q := ownershiptest.Queries{Refs: []resourceid.Ref{pod.Ref}, UIDs: []types.UID{"uid-rs"}, Domains: []ownership.SearchScope{ownership.InNamespace("alpha")}}
+	q := ownershiptest.Queries{Refs: []resourceid.Ref{pod.Ref}, UIDs: []types.UID{"uid-rs"}, Scopes: []ownership.SearchScope{ownership.InNamespace("alpha")}}
 	for _, tc := range []struct {
 		name  string
 		now   ownershiptest.World
@@ -301,7 +301,7 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 			func(now ownership.ReadSession) ownership.ReadSession { return inventedUID{now} },
 			map[string]outcome{"Object": confirmed, "DependentCandidates": unresolved}, nil},
 		// A Pod outside the searched namespace, named in a search for alpha.
-		{"a candidate outside the domain", world(rs, updated, elsewhere),
+		{"a candidate outside the scope", world(rs, updated, elsewhere),
 			func(now ownership.ReadSession) ownership.ReadSession {
 				return extraCandidate{now, ownershiptest.Observe(elsewhere)}
 			},
@@ -362,7 +362,7 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 			seen := map[string]bool{}
 			for _, d := range ownershiptest.Differences(begin(t, from), cache, q) {
 				question := "Object"
-				if d.Asked == ownershiptest.AskedCandidates {
+				if d.Asked == ownershiptest.AskedDependentCandidates {
 					question = "DependentCandidates"
 				}
 				seen[question] = true
@@ -387,14 +387,14 @@ func TestRecheckJudgesTheFreshAnswerAgainstTheAPIServer(t *testing.T) {
 // never excuses leaving out a listed object of a kind Radar reads.
 func TestRecheckDoesNotLetAKindlessGapExcuseAnOmission(t *testing.T) {
 	owner := ownershiptest.Object{Ref: resourceid.Ref{Group: "example.io", Kind: "ClusterWidget", Name: "parent"}, APIVersion: "example.io/v1", UID: "uid-parent", ResourceVersion: "1"}
-	a := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Node", Name: "a"}, APIVersion: "v1", UID: "uid-a", ResourceVersion: "10", Owners: []metav1.OwnerReference{owner.OwnerRef(false)}}
-	sibling := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Node", Name: "sibling"}, APIVersion: "v1", UID: "uid-sibling", ResourceVersion: "20", Owners: []metav1.OwnerReference{owner.OwnerRef(false)}}
+	a := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Node", Name: "a"}, APIVersion: "v1", UID: "uid-a", ResourceVersion: "10", OwnerReferences: []metav1.OwnerReference{owner.OwnerRef(false)}}
+	sibling := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Node", Name: "sibling"}, APIVersion: "v1", UID: "uid-sibling", ResourceVersion: "20", OwnerReferences: []metav1.OwnerReference{owner.OwnerRef(false)}}
 	updated := a
 	updated.ResourceVersion = "11"
 	for _, tc := range []struct {
 		name    string
 		partial bool
-		domain  ownership.SearchScope
+		scope   ownership.SearchScope
 	}{
 		{"an empty namespace entry", false, ownership.SearchScope{Namespaces: []string{""}, IncludeClusterScoped: true}},
 		{"partial discovery", true, ownership.SearchScope{IncludeClusterScoped: true}},
@@ -403,7 +403,7 @@ func TestRecheckDoesNotLetAKindlessGapExcuseAnOmission(t *testing.T) {
 			listedWorld, now := world(owner, a, sibling), world(owner, updated, sibling)
 			listedWorld.Partial, now.Partial = tc.partial, tc.partial
 			cache := dropsLater{begin(t, now), sibling.Ref, new(int)}
-			q := ownershiptest.Queries{UIDs: []types.UID{"uid-parent"}, Domains: []ownership.SearchScope{tc.domain}}
+			q := ownershiptest.Queries{UIDs: []types.UID{"uid-parent"}, Scopes: []ownership.SearchScope{tc.scope}}
 			diffs := ownershiptest.Differences(begin(t, listedWorld), cache, q)
 			if len(diffs) != 1 || diffs[0].Coverage || len(diffs[0].WantGaps) == 0 || diffs[0].WantGaps[0].Kind != (resourceid.GroupKind{}) {
 				t.Fatalf("scenario: want one object difference beside a kindless gap, got %v", diffs)
@@ -417,7 +417,7 @@ func TestRecheckDoesNotLetAKindlessGapExcuseAnOmission(t *testing.T) {
 
 func TestRecheckResolutionNeedsOnlyTheOwnerToChange(t *testing.T) {
 	rs := ownershiptest.Object{Ref: resourceid.Ref{Group: "apps", Kind: "ReplicaSet", Namespace: "alpha", Name: "rs"}, APIVersion: "apps/v1", UID: "uid-rs", ResourceVersion: "1"}
-	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "p"}, APIVersion: "v1", UID: "uid-p", ResourceVersion: "10", Owners: []metav1.OwnerReference{rs.OwnerRef(true)}}
+	pod := ownershiptest.Object{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "p"}, APIVersion: "v1", UID: "uid-p", ResourceVersion: "10", OwnerReferences: []metav1.OwnerReference{rs.OwnerRef(true)}}
 	recreated := rs
 	recreated.UID, recreated.ResourceVersion = "uid-rs-again", "2"
 	listedWorld := world(rs, pod)
@@ -596,7 +596,7 @@ func (l laggingMembership) Members(m resourceid.Ref) ownership.MembersRead {
 func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
 	cm := ownershiptest.Object{Ref: resourceid.Ref{Kind: "ConfigMap", Namespace: "shop", Name: "cfg"}, APIVersion: "v1", UID: "uid-cfg", ResourceVersion: "5"}
 	app := ownershiptest.Object{Ref: resourceid.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "shop"}, APIVersion: "argoproj.io/v1alpha1", UID: "uid-app", ResourceVersion: "10",
-		Membership: ownership.MembersRecorded, Members: []resourceid.Ref{cm.Ref}, Destination: "shop"}
+		Membership: ownership.MembersRecorded, Members: []resourceid.Ref{cm.Ref}, DestinationNamespace: "shop"}
 	dropped := app
 	dropped.ResourceVersion, dropped.Members = "11", []resourceid.Ref{}
 	resynced := app
@@ -605,7 +605,7 @@ func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
 	unreadable.ResourceVersion, unreadable.Membership, unreadable.Members = "13", ownership.MembersUnreadable, nil
 
 	other := ownershiptest.Object{Ref: resourceid.Ref{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "other"}, APIVersion: "argoproj.io/v1alpha1", UID: "uid-other", ResourceVersion: "20",
-		Membership: ownership.MembersRecorded, Members: []resourceid.Ref{}, Destination: "shop"}
+		Membership: ownership.MembersRecorded, Members: []resourceid.Ref{}, DestinationNamespace: "shop"}
 
 	sibling := app
 	sibling.Ref.Name, sibling.UID = "shop-too", "uid-shop-too"

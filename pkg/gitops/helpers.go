@@ -34,8 +34,10 @@ func IsInClusterDestination(app *unstructured.Unstructured) bool {
 	return IsInClusterArgoDestination(argoDestination(app))
 }
 
-// IsInClusterArgoDestination reports whether an Argo CD destination cluster,
-// given by name or server, is the cluster Radar is connected to.
+// IsInClusterArgoDestination reports whether an Argo CD destination, given by
+// name or server, is Argo CD's in-cluster destination: the name in-cluster or
+// the in-cluster API server address. Any other destination may still be this
+// cluster, registered under another name or its external address.
 func IsInClusterArgoDestination(name, server string) bool {
 	return strings.EqualFold(name, "in-cluster") || isLocalAPIServer(server)
 }
@@ -82,9 +84,9 @@ func argoDestination(app *unstructured.Unstructured) (name, server string) {
 }
 
 // FluxTargetsLocalCluster reports whether a Flux Kustomization or HelmRelease
-// applies to the cluster Radar is connected to. spec.kubeConfig points it at
-// another cluster, whose objects its inventory then names; nothing Radar reads
-// locally belongs to them. Fail closed: a nil object is not local.
+// applies to the cluster it runs in. spec.kubeConfig points it at a cluster
+// Radar can't confirm is this one, whose objects its inventory then names.
+// Fail closed: a nil object is not local.
 func FluxTargetsLocalCluster(obj *unstructured.Unstructured) bool {
 	if obj == nil {
 		return false
@@ -95,7 +97,8 @@ func FluxTargetsLocalCluster(obj *unstructured.Unstructured) bool {
 
 // isLocalAPIServer matches the in-cluster Kubernetes API server URL Argo records
 // for a same-cluster destination (kubernetes.default.svc, with or without a
-// scheme, port, or trailing dot). Any other host is a remote cluster.
+// scheme, port, or trailing dot). Any other host isn't confirmed to be this
+// cluster.
 func isLocalAPIServer(server string) bool {
 	if server == "" {
 		return false

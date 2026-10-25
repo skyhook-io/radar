@@ -161,7 +161,7 @@ func (s *session) RecordingManagers(ref resourceid.Ref) ownership.RecordingManag
 		slices.SortFunc(r.Gaps, compareGaps)
 		return r
 	}
-	q := &search{domain: ownership.Everywhere()}
+	q := &search{scope: ownership.Everywhere()}
 	var managers []candidate
 	var remote, unreadable []resourceid.Ref
 	for _, gk := range ownership.RecordingManagerKinds() {
@@ -213,7 +213,7 @@ type membersRead struct {
 func (s *session) readMembers(kind ownership.CatalogKind, keys []string) membersRead {
 	gk := kind.GroupKind
 	var m membersRead
-	q := &search{domain: ownership.Everywhere()}
+	q := &search{scope: ownership.Everywhere()}
 	keys = append([]string{k8score.UnreadableMembersKey}, keys...)
 	s.dynamicIndexed(q, kind, k8score.GitOpsMembersIndex, keys, func(u *unstructured.Unstructured) {
 		manager := resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()}

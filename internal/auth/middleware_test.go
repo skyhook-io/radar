@@ -449,8 +449,7 @@ func TestIsExemptPath(t *testing.T) {
 		{"/api/health/detailed", true},
 		{"/auth/login", true},
 		{"/auth/callback", true},
-		// Static assets are exempt; /debug/* (pprof) is not — it leaks the
-		// in-memory K8s cache and must require auth whenever auth is on.
+		// Static assets are exempt; process diagnostics must require auth.
 		{"/", true},
 		{"/index.html", true},
 		{"/assets/main.js", true},

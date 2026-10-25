@@ -88,7 +88,7 @@ func (d *driver) create(o ownershiptest.Object) {
 func (d *driver) update(ref resourceid.Ref, change func(*ownershiptest.Object)) {
 	i := d.index(ref)
 	o := d.w.Objects[i]
-	o.Owners = slices.Clone(o.Owners)
+	o.OwnerReferences = slices.Clone(o.OwnerReferences)
 	change(&o)
 	o.ResourceVersion = d.nextVersion()
 	d.apply("update", o)
@@ -121,7 +121,7 @@ func (d *driver) fence() {
 func (d *driver) staleKind() string {
 	for _, k := range ownershiptest.Kinds {
 		c := d.w.Collection[k.GroupKind]
-		if !k.Watchable || c.State != ownershiptest.Collected {
+		if !k.HasGCVerbs || c.State != ownershiptest.Collected {
 			continue
 		}
 		want := map[string]string{}
@@ -196,7 +196,7 @@ func (d *driver) step(r *rand.Rand, n int) string {
 		o := ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: kind.Group, Kind: kind.Kind, Namespace: "alpha", Name: fmt.Sprintf("manager-%d", n)},
 			APIVersion: k.APIVersion(), UID: types.UID(fmt.Sprintf("uid-manager-%d", n)),
-			Membership: ownership.MembersRecorded, Members: []resourceid.Ref{member}, Destination: "alpha",
+			Membership: ownership.MembersRecorded, Members: []resourceid.Ref{member}, DestinationNamespace: "alpha",
 		}
 		d.create(o)
 		return fmt.Sprintf("%v created listing %v", o.Ref, member)
@@ -228,11 +228,13 @@ func (d *driver) step(r *rand.Rand, n int) string {
 		return fmt.Sprintf("%v says %v in form %d", m.Ref, state, form)
 	case 0:
 		o, owner := pick(), pick()
-		d.update(o.Ref, func(o *ownershiptest.Object) { o.Owners = append(o.Owners, owner.OwnerRef(r.IntN(2) == 0)) })
+		d.update(o.Ref, func(o *ownershiptest.Object) {
+			o.OwnerReferences = append(o.OwnerReferences, owner.OwnerRef(r.IntN(2) == 0))
+		})
 		return fmt.Sprintf("%v gains owner %v", o.Ref, owner.Ref)
 	case 1:
 		o := pick()
-		d.update(o.Ref, func(o *ownershiptest.Object) { o.Owners = nil })
+		d.update(o.Ref, func(o *ownershiptest.Object) { o.OwnerReferences = nil })
 		return fmt.Sprintf("%v loses its owners", o.Ref)
 	case 2:
 		if len(d.w.Objects) < 4 {
@@ -266,7 +268,7 @@ func (d *driver) step(r *rand.Rand, n int) string {
 		o := ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: kind.Group, Kind: kind.Kind, Namespace: ns, Name: fmt.Sprintf("new-%d", n)},
 			APIVersion: k.APIVersion(), UID: types.UID(fmt.Sprintf("uid-new-%d", n)),
-			Owners: []metav1.OwnerReference{owner.OwnerRef(true)},
+			OwnerReferences: []metav1.OwnerReference{owner.OwnerRef(true)},
 		}
 		d.create(o)
 		return fmt.Sprintf("%v created under %v", o.Ref, owner.Ref)

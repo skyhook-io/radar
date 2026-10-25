@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
@@ -420,4 +421,43 @@ func TestServedGVRDoesNotWaitForASlowRefresh(t *testing.T) {
 	}
 	fakeDisc.Resources = servedOCIRepository("v2")
 	waitForServedVersion(t, "v2")
+}
+
+// A kind installed after discovery's last refresh resolves on the first
+// lookup that misses it, and further misses don't refresh again within the
+// interval.
+func TestLookupRefreshingOnMiss(t *testing.T) {
+	fakeDiscovery := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	core, err := k8score.NewResourceDiscovery(fakeDiscovery, k8score.WithDiscoveryCacheTTL(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &ResourceDiscovery{ResourceDiscovery: core}
+	widgets := func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) {
+		return d.GetGVRWithGroup("Widget", "example.test")
+	}
+	if _, ok := d.GetGVRWithGroup("Widget", "example.test"); ok {
+		t.Fatal("widget resolved before it was installed")
+	}
+	fakeDiscovery.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "example.test/v1",
+		APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}}},
+	}}
+	before := len(fakeDiscovery.Actions())
+	if gvr, ok := d.LookupRefreshingOnMiss(widgets); !ok || gvr.Resource != "widgets" {
+		t.Fatalf("installed kind = %v, %v", gvr, ok)
+	}
+	refreshed := len(fakeDiscovery.Actions())
+	if refreshed == before {
+		t.Fatal("a miss must refresh discovery")
+	}
+	if _, ok := d.LookupRefreshingOnMiss(widgets); !ok || len(fakeDiscovery.Actions()) != refreshed {
+		t.Fatal("a hit must not refresh discovery")
+	}
+	if _, ok := d.LookupRefreshingOnMiss(func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) { return d.GetGVR("gadgets") }); ok || len(fakeDiscovery.Actions()) != refreshed {
+		t.Fatal("a miss within the interval must not refresh discovery again")
+	}
+	if _, ok := (*ResourceDiscovery)(nil).LookupRefreshingOnMiss(widgets); ok {
+		t.Fatal("nil discovery resolved a kind")
+	}
 }

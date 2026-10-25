@@ -25,16 +25,16 @@ type candidate struct {
 // search collects one DependentCandidates call's candidates and gaps.
 type search struct {
 	uid        string
-	domain     ownership.SearchScope
+	scope      ownership.SearchScope
 	namespaces []string
 	found      []candidate
 	gaps       []ownership.Gap
 }
 
-func (s *session) DependentCandidates(uid types.UID, domain ownership.SearchScope) ownership.DependentCandidatesRead {
-	q := &search{uid: string(uid), domain: domain}
-	if !domain.AllNamespaces {
-		for _, ns := range slices.Compact(slices.Sorted(slices.Values(domain.Namespaces))) {
+func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope) ownership.DependentCandidatesRead {
+	q := &search{uid: string(uid), scope: scope}
+	if !scope.AllNamespaces {
+		for _, ns := range slices.Compact(slices.Sorted(slices.Values(scope.Namespaces))) {
 			if ns == "" {
 				// A store read for "" would answer for every namespace.
 				q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.NamespaceRequired})
@@ -43,12 +43,12 @@ func (s *session) DependentCandidates(uid types.UID, domain ownership.SearchScop
 			q.namespaces = append(q.namespaces, ns)
 		}
 	}
-	searches := domain.Searches(true) || domain.Searches(false)
+	searches := scope.Searches(true) || scope.Searches(false)
 	if !s.catalog.Complete() && searches {
 		q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.ReadError})
 	}
 	for _, kind := range s.catalog.DependentKinds() {
-		if !domain.Searches(kind.Namespaced) {
+		if !scope.Searches(kind.Namespaced) {
 			continue
 		}
 		if b, typed := typedKinds[kind.GroupKind]; typed {
@@ -58,7 +58,7 @@ func (s *session) DependentCandidates(uid types.UID, domain ownership.SearchScop
 		}
 	}
 	for _, a := range s.catalog.AmbiguousDependentKinds() {
-		if a.Namespaced && domain.Searches(true) || a.ClusterScoped && domain.Searches(false) {
+		if a.Namespaced && scope.Searches(true) || a.ClusterScoped && scope.Searches(false) {
 			q.gap(a.GroupKind, "", readreason.ReadError)
 		}
 	}
@@ -86,8 +86,8 @@ func (q *search) gap(gk resourceid.GroupKind, namespace string, reason readreaso
 // for a reason of the whole kind, such as Radar not collecting it: one gap,
 // however many namespaces the search covers.
 func (q *search) gapEverywhere(gk resourceid.GroupKind, namespaced bool, reason readreason.Code) {
-	if namespaced && !q.domain.AllNamespaces && len(q.namespaces) == 0 {
-		// The domain named no namespace to look in.
+	if namespaced && !q.scope.AllNamespaces && len(q.namespaces) == 0 {
+		// The scope named no namespace to look in.
 		return
 	}
 	q.gap(gk, "", reason)
@@ -103,7 +103,7 @@ func (q *search) add(gk resourceid.GroupKind, obj apiruntime.Object, namespace, 
 func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 	gk := b.GroupKind()
 	var target []string
-	if b.Namespaced && !q.domain.AllNamespaces {
+	if b.Namespaced && !q.scope.AllNamespaces {
 		target = append([]string{}, q.namespaces...)
 	}
 	a := s.caches.Typed.AssessKindRead(b.Resource, target)
@@ -161,13 +161,13 @@ func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
 }
 
 // dynamicIndexed reads the objects index files under any of keys for a
-// dynamic kind across q's domain, each store once for all the keys, handing
-// each object found to found and recording a gap for each part of the domain
+// dynamic kind across q's scope, each store once for all the keys, handing
+// each object found to found and recording a gap for each part of the scope
 // it can't read. A resource watched at several versions answers from one:
 // the most stable version whose cluster-wide store has loaded, or else,
 // namespace by namespace, the most stable version that answers there. Every
-// version receives the same objects, so another can only be a moment behind
-// or ahead of it.
+// version receives the same objects, so the one read can be behind another,
+// for as long as its watch lags or fails, but never contradicts it.
 func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index string, keys []string, found func(*unstructured.Unstructured)) {
 	gk := kind.GroupKind
 	if s.caches.Dynamic == nil {
@@ -182,11 +182,11 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 	// A cluster-wide store serves every namespace, so it is read once and its
 	// matches kept by namespace: reading it per namespace would gather all of
 	// them for each.
-	var inDomain map[string]bool
-	if kind.Namespaced && !q.domain.AllNamespaces {
-		inDomain = make(map[string]bool, len(q.namespaces))
+	var inScope map[string]bool
+	if kind.Namespaced && !q.scope.AllNamespaces {
+		inScope = make(map[string]bool, len(q.namespaces))
 		for _, ns := range q.namespaces {
-			inDomain[ns] = true
+			inScope[ns] = true
 		}
 	}
 	for _, gvr := range versions {
@@ -195,14 +195,14 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 			continue
 		}
 		for _, u := range objs {
-			if inDomain == nil || inDomain[u.GetNamespace()] {
+			if inScope == nil || inScope[u.GetNamespace()] {
 				found(u)
 			}
 		}
 		return
 	}
 	if !kind.Namespaced {
-		q.gap(gk, "", s.unansweredReason(versions, ""))
+		q.gap(gk, "", unansweredReason(s.caches.Dynamic, versions, ""))
 		return
 	}
 	var watchedByNamespace []string
@@ -214,18 +214,22 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 	if len(watchedByNamespace) == 0 {
 		// Each version's one informer serves every namespace and none can
 		// answer, so the kind's state is the same in each: one gap.
-		q.gapEverywhere(gk, true, s.unansweredReason(versions, ""))
+		q.gapEverywhere(gk, true, unansweredReason(s.caches.Dynamic, versions, ""))
 		return
 	}
 	namespaces := q.namespaces
-	if q.domain.AllNamespaces {
+	if q.scope.AllNamespaces {
 		slices.Sort(watchedByNamespace)
 		namespaces = slices.Compact(watchedByNamespace)
 	}
+	// Explaining an unread namespace needs the version's collection scope,
+	// which the cache would otherwise rebuild from every informer for each
+	// namespace.
+	obs := s.caches.Dynamic.NewObservationView(versions)
 	for _, ns := range namespaces {
-		s.readNamespace(q, gk, versions, ns, index, keys, found)
+		s.readNamespace(q, gk, versions, ns, index, keys, obs, found)
 	}
-	if q.domain.AllNamespaces {
+	if q.scope.AllNamespaces {
 		// The namespaces not watched one by one are unread: still loading if
 		// a version is watched cluster-wide, otherwise uncollected.
 		rest := readreason.RadarNamespaceNotCollected
@@ -240,7 +244,7 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 
 // readNamespace reads namespace from the most stable version that answers
 // there, or records why none did.
-func (s *session) readNamespace(q *search, gk resourceid.GroupKind, versions []schema.GroupVersionResource, namespace, index string, keys []string, found func(*unstructured.Unstructured)) {
+func (s *session) readNamespace(q *search, gk resourceid.GroupKind, versions []schema.GroupVersionResource, namespace, index string, keys []string, obs observer, found func(*unstructured.Unstructured)) {
 	for _, gvr := range versions {
 		if objs, ok := s.caches.Dynamic.ReadableIndexed(gvr, namespace, index, keys...); ok {
 			for _, u := range objs {
@@ -249,7 +253,7 @@ func (s *session) readNamespace(q *search, gk resourceid.GroupKind, versions []s
 			return
 		}
 	}
-	q.gap(gk, namespace, s.unansweredReason(versions, namespace))
+	q.gap(gk, namespace, unansweredReason(obs, versions, namespace))
 }
 
 // unwatchedReason reports a kind none of whose served versions is watched,

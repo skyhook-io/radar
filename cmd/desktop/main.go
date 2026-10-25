@@ -146,6 +146,10 @@ func main() {
 		log.Printf("ERROR: invalid --opencost-currency %q: %v", *openCostCurrency, err)
 		os.Exit(1)
 	}
+	enablePprof, err := config.PprofOverrideFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
@@ -186,6 +190,7 @@ func main() {
 		PortFallback:              desktopPortRemembered,
 		ListenAddress:             "127.0.0.1",
 		DevMode:                   false,
+		EnablePprof:               enablePprof,
 		HistoryLimit:              *historyLimit,
 		DebugEvents:               *debugEvents,
 		FakeInCluster:             *fakeInCluster,

@@ -339,6 +339,10 @@ func main() {
 			prometheusURLFlagSet = true
 		}
 	})
+	enablePprof, err := config.PprofOverrideFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	mcpMode, err := mcpFlags.Resolve()
 	if err != nil {
 		log.Fatal(err)
@@ -400,6 +404,7 @@ func main() {
 		NoBrowser:                   *noBrowser,
 		Browser:                     *browser,
 		DevMode:                     *devMode,
+		EnablePprof:                 enablePprof,
 		HistoryLimit:                *historyLimit,
 		DebugEvents:                 *debugEvents,
 		FakeInCluster:               *fakeInCluster,

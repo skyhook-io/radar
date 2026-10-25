@@ -12,7 +12,8 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// Scan is a source answering every question by scanning the World.
+// Scan is a source answering from the World by brute force. The World must
+// not change while the source is in use.
 func Scan(w World) ownership.Source {
 	return scanSource{w}
 }
@@ -30,17 +31,18 @@ func (s scanSource) Begin() (ownership.ReadSession, error) {
 	return session, nil
 }
 
-// scanSession answers from the World. It groups the World's objects by
-// reference and kind only to keep a search to the objects of the kinds it
-// covers; every answer is still a scan.
+// scanSession answers from the World. It looks objects up by reference, and
+// groups them by kind only to keep a search to the kinds it covers: which
+// objects name a UID is always found by scanning their owner references.
 type scanSession struct {
 	w          World
 	catalog    *ownership.Catalog
 	byRef      map[resourceid.Ref]Object
 	byKind     map[resourceid.GroupKind][]Object
 	dependents []dependentKind
-	// ambiguousKinds are the kinds two resources of one group serve, with the
-	// scopes in which one of them serves the kind with delete, list and watch.
+	// ambiguousKinds are the kinds two resources of one group serve, or that
+	// versions serve at different scopes, with the scopes in which one of
+	// them serves the kind with delete, list and watch.
 	ambiguousKinds map[resourceid.GroupKind]ambiguity
 }
 
@@ -63,16 +65,18 @@ type ambiguity struct {
 	namespaced, clusterScoped bool
 }
 
-// findAmbiguous returns the kinds two resources of their group serve.
+// findAmbiguous returns the kinds two resources of their group serve, or that
+// versions serve at different scopes.
 func (s scanSession) findAmbiguous() map[resourceid.GroupKind]ambiguity {
-	resources := map[resourceid.GroupKind]string{}
+	first := map[resourceid.GroupKind]ownership.ServedResource{}
 	ambiguous := map[resourceid.GroupKind]bool{}
 	for _, r := range s.w.Resources {
 		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
-		if seen, ok := resources[gk]; ok && seen != r.Resource {
+		if seen, ok := first[gk]; !ok {
+			first[gk] = r
+		} else if seen.Resource != r.Resource || seen.Namespaced != r.Namespaced {
 			ambiguous[gk] = true
 		}
-		resources[gk] = r.Resource
 	}
 	out := map[resourceid.GroupKind]ambiguity{}
 	for gk := range ambiguous {
@@ -189,18 +193,18 @@ func (s scanSession) dependentKinds() []dependentKind {
 	return out
 }
 
-func (s scanSession) DependentCandidates(uid types.UID, domain ownership.SearchScope) ownership.DependentCandidatesRead {
+func (s scanSession) DependentCandidates(uid types.UID, scope ownership.SearchScope) ownership.DependentCandidatesRead {
 	var r ownership.DependentCandidatesRead
 	gap := func(gk resourceid.GroupKind, namespace string, reason readreason.Code) {
 		r.Gaps = append(r.Gaps, ownership.Gap{Kind: gk, Namespace: namespace, Reason: reason})
 	}
-	searches := domain.AllNamespaces || len(domain.Namespaces) > 0 || domain.IncludeClusterScoped
+	searches := scope.AllNamespaces || len(scope.Namespaces) > 0 || scope.IncludeClusterScoped
 	if s.w.Partial && searches {
 		gap(resourceid.GroupKind{}, "", readreason.ReadError)
 	}
 	var namespaces []string
-	if !domain.AllNamespaces {
-		for _, ns := range domain.Namespaces {
+	if !scope.AllNamespaces {
+		for _, ns := range scope.Namespaces {
 			if ns == "" {
 				gap(resourceid.GroupKind{}, "", readreason.NamespaceRequired)
 			} else {
@@ -210,20 +214,20 @@ func (s scanSession) DependentCandidates(uid types.UID, domain ownership.SearchS
 	}
 	var found []Object
 	for _, k := range s.dependents {
-		if k.namespaced && !domain.AllNamespaces && len(domain.Namespaces) == 0 || !k.namespaced && !domain.IncludeClusterScoped {
+		if k.namespaced && !scope.AllNamespaces && len(scope.Namespaces) == 0 || !k.namespaced && !scope.IncludeClusterScoped {
 			continue
 		}
 		c := s.w.collection(k.gk)
 		readable := map[string]bool{}
 		all := false
 		switch {
-		case !k.namespaced || domain.AllNamespaces && (c.Namespaces == nil || c.State != Collected && c.State != Loading):
+		case !k.namespaced || scope.AllNamespaces && (c.Namespaces == nil || c.State != Collected && c.State != Loading):
 			if reason := heldReason(c, k.namespaced, ""); reason != "" {
 				gap(k.gk, "", reason)
 				continue
 			}
 			all = true
-		case domain.AllNamespaces:
+		case scope.AllNamespaces:
 			// Collected in some namespaces only: the rest are unread.
 			gap(k.gk, "", readreason.RadarNamespaceNotCollected)
 			for _, ns := range c.Namespaces {
@@ -235,7 +239,7 @@ func (s scanSession) DependentCandidates(uid types.UID, domain ownership.SearchS
 			}
 		case c.State == NotCollected || c.State == Refused || c.State == Unwatchable || c.State == Loading && c.Namespaces == nil:
 			// The whole kind's state, or that of the one store serving every
-			// namespace, leaves it unread in each namespace the domain names:
+			// namespace, leaves it unread in each namespace the scope names:
 			// one gap says so.
 			if len(namespaces) > 0 {
 				gap(k.gk, "", heldReason(c, true, ""))
@@ -252,15 +256,15 @@ func (s scanSession) DependentCandidates(uid types.UID, domain ownership.SearchS
 		}
 		read := func(o Object) bool { return all || readable[o.Ref.Namespace] }
 		for _, o := range s.byKind[k.gk] {
-			if read(o) && namesOwner(o.Owners, uid) {
+			if read(o) && namesOwner(o.OwnerReferences, uid) {
 				found = append(found, o)
 			}
 		}
 	}
 	for gk, a := range s.ambiguousKinds {
 		event := gk.Kind == "Event" && (gk.Group == "" || gk.Group == "events.k8s.io")
-		namespacedSearched := domain.AllNamespaces || len(domain.Namespaces) > 0
-		if !event && (a.namespaced && namespacedSearched || a.clusterScoped && domain.IncludeClusterScoped) {
+		namespacedSearched := scope.AllNamespaces || len(scope.Namespaces) > 0
+		if !event && (a.namespaced && namespacedSearched || a.clusterScoped && scope.IncludeClusterScoped) {
 			gap(gk, "", readreason.ReadError)
 		}
 	}
@@ -293,7 +297,7 @@ func observation(o Object) ownership.Observation {
 		UID:             o.UID,
 		ResourceVersion: o.ResourceVersion,
 	}
-	for _, ref := range o.Owners {
+	for _, ref := range o.OwnerReferences {
 		obs.OwnerReferences = append(obs.OwnerReferences, *ref.DeepCopy())
 	}
 	return obs
@@ -330,7 +334,8 @@ func (s scanSession) Members(manager resourceid.Ref) ownership.MembersRead {
 }
 
 // nameable says why no manager can list ref, or "" when one can: a reference
-// must name an object of a kind whose scope Radar can tell, in that scope. A
+// must name an object of a kind whose scope Radar can tell, in that scope, or
+// of a custom kind complete discovery doesn't serve, matched as recorded. A
 // built-in kind's scope is its own, unless discovery serves the kind with the
 // other scope.
 func (s scanSession) nameable(ref resourceid.Ref) readreason.Code {

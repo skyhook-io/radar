@@ -22,13 +22,13 @@ func BenchmarkRecordingManagers(b *testing.B) {
 		o := ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: ownership.ArgoApplication.Group, Kind: ownership.ArgoApplication.Kind, Namespace: "argocd", Name: fmt.Sprint("app-", i)},
 			APIVersion: "argoproj.io/v1alpha1", UID: types.UID(fmt.Sprint("uid-app-", i)), ResourceVersion: "1",
-			Membership: ownership.MembersRecorded, Destination: fmt.Sprint("team-", i%50),
+			Membership: ownership.MembersRecorded, DestinationNamespace: fmt.Sprint("team-", i%50),
 		}
 		if i%100 == 0 {
 			o.Membership = ownership.MembersUnreadable
 		}
 		for j := range 40 {
-			o.Members = append(o.Members, resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: o.Destination, Name: fmt.Sprintf("app-%d-service-%d", i, j)})
+			o.Members = append(o.Members, resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: o.DestinationNamespace, Name: fmt.Sprintf("app-%d-service-%d", i, j)})
 		}
 		w.Objects = append(w.Objects, o)
 	}

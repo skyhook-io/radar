@@ -2348,7 +2348,10 @@ func (rc *ResourceCache) ReadableCount(resource string, namespaces []string) (in
 }
 
 // PermissionResult returns the probes that selected this cache's informer
-// scope. A later global refresh must not re-label rows from this cache.
+// scope. A later global refresh must not re-label rows from this cache. Its
+// errors, including 401s, describe this cache for its whole life; they clear
+// only when the cache is rebuilt and probes again, as on a reconnect or a
+// --namespace-scope change.
 func (rc *ResourceCache) PermissionResult() *PermissionCheckResult {
 	if rc == nil {
 		return nil
