@@ -970,6 +970,8 @@ export function PodRenderer({
         </Section>
       )}
 
+      {/* Sandbox teardown and lost serving readiness are expected after success;
+          custom conditions retain their own meaning. */}
       <ConditionsSection
         conditions={data.status?.conditions}
         getConditionTone={(cond) =>
