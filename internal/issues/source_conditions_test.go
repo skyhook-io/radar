@@ -558,22 +558,23 @@ func TestGenericConditionSelectionHonorsCandidateGeneration(t *testing.T) {
 		observed    *int64
 		independent bool
 		want        string
+		message     string
 	}{
-		{name: "stale secondary error", observed: ptr.To[int64](1)},
-		{name: "current secondary error", observed: ptr.To[int64](2), want: "Synced: ReconcileError"},
-		{name: "missing generation stays actionable", want: "Synced: ReconcileError"},
-		{name: "zero generation stays actionable", observed: ptr.To[int64](0), want: "Synced: ReconcileError"},
-		{name: "future generation is not known stale", observed: ptr.To[int64](3), want: "Synced: ReconcileError"},
-		{name: "stale candidate keeps independent current error", observed: ptr.To[int64](1), independent: true, want: "Available: AvailabilityFailed"},
+		{name: "stale secondary error remains qualified", observed: ptr.To[int64](1), want: "Synced: ReconcileError", message: "Condition was last reported for generation 1; current resource generation is 2. original reconcile error"},
+		{name: "current secondary error", observed: ptr.To[int64](2), want: "Synced: ReconcileError", message: "original reconcile error"},
+		{name: "missing generation stays actionable", want: "Synced: ReconcileError", message: "original reconcile error"},
+		{name: "zero generation stays actionable", observed: ptr.To[int64](0), want: "Synced: ReconcileError", message: "original reconcile error"},
+		{name: "future generation is not known stale", observed: ptr.To[int64](3), want: "Synced: ReconcileError", message: "original reconcile error"},
+		{name: "stale candidate keeps independent current error", observed: ptr.To[int64](1), independent: true, want: "Available: AvailabilityFailed", message: "current availability error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			failure := map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError"}
+			failure := map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "original reconcile error"}
 			if tc.observed != nil {
 				failure["observedGeneration"] = *tc.observed
 			}
 			conds := []map[string]any{{"type": "Ready", "status": "False", "reason": "Creating", "observedGeneration": int64(2)}, failure}
 			if tc.independent {
-				conds = append(conds, map[string]any{"type": "Available", "status": "False", "reason": "AvailabilityFailed", "observedGeneration": int64(2)})
+				conds = append(conds, map[string]any{"type": "Available", "status": "False", "reason": "AvailabilityFailed", "message": "current availability error", "observedGeneration": int64(2)})
 			}
 			u := rolloutWithConditions(conds)
 			u.SetName("example")
@@ -583,12 +584,8 @@ func TestGenericConditionSelectionHonorsCandidateGeneration(t *testing.T) {
 			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
 			for _, grouped := range []bool{false, true} {
 				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
-				if tc.want == "" {
-					if len(got) != 0 {
-						t.Fatalf("stale error surfaced: %+v", got)
-					}
-				} else if len(got) != 1 || got[0].Reason != tc.want {
-					t.Fatalf("want %s got %+v", tc.want, got)
+				if len(got) != 1 || got[0].Reason != tc.want || got[0].Message != tc.message {
+					t.Fatalf("want %s message %q got %+v", tc.want, tc.message, got)
 				}
 			}
 		})
@@ -617,5 +614,56 @@ func TestActionableConditionsPreserveRolloutPauseAndFailure(t *testing.T) {
 		} else if len(got) != 1 || got[0].Severity != SeverityCritical || got[0].Reason != "InvalidSpec" || got[0].Message != "bad rollout spec" {
 			t.Fatalf("failure lost after expected condition: %+v", got)
 		}
+	}
+}
+
+func TestCuratedGatewayConditionsHonorCandidateGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, plural                       string
+		acceptedGeneration, programmedGeneration int64
+		want                                     string
+	}{
+		{name: "all stale stays visible", kind: "Gateway", plural: "gateways", acceptedGeneration: 1, programmedGeneration: 1, want: "Accepted: ListenersNotValid"},
+		{name: "stale accepted keeps current programmed failure", kind: "Gateway", plural: "gateways", acceptedGeneration: 1, programmedGeneration: 2, want: "Programmed: AddressNotAssigned"},
+		{name: "current accepted failure", kind: "Gateway", plural: "gateways", acceptedGeneration: 2, programmedGeneration: 1, want: "Accepted: ListenersNotValid"},
+		{name: "stale class failure stays visible", kind: "GatewayClass", plural: "gatewayclasses", acceptedGeneration: 1, want: "Accepted: InvalidParameters"},
+		{name: "current class failure", kind: "GatewayClass", plural: "gatewayclasses", acceptedGeneration: 2, want: "Accepted: InvalidParameters"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reason := "ListenersNotValid"
+			if tc.kind == "GatewayClass" {
+				reason = "InvalidParameters"
+			}
+			conds := []map[string]any{{"type": "Accepted", "status": "False", "reason": reason, "observedGeneration": tc.acceptedGeneration}}
+			if tc.programmedGeneration > 0 {
+				conds = append(conds, map[string]any{"type": "Programmed", "status": "False", "reason": "AddressNotAssigned", "observedGeneration": tc.programmedGeneration})
+			}
+			u := rolloutWithConditions(conds)
+			u.SetName("example")
+			u.SetGeneration(2)
+			u.Object["status"].(map[string]any)["observedGeneration"] = int64(2)
+			gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: tc.plural}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: tc.kind}, namespaced: map[schema.GroupVersionResource]bool{gvr: tc.kind == "Gateway"}}
+			got := Compose(p, Filters{})
+			if len(got) != 1 || got[0].Reason != tc.want || got[0].Severity != SeverityWarning {
+				t.Fatalf("want warning %s got %+v", tc.want, got)
+			}
+			if len(got) == 1 {
+				staleSelected := strings.HasPrefix(tc.want, "Accepted:") && tc.acceptedGeneration == 1
+				if strings.Contains(got[0].Message, "generation 1") != staleSelected {
+					t.Fatalf("generation certainty wrong: %+v", got[0])
+				}
+			}
+		})
+	}
+}
+
+func TestCurrentConditionGenerationDoesNotReviveOlderRepresentation(t *testing.T) {
+	u := rolloutWithConditions([]map[string]any{{"type": "Ready", "status": "False", "reason": "Unavailable", "observedGeneration": int64(2)}})
+	u.SetName("example")
+	u.SetGeneration(2)
+	u.Object["status"].(map[string]any)["v1beta2"] = map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable", "observedGeneration": int64(1)}}}
+	if c, found := findActionableCondition(u); !found || c.ObservedGeneration != 1 || !strings.Contains(c.Message, "generation 1") {
+		t.Fatalf("current representation must stay authoritative and qualified: %+v found=%v", c, found)
 	}
 }

@@ -64,9 +64,8 @@ func Find(obj *unstructured.Unstructured, condType string) (State, bool) {
 }
 
 // DefaultFalseConditionTypes is the set of "is this resource healthy?" condition
-// types the generic CRD fallback flags when False. Order matters only for
-// tiebreaking when multiple are False — first hit wins, biasing toward the
-// most-fundamental signal. Curated across the integration matrix: Argo
+// types the generic CRD fallback flags when False. Selection follows the
+// object's condition order, not this list's order. Curated across the integration matrix: Argo
 // (Synced/Healthy), Flux (Ready/Reconciled/Released), cert-manager/Knative/KEDA/
 // Crossplane/CNPG (Ready/Synced/Active/…), Cluster API (Ready/…, though CAPI has
 // its own curated checker).

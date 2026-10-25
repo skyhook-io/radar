@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"fmt"
 	"log"
 	"slices"
 	"sort"
@@ -271,20 +272,28 @@ func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) 
 	if len(condTypes) == 0 {
 		condTypes = conditions.DefaultFalseConditionTypes
 	}
+	// Spec edits do not prove recovery. Keep older failures as a qualified fallback.
+	var stale conditions.FalseCondition
+	hasStale := false
 	for len(condTypes) > 0 {
 		condition, found := conditions.FindFalseConditionWithTime(u, condTypes...)
 		if !found {
 			break
 		}
 		current, _ := conditions.Find(u, condition.Type)
-		stale := u.GetGeneration() > 0 && condition.ObservedGeneration > 0 && condition.ObservedGeneration < u.GetGeneration()
-		if current.Status == "False" && !stale && !isTransientCRDCondition(u, condition.Reason) {
-			return condition, true
+		if current.Status == "False" && !isTransientCRDCondition(u, condition.Reason) {
+			if u.GetGeneration() <= 0 || condition.ObservedGeneration <= 0 || condition.ObservedGeneration >= u.GetGeneration() {
+				return condition, true
+			}
+			if !hasStale {
+				condition.Message = strings.TrimSpace(fmt.Sprintf("Condition was last reported for generation %d; current resource generation is %d. %s", condition.ObservedGeneration, u.GetGeneration(), condition.Message))
+				stale, hasStale = condition, true
+			}
 		}
 		// Skip the whole type so an older representation cannot revive an expected condition.
 		condTypes = slices.DeleteFunc(slices.Clone(condTypes), func(candidateType string) bool { return candidateType == condition.Type })
 	}
-	return conditions.FalseCondition{}, false
+	return stale, hasStale
 }
 
 // gwListenerCond is one listener's failing condition within a gateway group.
