@@ -7,6 +7,23 @@ const searchCoverageNote = (entries: SearchCoverageEntry[] | undefined, opts: Pa
 const entry = (kind: string, reason: string, group = '', count?: number): SearchCoverageEntry => ({ kind, group, reason, count })
 
 describe('searchCoverageNote', () => {
+  it('explains an empty search narrowed by kind collection, without an action', () => {
+    expect(noteFor({ status: 'complete', narrowedBy: ['kind_collection'], gaps: [] }, { hits: [] })).toEqual({
+      text: "Radar doesn't watch every kind; search kind:<name> to include one.",
+    })
+    expect(noteFor({ status: 'complete', narrowedBy: ['kind_collection'], gaps: [] }, { hits: [{ kind: 'Pod' }] })).toBeUndefined()
+    expect(noteFor({ status: 'complete', gaps: [] }, { hits: [] })).toBeUndefined()
+  })
+
+  it.each(['user_access', 'namespace_collection', 'namespace_pin'] as const)('keeps empty %s narrowing quiet', (narrowing) => {
+    expect(noteFor({ status: 'complete', narrowedBy: [narrowing], gaps: [] }, { hits: [] })).toBeUndefined()
+  })
+
+  it('explains a partial namespace without claiming its returned kinds were unsearched', () => {
+    const note = noteFor({ status: 'partial', gaps: [{ code: 'radar_namespace_not_collected', kinds: { extent: 'unknown' }, namespaces: { count: 1, names: ['alpha'] } }] }, { hits: [{ kind: 'Pod' }] })
+    expect(note?.text).toBe("Some kinds weren't searched in namespace 'alpha': Radar here watches only some namespaces.")
+  })
+
   it('offers a kind re-check for a broad read error, with an action when supported', () => {
     const failed = [entry('Certificate', 'read_error', 'cert-manager.io')]
     expect(searchCoverageNote(failed, { query: 'renewal' })?.text).toBe("Couldn't read Certificate; matches of that kind may be missing. Search kind:Certificate to re-check.")

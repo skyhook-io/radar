@@ -23,11 +23,12 @@ import (
 // Use NewCacheProvider to capture the live cache handles and collector probe
 // results for one search request.
 type CacheProvider struct {
-	cache        *k8s.ResourceCache
-	dynamic      *k8s.DynamicResourceCache
-	discovery    *k8s.ResourceDiscovery
-	permissions  *k8s.PermissionCheckResult
-	observations *k8score.DynamicObservationView
+	cache            *k8s.ResourceCache
+	dynamic          *k8s.DynamicResourceCache
+	discovery        *k8s.ResourceDiscovery
+	permissions      *k8s.PermissionCheckResult
+	observations     *k8score.DynamicObservationView
+	catalogResources []k8score.APIResource
 }
 
 // NewCacheProvider returns a Provider over the live radar caches.
@@ -95,10 +96,20 @@ func (p *CacheProvider) DynamicResources() ([]schema.GroupVersionResource, error
 	if p.discovery == nil {
 		return nil, fmt.Errorf("%w: discovery", k8s.ErrDynamicNotReady)
 	}
-	resources, err := p.discovery.GetAPIResources()
-	if err != nil {
-		return nil, err
+	catalog := p.discovery.Catalog()
+	preferred := map[schema.GroupResource]k8score.APIResource{}
+	for _, ar := range catalog.Resources {
+		key := schema.GroupResource{Group: ar.Group, Resource: ar.Name}
+		if previous, ok := preferred[key]; !ok || k8score.IsMoreStableVersion(ar.Version, previous.Version) {
+			preferred[key] = ar
+		}
 	}
+	p.catalogResources = make([]k8score.APIResource, 0, len(preferred))
+	for _, ar := range preferred {
+		p.catalogResources = append(p.catalogResources, ar)
+	}
+	resources := p.catalogResources
+	var err error
 	// Every cluster serves core resources, so an empty catalog is discovery
 	// that hasn't succeeded yet (its errors are logged, not returned).
 	if len(resources) == 0 {
@@ -110,8 +121,10 @@ func (p *CacheProvider) DynamicResources() ([]schema.GroupVersionResource, error
 	switch {
 	case p.dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete:
 		err = fmt.Errorf("%w: CRD discovery", k8s.ErrDynamicNotReady)
-	case p.discovery.HasPartialDiscovery():
+	case p.discovery.HasPartialDiscovery() || p.discovery.LastRefreshFailed():
 		err = errIncompleteDiscovery
+	case !catalog.Complete:
+		err = fmt.Errorf("%w: API discovery", k8s.ErrDynamicNotReady)
 	}
 	seen := map[schema.GroupVersionResource]bool{}
 	watched := map[schema.GroupResource]bool{}
@@ -139,10 +152,7 @@ func (p *CacheProvider) UnlistableKinds() []k8score.APIResource {
 	if p.discovery == nil {
 		return nil
 	}
-	resources, err := p.discovery.GetAPIResources()
-	if err != nil {
-		return nil
-	}
+	resources := p.catalogResources
 	var out []k8score.APIResource
 	for _, ar := range resources {
 		if !strings.Contains(ar.Name, "/") && !slices.Contains(ar.Verbs, "list") {

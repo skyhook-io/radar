@@ -36,6 +36,8 @@ export interface SearchCoverageEntry {
   reason: string
   namespaces?: string[]
   count?: number
+  /** A namespace entry whose gap missed only some of the kinds searched. */
+  someKinds?: boolean
 }
 
 /** The entries of a search's coverage; filter failures are left to the hits. */
@@ -52,7 +54,7 @@ export function searchCoverageEntries(coverage: SearchCoverage | undefined): Sea
       out.push({ kind: '*', group: '', reason: gap.code, count: kinds.count })
     } else if (namespaces) {
       // A search names every namespace its query asked for.
-      out.push({ kind: '*', group: '', reason: gap.code, namespaces: namespaces.names ?? [] })
+      out.push({ kind: '*', group: '', reason: gap.code, namespaces: namespaces.names ?? [], someKinds: gap.kinds?.extent !== 'all' })
     } else {
       out.push({ kind: '*', group: '', reason: gap.code })
     }
@@ -113,7 +115,12 @@ function failedKinds(entries: SearchCoverageEntry[], label: (e: SearchCoverageEn
 // report them). An older Radar sends no coverage, and gets no note.
 export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: SearchCoverageNoteOptions): OmnibarNote | undefined {
   const unsearched = searchCoverageEntries(coverage)
-  if (!unsearched.length) return undefined
+  if (!unsearched.length) {
+    if (coverage?.gaps.length === 0 && !opts.hits?.length && coverage.narrowedBy?.includes('kind_collection')) {
+      return { text: "Radar doesn't watch every kind; search kind:<name> to include one." }
+    }
+    return undefined
+  }
   const label = kindLabeler(unsearched, opts.hits ?? [])
   const named = (reason: string) => distinctKinds(unsearched.filter((e) => e.reason === reason))
   const names = (entries: SearchCoverageEntry[], conj: string, plural = true) => joinNames([...new Set(entries.map((e) => label(e, plural)))], conj)
@@ -179,7 +186,9 @@ export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: S
   const pinned = namespaces(['outside_namespace_pin'])
   if (pinned.length) namespaceSentence(pinned, "wasn't searched: Radar is pinned to another namespace", "weren't searched: Radar is pinned to another namespace")
   const uncollected = namespaces(['radar_namespace_not_collected'])
-  if (uncollected.length) namespaceSentence(uncollected, "wasn't searched: Radar here watches only some namespaces", "weren't searched: Radar here watches only some namespaces")
+  const someKindsUncollected = unsearched.some((e) => e.reason === 'radar_namespace_not_collected' && e.someKinds)
+  if (uncollected.length && someKindsUncollected) say(`Some kinds weren't searched in ${uncollected.length === 1 ? 'namespace' : 'namespaces'} ${quoted(uncollected)}: Radar here watches only some namespaces.`)
+  else if (uncollected.length) namespaceSentence(uncollected, "wasn't searched: Radar here watches only some namespaces", "weren't searched: Radar here watches only some namespaces")
   const findings = named('filter_eval_failed')
   if (findings.length) say(`Radar ran out of time searching the findings of ${names(findings, 'and')}, so a CVE or package missing here may be in a report it left out.`)
   const denied = named('user_forbidden')

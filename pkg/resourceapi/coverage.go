@@ -137,8 +137,8 @@ type KindSet struct {
 // AllKinds is a gap's kinds when it reaches every kind in scope.
 func AllKinds() *KindSet { return &KindSet{Extent: ExtentAll} }
 
-// UnknownKinds is a gap's kinds when it reaches some, Radar can't say which:
-// the catalog of kinds itself couldn't be read.
+// UnknownKinds is a gap's kinds when it reaches an unknown subset of the
+// kinds in scope.
 func UnknownKinds() *KindSet { return &KindSet{Extent: ExtentUnknown} }
 
 // MarshalJSON writes an extent set as {"extent": …} alone, as NameSet does.

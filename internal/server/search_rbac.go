@@ -42,9 +42,9 @@ func (s *Server) searchKindAccess(r *http.Request, gate func([]string, string, s
 		return nil
 	}
 	return &search.KindAccess{
-		ClusterWide: func(group, resource string) bool {
+		ClusterWide: func(group, resource string) (bool, bool) {
 			_, denied, unchecked := gate(nil, group, resource)
-			return len(denied) == 0 && len(unchecked) == 0
+			return len(denied) == 0 && len(unchecked) == 0, len(unchecked) == 0
 		},
 		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
 			allowed, _, unchecked := gate(namespaces, group, resource)

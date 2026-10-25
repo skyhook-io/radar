@@ -870,8 +870,9 @@ gap is either about kinds or about namespaces, and states both axes: `kinds`
 giving an extent: `{"extent": "all"}` for every one in the search's scope, or
 `{"extent": "unknown"}` when Radar can't say which. A kind gap reaches all
 namespaces when the kind failed everywhere and an unknown part when only some
-namespaces failed; a namespace gap reaches all kinds; a gap from an unreadable
-catalog reaches an unknown set of kinds. A filter failure's gap names
+namespaces failed; a namespace gap reaches all kinds only when every searched
+kind was excluded in those namespaces, and otherwise an unknown subset of kinds.
+A gap from an unreadable catalog reaches an unknown set of kinds. A filter failure's gap names
 `objects` instead.
 
 **`status: "partial"` means this result can't rule out a match for what you
@@ -917,10 +918,10 @@ What gets reported follows from that:
   which custom kinds Radar watches), the response carries a `kind_sync_pending`
   gap whose kinds are `{"extent": "unknown"}` (the set isn't known yet) and no `kind_unknown`: a `kind:`
   term that matched nothing may simply not be discovered yet. When API discovery
-  failed for some groups, an unmatched `kind:` term is still `kind_unknown`, beside
-  a `read_error` gap whose kinds are unknown: the kind may live in a group Radar couldn't
-  discover. For broad searches, incomplete discovery adds `kind_collection`
-  to `narrowedBy`.
+  failed for some groups, or its last refresh failed and retained an older snapshot,
+  an unmatched `kind:` term is still `kind_unknown`, beside a `read_error` gap whose
+  kinds are unknown: the kind may live in a group Radar couldn't discover. For broad searches, incomplete discovery adds `kind_collection`
+  to `narrowedBy`. Search reads the in-memory discovery snapshot without refreshing it.
 - **A kind Radar doesn't watch yet narrows a broad search** (`kind_collection`),
   for example one too large to watch eagerly; a `kind:` term warms it and reports
   what happens. An access check Radar is still retrying is `kind_sync_pending`;
@@ -959,11 +960,13 @@ What gets reported follows from that:
 | `namespace_not_found` | named `ns:` | The namespace doesn't exist on this cluster. Only a caller who can see every namespace is told this. | Check the name. |
 | `user_namespace_not_visible` | named `ns:` | The namespace isn't among the namespaces you can see, or doesn't exist; the code doesn't say which. | Use a namespace you can see, or ask for access. |
 | `outside_namespace_pin` | named `ns:` | Radar's `--namespace-scope` pin leaves the namespace out. | Radar's `--namespace-scope` setting. |
-| `radar_namespace_not_collected` | named `ns:` | Radar's cache doesn't cover the namespace for at least one kind searched. | Widen Radar's collection. |
+| `radar_namespace_not_collected` | named `ns:` | Radar's cache left kinds unsearched there: `kinds.extent` is `all` only if every searched kind was excluded, otherwise `unknown`. | Widen Radar's collection. |
 | `filter_eval_failed` | when the filter fails, or the findings search ran out of time | The `filter=` expression couldn't be evaluated on some objects Radar read, or Radar stopped searching Trivy report findings when its time budget ran out, so a CVE or package may be in a report it left out. | Guard missing fields with `has()`; for findings, narrow with `kind:`, `ns:` or `image:`. |
 
-A namespace gap lists the namespaces you named that were not searched for that
-reason, once per code, never per kind. A named namespace that doesn't exist is
+A namespace gap lists the namespaces you named where kinds were missed for that
+reason, once per code, never per kind. Every combination of its axes was missed;
+`kinds: {"extent": "unknown"}` does not qualify kinds successfully searched there.
+A named namespace that doesn't exist is
 `namespace_not_found` for a caller whose RBAC covers every namespace, never
 searched to a silent empty answer or blamed on the pin (Radar watches
 Namespaces cluster-wide, even under the pin; when it can't list them, existence is

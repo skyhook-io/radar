@@ -2040,9 +2040,8 @@ export function useSearch(
   const enabled = (opts?.enabled ?? true) && trimmed.length >= SEARCH_MIN_QUERY;
   const limit = opts?.limit ?? 20;
   const context = opts?.context ?? "summary";
-  // globalNs makes search ignore the per-user namespace-switcher pick and scan
-  // the user's full RBAC ceiling (scope then comes only from the query's `ns:`
-  // tokens). The omnibar opts in so ⌘K is a genuinely global lookup.
+  // Searches always ignore the saved namespace pick. Keep globalNs as the
+  // explicit global-search marker used by the omnibar and embedded hosts.
   const globalNs = opts?.globalNs ?? false;
   return useQuery<SearchResult>({
     queryKey: ["search", trimmed, limit, context, globalNs],

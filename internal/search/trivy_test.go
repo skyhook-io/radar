@@ -271,9 +271,9 @@ type kindAccess struct {
 
 func (k *kindAccess) options() *KindAccess {
 	return &KindAccess{
-		ClusterWide: func(group, resource string) bool {
+		ClusterWide: func(group, resource string) (bool, bool) {
 			k.asked = append(k.asked, "cluster:"+resource)
-			return k.clusterWide
+			return k.clusterWide, true
 		},
 		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
 			k.asked = append(k.asked, fmt.Sprintf("ns:%s:%v", resource, namespaces))
