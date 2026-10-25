@@ -277,7 +277,8 @@ func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) 
 			break
 		}
 		current, _ := conditions.Find(u, condition.Type)
-		if current.Status == "False" && !isTransientCRDCondition(u, condition.Reason) {
+		stale := u.GetGeneration() > 0 && condition.ObservedGeneration > 0 && condition.ObservedGeneration < u.GetGeneration()
+		if current.Status == "False" && !stale && !isTransientCRDCondition(u, condition.Reason) {
 			return condition, true
 		}
 		// Skip the whole type so an older representation cannot revive an expected condition.

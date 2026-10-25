@@ -24,6 +24,7 @@ type State struct {
 
 type FalseCondition struct {
 	Type                  string
+	ObservedGeneration    int64
 	Reason                string
 	Message               string
 	LastTransitionTime    time.Time
@@ -119,7 +120,8 @@ func FindFalseConditionWithTime(obj *unstructured.Unstructured, condTypes ...str
 				if ct == wanted {
 					r, _ := cond["reason"].(string)
 					m, _ := cond["message"].(string)
-					result := FalseCondition{Type: ct, Reason: r, Message: m}
+					observedGeneration, _ := cond["observedGeneration"].(int64)
+					result := FalseCondition{Type: ct, Reason: r, Message: m, ObservedGeneration: observedGeneration}
 					if ts, _ := cond["lastTransitionTime"].(string); ts != "" {
 						if t, err := time.Parse(time.RFC3339, ts); err == nil {
 							result.LastTransitionTime = t

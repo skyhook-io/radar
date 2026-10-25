@@ -8,6 +8,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 )
 
 func rolloutWithConditions(conds []map[string]any) *unstructured.Unstructured {
@@ -26,21 +27,25 @@ func TestGenericConditionSelectionKeepsActionableFailures(t *testing.T) {
 	failure := map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError", "message": "credentials rejected", "lastTransitionTime": failedAt.Format(time.RFC3339)}
 	readyFailure := map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable", "lastTransitionTime": failedAt.Format(time.RFC3339)}
 	for _, tc := range []struct {
-		name       string
-		legacy     []map[string]any
-		current    []map[string]any
-		suspended  bool
-		lagging    bool
-		wantReason string
+		name        string
+		legacy      []map[string]any
+		current     []map[string]any
+		suspended   bool
+		lagging     bool
+		wantReason  string
+		wantMessage string
 	}{
-		{name: "expected first", legacy: []map[string]any{creating, failure}, wantReason: "Synced: ReconcileError"},
-		{name: "failure first", legacy: []map[string]any{failure, creating}, wantReason: "Synced: ReconcileError"},
+		{name: "expected first", legacy: []map[string]any{creating, failure}, wantReason: "Synced: ReconcileError", wantMessage: "credentials rejected"},
+		{name: "failure first", legacy: []map[string]any{failure, creating}, wantReason: "Synced: ReconcileError", wantMessage: "credentials rejected"},
 		{name: "only expected", legacy: []map[string]any{creating}},
 		{name: "actionable order unchanged", legacy: []map[string]any{readyFailure, failure}, wantReason: "Ready: Unavailable"},
-		{name: "current expected hides stale same type", current: []map[string]any{creating}, legacy: []map[string]any{readyFailure, failure}, wantReason: "Synced: ReconcileError"},
+		{name: "current expected hides stale same type", current: []map[string]any{creating}, legacy: []map[string]any{readyFailure, failure}, wantReason: "Synced: ReconcileError", wantMessage: "credentials rejected"},
 		{name: "current healthy hides stale same type", current: []map[string]any{{"type": "Ready", "status": "True"}}, legacy: []map[string]any{readyFailure}},
 		{name: "current unknown hides stale same type", current: []map[string]any{{"type": "Ready", "status": "Unknown"}}, legacy: []map[string]any{readyFailure}},
-		{name: "current healthy does not hide independent failure", current: []map[string]any{{"type": "Ready", "status": "True"}}, legacy: []map[string]any{readyFailure, failure}, wantReason: "Synced: ReconcileError"},
+		{name: "current healthy does not hide independent failure", current: []map[string]any{{"type": "Ready", "status": "True"}}, legacy: []map[string]any{readyFailure, failure}, wantReason: "Synced: ReconcileError", wantMessage: "credentials rejected"},
+		{name: "current failing overrides older healthy", current: []map[string]any{readyFailure}, legacy: []map[string]any{{"type": "Ready", "status": "True"}}, wantReason: "Ready: Unavailable"},
+		{name: "first duplicate healthy is authoritative", legacy: []map[string]any{{"type": "Ready", "status": "True"}, readyFailure}},
+		{name: "first duplicate expected is authoritative", legacy: []map[string]any{creating, readyFailure}},
 		{name: "suspend preserved", legacy: []map[string]any{creating, failure}, suspended: true},
 		{name: "generation lag preserved", legacy: []map[string]any{creating, failure}, lagging: true},
 	} {
@@ -74,6 +79,9 @@ func TestGenericConditionSelectionKeepsActionableFailures(t *testing.T) {
 				}
 				if len(got) != 1 || got[0].Reason != tc.wantReason || got[0].Severity != SeverityWarning {
 					t.Fatalf("grouped=%v: got %+v, want one warning %q", grouped, got, tc.wantReason)
+				}
+				if got[0].Message != tc.wantMessage {
+					t.Fatalf("message = %q, want %q", got[0].Message, tc.wantMessage)
 				}
 				if !got[0].FirstSeen.Equal(failedAt) {
 					t.Fatalf("failure onset = %v, want %v", got[0].FirstSeen, failedAt)
@@ -541,5 +549,73 @@ func TestDetectGenericCRDIssues_PlatformConditions(t *testing.T) {
 	}
 	if byKind["CustomResourceDefinition"].Category != issuesapi.CategoryOperatorConditionFail || byKind["CustomResourceDefinition"].Severity != SeverityCritical {
 		t.Fatalf("CRD issue = %+v, want critical operator condition", byKind["CustomResourceDefinition"])
+	}
+}
+
+func TestGenericConditionSelectionHonorsCandidateGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		observed    *int64
+		independent bool
+		want        string
+	}{
+		{name: "stale secondary error", observed: ptr.To[int64](1)},
+		{name: "current secondary error", observed: ptr.To[int64](2), want: "Synced: ReconcileError"},
+		{name: "missing generation stays actionable", want: "Synced: ReconcileError"},
+		{name: "zero generation stays actionable", observed: ptr.To[int64](0), want: "Synced: ReconcileError"},
+		{name: "future generation is not known stale", observed: ptr.To[int64](3), want: "Synced: ReconcileError"},
+		{name: "stale candidate keeps independent current error", observed: ptr.To[int64](1), independent: true, want: "Available: AvailabilityFailed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError"}
+			if tc.observed != nil {
+				failure["observedGeneration"] = *tc.observed
+			}
+			conds := []map[string]any{{"type": "Ready", "status": "False", "reason": "Creating", "observedGeneration": int64(2)}, failure}
+			if tc.independent {
+				conds = append(conds, map[string]any{"type": "Available", "status": "False", "reason": "AvailabilityFailed", "observedGeneration": int64(2)})
+			}
+			u := rolloutWithConditions(conds)
+			u.SetName("example")
+			u.SetNamespace("test")
+			u.SetGeneration(2)
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			for _, grouped := range []bool{false, true} {
+				got := Compose(p, Filters{Namespaces: []string{"test"}, Grouped: grouped})
+				if tc.want == "" {
+					if len(got) != 0 {
+						t.Fatalf("stale error surfaced: %+v", got)
+					}
+				} else if len(got) != 1 || got[0].Reason != tc.want {
+					t.Fatalf("want %s got %+v", tc.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestActionableConditionsPreserveRolloutPauseAndFailure(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		conds := []map[string]any{{"type": "Ready", "status": "False", "reason": "Creating"}, {"type": "Healthy", "status": "False", "reason": "RolloutHealthy"}}
+		if failed {
+			conds = append(conds, map[string]any{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "message": "bad rollout spec"})
+		}
+		u := rolloutWithConditions(conds)
+		u.SetAPIVersion("argoproj.io/v1alpha1")
+		u.SetKind("Rollout")
+		u.SetName("rollout")
+		u.SetNamespace("test")
+		u.Object["status"].(map[string]any)["phase"] = "Paused"
+		gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+		p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Rollout"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+		got := Compose(p, Filters{})
+		if !failed {
+			if len(got) != 0 {
+				t.Fatalf("paused rollout became noisy: %+v", got)
+			}
+		} else if len(got) != 1 || got[0].Severity != SeverityCritical || got[0].Reason != "InvalidSpec" || got[0].Message != "bad rollout spec" {
+			t.Fatalf("failure lost after expected condition: %+v", got)
+		}
 	}
 }
