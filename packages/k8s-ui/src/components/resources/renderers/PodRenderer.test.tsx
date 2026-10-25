@@ -551,6 +551,7 @@ describe('finished Pod resource usage',()=>{
  it.each(['Succeeded','Failed'])('explains ended live usage for %s without cluster repair advice',phase=>{
   const html=renderToString(<PodRenderer data={{...pod,status:{phase}}} onCopy={()=>{}} copied={null} metricsUnavailable metricsHistory={{containers:[],collectionError:'Pod metrics not found',metricsUnavailableReason:'not found'}} />)
   expect(html).toContain('Live resource usage has ended for this Pod')
+  expect(html).toContain('No recorded usage is available.')
   expect(html).not.toContain('Metrics collection error:')
   expect(html).not.toContain('Radar cannot read metrics.k8s.io')
   expect(html).not.toContain('No usage yet: this Pod is not running')

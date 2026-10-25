@@ -877,7 +877,7 @@ export function PodRenderer({
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {isTerminal && (
             <div className="mb-3 text-sm text-theme-text-tertiary">
-              Live resource usage has ended for this Pod.
+              Live resource usage has ended for this Pod.{metricsHistory && !hasMetricsHistory && ' No recorded usage is available.'}
             </div>
           )}
           {noUsageYet && <MetricsUnavailableNotice noUsageYet />}
