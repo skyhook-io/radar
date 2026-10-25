@@ -56,8 +56,8 @@ func TestDynamicResourceObservationUnwatchedAndUnsupported(t *testing.T) {
 			}
 		})
 	}
-	if err := cache.EnsureWatching(unsupported); err == nil {
-		t.Fatal("EnsureWatching unsupported GVR succeeded")
+	if err := cache.EnsureWatching(unsupported); !errors.Is(err, ErrCollectionNotSupported) {
+		t.Fatalf("unsupported GVR cause = %v", err)
 	}
 	discovery.AddAPIResource(APIResource{
 		Group: unsupported.Group, Version: unsupported.Version, Kind: "Summary", Name: unsupported.Resource,
@@ -127,7 +127,13 @@ func TestDynamicResourceObservationTracksOnDemandSyncAndExactGVR(t *testing.T) {
 	if watched.State != DynamicObservationSynced || watched.ReasonCode != "informer_synced" {
 		t.Fatalf("watched observation = %+v", watched)
 	}
+	if cache.IsStopped() {
+		t.Fatal("running cache reported stopped")
+	}
 	cache.Stop()
+	if !cache.IsStopped() {
+		t.Fatal("stopped cache reported running")
+	}
 	if got := cache.Observation(observed); got.State != DynamicObservationUnwatched || got.ReasonCode != "cache_stopped" {
 		t.Fatalf("stopped cache retained active observation: %+v", got)
 	}
@@ -560,7 +566,7 @@ func TestNamespaceObservationReadsOnlyTheServingInformer(t *testing.T) {
 	}
 }
 
-func TestReadServerChangesWhenAClusterWideInformerReplacesNamespaceOnes(t *testing.T) {
+func TestServedEntriesFollowAClusterWideInformerReplacingNamespaceOnes(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
 	release := make(chan struct{})
@@ -583,23 +589,18 @@ func TestReadServerChangesWhenAClusterWideInformerReplacesNamespaceOnes(t *testi
 	for !d.IsNamespaceSynced(gvr, "alpha") && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	before, synced := d.ReadServer(gvr, "alpha")
-	if !synced {
+	if _, synced := d.servedEntries(gvr, "alpha"); !synced {
 		t.Fatal("alpha's informer did not sync")
 	}
-	if again, _ := d.ReadServer(gvr, "alpha"); !again.Same(before) {
-		t.Fatal("the same informer must compare equal")
-	}
-	if _, synced := d.ReadServer(gvr, ""); synced {
+	if _, synced := d.servedEntries(gvr, ""); synced {
 		t.Fatal("namespace informers must not answer a cluster-wide read")
 	}
 	// The cluster-wide informer replaces alpha's; its initial list is held.
 	if err := d.startWatching(gvr, ""); err != nil {
 		t.Fatal(err)
 	}
-	after, synced := d.ReadServer(gvr, "alpha")
-	if after.Same(before) || synced {
-		t.Fatalf("after the replacement: same=%v synced=%v; want a different, unsynced server", after.Same(before), synced)
+	if _, synced := d.servedEntries(gvr, "alpha"); synced {
+		t.Fatal("after the replacement, alpha is served by the cluster-wide informer, which hasn't loaded")
 	}
 }
 
@@ -672,27 +673,6 @@ func TestProbesStopOnRejectedCredentials(t *testing.T) {
 	}
 }
 
-// Same compares informer sets: an all-namespaces read unions per-namespace
-// informers from a map, so equal sets can arrive in different orders.
-func TestReadServerSameIgnoresOrder(t *testing.T) {
-	a, b, c := &informerEntry{}, &informerEntry{}, &informerEntry{}
-	for name, tc := range map[string]struct {
-		x, y []*informerEntry
-		want bool
-	}{
-		"same order":      {[]*informerEntry{a, b}, []*informerEntry{a, b}, true},
-		"other order":     {[]*informerEntry{a, b}, []*informerEntry{b, a}, true},
-		"one replaced":    {[]*informerEntry{a, b}, []*informerEntry{a, c}, false},
-		"one more":        {[]*informerEntry{a}, []*informerEntry{a, b}, false},
-		"both empty":      {nil, nil, true},
-		"empty and other": {nil, []*informerEntry{a}, false},
-	} {
-		if got := (DynamicReadServer{entries: tc.x}).Same(DynamicReadServer{entries: tc.y}); got != tc.want {
-			t.Errorf("%s: Same = %v, want %v", name, got, tc.want)
-		}
-	}
-}
-
 // Stop keeps the informers, which go on reporting synced; nothing that vouches
 // for an answer may do so once the cache has stopped.
 func TestStoppedCacheVouchesForNothing(t *testing.T) {
@@ -714,20 +694,20 @@ func TestStoppedCacheVouchesForNothing(t *testing.T) {
 	for !(d.IsNamespaceSynced(widgets, "alpha") && d.IsClusterWideSynced(gizmos)) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, synced := d.ReadServer(widgets, "alpha"); !synced {
+	if _, synced := d.servedEntries(widgets, "alpha"); !synced {
 		t.Fatal("alpha's informer did not sync")
 	}
-	if _, synced := d.ReadServer(gizmos, ""); !synced {
+	if _, synced := d.servedEntries(gizmos, ""); !synced {
 		t.Fatal("the cluster-wide informer did not sync")
 	}
 
 	d.Stop()
 
-	if _, synced := d.ReadServer(widgets, "alpha"); synced {
-		t.Error("ReadServer vouches for a namespace informer of a stopped cache")
+	if _, synced := d.servedEntries(widgets, "alpha"); synced {
+		t.Error("a namespace informer of a stopped cache vouches for reads")
 	}
-	if _, synced := d.ReadServer(gizmos, ""); synced {
-		t.Error("ReadServer vouches for a cluster-wide informer of a stopped cache")
+	if _, synced := d.servedEntries(gizmos, ""); synced {
+		t.Error("a cluster-wide informer of a stopped cache vouches for reads")
 	}
 	if d.IsNamespaceSynced(widgets, "alpha") || d.IsClusterWideSynced(gizmos) || d.IsSynced(gizmos) {
 		t.Error("a stopped cache reports synced")
@@ -740,5 +720,58 @@ func TestStoppedCacheVouchesForNothing(t *testing.T) {
 	}
 	if counts := d.CountWatched(nil); counts != nil {
 		t.Errorf("CountWatched answers for a stopped cache: %v", counts)
+	}
+}
+
+func newWidgetDynamicClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, objects...)
+}
+
+func TestDynamicReadableObjectAnswersOnlyFromSyncedServingInformers(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := newWidgetDynamicClient(&unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.io/v1", "kind": "Widget",
+		"metadata": map[string]any{"name": "present", "namespace": "alpha"},
+	}})
+	release := make(chan struct{})
+	defer close(release)
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			<-release
+		}
+		return false, nil, nil
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if _, found, ok := d.ReadableObject(gvr, "alpha", "present"); found || ok {
+		t.Fatal("with no informer, a read must prove nothing")
+	}
+	if err := d.startWatching(gvr, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !d.IsNamespaceSynced(gvr, "alpha") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	obj, found, ok := d.ReadableObject(gvr, "alpha", "present")
+	if !found || !ok || obj.GetName() != "present" {
+		t.Fatalf("synced read: found=%v ok=%v", found, ok)
+	}
+	if _, found, ok := d.ReadableObject(gvr, "alpha", "missing"); found || !ok {
+		t.Fatalf("a synced store's miss: found=%v ok=%v; want an established absence", found, ok)
+	}
+	if _, _, ok := d.ReadableObject(gvr, "beta", "present"); ok {
+		t.Fatal("no informer serves beta, so the read proves nothing")
+	}
+	// A cluster-wide informer replaces alpha's; its initial list is held.
+	if err := d.startWatching(gvr, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, ok := d.ReadableObject(gvr, "alpha", "present"); found || ok {
+		t.Fatalf("after the replacement: found=%v ok=%v; want the unloaded cluster-wide informer to prove nothing", found, ok)
 	}
 }

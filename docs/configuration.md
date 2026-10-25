@@ -744,6 +744,34 @@ freshness; the existing scan memo can lag evidence changes by up to five seconds
 The per-resource audit endpoint remains a findings array and has no completeness
 metadata. Use the scan response or AI resource context when that distinction matters.
 
+### Resource budget checks
+
+Missing CPU/memory request and limit checks recognize both container resources
+and shared Pod budgets in `spec.resources` (or the workload's Pod template).
+Regular containers and restartable init sidecars are checked; one-shot init
+containers are excluded from these efficiency checks.
+
+For standalone Pods with no owner references, Radar reads the stored, admitted
+specification. Owned Pods are not checked directly by these efficiency checks.
+For workload
+templates, it considers request-from-limit defaulting, namespace LimitRanges,
+and possible shared-budget admission behavior. When those possibilities disagree,
+Radar leaves the affected evaluation unknown rather than reporting a certain
+pass or failure. Scan-level `missingInputs` includes `pod-resource-defaulting`
+when this uncertainty prevents an evaluation. These are configuration checks,
+not measurements of actual consumption. If LimitRanges cannot be listed,
+workload-template efficiency checks are skipped and `missingInputs` includes
+`limitranges`.
+
+### Per-resource check suppression
+
+Add `radarhq.io/ignore-checks` with comma-separated check IDs to the resource
+named in a finding, for example `singleReplica,hostNetwork`. For workload
+Pod-spec findings, put the annotation on the Deployment or other owning workload,
+not only on its generated Pods. Unknown check IDs have no effect. The annotation
+travels with the manifest and suppresses the matching findings for every Radar
+reading it; it does not disable those checks for other resources.
+
 ### Storage review checks
 
 Three snapshot checks in **Efficiency**, at **Medium** posture priority
