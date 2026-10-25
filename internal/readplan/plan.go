@@ -146,12 +146,12 @@ type NamespaceObserver interface {
 }
 
 // Dynamic never starts watches or probes. On-demand readers replan after I/O.
-func Dynamic(cache *k8s.DynamicResourceCache, observations NamespaceObserver, gvr schema.GroupVersionResource, target readscope.Target, clusterScoped bool) Plan {
+func Dynamic(observations NamespaceObserver, gvr schema.GroupVersionResource, target readscope.Target, clusterScoped bool) Plan {
 	p := Plan{}
 	if !clusterScoped && target.Namespaces != nil && len(target.Namespaces) == 0 {
 		return p
 	}
-	whole := cache.Observation(gvr)
+	whole := observations.NamespaceObservation(gvr, "")
 	extent := targetExtent(target, clusterScoped)
 	targets := slices.Clone(target.Namespaces)
 	slices.Sort(targets)

@@ -1212,7 +1212,7 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 				target.Namespaces = []string{namespace}
 			}
 			clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
-			facts := readplan.Dynamic(dynamicCache, dynamicCache, gvr, target, clusterScoped)
+			facts := readplan.Dynamic(dynamicCache, gvr, target, clusterScoped)
 			for _, part := range facts.Partitions {
 				switch part.Verdict.Code {
 				case readreason.KindSyncPending:
@@ -1243,7 +1243,7 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 		target.Namespaces = []string{namespace}
 	}
 	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
-	facts := readplan.Dynamic(dynamicCache, dynamicCache, gvr, target, clusterScoped)
+	facts := readplan.Dynamic(dynamicCache, gvr, target, clusterScoped)
 	for _, part := range facts.Partitions {
 		if part.Verdict.State != readplan.Readable {
 			return false, dynamicPlanError(ctx, kind, group, namespace, verb, part.Verdict.Code)

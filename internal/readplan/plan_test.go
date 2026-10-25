@@ -50,12 +50,6 @@ func TestDynamicVerdicts(t *testing.T) {
 	}
 }
 
-type namespaceObservations map[string]k8score.DynamicResourceObservation
-
-func (o namespaceObservations) NamespaceObservation(_ schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
-	return o[ns]
-}
-
 func TestDynamicEmptyAndWholeExtents(t *testing.T) {
 	cache := &k8s.DynamicResourceCache{}
 	// A nil embedded cache's observation is an unwatched kind.
@@ -69,7 +63,7 @@ func TestDynamicEmptyAndWholeExtents(t *testing.T) {
 		{readscope.Target{}, false, UnknownNamespaces, 1},
 		{readscope.Target{}, true, Cluster, 1},
 	} {
-		p := Dynamic(cache, namespaceObservations{}, schema.GroupVersionResource{}, tc.target, tc.cluster)
+		p := Dynamic(cache, schema.GroupVersionResource{}, tc.target, tc.cluster)
 		if len(p.Partitions) != tc.parts || tc.parts > 0 && p.Partitions[0].Extent != tc.extent {
 			t.Fatalf("%+v: %+v", tc, p)
 		}
@@ -143,7 +137,7 @@ func TestDynamicBroadPlanKeepsUnansweredNeighbor(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	before := len(dyn.Actions())
-	p := Dynamic(cache, cache, gvr, readscope.Target{}, false)
+	p := Dynamic(cache, gvr, readscope.Target{}, false)
 	if !p.CollectionLimited || len(p.Partitions) != 2 {
 		t.Fatalf("%+v", p)
 	}
@@ -168,7 +162,10 @@ func TestDynamicBroadPlanKeepsUnansweredNeighbor(t *testing.T) {
 
 type countingObserver struct{ calls int }
 
-func (o *countingObserver) NamespaceObservation(schema.GroupVersionResource, string) k8score.DynamicResourceObservation {
+func (o *countingObserver) NamespaceObservation(_ schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
+	if ns == "" {
+		return k8score.DynamicResourceObservation{State: k8score.DynamicObservationUnwatched}
+	}
 	o.calls++
 	if o.calls == 1 {
 		return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSyncing}
@@ -178,7 +175,7 @@ func (o *countingObserver) NamespaceObservation(schema.GroupVersionResource, str
 
 func TestDynamicObservesEachTargetOnce(t *testing.T) {
 	observer := &countingObserver{}
-	p := Dynamic(&k8s.DynamicResourceCache{}, observer, schema.GroupVersionResource{}, readscope.Target{Namespaces: []string{"a", "a"}}, false)
+	p := Dynamic(observer, schema.GroupVersionResource{}, readscope.Target{Namespaces: []string{"a", "a"}}, false)
 	if observer.calls != 1 || len(p.Partitions) != 1 || p.Partitions[0].Verdict.Code != readreason.KindSyncPending {
 		t.Fatalf("duplicate target observed %d times: %+v", observer.calls, p)
 	}

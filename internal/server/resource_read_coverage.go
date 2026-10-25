@@ -599,7 +599,7 @@ func namespaceReadFailure(dynamicCache *k8s.DynamicResourceCache, gvr schema.Gro
 	if namespace != "" {
 		target.Namespaces = []string{namespace}
 	}
-	plan := readplan.Dynamic(dynamicCache, dynamicCache, gvr, target, false)
+	plan := readplan.Dynamic(dynamicCache, gvr, target, false)
 	for _, part := range plan.Partitions {
 		if part.Verdict.State != readplan.Readable {
 			return dynamicPlanFailure(gvr.Resource, part.Verdict.Code)
@@ -738,7 +738,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			}
 			targets = observation.Namespaces
 			unanswered = observation.UnansweredNamespaces
-			facts := readplan.Dynamic(dynamicCache, dynamicCache, gvr, readscope.Target{}, clusterScoped)
+			facts := readplan.Dynamic(dynamicCache, gvr, readscope.Target{}, clusterScoped)
 			for _, part := range facts.Partitions {
 				if part.Verdict.State == readplan.Gap && slices.ContainsFunc(part.Namespaces, func(ns string) bool { return slices.Contains(unanswered, ns) }) {
 					unansweredCode = part.Verdict.Code
@@ -869,7 +869,7 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 // Radar doesn't collect narrows a scope the request didn't name (collected
 // for every namespace, uncovered for a finite one) and is a gap in one it did.
 func dynamicCountCoverage(cache *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, namespaces []string, clusterScoped, explicit bool) (read, collected, uncovered []string, gaps []resourceapi.Gap, ok bool) {
-	facts := readplan.Dynamic(cache, cache, gvr, readscope.Target{Namespaces: namespaces, Explicit: explicit}, clusterScoped)
+	facts := readplan.Dynamic(cache, gvr, readscope.Target{Namespaces: namespaces, Explicit: explicit}, clusterScoped)
 	read = []string{}
 	var intended, outside []string
 	for _, part := range facts.Partitions {

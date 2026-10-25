@@ -1071,7 +1071,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			return nil, nil, errConnectionChanged()
 		}
 		observation := dynamicCache.Observation(gvr)
-		facts := readplan.Dynamic(dynamicCache, dynamicCache, gvr, readscope.Target{}, false)
+		facts := readplan.Dynamic(dynamicCache, gvr, readscope.Target{}, false)
 		unanswered := make(map[string]bool, len(observation.UnansweredNamespaces))
 		for _, ns := range observation.UnansweredNamespaces {
 			unanswered[ns] = true

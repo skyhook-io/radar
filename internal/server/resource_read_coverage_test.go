@@ -995,7 +995,7 @@ func TestUnansweredProbeCodePrefersRejectedCredentials(t *testing.T) {
 		{k8score.DynamicResourceObservation{ProbeRetrying: true, UnansweredNamespaces: []string{"beta"}}, readreason.KindSyncPending},
 		{k8score.DynamicResourceObservation{UnansweredNamespaces: []string{"beta"}}, readreason.ReadError},
 	} {
-		plan := readplan.Dynamic(&k8s.DynamicResourceCache{}, testNamespaceObserver{tc.observation}, schema.GroupVersionResource{}, readscope.Target{Namespaces: []string{"beta"}}, false)
+		plan := readplan.Dynamic(testNamespaceObserver{tc.observation}, schema.GroupVersionResource{}, readscope.Target{Namespaces: []string{"beta"}}, false)
 		if got := plan.Partitions[0].Verdict.Code; got != tc.want {
 			t.Errorf("%+v: got %s, want %s", tc.observation, got, tc.want)
 		}
@@ -1006,7 +1006,10 @@ type testNamespaceObserver struct {
 	observation k8score.DynamicResourceObservation
 }
 
-func (o testNamespaceObserver) NamespaceObservation(schema.GroupVersionResource, string) k8score.DynamicResourceObservation {
+func (o testNamespaceObserver) NamespaceObservation(_ schema.GroupVersionResource, ns string) k8score.DynamicResourceObservation {
+	if ns == "" {
+		return k8score.DynamicResourceObservation{State: k8score.DynamicObservationUnwatched}
+	}
 	return o.observation
 }
 
