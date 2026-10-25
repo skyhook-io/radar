@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
 	"github.com/skyhook-io/radar/internal/trace"
+	"github.com/skyhook-io/radar/pkg/readscope"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
 )
@@ -81,7 +82,7 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		return
 	}
 	namespaces := s.traceNamespaceCeiling(r)
-	if noNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, q.Get("namespace")) {
+	if readscope.NoNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, q.Get("namespace")) {
 		s.writeError(w, http.StatusForbidden, "no access to the selected namespace")
 		return
 	}
@@ -191,7 +192,7 @@ func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http
 		return
 	}
 	namespaces := s.traceNamespaceCeiling(r)
-	if noNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, input.Namespace) {
+	if readscope.NoNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, input.Namespace) {
 		s.writeError(w, http.StatusForbidden, "no access to the selected namespace")
 		return
 	}
