@@ -1,3 +1,8 @@
+// Package readplan assesses what Radar's caches can answer for one kind and
+// target right now, and why the rest can't be read. It is shared by REST,
+// MCP and search so the same cache state gets the same verdict on every
+// surface. It reads cache state only: callers authorize, warm, read, validate
+// the source around a read and render the result.
 package readplan
 
 import (
@@ -12,6 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// State is a namespace's verdict: Readable now, a Gap with a code, or
+// OutsideCollection (Radar doesn't collect the kind there; a named namespace
+// reports it, an implicit target narrows it away).
 type State uint8
 
 const (
@@ -20,6 +28,8 @@ const (
 	OutsideCollection
 )
 
+// Extent says which namespaces a partition covers: those listed, every
+// namespace, a cluster-scoped kind, or some Radar can't name.
 type Extent uint8
 
 const (
@@ -40,6 +50,11 @@ type Partition struct {
 	Verdict    Verdict
 }
 
+// Plan groups a target's namespaces by verdict; each namespace is in exactly
+// one partition. CollectionLimited marks an implicit all-namespace target that
+// Radar collects in only some namespaces. WholeKindReady is an execution hint
+// for typed listers, not a coverage status. A plan is not a read receipt:
+// callers still check the source around the read.
 type Plan struct {
 	Partitions        []Partition
 	CollectionLimited bool

@@ -68,6 +68,15 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	// countTarget is a kind's target: the request's, with the gaps exact kind
 	// authorization left in it.
 	requestTarget := s.requestListTarget(r, namespaces)
+	// A named namespace Radar knows doesn't exist is a gap and is never
+	// counted: a zero there would say it holds nothing.
+	if requestTarget.explicit && namespaces != nil {
+		namespaces = slices.DeleteFunc(slices.Clone(namespaces), func(ns string) bool { return !slices.Contains(requestTarget.namespaces, ns) })
+		if len(namespaces) == 0 && slices.ContainsFunc(requestTarget.gaps, func(g resourceapi.Gap) bool { return g.Code == readreason.NamespaceNotFound }) {
+			s.writeReadFailure(w, "resource counts", noAccessFailure(readFailuref(readreason.UserNoNamespaceAccess, "no namespace to count"), requestTarget, false), &requestTarget)
+			return
+		}
+	}
 	countTarget := func(kindGaps []resourceapi.Gap, clusterScoped bool) listTarget {
 		if clusterScoped {
 			return listTarget{clusterScoped: true}

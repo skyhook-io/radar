@@ -323,7 +323,7 @@ func TestResourceListRejectsInvalidLimits(t *testing.T) {
 }
 
 func TestResourceListChecksCurrentSizeAfterCountGrowth(t *testing.T) {
-	client := fake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "initial", Namespace: "alpha"}})
+	client := fake.NewClientset(append(testNamespaces("alpha"), &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "initial", Namespace: "alpha"}})...)
 	useTestResourceCache(t, client)
 	var before ResourceCountsResponse
 	assertOK(t, get(t, "/api/resource-counts?namespace=alpha"), &before)
@@ -372,11 +372,11 @@ func TestResourceCountsKeepPartialScopeCountUsable(t *testing.T) {
 }
 
 func TestResourceCountsShareMetadataBudgetAcrossKinds(t *testing.T) {
-	useTestResourceCache(t, fake.NewClientset())
 	names := make([]string, 80)
 	for i := range names {
 		names[i] = fmt.Sprintf("ns-%03d", i)
 	}
+	useTestResourceCache(t, fake.NewClientset(testNamespaces(names...)...))
 	var counts testCounts
 	assertOK(t, get(t, "/api/resource-counts?namespaces="+strings.Join(names, ",")), &counts)
 	if len(counts.Counts) < 20 || len(counts.Coverage) != len(counts.Counts) {
@@ -509,6 +509,10 @@ func TestResourceCountsAllowExplicitClusterGrantWithoutNamespaceAccess(t *testin
 }
 
 func TestResourceDynamicNamespaceCoverageDoesNotBorrowAnotherInformer(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}},
+	))
 	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList", {Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}: "EndpointSliceList"})
 	dyn.PrependReactor("list", "widgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -558,6 +562,7 @@ func TestResourceDynamicNamespaceCoverageDoesNotBorrowAnotherInformer(t *testing
 }
 
 func TestResourceDynamicPendingEmptyDoesNotBecomeAbsence(t *testing.T) {
+	addPackageNamespaces(t, "alpha", "beta")
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -661,6 +666,7 @@ func TestResourceListGroupCollisionKeepsRowsAndCoverageTogether(t *testing.T) {
 }
 
 func TestDirectResourceListFollowsSmallPagesWithinBudget(t *testing.T) {
+	addPackageNamespaces(t, "alpha")
 	for _, limit := range []int{2, 3} {
 		t.Run(fmt.Sprintf("maxItems=%d", limit), func(t *testing.T) {
 			var mu sync.Mutex
@@ -732,7 +738,7 @@ func TestDirectResourceListFollowsSmallPagesWithinBudget(t *testing.T) {
 }
 
 func TestUnsupportedDynamicListKeepsItsCollectionCause(t *testing.T) {
-	useTestResourceCache(t, fake.NewClientset())
+	useTestResourceCache(t, fake.NewClientset(testNamespaces("alpha")...))
 	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "summaries"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "SummaryList"})
 	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Summary", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list"}}}); err != nil {
@@ -1005,7 +1011,10 @@ func (o testNamespaceObserver) NamespaceObservation(schema.GroupVersionResource,
 }
 
 func TestDynamicCountsRetainStalledAndUnreadCoverage(t *testing.T) {
-	useTestResourceCache(t, fake.NewClientset())
+	useTestResourceCache(t, fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}},
+	))
 	t.Cleanup(k8s.SetTestDynamicSyncStallAfter(time.Millisecond))
 	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
 	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.com/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "present"}}}
@@ -1059,7 +1068,7 @@ func TestDynamicCountsRetainStalledAndUnreadCoverage(t *testing.T) {
 }
 
 func TestDynamicRESTReadRejectsReplacedServingStores(t *testing.T) {
-	useTestResourceCache(t, fake.NewClientset())
+	useTestResourceCache(t, fake.NewClientset(testNamespaces("alpha")...))
 	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
 	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.com/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "present"}}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList", {Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}: "EndpointSliceList"}, widget)

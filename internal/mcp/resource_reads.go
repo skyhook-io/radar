@@ -179,11 +179,20 @@ func resolveReadTarget(ctx context.Context, requested []string) (readTarget, err
 			outside = visible
 		}
 	}
+	// Only a caller who can see every namespace learns that one doesn't
+	// exist; anyone else is answered below without telling the two apart. It
+	// comes before the pin: a mistyped name is the likelier cause, and "outside
+	// the pin" would send them to widen the pin to a namespace that isn't there.
+	unrestricted := pkgauth.FilterNamespacesForUser(nil, user, perms) == nil
+	if target.explicit && unrestricted {
+		if err := namespacesNotFound(requested); err != nil {
+			return target, err
+		}
+	}
 	if !ok {
 		return target, readErrorf(readreason.OutsideNamespacePin, "Radar is limited to other namespaces by its --namespace-scope setting, so it can't read namespace %q. Whoever runs Radar sets --namespace-scope.", namespaceForError(outside))
 	}
 	allowed := pkgauth.FilterNamespacesForUser(clamped, user, perms)
-	unrestricted := pkgauth.FilterNamespacesForUser(nil, user, perms) == nil
 	if allowed != nil && len(allowed) == 0 {
 		// A namespace the caller named and can't see may not exist either;
 		// the code doesn't say which. Unscoped, clamped is the
@@ -204,17 +213,6 @@ func resolveReadTarget(ctx context.Context, requested []string) (readTarget, err
 		}
 		return target, readErrorf(readreason.UserNoNamespaceAccess, "You can't access any namespace in this request's scope, so Radar read nothing. %s %s", withCloudRole(ctx, "A cluster admin can grant access"), namespaceAccessRule)
 	}
-	// Only a caller who can see every namespace learns that one doesn't
-	// exist; anyone else was answered above without telling the two apart.
-	if target.explicit && unrestricted {
-		if missing := missingNamespaces(clamped); len(missing) > 0 && len(missing) == len(clamped) {
-			scope := fmt.Sprintf("Namespace %q doesn't exist in this cluster", missing[0])
-			if len(missing) > 1 {
-				scope = fmt.Sprintf("Namespaces %q don't exist in this cluster", namespaceForError(missing))
-			}
-			return target, &readError{code: readreason.NamespaceNotFound, err: fmt.Errorf("%s, so there is nothing to read there.", scope), next: "Call list_namespaces to see the namespaces that exist."}
-		}
-	}
 	// Every narrowing that applied to a request that named no namespace, as
 	// REST and search report it: the caller's access when it is restricted,
 	// and the pin.
@@ -230,21 +228,25 @@ func resolveReadTarget(ctx context.Context, requested []string) (readTarget, err
 	return target, nil
 }
 
+// namespacesNotFound is the error for a request whose named namespaces Radar
+// knows don't exist, or nil when any of them may.
+func namespacesNotFound(namespaces []string) error {
+	missing := missingNamespaces(namespaces)
+	if len(missing) == 0 || len(missing) != len(namespaces) {
+		return nil
+	}
+	scope := fmt.Sprintf("Namespace %q doesn't exist in this cluster", missing[0])
+	if len(missing) > 1 {
+		scope = fmt.Sprintf("Namespaces %q don't exist in this cluster", namespaceForError(missing))
+	}
+	return &readError{code: readreason.NamespaceNotFound, err: fmt.Errorf("%s, so there is nothing to read there.", scope), next: "Call list_namespaces to see the namespaces that exist."}
+}
+
 // missingNamespaces returns the namespaces Radar knows don't exist: its
 // Namespace informer has synced and holds none by that name. Without a synced
 // informer, none is known to be missing.
 func missingNamespaces(namespaces []string) []string {
-	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Namespaces() == nil || !cache.IsKindReady("namespaces") {
-		return nil
-	}
-	var missing []string
-	for _, ns := range namespaces {
-		if _, err := cache.Namespaces().Get(ns); apierrors.IsNotFound(err) {
-			missing = append(missing, ns)
-		}
-	}
-	return missing
+	return k8s.GetResourceCache().KnownMissingNamespaces(namespaces)
 }
 
 // narrowedToCollection is t narrowed to what plan's kind is collected in. A
@@ -1349,6 +1351,7 @@ func dynamicReadGVR(kind, group string) (schema.GroupVersionResource, bool) {
 // still-empty store while readiness checks on either side of it both pass. A
 // read that doesn't stand is repeated once its scope is ready; if the
 // informers change again during the repeat, the kind is reported as loading.
+// A get that found its object stands without either check.
 // A read that stands is not repeated: that would only deep-copy the store
 // again.
 func readDynamicScope[T any](ctx context.Context, kind, group, namespace, verb string, read func() (T, error)) (T, error) {
@@ -1374,6 +1377,11 @@ func readDynamicScope[T any](ctx context.Context, kind, group, namespace, verb s
 	out, settled, err := bracketed()
 	if !current() {
 		return out, errConnectionChanged()
+	}
+	// A found object exists whatever its store's load state, so a get that
+	// found it stands. Only a miss needs a complete store to mean absence.
+	if verb == "get" && err == nil && ok && dynamicCache != nil {
+		return out, nil
 	}
 	ready, err := checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, err, dynamicCache, gvr, ok)
 	if ready && !settled && (err == nil || isObjectNotFound(err)) {

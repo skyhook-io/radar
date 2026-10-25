@@ -222,8 +222,16 @@ func (s *Server) requestListTarget(r *http.Request, visible []string) listTarget
 		// what they asked for, and namespace_not_visible reads the same whether
 		// that namespace exists or not.
 		t.named = slices.Compact(slices.Sorted(slices.Values(named)))
-		var pinned, hidden []string
+		var missing, pinned, hidden []string
 		t.namespaces = []string{}
+		// Only a caller who can see every namespace learns one doesn't exist,
+		// and before the pin: a mistyped name is the likelier cause, and
+		// "outside the pin" would send them to widen it to a namespace that
+		// isn't there.
+		var notFound []string
+		if s.getUserNamespaces(r, nil) == nil {
+			notFound = readCache().KnownMissingNamespaces(t.named)
+		}
 		// "Outside the pin" is said only about a namespace the caller can
 		// see. A hidden one gets the same answer inside or outside the pin, or
 		// guessing names would reveal which namespace Radar is pinned to.
@@ -233,6 +241,8 @@ func (s *Server) requestListTarget(r *http.Request, visible []string) listTarget
 		}
 		for _, ns := range t.named {
 			switch {
+			case slices.Contains(notFound, ns):
+				missing = append(missing, ns)
 			case visible == nil || slices.Contains(visible, ns):
 				t.namespaces = append(t.namespaces, ns)
 			case k8s.ForceNamespaceScope && ns != k8s.GetNamespaceScopeTarget() && (accessible == nil || slices.Contains(accessible, ns)):
@@ -240,6 +250,9 @@ func (s *Server) requestListTarget(r *http.Request, visible []string) listTarget
 			default:
 				hidden = append(hidden, ns)
 			}
+		}
+		if len(missing) > 0 {
+			t.gaps = append(t.gaps, gapOf(readreason.NamespaceNotFound, missing))
 		}
 		if len(pinned) > 0 {
 			t.gaps = append(t.gaps, gapOf(readreason.OutsideNamespacePin, pinned))

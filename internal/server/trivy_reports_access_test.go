@@ -30,6 +30,7 @@ const leakedMatch = "AWS_ACCESS_KEY_ID=AKIAFAKEFAKEFAKE1234"
 // and other, each carrying a leaked credential in report.secrets[].match.
 func setupExposedSecretReports(t *testing.T) {
 	t.Helper()
+	addPackageNamespaces(t, "legacy", "other")
 	gvr := exposedSecretReportGVR
 	var objs []runtime.Object
 	for _, ns := range []string{"legacy", "other"} {

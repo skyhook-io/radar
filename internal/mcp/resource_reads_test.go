@@ -2797,3 +2797,30 @@ func TestDynamicBroadListKeepsUnknownProbeExtent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A caller who can see every namespace and names one that doesn't exist is
+// told so even when it is outside the pin: a mistyped name is the likelier
+// cause, and "outside the pin" would send them to widen the pin to it. An
+// existing namespace outside the pin is still outside_namespace_pin.
+func TestMissingNamespaceOutsideThePinIsNotFound(t *testing.T) {
+	// The Namespace informer holds alpha, beta, gamma, shop and kube-system.
+	setupFakeCacheForFilterTests(t)
+	oldPin, oldTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("alpha")
+	t.Cleanup(func() { k8s.ForceNamespaceScope = oldPin; k8s.SetNamespaceScopeOverride(oldTarget) })
+	codeFor := func(namespace string) readreason.Code {
+		_, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "pods", Namespace: namespace, Context: "none"})
+		var re *readError
+		if !errors.As(err, &re) {
+			t.Fatalf("%s: want a read error, got %v", namespace, err)
+		}
+		return re.code
+	}
+	if got := codeFor("ghost"); got != readreason.NamespaceNotFound {
+		t.Fatalf("missing namespace outside the pin: %q, want %q", got, readreason.NamespaceNotFound)
+	}
+	if got := codeFor("beta"); got != readreason.OutsideNamespacePin {
+		t.Fatalf("existing namespace outside the pin: %q, want %q", got, readreason.OutsideNamespacePin)
+	}
+}

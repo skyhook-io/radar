@@ -61,6 +61,43 @@ func useTestResourceCache(t *testing.T, client *fake.Clientset) {
 	}
 }
 
+// testNamespaces is a Namespace for each name. A real cluster has one for
+// every namespace that holds objects, and Radar tells a caller who can see
+// every namespace when a namespace they named doesn't exist.
+func testNamespaces(names ...string) []runtime.Object {
+	out := make([]runtime.Object, 0, len(names))
+	for _, name := range names {
+		out = append(out, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	return out
+}
+
+// addPackageNamespaces adds Namespaces to the package fixture's cluster for
+// one test, and waits until its cache holds them.
+func addPackageNamespaces(t *testing.T, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, err := testFakeClient.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = testFakeClient.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{}) })
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, name := range names {
+		for {
+			if cache := k8s.GetResourceCache(); cache != nil && cache.Namespaces() != nil {
+				if _, err := cache.Namespaces().Get(name); err == nil {
+					break
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("namespace %s never reached the cache", name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 func TestMain(m *testing.M) {
 	// The Cloud-funnel rollout gate mints an install ID in ~/.radar on first
 	// use; redirect HOME so no test run touches the developer's real settings.

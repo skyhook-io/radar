@@ -2362,6 +2362,15 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces = authz.namespaces
+	// A named namespace Radar knows doesn't exist is a gap and is never read:
+	// an empty read there would say it holds nothing.
+	if target.explicit && namespaces != nil {
+		namespaces = slices.DeleteFunc(slices.Clone(namespaces), func(ns string) bool { return !slices.Contains(target.namespaces, ns) })
+		if len(namespaces) == 0 {
+			s.writeReadFailure(w, kind, noAccessFailure(readFailuref(readreason.UserNoNamespaceAccess, "no namespace to read"), target, false), &target)
+			return
+		}
+	}
 
 	cache, ok := s.gateResourceRead(w, kind, group)
 	if !ok {
@@ -2971,6 +2980,11 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 				return readFailuref(readreason.UserPermissionCheckFailed, "Radar could not determine your namespace access; retry when the permission check is available")
 			}
 			return readFailuref(readreason.UserNamespaceNotVisible, "namespace %q is not among the namespaces you can see, or does not exist", namespace)
+		}
+		// Only a caller who can see every namespace learns one doesn't exist.
+		// The handlers check the --namespace-scope pin after this.
+		if s.getUserNamespaces(r, nil) == nil && len(readCache().KnownMissingNamespaces([]string{namespace})) > 0 {
+			return readFailuref(readreason.NamespaceNotFound, "namespace %q doesn't exist in this cluster", namespace)
 		}
 		// Per-kind RBAC inside the namespace for Secrets — the chart can
 		// grant the SA cluster-wide secrets (Helm release visibility), so

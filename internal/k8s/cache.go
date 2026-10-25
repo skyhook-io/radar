@@ -2431,3 +2431,20 @@ func permissionUnauthorized(result *PermissionCheckResult) error {
 	}
 	return nil
 }
+
+// KnownMissingNamespaces returns the namespaces among names that Radar knows
+// don't exist: its Namespace informer has synced and holds none by that name.
+// Without a synced informer none is known to be missing. Only a caller who can
+// see every namespace may be told the answer.
+func (c *ResourceCache) KnownMissingNamespaces(names []string) []string {
+	if c == nil || c.Namespaces() == nil || !c.IsKindReady("namespaces") {
+		return nil
+	}
+	var missing []string
+	for _, ns := range names {
+		if _, err := c.Namespaces().Get(ns); apierrors.IsNotFound(err) {
+			missing = append(missing, ns)
+		}
+	}
+	return missing
+}

@@ -385,3 +385,62 @@ func TestProxyAuth_PinIsNotRevealedToGuesses(t *testing.T) {
 		t.Errorf("visible namespace outside the pin = %d %q, want 409 outside_namespace_pin", status, got)
 	}
 }
+
+// A caller who can see every namespace is told a named namespace doesn't
+// exist rather than shown an empty list, and before the --namespace-scope pin:
+// a mistyped name is the likelier cause. A real namespace beside it is still
+// read, and one outside the pin is still outside_namespace_pin.
+func TestProxyAuth_MissingNamespaceIsNotFound(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("root", nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
+	type body struct {
+		ErrorCode string `json:"error_code"`
+		Coverage  struct {
+			Gaps []struct {
+				Code       string `json:"code"`
+				Namespaces struct {
+					Names []string `json:"names"`
+				} `json:"namespaces"`
+			} `json:"gaps"`
+		} `json:"coverage"`
+		Items []json.RawMessage `json:"items"`
+	}
+	fetch := func(path string) (int, body) {
+		t.Helper()
+		resp := env.authGet(t, path, "root", "")
+		defer func() { _ = resp.Body.Close() }()
+		var b body
+		if err := json.NewDecoder(resp.Body).Decode(&b); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return resp.StatusCode, b
+	}
+	if status, b := fetch("/api/resources/deployments?namespaces=typo"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
+		t.Errorf("only a missing namespace = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	}
+	status, b := fetch("/api/resources/deployments?namespaces=default,typo")
+	if status != http.StatusOK || len(b.Items) != 1 || len(b.Coverage.Gaps) != 1 || b.Coverage.Gaps[0].Code != "namespace_not_found" || !slices.Equal(b.Coverage.Gaps[0].Namespaces.Names, []string{"typo"}) {
+		t.Errorf("missing beside existing = %d %+v, want default's row and a namespace_not_found gap for typo", status, b)
+	}
+	if status, b := fetch("/api/resources/deployments/typo/nginx"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
+		t.Errorf("get in a missing namespace = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	}
+
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("default")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+	if status, b := fetch("/api/resources/deployments?namespaces=typo"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
+		t.Errorf("missing namespace outside the pin = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	}
+	if status, b := fetch("/api/resources/deployments?namespaces=broken"); status != http.StatusConflict || b.ErrorCode != "outside_namespace_pin" {
+		t.Errorf("existing namespace outside the pin = %d %q, want 409 outside_namespace_pin", status, b.ErrorCode)
+	}
+	if status, b := fetch("/api/resources/deployments/typo/nginx"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
+		t.Errorf("get in a missing namespace outside the pin = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	}
+}
