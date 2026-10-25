@@ -804,6 +804,11 @@ watches for this scan; an empty result does not establish that unwatched kinds
 are healthy. These findings also feed Active Issues and AI resource/search
 summaries, but not dashboard health summaries or `cluster://health`.
 
+A `Ready=False/Deleting` condition is expected during the first 10 minutes of
+an actual deletion. Independent failure conditions still surface immediately.
+After that window, the condition remains a fallback when no stuck-deletion
+finding is available; it never takes priority over an independent error.
+
 Findings start at warning after 10 minutes. At 30 minutes, controller-owned
 finalizers follow this policy:
 

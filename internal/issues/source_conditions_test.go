@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
@@ -774,5 +775,98 @@ func TestCurrentConditionGenerationDoesNotReviveOlderRepresentation(t *testing.T
 	u.Object["status"].(map[string]any)["v1beta2"] = map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "Unavailable", "observedGeneration": int64(1)}}}
 	if c, found := findActionableCondition(u); !found || c.ObservedGeneration != 1 || !strings.Contains(c.Message, "generation 1") {
 		t.Fatalf("current representation must stay authoritative and qualified: %+v found=%v", c, found)
+	}
+}
+
+func TestGenericConditionsDuringDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                              string
+		deletionAge                                                       time.Duration
+		missing, zero, finalizer, failure, failureFirst, root, rootAccess bool
+		condType                                                          string
+		wantReason                                                        string
+		wantCount                                                         int
+	}{
+		{name: "ordinary deletion", deletionAge: time.Minute},
+		{name: "ordinary deletion with finalizer", deletionAge: time.Minute, finalizer: true},
+		{name: "no deletion timestamp", missing: true, wantReason: "Ready: Deleting", wantCount: 1},
+		{name: "zero deletion timestamp", zero: true, wantReason: "Ready: Deleting", wantCount: 1},
+		{name: "future deletion timestamp", deletionAge: -time.Minute, wantReason: "Ready: Deleting", wantCount: 1},
+
+		{name: "missing timestamp with error", missing: true, failure: true, wantReason: "Synced: ReconcileError", wantCount: 1},
+		{name: "zero timestamp with error", zero: true, failure: true, wantReason: "Synced: ReconcileError", wantCount: 1},
+		{name: "future timestamp with error", deletionAge: -time.Minute, failure: true, wantReason: "Synced: ReconcileError", wantCount: 1},
+		{name: "overdue without finalizer", deletionAge: 11 * time.Minute, wantReason: "Ready: Deleting", wantCount: 1},
+		{name: "error after ordinary deletion", deletionAge: time.Minute, failure: true, wantReason: "Synced: ReconcileError", wantCount: 1},
+		{name: "error after overdue deletion", deletionAge: 11 * time.Minute, failure: true, wantReason: "Synced: ReconcileError", wantCount: 1},
+		{name: "error before overdue deletion", deletionAge: 11 * time.Minute, failure: true, failureFirst: true, wantReason: "Synced: ReconcileError", wantCount: 1},
+		{name: "other condition meaning", deletionAge: time.Minute, condType: "Synced", wantReason: "Synced: Deleting", wantCount: 1},
+		{name: "overdue with root", deletionAge: 11 * time.Minute, root: true, rootAccess: true, wantCount: 1},
+		{name: "overdue root does not hide error", deletionAge: 11 * time.Minute, root: true, rootAccess: true, failure: true, wantReason: "Synced: ReconcileError", wantCount: 2},
+		{name: "root not run keeps fallback", deletionAge: 11 * time.Minute, root: true, wantReason: "Ready: Deleting", wantCount: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			condType := tc.condType
+			if condType == "" {
+				condType = "Ready"
+			}
+			conds := []map[string]any{{"type": condType, "status": "False", "reason": "Deleting"}}
+			if tc.failure {
+				failure := map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError"}
+				if tc.failureFirst {
+					conds = append([]map[string]any{failure}, conds...)
+				} else {
+					conds = append(conds, failure)
+				}
+			}
+			u := rolloutWithConditions(conds)
+			u.SetName("example")
+			u.SetNamespace("test")
+			if !tc.missing {
+				ts := metav1.NewTime(time.Now().Add(-tc.deletionAge))
+				if tc.zero {
+					ts = metav1.Time{}
+				}
+				u.SetDeletionTimestamp(&ts)
+			}
+			if tc.finalizer {
+				u.SetFinalizers([]string{"example.com/cleanup"})
+			}
+			gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+			p := &fakeProvider{dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, namespaced: map[schema.GroupVersionResource]bool{gvr: true}}
+			if tc.root {
+				p.terminatingProblems = []k8s.Detection{{Group: gvr.Group, Kind: "Widget", Namespace: "test", Name: "example", Reason: "Terminating stuck", Severity: "high"}}
+			}
+			for _, grouped := range []bool{false, true} {
+				f := Filters{Namespaces: []string{"test"}, Grouped: grouped}
+				if tc.rootAccess {
+					f.CanReadEvidence = func(EvidenceRead) bool { return true }
+				}
+				got := Compose(p, f)
+				if len(got) != tc.wantCount {
+					t.Fatalf("grouped=%v want %d, got %+v", grouped, tc.wantCount, got)
+				}
+				found := tc.wantReason == ""
+				for _, issue := range got {
+					if issue.Reason == tc.wantReason {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("missing %q: %+v", tc.wantReason, got)
+				}
+				if tc.rootAccess {
+					roots := 0
+					for _, issue := range got {
+						if issue.Category == issuesapi.CategoryTerminationStuck {
+							roots++
+						}
+					}
+					if roots != 1 {
+						t.Fatalf("want one termination root, got %+v", got)
+					}
+				}
+			}
+		})
 	}
 }

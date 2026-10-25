@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -272,9 +273,10 @@ func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) 
 	if len(condTypes) == 0 {
 		condTypes = conditions.DefaultFalseConditionTypes
 	}
+	now := time.Now()
 	// Spec edits do not prove recovery. Keep older failures as a qualified fallback.
-	var stale conditions.FalseCondition
-	hasStale := false
+	var stale, deleting conditions.FalseCondition
+	hasStale, hasDeletingFallback := false, false
 	for len(condTypes) > 0 {
 		condition, found := conditions.FindFalseConditionWithTime(u, condTypes...)
 		if !found {
@@ -283,18 +285,32 @@ func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) 
 		current, _ := conditions.Find(u, condition.Type)
 		paused := condition.Type == "Synced" && condition.Reason == "ReconcilePaused" && u.GetAnnotations()["crossplane.io/paused"] == "true"
 		if current.Status == "False" && !paused && !isTransientCRDCondition(u, condition.Reason) {
-			if u.GetGeneration() <= 0 || condition.ObservedGeneration <= 0 || condition.ObservedGeneration >= u.GetGeneration() {
-				return condition, true
-			}
-			if !hasStale {
-				condition.Message = strings.TrimSpace(fmt.Sprintf("Condition was last reported for generation %d; current resource generation is %d. %s", condition.ObservedGeneration, u.GetGeneration(), condition.Message))
-				stale, hasStale = condition, true
+			isDeleting := condition.Type == "Ready" && condition.Reason == "Deleting"
+			deletion := u.GetDeletionTimestamp()
+			expectedDeletion := isDeleting && deletion != nil && !deletion.IsZero() && !deletion.After(now) && now.Sub(deletion.Time) < health.NodeRemovalWarningAfter
+			if !expectedDeletion {
+				isStale := u.GetGeneration() > 0 && condition.ObservedGeneration > 0 && condition.ObservedGeneration < u.GetGeneration()
+				if isStale {
+					condition.Message = strings.TrimSpace(fmt.Sprintf("Condition was last reported for generation %d; current resource generation is %d. %s", condition.ObservedGeneration, u.GetGeneration(), condition.Message))
+				}
+				switch {
+				case isDeleting:
+					// A specific failure is more actionable than the deletion summary.
+					deleting, hasDeletingFallback = condition, true
+				case !isStale:
+					return condition, true
+				case !hasStale:
+					stale, hasStale = condition, true
+				}
 			}
 		}
 		// Skip the whole type so an older representation cannot revive an expected condition.
 		condTypes = slices.DeleteFunc(slices.Clone(condTypes), func(candidateType string) bool { return candidateType == condition.Type })
 	}
-	return stale, hasStale
+	if hasStale {
+		return stale, true
+	}
+	return deleting, hasDeletingFallback
 }
 
 // gwListenerCond is one listener's failing condition within a gateway group.
