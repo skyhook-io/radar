@@ -3561,7 +3561,7 @@ export function getVisibleLiveMetrics<T>(
 }
 
 // Fetch historical metrics for a pod (last ~1 hour)
-export function usePodMetricsHistory(namespace: string, podName: string, poll = true) {
+export function usePodMetricsHistory(namespace: string, podName: string) {
   return useQuery<PodMetricsHistory>({
     queryKey: ["pod-metrics-history", namespace, podName],
     queryFn: async () =>
@@ -3572,7 +3572,7 @@ export function usePodMetricsHistory(namespace: string, podName: string, poll = 
       ),
     enabled: Boolean(namespace && podName),
     staleTime: 25000, // Slightly less than poll interval
-    refetchInterval: poll ? 30000 : false,
+    refetchInterval: 30000, // Match the backend poll interval
   });
 }
 

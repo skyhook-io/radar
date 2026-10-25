@@ -884,9 +884,9 @@ export function PodRenderer({
           {showMetricsUnavailable && (
             <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} diagnosis={metricsHistory?.metricsUnavailableDiagnosis} />
           )}
-          {!isTerminal && metricsHistory?.collectionError && (
+          {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
-              <span className="font-medium">Metrics collection error:</span>{' '}
+              <span className="font-medium">{isTerminal ? 'Current metrics collection error:' : 'Metrics collection error:'}</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>
             </div>
           )}

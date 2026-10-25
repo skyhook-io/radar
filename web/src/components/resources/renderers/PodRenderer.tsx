@@ -49,7 +49,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const showPortForward = canPortForward || !isLocal
 
   // Metrics
-  const metricsHistoryQuery = usePodMetricsHistory(namespace, podName, !isTerminal)
+  const metricsHistoryQuery = usePodMetricsHistory(namespace, podName)
   const { data: metricsHistory } = metricsHistoryQuery
   const historyMetricsUnavailable = metricsHistory?.metricsUnavailable === true
   const liveMetricsEnabled = !isTerminal && shouldFetchLiveMetrics(metricsHistoryQuery.isFetched || metricsHistoryQuery.isError, historyMetricsUnavailable)
