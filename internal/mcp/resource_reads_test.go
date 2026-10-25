@@ -2659,3 +2659,40 @@ func TestNamespacePinIsNotRevealedToGuesses(t *testing.T) {
 		t.Fatalf("deniedScopeReason(alpha) = %q", got)
 	}
 }
+
+// A failure after some namespaces were already withheld covers only what the
+// failed read was reading, so no namespace lands in two gaps; and a failure
+// that wasn't assessed namespace by namespace still says where it applies.
+func TestFailedListCoverageStaysDisjointAndPresent(t *testing.T) {
+	target := readTarget{namespaces: []string{"alpha", "beta"}, explicit: true}
+	var gaps gapSet
+	gaps.add(readreason.UserForbidden, errors.New("denied"), "alpha")
+	if !gaps.absorb(errKindNotCollected("secrets"), []string{"beta"}) {
+		t.Fatal("a read failure is absorbed")
+	}
+	err := withListCoverage(context.Background(), gaps.failure(), "secrets", target, false)
+	result, ok := readErrorResult(err)
+	if !ok {
+		t.Fatal(err)
+	}
+	body := result.StructuredContent.(mcpReadError)
+	if body.Coverage == nil || body.Coverage.Validate() != nil || len(body.Coverage.Gaps) != 2 {
+		t.Fatalf("coverage = %+v", body.Coverage)
+	}
+	for _, gap := range body.Coverage.Gaps {
+		want := map[readreason.Code]string{readreason.UserForbidden: "alpha", readreason.RadarKindNotCollected: "beta"}[gap.Code]
+		if gap.Namespaces == nil || !slices.Equal(gap.Namespaces.Names, []string{want}) {
+			t.Fatalf("gap %s covers %+v, want %s", gap.Code, gap.Namespaces, want)
+		}
+	}
+
+	unassessed := withListCoverage(context.Background(), errKindNotCollected("services"), "services", readTarget{}, false)
+	result, ok = readErrorResult(unassessed)
+	if !ok {
+		t.Fatal(unassessed)
+	}
+	body = result.StructuredContent.(mcpReadError)
+	if body.Coverage == nil || body.Coverage.Validate() != nil || len(body.Coverage.Gaps) != 1 || body.Coverage.Gaps[0].Namespaces.Extent != resourceapi.ExtentAll {
+		t.Fatalf("an unassessed failure reaches the whole scope: %+v", body.Coverage)
+	}
+}

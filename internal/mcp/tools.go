@@ -921,7 +921,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 			target = target.narrowedToCollection(plan)
 		}
 		// Secrets withheld from the caller are part of why nothing was read.
-		if !gaps.empty() && gaps.absorb(err) {
+		if !gaps.empty() && gaps.absorb(err, readable) {
 			err = gaps.failure()
 		}
 		return nil, nil, withListCoverage(ctx, err, kind, target, clusterScoped)
@@ -1147,7 +1147,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 	default:
 		items, err := readDynamicScope(ctx, kind, group, "", "list", listAt(""))
 		if err != nil {
-			if !gaps.empty() && gaps.absorb(err) {
+			if !gaps.empty() && gaps.absorb(err, namespaces) {
 				err = gaps.failure()
 			}
 			return nil, nil, withListCoverage(ctx, err, collector.resource, target, clusterScoped)

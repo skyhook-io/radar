@@ -360,8 +360,9 @@ func (g *gapSet) merge(other gapSet) {
 func (g *gapSet) empty() bool { return len(g.namespaces) == 0 }
 
 // absorb adds a failed read's gaps to g: its assessed gaps, or its code over
-// an unknown extent. It reports false for an error that isn't a read failure.
-func (g *gapSet) absorb(err error) bool {
+// within, the namespaces that read covered (nil for the whole scope). It
+// reports false for an error that isn't a read failure.
+func (g *gapSet) absorb(err error, within []string) bool {
 	var re *readError
 	if !errors.As(err, &re) {
 		return false
@@ -369,7 +370,7 @@ func (g *gapSet) absorb(err error) bool {
 	if re.unread != nil {
 		g.merge(*re.unread)
 	} else {
-		g.add(re.code, err)
+		g.add(re.code, err, within...)
 	}
 	return true
 }
@@ -463,15 +464,22 @@ func listCoverageFor(clusterScoped bool, target readTarget, read []string, readA
 }
 
 // withListCoverage attaches a failed list's coverage: its scope and every gap,
-// with no read scope because the error returns no rows. An MCP error doesn't
-// send coverage, so the sentence has to say it: every cause when namespaces
-// failed for different reasons (one cause keeps its own explanation), and how
-// an unscoped request was narrowed when something other than the caller's own
-// access narrowed it.
+// with no read scope because the error returns no rows. The sentence says the
+// same in words, for the model: every cause when namespaces failed for
+// different reasons (one cause keeps its own explanation), and how an unscoped
+// request was narrowed when something other than the caller's own access
+// narrowed it.
 func withListCoverage(ctx context.Context, err error, resource string, target readTarget, clusterScoped bool) error {
 	var re *readError
-	if !errors.As(err, &re) || re.unread == nil {
+	if !errors.As(err, &re) {
 		return err
+	}
+	if re.unread == nil {
+		// A failure that wasn't assessed namespace by namespace reached all
+		// of the target.
+		whole := &gapSet{}
+		whole.add(re.code, re.err, target.namespaces...)
+		re = &readError{code: re.code, err: re.err, unread: whole, next: re.next}
 	}
 	cov := &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: listScope(target, clusterScoped), Gaps: re.unread.gaps(ctx, resourceapi.MCPSetLimit, clusterScoped)}
 	if !clusterScoped {

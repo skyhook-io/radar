@@ -299,6 +299,9 @@ func (c Coverage) Validate() error {
 		if (sc.Type == ScopeNamespaces) != (sc.Namespaces != nil) {
 			return fmt.Errorf("scope type %q with namespaces %v", sc.Type, sc.Namespaces)
 		}
+		if sc.Namespaces != nil && sc.Namespaces.Extent != "" {
+			return fmt.Errorf("an extent belongs on a gap, not a scope: %+v", *sc.Namespaces)
+		}
 		if err := sc.Namespaces.validListed(); err != nil {
 			return err
 		}
@@ -306,9 +309,22 @@ func (c Coverage) Validate() error {
 	if c.Read != nil && c.Read.Type != c.Scope.Type && !(c.Scope.Type == ScopeAllNamespaces && c.Read.Type == ScopeNamespaces) {
 		return fmt.Errorf("read type %q within scope type %q", c.Read.Type, c.Scope.Type)
 	}
+	if c.Status == CoverageComplete && c.Read != nil && !sameScope(c.Scope, *c.Read) {
+		return fmt.Errorf("a complete answer's read %+v isn't its scope %+v", *c.Read, c.Scope)
+	}
+	inScope := func(ns string) bool {
+		return c.Scope.Namespaces == nil || c.Scope.Namespaces.Names == nil || slices.Contains(c.Scope.Namespaces.Names, ns)
+	}
+	wholeGap := slices.ContainsFunc(c.Gaps, func(g Gap) bool { return g.Namespaces != nil && g.Namespaces.Extent == ExtentAll })
+	if wholeGap && (len(c.Gaps) > 1 || c.Read != nil) {
+		return fmt.Errorf("a gap over the whole scope leaves nothing for read or another gap")
+	}
 	seen := map[string]bool{}
 	if c.Read != nil && c.Read.Namespaces != nil {
 		for _, ns := range c.Read.Namespaces.Names {
+			if !inScope(ns) {
+				return fmt.Errorf("read namespace %q is outside scope", ns)
+			}
 			seen[ns] = true
 		}
 	}
@@ -348,6 +364,9 @@ func (c Coverage) Validate() error {
 		}
 		listedTotal += gap.Namespaces.Count
 		for _, ns := range gap.Namespaces.Names {
+			if !inScope(ns) {
+				return fmt.Errorf("gap %s: namespace %q is outside scope", gap.Code, ns)
+			}
 			if seen[ns] {
 				return fmt.Errorf("namespace %q is in two of read and the gaps", ns)
 			}
@@ -365,6 +384,13 @@ func (c Coverage) Validate() error {
 		}
 	}
 	return nil
+}
+
+func sameScope(a, b Scope) bool {
+	if a.Type != b.Type || (a.Namespaces == nil) != (b.Namespaces == nil) {
+		return false
+	}
+	return a.Namespaces == nil || a.Namespaces.Count == b.Namespaces.Count && slices.Equal(a.Namespaces.Names, b.Namespaces.Names)
 }
 
 // validListed checks a listed set: count not negative, names (when present)
@@ -391,12 +417,12 @@ func (c Coverage) MarshalJSON() ([]byte, error) {
 }
 
 // ReadError is the body of a failed resource read on every surface: REST
-// responses, and MCP results (structuredContent and the text block). A read
-// fails when it returns no usable inventory: Radar read nothing in its scope,
-// the answer would be too large, or its connection changed mid-read. On REST,
-// Coverage is present when Radar assessed the scope and keeps every reason,
-// including the ones ErrorCode does not name. MCP leaves it out: models act on
-// Error, which names every cause in words.
+// responses, and MCP results (structuredContent and the text block, where
+// `next` follows error_code). A read fails when it returns no usable
+// inventory: Radar read nothing in its scope, the answer would be too large,
+// or its connection changed mid-read. A failed list's Coverage keeps every
+// reason and where it applies, including the ones ErrorCode does not name, and
+// never has Read; Error names the same causes in words.
 type ReadError struct {
 	Error     string          `json:"error"`
 	ErrorCode readreason.Code `json:"error_code"`
