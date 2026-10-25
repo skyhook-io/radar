@@ -49,7 +49,7 @@ describe('workload GitOps manager', () => {
   })
 
   it('keeps Managed By when the search left managers it could not settle', () => {
-    const html = render({ managedBy: [app], managers: [app], ownership: { children: { complete: true }, managedBy: { remote: 1 } } })
+    const html = render({ managedBy: [app], managers: [app], ownership: { children: { complete: true }, managers: { remote: 1 } } })
     expect(html).toContain('Managed By')
     expect(html).toContain('Managed by')
   })
@@ -59,5 +59,6 @@ describe('workload GitOps manager', () => {
     const html = render({ managedBy: [app], managers: [hub], ownership: { children: { complete: true } } })
     expect(html).toContain('Managed By')
     expect(html).toContain('Tracked by')
+    expect(html).toContain("Its tracking label names Application argocd/shop, whose status doesn&#x27;t list it.")
   })
 })

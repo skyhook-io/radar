@@ -144,7 +144,7 @@ describe('RelatedResourcesSection ownership', () => {
 
   it('says why owner and children could not be read at all', () => {
     expect(renderToString(<RelatedResourcesSection relationships={{ ownership: { unavailableReason: 'connection_changed', children: { complete: false } } }} />)).toContain(
-      'Owner and children couldn&#x27;t be read: Radar switched clusters meanwhile.',
+      'Owner and children couldn&#x27;t be read: Radar&#x27;s connection changed meanwhile.',
     )
     expect(renderToString(<RelatedResourcesSection relationships={{ ownership: { unavailableReason: 'user_forbidden', children: { complete: false } } }} />)).toContain(
       'your access lets you open this object, but not list its kind here.',
@@ -225,7 +225,7 @@ describe('RelatedResourcesSection ownership', () => {
 
   it("says outright what it couldn't check about this resource when it lists none", () => {
     const html = renderToString(
-      <RelatedResourcesSection relationships={{ ownership: { children: { complete: true }, managedBy: { remote: 1, notChecked: [{ group: 'argoproj.io', kind: 'Application', reason: 'kind_sync_pending' }] } } }} />,
+      <RelatedResourcesSection relationships={{ ownership: { children: { complete: true }, managers: { remote: 1, notChecked: [{ group: 'argoproj.io', kind: 'Application', reason: 'kind_sync_pending' }] } } }} />,
     )
     expect(html).toContain('Managed By')
     expect(html).toContain('1 manager lists it for a cluster Radar can&#x27;t confirm is this one; couldn&#x27;t check Application (still loading).')
@@ -233,7 +233,7 @@ describe('RelatedResourcesSection ownership', () => {
 
   it("keeps it to the hint beside a listed manager", () => {
     const html = renderToString(
-      <RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managedBy: { remote: 1 } } }} onNavigate={() => {}} />,
+      <RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managers: { remote: 1 } } }} onNavigate={() => {}} />,
     )
     expect(html).toMatch(/aria-label="[^"]*1 manager lists it for a cluster Radar can&#x27;t confirm is this one/)
     expect(html).not.toMatch(/>1 Manager lists it/)
@@ -241,16 +241,18 @@ describe('RelatedResourcesSection ownership', () => {
 
   it("keeps a manager kind discovery couldn't read to the hint, as it would show on every resource", () => {
     const gaps = [{ group: 'argoproj.io', kind: 'Application', reason: 'read_error' }, { group: 'kustomize.toolkit.fluxcd.io', kind: 'Kustomization', reason: 'read_error' }]
-    const html = renderToString(<RelatedResourcesSection relationships={{ children: [rs], ownership: { children: { complete: true }, managedBy: { notChecked: gaps } } }} onNavigate={() => {}} />)
+    const html = renderToString(<RelatedResourcesSection relationships={{ children: [rs], ownership: { children: { complete: true }, managers: { notChecked: gaps } } }} onNavigate={() => {}} />)
     expect(html).not.toContain('Managed By')
-    const listed = renderToString(<RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managedBy: { notChecked: gaps } } }} onNavigate={() => {}} />)
-    expect(listed.match(/API discovery missed some API groups, so managers/g)).toHaveLength(1)
+    const listed = renderToString(<RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managers: { notChecked: gaps } } }} onNavigate={() => {}} />)
+    expect(listed).toContain('Radar couldn&#x27;t search Application objects, so those managers aren&#x27;t checked.')
+    expect(listed).toContain('Radar couldn&#x27;t search Kustomization objects, so those managers aren&#x27;t checked.')
+    expect(listed).not.toContain('Radar couldn&#x27;t search Application objects, so those managers aren&#x27;t checked.</div><div>Radar couldn&#x27;t search Application')
   })
 
   it('keeps an unreadable list to the hint, since it may name any resource', () => {
-    const none = renderToString(<RelatedResourcesSection relationships={{ children: [rs], ownership: { children: { complete: true }, managedBy: { unreadable: 1 } } }} onNavigate={() => {}} />)
+    const none = renderToString(<RelatedResourcesSection relationships={{ children: [rs], ownership: { children: { complete: true }, managers: { unreadable: 1 } } }} onNavigate={() => {}} />)
     expect(none).not.toContain('Managed By')
-    const listed = renderToString(<RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managedBy: { unreadable: 2 } } }} onNavigate={() => {}} />)
+    const listed = renderToString(<RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managers: { unreadable: 2 } } }} onNavigate={() => {}} />)
     expect(listed).toMatch(/aria-label="[^"]*2 managers&#x27; member lists can&#x27;t be read/)
   })
 
@@ -471,5 +473,19 @@ describe('AlertBanner optional actions', () => {
     const html = renderToString(<AlertBanner variant="warning" title="Metrics unavailable" message={message} action={<button>Open settings</button>} />)
     expect(html).toContain('Metrics unavailable'); expect(html).toContain('<button>Open settings</button>')
     expect(html).toContain('flex-wrap'); if (message) expect(html).toContain(message)
+  })
+})
+
+
+describe('RelatedResourcesSection capped lists', () => {
+  it('marks a list the server cut short as a lower bound', () => {
+    const pods = Array.from({ length: 12 }, (_, i) => ({ kind: 'Pod', namespace: 'shop', name: `web-${i}` }))
+    const text = (relationships: Relationships) => renderToString(<RelatedResourcesSection relationships={relationships} onNavigate={() => {}} />).replace(/<!-- -->/g, '')
+    const capped = text({ children: pods, ownership: { children: { complete: false, truncated: true } } })
+    expect(capped).toContain('Children (12+)')
+    expect(capped).toContain('Show the 12 listed')
+    const whole = text({ children: pods, ownership: { children: { complete: true } } })
+    expect(whole).toContain('Children (12)')
+    expect(whole).toContain('Show all 12')
   })
 })

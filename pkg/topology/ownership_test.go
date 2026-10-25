@@ -472,7 +472,7 @@ func TestApplyOwnershipSaysWhichManagersItCouldNotSettle(t *testing.T) {
 	} {
 		rel := &Relationships{}
 		ApplyOwnership(rel, ownershipView(t, w, tc.access), fetched(t, w, cm.Ref))
-		if got := rel.Ownership.ManagedBy; got == nil || !reflect.DeepEqual(*got, *tc.want) {
+		if got := rel.Ownership.Managers; got == nil || !reflect.DeepEqual(*got, *tc.want) {
 			t.Errorf("%s: ManagedBy %+v, want %+v", name, got, tc.want)
 		}
 	}
@@ -482,8 +482,8 @@ func TestApplyOwnershipSaysWhichManagersItCouldNotSettle(t *testing.T) {
 	sw := settled.World()
 	rel := &Relationships{}
 	ApplyOwnership(rel, ownershipView(t, sw, ownership.Unrestricted()), fetched(t, sw, c.Ref))
-	if rel.Ownership.ManagedBy != nil || len(rel.Managers) != 1 {
-		t.Errorf("settled: ManagedBy %+v, managers %v; want none and the one recorder", rel.Ownership.ManagedBy, refsText(rel.Managers))
+	if rel.Ownership.Managers != nil || len(rel.Managers) != 1 {
+		t.Errorf("settled: coverage %+v, managers %v; want none and the one recorder", rel.Ownership.Managers, refsText(rel.Managers))
 	}
 }
 

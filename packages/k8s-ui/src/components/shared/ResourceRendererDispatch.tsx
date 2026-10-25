@@ -554,6 +554,8 @@ interface ResourceRendererDispatchProps {
   resource: SelectedResource
   data: any
   relationships?: Relationships
+  /** See RelatedResourcesSection. */
+  trackedBy?: string
   certificateInfo?: SecretCertificateInfo
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
@@ -600,6 +602,7 @@ export function ResourceRendererDispatch({
   resource,
   data,
   relationships,
+  trackedBy,
   certificateInfo,
   hpaDiagnosis,
   scalerDiagnostics,
@@ -810,7 +813,7 @@ export function ResourceRendererDispatch({
 
   const sidebarContent = showCommonSections && (
     <>
-      <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} kind={kind} />
+      <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} kind={kind} trackedBy={trackedBy} />
       {kind !== 'events' && <EventsSection fullscreen={!!renderSidebar} events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />

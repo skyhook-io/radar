@@ -53,7 +53,8 @@ const (
 	// which exist. Whoever runs Radar can include it, if Radar's identity may
 	// list and watch it.
 	RadarKindNotCollected Code = "radar_kind_not_collected"
-	// KindUnknown: neither the built-in catalog nor discovery resolves the kind.
+	// KindUnknown: neither the built-in catalog nor discovery resolves the
+	// kind, or the version a reference names it at.
 	KindUnknown Code = "kind_unknown"
 	// KindNotWatchable: the API cannot be list/watched, so Radar cannot collect
 	// it; warming a watch will not help.
@@ -73,7 +74,8 @@ const (
 	// NamespaceNotFound: the namespace does not exist. Only a user who can
 	// see every namespace is told this.
 	NamespaceNotFound Code = "namespace_not_found"
-	// NamespaceRequired: a get of a namespaced kind named no namespace.
+	// NamespaceRequired: a get or a search of a namespaced kind named no
+	// namespace.
 	NamespaceRequired Code = "namespace_required"
 
 	// ObjectNotFound: the object is absent from a scope Radar read in full.

@@ -656,16 +656,18 @@ export interface Relationships {
   owners?: ResourceRef[]     // Every owner reference that resolves to an existing owner
   deployment?: ResourceRef   // Grandparent Deployment (for Pods owned by ReplicaSets)
   managedBy?: ResourceRef[]  // Topmost meaningful manager(s): GitOps controller (ArgoCD Application / Flux Kustomization / Flux HelmRelease), Helm release, or the topmost K8s owner. Synthesized server-side; replaces client-side detectGitOpsOwner.
-  children?: ResourceRef[]   // Objects whose owner references name this one
+  children?: ResourceRef[]   // Objects whose owner references name this one, less olderRevisions
   // Children kept apart because they only keep history: ReplicaSets that run
-  // no Pods and aren't their owner's current revision.
+  // no Pods and aren't their owner's current revision. ownership.children
+  // covers both lists together.
   olderRevisions?: ResourceRef[]
   // Management without an owner reference: GitOps member lists, class
   // bindings, spec and status references. Never ownership or garbage collection.
   managers?: ResourceRef[]
   manages?: ResourceRef[]
-  /** How complete the owner-reference answers are. Servers that answer
-   * Owner and Children from graph edges omit it. */
+  /** How complete the owner-reference and recorded-membership answers are.
+   * Absent: no completeness is claimed, whether because the server answers
+   * Owner and Children from graph edges or because the resource is an Event. */
   ownership?: OwnershipCoverage
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
@@ -693,7 +695,7 @@ export interface Relationships {
   resourceClaims?: ResourceRef[]    // For Pods: DRA ResourceClaims (direct + template-generated)
 }
 
-/** A kind Radar couldn't read, in namespace or (without one) in several or all of them; reason is a readreason code. */
+/** A kind Radar couldn't read, in namespace or (without one) in several or all of them, or the cluster for a cluster-scoped kind; reason is a readreason code. No kind stands for kinds discovery didn't list; no group is the core group. */
 export interface OwnershipGap {
   group?: string
   kind?: string
@@ -726,8 +728,8 @@ export interface OwnershipCoverage {
     unknown?: number
     truncated?: boolean
   }
-  /** Set when the search for the GitOps managers whose status lists this resource couldn't settle every one the viewer may read. */
-  managedBy?: {
+  /** Set when the search for the GitOps managers whose status lists this resource, for `managers`, couldn't settle every one the viewer may read. */
+  managers?: {
     /** Managers with a member list Radar can't read, any of which may list this resource. */
     unreadable?: number
     /** Managers listing this resource's coordinates for a cluster Radar can't confirm is this one. */

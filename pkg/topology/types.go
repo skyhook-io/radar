@@ -569,8 +569,11 @@ type CascadeDeletePreview struct {
 	Dependents   []ResourceRef `json:"dependents"`
 }
 
-// OwnershipCoverage says how complete a resource's owner-reference answers
-// are.
+// OwnershipCoverage says how complete a resource's owner-reference and
+// recorded-membership answers are. With UnavailableReason set nothing else is
+// answered, so an empty field there says nothing. Otherwise an omitted count
+// or flag is zero, and an omitted Manages or Managers means there was nothing
+// to qualify.
 type OwnershipCoverage struct {
 	// PrimaryOwnerState is the state of the owner reference when Owner is empty:
 	// "gone" or "replaced" when it names a deleted owner, "withheld" when the
@@ -585,34 +588,40 @@ type OwnershipCoverage struct {
 	// OwnerReason is a readreason code saying why an "unknown" owner couldn't
 	// be checked.
 	OwnerReason string `json:"ownerReason,omitempty"`
-	// Children says how complete Children are.
+	// Children says how complete Children and OlderRevisions are together.
 	Children ChildrenCoverage `json:"children"`
-	// Manages is set for a GitOps manager whose status lists its members.
+	// Manages is set for a GitOps manager kind whose status lists its
+	// members, whether or not that list could be read.
 	Manages *MembersCoverage `json:"manages,omitempty"`
-	// ManagedBy is set when the search for the GitOps managers whose status
-	// lists the resource couldn't settle every one the caller may read.
-	ManagedBy *ManagersCoverage `json:"managedBy,omitempty"`
+	// Managers is set when the search for the GitOps managers whose status
+	// lists the resource, for Managers, couldn't settle every one the caller
+	// may read.
+	Managers *ManagersCoverage `json:"managers,omitempty"`
 	// UnavailableReason is a reason code when Radar couldn't answer at all.
 	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
 
-// ChildrenCoverage says how complete a resource's Children are.
+// ChildrenCoverage says how complete a resource's Children and
+// OlderRevisions are, together: OlderRevisions only sets some of them apart.
 type ChildrenCoverage struct {
-	// Complete: Children are every child the caller may read.
+	// Complete: Children and OlderRevisions are every child the caller may
+	// read.
 	Complete bool `json:"complete"`
 	// NotChecked are the kinds and namespaces Radar couldn't search, and why.
 	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
-	// Truncated: there were more children than the response lists.
+	// Truncated: there were more children than the response lists; the cap
+	// applies before OlderRevisions are set apart.
 	Truncated bool `json:"truncated,omitempty"`
-	// Narrowed: the caller may read only some of the places children could
-	// be, so Children are the ones it may read.
+	// Narrowed: the caller wasn't known to read everywhere children could be,
+	// so Children are the ones it may read.
 	Narrowed bool `json:"narrowed,omitempty"`
 }
 
 // OwnershipGap is a kind that Radar couldn't read, with a readreason code
-// saying why: in Namespace, or with no Namespace in several namespaces, every
-// one, or the cluster for a cluster-scoped kind. An empty Kind stands for
-// kinds discovery didn't list.
+// saying why, from Radar's caches or the caller's access: in Namespace, or
+// with no Namespace in several namespaces, every one, or the cluster for a
+// cluster-scoped kind. An empty Kind stands for kinds discovery didn't list;
+// an empty Group is the core group.
 type OwnershipGap struct {
 	Group     string `json:"group,omitempty"`
 	Kind      string `json:"kind,omitempty"`
@@ -621,7 +630,7 @@ type OwnershipGap struct {
 }
 
 // ManagersCoverage says which GitOps managers the search for the resource's
-// Managed By couldn't settle.
+// Managers couldn't settle.
 type ManagersCoverage struct {
 	// Unreadable managers have a member list Radar can't read, so any of them
 	// may list the resource.
@@ -637,8 +646,9 @@ type ManagersCoverage struct {
 // MembersCoverage says what a GitOps manager's status records of its
 // members beyond those Manages lists.
 type MembersCoverage struct {
-	// Membership is "recorded", "remote" (the members are another cluster's)
-	// or "unreadable" (the status lists none Radar can read).
+	// Membership is "recorded", "remote" (its destination isn't confirmed to
+	// be this cluster, so its members aren't listed) or "unreadable" (the
+	// status lists none Radar can read).
 	Membership string `json:"membership"`
 	// UnavailableReason is a readreason code when the member list couldn't be read,
 	// as opposed to the status recording none.

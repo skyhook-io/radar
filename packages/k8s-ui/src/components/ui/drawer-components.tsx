@@ -825,6 +825,9 @@ interface RelatedResourcesSectionProps {
   onNavigate?: (ref: ResourceRef) => void
   /** The URL plural of the object shown (e.g. `deployments`). */
   kind?: string
+  /** The manager the resource's tracking metadata names, when every manager's
+   * list was read, that one's doesn't list the resource and another's does. */
+  trackedBy?: string
 }
 
 // Kinds whose objects usually own others. An empty Children list for one of
@@ -833,7 +836,7 @@ interface RelatedResourcesSectionProps {
 // would carry the note.
 const KINDS_WITH_CHILDREN = new Set(['deployments', 'replicasets', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'services', 'rollouts'])
 
-export function RelatedResourcesSection({ relationships, onNavigate, kind }: RelatedResourcesSectionProps) {
+export function RelatedResourcesSection({ relationships, onNavigate, kind, trackedBy }: RelatedResourcesSectionProps) {
   if (!relationships) return null
 
   const configRefs = omitResourceRefs(relationships.configRefs ?? [], relationships.dependencies ?? [])
@@ -841,7 +844,7 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind }: Rel
   const alsoOwnedBy = omitResourceRefs(relationships.owners ?? [], relationships.owner ? [relationships.owner] : [])
   const managesNote = membersNote(relationships.ownership?.manages, (relationships.manages?.length ?? 0) > 0)
   const managers = dedupeResourceRefs(relationships.managers ?? [])
-  const managedByNote = managersNote(relationships.ownership, managers.length)
+  const managedByNote = managersNote(relationships.ownership, managers.length, trackedBy)
   const unanswered = ownershipUnanswered(relationships.ownership)
   const several = !relationships.owner && relationships.ownership?.primaryOwnerState === 'several'
   const ownerMissing = relationships.owner || several ? undefined : ownerNote(relationships.ownership)
@@ -922,10 +925,11 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind }: Rel
             onNavigate={onNavigate}
             note={childrenCoverage}
             more={olderRevisions(relationships.olderRevisions)}
+            capped={relationships.ownership?.children?.truncated}
           />
         )}
         {((relationships.manages && relationships.manages.length > 0) || managesNote) && (
-          <RelationshipGroup label="Manages" refs={dedupeResourceRefs(relationships.manages ?? [])} onNavigate={onNavigate} note={managesNote} />
+          <RelationshipGroup label="Manages" refs={dedupeResourceRefs(relationships.manages ?? [])} onNavigate={onNavigate} note={managesNote} capped={relationships.ownership?.manages?.truncated} />
         )}
         {relationships.services && relationships.services.length > 0 && (
           <RelationshipGroup label="Services" refs={dedupeResourceRefs(relationships.services)} onNavigate={onNavigate} />
@@ -1088,7 +1092,7 @@ function gapReasonText(reason: string): string {
     case 'user_forbidden':
       return 'you may not list it'
     case 'kind_unknown':
-      return "Radar's API discovery doesn't list its kind"
+      return "Radar's API discovery doesn't list its kind or version"
     case 'object_not_found':
       return "Radar doesn't have it yet"
     case 'cluster_connecting':
@@ -1096,7 +1100,7 @@ function gapReasonText(reason: string): string {
     case 'cluster_disconnected':
       return 'Radar lost its connection'
     case 'connection_changed':
-      return 'Radar switched clusters meanwhile'
+      return "Radar's connection changed meanwhile"
     default:
       return 'the read failed'
   }
@@ -1142,6 +1146,8 @@ interface RelationshipGroupProps {
   note?: RelationshipNote
   /** Refs shown only on request, such as a Deployment's old ReplicaSets. */
   more?: MoreRefs
+  /** The server cut the list short, so refs is not every one. */
+  capped?: boolean
 }
 
 interface MoreRefs {
@@ -1182,28 +1188,30 @@ const MANAGED_BY_HINT = [
 // otherwise show beside every one, and the controllers stamp tracking
 // metadata on what they apply, through which the topology names such a
 // manager anyway.
-function managersNote(coverage: OwnershipCoverage | undefined, listed: number): RelationshipNote {
+function managersNote(coverage: OwnershipCoverage | undefined, listed: number, trackedBy?: string): RelationshipNote {
   const hint = [...MANAGED_BY_HINT]
   const open: string[] = []
-  const managedBy = coverage?.managedBy
-  if (managedBy?.unreadable) {
-    const n = managedBy.unreadable
+  const coverageOf = coverage?.managers
+  if (coverageOf?.unreadable) {
+    const n = coverageOf.unreadable
     hint.push(n === 1 ? "1 manager's member list can't be read, so it may also list this resource." : `${n} managers' member lists can't be read, so they may also list this resource.`)
   }
-  if (managedBy?.remote) {
-    const n = managedBy.remote
+  if (coverageOf?.remote) {
+    const n = coverageOf.remote
     open.push(`${n} ${n === 1 ? 'manager lists' : 'managers list'} it for a cluster Radar can't confirm is this one`)
   }
   const pressing = new Map<string, string>()
-  for (const g of managedBy?.notChecked ?? []) {
+  for (const g of coverageOf?.notChecked ?? []) {
     // An unserved manager kind under incomplete discovery reads as read_error
     // on every resource, like discovery's own gap.
-    if (!g.kind || g.reason === 'read_error') hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
+    if (!g.kind) hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
+    else if (g.reason === 'read_error') hint.push(`Radar couldn't search ${g.kind} objects, so those managers aren't checked.`)
     else if (g.reason === 'radar_kind_not_collected') hint.push(`Radar doesn't collect ${g.kind} objects, so those managers aren't checked.`)
     else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
   }
   if (pressing.size > 0) open.push(`couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}`)
   const text: string[] = []
+  if (trackedBy) text.push(`Its tracking label names ${trackedBy}, whose status doesn't list it.`)
   if (open.length > 0) {
     const sentence = `${capitalize(open.join('; '))}.`
     if (listed === 0) text.push(sentence)
@@ -1215,7 +1223,7 @@ function managersNote(coverage: OwnershipCoverage | undefined, listed: number): 
   return note
 }
 
-export function RelationshipGroup({ label, refs, onNavigate, note, more }: RelationshipGroupProps) {
+export function RelationshipGroup({ label, refs, onNavigate, note, more, capped }: RelationshipGroupProps) {
   const [showAll, setShowAll] = useState(false)
   if ((!refs || refs.length === 0) && !note && !more) return null
   const truncated = !showAll && refs.length > RELATIONSHIP_TRUNCATE_LIMIT
@@ -1224,7 +1232,7 @@ export function RelationshipGroup({ label, refs, onNavigate, note, more }: Relat
   return (
     <div>
       <div className="text-xs text-theme-text-tertiary mb-1 flex items-center gap-1">
-        <span>{label}{refs.length > 1 ? ` (${refs.length})` : ''}</span>
+        <span>{label}{refs.length > 1 ? ` (${refs.length}${capped ? '+' : ''})` : ''}</span>
         {note?.hint && (
           <Tooltip content={<div className="space-y-0.5">{note.hint.map((line) => <div key={line}>{line}</div>)}</div>} delay={150} className="max-h-64 overflow-y-auto">
             <button type="button" className="inline-flex rounded text-theme-text-tertiary hover:text-theme-text-secondary" aria-label={note.hint.join(' ')}>
@@ -1242,7 +1250,7 @@ export function RelationshipGroup({ label, refs, onNavigate, note, more }: Relat
             onClick={() => setShowAll(true)}
             className="px-2 py-0.5 text-xs rounded border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
           >
-            Show all {refs.length}
+            {capped ? `Show the ${refs.length} listed` : `Show all ${refs.length}`}
           </button>
         )}
       </div>

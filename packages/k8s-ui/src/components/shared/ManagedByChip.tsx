@@ -161,7 +161,7 @@ export function HelmManagedByChip({
   )
 }
 
-function gitOpsOwnerKindLabel(owner: GitOpsOwnerRef): string {
+export function gitOpsOwnerKindLabel(owner: GitOpsOwnerRef): string {
   if (owner.tool === 'argocd') return 'Application'
   if (owner.kind === 'helmreleases') return 'HelmRelease'
   if (owner.kind === 'kustomizations') return 'Kustomization'

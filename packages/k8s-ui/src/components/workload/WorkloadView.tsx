@@ -57,7 +57,7 @@ import {
 import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type DiagnoseHealthHint, type RendererOverrides } from '../shared/ResourceRendererDispatch'
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
-import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
+import { gitOpsOwnerKindLabel, HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
 import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge } from '../ui/drawer-components'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
@@ -727,8 +727,8 @@ export function WorkloadView({
   const relationshipGitOpsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
   const gitopsOwner = resolvedGitOpsOwner ?? relationshipGitOpsOwner
   const listing = useMemo(
-    () => managerListing(gitopsOwner, relationships?.managers, gitOpsOwnerVerified, !relationships?.ownership?.managedBy),
-    [gitopsOwner, relationships?.managers, relationships?.ownership?.managedBy, gitOpsOwnerVerified],
+    () => managerListing(gitopsOwner, relationships?.managers, gitOpsOwnerVerified, !relationships?.ownership?.managers),
+    [gitopsOwner, relationships?.managers, relationships?.ownership?.managers, gitOpsOwnerVerified],
   )
   // When the chip's manager is the only one whose status lists the resource,
   // the chip says it all: Related Resources would repeat it.
@@ -736,6 +736,8 @@ export function WorkloadView({
     () => (relationships && listing?.state === 'confirmed' ? { ...relationships, managers: undefined } : relationships),
     [relationships, listing],
   )
+  // When they disagree, Related Resources says which manager the label names.
+  const trackedBy = listing?.state === 'conflict' && gitopsOwner ? `${gitOpsOwnerKindLabel(gitopsOwner)} ${gitopsOwner.namespace}/${gitopsOwner.name}` : undefined
   // When the resource itself is a portal GitOps CR (Application, Kustomization,
   // HelmRelease, etc.), surface a link to its dedicated GitOps detail page —
   // the drawer's renderer is thorough but the tab has the tree + insights +
@@ -1123,6 +1125,7 @@ export function WorkloadView({
                 resource={selectedResource}
                 data={resource}
                 relationships={rendererRelationships}
+                trackedBy={trackedBy}
                 certificateInfo={certificateInfo}
                 hpaDiagnosis={hpaDiagnosis}
                 scalerDiagnostics={scalerDiagnostics}
@@ -1336,6 +1339,7 @@ export function WorkloadView({
               resource={resource}
               selectedResource={selectedResource}
               relationships={rendererRelationships}
+              trackedBy={trackedBy}
               certificateInfo={certificateInfo}
               hpaDiagnosis={hpaDiagnosis}
               scalerDiagnostics={scalerDiagnostics}
@@ -1973,6 +1977,7 @@ function InfoTab({
   resource,
   selectedResource,
   relationships,
+  trackedBy,
   certificateInfo,
   hpaDiagnosis,
   scalerDiagnostics,
@@ -2009,6 +2014,7 @@ function InfoTab({
   resource: any
   selectedResource: SelectedResource
   relationships?: Relationships
+  trackedBy?: string
   certificateInfo?: any
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
@@ -2063,6 +2069,7 @@ function InfoTab({
           resource={selectedResource}
           data={resource}
           relationships={relationships}
+          trackedBy={trackedBy}
           certificateInfo={certificateInfo}
           hpaDiagnosis={hpaDiagnosis}
           scalerDiagnostics={scalerDiagnostics}
