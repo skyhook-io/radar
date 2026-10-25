@@ -13,8 +13,9 @@ const (
 
 // CELFilter is the optional structured predicate applied AFTER the
 // modifier + free-token match. When set, only candidates that compile
-// down to truthy under the CEL program are kept; eval errors count as
-// a non-match (consistent with "missing field" semantics).
+// down to truthy under the CEL program are kept. False excludes normally;
+// evaluation errors exclude the object, increment FilterErrors, and make
+// coverage partial because whether that object matches is unknown.
 type CELFilter = filter.Filter
 
 // Query is a parsed search request.
@@ -27,13 +28,14 @@ type Query struct {
 	Tokens      []string  // free tokens; each must match somewhere; sum of best per-site scores = total
 	KindFilter  []string  // kind:Foo modifiers as written; matches Kind name (singular or plural), case-insensitively
 	NSFilter    []string  // ns:foo modifiers; restrict namespaced kinds, and exclude cluster-scoped kinds unless a kind: names them
-	LabelFilter []LabelEq // label:k=v modifiers; AND'd
+	LabelFilter []LabelEq // label:k=v equality or label:k presence checks; AND'd
 	ImageFilter []string  // image:foo modifiers; substring match on container images
 	Cluster     string    // cluster: modifier — radar ignores; hub uses for routing
 	Raw         string    // original query string, for debugging / round-tripping
 }
 
-// LabelEq is a single key=value label filter parsed from "label:k=v".
+// LabelEq is a label equality or presence filter parsed from "label:k=v" or
+// "label:k". An empty Value (including "label:k=") checks key presence only.
 type LabelEq struct {
 	Key   string
 	Value string
@@ -41,19 +43,22 @@ type LabelEq struct {
 
 // Hit is a single ranked search result.
 type Hit struct {
-	Score     int            `json:"score"`
-	Cluster   string         `json:"cluster,omitempty"`
-	Kind      string         `json:"kind"`
-	Group     string         `json:"group,omitempty"`
-	Namespace string         `json:"namespace,omitempty"`
-	Name      string         `json:"name"`
-	Summary   any            `json:"summary,omitempty"`
-	Raw       any            `json:"raw,omitempty"`
-	Matched   []MatchedField `json:"matched,omitempty"`
-	Snippets  []MatchSnippet `json:"snippets,omitempty"`
+	Score     int    `json:"score"`
+	Cluster   string `json:"cluster,omitempty"`
+	Kind      string `json:"kind"`
+	Group     string `json:"group,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Summary   any    `json:"summary,omitempty"`
+	// Raw is detail-minified content (wire include=raw), with Secrets redacted
+	// and heavy fields pruned; it is not the original Kubernetes object.
+	Raw      any            `json:"raw,omitempty"`
+	Matched  []MatchedField `json:"matched,omitempty"`
+	Snippets []MatchSnippet `json:"snippets,omitempty"`
 	// SummaryContext is the compact per-row enrichment (managedBy, health,
 	// issueCount). Populated by handlers via Options.SummaryBuilder; nil
-	// when the caller opted out (context=none) or no fields apply.
+	// when the caller opted out (context=none), no fields apply, or context
+	// preparation exceeded its budget. Absence does not prove no context exists.
 	SummaryContext *resourcecontext.ResourceSummaryContext `json:"summaryContext,omitempty"`
 }
 
@@ -109,6 +114,6 @@ type IncludeMode int
 
 const (
 	IncludeSummary IncludeMode = iota
-	IncludeRaw
-	IncludeNone // identity only (cheapest)
+	IncludeRaw                 // wire include=raw: detail-minified, with redaction and pruning
+	IncludeNone                // omit Summary and Raw; matching evidence and requested context remain
 )

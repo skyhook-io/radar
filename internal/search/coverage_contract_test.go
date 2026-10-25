@@ -108,9 +108,9 @@ func (p *readableProvider) PlanTyped(kind string, namespaces []string) readplan.
 	return plan
 }
 
-func (p *readableProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
+func (p *readableProvider) ListTyped(resource string, namespaces []string) ([]runtime.Object, error) {
 	p.listed = append(p.listed, namespaces)
-	return p.fakeProvider.ListTyped(kind, namespaces)
+	return p.fakeProvider.ListTyped(resource, namespaces)
 }
 
 // A typed kind watched namespace by namespace is searched where its informers
@@ -144,7 +144,7 @@ func TestPerKindAccessBoundsTheKindsReadiness(t *testing.T) {
 	res, _ := Search(context.Background(), p, Parse("robusta"), Options{
 		Include:   IncludeNone,
 		Selection: readscope.Selection{Namespaces: []string{"a", "b"}},
-		NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+		TypedKindAccess: func(ns []string, group, resource string) ([]string, []string, []string) {
 			if resource == "secrets" {
 				return []string{"a"}, []string{"b"}, nil
 			}

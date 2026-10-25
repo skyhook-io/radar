@@ -36,9 +36,9 @@ func TestTrivyClusterCheckFailureIsNotADenial(t *testing.T) {
 					budget.Store(readscope.MaxAccessChecks)
 				}
 				gate := func(ns []string) ([]string, []string, []string) {
-					return readscope.CheckNamespacedAccess(t.Context(), ns, budget, func(string) (bool, bool) { return false, false }, func(string) (bool, bool) { return false, check == "denied" })
+					return readscope.ClusterFirstNamespaceAccess(t.Context(), ns, budget, func(string) (bool, bool) { return false, false }, func(string) (bool, bool) { return false, check == "denied" })
 				}
-				opts := Options{KindAccess: &KindAccess{
+				opts := Options{DynamicKindAccess: &DynamicKindAccess{
 					ClusterWide: func(string, string) (bool, bool) {
 						_, denied, unchecked := gate(nil)
 						return len(denied) == 0 && len(unchecked) == 0, len(unchecked) == 0

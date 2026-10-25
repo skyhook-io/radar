@@ -5,33 +5,44 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
-// Options configures a Search call.
+// Options configures a Search call. Per-user exact-kind authorization requires
+// both TypedKindAccess and DynamicKindAccess: they protect separate paths and
+// must share one request budget.
 type Options struct {
-	Limit                int
-	Include              IncludeMode
-	Selection            readscope.Selection
+	// Limit defaults to DefaultLimit when non-positive and is capped at MaxLimit.
+	Limit int
+	// Include defaults to IncludeSummary.
+	Include IncludeMode
+	// Selection must be resolved for this query, caller and pin against the
+	// same captured provider. Use SelectNamespaces with the namespace check's
+	// result, and set NamespaceCheckFailed when that check did not answer.
+	Selection readscope.Selection
+	// NamespaceCheckFailed suppresses namespaced reads and records unknown
+	// access; it must agree with the check used to build Selection.
 	NamespaceCheckFailed bool
-	// NamespacedRBAC partitions exact-kind access before reading collector state.
+	// TypedKindAccess partitions typed exact-kind access before reading collector
+	// state. Nil disables the gate (auth off).
 	// A nil allowed list means every namespace; denied and unchecked use ""
 	// for a whole-scope decision when namespaces cannot be enumerated.
-	NamespacedRBAC func(namespaces []string, group, resource string) (allowed, denied, unchecked []string)
+	TypedKindAccess func(namespaces []string, group, resource string) (allowed, denied, unchecked []string)
 	// CanReadClusterScoped authorizes cluster-scoped resources before the
 	// cache walker scans them. Handlers provide a per-user SAR-backed
 	// decision; authoritative distinguishes denial from check failure. nil
 	// preserves auth-mode=none behavior, where collector RBAC is the only gate.
 	CanReadClusterScoped func(kind, group, resource string) (allowed, authoritative bool)
-	// KindAccess authorizes namespaced kinds requiring exact access by the
-	// caller's own list permission on that kind, within Selection.Namespaces. nil
+	// DynamicKindAccess authorizes namespaced kinds requiring exact access by the
+	// caller's own list permission on that kind, within Selection.Namespaces. Both
+	// ClusterWide and InNamespaces callbacks are required when non-nil. nil
 	// disables the gate (auth off: the cache's own RBAC is the only filter).
-	KindAccess *KindAccess
+	DynamicKindAccess *DynamicKindAccess
 	// Filter is an optional compiled CEL predicate. When set, each
 	// candidate that passed the modifier+token match is also evaluated
 	// against the filter; non-truthy results (including eval errors)
 	// drop the candidate. Compile happens in the handler; this layer
 	// just runs the program.
 	Filter *CELFilter
-	// SummaryBuilder, when non-nil, is invoked per matched hit to
-	// attach the compact summaryContext (managedBy + health +
+	// SummaryBuilder, when non-nil, is invoked once per returned hit after
+	// sorting and limiting, to attach summaryContext (managedBy + health +
 	// issueCount). Handlers provide a closure that wraps the
 	// request-scoped topology + per-namespace issue index so the
 	// per-row cost stays flat. Pass nil to opt out (context=none) —

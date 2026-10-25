@@ -1,7 +1,7 @@
 // Package search provides cluster-wide free-text search over typed and
 // dynamic-cached resources. It walks the in-memory radar cache, scores
 // each object against the parsed query, and returns ranked hits with
-// optional minified summaries or raw objects.
+// optional minified summaries or detail payloads.
 //
 // Search is O(N) per kind: we scan each lister rather than maintaining
 // inverted indexes. For radar's typical cluster sizes (≤50K objects)
@@ -35,9 +35,9 @@ import (
 )
 
 // SummaryBuilderFunc, when supplied via Options.SummaryBuilder, is
-// invoked once per matched hit to produce the compact SummaryContext
-// attached to the hit's summaryContext field. Exactly one of obj/u will be
-// non-nil — typed kinds pass obj, dynamic CRDs pass u. Returning nil
+// invoked once per returned hit after sorting and limiting to produce the
+// compact SummaryContext attached to the hit's summaryContext field. Exactly
+// one of obj/u will be non-nil — typed kinds pass obj, dynamic CRDs pass u. Returning nil
 // is fine (the field is omitempty); callers use it to gate context
 // emission per request (context=none opts out by passing nil here).
 //
@@ -48,9 +48,17 @@ import (
 // Service) in its per-resource issue index.
 type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext
 
-// Provider abstracts the cache so tests can inject a fake.
+// Provider supplies captured cache handles for one search. Planning, scope
+// observations and listing must agree about those handles.
+// Returned objects are borrowed and read-only: callers must not mutate or retain
+// them beyond the search. Methods do not warm caches except WarmDynamic; plans
+// describe observations, while successful lists establish actual read evidence.
 type Provider interface {
-	ListTyped(kind string, namespaces []string) ([]runtime.Object, error)
+	// ListTyped accepts a resource lookup key (e.g. "pods", "hpas"), unlike
+	// PlanTyped's singular Kind. Nil namespaces means all; non-nil empty means none.
+	ListTyped(resource string, namespaces []string) ([]runtime.Object, error)
+	// ListDynamic reads authoritative stores without warming. "" means the
+	// whole scope; an unavailable or changed serving source must fail the list.
 	ListDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
 	// DynamicResources lists the dynamic kinds to search. A non-nil error
 	// means the list may be incomplete; any kinds returned are still searched.
@@ -63,14 +71,19 @@ type Provider interface {
 	// NamespaceObservation reports the kind's observation, with readiness taken
 	// from the informer serving namespace; "" means the whole kind.
 	NamespaceObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation
+	// WarmDynamic may start a watch and wait for sync, bounded by ctx and two
+	// seconds. "" requests the whole scope. Refresh observations and plans afterward.
 	WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error
+	// KindForGVR returns "" when discovery cannot resolve the Kind.
 	KindForGVR(gvr schema.GroupVersionResource) string
 	// KnownMissingNamespaces is called only for callers who can see every namespace.
 	KnownMissingNamespaces(names []string) []string
 }
 
 type dynamicScopeProvider interface {
-	NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool)
+	// NamespacedForGVR returns known=false when discovery cannot resolve scope;
+	// namespaced is then unusable, rather than evidence of cluster scope.
+	NamespacedForGVR(gvr schema.GroupVersionResource) (namespaced, known bool)
 }
 
 // typedKinds is the set of typed kinds we walk for unfiltered queries.
@@ -115,10 +128,11 @@ var typedKinds = []struct {
 	{"LimitRange", "limitranges", ""},
 }
 
-// KindAccess answers per-kind list permission for the caller. Both checks
+// DynamicKindAccess answers dynamic exact-kind list permission for the caller.
+// Both callbacks are required when the gate is non-nil. Both checks
 // are handler-supplied SubjectAccessReviews; they are only asked about kinds
 // search gates for exact access.
-type KindAccess struct {
+type DynamicKindAccess struct {
 	// ClusterWide reports whether the caller may list the resource in every
 	// namespace, and whether the check answered.
 	ClusterWide func(group, resource string) (allowed, authoritative bool)
@@ -128,7 +142,6 @@ type KindAccess struct {
 	InNamespaces func(group, resource string, namespaces []string) (allowed, unchecked []string)
 }
 
-// Search runs the parsed query against the provider and returns ranked hits.
 // pendingHit pairs a Hit with the source object that produced it, so the
 // SummaryBuilder (topology lookups, issue-index reads) can be deferred
 // until AFTER the hits are sorted and truncated to opts.Limit. Lifecycle is
@@ -140,6 +153,11 @@ type pendingHit struct {
 	c   candidate                  // for c.Group/Kind/Namespace/Name when invoking SummaryBuilder
 }
 
+// Search returns ranked hits within opts.Selection, resolved for this query
+// and caller against p. It may warm explicitly named dynamic kinds and reports
+// per-kind failures as partial coverage. Cancellation and stopped dynamic caches
+// return errors. Before publishing, the caller must verify that its captured
+// provider is still current (CacheProvider.Current).
 func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
@@ -236,7 +254,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			continue
 		}
 		plan := p.PlanTyped(tk.Kind, opts.Selection.Namespaces)
-		sensitive := opts.NamespacedRBAC != nil && (k8s.RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: tk.Group, Resource: tk.Plural}) || requiresSearchRoleAccess(tk.Group, tk.Plural))
+		sensitive := opts.TypedKindAccess != nil && (k8s.RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: tk.Group, Resource: tk.Plural}) || requiresSearchRoleAccess(tk.Group, tk.Plural))
 		if !sensitive && len(plan.Partitions) == 1 && plan.Partitions[0].Verdict.State == readplan.Gap && cov.quiet(plan.Partitions[0].Verdict.Code) {
 			continue
 		}
@@ -253,7 +271,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			listNs = nil
 		}
 		if sensitive {
-			allowed, denied, unchecked := opts.NamespacedRBAC(listNs, tk.Group, tk.Plural)
+			allowed, denied, unchecked := opts.TypedKindAccess(listNs, tk.Group, tk.Plural)
 			if len(denied) > 0 {
 				cov.kindGap(tk.Kind, tk.Group, readreason.UserForbidden, scopeNarrowed || len(allowed) > 0 || len(unchecked) > 0)
 			}
@@ -386,7 +404,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		warm := !observation.ProbeRetrying && len(q.KindFilter) > 0 && (probeGap || observation.State == k8score.DynamicObservationUnwatched || observation.State == k8score.DynamicObservationDeferred)
 		perNamespace := probeGap || observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces
 		settled := reason != "" && !warm && !perNamespace
-		gated := !clusterScoped && opts.KindAccess != nil && k8s.RequiresExactNamespaceAccess(gvr)
+		gated := !clusterScoped && opts.DynamicKindAccess != nil && k8s.RequiresExactNamespaceAccess(gvr)
 		if settled && !gated && cov.quiet(reason) {
 			continue
 		}
@@ -413,7 +431,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		accessNarrowed := false
 		clusterAllowed, clusterAuthoritative := true, true
 		if gated {
-			clusterAllowed, clusterAuthoritative = opts.KindAccess.ClusterWide(gvr.Group, gvr.Resource)
+			clusterAllowed, clusterAuthoritative = opts.DynamicKindAccess.ClusterWide(gvr.Group, gvr.Resource)
 		}
 		checkItems := gated && !clusterAllowed
 		unknownAccessScope := checkItems && namespaces == nil
@@ -424,7 +442,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				cov.kindGap(kind, gvr.Group, deniedReason(clusterAuthoritative), true)
 				accessNarrowed = true
 			} else {
-				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespaces)
+				allowed, unchecked := opts.DynamicKindAccess.InNamespaces(gvr.Group, gvr.Resource, namespaces)
 				denied := len(namespaces) - len(allowed) - len(unchecked)
 				if denied > 0 {
 					cov.kindGap(kind, gvr.Group, readreason.UserForbidden, denied < len(namespaces))
@@ -445,7 +463,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				if ns == "" {
 					return
 				}
-				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, []string{ns})
+				allowed, unchecked := opts.DynamicKindAccess.InNamespaces(gvr.Group, gvr.Resource, []string{ns})
 				if len(unchecked) > 0 {
 					reason = readreason.UserPermissionCheckFailed
 				} else if len(allowed) == 0 {
@@ -595,7 +613,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if checkItems && !unknownAccessScope {
 			items = itemsInNamespaces(items, namespaces)
 		} else if checkItems && len(items) > 0 {
-			allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespacesOf(items))
+			allowed, unchecked := opts.DynamicKindAccess.InNamespaces(gvr.Group, gvr.Resource, namespacesOf(items))
 			items = itemsInNamespaces(items, allowed)
 			if len(unchecked) > 0 {
 				cov.kindGap(kind, gvr.Group, readreason.UserPermissionCheckFailed, accessNarrowed || len(allowed) > 0)
@@ -843,7 +861,7 @@ func isClusterScopedKind(kind string) bool {
 
 // buildHit assembles the response shape for a matched candidate. Exactly
 // one of obj/u will be non-nil. minify-on-demand keeps the cost of
-// IncludeNone (identity-only) flat. SummaryContext attachment is NOT
+// IncludeNone (identity and match evidence) flat. SummaryContext attachment is NOT
 // done here — it happens in Search's post-truncation loop so the
 // expensive topology lookups + issue-index reads only run for the hits
 // that survive sort + Limit truncation.

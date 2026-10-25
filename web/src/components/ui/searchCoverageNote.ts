@@ -38,9 +38,10 @@ export interface SearchCoverageEntry {
   count?: number
   /** A namespace entry whose gap missed only some of the kinds searched. */
   someKinds?: boolean
+  wholeNamespaceScope?: boolean
 }
 
-/** The entries of a search's coverage; filter failures are left to the hits. */
+/** The entries of a search's coverage; CEL evaluation failures are left to the hits. */
 export function searchCoverageEntries(coverage: SearchCoverage | undefined): SearchCoverageEntry[] {
   const out: SearchCoverageEntry[] = []
   for (const gap of coverage?.gaps ?? []) {
@@ -49,7 +50,7 @@ export function searchCoverageEntries(coverage: SearchCoverage | undefined): Sea
     const kinds = gap.kinds && gap.kinds.extent === undefined ? gap.kinds : undefined
     const namespaces = gap.namespaces && gap.namespaces.extent === undefined ? gap.namespaces : undefined
     if (kinds?.names) {
-      for (const k of kinds.names) out.push({ kind: k.kind, group: k.group ?? '', reason: gap.code })
+      for (const k of kinds.names) out.push({ kind: k.kind, group: k.group ?? '', reason: gap.code, wholeNamespaceScope: gap.namespaces?.extent === 'all' })
     } else if (kinds) {
       out.push({ kind: '*', group: '', reason: gap.code, count: kinds.count })
     } else if (namespaces) {
@@ -111,13 +112,18 @@ function failedKinds(entries: SearchCoverageEntry[], label: (e: SearchCoverageEn
 
 // Radar's ⌘K note for one search: what happened to the kinds and namespaces
 // the query named, whether results are still loading, and which kinds failed
-// to read. Access and setup never come up on a broad search (Radar doesn't
-// report them). An older Radar sends no coverage, and gets no note.
+// to read. Broad searches keep access and setup exclusions quiet; an empty
+// result can explain collection narrowing. Missing coverage gets no note.
 export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: SearchCoverageNoteOptions): OmnibarNote | undefined {
   const unsearched = searchCoverageEntries(coverage)
   if (!unsearched.length) {
-    if (coverage?.gaps.length === 0 && !opts.hits?.length && coverage.narrowedBy?.includes('kind_collection')) {
-      return { text: "Radar doesn't watch every kind; search kind:<name> to include one." }
+    if (coverage?.gaps.length === 0 && !opts.hits?.length) {
+      if (coverage.narrowedBy?.includes('namespace_collection')) {
+        return { text: 'Radar here watches only some namespaces; name one with ns:<name> to check it.' }
+      }
+      if (coverage.narrowedBy?.includes('kind_collection')) {
+        return { text: "Radar doesn't watch every kind; search kind:<name> to include one." }
+      }
     }
     return undefined
   }
@@ -192,7 +198,10 @@ export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: S
   const findings = named('filter_eval_failed')
   if (findings.length) say(`Radar ran out of time searching the findings of ${names(findings, 'and')}, so a CVE or package missing here may be in a report it left out.`)
   const denied = named('user_forbidden')
-  if (denied.length) say(`Your access doesn't include all ${names(denied, 'or')}.`)
+  if (denied.length) {
+    const suggestion = denied.some((e) => e.wholeNamespaceScope) ? ' Try narrowing with ns:<namespace>.' : ''
+    say(`Your access doesn't include all ${names(denied, 'or')}.${suggestion}`)
+  }
   const collector = named('radar_forbidden')
   if (collector.length) say(`Radar isn't allowed to read ${names(collector, 'or')} on this cluster.`)
   const unwatched = named('radar_kind_not_collected')

@@ -32,7 +32,8 @@ type CacheProvider struct {
 }
 
 // NewCacheProvider returns a Provider over the live radar caches.
-// Returns nil when the typed cache is unavailable (radar isn't connected yet).
+// Returns nil when the typed cache is unavailable or connection handles change
+// during capture.
 func NewCacheProvider() *CacheProvider {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -52,16 +53,16 @@ func NewCacheProvider() *CacheProvider {
 	return provider
 }
 
-func (p *CacheProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
+func (p *CacheProvider) ListTyped(resource string, namespaces []string) ([]runtime.Object, error) {
 	// A namespace whose informer has synced is read from its own store, so a
 	// kind still loading elsewhere — whose lister is withheld until it has
 	// loaded everywhere — can still be searched there.
 	if namespaces != nil {
-		if objs, ok := p.cache.ReadableObjects(kind, namespaces); ok {
+		if objs, ok := p.cache.ReadableObjects(resource, namespaces); ok {
 			return objs, nil
 		}
 	}
-	return k8s.FetchResourceList(p.cache, kind, namespaces)
+	return k8s.FetchResourceList(p.cache, resource, namespaces)
 }
 
 func (p *CacheProvider) ListDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
@@ -148,7 +149,8 @@ func (p *CacheProvider) DynamicResources() ([]schema.GroupVersionResource, error
 }
 
 // UnlistableKinds returns the discovered APIs without a list verb, such as
-// create-only reviews.
+// create-only reviews, from the catalog captured by the preceding
+// DynamicResources call. Before that call, empty is not evidence of their absence.
 func (p *CacheProvider) UnlistableKinds() []k8score.APIResource {
 	if p.discovery == nil {
 		return nil
@@ -248,7 +250,7 @@ func (p *CacheProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 	return p.discovery.GetKindForGVR(gvr)
 }
 
-func (p *CacheProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
+func (p *CacheProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (namespaced, known bool) {
 	if p.discovery == nil {
 		return false, false
 	}

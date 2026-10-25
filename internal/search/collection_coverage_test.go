@@ -84,7 +84,7 @@ func TestBroadSearchPermissionChecksDoNotScaleWithNamespacedCRDs(t *testing.T) {
 	checks := 0
 	res, err := Search(context.Background(), p, Parse(""), Options{
 		Selection: readscope.Selection{Namespaces: namespaces},
-		NamespacedRBAC: func(ns []string, group, resource string) ([]string, []string, []string) {
+		TypedKindAccess: func(ns []string, group, resource string) ([]string, []string, []string) {
 			checks++
 			if group == "example.io" {
 				t.Fatal("ordinary namespaced CRD was per-kind gated")
@@ -149,7 +149,7 @@ func TestCallerAccessPrecedesTransientCoverage(t *testing.T) {
 		reason  string
 	}{{false, "user_forbidden"}, {true, "radar_forbidden"}} {
 		res, _ := Search(context.Background(), collectorDenied, Parse("kind:Node kind:Secret kind:Gadget"), Options{
-			NamespacedRBAC: func([]string, string, string) ([]string, []string, []string) {
+			TypedKindAccess: func([]string, string, string) ([]string, []string, []string) {
 				if tc.allowed {
 					return nil, nil, nil
 				}
@@ -183,7 +183,7 @@ func TestCallerAccessPrecedesTransientCoverage(t *testing.T) {
 	loading.namespaced = map[schema.GroupVersionResource]bool{gvr: false}
 	loading.observations = map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: {State: k8score.DynamicObservationSyncing}}
 	denied := Options{
-		NamespacedRBAC:       func([]string, string, string) ([]string, []string, []string) { return []string{}, []string{""}, nil },
+		TypedKindAccess:      func([]string, string, string) ([]string, []string, []string) { return []string{}, []string{""}, nil },
 		CanReadClusterScoped: func(string, string, string) (bool, bool) { return false, true },
 	}
 	for _, query := range []string{"robusta", "ns:team-a robusta"} {
@@ -204,7 +204,7 @@ func TestCallerAccessPrecedesTransientCoverage(t *testing.T) {
 		t.Fatalf("named unreadable kinds = %+v, want %+v", unsearched(res), want)
 	}
 	res, _ = Search(context.Background(), loading, Parse("robusta"), Options{
-		NamespacedRBAC:       func([]string, string, string) ([]string, []string, []string) { return nil, nil, nil },
+		TypedKindAccess:      func([]string, string, string) ([]string, []string, []string) { return nil, nil, nil },
 		CanReadClusterScoped: func(string, string, string) (bool, bool) { return true, true },
 	})
 	want = []UnsearchedKind{
@@ -264,7 +264,7 @@ func TestWarmingRefusedNamespaceIsCollectorScope(t *testing.T) {
 func TestPermissionCheckFailuresAreNotReportedAsDenial(t *testing.T) {
 	for _, kind := range []string{"Secret", "Node"} {
 		res, _ := Search(context.Background(), &fakeProvider{}, Parse("kind:"+kind), Options{
-			NamespacedRBAC:       func([]string, string, string) ([]string, []string, []string) { return []string{}, nil, []string{""} },
+			TypedKindAccess:      func([]string, string, string) ([]string, []string, []string) { return []string{}, nil, []string{""} },
 			CanReadClusterScoped: func(string, string, string) (bool, bool) { return false, false },
 		})
 		if !partial(res) || len(unsearched(res)) != 1 || unsearched(res)[0].Reason != "user_permission_check_failed" {

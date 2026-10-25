@@ -23,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 type probeRetryProvider struct{ *CacheProvider }
@@ -353,5 +354,40 @@ func TestSearchExplicitNamespaceRetryScope(t *testing.T) {
 	res, err = Search(t.Context(), p, Parse("robusta"), opts)
 	if err != nil || partial(res) || !reflect.DeepEqual(hitNames(res), []string{"Widget/a/robusta-a", "Widget/b/robusta-b"}) {
 		t.Fatalf("full scope did not recover: %+v err=%v", res, err)
+	}
+}
+
+func TestSearchKeepsUnknownWholeProbeRemainder(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	ready := k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{"read-a"}}
+	whole := ready
+	whole.ProbeRetrying = true
+	p := &fakeProvider{
+		kinds:                 map[schema.GroupVersionResource]string{gvr: "Widget"},
+		namespaced:            map[schema.GroupVersionResource]bool{gvr: true},
+		observations:          map[schema.GroupVersionResource]k8score.DynamicResourceObservation{gvr: whole},
+		namespaceObservations: map[schema.GroupVersionResource]map[string]k8score.DynamicResourceObservation{gvr: {"read-a": ready}},
+		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {
+			{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "read-a", "name": "ordinary"}}},
+			{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "elsewhere", "name": "needle"}}},
+		}},
+		filterDynamicByNamespace: true,
+	}
+	plan := p.PlanDynamic(gvr, nil, false)
+	if len(plan.Partitions) != 2 || plan.Partitions[1].Extent != readplan.UnknownNamespaces || plan.Partitions[1].Verdict.Code != readreason.KindSyncPending {
+		t.Fatalf("plan=%+v", plan)
+	}
+	res, err := Search(t.Context(), p, Parse("kind:Widget needle"), Options{Include: IncludeNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := resourceapi.SearchCoverage{Status: resourceapi.CoveragePartial, Gaps: []resourceapi.Gap{{Code: readreason.KindSyncPending, Kinds: resourceapi.Kinds([]resourceapi.KindRef{{Kind: "Widget", Group: "example.io"}}, 1), Namespaces: resourceapi.UnknownNames()}}}
+	if !reflect.DeepEqual(res.Coverage, want) || len(res.Hits) != 0 || !reflect.DeepEqual(p.dynamicListNamespaces, []string{"read-a"}) || len(p.warmed) != 0 {
+		t.Fatalf("result=%+v reads=%v warm=%v", res, p.dynamicListNamespaces, p.warmed)
+	}
+	p.dynamicListNamespaces = nil
+	res, err = Search(t.Context(), p, Parse("kind:Widget ns:read-a needle"), Options{Include: IncludeNone, Selection: readscope.Selection{Namespaces: []string{"read-a"}}})
+	if err != nil || partial(res) || len(res.Hits) != 0 {
+		t.Fatalf("explicit ready scope: result=%+v err=%v", res, err)
 	}
 }

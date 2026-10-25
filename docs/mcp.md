@@ -872,8 +872,11 @@ giving an extent: `{"extent": "all"}` for every one in the search's scope, or
 namespaces when the kind failed everywhere and an unknown part when only some
 namespaces failed; a namespace gap reaches all kinds only when every searched
 kind was excluded in those namespaces, and otherwise an unknown subset of kinds.
-A gap from an unreadable catalog reaches an unknown set of kinds. A filter failure's gap names
-`objects` instead.
+A gap from an unreadable catalog reaches an unknown set of kinds.
+`filter_eval_failed` has two forms: CEL evaluation failures name `objects`
+instead; the findings-scan time limit lists report `kinds` with
+`namespaces: {"extent": "unknown"}`, because findings in unscanned reports
+may still match.
 
 **`status: "partial"` means this result can't rule out a match for what you
 asked: something was loading or failed, a kind or namespace you named couldn't
@@ -983,17 +986,21 @@ On MCP, a partial result also carries `coverageHint`: an explanation per reason
 present, most actionable first (a typo, an unsearchable kind, a failing filter,
 loading), at most three sentences and then `+N more reasons.`. A narrowed broad
 search with no hits carries one too, saying it doesn't rule out matches outside
-your access and Radar's collection. REST never carries it.
+your access and Radar's collection. A named kind denied across the whole
+namespace scope suggests trying `ns:<namespace>`; namespace access may differ,
+so this is a suggestion, not a promise of access. REST never carries it.
+The response is one JSON value, with human-readable `coverageHint` and
+`narrowHint` (when present) before the hits, as with `list_resources`.
 
 ```json
-{"coverage": {"status": "partial", "gaps": [{"code": "kind_sync_pending", "action": "retry", "kinds": {"count": 37}, "namespaces": {"extent": "all"}}]},
- "coverageHint": "37 kinds were still loading; retry in a few seconds before concluding absence.", …}
-{"coverage": {"status": "partial", "gaps": [{"code": "user_forbidden", "action": "user_access", "kinds": {"count": 1, "names": [{"kind": "Secret"}]}, "namespaces": {"extent": "all"}}]},
- "coverageHint": "Your access doesn't include all Secrets; this result says nothing about the rest.", …}
-{"coverage": {"status": "partial", "gaps": [{"code": "namespace_not_found", "action": "change_request", "kinds": {"extent": "all"}, "namespaces": {"count": 1, "names": ["payments-prd"]}}]},
- "coverageHint": "Namespace 'payments-prd' doesn't exist on this cluster.", …}
-{"coverage": {"status": "complete", "narrowedBy": ["user_access"], "gaps": []},
- "coverageHint": "No matches within what your access and Radar's collection cover; that does not rule out matches outside them.", …}
+{"coverageHint": "37 kinds were still loading; retry in a few seconds before concluding absence.",
+ "coverage": {"status": "partial", "gaps": [{"code": "kind_sync_pending", "action": "retry", "kinds": {"count": 37}, "namespaces": {"extent": "all"}}]}, …}
+{"coverageHint": "Your access doesn't include all Secrets; this result says nothing about the rest. Try narrowing with ns:<namespace>.",
+ "coverage": {"status": "partial", "gaps": [{"code": "user_forbidden", "action": "user_access", "kinds": {"count": 1, "names": [{"kind": "Secret"}]}, "namespaces": {"extent": "all"}}]}, …}
+{"coverageHint": "Namespace 'payments-prd' doesn't exist on this cluster.",
+ "coverage": {"status": "partial", "gaps": [{"code": "namespace_not_found", "action": "change_request", "kinds": {"extent": "all"}, "namespaces": {"count": 1, "names": ["payments-prd"]}}]}, …}
+{"coverageHint": "No matches within what your access and Radar's collection cover; that does not rule out matches outside them.",
+ "coverage": {"status": "complete", "narrowedBy": ["user_access"], "gaps": []}, …}
 ```
 
 `ns:` (and the MCP `namespace` argument) restricts namespaced kinds. A broad `ns:`

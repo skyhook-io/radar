@@ -116,13 +116,13 @@ func TestSearchCoverageReadFailuresAndPartialNamespaces(t *testing.T) {
 		}
 	}
 	rec := &recordingProvider{fakeProvider: &fakeProvider{}}
-	res, _ := Search(context.Background(), rec, Parse("kind:Role"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}, NamespacedRBAC: func([]string, string, string) ([]string, []string, []string) {
+	res, _ := Search(context.Background(), rec, Parse("kind:Role"), Options{Selection: readscope.Selection{Namespaces: []string{"a", "b"}}, TypedKindAccess: func([]string, string, string) ([]string, []string, []string) {
 		return []string{"a"}, []string{"b"}, nil
 	}})
 	if !partial(res) || len(unsearched(res)) != 1 || unsearched(res)[0].Reason != "user_forbidden" || len(rec.listedWith["roles"]) != 1 || rec.listedWith["roles"][0] != "a" {
 		t.Fatalf("namespace narrowing: %+v lists=%v", res, rec.listedWith)
 	}
-	res, _ = Search(context.Background(), rec, Parse("kind:Role"), Options{NamespacedRBAC: func([]string, string, string) ([]string, []string, []string) { return []string{}, []string{""}, nil }})
+	res, _ = Search(context.Background(), rec, Parse("kind:Role"), Options{TypedKindAccess: func([]string, string, string) ([]string, []string, []string) { return []string{}, []string{""}, nil }})
 	if !partial(res) || res.Searched != 0 {
 		t.Fatalf("empty override: %+v", res)
 	}

@@ -15,8 +15,28 @@ describe('searchCoverageNote', () => {
     expect(noteFor({ status: 'complete', gaps: [] }, { hits: [] })).toBeUndefined()
   })
 
-  it.each(['user_access', 'namespace_collection', 'namespace_pin'] as const)('keeps empty %s narrowing quiet', (narrowing) => {
+  it.each(['user_access', 'namespace_pin'] as const)('keeps empty %s narrowing quiet', (narrowing) => {
     expect(noteFor({ status: 'complete', narrowedBy: [narrowing], gaps: [] }, { hits: [] })).toBeUndefined()
+  })
+
+  it('explains empty namespace collection narrowing, including combined narrowing', () => {
+    for (const narrowedBy of [['namespace_collection'], ['kind_collection', 'namespace_collection']] as const) {
+      const coverage: Parameters<typeof noteFor>[0] = { status: 'complete', narrowedBy: [...narrowedBy], gaps: [] }
+      expect(noteFor(coverage, { hits: [] })).toEqual({
+        text: 'Radar here watches only some namespaces; name one with ns:<name> to check it.',
+      })
+      expect(noteFor(coverage, { hits: [{ kind: 'Pod' }] })).toBeUndefined()
+    }
+  })
+
+  it('suggests a namespace only for a whole namespaced-kind denial', () => {
+    const kinds = { count: 1, names: [{ kind: 'Secret' }] }
+    expect(noteFor({ status: 'partial', gaps: [{ code: 'user_forbidden', kinds, namespaces: { extent: 'all' } }] }, { query: 'kind:Secret' })?.text)
+      .toBe("Your access doesn't include all Secrets. Try narrowing with ns:<namespace>.")
+    expect(noteFor({ status: 'partial', gaps: [{ code: 'user_forbidden', kinds, namespaces: { extent: 'unknown' } }] }, {})?.text)
+      .toBe("Your access doesn't include all Secrets.")
+    expect(noteFor({ status: 'partial', gaps: [{ code: 'user_forbidden', kinds: { count: 1, names: [{ kind: 'Node' }] } }] }, {})?.text)
+      .toBe("Your access doesn't include all Nodes.")
   })
 
   it('explains a partial namespace without claiming its returned kinds were unsearched', () => {
@@ -64,7 +84,7 @@ describe('searchCoverageNote', () => {
   })
 
   it('explains a named kind the caller or Radar cannot read', () => {
-    expect(searchCoverageNote([entry('Secret', 'user_forbidden')], {})?.text).toBe("Your access doesn't include all Secrets.")
+    expect(searchCoverageNote([entry('Secret', 'user_forbidden')], {})?.text).toBe("Your access doesn't include all Secrets. Try narrowing with ns:<namespace>.")
     expect(searchCoverageNote([entry('Secret', 'radar_forbidden')], {})?.text).toBe("Radar isn't allowed to read Secrets on this cluster.")
     expect(searchCoverageNote([entry('Role', 'radar_kind_not_collected')], {})?.text).toBe("Radar doesn't watch Roles on this cluster, so they weren't searched.")
   })
@@ -119,7 +139,7 @@ describe('searchCoverageNote', () => {
       "Couldn't read Certificate (networking.internal.knative.dev); matches of that kind may be missing.",
     )
     expect(searchCoverageNote([entry('Certificate', 'user_forbidden', 'cert-manager.io')], { hits: [{ kind: 'Certificate', group: 'networking.internal.knative.dev' }] })?.text).toBe(
-      "Your access doesn't include all Certificates (cert-manager.io).",
+      "Your access doesn't include all Certificates (cert-manager.io). Try narrowing with ns:<namespace>.",
     )
   })
 
