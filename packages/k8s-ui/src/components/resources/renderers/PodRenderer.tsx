@@ -3,7 +3,7 @@ import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, Circle
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
@@ -660,20 +660,7 @@ export function PodRenderer({
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>
         <div className="space-y-3">
-          {/* Pod-level budget (spec.resources) is shared by all containers, so it
-              stays its own row rather than being merged into the container rows. */}
-          {(podResources?.requests || podResources?.limits) && (
-            <div className="rounded-[10px] border border-dashed border-theme-border p-3">
-              <div className="flex items-baseline justify-between gap-2 mb-2">
-                <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
-                <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
-              </div>
-              <div className="text-xs text-theme-text-secondary space-y-1">
-                {podResources.requests && <div>Requests: {formatResources(podResources.requests)}</div>}
-                {podResources.limits && <div>Limits: {formatResources(podResources.limits)}</div>}
-              </div>
-            </div>
-          )}
+          <PodAggregateResources resources={podResources} />
           {containers.map((container: any) => {
             const status = containerStatuses.find((s: any) => s.name === container.name)
             const state = status?.state
