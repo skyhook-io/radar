@@ -183,6 +183,7 @@ below describe that installation-scoped behavior.
   "namespaces": [],
   "port": 9280,
   "noBrowser": false,
+  "noVersionCheck": false,
   "browser": "",
   "timelineStorage": "memory",
   "timelineDbPath": "~/.radar/timeline.db",
@@ -211,6 +212,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
+| `noVersionCheck` | Disable automatic version checks; Desktop's manual Check for Updates remains available |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
 | `timelineStorage` | `memory`, `sqlite`, or `postgres` |
 | `timelineDbPath` | Path to SQLite database (sqlite only) |
@@ -882,11 +884,31 @@ request, all to Skyhook, none containing your resources, logs or events:
 - **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
   install method, whether it is running locally or in-cluster, and the
   installation timestamp when Radar can determine it. Radar caches the release
-  result for one hour. Development builds are excluded.
+  result for one hour. Development builds skip the browser relay and use
+  release-only lookups when fetching release metadata.
 - **[Anonymous usage stats](usage-stats.md)**: once a day, strictly opt-in.
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
+
+Disable automatic version checks with `--no-version-check`,
+`RADAR_DISABLE_VERSION_CHECK=1` (or `true`), or `"noVersionCheck": true` in
+`~/.radar/config.json`. The config setting works for both CLI and Desktop,
+including Desktop launched from Finder or the Dock. These controls stop both
+automatic release lookups and the in-cluster browser relay. Desktop's Help >
+Check for Updates remains available and makes one fresh lookup when clicked,
+including when automatic checks are disabled. It reports an available update,
+an up-to-date installation or a lookup failure, and leaves the automatic-check
+setting unchanged. `DO_NOT_TRACK` does not
+change version checks; [usage stats](usage-stats.md) are controlled separately.
+
+For Helm deployments, use the chart's existing environment-variable support:
+
+```yaml
+env:
+  - name: RADAR_DISABLE_VERSION_CHECK
+    value: "1"
+```
 
 A standalone Radar sends your cluster's data nowhere: it talks to your
 Kubernetes API directly and keeps everything it reads on your machine.

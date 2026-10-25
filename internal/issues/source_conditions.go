@@ -138,6 +138,12 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		}
 
 		for _, u := range items {
+			if gvr.Group == "" && kind == "Pod" {
+				phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+				if phase == "Succeeded" {
+					continue
+				}
+			}
 			if gvr.Group == "kafka.strimzi.io" && kind == "KafkaConnector" {
 				out = append(out, detectStrimziConnectorIssues(gvr, u)...)
 				continue

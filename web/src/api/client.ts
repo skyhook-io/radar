@@ -1786,6 +1786,7 @@ export async function markWhatsNewSeen(version: string): Promise<void> {
 
 export interface VersionInfo {
   currentVersion: string;
+  buildChannel?: 'stable' | 'prerelease' | 'custom' | 'development';
   latestVersion?: string;
   updateAvailable: boolean;
   releaseUrl?: string;

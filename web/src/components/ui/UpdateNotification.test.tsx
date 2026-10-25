@@ -21,12 +21,13 @@ vi.mock('../../api/client', () => ({
 }))
 
 import { UpdateNotification } from './UpdateNotification'
+import { ToastProvider } from './Toast'
 
 function renderNotification() {
   const client = new QueryClient()
   return renderToString(
     <QueryClientProvider client={client}>
-      <UpdateNotification />
+      <ToastProvider><UpdateNotification /></ToastProvider>
     </QueryClientProvider>,
   )
 }

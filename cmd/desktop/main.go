@@ -74,7 +74,12 @@ func main() {
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
+	noVersionCheck := flag.Bool("no-version-check", fileCfg.NoVersionCheck, "Disable automatic checks for newer Radar versions and releases; manual Desktop checks remain available (also enabled via RADAR_DISABLE_VERSION_CHECK=1)")
 	flag.Parse()
+
+	if *noVersionCheck {
+		versionpkg.SetDisabled(true)
+	}
 
 	if *showVersion {
 		fmt.Printf("radar-desktop %s\n", version)

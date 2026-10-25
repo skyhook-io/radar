@@ -9,7 +9,9 @@ import {
   useDesktopUpdateStatus,
   useApplyDesktopUpdate,
 } from '../../api/client'
-import type { DesktopUpdateState } from '../../api/client'
+import type { DesktopUpdateState, VersionInfo } from '../../api/client'
+import { getApiBase } from '../../api/config'
+import { useToast } from './Toast'
 import { WithTooltip } from './Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
@@ -35,6 +37,7 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
   const queryClient = useQueryClient()
+  const { showToast } = useToast()
   const { data: capabilities } = useCapabilities()
   const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
   const { data: versionInfo } = useVersionCheck()
@@ -58,17 +61,38 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
     return () => document.removeEventListener('pointerdown', closeOutside)
   }, [expanded])
 
-  // Listen for "Check for Updates" menu item in desktop app.
   useEffect(() => {
+    if (inSettings) return
+    const id = 'radar-manual-update-check'
     const handler = () => {
+      showToast('Checking for updates…', { id, type: 'info', duration: 0 })
+    }
+    const resultHandler = (event: Event) => {
+      const info = (event as CustomEvent<VersionInfo>).detail
+      if (info.error) {
+        showToast('Could not check for updates', { id, type: 'error', detail: info.error })
+        return
+      }
+      void queryClient.cancelQueries({ queryKey: ['version-check', getApiBase()], exact: true })
       setDismissed(false)
       try { localStorage.removeItem(DISMISSED_KEY) } catch { /* ignore */ }
-      queryClient.invalidateQueries({ queryKey: ['version-check'] })
+      queryClient.setQueryData(['version-check', getApiBase()], info)
+      if (info.updateAvailable) {
+        showToast(`Radar ${info.latestVersion} is available`, { id, type: 'info' })
+      } else if (info.buildChannel === 'development') {
+        showToast(`Latest Radar release: ${info.latestVersion}`, { id, type: 'info', detail: 'You are running a development build.' })
+      } else {
+        showToast("You're up to date", { id, type: 'success', detail: `Radar ${info.currentVersion}` })
+      }
     }
 
     window.addEventListener('radar:check-for-updates', handler)
-    return () => window.removeEventListener('radar:check-for-updates', handler)
-  }, [queryClient])
+    window.addEventListener('radar:update-check-result', resultHandler)
+    return () => {
+      window.removeEventListener('radar:check-for-updates', handler)
+      window.removeEventListener('radar:update-check-result', resultHandler)
+    }
+  }, [queryClient, inSettings, showToast])
 
   // Log version check errors for debugging
   useEffect(() => {

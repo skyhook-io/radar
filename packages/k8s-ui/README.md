@@ -2,6 +2,13 @@
 
 Shared, source-distributed Kubernetes UI components used by Radar.
 
+## Toast updates
+
+`useToast().showToast(message, { id })` updates an existing toast with that ID
+in place and restarts its dismiss timer. Omit `id` for independent toasts.
+Set `duration: 0` to keep a progress toast visible until its result replaces it;
+omit `duration` on the result to use the normal dismiss time.
+
 ## Local terminal metadata
 
 `LocalTerminalTab` accepts optional `onSessionInfo` and `toolbarExtra` props.

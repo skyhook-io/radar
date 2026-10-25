@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react'
 import { DURATION_TOAST_EXIT } from '../../utils/animation'
 import { Check, Terminal, X, AlertTriangle, Info } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -15,15 +15,13 @@ interface Toast {
   onDetailClick?: () => void
 }
 
+type ToastOptions = Omit<Toast, 'id' | 'message' | 'dismissing'> & {
+  id?: string
+  duration?: number
+}
+
 interface ToastContextType {
-  showToast: (message: string, options?: {
-    detail?: string
-    command?: string
-    type?: Toast['type']
-    position?: { x: number; y: number }
-    action?: Toast['action']
-    onDetailClick?: () => void
-  }) => void
+  showToast: (message: string, options?: ToastOptions) => void
   showCopied: (command: string, label?: string, event?: React.MouseEvent) => void
   showError: (message: string, detail?: string) => void
   showSuccess: (message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void
@@ -94,33 +92,41 @@ export function useToast() {
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
   const animateDismiss = useCallback((id: string) => {
+    clearTimeout(timers.current.get(id))
     setToasts(prev => prev.map(t => t.id === id ? { ...t, dismissing: true } : t))
-    setTimeout(() => {
+    timers.current.set(id, setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id))
-    }, DURATION_TOAST_EXIT)
+      timers.current.delete(id)
+    }, DURATION_TOAST_EXIT))
   }, [])
 
-  const showToast = useCallback((message: string, options?: {
-    detail?: string
-    command?: string
-    type?: Toast['type']
-    position?: { x: number; y: number }
-    action?: Toast['action']
-    onDetailClick?: () => void
-  }) => {
-    const id = Math.random().toString(36).slice(2)
-    const toast: Toast = { id, message, ...options }
+  const showToast = useCallback((message: string, options?: ToastOptions) => {
+    const { id = Math.random().toString(36).slice(2), duration, ...toastOptions } = options ?? {}
+    const toast: Toast = { id, message, ...toastOptions }
 
-    setToasts(prev => [...prev, toast])
+    clearTimeout(timers.current.get(id))
+    timers.current.delete(id)
+    setToasts(prev => prev.some(t => t.id === id)
+      ? prev.map(t => t.id === id ? toast : t)
+      : [...prev, toast])
 
     // Auto-dismiss: errors stay longer (10s), others 7s
-    const dismissTime = options?.type === 'error' ? 10000 : 7000
-    setTimeout(() => {
-      animateDismiss(id)
-    }, dismissTime)
+    const dismissTime = duration ?? (toast.type === 'error' ? 10000 : 7000)
+    if (dismissTime > 0) {
+      timers.current.set(id, setTimeout(() => animateDismiss(id), dismissTime))
+    }
   }, [animateDismiss])
+
+  useEffect(() => {
+    const activeTimers = timers.current
+    return () => {
+      activeTimers.forEach(clearTimeout)
+      activeTimers.clear()
+    }
+  }, [])
 
   const showCopied = useCallback((command: string, label?: string, event?: React.MouseEvent) => {
     navigator.clipboard.writeText(command)
@@ -187,6 +193,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
 
   return (
     <div
+      role="status"
       className={clsx(
         'flex items-start gap-3 p-4 rounded-lg shadow-2xl border backdrop-blur-sm',
         'w-[480px] max-w-[calc(100vw-32px)]',

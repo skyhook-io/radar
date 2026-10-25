@@ -16,6 +16,12 @@ export interface MultiSelectPickerProps {
   onClearAll: () => void
   /** Footer "Done" button. */
   onDone: () => void
+  /**
+   * When set, each row gets an "Only" button that selects just that item. The
+   * name and checkbox still toggle. The host decides whether it also commits
+   * and closes.
+   */
+  onSelectOnly?: (item: string) => void
 
   /** Controlled search term (kept in the host so the body stays SSR-testable). */
   search: string
@@ -50,6 +56,7 @@ export function MultiSelectPicker({
   onSelectionChange,
   onClearAll,
   onDone,
+  onSelectOnly,
   search,
   onSearchChange,
   searchPlaceholder,
@@ -136,8 +143,8 @@ export function MultiSelectPicker({
         )}
 
         {filteredItems.map(item => (
-          <li key={item}>
-            <label className="w-full flex items-center justify-between px-3 py-1.5 text-sm hover:bg-theme-hover text-left text-theme-text-primary cursor-pointer">
+          <li key={item} className="group/row flex items-center hover:bg-theme-hover">
+            <label className="flex-1 min-w-0 flex items-center px-3 py-1.5 text-sm text-left text-theme-text-primary cursor-pointer">
               <span className="flex items-center gap-2 min-w-0">
                 <input
                   type="checkbox"
@@ -149,6 +156,17 @@ export function MultiSelectPicker({
                 {renderItemMeta?.(item)}
               </span>
             </label>
+            {onSelectOnly && (
+              // Touchscreens can coexist with a hover-capable mouse.
+              <button
+                type="button"
+                onClick={() => onSelectOnly(item)}
+                aria-label={`Show only ${item}`}
+                className="shrink-0 mr-2 px-1.5 py-0.5 rounded border border-theme-border bg-theme-surface text-[11px] text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary opacity-0 transition-opacity group-hover/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 focus-visible:opacity-100 any-pointer-coarse:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                Only
+              </button>
+            )}
           </li>
         ))}
       </ul>

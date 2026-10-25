@@ -204,7 +204,7 @@ func createMenu(desktopApp *DesktopApp, version, goos string) *menu.Menu {
 	// Help menu
 	helpMenu := appMenu.AddSubmenu("Help")
 	helpMenu.AddText("Check for Updates...", nil, func(_ *menu.CallbackData) {
-		runtime.WindowExecJS(desktopApp.ctx, `window.dispatchEvent(new Event('radar:check-for-updates'))`)
+		desktopApp.checkForUpdates()
 	})
 	helpMenu.AddSeparator()
 	// The macOS application menu already carries About, drawn from mac.AboutInfo.

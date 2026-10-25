@@ -38,6 +38,64 @@ func resourceIssuesRequest(t *testing.T, s *Server, path string) *httptest.Respo
 	return w
 }
 
+func TestIssuesAPICompletedPodsRemainQuiet(t *testing.T) {
+	completed := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "completed", Namespace: "batch"},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded, Conditions: []corev1.PodCondition{{
+			Type: corev1.PodReady, Status: corev1.ConditionFalse, Reason: "PodCompleted",
+		}}},
+	}
+	failed := completed.DeepCopy()
+	failed.Name = "failed"
+	failed.Status.Phase = corev1.PodFailed
+	failed.Status.Conditions[0].Reason = "PodFailed"
+	useTestResourceCache(t, fake.NewClientset(completed, failed))
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	dyn := dynamicfake.NewSimpleDynamicClient(scheme, completed, failed)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	if _, err := k8s.GetDynamicResourceCache().ListBlocking(gvr, "batch", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"none", "proxy"} {
+		t.Run(mode, func(t *testing.T) {
+			s := newAuthServer(auth.Config{Mode: mode})
+			var user *auth.User
+			if mode == "proxy" {
+				user = &auth.User{Username: "batch-user"}
+				s.permCache.Set(user.Username, nil, &auth.UserPermissions{AllowedNamespaces: []string{"batch"}})
+			}
+			for range 2 {
+				w := httptest.NewRecorder()
+				s.handleIssues(w, requestWithUser(http.MethodGet, "/api/issues?namespaces=batch&kind=Pod", user))
+				if w.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+				}
+				var response issuesapi.Response
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				failedReported := false
+				for _, issue := range response.Issues {
+					if issue.Name != failed.Name {
+						t.Errorf("completed Pod must not appear in Issues: %s", w.Body.String())
+					}
+					failedReported = failedReported || (issue.Name == failed.Name && issue.Severity == issues.SeverityCritical)
+				}
+				if !failedReported {
+					t.Fatalf("failed Pod must remain critical: %s", w.Body.String())
+				}
+			}
+		})
+	}
+}
+
 // Namespaced issues follow the drawer: namespace access opens a Deployment,
 // so it opens the Deployment's issues too, with no per-kind check.
 // Fixture: TestMain seeds Deployment broken/stuck-app with no available replicas.
