@@ -186,6 +186,13 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 					unansweredCode = part.Verdict.Code
 				}
 			}
+			// The cache records a whole-scope failure only for a kind with no
+			// informer, so beside a loaded namespace the planner can't see it.
+			// A refusal is what narrowed the collection; any other failure
+			// leaves the rest of the scope unread.
+			if listErr != nil && len(unknownGaps) == 0 && !apierrors.IsForbidden(listErr) {
+				unknownGaps = append(unknownGaps, resourceapi.Gap{Code: collectionFailure(gvr.Resource, listErr).code, Namespaces: resourceapi.UnknownNames()})
+			}
 		}
 		// A namespace whose access check hasn't answered may be collected: it
 		// stays in the scope, as a gap.
