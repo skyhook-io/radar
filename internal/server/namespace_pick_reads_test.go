@@ -396,6 +396,7 @@ func TestProxyAuth_MissingNamespaceIsNotFound(t *testing.T) {
 	env := newAuthTestServer(t)
 	env.srv.permCache.Set("root", nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
 	type body struct {
+		Error     string `json:"error"`
 		ErrorCode string `json:"error_code"`
 		Coverage  struct {
 			Gaps []struct {
@@ -417,8 +418,8 @@ func TestProxyAuth_MissingNamespaceIsNotFound(t *testing.T) {
 		}
 		return resp.StatusCode, b
 	}
-	if status, b := fetch("/api/resources/deployments?namespaces=typo"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
-		t.Errorf("only a missing namespace = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	if status, b := fetch("/api/resources/deployments?namespaces=typo"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" || b.Error != `namespace "typo" doesn't exist in this cluster` {
+		t.Errorf("only a missing namespace = %d %q %q, want 404 namespace_not_found naming typo", status, b.ErrorCode, b.Error)
 	}
 	status, b := fetch("/api/resources/deployments?namespaces=default,typo")
 	if status != http.StatusOK || len(b.Items) != 1 || len(b.Coverage.Gaps) != 1 || b.Coverage.Gaps[0].Code != "namespace_not_found" || !slices.Equal(b.Coverage.Gaps[0].Namespaces.Names, []string{"typo"}) {
@@ -437,8 +438,8 @@ func TestProxyAuth_MissingNamespaceIsNotFound(t *testing.T) {
 	if status, b := fetch("/api/resources/deployments?namespaces=typo"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
 		t.Errorf("missing namespace outside the pin = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
 	}
-	if status, b := fetch("/api/resources/deployments?namespaces=broken"); status != http.StatusConflict || b.ErrorCode != "outside_namespace_pin" {
-		t.Errorf("existing namespace outside the pin = %d %q, want 409 outside_namespace_pin", status, b.ErrorCode)
+	if status, b := fetch("/api/resources/deployments?namespaces=broken"); status != http.StatusConflict || b.ErrorCode != "outside_namespace_pin" || b.Error != `namespace "broken" is outside Radar's --namespace-scope pin` {
+		t.Errorf("existing namespace outside the pin = %d %q %q, want 409 outside_namespace_pin naming broken", status, b.ErrorCode, b.Error)
 	}
 	if status, b := fetch("/api/resources/deployments/typo/nginx"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
 		t.Errorf("get in a missing namespace outside the pin = %d %q, want 404 namespace_not_found", status, b.ErrorCode)

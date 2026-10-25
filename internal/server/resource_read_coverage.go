@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -306,9 +307,53 @@ func noAccessFailure(failure *resourceReadFailure, target listTarget, accessChec
 		for _, gap := range target.gaps {
 			codes = append(codes, gap.Code)
 		}
-		return &resourceReadFailure{code: readreason.Primary(codes), message: failure.message}
+		primary := readreason.Primary(codes)
+		return &resourceReadFailure{code: primary, message: namespaceGapMessage(primary, target.gaps, failure.message)}
 	}
 	return failure
+}
+
+// namespaceGapMessage words a list failure after the namespaces of its primary
+// gap, as a get of one of them would. They are names the caller asked for, so
+// naming them reveals nothing.
+func namespaceGapMessage(code readreason.Code, gaps []resourceapi.Gap, fallback string) string {
+	var names []string
+	for _, gap := range gaps {
+		if gap.Code == code && gap.Namespaces != nil {
+			names = append(names, gap.Namespaces.Names...)
+		}
+	}
+	if len(names) == 0 {
+		return fallback
+	}
+	quoted := make([]string, len(names))
+	for i, ns := range names {
+		quoted[i] = strconv.Quote(ns)
+	}
+	list := strings.Join(quoted, ", ")
+	one := len(names) == 1
+	noun := "namespaces " + list
+	if one {
+		noun = "namespace " + list
+	}
+	switch code {
+	case readreason.NamespaceNotFound:
+		if one {
+			return noun + " doesn't exist in this cluster"
+		}
+		return noun + " don't exist in this cluster"
+	case readreason.UserNamespaceNotVisible:
+		if one {
+			return noun + " is not among the namespaces you can see, or does not exist"
+		}
+		return noun + " are not among the namespaces you can see, or do not exist"
+	case readreason.OutsideNamespacePin:
+		if one {
+			return noun + " is outside Radar's --namespace-scope pin"
+		}
+		return noun + " are outside Radar's --namespace-scope pin"
+	}
+	return fallback
 }
 
 // withGaps adds the caller's own gaps within namespaces they can see: exact
