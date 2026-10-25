@@ -26,8 +26,9 @@ Every answer says what it couldn't read. An empty answer means "none" only when 
   - `Members(manager)` and `RecordingManagers(ref)` → a manager's recorded list, and the managers whose lists name an
     object (`membership.go`). A list is **recorded**, **unreadable** (any object may be in it) or **remote** (its
     destination isn't confirmed to be this cluster, so a match isn't reported as a local recorder). A manager whose
-    destination is named and isn't this cluster is remote even when its list can't be read: it names nothing here, so
-    it never makes an answer about a local object uncertain.
+    destination is named and isn't this cluster is remote even when its list can't be read; unreadable, it names
+    nothing here and leaves no local answer uncertain. A readable remote list naming an object's coordinates still
+    does, since its destination may be this cluster under another name.
   - The `Catalog` is discovery's served API, fixed for the session (`catalog.go`). A kind two resources serve, or one
     served at two scopes, is ambiguous: reads of it are unavailable and searches report it as a gap.
   - `ResolveOwner` judges one owner reference as the collector does: found, gone, replaced, unresolvable, excluded or

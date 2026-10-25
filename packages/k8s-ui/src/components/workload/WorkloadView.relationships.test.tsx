@@ -61,4 +61,10 @@ describe('workload GitOps manager', () => {
     expect(html).toContain('Tracked by')
     expect(html).toContain("Its tracking label names Application argocd/shop, whose status doesn&#x27;t list it.")
   })
+
+  it('names a manager known only by its instance label without a namespace', () => {
+    const hub = { ...app, name: 'hub' }
+    const html = render({ managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: '', name: 'shop' }], managers: [hub], ownership: { children: { complete: true } } })
+    expect(html).toContain("Its tracking label names Application shop, whose status doesn&#x27;t list it.")
+  })
 })

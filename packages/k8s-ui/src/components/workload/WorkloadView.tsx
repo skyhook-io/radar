@@ -737,7 +737,7 @@ export function WorkloadView({
     [relationships, listing],
   )
   // When they disagree, Related Resources says which manager the label names.
-  const trackedBy = listing?.state === 'conflict' && gitopsOwner ? `${gitOpsOwnerKindLabel(gitopsOwner)} ${gitopsOwner.namespace}/${gitopsOwner.name}` : undefined
+  const trackedBy = listing?.state === 'conflict' && gitopsOwner ? `${gitOpsOwnerKindLabel(gitopsOwner)} ${gitopsOwner.namespace ? `${gitopsOwner.namespace}/` : ''}${gitopsOwner.name}` : undefined
   // When the resource itself is a portal GitOps CR (Application, Kustomization,
   // HelmRelease, etc.), surface a link to its dedicated GitOps detail page —
   // the drawer's renderer is thorough but the tab has the tree + insights +
