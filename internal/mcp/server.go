@@ -64,7 +64,7 @@ func RunStdio(ctx context.Context) error {
 func RunStdioMode(ctx context.Context, readOnly, allowApplicationEvidence bool) error {
 	ctx = context.WithValue(ctx, runtimeLocalCallerKey{}, true)
 	server := newServer(!readOnly, !readOnly, serverInstructions(!readOnly))
-	if !allowApplicationEvidence || !runtimeEvidenceAllowed(ctx) {
+	if readOnly || !allowApplicationEvidence || !runtimeEvidenceAllowed(ctx) {
 		server.RemoveTools("collect_application_evidence")
 		ctx = context.WithValue(ctx, applicationActionsDisabledKey{}, true)
 	}

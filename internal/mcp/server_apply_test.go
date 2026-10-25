@@ -21,6 +21,9 @@ func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
+	if got := session.InitializeResult().Instructions; got != serverInstructions(true) {
+		t.Fatalf("restricted catalog lost server guidance: got %q", got)
+	}
 	names := map[string]bool{}
 	cursor := ""
 	for {
