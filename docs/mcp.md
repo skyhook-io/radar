@@ -677,12 +677,20 @@ A list fails only when it returns no usable inventory: Radar read nothing in
 its scope, its cluster connection changed mid-read, or the answer was over its
 size budget. A failed read's `structuredContent` and its only text block are
 the same body, `{error, error_code, next?, coverage?}`. A list's error carries
-the `coverage` Radar assessed, without `read`: an error returns no rows.
+the `coverage` Radar assessed, without `read`: an error returns no rows. A
+request Radar couldn't turn into a scope has none (a namespace you can't see,
+or one outside the `--namespace-scope` pin). A get's error has no coverage.
 
 ```json
 {
-  "error": "Radar doesn't collect services in namespace \"beta\", so it can't say what exists there. It collects services in namespaces \"alpha,gamma\". Whoever runs Radar can add namespaces with --namespaces, if its kubeconfig identity can list services there.",
-  "error_code": "radar_namespace_not_collected"
+  "error": "Radar doesn't collect services in namespace \"read-c\", so it can't say what exists there. It collects services in namespace \"read-a\". Whoever runs Radar can add namespaces with --namespaces, if its kubeconfig identity can list services there.",
+  "error_code": "radar_namespace_not_collected",
+  "coverage": {
+    "status": "partial",
+    "scope": {"type": "namespaces", "namespaces": {"count": 1, "names": ["read-c"]}},
+    "gaps": [{"code": "radar_namespace_not_collected", "action": "radar_config",
+              "namespaces": {"count": 1, "names": ["read-c"]}}]
+  }
 }
 ```
 
