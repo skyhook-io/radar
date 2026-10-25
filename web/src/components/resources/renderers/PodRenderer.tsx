@@ -131,6 +131,8 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       )}
       metrics={visibleMetrics}
       metricsHistory={metricsHistory}
+      metricsHistoryLoading={metricsHistoryQuery.isLoading}
+      metricsHistoryError={metricsHistoryQuery.error}
       metricsUnavailable={metricsUnavailable}
       hideMetricsServer={hideMetricsServer}
       renderImageBrowser={({ image, namespace: ns, podName: pod, pullSecrets, onClose, onSwitchToPodFiles }) => (

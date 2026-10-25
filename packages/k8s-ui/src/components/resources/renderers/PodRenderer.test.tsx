@@ -558,7 +558,7 @@ describe('finished Pod resource usage',()=>{
  })
  it('keeps a genuine collector error qualified as current on a finished Pod',()=>{
   const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null} metricsHistory={{containers:[],collectionError:'forbidden: list pods.metrics.k8s.io'}} />)
-  expect(html).toContain('Current metrics collection error:')
+  expect(html).toContain('Current cluster metrics collection error:')
   expect(html).toContain('forbidden: list pods.metrics.k8s.io')
   expect(html).toContain('Live resource usage has ended for this Pod')
  })
@@ -570,4 +570,24 @@ describe('finished Pod resource usage',()=>{
   expect(html).not.toContain('cached-live')
   expect(html).not.toContain('Last updated:')
  })
+ it('distinguishes loading from a loaded empty terminal history',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null} metricsHistoryLoading />)
+  expect(html).toContain('Loading recorded usage...')
+  expect(html).not.toContain('No recorded usage is available.')
+ })
+ it('shows a failed terminal history fetch without claiming empty history',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Failed'}}} onCopy={()=>{}} copied={null} metricsHistoryError={new Error('Metrics history not available')} />)
+  expect(html).toContain('Recorded usage could not be loaded')
+  expect(html).toContain('Metrics history not available')
+  expect(html).not.toContain('No recorded usage is available.')
+ })
+ it('retains cached history when its refresh fails',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null}
+   metricsHistory={{containers:[{name:'recorded-history',dataPoints:[{timestamp:'2026-10-25T11:59:00Z',cpu:100,memory:1024}]}]}}
+   metricsHistoryError={new Error('Network request failed')} />)
+  expect(html).toContain('Recorded usage could not be refreshed')
+  expect(html).toContain('recorded-history')
+  expect(html).not.toContain('No recorded usage is available.')
+ })
+
 })
