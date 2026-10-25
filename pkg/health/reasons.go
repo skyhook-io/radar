@@ -414,11 +414,11 @@ func IsPodUnschedulable(pod *corev1.Pod) bool {
 
 // PodReadinessGateFailure reports a declared False or missing gate that still
 // blocks a running Pod after its containers became ready. A nil Pod has no failure.
-// Both readiness
-// transitions get the probe path's five-minute grace. Missing transition times
+// Both readiness transitions get the probe path's five-minute grace. Missing transition times
 // use creation only for grace, never as evidence of failure onset. Onset is
 // known only when both transitions are dated. With no transition or creation
-// time, no grace is assumed. An Unknown gate alone does not qualify.
+// time, no grace is assumed. Future timestamps establish neither grace nor onset.
+// An Unknown gate alone does not qualify.
 func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, failing bool) {
 	if pod == nil || pod.Status.Phase != corev1.PodRunning || len(pod.Spec.ReadinessGates) == 0 {
 		return time.Time{}, false
@@ -436,14 +436,19 @@ func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, f
 	if ready == nil || ready.Status != corev1.ConditionFalse || ready.Reason != reasonReadinessGateFail || containersReady == nil || containersReady.Status != corev1.ConditionTrue {
 		return time.Time{}, false
 	}
+	recent, future := false, false
 	for _, c := range []*corev1.PodCondition{ready, containersReady} {
 		transition := c.LastTransitionTime.Time
 		if transition.IsZero() {
 			transition = pod.CreationTimestamp.Time
 		}
-		if !transition.IsZero() && now.Sub(transition) < 5*time.Minute {
-			return time.Time{}, false
+		if !transition.IsZero() {
+			future = future || transition.After(now)
+			recent = recent || (!transition.After(now) && now.Sub(transition) < 5*time.Minute)
 		}
+	}
+	if recent && !future {
+		return time.Time{}, false
 	}
 	for _, gate := range pod.Spec.ReadinessGates {
 		found := false
@@ -463,7 +468,7 @@ func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, f
 	if !failing {
 		return time.Time{}, false
 	}
-	if !ready.LastTransitionTime.IsZero() && !containersReady.LastTransitionTime.IsZero() {
+	if !future && !ready.LastTransitionTime.IsZero() && !containersReady.LastTransitionTime.IsZero() {
 		since = ready.LastTransitionTime.Time
 		if containersReady.LastTransitionTime.After(since) {
 			since = containersReady.LastTransitionTime.Time

@@ -301,10 +301,15 @@ function podReadinessGateBlocked(pod: any): boolean {
   const containersReady = conditions.find(c => c.type === 'ContainersReady')
   if (ready?.status !== 'False' || ready.reason !== 'ReadinessGatesNotReady' || containersReady?.status !== 'True') return false
   const now = Date.now()
+  let recent = false
+  let future = false
   for (const c of [ready, containersReady]) {
-    const since = c.lastTransitionTime || pod.metadata?.creationTimestamp
-    if (since && now - Date.parse(since) < PENDING_STUCK_MINUTES * 60000) return false
+    const since = Date.parse(c.lastTransitionTime || pod.metadata?.creationTimestamp)
+    if (!Number.isFinite(since)) continue
+    future ||= since > now
+    recent ||= since <= now && now - since < PENDING_STUCK_MINUTES * 60000
   }
+  if (recent && !future) return false
   return gates.some(g => {
     const condition = conditions.find(c => c.type === g.conditionType)
     return !condition || condition.status === 'False'

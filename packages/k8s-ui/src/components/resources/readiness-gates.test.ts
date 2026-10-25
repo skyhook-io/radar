@@ -53,4 +53,22 @@ describe('declared readiness gates', () => {
   expect(getPodPhaseDisplay(p).level).toBe(want)
  })
 
+ it.each([0,1])('does not grant grace for future transition %s', index => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p = makePod()
+  p.status.conditions[index].lastTransitionTime='2026-10-25T13:00:00Z'
+  p.status.conditions[1-index].lastTransitionTime='2026-10-25T11:59:00Z'
+  expect(getPodStatus(p).level).toBe('degraded')
+  expect(getPodPhaseDisplay(p).level).toBe('degraded')
+ })
+ it('uses recent creation only as grace for missing transition times', () => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p = makePod()
+  p.status.conditions.forEach((c:any) => delete c.lastTransitionTime)
+  p.metadata.creationTimestamp='2026-10-25T11:59:00Z'
+  expect(getPodStatus(p).level).toBe('healthy')
+  p.metadata.creationTimestamp='2026-10-25T13:00:00Z'
+  expect(getPodStatus(p).level).toBe('degraded')
+ })
+
 })

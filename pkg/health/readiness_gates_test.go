@@ -16,7 +16,10 @@ func TestPodReadinessGateFailure(t *testing.T) {
 	}{
 		{name: "missing gate", want: true}, {name: "false gate", gate: "False", want: true}, {name: "passed gate", gate: "True"}, {name: "unknown gate", gate: "Unknown"},
 		{name: "no declaration", noGates: true}, {name: "other ready failure", reason: "NodeNotReady"}, {name: "containers unready", notContainersReady: true},
-		{name: "recent ready", readyAge: time.Minute}, {name: "long startup recently container ready", containersAge: time.Minute}, {name: "future containers ready", containersAge: -time.Minute},
+		{name: "recent ready", readyAge: time.Minute}, {name: "long startup recently container ready", containersAge: time.Minute}, {name: "future containers ready", containersAge: -time.Minute, want: true, unknownOnset: true},
+		{name: "future ready", readyAge: -time.Minute, want: true, unknownOnset: true},
+		{name: "future vetoes fresh transition", readyAge: -time.Minute, containersAge: time.Minute, want: true, unknownOnset: true},
+		{name: "unknown transitions future creation", unknownTimes: true, creationAge: -time.Minute, want: true, unknownOnset: true},
 		{name: "unknown transitions old creation", unknownTimes: true, want: true, unknownOnset: true},
 		{name: "unknown transitions young creation", unknownTimes: true, creationAge: time.Minute},
 		{name: "succeeded", phase: "Succeeded"}, {name: "pending", phase: "Pending"},
