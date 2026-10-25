@@ -216,7 +216,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 		}
 		// A kind still loading elsewhere is listed from the stores of the
 		// requested namespaces, which have all loaded.
-		if !plan.whole {
+		if !plan.wholeKindReady {
 			objs, ok := cache.ReadableObjects(key, plan.read)
 			if !ok {
 				s.writeIncompleteAIList(w, target, []resourceapi.Gap{{Code: readreason.KindSyncPending}})
@@ -421,7 +421,7 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 			s.writeCollectionFailure(w, kind, err)
 			return
 		}
-		if !plan.whole {
+		if !plan.wholeKindReady {
 			obj, found, ok := cache.ReadableObject(key, namespace, name)
 			switch {
 			case !ok:

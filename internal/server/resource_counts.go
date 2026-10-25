@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -211,7 +212,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var n int
-		if plan.whole {
+		if plan.wholeKindReady {
 			l := kl.Lister()(cache.ResourceCache)
 			if l == nil {
 				// No informer: Radar's SA can't read this kind (not installed, SA
@@ -376,7 +377,16 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 						target = readable
 					}
 				}
-				read, collected, uncovered, gaps, ready := dynamicCountCoverage(dynamicCache, crd.gvr, target, !crd.namespaced, requestTarget.explicit)
+				inventory := readplan.ForInventory(readplan.Dynamic(dynamicCache, crd.gvr, target, !crd.namespaced), target, requestTarget.explicit, !crd.namespaced)
+				read := inventory.Namespaces
+				if inventory.All {
+					read = nil
+				}
+				gaps := inventoryGaps(inventory)
+				var collected, uncovered []string
+				if inventory.Collection != nil {
+					collected, uncovered = inventory.Collection.Namespaces, inventory.Collection.Outside
+				}
 				if len(denied) > 0 {
 					if read == nil {
 						// A cluster-wide watch read every namespace; the
@@ -385,7 +395,8 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 					}
 					gaps = append(gaps, gapOf(readreason.UserForbidden, denied))
 				}
-				if ready {
+				// Count treats an empty namespace filter as every namespace.
+				if inventory.AnyReadable && (inventory.All || len(inventory.Namespaces) > 0) {
 					countIn := read
 					if countIn == nil {
 						countIn = target
@@ -399,7 +410,12 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 						countCoverage[key] = coverageTarget.coverage(read, gaps)
 						continue
 					}
-					_, collected, uncovered, gaps, _ = dynamicCountCoverage(dynamicCache, crd.gvr, target, !crd.namespaced, requestTarget.explicit)
+					inventory = readplan.ForInventory(readplan.Dynamic(dynamicCache, crd.gvr, target, !crd.namespaced), target, requestTarget.explicit, !crd.namespaced)
+					gaps = inventoryGaps(inventory)
+					collected, uncovered = nil, nil
+					if inventory.Collection != nil {
+						collected, uncovered = inventory.Collection.Namespaces, inventory.Collection.Outside
+					}
 					if len(denied) > 0 {
 						gaps = append(gaps, gapOf(readreason.UserForbidden, denied))
 					}
