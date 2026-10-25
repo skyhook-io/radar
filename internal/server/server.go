@@ -2399,12 +2399,12 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	plan, err := typedReadCoverage(cache, key, namespaces, clusterScoped, target.explicit)
+	if len(plan.collected) > 0 {
+		target = target.narrowedByCollection(plan.collected, plan.uncovered)
+	}
 	if err != nil {
 		s.writeReadFailure(w, kind, err, &target)
 		return
-	}
-	if plan.collected != nil {
-		target = target.narrowedByCollection(plan.collected, plan.uncovered)
 	}
 	coverage := target.coverage(plan.read, plan.gaps)
 	namespaces = plan.read

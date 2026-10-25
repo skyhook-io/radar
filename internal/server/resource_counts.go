@@ -162,6 +162,7 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		countCoverage[endpointSliceCountKey] = countTarget(nil, false).coverage(nil, nil)
 	}
 
+	permissions := cache.PermissionResult()
 	for _, kl := range k8score.AllKindListers() {
 		if cache.KindReadinessForKindName(kl.Kind()) == k8score.KindUnavailable {
 			markForbidden(kl.CountKey(), reasonUnavailable)
@@ -186,14 +187,17 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		// endpoint, whose kind_sync_timed_out renders honestly.
 		key := informerKeyForKind(kl.Kind())
 		target := countTarget(authz.gaps, clusterScoped)
-		plan, scopeErr := typedReadCoverage(cache, key, kindNamespaces, clusterScoped, target.explicit)
+		plan, scopeErr := typedReadCoverageFrom(cache, permissions, key, kindNamespaces, clusterScoped, target.explicit)
+		if len(plan.collected) > 0 {
+			target = target.narrowedByCollection(plan.collected, plan.uncovered)
+		}
 		if scopeErr != nil {
 			markUnavailable(kl.CountKey())
 			var failure *resourceReadFailure
 			if errors.As(scopeErr, &failure) {
 				reasons[kl.CountKey()] = string(failure.code)
 				if len(failure.gaps) > 0 {
-					countCoverage[kl.CountKey()] = resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: append(slices.Clone(target.gaps), failure.gaps...)}
+					countCoverage[kl.CountKey()] = resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: target.placeGaps(append(slices.Clone(target.gaps), failure.gaps...), nil)}
 				}
 			}
 			continue
@@ -217,9 +221,6 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			n = count
 		}
 		markCounted(kl.CountKey(), n)
-		if plan.collected != nil {
-			target = target.narrowedByCollection(plan.collected, plan.uncovered)
-		}
 		countCoverage[kl.CountKey()] = target.coverage(plan.read, plan.gaps)
 	}
 
@@ -390,8 +391,19 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 						countCoverage[key] = coverageTarget.coverage(read, gaps)
 						continue
 					}
+					_, collected, uncovered, gaps, _ = dynamicCountCoverage(dynamicCache, crd.gvr, target, !crd.namespaced, requestTarget.explicit)
+					if len(denied) > 0 {
+						gaps = append(gaps, gapOf(readreason.UserForbidden, denied))
+					}
 				}
 				markUnavailable(key)
+				if len(gaps) > 0 {
+					coverageTarget := countTarget(nil, !crd.namespaced)
+					if len(collected) > 0 {
+						coverageTarget = coverageTarget.narrowedByCollection(collected, uncovered)
+					}
+					countCoverage[key] = resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: coverageTarget.scope(), NarrowedBy: coverageTarget.narrowedBy, Gaps: coverageTarget.placeGaps(gaps, nil)}
+				}
 			}
 		}
 	}

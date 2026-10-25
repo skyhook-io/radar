@@ -12,11 +12,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -986,8 +989,154 @@ func TestUnansweredProbeCodePrefersRejectedCredentials(t *testing.T) {
 		{k8score.DynamicResourceObservation{ProbeRetrying: true, UnansweredNamespaces: []string{"beta"}}, readreason.KindSyncPending},
 		{k8score.DynamicResourceObservation{UnansweredNamespaces: []string{"beta"}}, readreason.ReadError},
 	} {
-		if got := unansweredProbeCode(tc.observation); got != tc.want {
+		plan := readplan.Dynamic(&k8s.DynamicResourceCache{}, testNamespaceObserver{tc.observation}, schema.GroupVersionResource{}, readscope.Target{Namespaces: []string{"beta"}}, false)
+		if got := plan.Partitions[0].Verdict.Code; got != tc.want {
 			t.Errorf("%+v: got %s, want %s", tc.observation, got, tc.want)
 		}
+	}
+}
+
+type testNamespaceObserver struct {
+	observation k8score.DynamicResourceObservation
+}
+
+func (o testNamespaceObserver) NamespaceObservation(schema.GroupVersionResource, string) k8score.DynamicResourceObservation {
+	return o.observation
+}
+
+func TestDynamicCountsRetainStalledAndUnreadCoverage(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset())
+	t.Cleanup(k8s.SetTestDynamicSyncStallAfter(time.Millisecond))
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.com/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "present"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList", {Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}: "EndpointSliceList"}, widget)
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("denied"))
+		}
+		if a.GetNamespace() == "beta" && a.(interface{ GetListOptions() metav1.ListOptions }).GetListOptions().Limit != 1 {
+			return true, nil, errors.New("initial list held")
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	cache := k8s.GetDynamicResourceCache()
+	for _, ns := range []string{"alpha", "beta"} {
+		if err := cache.EnsureWatchingContext(context.Background(), gvr, ns); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !cache.IsNamespaceSynced(gvr, "alpha") || cache.NamespaceObservation(gvr, "beta").ReasonCode != "sync_stalled" {
+		if time.Now().After(deadline) {
+			t.Fatal("scenario never ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, namespaces := range []string{"alpha,beta", "beta"} {
+		w := httptest.NewRecorder()
+		(&Server{}).handleResourceCounts(w, httptest.NewRequest(http.MethodGet, "/api/resource-counts?namespaces="+namespaces, nil))
+		var counts testCounts
+		if err := json.Unmarshal(w.Body.Bytes(), &counts); err != nil {
+			t.Fatal(err)
+		}
+		key := "example.com/Widget"
+		cov := counts.Coverage[key]
+		if len(cov.Gaps) != 1 || cov.Gaps[0].Code != readreason.KindSyncTimedOut || !slices.Equal(cov.Gaps[0].Namespaces.Names, []string{"beta"}) {
+			t.Fatalf("%s: %+v", namespaces, cov)
+		}
+		if namespaces == "alpha,beta" {
+			if counts.Counts[key] != 1 || cov.Read == nil || !slices.Equal(cov.Read.Namespaces.Names, []string{"alpha"}) {
+				t.Fatalf("partial count: %+v", counts)
+			}
+		} else if _, exists := counts.Counts[key]; exists || cov.Read != nil || !slices.Contains(counts.Unavailable, key) {
+			t.Fatalf("unread count: %+v", counts)
+		}
+	}
+}
+
+func TestDynamicRESTReadRejectsReplacedServingStores(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset())
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.com/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "present"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList", {Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}: "EndpointSliceList"}, widget)
+	var promote, hold atomic.Bool
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() != "" {
+			return false, nil, nil
+		}
+		if !promote.Load() {
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("denied"))
+		}
+		if hold.Load() && a.(interface{ GetListOptions() metav1.ListOptions }).GetListOptions().Limit != 1 {
+			return true, nil, errors.New("initial list held")
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	d := k8s.GetDynamicResourceCache()
+	if err := d.EnsureWatchingContext(context.Background(), gvr, "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if !d.WaitForSync(gvr, 3*time.Second) {
+		t.Fatal("namespace source did not sync")
+	}
+	countsAt := func() testCounts {
+		t.Helper()
+		w := httptest.NewRecorder()
+		(&Server{}).handleResourceCounts(w, httptest.NewRequest(http.MethodGet, "/api/resource-counts?namespace=alpha", nil))
+		var counts testCounts
+		if w.Code != http.StatusOK {
+			t.Fatalf("counts status: %d %s", w.Code, w.Body.String())
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &counts); err != nil {
+			t.Fatal(err)
+		}
+		return counts
+	}
+	reads := 0
+	rows, settled, err := readCachedDynamicList(d, gvr, "alpha", func(first bool) ([]*unstructured.Unstructured, error) {
+		reads++
+		if !first {
+			return d.List(gvr, "alpha")
+		}
+		promote.Store(true)
+		hold.Store(true)
+		if err := d.EnsureWatching(gvr); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := d.List(gvr, "alpha")
+		if err != nil || len(rows) != 0 || d.IsNamespaceSynced(gvr, "alpha") {
+			t.Fatalf("replacement was already loaded: rows=%d err=%v", len(rows), err)
+		}
+		_, getErr := readDynamicResourceGet(context.Background(), k8s.GetResourceCache(), "widgets", gvr.Group, "alpha", "present")
+		var failure *resourceReadFailure
+		if !errors.As(getErr, &failure) || failure.code != readreason.KindSyncPending {
+			t.Fatalf("replacement miss became absence: %v", getErr)
+		}
+		counts := countsAt()
+		if _, exists := counts.Counts["example.com/Widget"]; exists || len(counts.Coverage["example.com/Widget"].Gaps) != 1 || counts.Coverage["example.com/Widget"].Gaps[0].Code != readreason.KindSyncPending {
+			t.Fatalf("replacement count: %+v", counts)
+		}
+		hold.Store(false)
+		if !d.WaitForSync(gvr, 5*time.Second) {
+			t.Fatal("replacement did not sync")
+		}
+		return rows, nil
+	})
+	if err != nil || !settled || reads != 2 || len(rows) != 1 {
+		t.Fatalf("read accepted old empty rows: reads=%d rows=%d settled=%v err=%v", reads, len(rows), settled, err)
+	}
+	if counts := countsAt(); counts.Counts["example.com/Widget"] != 1 {
+		t.Fatalf("settled count: %+v", counts)
+	}
+	if obj, err := readDynamicResourceGet(context.Background(), k8s.GetResourceCache(), "widgets", gvr.Group, "alpha", "present"); err != nil || obj.GetName() != "present" {
+		t.Fatalf("settled get: %v %v", obj, err)
 	}
 }

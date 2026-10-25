@@ -43,6 +43,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
@@ -386,6 +387,7 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 		return
 	}
+	var readable runtime.Object
 	if key := informerKeyForKind(kind); key != "" && (group == "" || k8s.TypedKindOwnsGroup(kind, group)) {
 		clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
 		target := []string{namespace}
@@ -398,15 +400,27 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !plan.whole {
-			s.writeCollectionFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key))
-			return
+			obj, found, ok := cache.ReadableObject(key, namespace, name)
+			switch {
+			case !ok:
+				s.writeCollectionFailure(w, kind, readFailuref(readreason.KindSyncPending, "%s are still loading, please retry shortly", key))
+				return
+			case !found:
+				s.writeAIFetchError(w, kind, apierrors.NewNotFound(schema.GroupResource{Resource: key}, name))
+				return
+			}
+			readable = obj
 		}
 	}
 
-	obj, isUnstructured, err := s.fetchAIResource(r.Context(), cache, kind, namespace, name, group)
-	if err != nil {
-		s.writeAIFetchError(w, kind, err)
-		return
+	obj, isUnstructured := readable, false
+	if obj == nil {
+		var err error
+		obj, isUnstructured, err = s.fetchAIResource(r.Context(), cache, kind, namespace, name, group)
+		if err != nil {
+			s.writeAIFetchError(w, kind, err)
+			return
+		}
 	}
 
 	if !isUnstructured {

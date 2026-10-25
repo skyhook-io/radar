@@ -239,3 +239,49 @@ func TestAIListRefusesWhatABareArrayCantQualify(t *testing.T) {
 		t.Fatalf("a namespace Radar collects is answered whole: %d", named.StatusCode)
 	}
 }
+
+func TestAIGetReadsSyncedNamespaceWhileNeighborLoads(t *testing.T) {
+	useLoadingConfigMaps(t)
+	var body map[string]any
+	assertOK(t, get(t, "/api/ai/resources/configmaps/alpha/alpha-cm?context=none"), &body)
+	metadata, _ := body["metadata"].(map[string]any)
+	if metadata["name"] != "alpha-cm" {
+		t.Fatalf("synced get: %+v", body)
+	}
+	resp := get(t, "/api/ai/resources/configmaps/gamma/gamma-cm?context=none")
+	defer resp.Body.Close()
+	assertResourceReadError(t, resp, http.StatusServiceUnavailable, "kind_sync_pending")
+	list := get(t, "/api/ai/resources/configmaps?namespaces=alpha,gamma")
+	defer list.Body.Close()
+	assertResourceReadError(t, list, http.StatusServiceUnavailable, "kind_sync_pending")
+}
+
+func TestTypedFailureRetainsNarrowedCollection(t *testing.T) {
+	useLoadingConfigMaps(t)
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"gamma", "outside"}})
+	resp := env.authGet(t, "/api/resources/configmaps", "reader", "")
+	defer resp.Body.Close()
+	var body resourceapi.ReadError
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable || body.Coverage == nil {
+		t.Fatalf("%d %+v", resp.StatusCode, body)
+	}
+	if err := body.Coverage.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(body.Coverage.Scope.Namespaces.Names, []string{"gamma"}) || !slices.Contains(body.Coverage.NarrowedBy, resourceapi.NarrowedByNamespaceCollection) || len(body.Coverage.Gaps) != 1 || body.Coverage.Gaps[0].Code != readreason.KindSyncPending {
+		t.Fatalf("%+v", body.Coverage)
+	}
+	var counts testCounts
+	assertOK(t, env.authGet(t, "/api/resource-counts", "reader", ""), &counts)
+	cov := counts.Coverage["ConfigMap"]
+	if _, exists := counts.Counts["ConfigMap"]; exists {
+		t.Fatal("unread count invented zero")
+	}
+	if !slices.Equal(cov.Scope.Namespaces.Names, []string{"gamma"}) || !slices.Contains(cov.NarrowedBy, resourceapi.NarrowedByNamespaceCollection) || len(cov.Gaps) != 1 || cov.Gaps[0].Code != readreason.KindSyncPending {
+		t.Fatalf("count coverage: %+v", cov)
+	}
+}
