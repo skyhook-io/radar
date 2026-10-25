@@ -1314,3 +1314,9 @@ coverage. Remote/unknown destinations list no local inventory. Controller
 opt-outs and Helm release manifests can differ from the recorded member list.
 Force deletion strips finalizers and can skip remaining cleanup; it cannot undo
 cleanup that already started.
+
+The preview describes collection caused by deleting the root in the observed
+state. A live outside owner prevents that collection; its independent deletion
+may subsequently collect the same object. Opening the REST dialog is advisory
+and does not transactionally bind a later HTTP delete. MCP confirmation adds
+root preconditions and a server-side impact fingerprint.

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -56,6 +57,18 @@ func PreviewDeletion(ctx context.Context, v *ownership.View, obj *unstructured.U
 	p.ControllerTeardown, members = previewControllerTeardown(v, ref, obj)
 	if p.ControllerTeardown != nil {
 		p.NotEnumerated = nil
+		for _, f := range obj.GetFinalizers() {
+			known := f == metav1.FinalizerDeleteDependents || f == metav1.FinalizerOrphanDependents
+			if p.ControllerTeardown.Controller == "Argo CD" {
+				known = known || f == argoResourcesFinalizer || strings.HasPrefix(f, argoResourcesFinalizer+"/") || f == "foreground-cascade.argocd.argoproj.io"
+			} else {
+				known = known || fluxTeardownFinalizers[f]
+			}
+			if !known {
+				p.NotEnumerated = []string{"cleanup performed by other finalizers"}
+				break
+			}
+		}
 	}
 	for _, o := range append(a.Dependents, a.Possible...) {
 		if ownership.IsRecordingManager(o.Ref.GroupKind()) {

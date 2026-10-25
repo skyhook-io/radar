@@ -105,7 +105,7 @@ func TestDeleteResourcePreservesPendingDeletionPolicy(t *testing.T) {
 					t.Fatalf("%d delete requests, want 1", len(deletes))
 				}
 				got := deletes[0].DeleteOptions
-				if tt.wantBackground {
+				if tt.wantBackground || force {
 					if got.PropagationPolicy == nil || *got.PropagationPolicy != metav1.DeletePropagationBackground {
 						t.Errorf("propagationPolicy = %v, want Background", got.PropagationPolicy)
 					}
