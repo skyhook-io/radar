@@ -31,6 +31,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -1799,9 +1801,7 @@ func TestSmokeCloudMode_SettingsPutRejectsUserScoped(t *testing.T) {
 }
 
 // TestSmokeCloudMode_PprofNotMounted verifies that /debug/pprof/* is not
-// registered under cloud-mode. The pprof heap endpoint would otherwise
-// leak the in-memory K8s cache (every Secret, ConfigMap, Pod spec) through
-// the Cloud tunnel. This test constructs a fresh server with
+// registered under cloud-mode. This test constructs a fresh server with
 // RADAR_CLOUD_MODE set before Server.setupRoutes reads it, so the
 // pprof-gate conditional fires.
 func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
@@ -1839,6 +1839,93 @@ func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
 				}
 			}
 			// 404 is also acceptable (no frontend handler in some test configs).
+		})
+	}
+}
+
+func TestSmokePprofGating(t *testing.T) {
+	enabled, disabled := true, false
+	for _, tt := range []struct {
+		name     string
+		address  string
+		auth     bool
+		dev      bool
+		cloud    bool
+		override *bool
+		want     bool
+	}{
+		{name: "default listener", want: true},
+		{name: "IPv4 loopback", address: "127.0.0.1", want: true},
+		{name: "IPv4 loopback range", address: "127.0.0.2", want: true},
+		{name: "IPv6 loopback", address: "::1", want: true},
+		{name: "IPv4-mapped IPv6 loopback", address: "::ffff:127.0.0.1", want: true},
+		{name: "localhost", address: "localhost", want: true},
+		{name: "IPv4 wildcard", address: "0.0.0.0"},
+		{name: "IPv6 wildcard", address: "::"},
+		{name: "specific shared address", address: "192.168.1.5"},
+		{name: "authenticated shared", address: "0.0.0.0", auth: true, want: true},
+		{name: "authenticated loopback", address: "127.0.0.1", auth: true, want: true},
+		{name: "local dev", address: "127.0.0.1", dev: true, want: true},
+		{name: "shared dev", address: "0.0.0.0", dev: true},
+		{name: "explicit shared opt in", address: "0.0.0.0", override: &enabled, want: true},
+		{name: "explicit local opt out", address: "127.0.0.1", override: &disabled},
+		{name: "explicit authenticated opt out", address: "0.0.0.0", auth: true, override: &disabled},
+		{name: "explicit dev opt out", address: "127.0.0.1", dev: true, override: &disabled},
+		{name: "cloud default", address: "0.0.0.0", cloud: true},
+		{name: "cloud overrides local auth dev opt in", address: "127.0.0.1", auth: true, dev: true, cloud: true, override: &enabled},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RADAR_CLOUD_MODE", fmt.Sprint(tt.cloud))
+			cfg := Config{ListenAddress: tt.address, DevMode: tt.dev, EnablePprof: tt.override, DiagConfig: &DiagConfig{}}
+			if tt.auth {
+				cfg.AuthConfig = auth.Config{Mode: "proxy"}
+			}
+			srv := New(cfg)
+			defer srv.Stop()
+			for _, path := range []string{"/debug/pprof", "/debug/pprof/", "/debug/pprof/cmdline"} {
+				req := httptest.NewRequest(http.MethodGet, "http://localhost"+path, nil)
+				req.Header.Set("X-Forwarded-User", "pprof-test")
+				rec := httptest.NewRecorder()
+				handler := srv.Handler()
+				if tt.cloud {
+					handler = cloud.AuthenticatedTunnelHandler(handler)
+				}
+				handler.ServeHTTP(rec, req)
+				if tt.want && tt.auth && path == "/debug/pprof/cmdline" {
+					if rec.Code != http.StatusForbidden {
+						t.Fatalf("cmdline: expected 403, got %d", rec.Code)
+					}
+				} else if tt.want {
+					if rec.Code != http.StatusOK {
+						t.Fatalf("%s: expected 200, got %d", path, rec.Code)
+					}
+					if path != "/debug/pprof/cmdline" && !strings.Contains(rec.Body.String(), "Types of profiles available") {
+						t.Fatalf("%s: missing pprof index", path)
+					}
+				} else if strings.Contains(rec.Body.String(), "Types of profiles available") ||
+					(rec.Code == http.StatusOK && !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html")) {
+					t.Fatalf("%s: profiling served while disabled", path)
+				}
+				if tt.auth && tt.want {
+					unauth := httptest.NewRecorder()
+					srv.Handler().ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "http://localhost"+path, nil))
+					if unauth.Code != http.StatusUnauthorized {
+						t.Fatalf("%s: unauthenticated status = %d, want 401", path, unauth.Code)
+					}
+				}
+			}
+			rec := httptest.NewRecorder()
+			srv.handleDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("diagnostics status = %d, want 200", rec.Code)
+			}
+			var snap DiagnosticsSnapshot
+			if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+				t.Fatal(err)
+			}
+			if snap.Config == nil || snap.Config.Pprof != tt.want {
+				t.Fatalf("diagnostics config = %+v, want pprof %v", snap.Config, tt.want)
+			}
 		})
 	}
 }

@@ -88,6 +88,7 @@ type Server struct {
 	startupLog              bool
 	remoteAccessHint        bool
 	devMode                 bool
+	enablePprof             *bool
 	trustedOrigins          map[string]struct{} // normalized; see browserOriginAllowed
 	staticFS                fs.FS
 	startTime               time.Time
@@ -205,6 +206,7 @@ type Config struct {
 	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
 	RemoteAccessHint        bool                        // Explain the explicit shared-listener opt-in (native CLI only)
 	DevMode                 bool                        // Serve frontend from filesystem instead of embedded
+	EnablePprof             *bool                       // nil uses the listener/authentication default; Cloud always disables profiling
 	TrustedOrigins          []string                    // Extra origins allowed to make changes, from ParseTrustedOrigins
 	StaticFS                embed.FS                    // Embedded frontend files
 	StaticRoot              string                      // Path within StaticFS
@@ -248,6 +250,7 @@ func New(cfg Config) *Server {
 		startupLog:              cfg.StartupLog,
 		remoteAccessHint:        cfg.RemoteAccessHint,
 		devMode:                 cfg.DevMode,
+		enablePprof:             cfg.EnablePprof,
 		startTime:               time.Now(),
 		mcpHandler:              cfg.MCPHandler,
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
@@ -395,7 +398,7 @@ func (s *Server) setupRoutes() {
 // r.URL.Path prefixed, while the auth middleware matches on r.URL.Path and
 // treats anything outside /api, /mcp and /debug as public static content — so a
 // still-prefixed path reads as public and skips authentication entirely,
-// /debug/pprof (which dumps the whole informer cache) included. Translating once
+// /debug/pprof process diagnostics included. Translating once
 // here keeps that concern at the edge rather than in every path check inside.
 func (s *Server) basePathHandler(app http.Handler) http.Handler {
 	stripped := http.StripPrefix(s.basePath, app)
@@ -481,14 +484,19 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	metricsHandler := s.newMetricsHandler()
 	r.Get("/metrics", metricsHandler.ServeHTTP)
 
-	// pprof routes for profiling. Not mounted under cloud-mode — they'd be
-	// reachable via the Cloud tunnel and leak the in-memory K8s cache (every
-	// Secret, ConfigMap, Pod spec) via /debug/pprof/heap. Local/standalone
-	// installs keep them for debugging.
-	if !cloudMode() {
+	// Profiling exposes process diagnostics and can trigger costly collection.
+	// Keep unauthenticated shared listeners opt-in and Cloud routes unmounted.
+	if s.pprofEnabled() {
+		log.Printf("[server] pprof endpoints enabled at /debug/pprof/")
 		r.Route("/debug/pprof", func(r chi.Router) {
 			r.Get("/", pprof.Index)
-			r.Get("/cmdline", pprof.Cmdline)
+			r.Get("/cmdline", func(w http.ResponseWriter, r *http.Request) {
+				if s.authConfig.Enabled() {
+					s.writeError(w, http.StatusForbidden, "command-line arguments may contain credentials and are unavailable on authenticated installations")
+					return
+				}
+				pprof.Cmdline(w, r)
+			})
 			r.Get("/profile", pprof.Profile)
 			r.Get("/symbol", pprof.Symbol)
 			r.Get("/trace", pprof.Trace)
@@ -6375,4 +6383,14 @@ func (s *Server) handleDebugInformers(w http.ResponseWriter, r *http.Request) {
 		"dynamicInformers": len(gvrs),
 		"watchedResources": resources,
 	})
+}
+
+func (s *Server) pprofEnabled() bool {
+	if cloudMode() {
+		return false
+	}
+	if s.enablePprof != nil {
+		return *s.enablePprof
+	}
+	return s.authConfig.Enabled() || s.listenAddress == "" || !s.sharedListener()
 }

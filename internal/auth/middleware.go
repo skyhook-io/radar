@@ -186,9 +186,8 @@ func rejectDisallowedIdentity(w http.ResponseWriter, username string, cloud bool
 func isExemptPath(path string) bool {
 	// Under cloud-mode, the full handler is reachable only via the authenticated
 	// tunnel and the ordinary TCP listener is health-only. Keep this auth-layer
-	// check as defense in depth: /debug/pprof/* in particular leaks the entire
-	// in-memory K8s cache, so it must never bypass the Hub identity boundary (and
-	// is not mounted at all under cloud-mode — see server.go).
+	// check as defense in depth: process diagnostics must never bypass the
+	// Hub identity boundary. Profiling routes are omitted entirely in Cloud mode.
 	if cloudMode() {
 		// Cloud owns authentication; Radar's own login/callback endpoints must
 		// not be reachable without the Hub identity boundary. The exact health
@@ -210,12 +209,9 @@ func isExemptPath(path string) bool {
 			return true
 		}
 	}
-	// Static assets don't require auth. /debug/* (pprof) is excluded: it's
-	// mounted on every non-cloud build, and the fallthrough would otherwise
-	// expose it unauthenticated whenever auth is enabled — /debug/pprof/heap
-	// leaks the entire in-memory K8s cache (every Secret, ConfigMap, Pod
-	// spec). /metrics stays open by this fallthrough: operational counters
-	// only, scraped by Prometheus.
+	// Static assets don't require auth. /debug/* (pprof) is excluded so
+	// process diagnostics remain authenticated whenever profiling is enabled.
+	// /metrics stays open: operational counters only, scraped by Prometheus.
 	if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/mcp") && !strings.HasPrefix(path, "/debug/") {
 		return true
 	}

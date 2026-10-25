@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectInvestigationEvidence } from "./index";
+import { failedStepMessage } from "./builder";
 import {
   completeLogProof,
   criticalIssue,
@@ -2265,7 +2266,7 @@ describe("honest zero and partial-result states", () => {
         truncated: true,
         narrowHint: "subgraph capped at 25 nodes",
         omitted: [
-          { field: "uses.secrets", reason: "rbac_denied" },
+          { field: "uses.secrets", reason: "user_forbidden" },
           { field: "referencedBy", reason: "budget_exceeded" },
         ],
       }),
@@ -2855,5 +2856,27 @@ describe("namespace listings", () => {
         ? card.latest.data.resources.map((r) => r.name)
         : [],
     ).toEqual(["capi-system", "shop"]);
+  });
+});
+
+describe("failedStepMessage", () => {
+  it("shows a coded read failure's explanation, not its JSON body", () => {
+    const body = JSON.stringify({
+      error:
+        'namespace "beta" is not among the namespaces you can see, or does not exist',
+      error_code: "user_namespace_not_visible",
+      coverage: { status: "partial", scope: { type: "namespaces" }, gaps: [] },
+    });
+    expect(failedStepMessage(body)).toBe(
+      'namespace "beta" is not among the namespaces you can see, or does not exist',
+    );
+  });
+  it("keeps any other failure text as it came", () => {
+    expect(failedStepMessage("user_forbidden: your role cannot list pods")).toBe(
+      "user_forbidden: your role cannot list pods",
+    );
+    expect(failedStepMessage('{"error":"no code"}')).toBe(
+      '{"error":"no code"}',
+    );
   });
 });

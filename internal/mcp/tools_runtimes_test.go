@@ -88,7 +88,7 @@ func TestGetRuntimeVersions_OutsidePinIsNotRBACDenial(t *testing.T) {
 	k8s.SetNamespaceScopeOverride("alpha")
 	t.Cleanup(func() { k8s.ForceNamespaceScope = previous; k8s.SetNamespaceScopeOverride(previousTarget) })
 	_, _, err := handleGetRuntimeVersions(context.Background(), nil, runtimeVersionsInput{Namespace: "beta"})
-	if err == nil || !strings.Contains(err.Error(), ReasonOutsideNamespaceScope) {
+	if err == nil || !strings.Contains(err.Error(), ReasonOutsideNamespacePin) {
 		t.Fatalf("outside pin must report configuration scope: %v", err)
 	}
 }

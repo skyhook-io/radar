@@ -330,7 +330,7 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 	requested := requestedNamespaces(input.Namespace)
 	allowed := scopedNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason(requested), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, requested), opencost.ResolveCurrency(), ""), nil
 	}
 
 	// Selected() first on the success path: currency detection consults the
@@ -493,7 +493,7 @@ func costWorkloadsView(ctx context.Context, input getCostInput, limit int) (cost
 	base := costResponse{View: "workloads", Namespace: namespace}
 
 	if allowed := scopedNamespacesForUser(ctx, []string{namespace}); allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason([]string{namespace}), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, []string{namespace}), opencost.ResolveCurrency(), ""), nil
 	}
 
 	connection, err := opencost.Selected(ctx)
@@ -770,7 +770,7 @@ func costTrendView(ctx context.Context, input getCostInput) (costResponse, error
 	requested := requestedNamespaces(input.Namespace)
 	allowed := scopedNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return base.unavailable(deniedScopeReason(requested), opencost.ResolveCurrency(), ""), nil
+		return base.unavailable(deniedScopeReason(ctx, requested), opencost.ResolveCurrency(), ""), nil
 	}
 
 	connection, err := opencost.Selected(ctx)
@@ -1030,7 +1030,7 @@ func truncateRows[T any](rows []T, limit int) ([]T, bool) {
 
 func costRemediation(reason string) string {
 	switch reason {
-	case ReasonOutsideNamespaceScope:
+	case ReasonOutsideNamespacePin:
 		// The pinned namespace is not named: this caller was denied, and may have
 		// no access to it either.
 		return "radar is pinned to a single namespace with --namespace-scope, so it cannot report on the requested scope. This is a startup flag, not a permissions problem — restart radar without --namespace-scope for cluster-wide cost."

@@ -1,0 +1,60 @@
+{
+  "description": "list_resources results for an unrestricted, unscoped read of Services that Radar collects only in alpha and gamma, where gamma is still loading: narrowed to the collected namespaces and partial within them, exactly as an MCP client receives them. internal/mcp asserts the producer still returns these results, internal/ai that every agent backend passes the text through unchanged, and web's investigationEvidence projection that Findings shows the rows with the coverage caveat.",
+  "cases": [
+    {
+      "name": "partial",
+      "objects": [
+        "alpha",
+        "beta"
+      ],
+      "arguments": {
+        "kind": "services",
+        "context": "none"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"summary\":\"Partial: 1 Service from namespace \\\"alpha\\\". Unknown: namespace \\\"gamma\\\", because Radar is still loading services there. Other namespaces are unknown: Radar collects services only in namespaces \\\"alpha\\\", \\\"gamma\\\". Whoever runs Radar can widen its collection.\",\"next\":\"Retry in a few seconds to read namespace \\\"gamma\\\".\",\"coverage\":{\"status\":\"partial\",\"scope\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":2,\"names\":[\"alpha\",\"gamma\"]}},\"narrowedBy\":[\"namespace_collection\"],\"read\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":1,\"names\":[\"alpha\"]}},\"gaps\":[{\"code\":\"kind_sync_pending\",\"action\":\"retry\",\"namespaces\":{\"count\":1,\"names\":[\"gamma\"]}}]},\"items\":[{\"kind\":\"Service\",\"name\":\"alpha-object\",\"namespace\":\"alpha\"}]}"
+          }
+        ]
+      }
+    },
+    {
+      "name": "partial and empty",
+      "objects": [
+        "beta"
+      ],
+      "arguments": {
+        "kind": "services",
+        "context": "none"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"summary\":\"Partial: no services in namespace \\\"alpha\\\". Unknown: namespace \\\"gamma\\\", because Radar is still loading services there. Other namespaces are unknown: Radar collects services only in namespaces \\\"alpha\\\", \\\"gamma\\\". Whoever runs Radar can widen its collection.\",\"next\":\"Retry in a few seconds to read namespace \\\"gamma\\\".\",\"coverage\":{\"status\":\"partial\",\"scope\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":2,\"names\":[\"alpha\",\"gamma\"]}},\"narrowedBy\":[\"namespace_collection\"],\"read\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":1,\"names\":[\"alpha\"]}},\"gaps\":[{\"code\":\"kind_sync_pending\",\"action\":\"retry\",\"namespaces\":{\"count\":1,\"names\":[\"gamma\"]}}]},\"items\":[]}"
+          }
+        ]
+      }
+    },
+    {
+      "name": "partial and empty, kind by alias",
+      "objects": [
+        "beta"
+      ],
+      "arguments": {
+        "kind": "svc",
+        "context": "none"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"summary\":\"Partial: no services in namespace \\\"alpha\\\". Unknown: namespace \\\"gamma\\\", because Radar is still loading services there. Other namespaces are unknown: Radar collects services only in namespaces \\\"alpha\\\", \\\"gamma\\\". Whoever runs Radar can widen its collection.\",\"next\":\"Retry in a few seconds to read namespace \\\"gamma\\\".\",\"coverage\":{\"status\":\"partial\",\"scope\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":2,\"names\":[\"alpha\",\"gamma\"]}},\"narrowedBy\":[\"namespace_collection\"],\"read\":{\"type\":\"namespaces\",\"namespaces\":{\"count\":1,\"names\":[\"alpha\"]}},\"gaps\":[{\"code\":\"kind_sync_pending\",\"action\":\"retry\",\"namespaces\":{\"count\":1,\"names\":[\"gamma\"]}}]},\"items\":[]}"
+          }
+        ]
+      }
+    }
+  ]
+}

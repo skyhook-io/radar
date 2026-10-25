@@ -54,8 +54,8 @@ func handleGetRuntimeVersions(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err := images.ValidateRuntimeQuery(input.Runtime, fixedIn); err != nil {
 		return nil, nil, err
 	}
-	if input.Namespace != "" && !namespaceWithinPin(input.Namespace) {
-		return nil, nil, fmt.Errorf("%s: namespace %q is outside Radar's configured scope", deniedScopeReason([]string{input.Namespace}), input.Namespace)
+	if input.Namespace != "" && pinExcludesVisible(ctx, []string{input.Namespace}) {
+		return nil, nil, fmt.Errorf("%s: namespace %q is outside Radar's configured scope", ReasonOutsideNamespacePin, input.Namespace)
 	}
 	pods, denied := runtimePods(ctx, cache, input.Namespace)
 	user, _ := resolveUserPerms(ctx)

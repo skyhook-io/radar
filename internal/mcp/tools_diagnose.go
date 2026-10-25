@@ -301,19 +301,23 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if cache == nil {
 		return nil, nil, errNotConnected()
 	}
+	cache, _, err := resourceReadCache(ctx, kindNorm, input.Group, []string{input.Namespace}, true)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var obj runtime.Object
 	if input.Group != "" && !k8s.TypedKindOwnsGroup(kindNorm, input.Group) {
-		u, err := cache.GetDynamicWithGroup(ctx, kindNorm, input.Namespace, input.Name, input.Group)
+		u, err := fetchMCPDynamicResource(ctx, cache, kindNorm, input.Group, input.Namespace, input.Name)
 		if err != nil {
-			return nil, nil, notFoundError(ctx, err, kindNorm, input.Namespace, input.Name)
+			return nil, nil, err
 		}
 		obj = u
 	} else {
 		var err error
 		obj, err = k8s.FetchResource(cache, kindNorm, input.Namespace, input.Name)
 		if err != nil {
-			return nil, nil, notFoundError(ctx, err, kindNorm, input.Namespace, input.Name)
+			return nil, nil, resourceGetError(ctx, err, kindNorm, input.Namespace, input.Name)
 		}
 	}
 	k8s.SetTypeMeta(obj)
@@ -592,7 +596,7 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 	if cache == nil {
 		return nil, nil, errNotConnected()
 	}
-	u, err := cache.GetDynamicWithGroup(ctx, canonicalKind, input.Namespace, input.Name, group)
+	u, err := fetchMCPDynamicResource(ctx, cache, canonicalKind, group, input.Namespace, input.Name)
 	if err != nil {
 		// Distinguish "the CRD isn't installed / not yet discovered" from a
 		// genuinely absent object — telling an agent "resource not found" when
@@ -601,7 +605,7 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 		if errors.Is(err, k8s.ErrUnknownDynamicKind) {
 			return nil, nil, fmt.Errorf("%s (%s) is not installed or not yet discovered in this cluster — is %s running?", canonicalKind, group, tool)
 		}
-		return nil, nil, notFoundError(ctx, err, canonicalKind, input.Namespace, input.Name)
+		return nil, nil, err
 	}
 	minified, err := aicontext.Minify(u, aicontext.LevelDetail)
 	if err != nil {

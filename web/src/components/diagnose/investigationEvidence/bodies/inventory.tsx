@@ -9,9 +9,6 @@ import {
 import { listingRowNamesSubject, sameKind } from "../../investigationCase";
 import type { EvidenceDataOf } from "../cardParts";
 
-// The rows the citations on a card name, in citation order: one row when the
-// name picks exactly one entry, otherwise a line saying the entry is absent
-// or which entries the name could mean.
 export function listingScopeNamespace(
   source: InvestigationEvidenceSource,
 ): string | undefined {
@@ -19,24 +16,45 @@ export function listingScopeNamespace(
   return typeof namespace === "string" && namespace ? namespace : undefined;
 }
 
+export interface NamedInventoryRow {
+  key: string;
+  label: string;
+  matches: number;
+  row?: InvestigationResourceSummary;
+  /** No row matches, and the subject's namespace is one the listing did not read. */
+  notRead?: string;
+  /**
+   * No row matches, on a listing that read `count` namespaces without naming
+   * them. With a `namespace`, the subject's namespace may not have been one
+   * of them; without, the subject is only known to be absent from those.
+   */
+  readUnnamed?: { count: number; namespace?: string };
+  /**
+   * No row matches a subject that names no namespace, on a listing that read
+   * only these namespaces.
+   */
+  readOnlyIn?: readonly string[];
+}
+
+// The rows the citations on a card name, in citation order: one row when the
+// name picks exactly one entry, otherwise a line saying the entry is absent,
+// that where it would be was not read, or which entries the name could mean.
 export function namedInventoryRows(
   resources: InvestigationResourceSummary[],
   items: readonly { subject?: DiagnosisEvidenceSubject }[],
   /** The namespace the listing call was scoped to; rows omit it then. */
   scopeNamespace?: string,
-): {
-  key: string;
-  label: string;
-  matches: number;
-  row?: InvestigationResourceSummary;
-}[] {
+  /** Set when Radar's collector read the listed kind only in these namespaces. */
+  namespacesRead?: readonly string[],
+  namespacesReadOmitted = 0,
+): NamedInventoryRow[] {
+  const observedNamespaces = new Set(
+    resources
+      .map((resource) => resource.namespace ?? scopeNamespace)
+      .filter(Boolean),
+  );
   const seen = new Set<string>();
-  const out: {
-    key: string;
-    label: string;
-    matches: number;
-    row?: InvestigationResourceSummary;
-  }[] = [];
+  const out: NamedInventoryRow[] = [];
   for (const item of items) {
     const subject = item.subject;
     if (!subject?.name) continue;
@@ -64,11 +82,36 @@ export function namedInventoryRows(
           declaringObject(resource) ||
           (resource.namespace ?? scopeNamespace) === namespace),
     );
+    // A name the rows lack is absent only where the listing looked.
+    const unread = namespacesRead && matches.length === 0;
     out.push({
       key,
       label: namespace ? `${namespace}/${subject.name}` : subject.name,
       matches: matches.length,
       row: matches.length === 1 ? matches[0] : undefined,
+      notRead:
+        unread &&
+        namespace &&
+        namespacesReadOmitted === 0 &&
+        !namespacesRead.includes(namespace) &&
+        !observedNamespaces.has(namespace)
+          ? namespace
+          : undefined,
+      readOnlyIn:
+        unread && !namespace && namespacesReadOmitted === 0
+          ? namespacesRead
+          : undefined,
+      readUnnamed:
+        unread &&
+        namespacesReadOmitted > 0 &&
+        (!namespace ||
+          (!namespacesRead.includes(namespace) &&
+            !observedNamespaces.has(namespace)))
+          ? {
+              count: namespacesRead.length + namespacesReadOmitted,
+              namespace,
+            }
+          : undefined,
     });
   }
   return out;
@@ -143,7 +186,7 @@ export function InventoryBody({
     ...lead,
     ...data.resources.filter((resource) => !lead.includes(resource)),
   ];
-  return (
+  const list = (
     <div className="max-h-72 overflow-y-auto rounded-md border border-theme-border">
       {rows.map((resource, index) => (
         <InventoryRow
@@ -153,6 +196,13 @@ export function InventoryBody({
           cited={lead.includes(resource)}
         />
       ))}
+    </div>
+  );
+  if (!data.coverageNote) return list;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-theme-text-secondary">{data.coverageNote}</p>
+      {list}
     </div>
   );
 }

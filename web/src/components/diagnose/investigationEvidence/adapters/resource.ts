@@ -226,20 +226,94 @@ export function adaptListNamespaces(
   );
 }
 
+// list_resources arrives as `{summary, coverage, items}`. summary says in
+// words what the rows cover and what was not read; coverage.read names the
+// namespaces Radar read when that is a namespace set. A bare array is an older
+// Radar's list (or a run recorded from one): it carries no coverage, so
+// nothing about it may read as complete.
+type ListCoverage = {
+  partial: boolean;
+  narrowed: boolean;
+  /** Set when Radar read a finite namespace set: rows prove nothing outside it. */
+  namespacesRead?: string[];
+  namespacesReadOmitted: number;
+  summary: string;
+};
+
+function listedRows(
+  payload: unknown,
+): { rows: unknown[]; coverage?: ListCoverage } | undefined {
+  if (Array.isArray(payload)) return { rows: payload };
+  const value = record(payload);
+  const coverage = record(value?.coverage);
+  const status = coverage?.status;
+  if (
+    !value ||
+    !Array.isArray(value.items) ||
+    !nonEmptyString(value.summary) ||
+    (status !== "complete" && status !== "partial")
+  ) {
+    return undefined;
+  }
+  const summary = value.summary;
+  const read = record(coverage?.read);
+  const narrowed =
+    Array.isArray(coverage?.narrowedBy) && coverage.narrowedBy.length > 0;
+  if (read?.type !== "namespaces") {
+    return {
+      rows: value.items,
+      coverage: {
+        partial: status === "partial",
+        narrowed,
+        namespacesReadOmitted: 0,
+        summary,
+      },
+    };
+  }
+  // A set lists every name or, when it is too large, none: then which
+  // namespaces were read is unknown and only the count is.
+  const set = record(read.namespaces);
+  const count = set?.count;
+  const names = set?.names === undefined ? [] : stringArray(set.names);
+  if (
+    !names ||
+    typeof count !== "number" ||
+    !Number.isInteger(count) ||
+    (set?.names !== undefined && names.length !== count)
+  ) {
+    return undefined;
+  }
+  return {
+    rows: value.items,
+    coverage: {
+      partial: status === "partial",
+      narrowed,
+      namespacesRead: names,
+      namespacesReadOmitted: count - names.length,
+      summary,
+    },
+  };
+}
+
 export function adaptListResources(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   payload: unknown,
   options: { title?: string } = {},
 ): void {
-  if (!Array.isArray(payload)) {
+  const listed = listedRows(payload);
+  if (!listed) {
     invalidPayload(builder, source);
     return;
   }
-  const resources = payload
+  const { rows, coverage } = listed;
+  const namespacesRead = coverage?.namespacesRead;
+  const namespacesReadCount =
+    (namespacesRead?.length ?? 0) + (coverage?.namespacesReadOmitted ?? 0);
+  const resources = rows
     .map(resourceSummary)
     .filter((item): item is InvestigationResourceSummary => Boolean(item));
-  if (resources.length !== payload.length) {
+  if (resources.length !== rows.length) {
     invalidPayload(builder, source);
     return;
   }
@@ -257,12 +331,16 @@ export function adaptListResources(
     : undefined;
   const title = options.title ?? (namespace ? `${noun} in ${namespace}` : noun);
   if (resources.length === 0) {
-    // list_resources intentionally returns [] for some RBAC-filtered reads;
-    // even a successful transport outcome therefore cannot prove absence.
+    // An older Radar returns [] for some RBAC-filtered reads, so a bare array
+    // cannot prove absence. Otherwise the copy is the server's summary: the
+    // requested kind may be an alias ("svc"), and the summary names the
+    // resource it resolved.
     builder.limit(
       source,
       "Resource inventory",
-      `Radar found no matching resources for ${scope}. Anything you do not have permission to read was not searched.`,
+      !coverage
+        ? `Radar found no matching resources for ${scope}. Anything you do not have permission to read was not searched.`
+        : coverage.summary,
       "unknown",
     );
     return;
@@ -288,8 +366,29 @@ export function adaptListResources(
       relevance: "broader",
       tone: hasAdverseResource ? "warning" : "neutral",
       title,
-      summary: `${resources.length} returned${nonEmptyString(args?.group) ? ` · ${args.group}` : ""}`,
-      data: { type: "inventory", resources, scope },
+      summary: [
+        `${resources.length} returned`,
+        nonEmptyString(args?.group) ? args.group : undefined,
+        namespacesRead && (coverage?.partial || coverage?.narrowed)
+          ? `only ${namespacesReadCount > 2 ? `${namespacesReadCount} namespaces` : namespacesRead.join(", ")} read`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      data: {
+        type: "inventory",
+        resources,
+        scope,
+        ...(namespacesRead
+          ? {
+              namespacesRead,
+              namespacesReadOmitted: coverage!.namespacesReadOmitted,
+            }
+          : {}),
+        ...(coverage && (coverage.partial || coverage.narrowed)
+          ? { coverageNote: coverage.summary }
+          : {}),
+      },
     },
   );
 }

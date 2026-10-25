@@ -50,6 +50,13 @@ describe('parseMemoryToBytes', () => {
     expect(parseMemoryToBytes('1E3')).toBe(1000)
     expect(formatMemoryString('1e9')).toBe('954 MiB')
   })
+
+  it('reads sub-unit suffixes as fractions of a byte', () => {
+    expect(parseMemoryToBytes('1181116006400m')).toBeCloseTo(1181116006.4)
+    expect(parseMemoryToBytes('1000000u')).toBeCloseTo(1)
+    expect(parseMemoryToBytes('1000000000n')).toBeCloseTo(1)
+    expect(formatMemoryString('18360985190400m')).toBe('17.1 GiB')
+  })
 })
 
 describe('parseQuantityToNumber', () => {

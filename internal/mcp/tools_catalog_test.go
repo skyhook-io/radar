@@ -247,9 +247,11 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// The manage_node drain contract (a 'partial' drain, with pods still on the
 	// node in errors/pendingPods/skippedPods, is not safe to take down) is one
 	// such uncertainty boundary, and get_runtime_versions' "declared, not
-	// proof" and "unknown, not absent" another.
+	// proof" and "unknown, not absent" another, and list_resources' and
+	// get_resource's result shapes, with "only object_not_found means it is
+	// absent", a third.
 	const (
-		maxCatalogBytes         = 62810
+		maxCatalogBytes         = 63200
 		maxToolDescriptionBytes = 3000
 	)
 

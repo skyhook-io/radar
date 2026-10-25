@@ -200,7 +200,7 @@ unknown, partial and denied values first: every piece here exists to keep them.
     `full|partial|denied|notInstalled|syncing|uncached|error`, with denied and
     uncached namespaces named only when the caller supplied the namespace list.
   - Assess a typed kind's scope with the cache's `AssessKindRead`
-    (`pkg/k8score/read_scope.go`), which Capacity and Vitals use too. It splits
+    (`pkg/k8score/read_scope.go`), which MCP, Capacity and Vitals use too. It splits
     the namespaces asked for into read, loading, failed and not collected, so a
     namespace whose own informer has synced is readable while another still
     loads. `Complete` means every requested namespace is readable now, and
