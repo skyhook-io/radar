@@ -71,6 +71,9 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	// and an Application's or Kustomization's from the same status list, for
 	// the workload and network kinds it draws.
 	managers := v.RecordingManagers(subject)
+	if len(managers.Unreadable)+len(managers.Remote)+len(managers.Gaps) > 0 {
+		cov.ManagedBy = &ManagersCoverage{Unreadable: len(managers.Unreadable), Remote: len(managers.Remote), NotChecked: notChecked(managers.Gaps)}
+	}
 	for _, m := range managers.Managers {
 		rel.Managers = appendResourceRef(rel.Managers, refOf(m.Ref))
 	}

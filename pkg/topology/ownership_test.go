@@ -29,7 +29,7 @@ func fetched(t *testing.T, w ownershiptest.World, ref resourceid.Ref) ownership.
 	t.Helper()
 	for _, o := range w.Objects {
 		if o.Ref == ref {
-			return ownership.Observation{Ref: o.Ref, UID: o.UID, OwnerReferences: o.Owners}
+			return ownership.Observation{Ref: o.Ref, UID: o.UID, OwnerReferences: o.OwnerReferences}
 		}
 	}
 	t.Fatalf("no %v in the fixture", ref)
@@ -206,7 +206,7 @@ func TestApplyOwnershipNeedsAChainThatEnds(t *testing.T) {
 			if shape == "loop" {
 				for i := range w.Objects {
 					if w.Objects[i].Ref == top.Ref {
-						w.Objects[i].Owners = []metav1.OwnerReference{below.OwnerRef(true)}
+						w.Objects[i].OwnerReferences = []metav1.OwnerReference{below.OwnerRef(true)}
 					}
 				}
 			}
@@ -449,6 +449,41 @@ func TestApplyOwnershipNamesOnlyManagersTheCallerReads(t *testing.T) {
 		if len(rel.Managers) != tc.want {
 			t.Errorf("%s: managers %v, want %d", name, refsText(rel.Managers), tc.want)
 		}
+	}
+}
+
+// Managed By says when the search couldn't settle every manager the caller
+// may read: an unreadable list may name the resource, and a remote list names
+// its coordinates in a cluster Radar can't confirm is this one. A manager the
+// caller may not read isn't counted, and a settled search says nothing.
+func TestApplyOwnershipSaysWhichManagersItCouldNotSettle(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	cm := b.Add("", "ConfigMap", "alpha", "c")
+	b.Manager(ownership.ArgoApplication, "argocd", "broken", ownership.MembersUnreadable, "alpha")
+	b.Manager(ownership.FluxKustomization, "flux-system", "elsewhere", ownership.MembersRemote, "", cm.Ref)
+	w := b.World()
+	for name, tc := range map[string]struct {
+		access ownership.Access
+		want   *ManagersCoverage
+	}{
+		"readable":          {ownership.Unrestricted(), &ManagersCoverage{Unreadable: 1, Remote: 1}},
+		"no Applications":   {denyKind{ownership.ArgoApplication}, &ManagersCoverage{Remote: 1}},
+		"no Kustomizations": {denyKind{ownership.FluxKustomization}, &ManagersCoverage{Unreadable: 1}},
+	} {
+		rel := &Relationships{}
+		ApplyOwnership(rel, ownershipView(t, w, tc.access), fetched(t, w, cm.Ref))
+		if got := rel.Ownership.ManagedBy; got == nil || !reflect.DeepEqual(*got, *tc.want) {
+			t.Errorf("%s: ManagedBy %+v, want %+v", name, got, tc.want)
+		}
+	}
+	settled := ownershiptest.NewBuilder()
+	c := settled.Add("", "ConfigMap", "alpha", "c")
+	settled.Manager(ownership.ArgoApplication, "argocd", "app", ownership.MembersRecorded, "alpha", c.Ref)
+	sw := settled.World()
+	rel := &Relationships{}
+	ApplyOwnership(rel, ownershipView(t, sw, ownership.Unrestricted()), fetched(t, sw, c.Ref))
+	if rel.Ownership.ManagedBy != nil || len(rel.Managers) != 1 {
+		t.Errorf("settled: ManagedBy %+v, managers %v; want none and the one recorder", rel.Ownership.ManagedBy, refsText(rel.Managers))
 	}
 }
 

@@ -65,7 +65,7 @@ func TestAnswerOwnershipRefusesReplacedCaches(t *testing.T) {
 	var fetched ownership.Observation
 	for _, o := range ownershiptest.Fixture().Objects {
 		if o.Ref == pod {
-			fetched = ownership.Observation{Ref: o.Ref, UID: o.UID, OwnerReferences: o.Owners}
+			fetched = ownership.Observation{Ref: o.Ref, UID: o.UID, OwnerReferences: o.OwnerReferences}
 		}
 	}
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }

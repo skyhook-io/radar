@@ -442,6 +442,10 @@ type RecordingManagersAnswer struct {
 	// Unreadable are the managers the caller may read whose member lists
 	// can't be read, any of which may name the object, sorted.
 	Unreadable []resourceid.Ref
+	// Remote are the managers the caller may read whose lists name an
+	// object at the same coordinates in a cluster Radar can't confirm is this
+	// one, sorted.
+	Remote []resourceid.Ref
 	// Gaps are the search's gaps the caller may read; see RecordingManagersRead.Gaps.
 	Gaps []Gap
 	// searchGaps are all the search's gaps, for Searched.
@@ -501,6 +505,11 @@ func (v *View) RecordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 	for _, m := range found.Unreadable {
 		if v.access.CanRead(m.GroupKind(), m.Namespace) == Allowed {
 			a.Unreadable = append(a.Unreadable, m)
+		}
+	}
+	for _, m := range found.Remote {
+		if v.access.CanRead(m.GroupKind(), m.Namespace) == Allowed {
+			a.Remote = append(a.Remote, m)
 		}
 	}
 	return a

@@ -589,6 +589,9 @@ type OwnershipCoverage struct {
 	Children ChildrenCoverage `json:"children"`
 	// Manages is set for a GitOps manager whose status lists its members.
 	Manages *MembersCoverage `json:"manages,omitempty"`
+	// ManagedBy is set when the search for the GitOps managers whose status
+	// lists the resource couldn't read every one the caller may read.
+	ManagedBy *ManagersCoverage `json:"managedBy,omitempty"`
 	// UnavailableReason is a reason code when Radar couldn't answer at all.
 	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
@@ -615,6 +618,20 @@ type OwnershipGap struct {
 	Kind      string `json:"kind,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	Reason    string `json:"reason"`
+}
+
+// ManagersCoverage says which GitOps managers the search for the resource's
+// Managed By couldn't settle.
+type ManagersCoverage struct {
+	// Unreadable managers have a member list Radar can't read, so any of them
+	// may list the resource.
+	Unreadable int `json:"unreadable,omitempty"`
+	// Remote managers list an object at the resource's coordinates, in a
+	// cluster Radar can't confirm is this one.
+	Remote int `json:"remote,omitempty"`
+	// NotChecked are the manager kinds and namespaces Radar couldn't search,
+	// and why.
+	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
 }
 
 // MembersCoverage says what a GitOps manager's status records of its
