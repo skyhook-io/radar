@@ -175,7 +175,7 @@ func summarizePodRow(p *corev1.Pod) any {
 			Message:               p.Status.Message,
 			PodIP:                 p.Status.PodIP,
 			PodIPs:                p.Status.PodIPs,
-			Conditions:            summaryPodConditions(p.Status.Conditions),
+			Conditions:            summaryPodConditions(p.Status.Conditions, len(p.Spec.ReadinessGates) > 0),
 			ContainerStatuses:     summaryContainerStatuses(p.Status.ContainerStatuses),
 			InitContainerStatuses: summaryContainerStatuses(p.Status.InitContainerStatuses),
 		},
@@ -201,14 +201,14 @@ func summaryContainers(containers []corev1.Container, withRestartPolicy bool) []
 	return out
 }
 
-func summaryPodConditions(conditions []corev1.PodCondition) []podRowCondition {
+func summaryPodConditions(conditions []corev1.PodCondition, keepTransitionTime bool) []podRowCondition {
 	if conditions == nil {
 		return nil
 	}
 	out := make([]podRowCondition, 0, len(conditions))
 	for _, c := range conditions {
 		row := podRowCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message}
-		if !c.LastTransitionTime.IsZero() {
+		if keepTransitionTime && !c.LastTransitionTime.IsZero() {
 			row.LastTransitionTime = &c.LastTransitionTime
 		}
 		out = append(out, row)

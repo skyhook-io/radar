@@ -29,4 +29,11 @@ describe('declared readiness gates', () => {
   p.status.conditions[0].reason='ReadinessGatesNotReady';p.status.containerStatuses[0].state={waiting:{reason:'ImagePullBackOff'}}
   expect(getPodStatus(p).level).toBe('unhealthy');expect(getPodPhaseDisplay(p).level).toBe('unhealthy')
  })
+ it('keeps recent crash history ahead of gate text',()=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.status.containerStatuses[0]={name:'app',ready:true,restartCount:2,state:{running:{startedAt:'2026-10-25T11:59:55Z'}},lastState:{terminated:{reason:'Error',exitCode:1,finishedAt:'2026-10-25T11:59:50Z'}}}
+  expect(getPodStatus(p).text).not.toContain('gate')
+  expect(getPodPhaseDisplay(p).text).not.toContain('gate')
+ })
+
 })

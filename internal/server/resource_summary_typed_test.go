@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -319,4 +320,13 @@ func TestPodSummaryKeepsReadinessGateEvidence(t *testing.T) {
 			t.Fatalf("transition lost: %s", raw)
 		}
 	}
+	p.Spec.ReadinessGates = nil
+	raw, err = json.Marshal(summarizePodRow(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("lastTransitionTime")) {
+		t.Fatalf("ungated rows pay unused timestamp cost: %s", raw)
+	}
+
 }

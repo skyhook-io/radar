@@ -83,6 +83,12 @@ func TestPodReadinessGateFailure(t *testing.T) {
 					if v := Pod(p, now); v.Level != LevelUnhealthy || v.Reason != "OOMKilled" {
 						t.Errorf("gate masked active OOM: %+v", v)
 					}
+					cs.RestartCount = 2
+					cs.LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, FinishedAt: metav1.NewTime(now.Add(-10 * time.Second))}}
+					cs.State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-5 * time.Second))}}
+					if v := Pod(p, now); v.Reason != "CrashLoopBackOff" {
+						t.Errorf("gate masked stable crash loop: %+v", v)
+					}
 					cs.LastTerminationState = corev1.ContainerState{}
 				}
 				p.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}}
