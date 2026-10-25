@@ -311,6 +311,31 @@ function podReadinessGateBlocked(pod: any): boolean {
   })
 }
 
+// Match the health classifier's OOM recovery precedence before showing a gate failure.
+function readinessGateOOMRecovery(pod: any): string | null {
+  const now = Date.now()
+  for (const cs of pod.status?.containerStatuses || []) {
+    if (cs.lastState?.terminated?.reason !== 'OOMKilled') continue
+    const probe = pod.spec?.containers?.find((c: any) => c.name === cs.name)?.readinessProbe
+    if (cs.ready && probe) continue
+    const startedAt = Date.parse(cs.state?.running?.startedAt)
+    if (Number.isFinite(startedAt)) {
+      if (now - startedAt <= CRASH_SETTLE_MS) return cs.name
+      continue
+    }
+    const finishedAt = Date.parse(cs.lastState.terminated.finishedAt)
+    if (cs.state?.waiting || (Number.isFinite(finishedAt) && now - finishedAt <= CRASH_SETTLE_MS)) return cs.name
+  }
+  for (const cs of pod.status?.initContainerStatuses || []) {
+    if (cs.lastState?.terminated?.reason !== 'OOMKilled') continue
+    if (cs.state?.terminated?.exitCode === 0) continue
+    const startedAt = Date.parse(cs.state?.running?.startedAt)
+    if (Number.isFinite(startedAt) && now - startedAt > CRASH_SETTLE_MS) continue
+    return cs.name
+  }
+  return null
+}
+
 export function getPodStatus(pod: any): StatusBadge {
   const phase = pod.status?.phase || 'Unknown'
   const containerStatuses = pod.status?.containerStatuses || []
@@ -332,6 +357,12 @@ export function getPodStatus(pod: any): StatusBadge {
   // dashboard report it as an error regardless).
   if (phase === 'Failed') {
     return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  const gateBlocked = podReadinessGateBlocked(pod)
+  const gateOOM = gateBlocked ? readinessGateOOMRecovery(pod) : null
+  if (gateOOM) {
+    return { text: 'OOMKilled', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
   const crashHistoryLevel = phase !== 'Succeeded' && phase !== 'Unknown'
@@ -366,7 +397,7 @@ export function getPodStatus(pod: any): StatusBadge {
 
   switch (phase) {
     case 'Running': {
-      if (podReadinessGateBlocked(pod)) {
+      if (gateBlocked) {
         return { text: 'Readiness gate blocked', color: healthColors.degraded, level: 'degraded' }
       }
       // Degrade only on containers that are neither ready nor successfully done —
@@ -460,6 +491,12 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     return { phase, text: 'Failed', level: 'unhealthy' }
   }
 
+  const gateBlocked = podReadinessGateBlocked(pod)
+  const gateOOM = gateBlocked ? readinessGateOOMRecovery(pod) : null
+  if (gateOOM) {
+    return { phase, text: `${phase} — OOMKilled`, level: 'unhealthy', hint: `Container "${gateOOM}" is recovering from an OOM kill.` }
+  }
+
   const crashHistoryLevel = phase !== 'Succeeded' && phase !== 'Unknown'
     ? podCrashHistoryLevel(pod)
     : null
@@ -498,7 +535,7 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
 
   switch (phase) {
     case 'Running': {
-      if (podReadinessGateBlocked(pod)) {
+      if (gateBlocked) {
         return { phase, text: 'Running — Readiness gate blocked', level: 'degraded', hint: pod.status?.conditions?.find((c: any) => c.type === 'Ready')?.message }
       }
       // A successfully-completed container (exit 0) is settled, not "not ready" —

@@ -36,4 +36,21 @@ describe('declared readiness gates', () => {
   expect(getPodPhaseDisplay(p).text).not.toContain('gate')
  })
 
+ it.each([['recent',false,'2026-10-25T11:59:00Z','unhealthy'],['settled',false,'2026-10-25T11:54:00Z','degraded'],['probe passed',true,'2026-10-25T11:59:00Z','degraded']])('keeps %s OOM recovery ahead of gate status',(_name,probe,startedAt,want)=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.spec.containers=[{name:'app',...(probe?{readinessProbe:{}}:{})}]
+  p.status.containerStatuses[0]={name:'app',ready:true,restartCount:1,state:{running:{startedAt}},lastState:{terminated:{reason:'OOMKilled',exitCode:137,finishedAt:'2026-10-25T11:58:00Z'}}}
+  expect(getPodStatus(p).level).toBe(want);expect(getPodPhaseDisplay(p).level).toBe(want)
+  if(want==='unhealthy'){expect(getPodStatus(p).text).toBe('OOMKilled');expect(getPodPhaseDisplay(p).text).toContain('OOMKilled')}
+ })
+
+ it.each(['missing', 'recent', 'settled', 'completed'])('handles %s init OOM recovery with a gate', state => {
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p = makePod()
+  p.status.initContainerStatuses = [{name:'init',lastState:{terminated:{reason:'OOMKilled'}},state:state==='completed'?{terminated:{exitCode:0}}:{running:state==='missing'?{}:{startedAt:state==='recent'?'2026-10-25T11:59:00Z':'2026-10-25T11:54:00Z'}}}]
+  const want = state==='missing'||state==='recent'?'unhealthy':'degraded'
+  expect(getPodStatus(p).level).toBe(want)
+  expect(getPodPhaseDisplay(p).level).toBe(want)
+ })
+
 })

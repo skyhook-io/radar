@@ -121,6 +121,8 @@ type podRowSpec struct {
 
 type podRowContainer struct {
 	Name string `json:"name"`
+	// Presence alone distinguishes probe-confirmed OOM recovery from a ready process.
+	ReadinessProbe *struct{} `json:"readinessProbe,omitempty"`
 	// RestartPolicy is the native-sidecar marker — dropping it would
 	// silently mis-badge sidecar crash loops in podCrashHistoryLevel.
 	RestartPolicy *corev1.ContainerRestartPolicy `json:"restartPolicy,omitempty"`
@@ -165,8 +167,8 @@ func summarizePodRow(p *corev1.Pod) any {
 		Spec: podRowSpec{
 			ReadinessGates: p.Spec.ReadinessGates,
 			NodeName:       p.Spec.NodeName,
-			Containers:     summaryContainers(p.Spec.Containers, false),
-			InitContainers: summaryContainers(p.Spec.InitContainers, true),
+			Containers:     summaryContainers(p.Spec.Containers, false, len(p.Spec.ReadinessGates) > 0),
+			InitContainers: summaryContainers(p.Spec.InitContainers, true, false),
 			Resources:      p.Spec.Resources,
 		},
 		Status: podRowStatus{
@@ -182,7 +184,7 @@ func summarizePodRow(p *corev1.Pod) any {
 	}
 }
 
-func summaryContainers(containers []corev1.Container, withRestartPolicy bool) []podRowContainer {
+func summaryContainers(containers []corev1.Container, withRestartPolicy, keepReadinessProbe bool) []podRowContainer {
 	if containers == nil {
 		return nil
 	}
@@ -190,6 +192,9 @@ func summaryContainers(containers []corev1.Container, withRestartPolicy bool) []
 	for i := range containers {
 		c := &containers[i]
 		row := podRowContainer{Name: c.Name}
+		if keepReadinessProbe && c.ReadinessProbe != nil {
+			row.ReadinessProbe = &struct{}{}
+		}
 		if withRestartPolicy {
 			row.RestartPolicy = c.RestartPolicy
 		}

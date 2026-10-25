@@ -512,7 +512,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 			reason := health.PodProblemReason(pod, now)
 			message := health.PodProblemMessage(pod)
-			if reason == "ReadinessGatesNotReady" {
+			if reason == readinessGatesNotReadyReason {
 				message = podHealth.Message
 			}
 			if pf, ok := newestProbeFailure(probeFailures, pod, ""); ok && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
@@ -708,7 +708,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			// The evidence above classifies workload/rollout timing, not when this
 			// Pod's specific waiting or termination reason began.
 			var onset time.Time
-			if reason == "ReadinessGatesNotReady" {
+			if reason == readinessGatesNotReadyReason {
 				onset, _ = health.PodReadinessGateFailure(pod, now)
 			}
 			setDetectionOnset(&detection, now, onset)

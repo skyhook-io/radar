@@ -514,3 +514,22 @@ func TestContainerHasMemoryLimit_EnactedLimit(t *testing.T) {
 		t.Fatal("an enacted limit in status counts even when the spec shows none")
 	}
 }
+
+func TestDetectProblems_SlowGateLoopKeepsItsIdentity(t *testing.T) {
+	defer ResetTestState()
+	now := time.Now()
+	pod := restartLoopPod(now, corev1.ContainerStatus{Name: "app", Ready: true, RestartCount: 5,
+		State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-9 * time.Minute))}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-12 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-9*time.Minute - 10*time.Second))}},
+	})
+	pod.CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+	pod.Spec.ReadinessGates = []corev1.PodReadinessGate{{ConditionType: "example.com/ready"}}
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, Reason: "ReadinessGatesNotReady", LastTransitionTime: metav1.NewTime(now.Add(-20 * time.Minute))}, {Type: corev1.ContainersReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(now.Add(-9 * time.Minute))}}
+	if err := InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	out := DetectProblems(GetResourceCache(), "ns")
+	if p, ok := lookupProblem(out, "Pod", "p", crashLoopReason); !ok || p.RestartLoop == nil {
+		t.Fatalf("slow loop changed into gate issue: %+v", out)
+	}
+}
