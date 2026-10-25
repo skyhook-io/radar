@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ResourceReadCoverage } from '@skyhook-io/k8s-ui/types/resource-coverage'
-import { combinedListStatus, listSyncPending, normalizeResourceList } from './resourceLists'
+import { combinedListStatus, createListRefetchInterval, listSyncPending, normalizeResourceList } from './resourceLists'
 
 const complete: ResourceReadCoverage = { status: 'complete', gaps: [], scope: { type: 'cluster' }, read: { type: 'cluster' } }
 const partial: ResourceReadCoverage = { ...complete, status: 'partial', gaps: [{ code: 'radar_namespace_not_collected' }] }
@@ -60,3 +60,25 @@ describe('combinedListStatus', () => {
     expect(combinedListStatus([], false, false)).toBe('unknown')
   })
 })
+
+ describe('loading list backoff', () => {
+  it('backs off per response, caps, and resets for coverage or query changes', () => {
+   const interval = createListRefetchInterval(120000)
+   const pending = { ...partial, gaps: [{ code: 'kind_sync_pending' }] }
+   const query = { state: { data: { coverage: pending }, dataUpdateCount: 1 } }
+   for (const delay of [5000, 10000, 20000, 30000, 30000]) {
+    expect(interval(query)).toBe(delay)
+    expect(interval(query)).toBe(delay)
+    query.state.dataUpdateCount++
+   }
+   query.state.data.coverage = complete
+   expect(interval(query)).toBe(120000)
+   query.state.data.coverage = pending
+   expect(interval(query)).toBe(5000)
+   query.state.dataUpdateCount++
+   expect(interval(query)).toBe(10000)
+   const other = { state: { ...query.state } }
+   expect(interval(other)).toBe(5000)
+   expect(interval(query)).toBe(5000)
+  })
+ })

@@ -30,8 +30,26 @@ export function normalizeResourceList<T>(body: ResourceListBody<T>): ResourceLis
   return { items: body.items, coverage: body.coverage ?? { status: 'unknown' }, printerTable: sanitizePrinterTable(body) }
 }
 
-/** How often to re-read a list while part of it is still loading. */
-export const LIST_SYNC_PENDING_REFETCH_MS = 5000
+/** Back off once per loading response, resetting for a new query or settled coverage. */
+export function createListRefetchInterval(normalInterval?: number | false) {
+  type ListQuery = { state: { data?: { coverage: ResourceCoverage }; dataUpdateCount: number } }
+  let previousQuery: ListQuery | undefined
+  let previousUpdate = -1
+  let delay = 0
+  return (query: ListQuery): number | false | undefined => {
+    if (query !== previousQuery || !listSyncPending(query.state.data?.coverage)) {
+      delay = 0
+      previousUpdate = -1
+      previousQuery = query
+    }
+    if (!listSyncPending(query.state.data?.coverage)) return normalInterval
+    if (query.state.dataUpdateCount !== previousUpdate) {
+      delay = delay === 0 ? 5000 : Math.min(delay * 2, 30000)
+      previousUpdate = query.state.dataUpdateCount
+    }
+    return delay
+  }
+}
 
 export function listSyncPending(coverage: ResourceCoverage | undefined): boolean {
   return coverage?.status === 'partial' && coverage.gaps.some(gap => gap.code === 'kind_sync_pending')

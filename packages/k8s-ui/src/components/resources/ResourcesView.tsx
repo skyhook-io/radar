@@ -159,7 +159,7 @@ import {
   printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
 } from './printer-columns'
 import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
-import { pluralize } from '../../utils/pluralize'
+import { englishPlural, isEnglishPlural, pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { formatRelativeAgeTime, parseQuantityToNumber } from '../../utils/format'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
@@ -6577,9 +6577,9 @@ export function ResourcesView({
           </div>
         )}
 
-        {!isLoading && !selectedQueryError && resourceCoverageNotice(selectedQuery?.coverage) && (
+        {!isLoading && !selectedQueryError && resourceCoverageNotice(selectedQuery?.coverage, isEnglishPlural(selectedKind.kind) ? selectedKind.kind : englishPlural(selectedKind.kind)) && (
           <div role="status" className="px-4 py-2 text-xs text-warning-text border-b border-theme-border bg-theme-surface">
-            {resourceCoverageNotice(selectedQuery?.coverage)}
+            {resourceCoverageNotice(selectedQuery?.coverage, isEnglishPlural(selectedKind.kind) ? selectedKind.kind : englishPlural(selectedKind.kind))}
           </div>
         )}
 

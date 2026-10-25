@@ -1,4 +1,4 @@
-import { LIST_SYNC_PENDING_REFETCH_MS, listSyncPending, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
+import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
@@ -2941,12 +2941,13 @@ export function useResources<T>(
   group?: string,
   options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
 ) {
+  const loadingInterval = useMemo(() => createListRefetchInterval(options?.refetchInterval), [options?.refetchInterval])
   const query = useQuery<ResourceListResult<T>>({
     queryKey: ["resources", kind, group, namespace, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: ({ signal }) => fetchResourceList<T>(kind, { namespaces: namespace ? [namespace] : [], group, signal }),
     enabled: (options?.enabled ?? true) && Boolean(kind),
     staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
-    refetchInterval: (q) => listSyncPending(q.state.data?.coverage) ? LIST_SYNC_PENDING_REFETCH_MS : options?.refetchInterval,
+    refetchInterval: loadingInterval,
     // Kind still completing its initial sync (progressive shell, or a
     // deferred kind shortly after connect): keep polling instead of
     // surfacing an error.

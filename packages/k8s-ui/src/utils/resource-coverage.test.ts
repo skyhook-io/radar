@@ -27,10 +27,11 @@ describe('partial coverage notice', () => {
     expect(resourceCoverageNotice(partial)).toContain("Radar doesn't collect this kind")
     expect(resourceCoverageNotice({ ...partial, gaps: [{ code: 'radar_namespace_not_collected' }, { code: 'kind_sync_pending' }] })).toContain('still loading')
   })
-  it('says "requested" only of namespaces the request named', () => {
+  it('names small gaps and reserves "requested" for unnamed explicit scope', () => {
     expect(resourceCoverageNotice(partial)).toBe("Partial results. Radar read 1,000 namespaces; Radar doesn't collect this kind in some namespaces.")
     const named = { ...partial, scope: { type: 'namespaces' as const, namespaces: { names: ['alpha', 'zeta'], count: 2 } }, read: { type: 'namespaces' as const, namespaces: { names: ['alpha'], count: 1 } }, gaps: [{ code: 'radar_namespace_not_collected', namespaces: { names: ['zeta'], count: 1 } }] }
-    expect(resourceCoverageNotice(named)).toBe("Partial results. Radar read alpha; Radar doesn't collect this kind in some requested namespaces.")
+    expect(resourceCoverageNotice(named, 'Pods')).toBe("Partial results. Radar read alpha; Radar doesn't collect Pods in zeta.")
+    expect(resourceCoverageNotice({ ...named, gaps: [{ code: 'radar_namespace_not_collected', namespaces: { count: 1 } }] })).toContain('some requested namespaces')
     expect(resourceCoverageNotice({ ...named, narrowedBy: ['user_access'] })).not.toContain('requested')
   })
 
@@ -101,3 +102,14 @@ describe('empty lists and counts', () => {
     expect(boundedCountLabel(12345, false)).toBe((12345).toLocaleString())
   })
 })
+
+ it('names a small excluded namespace set with its kind', () => {
+  const coverage: ResourceReadCoverage = { status: 'partial', scope: { type: 'all_namespaces' }, read: { type: 'namespaces', namespaces: { count: 1, names: ['read-a'] } }, gaps: [{ code: 'user_forbidden', namespaces: { count: 1, names: ['read-b'] } }] }
+  expect(resourceCoverageNotice(coverage, 'Secrets')).toBe('Partial results. Radar read read-a; your permissions exclude Secrets in read-b.')
+  coverage.gaps[0].namespaces = { count: 3, names: ['b', 'c', 'd'] }
+  expect(resourceCoverageNotice(coverage, 'Secrets')).toContain('Secrets in b, c, d.')
+  coverage.gaps[0].namespaces = { count: 4, names: ['b', 'c', 'd', 'e'] }
+  expect(resourceCoverageNotice(coverage, 'Secrets')).toContain('your permissions exclude some namespaces.')
+  coverage.gaps[0].namespaces = { count: 2 }
+  expect(resourceCoverageNotice(coverage, 'Secrets')).toContain('your permissions exclude some namespaces.')
+ })

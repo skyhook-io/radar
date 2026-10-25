@@ -26,7 +26,7 @@ function namespacePreview({ names, count }: ReadNameSet): string {
   return `${names.slice(0, 3).join(', ')}${extra > 0 ? ` and ${extra} more` : ''}`
 }
 
-export function resourceCoverageNotice(coverage: ResourceCoverage | undefined): string | undefined {
+export function resourceCoverageNotice(coverage: ResourceCoverage | undefined, kind = "resources"): string | undefined {
   if (coverage?.status !== 'partial') return undefined
   const read = coverage.read
   if (read?.type !== 'namespaces' || !read.namespaces) return 'Partial results. Radar could not read the whole requested scope.'
@@ -35,13 +35,28 @@ export function resourceCoverageNotice(coverage: ResourceCoverage | undefined): 
   // A broad request named no namespaces, so none of them were "requested".
   const where = coverage.scope.type === 'namespaces' && !coverage.narrowedBy?.length ? 'requested namespaces' : 'namespaces'
   const codes = new Set(coverage.gaps.map(gap => gap.code))
-  const gap = gapPhrases.find(([code]) => codes.has(code))?.[1](where) ?? `other ${where} were not read`
+  const phrase = gapPhrases.find(([code]) => codes.has(code))
+  const affected = coverage.gaps.filter(gap => gap.code === phrase?.[0]).map(gap => gap.namespaces)
+  const names = [...new Set(affected.flatMap(set => set?.names ?? []))]
+  const canName = affected.length > 0 && names.length > 0 && names.length <= 3 && affected.every(set => set && !set.extent && set.names?.length === set.count)
+  const namedScope = `${kind} in ${names.join(', ')}`
+  const namedPhrases: Record<string, string> = {
+    kind_sync_pending: `${namedScope} are still loading`,
+    user_permission_check_failed: `access to ${namedScope} could not be verified`,
+    user_forbidden: `your permissions exclude ${namedScope}`,
+    user_namespace_not_visible: `${names.join(', ')} ${names.length === 1 ? "isn't" : "aren't"} visible to you`,
+    radar_credentials_rejected: `Kubernetes rejected Radar's credentials for ${namedScope}`,
+    radar_forbidden: `Radar's collector could not read ${namedScope}`,
+    kind_sync_timed_out: `${namedScope} haven't finished loading`,
+    radar_namespace_not_collected: `Radar doesn't collect ${namedScope}`,
+  }
+  const gap = (canName && phrase && namedPhrases[phrase[0]]) || phrase?.[1](where) || `other ${where} were not read`
   return `Partial results. Radar read ${scope}; ${gap}.`
 }
 
 /**
  * A complete answer whose scope Radar's own collection narrowed. The other
- * narrowings (the caller's access, Radar's pin, the saved pick) already show
+ * narrowings (the caller's access and Radar's pin) already show
  * in the namespace picker, so they get no note.
  */
 export function resourceNarrowedNotice(coverage: ResourceCoverage | undefined): string | undefined {

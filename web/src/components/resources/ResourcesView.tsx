@@ -6,7 +6,7 @@ import { isBadgeWorthy } from '../../utils/auditBadges'
 import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
 import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { stripBasename } from '../../api/config'
-import { LIST_SYNC_PENDING_REFETCH_MS, listSyncPending, type ResourceListResult } from '../../api/resourceLists'
+import { createListRefetchInterval, type ResourceListResult } from '../../api/resourceLists'
 import { useAPIResources } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
 import { getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
@@ -232,6 +232,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       }
     : null
 
+  const loadingInterval = useMemo(() => createListRefetchInterval(120000), [])
+
   // Fetch full data only for the selected kind
   const selectedKindQuery = useQuery({
     queryKey: ['resources', selectedKind?.name, isSelectedCrd ? selectedKind?.group : '', namespaces],
@@ -251,7 +253,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     staleTime: 30000,
     // Safety net — SSE k8s_event drives near-real-time invalidation. A list
     // whose namespaces are still loading is re-read until they finish.
-    refetchInterval: (query) => listSyncPending(query.state.data?.coverage) ? LIST_SYNC_PENDING_REFETCH_MS : 120000,
+    refetchInterval: loadingInterval,
     retry: (failureCount: number, error: Error) => {
       if (isForbiddenError(error) || isKindSyncFailed(error) || isUnretryableReadError(error)) return false
       // Cluster still connecting, or this kind's informer still completing
