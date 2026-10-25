@@ -74,14 +74,6 @@ const maxNamedFailures = 5
 // maxFilterFailedObjects bounds the objects a filter_eval_failed gap names.
 const maxFilterFailedObjects = 20
 
-// typedNamespaceReader is a Provider that can say which namespaces of a typed
-// kind are readable while others still load, and whether Radar collects the
-// kind in only part of them.
-type typedNamespaceReader interface {
-	TypedReadable(kind string, namespaces []string) []string
-	TypedCollectionLimited(kind string, namespaces []string) bool
-}
-
 // unlistableKindProvider is a Provider that can name the discovered APIs
 // that can't be listed at all, which search therefore never scans.
 type unlistableKindProvider interface {
@@ -112,8 +104,8 @@ type coverage struct {
 	// someNamespaces marks reasons recorded for a kind in only some
 	// namespaces.
 	someNamespaces map[readreason.Code]bool
-	nsGaps          map[readreason.Code][]string
-	namespaceSeen   map[readreason.Code]map[string]bool
+	nsGaps         map[readreason.Code][]string
+	namespaceSeen  map[readreason.Code]map[string]bool
 	// unbounded marks reasons that reach an unknown set of kinds (the catalog
 	// itself could not be read).
 	unbounded map[readreason.Code]bool
@@ -342,13 +334,14 @@ func (o *Options) excludeMissingNamespaces(p Provider, q Query) {
 	if len(q.NSFilter) == 0 || !o.seesAllNamespaces {
 		return
 	}
+	missing := p.KnownMissingNamespaces(q.NSFilter)
 	split := func(namespaces []string) (kept []string) {
 		if namespaces == nil {
 			return nil
 		}
 		kept = make([]string, 0, len(namespaces))
 		for _, ns := range namespaces {
-			if exists, known := p.NamespaceExists(ns); known && !exists {
+			if slices.Contains(missing, ns) {
 				o.MissingNamespaces = append(o.MissingNamespaces, ns)
 			} else {
 				kept = append(kept, ns)
@@ -385,51 +378,4 @@ func listErrorReason(err error) readreason.Code {
 		return readreason.KindSyncPending
 	}
 	return readreason.ReadError
-}
-
-func dynamicObservationReason(observation k8score.DynamicResourceObservation) readreason.Code {
-	if observation.ReasonCode == "credentials_rejected" {
-		// Kubernetes rejected Radar's credentials: checks still outstanding
-		// were refused, not left unanswered, and someone has to act on it.
-		return readreason.RadarCredentialsRejected
-	}
-	if observation.ProbeRetrying {
-		return readreason.KindSyncPending
-	}
-	if len(observation.UnansweredNamespaces) > 0 || observation.ReasonCode == "scope_probe_incomplete" {
-		return readreason.ReadError
-	}
-	switch observation.State {
-	case k8score.DynamicObservationSynced:
-		return ""
-	case k8score.DynamicObservationDenied:
-		if observation.ReasonCode == "credentials_rejected" {
-			return readreason.RadarCredentialsRejected
-		}
-		return readreason.RadarForbidden
-	case k8score.DynamicObservationSyncing:
-		if observation.ReasonCode == "sync_stalled" {
-			return readreason.KindSyncTimedOut
-		}
-		return readreason.KindSyncPending
-	case k8score.DynamicObservationDeferred:
-		switch observation.ReasonCode {
-		case "eager_watch_pending":
-			return readreason.KindSyncPending
-		case "scope_probe_failed":
-			// Radar's access check failed for a reason that isn't a
-			// refusal: not a limit of what it collects.
-			return readreason.ReadError
-		}
-		return readreason.RadarKindNotCollected
-	case k8score.DynamicObservationUnsupported:
-		if observation.ReasonCode == "direct_read_only" {
-			// Radar reads these directly instead of watching them, so
-			// list_resources reads them; only search can't.
-			return readreason.KindNotSearchable
-		}
-		return readreason.KindNotWatchable
-	default:
-		return readreason.RadarKindNotCollected
-	}
 }

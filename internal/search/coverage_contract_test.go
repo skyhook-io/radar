@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -85,9 +86,20 @@ type readableProvider struct {
 	listed   [][]string
 }
 
-func (p *readableProvider) TypedReadable(string, []string) []string { return p.readable }
-
-func (p *readableProvider) TypedCollectionLimited(string, []string) bool { return p.limited }
+func (p *readableProvider) PlanTyped(kind string, namespaces []string) readplan.Plan {
+	plan := p.fakeProvider.PlanTyped(kind, namespaces)
+	if kind != "Pod" {
+		return plan
+	}
+	plan.CollectionLimited = p.limited
+	plan.Partitions = slices.DeleteFunc(plan.Partitions, func(part readplan.Partition) bool {
+		return part.Extent == readplan.NamespaceSet && slices.Contains(p.readable, part.Namespaces[0])
+	})
+	for _, ns := range p.readable {
+		plan.Partitions = append(plan.Partitions, readplan.Partition{Extent: readplan.NamespaceSet, Namespaces: []string{ns}, Verdict: readplan.Verdict{State: readplan.Readable}})
+	}
+	return plan
+}
 
 func (p *readableProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
 	p.listed = append(p.listed, namespaces)

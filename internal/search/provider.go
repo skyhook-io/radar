@@ -8,12 +8,13 @@ import (
 	"strings"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -26,8 +27,7 @@ type CacheProvider struct {
 	cache        *k8s.ResourceCache
 	dynamic      *k8s.DynamicResourceCache
 	discovery    *k8s.ResourceDiscovery
-	permissions  *k8s.ResourcePermissions
-	probeErrors  map[string]error
+	permissions  *k8s.PermissionCheckResult
 	observations *k8score.DynamicObservationView
 }
 
@@ -44,8 +44,7 @@ func NewCacheProvider() *CacheProvider {
 		discovery: k8s.GetResourceDiscovery(),
 	}
 	if result := cache.PermissionResult(); result != nil {
-		provider.permissions = result.Perms
-		provider.probeErrors = result.ProbeErrors
+		provider.permissions = result
 	}
 	if cache != k8s.GetResourceCache() || provider.dynamic != k8s.GetDynamicResourceCache() || provider.discovery != k8s.GetResourceDiscovery() {
 		return nil
@@ -75,7 +74,19 @@ func (p *CacheProvider) ListDynamic(ctx context.Context, gvr schema.GroupVersion
 	// it lists; TestSearch_LeavesListedObjectsUnchanged guards that.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	return p.dynamic.ListReadOnlyContext(ctx, gvr, namespace)
+	source, ready := p.dynamic.ReadSource(gvr, namespace)
+	if !ready {
+		return nil, fmt.Errorf("%w: initial sync", k8s.ErrDynamicNotReady)
+	}
+	items, err := p.dynamic.ListReadOnlyContext(ctx, gvr, namespace)
+	if err != nil {
+		return nil, err
+	}
+	after, ready := p.dynamic.ReadSource(gvr, namespace)
+	if !ready || !source.Same(after) {
+		return nil, fmt.Errorf("%w: serving informers changed", k8s.ErrDynamicNotReady)
+	}
+	return items, nil
 }
 
 func (p *CacheProvider) DynamicResources() ([]schema.GroupVersionResource, error) {
@@ -142,61 +153,25 @@ func (p *CacheProvider) UnlistableKinds() []k8score.APIResource {
 	return out
 }
 
-func (p *CacheProvider) TypedCoverage(kind string, namespaces []string) readreason.Code {
-	resource := k8s.CanonicalBuiltinKind(kind)
-	assessment := p.cache.AssessKindRead(resource, namespaces)
-	if assessment.Readiness == k8s.KindUnavailable {
-		if apierrors.IsUnauthorized(p.probeErrors[resource]) {
-			return readreason.RadarCredentialsRejected
-		}
-		if p.permissions != nil && !p.permissions.CanList(kind) {
-			return readreason.RadarForbidden
-		}
-		return readreason.RadarKindNotCollected
-	}
-	// A target read in full is not held back by another namespace of the
-	// kind that is still loading.
-	if assessment.Complete {
-		return ""
-	}
-	clusterScoped := isClusterScopedKind(kind)
-	if !clusterScoped && len(namespaces) > 0 && len(assessment.Uncovered) == len(namespaces) {
-		return readreason.RadarNamespaceNotCollected
-	}
-	switch {
-	case len(assessment.Loading) > 0 || (assessment.AllNamespaces && assessment.Readiness == k8s.KindPending):
-		return readreason.KindSyncPending
-	case len(assessment.Failed) > 0 || (assessment.AllNamespaces && assessment.Readiness == k8s.KindFailed):
-		return readreason.KindSyncTimedOut
-	}
-	if !clusterScoped {
-		return readreason.RadarNamespaceNotCollected
-	}
-	return ""
+func (p *CacheProvider) PlanTyped(kind string, namespaces []string) readplan.Plan {
+	return readplan.Typed(p.cache, p.permissions, k8s.CanonicalBuiltinKind(kind), readscope.Target{Namespaces: namespaces}, isClusterScopedKind(kind))
 }
 
-// TypedCollectionLimited reports that Radar collects kind in only part of
-// namespaces (nil: every namespace).
-func (p *CacheProvider) TypedCollectionLimited(kind string, namespaces []string) bool {
-	assessment := p.cache.AssessKindRead(k8s.CanonicalBuiltinKind(kind), namespaces)
-	return !assessment.AllNamespaces && (namespaces == nil || len(assessment.Uncovered) > 0)
+func (p *CacheProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces []string, clusterScoped bool) readplan.Plan {
+	plan := readplan.Dynamic(p, gvr, readscope.Target{Namespaces: namespaces}, clusterScoped)
+	for i := range plan.Partitions {
+		part := &plan.Partitions[i]
+		if part.Verdict.Code == readreason.KindNotWatchable && k8s.ShouldBypassDynamicInformer(gvr) {
+			part.Verdict.Code = readreason.KindNotSearchable
+		}
+	}
+	return plan
 }
 
 // Current reports whether the provider still reads the connection Radar is
 // on: a search whose caches were replaced mid-read mixes two clusters.
 func (p *CacheProvider) Current() bool {
 	return p.cache == k8s.GetResourceCache() && p.dynamic == k8s.GetDynamicResourceCache() && p.discovery == k8s.GetResourceDiscovery()
-}
-
-// TypedReadable returns the namespaces of a namespace-scoped collector's kind
-// whose own informers have synced, of namespaces (nil: all it collects). A
-// kind one informer serves has no partial state, so it returns nil.
-func (p *CacheProvider) TypedReadable(kind string, namespaces []string) []string {
-	assessment := p.cache.AssessKindRead(k8s.CanonicalBuiltinKind(kind), namespaces)
-	if assessment.AllNamespaces {
-		return nil
-	}
-	return assessment.Read
 }
 
 func (p *CacheProvider) DynamicCacheStopped() bool {
@@ -210,7 +185,7 @@ func (p *CacheProvider) PrepareDynamicObservations(gvrs []schema.GroupVersionRes
 	}
 }
 
-func (p *CacheProvider) DynamicObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation {
+func (p *CacheProvider) NamespaceObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation {
 	if p.dynamic == nil {
 		return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSyncing}
 	}
@@ -252,16 +227,8 @@ func (p *CacheProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersion
 	return nil
 }
 
-func (p *CacheProvider) NamespaceExists(name string) (bool, bool) {
-	lister := p.cache.Namespaces()
-	if lister == nil || !p.cache.IsKindReady("namespaces") {
-		return false, false
-	}
-	_, err := lister.Get(name)
-	if apierrors.IsNotFound(err) {
-		return false, true
-	}
-	return err == nil, err == nil
+func (p *CacheProvider) KnownMissingNamespaces(names []string) []string {
+	return p.cache.KnownMissingNamespaces(names)
 }
 
 func (p *CacheProvider) KindForGVR(gvr schema.GroupVersionResource) string {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,7 +25,7 @@ import (
 
 type probeRetryProvider struct{ *CacheProvider }
 
-func (*probeRetryProvider) TypedCoverage(string, []string) readreason.Code { return "" }
+func (*probeRetryProvider) PlanTyped(string, []string) readplan.Plan { return readplan.Plan{} }
 
 func TestSearchProbeRetryCoverage(t *testing.T) {
 	for _, tc := range []struct {
