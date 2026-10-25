@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -23,8 +22,8 @@ type ServedResource struct {
 	Verbs      []string
 }
 
-// Kind is what a catalog knows about one group and kind across the versions
-// serving it.
+// CatalogKind is what a catalog knows about one group and kind across the
+// versions serving it.
 type CatalogKind struct {
 	resourceid.GroupKind
 	Resource   string
@@ -43,8 +42,9 @@ type Catalog struct {
 	kinds map[resourceid.GroupKind]CatalogKind
 	// dependents are DependentKinds, worked out once.
 	dependents []CatalogKind
-	// ambiguous are the kinds two resources of one group serve: a reference
-	// names a kind, not a resource, so it can't say which it means.
+	// ambiguous are the kinds two resources of one group serve, or that
+	// versions serve at different scopes: a reference names a kind, not a
+	// resource or a scope, so it can't say which it means.
 	ambiguous []AmbiguousKind
 	// ambiguousDependents are those of them the garbage collector may act on.
 	ambiguousDependents []AmbiguousKind
@@ -52,12 +52,11 @@ type Catalog struct {
 	// the kinds it spells: the garbage collector's discovery RESTMapper maps
 	// it too.
 	lowercase map[resourceid.GroupKind][]resourceid.GroupKind
-	// groupVersions are the group versions discovery listed a resource in.
-	groupVersions map[schema.GroupVersion]bool
-	complete      bool
+	complete  bool
 }
 
-// AmbiguousKind is a kind two resources of one group serve.
+// AmbiguousKind is a kind two resources of one group serve, or that versions
+// serve at different scopes.
 type AmbiguousKind struct {
 	resourceid.GroupKind
 	// Namespaced and ClusterScoped say whether a resource of that scope serves
@@ -71,7 +70,7 @@ type AmbiguousKind struct {
 // catalog may still be served.
 func NewCatalog(resources []ServedResource, complete bool) *Catalog {
 	byKind := map[resourceid.GroupKind][]ServedResource{}
-	c := &Catalog{lowercase: map[resourceid.GroupKind][]resourceid.GroupKind{}, groupVersions: map[schema.GroupVersion]bool{}, complete: complete}
+	c := &Catalog{lowercase: map[resourceid.GroupKind][]resourceid.GroupKind{}, complete: complete}
 	for _, r := range resources {
 		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
 		if byKind[gk] == nil {
@@ -81,12 +80,11 @@ func NewCatalog(resources []ServedResource, complete bool) *Catalog {
 			}
 		}
 		byKind[gk] = append(byKind[gk], r)
-		c.groupVersions[schema.GroupVersion{Group: r.Group, Version: r.Version}] = true
 	}
 	c.kinds = make(map[resourceid.GroupKind]CatalogKind, len(byKind))
 	for gk, served := range byKind {
-		resource := served[0].Resource
-		if slices.ContainsFunc(served, func(r ServedResource) bool { return r.Resource != resource }) {
+		resource, namespaced := served[0].Resource, served[0].Namespaced
+		if slices.ContainsFunc(served, func(r ServedResource) bool { return r.Resource != resource || r.Namespaced != namespaced }) {
 			a := AmbiguousKind{GroupKind: gk}
 			for _, r := range served {
 				if hasVerbs(r.Verbs, "delete", "list", "watch") {
@@ -142,7 +140,8 @@ func (c *Catalog) Kind(gk resourceid.GroupKind) (CatalogKind, bool) {
 	return k, ok
 }
 
-// Ambiguous reports whether two resources of gk's group serve gk.
+// Ambiguous reports whether two resources of gk's group serve gk, or its
+// versions serve it at different scopes.
 func (c *Catalog) Ambiguous(gk resourceid.GroupKind) bool {
 	_, found := slices.BinarySearchFunc(c.ambiguous, gk, func(a AmbiguousKind, gk resourceid.GroupKind) int {
 		return compareGroupKinds(a.GroupKind, gk)
@@ -169,13 +168,15 @@ func (c *Catalog) Serves(gk resourceid.GroupKind, version string) bool {
 
 // referencedKind is the kind an owner reference's group and kind name as the
 // garbage collector's discovery RESTMapper reads them: the kind as spelled,
-// or the kind whose all-lowercase spelling it is. ok is false when that
-// spelling is two kinds'. Two rarer collisions resolve as spelled although
-// the collector's mapping depends on the order discovery lists the kinds in:
-// a served kind that is another's all-lowercase spelling, and a served kind
-// named another served kind of the group plus List.
+// or the kind whose all-lowercase spelling it is. ok is false when the
+// RESTMapper's answer depends on the order discovery listed kinds in: a
+// spelling two kinds share in lower case, or a served kind that is another's
+// all-lowercase spelling.
 func (c *Catalog) referencedKind(gk resourceid.GroupKind) (resourceid.GroupKind, bool) {
-	if _, known := c.kinds[gk]; known || c.Ambiguous(gk) {
+	if _, known := c.kinds[gk]; known {
+		return gk, len(c.lowercase[gk]) == 0
+	}
+	if c.Ambiguous(gk) {
 		return gk, true
 	}
 	switch spelled := c.lowercase[gk]; len(spelled) {
@@ -195,35 +196,6 @@ func (c *Catalog) mapsAt(gk resourceid.GroupKind, version string) bool {
 		return known
 	}
 	return c.Serves(gk, version)
-}
-
-// listKind reports a kind the collector's discovery RESTMapper makes up: List
-// at a listed group version, or a served kind's name followed by List at a
-// version it maps the kind at. It maps them to resources no API serves, so
-// their owners are never found; namespaced is the scope it gives them, and
-// ambiguous that the kind before List is two resources'.
-func (c *Catalog) listKind(gk resourceid.GroupKind, version string) (namespaced, ambiguous, ok bool) {
-	if gk.Kind == "List" {
-		if version != "" && version != runtime.APIVersionInternal {
-			return false, false, c.groupVersions[schema.GroupVersion{Group: gk.Group, Version: version}]
-		}
-		for gv := range c.groupVersions {
-			if gv.Group == gk.Group {
-				return false, false, true
-			}
-		}
-		return false, false, false
-	}
-	base, isList := strings.CutSuffix(gk.Kind, "List")
-	if !isList || base == "" {
-		return false, false, false
-	}
-	listed := resourceid.GroupKind{Group: gk.Group, Kind: base}
-	if c.Ambiguous(listed) {
-		return false, true, true
-	}
-	k, known := c.kinds[listed]
-	return k.Namespaced, false, known && c.mapsAt(listed, version)
 }
 
 // Complete reports whether the discovery that built the catalog answered for

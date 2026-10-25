@@ -114,7 +114,7 @@ func TestViewAgreesWithItselfWhileTheClusterChanges(t *testing.T) {
 	for i := range after.Objects {
 		if after.Objects[i].Ref == pod {
 			// Orphaned: the same Pod, no longer naming its ReplicaSet.
-			after.Objects[i].Owners = nil
+			after.Objects[i].OwnerReferences = nil
 		}
 	}
 	owned := func(v *ownership.View) bool {
@@ -143,9 +143,9 @@ func TestViewAnswersFromItsCaptureWhenTheSearchFindsANewerCopy(t *testing.T) {
 	pod, rs := at("", "Pod", "alpha", "web-1-a"), at("apps", "ReplicaSet", "alpha", "web-1")
 	for i := range after.Objects {
 		if after.Objects[i].Ref == pod {
-			r := after.Objects[i].Owners[0]
+			r := after.Objects[i].OwnerReferences[0]
 			r.Controller = nil
-			after.Objects[i].Owners = []metav1.OwnerReference{r}
+			after.Objects[i].OwnerReferences = []metav1.OwnerReference{r}
 			after.Objects[i].ResourceVersion = "changed"
 		}
 	}

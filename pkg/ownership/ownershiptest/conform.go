@@ -14,17 +14,17 @@ import (
 )
 
 // Queries are the questions Conform asks both sessions: Object and RecordingManagers
-// of every ref, DependentCandidates of every UID in every domain at every limit,
+// of every ref, DependentCandidates of every UID in every scope,
 // and Members of every manager.
 type Queries struct {
 	Refs     []resourceid.Ref
 	UIDs     []types.UID
-	Domains  []ownership.SearchScope
+	Scopes   []ownership.SearchScope
 	Managers []resourceid.Ref
 }
 
 // QueriesFor derives questions from w: every object, refs that miss in each
-// way a ref can, every UID an object has or names, domains around every
+// way a ref can, every UID an object has or names, scopes around every
 // namespace, every manager and every member a manager lists.
 func QueriesFor(w World) Queries {
 	var q Queries
@@ -62,7 +62,7 @@ func QueriesFor(w World) Queries {
 			addRef(inNamespace)
 		}
 		addUID(o.UID)
-		for _, owner := range o.Owners {
+		for _, owner := range o.OwnerReferences {
 			addUID(owner.UID)
 			group, _ := resourceid.SplitAPIVersion(owner.APIVersion)
 			addRef(resourceid.Ref{Group: group, Kind: owner.Kind, Namespace: o.Ref.Namespace, Name: owner.Name})
@@ -90,7 +90,7 @@ func QueriesFor(w World) Queries {
 
 	slices.Sort(namespaces)
 	namespaces = slices.Compact(namespaces)
-	q.Domains = []ownership.SearchScope{
+	q.Scopes = []ownership.SearchScope{
 		ownership.Everywhere(),
 		{AllNamespaces: true},
 		{IncludeClusterScoped: true},
@@ -98,30 +98,34 @@ func QueriesFor(w World) Queries {
 		{Namespaces: []string{"no-such-namespace"}},
 	}
 	for _, ns := range namespaces {
-		q.Domains = append(q.Domains, ownership.InNamespace(ns))
+		q.Scopes = append(q.Scopes, ownership.InNamespace(ns))
 	}
 	if len(namespaces) > 0 {
 		// AllNamespaces wins over a namespace list; an empty entry never
 		// means every namespace.
-		q.Domains = append(q.Domains,
+		q.Scopes = append(q.Scopes,
 			ownership.SearchScope{AllNamespaces: true, Namespaces: namespaces[:1]},
 			ownership.SearchScope{Namespaces: []string{"", namespaces[0]}},
 		)
 	}
-	q.Domains = append(q.Domains, ownership.SearchScope{Namespaces: []string{""}, IncludeClusterScoped: true})
+	q.Scopes = append(q.Scopes, ownership.SearchScope{Namespaces: []string{""}, IncludeClusterScoped: true})
 	if len(namespaces) >= 2 {
-		q.Domains = append(q.Domains, ownership.SearchScope{Namespaces: []string{namespaces[1], namespaces[0], namespaces[1]}, IncludeClusterScoped: true})
+		q.Scopes = append(q.Scopes, ownership.SearchScope{Namespaces: []string{namespaces[1], namespaces[0], namespaces[1]}, IncludeClusterScoped: true})
 	}
 	return q
 }
 
-// Asked names a Session question.
+// Asked names the ReadSession question a Difference is about.
 type Asked uint8
 
 const (
+	// AskedObject: Object(Ref). It is the zero value.
 	AskedObject Asked = iota
-	AskedCandidates
+	// AskedDependentCandidates: DependentCandidates(UID, Scope).
+	AskedDependentCandidates
+	// AskedRecordingManagers: RecordingManagers(Ref).
 	AskedRecordingManagers
+	// AskedMembers: Members(Ref).
 	AskedMembers
 )
 
@@ -134,12 +138,12 @@ type Difference struct {
 	// Coverage: the answers disagree about what was read (gaps), not only
 	// about objects.
 	Coverage bool
-	// The question itself: Object(Ref), DependentCandidates(UID, SearchScope),
+	// The question itself: Object(Ref), DependentCandidates(UID, Scope),
 	// RecordingManagers(Ref) or Members(Ref).
-	Asked  Asked
-	Ref    resourceid.Ref
-	UID    types.UID
-	Domain ownership.SearchScope
+	Asked Asked
+	Ref   resourceid.Ref
+	UID   types.UID
+	Scope ownership.SearchScope
 	// WantGaps are the gaps the first session reported for a search.
 	WantGaps []ownership.Gap
 }
@@ -175,7 +179,7 @@ func Differences(want, got ownership.ReadSession, q Queries) []Difference {
 		}
 	}
 	for _, uid := range q.UIDs {
-		for _, d := range q.Domains {
+		for _, d := range q.Scopes {
 			w, g := want.DependentCandidates(uid, d), got.DependentCandidates(uid, d)
 			if !sameCandidates(w, g) {
 				diffs = append(diffs, Difference{
@@ -183,7 +187,7 @@ func Differences(want, got ownership.ReadSession, q Queries) []Difference {
 					Want:     describeCandidates(w), Got: describeCandidates(g),
 					Objects:  differingCandidates(w, g),
 					Coverage: !slices.Equal(w.Gaps, g.Gaps),
-					Asked:    AskedCandidates, UID: uid, Domain: d, WantGaps: w.Gaps,
+					Asked:    AskedDependentCandidates, UID: uid, Scope: d, WantGaps: w.Gaps,
 				})
 			}
 		}
@@ -191,8 +195,8 @@ func Differences(want, got ownership.ReadSession, q Queries) []Difference {
 	return diffs
 }
 
-// Conform fails t for every question on which got answers differently from
-// want. It returns the number of differences.
+// Conform fails t when got answers any question differently from want,
+// showing the first 20 differences. It returns the number of differences.
 func Conform(t testing.TB, want, got ownership.ReadSession, q Queries) int {
 	t.Helper()
 	diffs := Differences(want, got, q)

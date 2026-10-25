@@ -7,10 +7,10 @@ import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock, Crosshair, X } from 'lucide-react'
+import { Filter, Plug, List, Activity, AlertTriangle, Clock, Crosshair, X } from 'lucide-react'
 import { TrafficFocusSearch } from './TrafficFocusSearch'
+import { TrafficSourcePill } from './TrafficSourcePill'
 import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
-import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
@@ -457,8 +457,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const connectMutation = useTrafficConnect()
   const setSourceMutation = useSetTrafficSource()
   const hasAutoConnectedRef = useRef(false)
-  const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
-  const sourcePickerRef = useRef<HTMLDivElement>(null)
 
   // Track cluster context to reset state on cluster change
   const { data: clusterInfo } = useClusterInfo()
@@ -478,18 +476,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     }
     lastClusterRef.current = currentCluster
   }, [clusterInfo?.context, queryClient])
-
-  // Close source picker on outside click (capture phase to beat ReactFlow)
-  useEffect(() => {
-    if (!sourcePickerOpen) return
-    const handler = (e: MouseEvent) => {
-      if (sourcePickerRef.current && !sourcePickerRef.current.contains(e.target as Node)) {
-        setSourcePickerOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler, true)
-    return () => document.removeEventListener('mousedown', handler, true)
-  }, [sourcePickerOpen])
 
   const {
     data: sourcesData,
@@ -1449,8 +1435,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
             const activeSource = availableSources.find(s => s.name === activeName) || availableSources[0]
 
             const handleSwitchSource = (name: string) => {
-              if (name === activeSource?.name) { setSourcePickerOpen(false); return }
-              setSourcePickerOpen(false)
               setIsConnecting(true)
               setConnectionError(null)
               hasAutoConnectedRef.current = true
@@ -1509,43 +1493,13 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                     />
                   )}
                   {activeSource && (
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[11px]">
-                      {isConnecting ? (
-                        <>
-                          <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
-                          <span className="text-blue-400">Connecting...</span>
-                        </>
-                      ) : connectionError ? (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                          <span className="text-theme-text-secondary">{activeSource.name}</span>
-                          <button onClick={() => handleConnect(true)} className="text-yellow-500 hover:text-yellow-400 font-medium">retry</button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-green-500" />
-                          {availableSources.length > 1 ? (
-                            <div className="relative" ref={sourcePickerRef}>
-                              <button onClick={() => setSourcePickerOpen(!sourcePickerOpen)} className="flex items-center gap-1 text-theme-text-secondary hover:text-theme-text-primary">
-                                {activeSource.name} <ChevronDown className="h-3 w-3" />
-                              </button>
-                              {sourcePickerOpen && (
-                                <div className="absolute top-full left-0 mt-1 z-50 bg-theme-surface border border-theme-border rounded-md shadow-lg py-1 min-w-[120px]">
-                                  {availableSources.map(source => (
-                                    <button key={source.name} onClick={() => handleSwitchSource(source.name)}
-                                      className={clsx('w-full text-left px-3 py-1 text-xs hover:bg-theme-hover capitalize', source.name === activeSource.name && 'text-blue-400')}>
-                                      {source.name}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-theme-text-secondary">{activeSource.name}</span>
-                          )}
-                        </>
-                      )}
-                    </div>
+                    <TrafficSourcePill
+                      sources={availableSources.map(s => s.name)}
+                      active={activeSource.name}
+                      connection={isConnecting ? 'connecting' : connectionError ? 'error' : 'connected'}
+                      onSwitch={handleSwitchSource}
+                      onRetry={() => handleConnect(true)}
+                    />
                   )}
                 </div>
 

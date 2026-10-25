@@ -2635,7 +2635,7 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 
 	loaded, err := load(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
-		if errors.Is(err, errSourceRequired) {
+		if errors.Is(err, errSourceRequired) || errors.Is(err, errChartDigest) {
 			return nil, err
 		}
 		if reconstructingStoredChart {
@@ -3365,7 +3365,7 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 		chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 	}
 
-	cp, err := c.locateChartPath(nil, chartURL, chartVersion.Version)
+	cp, err := c.locateChartPath(&action.Configuration{}, chartURL, chartVersion.Version)
 	if err != nil {
 		// If we can't download, return basic info from index
 		return &ChartDetail{
@@ -3373,8 +3373,11 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 		}, nil
 	}
 
-	chart, err := loader.Load(cp)
+	chart, err := loadChartWithDigest(cp, chartVersion.Digest)
 	if err != nil {
+		if errors.Is(err, errChartDigest) {
+			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, withChartDigestGuidance(err, false))
+		}
 		return &ChartDetail{
 			ChartInfo: chartVersionToInfo(chartVersion, repoName),
 		}, nil
@@ -3444,6 +3447,7 @@ func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRe
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
 
 	var chartURL string
+	var indexDigest string
 	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
@@ -3514,6 +3518,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
@@ -3570,6 +3575,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
@@ -3597,9 +3603,9 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
 	}
-	chart, err := loader.Load(cp)
+	chart, err := loadChartWithDigest(cp, indexDigest)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load chart: %w", err)
+		return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 	}
 
 	if mode != installFresh {
@@ -3641,6 +3647,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	}
 
 	var chartURL string
+	var indexDigest string
 	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
@@ -3711,6 +3718,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		chartURL = chartVersion.URLs[0]
 		if !isAbsoluteChartURL(chartURL) {
@@ -3765,6 +3773,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		chartURL = chartVersion.URLs[0]
 		if !isAbsoluteChartURL(chartURL) {
@@ -3799,9 +3808,9 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("failed to locate chart: %w", err)
 		}
 		sendProgress("loading", "Loading chart...", chartPath)
-		loadedChart, err = loader.Load(chartPath)
+		loadedChart, err = loadChartWithDigest(chartPath, indexDigest)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load chart: %w", err)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 	} else {
 		// Preserve the existing direct HTTP path. Helm's ChartDownloader loads all
@@ -3829,10 +3838,9 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		tmpChart.Close()
 
 		sendProgress("loading", "Loading chart...", tmpChart.Name())
-
-		loadedChart, err = loader.Load(tmpChart.Name())
+		loadedChart, err = loadChartWithDigest(tmpChart.Name(), indexDigest)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load chart: %w", err)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 	}
 

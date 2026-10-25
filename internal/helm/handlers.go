@@ -1043,6 +1043,8 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 
 func chartSourceErrorStatus(err error) int {
 	switch {
+	case errors.Is(err, errChartDigest):
+		return http.StatusBadGateway
 	case errors.Is(err, errSourceUnavailable):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, driver.ErrReleaseNotFound):
@@ -1185,7 +1187,7 @@ func (h *Handlers) handleGetChartDetail(w http.ResponseWriter, r *http.Request) 
 
 	detail, err := client.GetChartDetail(repoName, chartName, "")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChartSourceOperationError(w, err, "read-chart-detail", repoName, chartName)
 		return
 	}
 
@@ -1206,7 +1208,7 @@ func (h *Handlers) handleGetChartDetailVersion(w http.ResponseWriter, r *http.Re
 
 	detail, err := client.GetChartDetail(repoName, chartName, version)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeChartSourceOperationError(w, err, "read-chart-detail", repoName, chartName)
 		return
 	}
 

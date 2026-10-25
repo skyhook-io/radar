@@ -210,11 +210,13 @@ func collectorMapper(resources []ownership.ServedResource) meta.RESTMapper {
 }
 
 // Every spelling of an owner reference the API server admits must resolve as
-// the collector maps it: where its RESTMapper maps nothing, or maps a
-// namespaced owner for a cluster-scoped object, the reference is
-// unresolvable; where it maps a resource no API serves, the owner is gone;
-// otherwise the owner is the object of the mapped kind at the reference's
-// name, judged by UID, unless Radar can't read that kind.
+// the collector maps it, or be unknown where Radar can't tell: where its
+// RESTMapper maps nothing, the collector retries, so the owner is unknown;
+// where it maps a namespaced owner for a cluster-scoped object, the reference
+// is unresolvable; where it maps a resource no API serves, as for the List
+// kinds it makes up, Radar leaves the owner unknown; otherwise the owner is
+// the object of the mapped kind at the reference's name, judged by UID,
+// unless Radar can't read that kind.
 func TestResolveOwnerMapsReferencesAsTheCollectorsRESTMapperDoes(t *testing.T) {
 	w := ownershiptest.Fixture()
 	s, _ := ownershiptest.Scan(w).Begin()
@@ -276,7 +278,8 @@ func TestResolveOwnerMapsReferencesAsTheCollectorsRESTMapperDoes(t *testing.T) {
 
 // collectorResolves is what the collector's RESTMapper and a GET make of ref.
 // readable is false when Radar can't read the mapped kind, so an unknown
-// answer is honest.
+// answer is honest. Radar also leaves unknown the List kinds the RESTMapper
+// makes up, whose resources no API serves.
 func collectorResolves(t *testing.T, w ownershiptest.World, mapper meta.RESTMapper, kindOf map[schema.GroupResource]resourceid.GroupKind, dependent ownership.Observation, ref metav1.OwnerReference) (ownership.OwnerState, resourceid.Ref, bool) {
 	t.Helper()
 	gv, err := schema.ParseGroupVersion(ref.APIVersion)
@@ -289,21 +292,17 @@ func collectorResolves(t *testing.T, w ownershiptest.World, mapper meta.RESTMapp
 		// the kind.
 		return ownership.OwnerUnknown, resourceid.Ref{}, true
 	}
+	gk, served := kindOf[mapping.Resource.GroupResource()]
+	if !served {
+		return ownership.OwnerGone, resourceid.Ref{}, false
+	}
 	namespaced := mapping.Scope.Name() == meta.RESTScopeNameNamespace
 	if namespaced && dependent.Ref.Namespace == "" {
 		return ownership.OwnerUnresolvable, resourceid.Ref{}, true
 	}
-	gk, served := kindOf[mapping.Resource.GroupResource()]
-	at := resourceid.Ref{Group: gv.Group, Kind: ref.Kind, Name: ref.Name}
-	if served {
-		at.Kind = gk.Kind
-	}
+	at := resourceid.Ref{Group: gv.Group, Kind: gk.Kind, Name: ref.Name}
 	if namespaced {
 		at.Namespace = dependent.Ref.Namespace
-	}
-	if !served {
-		// The GET of a resource no API serves is a 404: the owner is gone.
-		return ownership.OwnerGone, at, true
 	}
 	if c := w.Collection[gk]; c.State != ownershiptest.Collected {
 		return ownership.OwnerUnknown, at, false
@@ -319,10 +318,11 @@ func collectorResolves(t *testing.T, w ownershiptest.World, mapper meta.RESTMapp
 	return ownership.OwnerGone, at, true
 }
 
-// Two references the collector's RESTMapper settles by the order it registered
+// References the collector's RESTMapper settles by the order it registered
 // resources in, which Radar can't know, stay unknown rather than resolving to
 // one candidate: a kind in lower case that two kinds differing only in case
-// share, and the List kind of a kind two resources serve.
+// share, a served kind that is another's lower-case spelling, and the List
+// kinds it makes up, one of which can name a served resource.
 func TestResolveOwnerLeavesOrderDependentMappingsUnknown(t *testing.T) {
 	gc := []string{"create", "delete", "get", "list", "patch", "update", "watch"}
 	w := ownershiptest.Fixture()
@@ -331,16 +331,19 @@ func TestResolveOwnerLeavesOrderDependentMappingsUnknown(t *testing.T) {
 		ownership.ServedResource{Group: "shapes.example.io", Version: "v1", Kind: "THING", Resource: "allcapsthings", Namespaced: true, Verbs: gc},
 		ownership.ServedResource{Group: "shapes.example.io", Version: "v1", Kind: "Gizmo", Resource: "gizmos", Namespaced: true, Verbs: gc},
 		ownership.ServedResource{Group: "shapes.example.io", Version: "v1", Kind: "Gizmo", Resource: "gizmoalts", Namespaced: true, Verbs: gc},
+		ownership.ServedResource{Group: "shapes.example.io", Version: "v1", Kind: "dial", Resource: "lowerdials", Namespaced: true, Verbs: gc},
+		ownership.ServedResource{Group: "shapes.example.io", Version: "v1", Kind: "Dial", Resource: "dials", Namespaced: true, Verbs: gc},
+		ownership.ServedResource{Group: "shapes.example.io", Version: "v1", Kind: "Other", Resource: "diallists", Namespaced: true, Verbs: gc},
 	)
 	s, err := ownershiptest.Scan(w).Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	pod := ownership.Observation{Ref: resourceid.Ref{Kind: "Pod", Namespace: "alpha", Name: "probe"}}
-	for _, kind := range []string{"thing", "GizmoList"} {
+	for _, kind := range []string{"thing", "dial", "GizmoList", "DialList", "List"} {
 		got := ownership.ResolveOwner(s, pod, metav1.OwnerReference{APIVersion: "shapes.example.io/v1", Kind: kind, Name: "x", UID: "uid-x"})
-		if got.State != ownership.OwnerUnknown || got.Gap.Reason != readreason.ReadError {
-			t.Errorf("%s: %v %+v, want unknown with read_error", kind, got.State, got.Gap)
+		if got.State != ownership.OwnerUnknown || got.Gap.Reason == "" {
+			t.Errorf("%s: %v %+v, want unknown with a reason", kind, got.State, got.Gap)
 		}
 	}
 }

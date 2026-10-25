@@ -446,9 +446,7 @@ export function argoApplicationSetConditionsToGitOpsStatus(
 export function parseFluxInventory(entries: Array<{ id: string; v?: string }>): ManagedResource[] {
   return entries
     .map(entry => {
-      // Format: namespace_name_group_kind
-      // The challenge is that namespace, name, and group can all contain underscores
-      // But the format is always: ns_name_group_kind where kind is the last part
+      // Format: namespace_name_group_kind; only the name can hold an underscore.
       const id = entry.id || ''
       const parts = id.split('_')
 

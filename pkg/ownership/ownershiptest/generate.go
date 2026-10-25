@@ -22,9 +22,9 @@ type Kind struct {
 	// Typed: Radar holds the kind in its typed cache, whose collection is
 	// fixed when it starts; other kinds are watched on demand.
 	Typed bool
-	// Watchable: served with list and watch (and delete), so Radar can
-	// collect it and the garbage collector acts on it.
-	Watchable bool
+	// HasGCVerbs: served with delete, list and watch, so Radar can collect
+	// it and the garbage collector acts on it.
+	HasGCVerbs bool
 }
 
 func (k Kind) APIVersion() string {
@@ -36,22 +36,22 @@ func (k Kind) APIVersion() string {
 // scope), one kind that can't be watched, Events, and the GitOps managers
 // whose status lists their members.
 var Kinds = []Kind{
-	{GroupKind: resourceid.GroupKind{Kind: "Pod"}, Version: "v1", Resource: "pods", Namespaced: true, Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}, Version: "v1", Resource: "replicasets", Namespaced: true, Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, Version: "v1", Resource: "deployments", Namespaced: true, Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Kind: "ConfigMap"}, Version: "v1", Resource: "configmaps", Namespaced: true, Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Group: "batch", Kind: "Job"}, Version: "v1", Resource: "jobs", Namespaced: true, Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Kind: "Node"}, Version: "v1", Resource: "nodes", Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Kind: "PersistentVolume"}, Version: "v1", Resource: "persistentvolumes", Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Kind: "Event"}, Version: "v1", Resource: "events", Namespaced: true, Typed: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Widget"}, Version: "v1", Resource: "widgets", Namespaced: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Gadget"}, Version: "v1", Resource: "gadgets", Namespaced: true, Watchable: true},
-	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "ClusterWidget"}, Version: "v1", Resource: "clusterwidgets", Watchable: true},
+	{GroupKind: resourceid.GroupKind{Kind: "Pod"}, Version: "v1", Resource: "pods", Namespaced: true, Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}, Version: "v1", Resource: "replicasets", Namespaced: true, Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, Version: "v1", Resource: "deployments", Namespaced: true, Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Kind: "ConfigMap"}, Version: "v1", Resource: "configmaps", Namespaced: true, Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Group: "batch", Kind: "Job"}, Version: "v1", Resource: "jobs", Namespaced: true, Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Kind: "Node"}, Version: "v1", Resource: "nodes", Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Kind: "PersistentVolume"}, Version: "v1", Resource: "persistentvolumes", Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Kind: "Event"}, Version: "v1", Resource: "events", Namespaced: true, Typed: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Widget"}, Version: "v1", Resource: "widgets", Namespaced: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Gadget"}, Version: "v1", Resource: "gadgets", Namespaced: true, HasGCVerbs: true},
+	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "ClusterWidget"}, Version: "v1", Resource: "clusterwidgets", HasGCVerbs: true},
 	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Summary"}, Version: "v1", Resource: "summaries", Namespaced: true},
-	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Node"}, Version: "v1", Resource: "nodes", Namespaced: true, Watchable: true},
-	{GroupKind: ownership.ArgoApplication, Version: "v1alpha1", Resource: "applications", Namespaced: true, Watchable: true},
-	{GroupKind: ownership.FluxHelmRelease, Version: "v2", Resource: "helmreleases", Namespaced: true, Watchable: true},
-	{GroupKind: ownership.FluxKustomization, Version: "v1", Resource: "kustomizations", Namespaced: true, Watchable: true},
+	{GroupKind: resourceid.GroupKind{Group: "example.io", Kind: "Node"}, Version: "v1", Resource: "nodes", Namespaced: true, HasGCVerbs: true},
+	{GroupKind: ownership.ArgoApplication, Version: "v1alpha1", Resource: "applications", Namespaced: true, HasGCVerbs: true},
+	{GroupKind: ownership.FluxHelmRelease, Version: "v2", Resource: "helmreleases", Namespaced: true, HasGCVerbs: true},
+	{GroupKind: ownership.FluxKustomization, Version: "v1", Resource: "kustomizations", Namespaced: true, HasGCVerbs: true},
 }
 
 // KindOf returns the generated kind gk.
@@ -70,7 +70,7 @@ func Resources() []ownership.ServedResource {
 	var out []ownership.ServedResource
 	for _, k := range Kinds {
 		verbs := gc
-		if !k.Watchable {
+		if !k.HasGCVerbs {
 			verbs = []string{"get", "list"}
 		}
 		out = append(out, ownership.ServedResource{Group: k.Group, Version: k.Version, Kind: k.Kind, Resource: k.Resource, Namespaced: k.Namespaced, Verbs: verbs})
@@ -264,7 +264,7 @@ func Generate(seed uint64) World {
 	w := b.world()
 	w.Partial = r.IntN(8) == 0
 	for _, k := range Kinds {
-		if !k.Watchable {
+		if !k.HasGCVerbs {
 			continue
 		}
 		c := w.Collection[k.GroupKind]
@@ -311,7 +311,7 @@ func (b *builder) add(group, kind, namespace, name string, owners ...metav1.Owne
 		APIVersion:      k.APIVersion(),
 		UID:             types.UID(uid),
 		ResourceVersion: fmt.Sprint(len(b.objects) + 1),
-		Owners:          owners,
+		OwnerReferences: owners,
 	}
 	b.objects = append(b.objects, o)
 	return o
@@ -321,7 +321,7 @@ func (b *builder) add(group, kind, namespace, name string, owners ...metav1.Owne
 func (b *builder) manager(gk resourceid.GroupKind, namespace, name string, state ownership.MembershipState, form uint8, destination string, members ...resourceid.Ref) Object {
 	b.add(gk.Group, gk.Kind, namespace, name)
 	o := &b.objects[len(b.objects)-1]
-	o.Membership, o.Form, o.Destination, o.Members = state, form, destination, members
+	o.Membership, o.Form, o.DestinationNamespace, o.Members = state, form, destination, members
 	return *o
 }
 
@@ -341,7 +341,7 @@ func (b *builder) world() World {
 	w := World{Resources: Resources(), Objects: b.objects, Collection: map[resourceid.GroupKind]Collection{}}
 	for _, k := range Kinds {
 		c := Collection{OnDemand: !k.Typed}
-		if !k.Watchable {
+		if !k.HasGCVerbs {
 			c.State = Unwatchable
 		}
 		w.Collection[k.GroupKind] = c

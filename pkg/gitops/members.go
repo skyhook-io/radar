@@ -7,18 +7,27 @@ type Member struct {
 	Group, Kind, Namespace, Name string
 }
 
-// MemberList is what a GitOps manager's status lists as the objects it
-// applies.
+// MemberList is what a GitOps manager's status records: for an Argo CD
+// Application, the objects its last comparison covered, including desired
+// objects not yet created, live ones awaiting pruning and ones another
+// Application also tracks; for Flux, the inventory of its last apply. An
+// entry says the manager recorded the object, not that it applied it or
+// alone manages it.
 type MemberList struct {
 	Entries []Member
-	// DestinationNamespace is an Argo CD Application's destination namespace.
+	// DestinationNamespace is the namespace of the destination an Argo CD
+	// Application's list was compared against, where an entry recording no
+	// namespace is; empty for Flux.
 	DestinationNamespace string
 }
 
 // ArgoMembers reads an Application's status.resources, as of the destination
 // Argo CD compared it against. ok is false when the list can't be trusted, so
-// that any object may be a member: the Application has no destination, Argo CD
-// hasn't reconciled it, or an entry names no object.
+// that any object may be a member: the Application has no destination, the
+// list is left out before Argo CD has reconciled it (reconciledAt unset), the
+// list is empty or left out after a failed comparison, or an entry names no
+// object. A nonempty list from a failed comparison is still what Argo CD
+// recorded, though it may leave objects out.
 func ArgoMembers(app *unstructured.Unstructured) (MemberList, bool) {
 	return argoMembers(app, true)
 }
@@ -156,8 +165,10 @@ func optionalString(v any) (string, bool) {
 }
 
 // argoComparisonFailed reports whether Argo CD's last comparison failed. A
-// failed comparison records an empty resource list and still sets
-// reconciledAt, so an empty list then says nothing about what it manages.
+// failed comparison still sets reconciledAt and can leave an empty, partial
+// or previous resource list. An empty one then says nothing about what the
+// Application covers; a nonempty one is still what it recorded, though it
+// may leave objects out.
 func argoComparisonFailed(app *unstructured.Unstructured) bool {
 	if status, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status"); status == "Unknown" {
 		return true

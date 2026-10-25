@@ -20,8 +20,7 @@ const (
 	// UID.
 	OwnerFound
 	// OwnerGone: no object has the reference's coordinates. The collector
-	// treats the reference as dangling. That includes a List kind the
-	// collector's RESTMapper makes up, which maps to a resource no API serves.
+	// treats the reference as dangling.
 	OwnerGone
 	// OwnerReplaced: an object has the coordinates under another UID, a
 	// later incarnation. The collector treats the reference as dangling too.
@@ -105,19 +104,6 @@ func resolveOwner(catalog *Catalog, dependent Observation, ref metav1.OwnerRefer
 	}
 	kind, known := catalog.Kind(gk)
 	if !known || !catalog.mapsAt(gk, gv.Version) {
-		if namespaced, ambiguous, made := catalog.listKind(gk, gv.Version); made {
-			switch {
-			case ambiguous:
-				return unknown
-			case namespaced && dependent.Ref.Namespace == "":
-				return OwnerResolution{State: OwnerUnresolvable}
-			}
-			gone := resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Name: ref.Name}
-			if namespaced {
-				gone.Namespace = dependent.Ref.Namespace
-			}
-			return OwnerResolution{State: OwnerGone, Ref: gone}
-		}
 		// The collector retries a reference its RESTMapper can't map, since
 		// its next discovery may serve the kind, and the catalog can be older
 		// than the collector's discovery. So what discovery didn't list is

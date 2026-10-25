@@ -149,10 +149,10 @@ func TestLiveParity(t *testing.T) {
 		o := ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: u.GetNamespace(), Name: u.GetName()},
 			APIVersion: gvr.GroupVersion().String(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
-			Owners: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
+			OwnerReferences: u.GetOwnerReferences(), DeletionTimestamp: u.GetDeletionTimestamp(), Finalizers: u.GetFinalizers(),
 		}
 		if ownership.IsRecordingManager(gk) {
-			o.Membership, o.Members, o.Destination = liveMembership(gk, u, scope)
+			o.Membership, o.Members, o.DestinationNamespace = liveMembership(gk, u, scope)
 		}
 		return o
 	}
@@ -201,16 +201,16 @@ func TestLiveParity(t *testing.T) {
 
 	// questions asks about every object and one certainly missing per
 	// collected kind, every UID an object has or names plus one nothing has,
-	// and domains around a sample of namespaces. Each question is asked once.
+	// and scopes around a sample of namespaces. Each question is asked once.
 	questions := func(w ownershiptest.World) ownershiptest.Queries {
-		q := ownershiptest.Queries{Domains: []ownership.SearchScope{ownership.Everywhere(), {Namespaces: []string{""}, IncludeClusterScoped: true}}}
+		q := ownershiptest.Queries{Scopes: []ownership.SearchScope{ownership.Everywhere(), {Namespaces: []string{""}, IncludeClusterScoped: true}}}
 		refs := map[resourceid.Ref]bool{}
 		uids := map[types.UID]bool{"uid-nothing-has": true}
 		var namespaces []string
 		for _, o := range w.Objects {
 			refs[o.Ref] = true
 			uids[o.UID] = true
-			for _, ref := range o.Owners {
+			for _, ref := range o.OwnerReferences {
 				uids[ref.UID] = true
 			}
 			if o.Ref.Namespace != "" && !slices.Contains(namespaces, o.Ref.Namespace) {
@@ -246,7 +246,7 @@ func TestLiveParity(t *testing.T) {
 		slices.Sort(namespaces)
 		for i, ns := range namespaces {
 			if i%5 == 0 {
-				q.Domains = append(q.Domains, ownership.InNamespace(ns))
+				q.Scopes = append(q.Scopes, ownership.InNamespace(ns))
 			}
 		}
 		return q
@@ -315,8 +315,8 @@ func TestLiveParity(t *testing.T) {
 		}
 		t.Logf("pass %d: GitOps managers: %d recorded, listing %d members; %d unreadable; %d remote",
 			pass, states[ownership.MembersRecorded], members, states[ownership.MembersUnreadable], states[ownership.MembersRemote])
-		t.Logf("pass %d: %d objects; %d questions (%d objects and their recording managers, %d UIDs × %d domains, %d inventories) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d wrong or not settled",
-			pass, len(w.Objects), 2*len(q.Refs)+len(q.UIDs)*len(q.Domains)+len(q.Managers), len(q.Refs), len(q.UIDs), len(q.Domains), len(q.Managers), resolutions,
+		t.Logf("pass %d: %d objects; %d questions (%d objects and their recording managers, %d UIDs × %d scopes, %d inventories) and %d owner references resolved; %d differ: %d confirmed by a change the API server shows, %d caught up with no change shown, %d wrong or not settled",
+			pass, len(w.Objects), 2*len(q.Refs)+len(q.UIDs)*len(q.Scopes)+len(q.Managers), len(q.Refs), len(q.UIDs), len(q.Scopes), len(q.Managers), resolutions,
 			len(diffs)+resolutionDiffs, counts[confirmed], counts[caughtUp], counts[unresolved])
 		for i, question := range caughtUpQuestions {
 			if i == 10 {

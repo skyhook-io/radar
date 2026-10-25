@@ -92,7 +92,7 @@ func (st settle) recheck(d ownershiptest.Difference, listed map[resourceid.Ref]o
 	}
 	holds := true
 	switch d.Asked {
-	case ownershiptest.AskedCandidates:
+	case ownershiptest.AskedDependentCandidates:
 		holds = r.candidatesHold(d)
 	case ownershiptest.AskedRecordingManagers:
 		holds = r.managersHold(d)
@@ -140,39 +140,39 @@ const answers = 2
 
 // candidatesHold asks for a fresh answer until one holds, at most answers
 // times. It holds when it is complete, with the expected gaps; every
-// candidate is in the domain, once, names the UID in its current copy and
+// candidate is in the scope, once, names the UID in its current copy and
 // matches that copy exactly; and it owes nothing (see owes).
 func (r *rechecking) candidatesHold(d ownershiptest.Difference) bool {
 	for range answers {
-		fresh := r.cache.DependentCandidates(d.UID, d.Domain)
+		fresh := r.cache.DependentCandidates(d.UID, d.Scope)
 		if !slices.Equal(fresh.Gaps, d.WantGaps) {
 			return false
 		}
 		seen := map[resourceid.Ref]bool{}
 		for _, c := range fresh.Candidates {
-			if seen[c.Ref] || !inDomain(c.Ref, d.Domain) || !r.settleRef(c.Ref) {
+			if seen[c.Ref] || !inScope(c.Ref, d.Scope) || !r.settleRef(c.Ref) {
 				return false
 			}
 			seen[c.Ref] = true
-			if !r.exists[c.Ref] || !names(r.current[c.Ref].Owners, d.UID) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
+			if !r.exists[c.Ref] || !names(r.current[c.Ref].OwnerReferences, d.UID) || !ownershiptest.SameObservation(c, ownershiptest.Observe(r.current[c.Ref])) {
 				return false
 			}
 		}
 		var suspects []resourceid.Ref
 		for _, ref := range d.Objects {
-			if !seen[ref] && inDomain(ref, d.Domain) {
+			if !seen[ref] && inScope(ref, d.Scope) {
 				suspects = append(suspects, ref)
 			}
 		}
 		for ref, o := range r.listed {
-			if seen[ref] || !inDomain(ref, d.Domain) || unread(fresh.Gaps, ref) {
+			if seen[ref] || !inScope(ref, d.Scope) || unread(fresh.Gaps, ref) {
 				continue
 			}
-			if read := r.cache.Object(ref); names(o.Owners, d.UID) || read.State == ownership.Present && names(read.Object.OwnerReferences, d.UID) {
+			if read := r.cache.Object(ref); names(o.OwnerReferences, d.UID) || read.State == ownership.Present && names(read.Object.OwnerReferences, d.UID) {
 				suspects = append(suspects, ref)
 			}
 		}
-		owes, settled := r.owes(suspects, func(o ownershiptest.Object) bool { return names(o.Owners, d.UID) })
+		owes, settled := r.owes(suspects, func(o ownershiptest.Object) bool { return names(o.OwnerReferences, d.UID) })
 		if !settled {
 			return false
 		}
@@ -324,9 +324,9 @@ func unread(gaps []ownership.Gap, ref resourceid.Ref) bool {
 	})
 }
 
-// inDomain reports whether a search of d covers ref, an object of a
+// inScope reports whether a search of d covers ref, an object of a
 // cluster-scoped kind when it has no namespace.
-func inDomain(ref resourceid.Ref, d ownership.SearchScope) bool {
+func inScope(ref resourceid.Ref, d ownership.SearchScope) bool {
 	if ref.Namespace == "" {
 		return d.IncludeClusterScoped
 	}

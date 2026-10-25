@@ -183,10 +183,10 @@ func (v *View) Children(ref resourceid.Ref) ChildrenAnswer {
 	if ref.Namespace == "" {
 		namespaces, all = v.access.Namespaces()
 	}
-	domain := SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: ref.Namespace == ""}
+	scope := SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: ref.Namespace == ""}
 	found, searched := v.searches[ref]
 	if !searched {
-		found = v.session.DependentCandidates(owner.UID, domain)
+		found = v.session.DependentCandidates(owner.UID, scope)
 		v.searches[ref] = found
 	}
 	candidates, unread, undecided := v.candidates(found)
@@ -217,7 +217,7 @@ func (v *View) Children(ref resourceid.Ref) ChildrenAnswer {
 		a.Children = append(a.Children, c)
 	}
 	for _, g := range found.Gaps {
-		if v.coversReadable(g, domain) {
+		if v.coversReadable(g, scope) {
 			a.Gaps = append(a.Gaps, g)
 		}
 	}
@@ -276,10 +276,10 @@ func (v *View) candidates(found DependentCandidatesRead) (out []Observation, unr
 }
 
 // coversReadable reports whether gap covers something the caller may read
-// within domain, so leaving it unread may have hidden a child. A gap on a
-// namespaced kind without a namespace covers every namespace of the domain,
+// within scope, so leaving it unread may have hidden a child. A gap on a
+// namespaced kind without a namespace covers every namespace of the scope,
 // and counts if the caller may read the kind in any of them.
-func (v *View) coversReadable(g Gap, domain SearchScope) bool {
+func (v *View) coversReadable(g Gap, scope SearchScope) bool {
 	if g.Kind.Kind == "" {
 		return true
 	}
@@ -290,10 +290,10 @@ func (v *View) coversReadable(g Gap, domain SearchScope) bool {
 	if !known || !k.Namespaced {
 		return v.access.CanRead(g.Kind, "") != Denied
 	}
-	if domain.AllNamespaces {
+	if scope.AllNamespaces {
 		return v.access.CanRead(g.Kind, "") != Denied
 	}
-	return slices.ContainsFunc(domain.Namespaces, func(ns string) bool { return v.access.CanRead(g.Kind, ns) != Denied })
+	return slices.ContainsFunc(scope.Namespaces, func(ns string) bool { return v.access.CanRead(g.Kind, ns) != Denied })
 }
 
 // ControllerChainAnswer is the chain of controller references from an object

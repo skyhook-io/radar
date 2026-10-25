@@ -66,6 +66,25 @@ func TestCatalogMarksAKindServedByTwoResourcesAmbiguous(t *testing.T) {
 	}
 }
 
+// An aggregated API can serve one kind namespaced at one version and
+// cluster-scoped at another, so which scope a reference or a search means is
+// as open as which resource.
+func TestCatalogMarksAKindServedAtTwoScopesAmbiguous(t *testing.T) {
+	widget := resourceid.GroupKind{Group: "example.io", Kind: "Widget"}
+	gc := []string{"delete", "list", "watch"}
+	v1 := ServedResource{Group: "example.io", Version: "v1", Kind: "Widget", Resource: "widgets", Namespaced: true, Verbs: gc}
+	v1beta1 := ServedResource{Group: "example.io", Version: "v1beta1", Kind: "Widget", Resource: "widgets", Verbs: gc}
+	for _, order := range [][]ServedResource{{v1, v1beta1}, {v1beta1, v1}} {
+		c := NewCatalog(order, true)
+		if _, found := c.Kind(widget); found || !c.Ambiguous(widget) {
+			t.Fatalf("Widget at two scopes must be ambiguous: found=%v", found)
+		}
+		if got := c.AmbiguousDependentKinds(); !slices.Equal(got, []AmbiguousKind{{GroupKind: widget, Namespaced: true, ClusterScoped: true}}) {
+			t.Fatalf("AmbiguousDependentKinds = %+v; want Widget in both scopes", got)
+		}
+	}
+}
+
 // Aggregated APIs can serve one kind through several query resources that
 // nothing can list, watch or delete, as Kueue's visibility API serves
 // PendingWorkloadsSummary through clusterqueues and localqueues. The kind is

@@ -15,14 +15,14 @@ type scopeOf func(resourceid.GroupKind) (namespaced, known bool)
 
 // discoveredScope is the scope of each kind as served: a built-in kind's
 // own, unless discovery serves it with the other scope; a kind two resources
-// serve has none.
+// serve, or that versions serve at different scopes, has none.
 func discoveredScope(served []ownership.ServedResource) scopeOf {
 	scopes := map[resourceid.GroupKind]bool{}
 	resource := map[resourceid.GroupKind]string{}
 	ambiguous := map[resourceid.GroupKind]bool{}
 	for _, r := range served {
 		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
-		if seen, ok := resource[gk]; ok && seen != r.Resource {
+		if seen, ok := resource[gk]; ok && (seen != r.Resource || scopes[gk] != r.Namespaced) {
 			ambiguous[gk] = true
 		}
 		resource[gk], scopes[gk] = r.Resource, r.Namespaced
@@ -105,8 +105,9 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 		return ownership.MembersUnreadable, nil, namespace
 	}
 	if len(list) == 0 {
-		// After a failed comparison Argo CD records no resources and still
-		// sets reconciledAt.
+		// A failed comparison can leave an empty list and still sets
+		// reconciledAt; Argo CD leaves out a successful empty list only once
+		// it has reconciled.
 		failed := sync["status"] == "Unknown"
 		conditions, _ := status["conditions"].([]any)
 		for _, c := range conditions {
@@ -114,7 +115,7 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 				failed = true
 			}
 		}
-		if reconciled, _ := status["reconciledAt"].(string); reconciled == "" || failed {
+		if reconciled, _ := status["reconciledAt"].(string); failed || raw == nil && reconciled == "" {
 			return ownership.MembersUnreadable, nil, namespace
 		}
 		if raw == nil {

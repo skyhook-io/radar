@@ -77,7 +77,7 @@ func setMeta(t testing.TB, obj runtime.Object, o ownershiptest.Object) {
 	m.SetUID(o.UID)
 	m.SetResourceVersion(o.ResourceVersion)
 	var owners []metav1.OwnerReference
-	for _, ref := range o.Owners {
+	for _, ref := range o.OwnerReferences {
 		owners = append(owners, *ref.DeepCopy())
 	}
 	m.SetOwnerReferences(owners)
@@ -135,7 +135,7 @@ func renderApplication(u *unstructured.Unstructured, o ownershiptest.Object) {
 			e["group"] = m.Group
 		}
 		namespaced, known := namespacedKind(m.GroupKind())
-		inDestination := known && namespaced && o.Destination != "" && m.Namespace == o.Destination && i%2 == 1
+		inDestination := known && namespaced && o.DestinationNamespace != "" && m.Namespace == o.DestinationNamespace && i%2 == 1
 		if m.Namespace != "" && !inDestination {
 			e["namespace"] = m.Namespace
 		}
@@ -167,8 +167,8 @@ func renderApplication(u *unstructured.Unstructured, o ownershiptest.Object) {
 			destination = map[string]any{}
 		}
 	}
-	if o.Destination != "" && len(destination) > 0 {
-		destination["namespace"] = o.Destination
+	if o.DestinationNamespace != "" && len(destination) > 0 {
+		destination["namespace"] = o.DestinationNamespace
 	}
 	u.Object["spec"] = map[string]any{"project": "default", "destination": destination}
 	if status != nil {
@@ -298,12 +298,12 @@ func render(t testing.TB, w ownershiptest.World) *rendered {
 	// Reactors go in before any watch starts: the fake client's reactor
 	// chain isn't safe to change while informers list through it.
 	for _, k := range ownershiptest.Kinds {
-		if !k.Typed && k.Watchable {
+		if !k.Typed && k.HasGCVerbs {
 			r.reactDynamic(k, w.Collection[k.GroupKind])
 		}
 	}
 	for _, k := range ownershiptest.Kinds {
-		if !k.Typed && k.Watchable {
+		if !k.Typed && k.HasGCVerbs {
 			r.watchDynamic(t, k, w.Collection[k.GroupKind])
 		}
 	}

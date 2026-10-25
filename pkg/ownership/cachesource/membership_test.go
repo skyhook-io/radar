@@ -193,7 +193,7 @@ func TestRecordingManagersOfABuiltInDiscoveryDisputes(t *testing.T) {
 			app := ownershiptest.Object{
 				Ref:        resourceid.Ref{Group: ownership.ArgoApplication.Group, Kind: ownership.ArgoApplication.Kind, Namespace: "argocd", Name: "rbac"},
 				APIVersion: "argoproj.io/v1alpha1", UID: "uid-rbac", ResourceVersion: "1",
-				Membership: ownership.MembersRecorded, Members: []resourceid.Ref{reader}, Destination: "alpha",
+				Membership: ownership.MembersRecorded, Members: []resourceid.Ref{reader}, DestinationNamespace: "alpha",
 			}
 			w.Objects = []ownershiptest.Object{app}
 			scan, _ := ownershiptest.Scan(w).Begin()
@@ -239,7 +239,7 @@ func TestRecordingManagersAreCompleteOnlyWithoutDoubt(t *testing.T) {
 		return ownershiptest.Object{
 			Ref:        resourceid.Ref{Group: ownership.ArgoApplication.Group, Kind: ownership.ArgoApplication.Kind, Namespace: "argocd", Name: name},
 			APIVersion: "argoproj.io/v1alpha1", UID: types.UID("uid-" + name), ResourceVersion: "1",
-			Membership: state, Members: members, Destination: "alpha",
+			Membership: state, Members: members, DestinationNamespace: "alpha",
 		}
 	}
 	for _, tc := range []struct {
