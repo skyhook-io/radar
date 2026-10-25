@@ -25,6 +25,7 @@ interface PodRendererProps {
 export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, resolvedEnvFrom }: PodRendererProps) {
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
+  const isTerminal = data.status?.phase === 'Succeeded' || data.status?.phase === 'Failed'
   const environmentEnabled = [...(data.spec?.initContainers ?? []), ...(data.spec?.containers ?? [])]
     .some((container: any) => container.env?.length > 0 || container.envFrom?.length > 0)
   const environmentQuery = usePodEnvironment(namespace ?? '', podName ?? '', environmentEnabled)
@@ -51,7 +52,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const metricsHistoryQuery = usePodMetricsHistory(namespace, podName)
   const { data: metricsHistory } = metricsHistoryQuery
   const historyMetricsUnavailable = metricsHistory?.metricsUnavailable === true
-  const liveMetricsEnabled = shouldFetchLiveMetrics(metricsHistoryQuery.isFetched || metricsHistoryQuery.isError, historyMetricsUnavailable)
+  const liveMetricsEnabled = !isTerminal && shouldFetchLiveMetrics(metricsHistoryQuery.isFetched || metricsHistoryQuery.isError, historyMetricsUnavailable)
   const { data: metrics } = usePodMetrics(namespace, podName, { enabled: liveMetricsEnabled })
   const metricsUnavailable = historyMetricsUnavailable || isLiveMetricsUnavailable(liveMetricsEnabled, metrics)
   const visibleMetrics = getVisibleLiveMetrics(liveMetricsEnabled, metricsUnavailable, metrics)

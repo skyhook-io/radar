@@ -546,3 +546,21 @@ it('shows reported running-but-unready nginx readiness as degraded', () => {
   expect(html).toMatch(/bg-amber-100[^>]*>Not Ready</)
   expect(html).toMatch(/>running</)
 })
+
+describe('finished Pod resource usage',()=>{
+ it.each(['Succeeded','Failed'])('explains ended live usage for %s without cluster repair advice',phase=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase}}} onCopy={()=>{}} copied={null} metricsUnavailable metricsHistory={{containers:[],collectionError:'Pod metrics not found',metricsUnavailableReason:'not found'}} />)
+  expect(html).toContain('Live resource usage has ended for this Pod')
+  expect(html).not.toContain('Metrics collection error:')
+  expect(html).not.toContain('Radar cannot read metrics.k8s.io')
+  expect(html).not.toContain('No usage yet: this Pod is not running')
+ })
+ it('keeps recorded history and hides cached live usage after completion',()=>{
+  const html=renderToString(<PodRenderer data={{...pod,status:{phase:'Succeeded'}}} onCopy={()=>{}} copied={null}
+   metrics={{timestamp:'2026-10-25T12:00:00Z',containers:[{name:'cached-live',usage:{cpu:'100m',memory:'1Mi'}}]}}
+   metricsHistory={{containers:[{name:'recorded-history',dataPoints:[{timestamp:'2026-10-25T11:59:00Z',cpu:100,memory:1024}]}]}} />)
+  expect(html).toContain('recorded-history')
+  expect(html).not.toContain('cached-live')
+  expect(html).not.toContain('Last updated:')
+ })
+})
