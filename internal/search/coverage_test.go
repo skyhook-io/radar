@@ -97,16 +97,16 @@ func TestSearchCoverageReadFailuresAndPartialNamespaces(t *testing.T) {
 		})
 	}
 	// Radar's collection scope is reported only for a namespace the query
-	// names; the cached namespaces still answer.
+	// names.
 	p := &fakeProvider{typedReasons: map[string]string{"Pod": "radar_namespace_not_collected"}, typed: map[string][]runtime.Object{"pods": {newPod("a", "visible", "x", nil)}}}
-	if res, _ := Search(context.Background(), p, Parse("kind:Pod"), Options{}); partial(res) || len(unsearched(res)) != 0 || len(res.Hits) != 1 {
+	if res, _ := Search(context.Background(), p, Parse("kind:Pod"), Options{}); partial(res) || len(unsearched(res)) != 0 || len(res.Hits) != 0 {
 		t.Fatalf("kind: alone reported collector scope: %+v", res)
 	}
 	q := Parse("kind:Pod ns:a")
 	opts := Options{}
 	opts.ScopeNamespaces(q, nil, nil)
 	want := []UnsearchedKind{{Kind: "*", Reason: "radar_namespace_not_collected", Namespaces: []string{"a"}}}
-	if res, _ := Search(context.Background(), p, q, opts); !partial(res) || !reflect.DeepEqual(unsearched(res), want) || len(res.Hits) != 1 {
+	if res, _ := Search(context.Background(), p, q, opts); !partial(res) || !reflect.DeepEqual(unsearched(res), want) || len(res.Hits) != 0 {
 		t.Fatalf("named namespace outside collection: %+v, want %+v", unsearched(res), want)
 	}
 	for _, tc := range []struct {

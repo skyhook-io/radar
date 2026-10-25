@@ -100,8 +100,12 @@ func readableWithin(listNs, readable []string) []string {
 type coverage struct {
 	namedKinds      bool
 	namedNamespaces map[string]bool
-	kinds           map[readreason.Code][]resourceapi.KindRef
-	kindSeen        map[coverageKey]bool
+	searchedKinds   int
+	namespaceKinds  map[readreason.Code]map[string]int
+	// Kinds are scanned serially; deduplication needs to retain only the current kind.
+	namespaceKindSeen map[readreason.Code]map[string]bool
+	kinds             map[readreason.Code][]resourceapi.KindRef
+	kindSeen          map[coverageKey]bool
 	// someNamespaces marks reasons recorded for a kind in only some
 	// namespaces.
 	someNamespaces map[readreason.Code]bool
@@ -126,6 +130,7 @@ func newCoverage(q Query) *coverage {
 	return &coverage{
 		namedKinds:      len(q.KindFilter) > 0,
 		namedNamespaces: namespaces,
+		namespaceKinds:  map[readreason.Code]map[string]int{},
 		kinds:           map[readreason.Code][]resourceapi.KindRef{},
 		kindSeen:        map[coverageKey]bool{},
 		someNamespaces:  map[readreason.Code]bool{},
@@ -223,6 +228,23 @@ func (c *coverage) namespaces(reason readreason.Code, namespaces ...string) {
 	}
 }
 
+func (c *coverage) kindNamespaces(reason readreason.Code, namespaces ...string) {
+	c.namespaces(reason, namespaces...)
+	for _, ns := range namespaces {
+		if !c.namedNamespaces[ns] || c.namespaceKindSeen[reason][ns] {
+			continue
+		}
+		if c.namespaceKinds[reason] == nil {
+			c.namespaceKinds[reason] = map[string]int{}
+		}
+		if c.namespaceKindSeen[reason] == nil {
+			c.namespaceKindSeen[reason] = map[string]bool{}
+		}
+		c.namespaceKindSeen[reason][ns] = true
+		c.namespaceKinds[reason][ns]++
+	}
+}
+
 // result renders the gaps, most actionable first. On a query that names kinds
 // every kind-level gap names all of them. Otherwise loading kinds are only
 // counted — at startup they can be most of the catalog — and each failure
@@ -250,7 +272,14 @@ func (c *coverage) result() []resourceapi.Gap {
 		out = append(out, resourceapi.Gap{Code: reason, Kinds: resourceapi.Kinds(kinds, limit), Namespaces: where})
 	}
 	for reason, namespaces := range c.nsGaps {
-		out = append(out, resourceapi.Gap{Code: reason, Kinds: resourceapi.AllKinds(), Namespaces: resourceapi.Names(namespaces, len(namespaces))})
+		kinds := resourceapi.AllKinds()
+		for _, ns := range namespaces {
+			if affected := c.namespaceKinds[reason][ns]; affected > 0 && affected != c.searchedKinds {
+				kinds = resourceapi.UnknownKinds()
+				break
+			}
+		}
+		out = append(out, resourceapi.Gap{Code: reason, Kinds: kinds, Namespaces: resourceapi.Names(namespaces, len(namespaces))})
 	}
 	for reason := range c.unbounded {
 		out = append(out, resourceapi.Gap{Code: reason, Kinds: resourceapi.UnknownKinds(), Namespaces: resourceapi.AllNames()})
@@ -380,7 +409,7 @@ var ErrConnectionChanged = errors.New("Radar's cluster connection changed during
 // listErrorReason classifies a failed collector list or warm-up. The typed
 // cache reports a probe-disabled kind as a "forbidden:" error, and
 // ErrUnknownKind marks a kind Radar reads directly instead of watching. A 401
-// stays collector_forbidden: the probes and retained observations behind most
+// stays radar_forbidden: the probes and retained observations behind most
 // collector denials do not keep 401 apart from 403.
 func listErrorReason(err error) readreason.Code {
 	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) || strings.HasPrefix(err.Error(), "forbidden:") {

@@ -149,9 +149,9 @@ func TestNamespaceCoverageNamesOnlyNamedNamespaces(t *testing.T) {
 			{Kind: "*", Reason: "outside_namespace_pin", Namespaces: []string{"b"}},
 			{Kind: "*", Reason: "user_namespace_not_visible", Namespaces: []string{"c"}},
 		}, 1},
-		{"collection", "ns:a robusta", nil, nil, true, []UnsearchedKind{{Kind: "*", Reason: "radar_namespace_not_collected", Namespaces: []string{"a"}}}, 1},
-		{"pin without ns:", "robusta", []string{"a"}, nil, true, []UnsearchedKind{}, 3},
-		{"kind: without ns:", "kind:Pod robusta", []string{"a"}, nil, true, []UnsearchedKind{}, 1},
+		{"collection", "ns:a robusta", nil, nil, true, []UnsearchedKind{{Kind: "*", Reason: "radar_namespace_not_collected", Namespaces: []string{"a"}}}, 0},
+		{"pin without ns:", "robusta", []string{"a"}, nil, true, []UnsearchedKind{}, 2},
+		{"kind: without ns:", "kind:Pod robusta", []string{"a"}, nil, true, []UnsearchedKind{}, 0},
 		{"cluster-scoped kind", "kind:ClusterRole ns:b robusta", []string{"a"}, []string{"a"}, false, []UnsearchedKind{}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

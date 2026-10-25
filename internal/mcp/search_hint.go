@@ -28,6 +28,8 @@ type hintEntry struct {
 	Reason      readreason.Code
 	Namespaces  []string
 	Count       int
+	// SomeKinds: a namespace gap that missed only some of the kinds searched.
+	SomeKinds bool
 }
 
 func hintEntries(cov resourceapi.SearchCoverage) []hintEntry {
@@ -43,7 +45,7 @@ func hintEntries(cov resourceapi.SearchCoverage) []hintEntry {
 				out = append(out, hintEntry{Kind: k.Kind, Group: k.Group, Reason: gap.Code})
 			}
 		case gap.Namespaces != nil && gap.Namespaces.Extent == "":
-			out = append(out, hintEntry{Kind: "*", Reason: gap.Code, Namespaces: gap.Namespaces.Names})
+			out = append(out, hintEntry{Kind: "*", Reason: gap.Code, Namespaces: gap.Namespaces.Names, SomeKinds: gap.Kinds != nil && gap.Kinds.Extent != resourceapi.ExtentAll})
 		default:
 			out = append(out, hintEntry{Kind: "*", Reason: gap.Code})
 		}
@@ -334,10 +336,18 @@ func namespaceSentence(entries []hintEntry, oneWhy, manyWhy string) string {
 		}
 	}
 	slices.Sort(namespaces)
+	someKinds := slices.ContainsFunc(entries, func(e hintEntry) bool { return e.SomeKinds })
 	if len(namespaces) == 1 {
+		if someKinds {
+			return fmt.Sprintf("Some kinds weren't searched in namespace %s: %s.", namespaces[0], oneWhy)
+		}
 		return fmt.Sprintf("Namespace %s wasn't searched: %s.", namespaces[0], oneWhy)
 	}
-	return fmt.Sprintf("Namespaces %s weren't searched: %s.", boundedCoverageNames(namespaces[:min(len(namespaces), 5)], len(namespaces)), manyWhy)
+	names := boundedCoverageNames(namespaces[:min(len(namespaces), 5)], len(namespaces))
+	if someKinds {
+		return fmt.Sprintf("Some kinds weren't searched in namespaces %s: %s.", names, manyWhy)
+	}
+	return fmt.Sprintf("Namespaces %s weren't searched: %s.", names, manyWhy)
 }
 
 // celNoSuchKey matches CEL's missing-field message so the hint can name the field.

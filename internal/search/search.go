@@ -196,8 +196,8 @@ type Options struct {
 // search gates (kindRBACGroups).
 type KindAccess struct {
 	// ClusterWide reports whether the caller may list the resource in every
-	// namespace.
-	ClusterWide func(group, resource string) bool
+	// namespace, and whether the check answered.
+	ClusterWide func(group, resource string) (allowed, authoritative bool)
 	// InNamespaces splits namespaces into those where the caller may list
 	// the resource and those it could not decide (check budget spent, or the
 	// check failed). Namespaces in neither are denied.
@@ -245,6 +245,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	// or the pin left out, and returns false when no namespace is left to scan
 	// for kind.
 	namespaced := func(kind, group string) bool {
+		cov.searchedKinds++
+		cov.namespaceKindSeen = map[readreason.Code]map[string]bool{}
 		if opts.NamespaceCheckFailed {
 			if len(q.KindFilter) > 0 {
 				cov.kind(kind, group, readreason.UserPermissionCheckFailed)
@@ -380,7 +382,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			case readplan.Readable:
 				readable = append(readable, part.Namespaces...)
 			case readplan.OutsideCollection:
-				cov.namespaces(readreason.RadarNamespaceNotCollected, part.Namespaces...)
+				hasGap = true
+				cov.kindNamespaces(readreason.RadarNamespaceNotCollected, part.Namespaces...)
 			case readplan.Gap:
 				hasGap = true
 				cov.kindScope(tk.Kind, tk.Group, part.Verdict.Code, scopeNarrowed || partOfScope(plan, part.Verdict.Code))
@@ -507,13 +510,17 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			namespaces = readableWithin(namespaces, q.NSFilter)
 		}
 		accessNarrowed := false
-		checkItems := gated && !opts.KindAccess.ClusterWide(gvr.Group, gvr.Resource)
+		clusterAllowed, clusterAuthoritative := true, true
+		if gated {
+			clusterAllowed, clusterAuthoritative = opts.KindAccess.ClusterWide(gvr.Group, gvr.Resource)
+		}
+		checkItems := gated && !clusterAllowed
 		unknownAccessScope := checkItems && namespaces == nil
 		if checkItems {
 			if namespaces == nil {
 				// Namespace membership cannot enumerate a cluster-wide reader's
 				// exact-kind scope. Only individually authorized items can be kept.
-				cov.kindScope(kind, gvr.Group, readreason.UserForbidden, true)
+				cov.kindScope(kind, gvr.Group, deniedReason(clusterAuthoritative), true)
 				accessNarrowed = true
 			} else {
 				allowed, unchecked := opts.KindAccess.InNamespaces(gvr.Group, gvr.Resource, namespaces)
@@ -531,6 +538,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 		}
+		kindFailures := map[readreason.Code]map[string]bool{}
 		kindGap := func(ns string, reason readreason.Code) {
 			if unknownAccessScope {
 				if ns == "" {
@@ -543,10 +551,23 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					reason = readreason.UserForbidden
 				}
 			}
-			cov.kindScope(kind, gvr.Group, reason, ns != "" || accessNarrowed)
+			if kindFailures[reason] == nil {
+				kindFailures[reason] = map[string]bool{}
+			}
+			kindFailures[reason][ns] = true
+		}
+		recordKindFailures := func() {
+			for reason, failed := range kindFailures {
+				partial := accessNarrowed || plan.CollectionLimited || slices.ContainsFunc(plan.Partitions, func(part readplan.Partition) bool { return part.Extent == readplan.UnknownNamespaces })
+				if !failed[""] {
+					partial = partial || namespaces == nil || len(failed) != len(namespaces)
+				}
+				cov.kindScope(kind, gvr.Group, reason, partial)
+			}
 		}
 		if settled {
 			kindGap("", reason)
+			recordKindFailures()
 			continue
 		}
 		if clusterScoped || namespaces == nil {
@@ -593,7 +614,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				current = p.PlanDynamic(gvr, target, clusterScoped)
 			}
 			if ns == "" && current.CollectionLimited && !nsObservation.ProbeRetrying && len(nsObservation.UnansweredNamespaces) == 0 && nsObservation.ReasonCode != "scope_probe_incomplete" {
-				cov.namespaces(readreason.RadarNamespaceNotCollected, "")
+				cov.kindNamespaces(readreason.RadarNamespaceNotCollected, "")
 			}
 			if warmErr != nil {
 				var codes []readreason.Code
@@ -608,7 +629,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					return Result{}, ErrConnectionChanged
 				}
 				if outsideScope && code == readreason.RadarForbidden {
-					cov.namespaces(readreason.RadarNamespaceNotCollected, ns)
+					cov.kindNamespaces(readreason.RadarNamespaceNotCollected, ns)
 				} else {
 					kindGap(ns, code)
 				}
@@ -638,10 +659,10 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					}
 					switch state {
 					case readplan.OutsideCollection:
-						cov.namespaces(readreason.RadarNamespaceNotCollected, target)
+						cov.kindNamespaces(readreason.RadarNamespaceNotCollected, target)
 					case readplan.Gap:
 						if code == readreason.RadarForbidden && outsideScope && !slices.Contains(nsObservation.Namespaces, target) {
-							cov.namespaces(readreason.RadarNamespaceNotCollected, target)
+							cov.kindNamespaces(readreason.RadarNamespaceNotCollected, target)
 							continue
 						}
 						gapNS := target
@@ -660,6 +681,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 		}
+		recordKindFailures()
 		if gated && len(q.NSFilter) > 0 {
 			kept := make([]*unstructured.Unstructured, 0, len(items))
 			for _, u := range items {

@@ -579,7 +579,7 @@ func TestSearchKindRBACBudgetAndCancellation(t *testing.T) {
 	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "", false)
 	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "cached", true)
 	trivy := mcpSearchKindAccess(ctx, gate)
-	if trivy.ClusterWide("aquasecurity.github.io", "vulnerabilityreports") {
+	if allowed, authoritative := trivy.ClusterWide("aquasecurity.github.io", "vulnerabilityreports"); allowed || !authoritative {
 		t.Fatal("denied Trivy cluster grant")
 	}
 	trivyAllowed, trivyUnchecked := trivy.InNamespaces("aquasecurity.github.io", "vulnerabilityreports", namespaces)
@@ -623,5 +623,39 @@ func TestSearchKindRBACMixedPartitionsReachCoverage(t *testing.T) {
 		}) {
 			t.Fatalf("missing %s partial gap: %+v", code, body.Coverage)
 		}
+	}
+}
+
+func TestSearchTrivyClusterCheckKeepsAuthority(t *testing.T) {
+	ctx := withClusterAdmin(t, "search-trivy-authority")
+	for _, tc := range []struct {
+		name                   string
+		denied, unchecked      []string
+		allowed, authoritative bool
+	}{
+		{"allowed", nil, nil, true, true},
+		{"denied", []string{""}, nil, false, true},
+		{"unchecked", nil, []string{""}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := func(ns []string, group, resource string) ([]string, []string, []string) {
+				if ns != nil || group != "aquasecurity.github.io" || resource != "vulnerabilityreports" {
+					t.Fatalf("wrong gate: %v %s/%s", ns, group, resource)
+				}
+				return nil, tc.denied, tc.unchecked
+			}
+			access := mcpSearchKindAccess(ctx, gate)
+			allowed, authoritative := access.ClusterWide("aquasecurity.github.io", "vulnerabilityreports")
+			if allowed != tc.allowed || authoritative != tc.authoritative {
+				t.Fatalf("got %v/%v, want %v/%v", allowed, authoritative, tc.allowed, tc.authoritative)
+			}
+		})
+	}
+}
+
+func TestSearchPartialNamespaceHint(t *testing.T) {
+	res := search.Result{Coverage: resourceapi.SearchCoverage{Status: resourceapi.CoveragePartial, Gaps: []resourceapi.Gap{{Code: readreason.RadarNamespaceNotCollected, Kinds: resourceapi.UnknownKinds(), Namespaces: resourceapi.Names([]string{"alpha"}, 1)}}}}
+	if got := coverageHint(res, true); got != "Some kinds weren't searched in namespace alpha: Radar here watches only some namespaces." {
+		t.Fatalf("hint: %q", got)
 	}
 }
