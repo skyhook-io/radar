@@ -1028,6 +1028,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	}
 	if s.mcpApplyHandler != nil {
 		r.Mount("/mcp-apply", s.mcpApplyHandler)
+	} else {
+		r.Mount("/mcp-apply", http.NotFoundHandler())
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
