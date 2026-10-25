@@ -25,8 +25,8 @@ type listAuthorization struct {
 // parseNamespacesForUser (which primes the canI cache that canRead relies on).
 //
 // A failure means nothing may be read: a denied cluster-scoped kind, no
-// namespace access, or the kind denied in every namespace. Otherwise Secrets
-// and LimitRanges — which need the caller's exact list permission, not
+// namespace access, or the kind denied in every namespace. Otherwise Secrets, Roles, RoleBindings,
+// LimitRanges and Trivy reports — which need the caller's exact list permission, not
 // namespace visibility — are narrowed to the namespaces it allows, and the
 // rest become gaps.
 func (s *Server) preflightResourceList(r *http.Request, kind, group string, namespaces []string) (listAuthorization, *resourceReadFailure) {
@@ -70,7 +70,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 	// rbac.helm, auth.mode != "none", or cloud.enabled — see deploy/helm/
 	// radar/templates/clusterrole.yaml). When any of those triggers fires
 	// the cache holds every secret in the cluster, so per-user RBAC must
-	// gate the read. LimitRanges and Trivy Operator reports (an
+	// gate the read. Roles, RoleBindings, LimitRanges and Trivy Operator reports (an
 	// ExposedSecretReport quotes the leaked credential) get the same exact
 	// gate. Other namespaced kinds use namespace visibility.
 	exactGroup := group
@@ -120,7 +120,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 //  2. cluster-scoped (Node/CRD/…) → per-kind get SAR (ClassifyKindScope)
 //  3. namespaced                   → namespace access via getUserNamespaces,
 //     namespace_not_found for a caller who can see every namespace, then
-//     per-namespace get SAR for Secrets, LimitRanges and Trivy reports
+//     per-namespace get SAR for Secrets, Roles, RoleBindings, LimitRanges and Trivy reports
 func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) *resourceReadFailure {
 	return s.preflightResourceGetFrom(r, readCache(), kind, namespace, name, group)
 }
@@ -160,7 +160,7 @@ func (s *Server) preflightResourceGetFrom(r *http.Request, cache *k8s.ResourceCa
 				return readFailuref(readreason.NamespaceNotFound, "namespace %q doesn't exist in this cluster", namespace)
 			}
 		}
-		if gvr, ok := k8s.BuiltinGVR(kind, ""); ok && k8s.RequiresExactNamespaceAccess(gvr) && (group == "" || gvr.Resource == "secrets") {
+		if gvr, ok := k8s.BuiltinGVRAnyGroup(kind); ok && k8s.RequiresExactNamespaceAccess(gvr) && (group == "" || group == gvr.Group || gvr.Resource == "secrets") {
 			if allowed, checked := s.canReadDecision(r, gvr.Group, gvr.Resource, namespace, "get"); !allowed {
 				return permissionFailure(checked, fmt.Sprintf("no access to %s in namespace %q", gvr.Resource, namespace))
 			}

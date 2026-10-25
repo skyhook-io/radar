@@ -499,7 +499,7 @@ func splitCSV(v string) []string {
 }
 
 // issueSubjectAccess is the drawer's gate for an issue's own namespaced
-// resource: namespace access, plus a get for Secrets and LimitRanges. It runs
+// resource: namespace access, plus a get for exact-gated namespaced kinds. It runs
 // once per composed row, so the caller's namespaces are resolved once.
 func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
 	if auth.UserFromContext(r.Context()) == nil {

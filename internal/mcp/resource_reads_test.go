@@ -18,6 +18,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2822,5 +2823,49 @@ func TestMissingNamespaceOutsideThePinIsNotFound(t *testing.T) {
 	}
 	if got := codeFor("beta"); got != readreason.OutsideNamespacePin {
 		t.Fatalf("existing namespace outside the pin: %q, want %q", got, readreason.OutsideNamespacePin)
+	}
+}
+
+func TestRBACResourceReadsRequireExactNamespaceAccess(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces(
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "alpha"}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "beta"}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "alpha"}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "beta"}},
+	)...)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	ctx := withRestrictedUser(t, "rbac-reader", []string{"alpha", "beta"})
+	perms := getPermCache().Get("rbac-reader", nil)
+	for _, resource := range []string{"roles", "rolebindings"} {
+		for _, verb := range []string{"list", "get"} {
+			perms.SetCanI(verb, "rbac.authorization.k8s.io", resource, "alpha", true)
+			perms.SetCanI(verb, "rbac.authorization.k8s.io", resource, "beta", false)
+		}
+		result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: resource})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Items    []map[string]any     `json:"items"`
+			Coverage resourceapi.Coverage `json:"coverage"`
+		}
+		if err := json.Unmarshal([]byte(extractText(t, result)), &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Items) != 1 || body.Coverage.Status != resourceapi.CoveragePartial || len(body.Coverage.Gaps) != 1 || body.Coverage.Gaps[0].Code != readreason.UserForbidden || !slices.Equal(body.Coverage.Gaps[0].Namespaces.Names, []string{"beta"}) {
+			t.Fatalf("exact list access: %+v", body)
+		}
+		for _, ns := range []string{"alpha", "beta"} {
+			result, _, err := handleGetResource(ctx, nil, getResourceInput{Kind: resource, Namespace: ns, Name: "entry"})
+			if ns == "beta" {
+				if err == nil || !strings.HasPrefix(err.Error(), "user_forbidden:") {
+					t.Fatalf("denied get: %v", err)
+				}
+			} else if err != nil || !strings.Contains(extractText(t, result), "entry") {
+				t.Fatalf("allowed get: %v", err)
+			}
+		}
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1169,5 +1170,52 @@ func TestDynamicRESTReadRejectsReplacedServingStores(t *testing.T) {
 	}
 	if obj, err := readDynamicResourceGet(context.Background(), k8s.GetResourceCache(), "widgets", gvr.Group, "alpha", "present"); err != nil || obj.GetName() != "present" {
 		t.Fatalf("settled get: %v %v", obj, err)
+	}
+}
+
+func TestRBACResourceReadsRequireExactNamespaceAccess(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "alpha"}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "beta"}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "alpha"}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "beta"}},
+	))
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}}
+	for _, resource := range []string{"roles", "rolebindings"} {
+		for _, verb := range []string{"list", "get"} {
+			perms.SetCanI(verb, "rbac.authorization.k8s.io", resource, "alpha", true)
+			perms.SetCanI(verb, "rbac.authorization.k8s.io", resource, "beta", false)
+		}
+	}
+	env.srv.permCache.Set("rbac-reader", nil, perms)
+	for _, tc := range []struct{ resource, kind string }{{"roles", "Role"}, {"rolebindings", "RoleBinding"}} {
+		t.Run(tc.resource, func(t *testing.T) {
+			var list testResourceListEnvelope
+			assertOK(t, env.authGet(t, "/api/resources/"+tc.resource+"?namespaces=alpha,beta", "rbac-reader", ""), &list)
+			if len(list.Items) != 1 || list.Coverage.Status != resourceapi.CoveragePartial || len(list.Coverage.Gaps) != 1 || list.Coverage.Gaps[0].Code != readreason.UserForbidden || !slices.Equal(list.Coverage.Gaps[0].Namespaces.Names, []string{"beta"}) {
+				t.Fatalf("exact list access: %+v", list)
+			}
+			var counts testCounts
+			assertOK(t, env.authGet(t, "/api/resource-counts?namespaces=alpha,beta", "rbac-reader", ""), &counts)
+			key := "rbac.authorization.k8s.io/" + tc.kind
+			if counts.Counts[key] != 1 || !reflect.DeepEqual(counts.Coverage[key], list.Coverage) {
+				t.Fatalf("count/list disagree: %+v / %+v", counts, list)
+			}
+			for _, prefix := range []string{"/api/resources/", "/api/ai/resources/"} {
+				for _, suffix := range []string{"?namespace=beta", "/beta/entry", "/beta/entry?group=rbac.authorization.k8s.io"} {
+					resp := env.authGet(t, prefix+tc.resource+suffix, "rbac-reader", "")
+					assertResourceReadError(t, resp, http.StatusForbidden, "user_forbidden")
+					resp.Body.Close()
+				}
+				var body struct {
+					Resource map[string]any `json:"resource"`
+				}
+				assertOK(t, env.authGet(t, prefix+tc.resource+"/alpha/entry", "rbac-reader", ""), &body)
+				if body.Resource["kind"] != tc.kind {
+					t.Fatalf("get returned %+v", body)
+				}
+			}
+		})
 	}
 }

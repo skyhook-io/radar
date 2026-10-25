@@ -100,7 +100,7 @@ func readCache() *k8s.ResourceCache {
 }
 
 // withGaps adds the caller's own gaps within namespaces they can see: exact
-// kind authorization (Secrets, LimitRanges) denying the kind there, or a
+// exact kind authorization denying the kind there, or a
 // check that couldn't complete. Naming them leaks nothing.
 func (t listTarget) withGaps(gaps []resourceapi.Gap) listTarget {
 	// A namespace already a gap of the target (one that doesn't exist, is

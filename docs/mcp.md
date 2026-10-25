@@ -659,7 +659,7 @@ namespace whose informer has synced is read even while another is loading. A
 namespace you name that Radar doesn't collect, or was refused in, is a gap too;
 on an unscoped request those namespaces narrow it (`namespace_collection`) instead.
 
-Secrets, LimitRanges and Trivy Operator reports need your exact permission
+Secrets, Roles, RoleBindings, LimitRanges and Trivy Operator reports need your exact permission
 on that kind, not just namespace visibility: namespaces you can see but can't
 list them in are a `user_forbidden` gap (or `user_permission_check_failed`
 when the check didn't complete), and a get needs `get` in the namespace. A
