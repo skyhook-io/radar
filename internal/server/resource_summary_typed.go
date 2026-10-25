@@ -110,9 +110,10 @@ type podRow struct {
 }
 
 type podRowSpec struct {
-	NodeName       string            `json:"nodeName,omitempty"`
-	Containers     []podRowContainer `json:"containers,omitempty"`
-	InitContainers []podRowContainer `json:"initContainers,omitempty"`
+	ReadinessGates []corev1.PodReadinessGate `json:"readinessGates,omitempty"`
+	NodeName       string                    `json:"nodeName,omitempty"`
+	Containers     []podRowContainer         `json:"containers,omitempty"`
+	InitContainers []podRowContainer         `json:"initContainers,omitempty"`
 	// Pod-level budget (PodLevelResources): the CPU/Mem column checks which
 	// requests/limits it sets.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
@@ -140,10 +141,11 @@ type podRowStatus struct {
 }
 
 type podRowCondition struct {
-	Type    corev1.PodConditionType `json:"type"`
-	Status  corev1.ConditionStatus  `json:"status"`
-	Reason  string                  `json:"reason,omitempty"`
-	Message string                  `json:"message,omitempty"`
+	LastTransitionTime *metav1.Time            `json:"lastTransitionTime,omitempty"`
+	Type               corev1.PodConditionType `json:"type"`
+	Status             corev1.ConditionStatus  `json:"status"`
+	Reason             string                  `json:"reason,omitempty"`
+	Message            string                  `json:"message,omitempty"`
 }
 
 // podRowContainerStatus keeps the crash-forensics fields (state, lastState,
@@ -161,6 +163,7 @@ func summarizePodRow(p *corev1.Pod) any {
 	return &podRow{
 		Metadata: summaryRowMeta(&p.ObjectMeta),
 		Spec: podRowSpec{
+			ReadinessGates: p.Spec.ReadinessGates,
 			NodeName:       p.Spec.NodeName,
 			Containers:     summaryContainers(p.Spec.Containers, false),
 			InitContainers: summaryContainers(p.Spec.InitContainers, true),
@@ -204,7 +207,11 @@ func summaryPodConditions(conditions []corev1.PodCondition) []podRowCondition {
 	}
 	out := make([]podRowCondition, 0, len(conditions))
 	for _, c := range conditions {
-		out = append(out, podRowCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
+		row := podRowCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message}
+		if !c.LastTransitionTime.IsZero() {
+			row.LastTransitionTime = &c.LastTransitionTime
+		}
+		out = append(out, row)
 	}
 	return out
 }

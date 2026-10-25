@@ -231,7 +231,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryHighRestart
 		case "LivenessProbeFailed", "LivenessProbeInvalid":
 			return issuesapi.CategoryLivenessProbeFail
-		case "ReadinessProbeFailed", "ReadinessProbeInvalid":
+		case "ReadinessProbeFailed", "ReadinessProbeInvalid", "ReadinessGatesNotReady":
 			return issuesapi.CategoryReadinessFailed
 		case "InitContainerStalled":
 			return issuesapi.CategoryInitContainerFailed

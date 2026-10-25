@@ -101,7 +101,7 @@ var categoryDescription = map[Category]string{
 	CategoryCrashLoop:         "A container keeps exiting and being restarted (CrashLoopBackOff or repeated restarts) — it crashes, fails a liveness or startup probe, or its process exits, whatever the exit code.",
 	CategoryOOMKilled:         "A container was OOMKilled — it hit its own memory limit, or the node ran out of memory. Check usage vs limits and node memory pressure before raising limits.",
 	CategoryLivenessProbeFail: "The liveness probe keeps failing, so the kubelet repeatedly restarts the container.",
-	CategoryReadinessFailed:   "The readiness probe is failing, so the pod is kept out of Service endpoints and receives no traffic.",
+	CategoryReadinessFailed:   "A readiness probe is failing or a declared readiness gate has not passed; the Pod is not ready for normal Service traffic.",
 	CategoryWorkloadDegraded:  "A workload has fewer ready replicas than desired — some pods are unavailable.",
 	CategoryHighRestart:       "A container has restarted many times — unstable even if it's currently running.",
 	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline — or has been running too long with no completions.",

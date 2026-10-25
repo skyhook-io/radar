@@ -192,6 +192,7 @@
       "kind": "DaemonSet",
       "level": "unhealthy",
       "object": { "metadata": { "generation": 5 }, "status": { "observedGeneration": 5, "desiredNumberScheduled": 3, "numberReady": 0, "updatedNumberScheduled": 3 } }
-    }
+    },
+    {"name": "pod blocked by declared readiness gate with unknown onset", "kind": "Pod", "level": "degraded", "object": {"spec": {"readinessGates": [{"conditionType": "example.com/ready"}]}, "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "False", "reason": "ReadinessGatesNotReady"}, {"type": "ContainersReady", "status": "True"}], "containerStatuses": [{"ready": true, "state": {"running": {}}}]}}}
   ]
 }

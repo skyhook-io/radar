@@ -293,6 +293,24 @@ function podCrashRestartTotal(pod: any): number {
     .reduce((sum, cs) => sum + (cs?.restartCount || 0), 0)
 }
 
+function podReadinessGateBlocked(pod: any): boolean {
+  const gates: { conditionType: string }[] = pod.spec?.readinessGates || []
+  if (pod.status?.phase !== 'Running' || gates.length === 0) return false
+  const conditions: any[] = pod.status?.conditions || []
+  const ready = conditions.find(c => c.type === 'Ready')
+  const containersReady = conditions.find(c => c.type === 'ContainersReady')
+  if (ready?.status !== 'False' || ready.reason !== 'ReadinessGatesNotReady' || containersReady?.status !== 'True') return false
+  const now = Date.now()
+  for (const c of [ready, containersReady]) {
+    const since = c.lastTransitionTime || pod.metadata?.creationTimestamp
+    if (since && now - Date.parse(since) < PENDING_STUCK_MINUTES * 60000) return false
+  }
+  return gates.some(g => {
+    const condition = conditions.find(c => c.type === g.conditionType)
+    return !condition || condition.status === 'False'
+  })
+}
+
 export function getPodStatus(pod: any): StatusBadge {
   const phase = pod.status?.phase || 'Unknown'
   const containerStatuses = pod.status?.containerStatuses || []
@@ -348,6 +366,9 @@ export function getPodStatus(pod: any): StatusBadge {
 
   switch (phase) {
     case 'Running': {
+      if (podReadinessGateBlocked(pod)) {
+        return { text: 'Readiness gate blocked', color: healthColors.degraded, level: 'degraded' }
+      }
       // Degrade only on containers that are neither ready nor successfully done —
       // a completed container (exit 0) on a Running pod is finishing, not a fault.
       const ready = containerStatuses.filter((c: any) => c.ready).length
@@ -477,6 +498,9 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
 
   switch (phase) {
     case 'Running': {
+      if (podReadinessGateBlocked(pod)) {
+        return { phase, text: 'Running — Readiness gate blocked', level: 'degraded', hint: pod.status?.conditions?.find((c: any) => c.type === 'Ready')?.message }
+      }
       // A successfully-completed container (exit 0) is settled, not "not ready" —
       // don't degrade a completing pod over it (matches getPodStatus / timeline).
       const unsettled = containerStatuses.filter((c) => !containerSettledOk(c)).length

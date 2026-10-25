@@ -21,7 +21,7 @@ import (
 //	fatal waiting reason → unhealthy
 //	active OOMKilled     → unhealthy
 //	Pending > 5m         → degraded ; Pending < 5m → healthy (startup grace)
-//	readiness probe fail → degraded
+//	readiness probe/gate → degraded
 //	active thrash        → degraded
 //	owned by a Job       → neutral  (batch work in flight; not an all-clear)
 //	default              → healthy
@@ -38,6 +38,14 @@ func Pod(pod *corev1.Pod, now time.Time) Verdict {
 	case LevelDegraded, LevelUnhealthy:
 		v.Reason = PodProblemReason(pod, now)
 		v.Message = PodProblemMessage(pod)
+		if v.Reason == reasonReadinessGateFail {
+			for _, c := range pod.Status.Conditions {
+				if c.Type == corev1.PodReady {
+					v.Message = c.Message
+					break
+				}
+			}
+		}
 	case LevelNeutral:
 		if pod.Status.Phase == corev1.PodSucceeded {
 			v.Reason = "Completed"
@@ -115,6 +123,9 @@ func classifyPodLevel(pod *corev1.Pod, now time.Time) Level {
 	}
 
 	if podHasReadinessProbeFailure(pod, now) {
+		return LevelDegraded
+	}
+	if _, blocked := PodReadinessGateFailure(pod, now); blocked {
 		return LevelDegraded
 	}
 
@@ -217,6 +228,9 @@ func podProblemReasonRaw(pod *corev1.Pod, now time.Time) string {
 	// completed init container cannot shadow a readiness failure below it.
 	if podHasReadinessProbeFailure(pod, now) {
 		return reasonReadinessProbeFail
+	}
+	if _, blocked := PodReadinessGateFailure(pod, now); blocked && !podHasStableCrashLoop(pod, now) && !podHasActiveOOMKilled(pod, now) {
+		return reasonReadinessGateFail
 	}
 	// A failed pod is never described by a container that succeeded. The kubelet
 	// puts the cause on the pod itself for the failures that have no failing
