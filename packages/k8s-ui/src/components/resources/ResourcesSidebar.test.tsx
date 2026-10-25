@@ -253,3 +253,14 @@ it('qualifies the collapsed category total as well as the individual kind', () =
   expect(start).toBeGreaterThan(-1)
   expect(html.slice(start, html.indexOf('</button>', start))).toContain('≥3')
 })
+
+it('bounds a category total over kinds Radar collects in only some namespaces', () => {
+  const widget = { name: 'widgets', kind: 'Widget', group: 'read.example.test', version: 'v1', namespaced: true, isCrd: true, verbs: ['get', 'list', 'watch'] }
+  const gadget = { ...widget, name: 'gadgets', kind: 'Gadget' }
+  const collected = (ns: string) => ({ status: 'complete' as const, narrowedBy: ['namespace_collection'], gaps: [], scope: { type: 'namespaces' as const, namespaces: { names: [ns], count: 1 } }, read: { type: 'namespaces' as const, namespaces: { names: [ns], count: 1 } } })
+  const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[widget, gadget]} resourceCounts={{ 'read.example.test/Widget': 3, 'read.example.test/Gadget': 2 }} resourceCoverage={{ 'read.example.test/Widget': collected('alpha'), 'read.example.test/Gadget': collected('beta') }} />)
+  const start = html.indexOf('>Test Read Example</span>')
+  expect(start).toBeGreaterThan(-1)
+  // Each kind is exact where Radar collects it; their sum is exact for no scope.
+  expect(html.slice(start, html.indexOf('</button>', start))).toContain('≥5')
+})

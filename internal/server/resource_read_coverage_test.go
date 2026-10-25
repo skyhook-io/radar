@@ -972,3 +972,22 @@ func TestPlaceGapsStatesEveryGapsNamespaces(t *testing.T) {
 		t.Errorf("a cluster-scoped answer's gaps carry namespaces: %+v", got)
 	}
 }
+
+// A namespace whose check a credential rejection ended reads as rejected
+// credentials, the cause someone has to act on, even while it is still listed
+// as unanswered.
+func TestUnansweredProbeCodePrefersRejectedCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		observation k8score.DynamicResourceObservation
+		want        readreason.Code
+	}{
+		{k8score.DynamicResourceObservation{ReasonCode: "credentials_rejected", ProbeRetrying: true, UnansweredNamespaces: []string{"beta"}}, readreason.RadarCredentialsRejected},
+		{k8score.DynamicResourceObservation{ReasonCode: "credentials_rejected", UnansweredNamespaces: []string{"beta"}}, readreason.RadarCredentialsRejected},
+		{k8score.DynamicResourceObservation{ProbeRetrying: true, UnansweredNamespaces: []string{"beta"}}, readreason.KindSyncPending},
+		{k8score.DynamicResourceObservation{UnansweredNamespaces: []string{"beta"}}, readreason.ReadError},
+	} {
+		if got := unansweredProbeCode(tc.observation); got != tc.want {
+			t.Errorf("%+v: got %s, want %s", tc.observation, got, tc.want)
+		}
+	}
+}

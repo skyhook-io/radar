@@ -1,5 +1,5 @@
 import type { ResourceCoverage } from '../../types/resource-coverage'
-import { boundedCountLabel, isEmptyCount, resourceCountLabel } from '../../utils/resource-coverage'
+import { boundedCountLabel, isEmptyCount, isLowerBound, resourceCountLabel } from '../../utils/resource-coverage'
 import { useState, useMemo, useEffect, useRef, useCallback, useId, forwardRef, type ComponentType } from 'react'
 import {
   Search,
@@ -407,9 +407,9 @@ export function ResourcesSidebar({
         (sum, resource) => sum + (counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? 0),
         0
       )
-      const partial = category.resources.some(resource =>
-        resourceCoverage?.[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]?.status === 'partial')
-      const totalLabel = boundedCountLabel(total, partial)
+      const lowerBound = category.resources.some(resource =>
+        isLowerBound(resourceCoverage?.[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]))
+      const totalLabel = boundedCountLabel(total, lowerBound)
 
       // Filter resources: hide only empty kinds. An unknown count stays visible
       // as a dash, and a partial zero as one too, so count coverage gaps do not

@@ -222,11 +222,18 @@ func (s *Server) requestListTarget(r *http.Request, visible []string) listTarget
 		t.named = slices.Compact(slices.Sorted(slices.Values(named)))
 		var pinned, hidden []string
 		t.namespaces = []string{}
+		// "Outside the pin" is said only about a namespace the caller can
+		// see. A hidden one gets the same answer inside or outside the pin, or
+		// guessing names would reveal which namespace Radar is pinned to.
+		var accessible []string
+		if k8s.ForceNamespaceScope {
+			accessible = s.getUserNamespaces(r, t.named)
+		}
 		for _, ns := range t.named {
 			switch {
 			case visible == nil || slices.Contains(visible, ns):
 				t.namespaces = append(t.namespaces, ns)
-			case k8s.ForceNamespaceScope && ns != k8s.GetNamespaceScopeTarget():
+			case k8s.ForceNamespaceScope && ns != k8s.GetNamespaceScopeTarget() && (accessible == nil || slices.Contains(accessible, ns)):
 				pinned = append(pinned, ns)
 			default:
 				hidden = append(hidden, ns)
@@ -563,9 +570,15 @@ func dynamicReadHandles(cache *k8s.ResourceCache, kind, group string) (*k8s.Dyna
 }
 
 // unansweredProbeCode is why namespaces whose access check got no answer
-// weren't read: still being retried, or never answered.
+// weren't read: Kubernetes rejected Radar's credentials, still being retried,
+// or never answered.
 func unansweredProbeCode(observation k8score.DynamicResourceObservation) readreason.Code {
-	if observation.ProbeRetrying {
+	switch {
+	case observation.ReasonCode == "credentials_rejected":
+		// Kubernetes rejected Radar's credentials during the retries: the
+		// checks still outstanding were refused, not left unanswered.
+		return readreason.RadarCredentialsRejected
+	case observation.ProbeRetrying:
 		return readreason.KindSyncPending
 	}
 	return readreason.ReadError

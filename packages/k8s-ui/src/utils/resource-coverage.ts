@@ -66,21 +66,35 @@ export function resourceEmptyMessage(kind: string, coverage: ResourceCoverage | 
 }
 
 /**
- * A zero that hides its kind as empty. A partial zero proves nothing about the
- * namespaces Radar couldn't read, and one Radar's collection narrowed nothing
- * about the namespaces it doesn't collect.
+ * Whether a read's numbers are a lower bound for the cluster: it was partial,
+ * or Radar's collection narrowed it to the namespaces it collects. Views show
+ * cluster totals, which a read of only the collected namespaces can't
+ * establish.
  */
-export function isEmptyCount(count: number | null | undefined, coverage: ResourceCoverage | undefined): boolean {
-  if (count !== 0 || coverage?.status === 'partial') return false
-  return !(coverage?.status === 'complete' && coverage.narrowedBy?.includes('namespace_collection'))
+export function isLowerBound(coverage: ResourceCoverage | undefined): boolean {
+  return coverage?.status === 'partial' || (coverage?.status === 'complete' && coverage.narrowedBy?.includes('namespace_collection') === true)
 }
 
-/** A partial count is a lower bound, and a partial zero is no count at all. */
-export function boundedCountLabel(count: number, partial: boolean): string {
-  if (!partial) return count.toLocaleString()
+/**
+ * A zero that hides its kind as empty. A lower-bound zero proves nothing
+ * about the namespaces Radar couldn't read or doesn't collect.
+ */
+export function isEmptyCount(count: number | null | undefined, coverage: ResourceCoverage | undefined): boolean {
+  return count === 0 && !isLowerBound(coverage)
+}
+
+/** A lower-bound count reads "≥N", and a lower-bound zero is no count at all. */
+export function boundedCountLabel(count: number, lowerBound: boolean): string {
+  if (!lowerBound) return count.toLocaleString()
   return count === 0 ? '–' : `≥${count.toLocaleString()}`
 }
 
+/**
+ * One kind's count. Only a partial count is bounded: a count Radar's
+ * collection narrowed is exact within the namespaces Radar collects, which
+ * the kind's list says. A total over several kinds is a lower bound either
+ * way (see isLowerBound): they may be collected in different namespaces.
+ */
 export function resourceCountLabel(count: number, coverage: ResourceCoverage | undefined): string {
   return boundedCountLabel(count, coverage?.status === 'partial')
 }

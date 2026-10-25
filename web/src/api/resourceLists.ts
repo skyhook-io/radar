@@ -1,5 +1,6 @@
 import { sanitizePrinterTable, type PrinterTable } from '@skyhook-io/k8s-ui/components/resources/printer-columns'
 import type { ResourceCoverage, ResourceListResponse } from '@skyhook-io/k8s-ui/types/resource-coverage'
+import { isLowerBound } from '@skyhook-io/k8s-ui/utils/resource-coverage'
 
 export interface ResourceListResult<T> {
   items: T[]
@@ -44,15 +45,9 @@ export function listSyncPending(coverage: ResourceCoverage | undefined): boolean
  * itself a complete answer.
  */
 export function combinedListStatus(coverage: ResourceCoverage[], failed: boolean, nothingToRead: boolean): 'complete' | 'partial' | 'unknown' {
-  if (failed || coverage.some(lowerBound)) return 'partial'
+  if (failed || coverage.some(isLowerBound)) return 'partial'
   if (coverage.length === 0 ? nothingToRead : coverage.every(c => c.status === 'complete')) return 'complete'
   return 'unknown'
 }
 
-/**
- * Whether a read's numbers are a lower bound for the cluster: it was partial,
- * or Radar's collection narrowed it to the namespaces it collects.
- */
-export function lowerBound(coverage: ResourceCoverage): boolean {
-  return coverage.status === 'partial' || (coverage.status === 'complete' && coverage.narrowedBy?.includes('namespace_collection') === true)
-}
+export { isLowerBound as lowerBound } from '@skyhook-io/k8s-ui/utils/resource-coverage'

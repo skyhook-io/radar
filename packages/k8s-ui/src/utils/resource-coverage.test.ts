@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ResourceReadCoverage } from '../types/resource-coverage'
-import { boundedCountLabel, isEmptyCount, resourceCountLabel, resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from './resource-coverage'
+import { boundedCountLabel, isEmptyCount, isLowerBound, resourceCountLabel, resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from './resource-coverage'
 
 const partial: ResourceReadCoverage = {
   status: 'partial', scope: { type: 'all_namespaces' },
@@ -72,6 +72,13 @@ describe('empty lists and counts', () => {
     expect(resourceCountLabel(23, partial)).toBe('≥23')
     expect(resourceCountLabel(0, partial)).toBe('–')
     expect(isEmptyCount(0, partial)).toBe(false)
+  })
+  it('treats a partial or collection-narrowed read as a lower bound for the cluster', () => {
+    expect(isLowerBound(partial)).toBe(true)
+    expect(isLowerBound(collected)).toBe(true)
+    expect(isLowerBound(complete)).toBe(false)
+    expect(isLowerBound({ status: 'unknown' })).toBe(false)
+    expect(isLowerBound(undefined)).toBe(false)
   })
   it("never hides a kind whose zero covers only the namespaces Radar collects", () => {
     expect(isEmptyCount(0, collected)).toBe(false)

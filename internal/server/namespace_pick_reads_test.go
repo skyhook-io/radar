@@ -340,3 +340,48 @@ func seedTimelineAcrossNamespaces(t *testing.T) {
 		}
 	}
 }
+
+// A caller who can't see a namespace gets the same answer for it whether or
+// not it is outside the --namespace-scope pin, so guessing names doesn't
+// reveal which namespace Radar is pinned to. "Outside the pin" is said only
+// about a namespace the caller can see.
+func TestProxyAuth_PinIsNotRevealedToGuesses(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("default")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+	env := newAuthTestServer(t)
+	for user, namespaces := range map[string][]string{"bob": {"broken"}, "carol": {"broken", "default"}} {
+		perms := &pkgauth.UserPermissions{AllowedNamespaces: namespaces}
+		for _, ns := range namespaces {
+			perms.SetCanI("list", "apps", "deployments", ns, true)
+		}
+		env.srv.permCache.Set(user, nil, perms)
+	}
+	code := func(user, ns string) (int, string) {
+		t.Helper()
+		resp := env.authGet(t, "/api/resources/deployments?namespaces="+ns, user, "")
+		defer func() { _ = resp.Body.Close() }()
+		var failure struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&failure); err != nil {
+			t.Fatalf("decode %s as %s: %v", ns, user, err)
+		}
+		return resp.StatusCode, failure.ErrorCode
+	}
+	// bob can see neither default (inside the pin) nor elsewhere (outside it).
+	insideStatus, inside := code("bob", "default")
+	outsideStatus, outside := code("bob", "elsewhere")
+	if inside != "user_namespace_not_visible" || outside != inside || outsideStatus != insideStatus {
+		t.Errorf("hidden namespaces answered differently: inside the pin %d %q, outside %d %q", insideStatus, inside, outsideStatus, outside)
+	}
+	// carol can see broken, which the pin leaves out.
+	if status, got := code("carol", "broken"); status != http.StatusConflict || got != "outside_namespace_pin" {
+		t.Errorf("visible namespace outside the pin = %d %q, want 409 outside_namespace_pin", status, got)
+	}
+}
