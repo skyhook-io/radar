@@ -361,8 +361,8 @@ func compareRefs(a, b resourceid.Ref) int {
 	return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 }
 
-// MembersAnswer is what a GitOps manager's status records it applies to
-// this cluster, as one caller may see it.
+// MembersAnswer is what a GitOps manager's status records of this cluster's
+// objects, as one caller may see it.
 type MembersAnswer struct {
 	Subject Subject
 	// Membership is what the manager's status records; Members and the counts
