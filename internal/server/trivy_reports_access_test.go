@@ -120,7 +120,7 @@ func TestProxyAuth_TrivyReportsDeniedWithoutReportRBAC(t *testing.T) {
 	}
 
 	resp = env.authGet(t, "/api/resource-counts", "bob", "")
-	var counts ResourceCountsResponse
+	var counts testCounts
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestProxyAuth_TrivyReportsFollowReportRBAC(t *testing.T) {
 			}
 
 			resp = env.authGet(t, "/api/resource-counts", "reader", "")
-			var counts ResourceCountsResponse
+			var counts testCounts
 			if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 				t.Fatal(err)
 			}
@@ -228,7 +228,7 @@ func TestProxyAuth_TrivyReportCountsBoundChecks(t *testing.T) {
 	}
 
 	resp := env.authGet(t, "/api/resource-counts", "reader", "")
-	var counts ResourceCountsResponse
+	var counts testCounts
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestProxyAuth_TrivyReportCountsBoundChecks(t *testing.T) {
 	}
 
 	resp = env.authGet(t, "/api/resource-counts", "reader", "")
-	counts = ResourceCountsResponse{}
+	counts = testCounts{}
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestProxyAuth_TrivyReportCountsUnansweredCheckIsUnavailable(t *testing.T) {
 	env.srv.permCache.Set("reader", nil, &auth.UserPermissions{AllowedNamespaces: nil})
 
 	resp := env.authGet(t, "/api/resource-counts", "reader", "")
-	var counts ResourceCountsResponse
+	var counts testCounts
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &counts); err != nil {
 		t.Fatal(err)
 	}

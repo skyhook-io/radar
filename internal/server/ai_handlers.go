@@ -203,7 +203,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 		// represented by that contract, so require its entire requested scope.
 		// Nor can it say Radar's collection narrowed it, so that is refused too.
 		if plan.collected != nil {
-			s.writeIncompleteAIList(w, target, []resourceapi.Gap{{Code: readreason.RadarNamespaceNotCollected}})
+			s.writeIncompleteAIList(w, target, []resourceapi.Gap{{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()}})
 			return
 		}
 		if len(plan.gaps) > 0 || !plan.whole {
@@ -297,7 +297,7 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 		return
 	}
 	if list.narrowed {
-		s.writeIncompleteAIList(w, target, append(list.gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected}))
+		s.writeIncompleteAIList(w, target, append(list.gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()}))
 		return
 	}
 	if len(list.gaps) > 0 {

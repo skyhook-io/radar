@@ -115,7 +115,7 @@ func TestResourceReadsArePerNamespaceForBuiltInKinds(t *testing.T) {
 	defer loading.Body.Close()
 	assertResourceReadError(t, loading, http.StatusServiceUnavailable, "kind_sync_pending")
 
-	var counts ResourceCountsResponse
+	var counts testCounts
 	assertOK(t, get(t, "/api/resource-counts?namespaces=alpha,gamma"), &counts)
 	if counts.Counts["ConfigMap"] != 1 || counts.Coverage["ConfigMap"].Status != resourceapi.CoveragePartial {
 		t.Fatalf("a partial count is the synced namespaces' count, qualified: %+v %+v", counts.Counts, counts.Coverage["ConfigMap"])

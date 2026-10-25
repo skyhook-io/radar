@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -41,6 +42,35 @@ type testResourceListEnvelope struct {
 	Cells    map[string][]any     `json:"cells"`
 }
 
+// testCounts is a resource-counts response whose decoding rejects any kind's
+// coverage that breaks the contract.
+type testCounts struct{ ResourceCountsResponse }
+
+func (c *testCounts) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &c.ResourceCountsResponse); err != nil {
+		return err
+	}
+	for kind, coverage := range c.Coverage {
+		if err := coverage.Validate(); err != nil {
+			return fmt.Errorf("%s coverage breaks the contract: %w: %s", kind, err, data)
+		}
+	}
+	return nil
+}
+
+// UnmarshalJSON rejects a list whose coverage breaks the contract, so every
+// test that reads a list checks it.
+func (e *testResourceListEnvelope) UnmarshalJSON(data []byte) error {
+	type plain testResourceListEnvelope
+	if err := json.Unmarshal(data, (*plain)(e)); err != nil {
+		return err
+	}
+	if err := e.Coverage.Validate(); err != nil {
+		return fmt.Errorf("coverage breaks the contract: %w: %s", err, data)
+	}
+	return nil
+}
+
 func assertResourceReadError(t *testing.T, resp *http.Response, status int, reason string) {
 	t.Helper()
 	body, err := io.ReadAll(resp.Body)
@@ -71,6 +101,9 @@ func assertResourceReadError(t *testing.T, resp *http.Response, status int, reas
 		var coverage resourceapi.Coverage
 		if err := json.Unmarshal(raw, &coverage); err != nil || coverage.Read != nil || coverage.Status != resourceapi.CoveragePartial || len(coverage.Gaps) == 0 {
 			t.Fatalf("failed read's coverage claims a read: %s", body)
+		}
+		if err := coverage.Validate(); err != nil {
+			t.Fatalf("failed read's coverage breaks the contract: %v: %s", err, body)
 		}
 	}
 }
@@ -323,7 +356,7 @@ func TestResourceCountsKeepPartialScopeCountUsable(t *testing.T) {
 	if err := k8s.InitScopedTestResourceCache(client, map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "alpha"}}); err != nil {
 		t.Fatal(err)
 	}
-	var counts ResourceCountsResponse
+	var counts testCounts
 	assertOK(t, get(t, "/api/resource-counts?namespaces=alpha,beta"), &counts)
 	if counts.Counts["Pod"] != 1 || counts.Coverage["Pod"].Status != resourceapi.CoveragePartial || containsString(counts.Unavailable, "Pod") || containsString(counts.Forbidden, "Pod") {
 		t.Fatalf("partial count should remain usable: %+v", counts)
@@ -341,7 +374,7 @@ func TestResourceCountsShareMetadataBudgetAcrossKinds(t *testing.T) {
 	for i := range names {
 		names[i] = fmt.Sprintf("ns-%03d", i)
 	}
-	var counts ResourceCountsResponse
+	var counts testCounts
 	assertOK(t, get(t, "/api/resource-counts?namespaces="+strings.Join(names, ",")), &counts)
 	if len(counts.Counts) < 20 || len(counts.Coverage) != len(counts.Counts) {
 		t.Fatalf("expected coverage for every normal count: %+v", counts)
@@ -394,7 +427,7 @@ func TestResourceNamespaceCountMatchesAuthorizedClusterScopedList(t *testing.T) 
 	env.srv.permCache.Set("namespace-reader", nil, perms)
 	var list testResourceListEnvelope
 	assertOK(t, env.authGet(t, "/api/resources/namespaces?namespace=alpha", "namespace-reader", ""), &list)
-	var counts ResourceCountsResponse
+	var counts testCounts
 	assertOK(t, env.authGet(t, "/api/resource-counts?namespace=alpha", "namespace-reader", ""), &counts)
 	if len(list.Items) != 2 || counts.Counts["Namespace"] != 2 || counts.Coverage["Namespace"].Scope.Type != resourceapi.ScopeCluster || counts.Coverage["Namespace"].Status != resourceapi.CoverageComplete {
 		t.Fatalf("authorized Namespace count/list disagree: list=%+v counts=%+v", list, counts)
@@ -438,7 +471,7 @@ func TestResourceCountsHonorSpecialNamespacedListGates(t *testing.T) {
 	partial.SetCanI("list", "", "limitranges", "alpha", true)
 	partial.SetCanI("list", "", "limitranges", "beta", false)
 	env.srv.permCache.Set("partial", nil, partial)
-	var counts ResourceCountsResponse
+	var counts testCounts
 	assertOK(t, env.authGet(t, "/api/resource-counts?namespaces=alpha,beta", "partial", ""), &counts)
 	var list testResourceListEnvelope
 	assertOK(t, env.authGet(t, "/api/resources/secrets?namespaces=alpha,beta", "partial", ""), &list)
@@ -462,7 +495,7 @@ func TestResourceCountsAllowExplicitClusterGrantWithoutNamespaceAccess(t *testin
 	env.srv.permCache.Set("node-reader", nil, perms)
 	var list testResourceListEnvelope
 	assertOK(t, env.authGet(t, "/api/resources/nodes", "node-reader", ""), &list)
-	var counts ResourceCountsResponse
+	var counts testCounts
 	assertOK(t, env.authGet(t, "/api/resource-counts", "node-reader", ""), &counts)
 	if len(list.Items) != 1 || counts.Counts["Node"] != 1 || counts.Coverage["Node"].Status != resourceapi.CoverageComplete {
 		t.Fatalf("explicit cluster grant was lost by namespace-count gate: list=%+v counts=%+v", list, counts)
@@ -512,7 +545,7 @@ func TestResourceDynamicNamespaceCoverageDoesNotBorrowAnotherInformer(t *testing
 
 	rec := httptest.NewRecorder()
 	testServerSrv.handleResourceCounts(rec, httptest.NewRequest("GET", "/api/resource-counts?namespaces=alpha,beta", nil))
-	var counts ResourceCountsResponse
+	var counts testCounts
 	if err := json.Unmarshal(rec.Body.Bytes(), &counts); err != nil {
 		t.Fatal(err)
 	}
@@ -898,5 +931,44 @@ func TestStoppedDynamicCacheAnswersNothing(t *testing.T) {
 	var body resourceapi.ReadError
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.ErrorCode != readreason.ConnectionChanged {
 		t.Fatalf("counts from a stopped cache: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPlaceGapsStatesEveryGapsNamespaces(t *testing.T) {
+	pending := resourceapi.Gap{Code: readreason.KindSyncPending}
+	denied := gapOf(readreason.UserForbidden, []string{"beta"})
+	many := make([]string, resourceapi.RESTSetLimit+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("ns-%02d", i)
+	}
+	for _, tc := range []struct {
+		name   string
+		target listTarget
+		gaps   []resourceapi.Gap
+		read   []string
+		want   []*resourceapi.NameSet
+	}{
+		{"the only part is the whole scope", listTarget{}, []resourceapi.Gap{pending}, nil, []*resourceapi.NameSet{resourceapi.AllNames()}},
+		{"the rest of a listed scope", listTarget{namespaces: []string{"alpha", "beta", "gamma"}}, []resourceapi.Gap{denied, pending}, []string{"alpha"},
+			[]*resourceapi.NameSet{denied.Namespaces, resourceapi.Names([]string{"gamma"}, resourceapi.RESTSetLimit)}},
+		{"the rest of every namespace is unknown", listTarget{}, []resourceapi.Gap{denied, pending}, nil, []*resourceapi.NameSet{denied.Namespaces, resourceapi.UnknownNames()}},
+		{"a capped gap leaves the rest unknown", listTarget{namespaces: append(slices.Clone(many), "zz")}, []resourceapi.Gap{gapOf(readreason.UserForbidden, many), pending}, nil,
+			[]*resourceapi.NameSet{resourceapi.Names(many, resourceapi.RESTSetLimit), resourceapi.UnknownNames()}},
+		{"nothing left drops the gap", listTarget{namespaces: []string{"alpha", "beta"}}, []resourceapi.Gap{denied, pending}, []string{"alpha"}, []*resourceapi.NameSet{denied.Namespaces}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.target.placeGaps(tc.gaps, tc.read)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d gaps, want %d: %+v", len(got), len(tc.want), got)
+			}
+			for i, gap := range got {
+				if !reflect.DeepEqual(gap.Namespaces, tc.want[i]) {
+					t.Errorf("gap %d (%s) namespaces = %+v, want %+v", i, gap.Code, gap.Namespaces, tc.want[i])
+				}
+			}
+		})
+	}
+	if got := (listTarget{clusterScoped: true}).placeGaps([]resourceapi.Gap{denied, pending}, nil); got[0].Namespaces != nil || got[1].Namespaces != nil {
+		t.Errorf("a cluster-scoped answer's gaps carry namespaces: %+v", got)
 	}
 }

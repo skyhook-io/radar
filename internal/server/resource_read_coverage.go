@@ -132,7 +132,7 @@ func (s *Server) writeReadFailure(w http.ResponseWriter, resource string, err er
 		if !slices.ContainsFunc(gaps, func(gap resourceapi.Gap) bool { return gap.Code == failure.code }) {
 			gaps = append(gaps, resourceapi.Gap{Code: failure.code})
 		}
-		body.Coverage = &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: gaps}
+		body.Coverage = &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: target.placeGaps(gaps, nil)}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(readStatusFor(failure.code))
@@ -145,8 +145,8 @@ func (s *Server) writeCollectionFailure(w http.ResponseWriter, resource string, 
 }
 
 // listTarget is what a list is about: the namespaces the request named, or
-// what remained of every namespace after the --namespace-scope pin, the saved
-// namespace pick and the caller's access narrowed it. A named namespace stays
+// what remained of every namespace after the --namespace-scope pin and the
+// caller's access narrowed it. A named namespace stays
 // in scope even when it can't be read, so what's missing is a gap; implicit
 // narrowing is declared instead. gaps are the caller's own: named namespaces
 // they can't see, and namespaces they can see where exact kind authorization
@@ -179,7 +179,7 @@ func (t listTarget) scope() resourceapi.Scope {
 // coverage is a successful list's coverage: read is the namespaces read, or
 // nil when Radar read the whole scope.
 func (t listTarget) coverage(read []string, gaps []resourceapi.Gap) resourceapi.Coverage {
-	gaps = append(slices.Clone(t.gaps), gaps...)
+	gaps = t.placeGaps(append(slices.Clone(t.gaps), gaps...), read)
 	cov := resourceapi.Coverage{Status: resourceapi.CoverageComplete, Scope: t.scope(), NarrowedBy: t.narrowedBy, Gaps: gaps}
 	readScope := cov.Scope
 	switch {
@@ -416,6 +416,67 @@ func typedReadCoverage(cache *k8s.ResourceCache, resource string, namespaces []s
 		read = nil
 	}
 	return typedRead{read: read, whole: a.Readiness == k8s.KindReady, gaps: gaps, collected: collected, uncovered: uncovered}, nil
+}
+
+// placeGaps gives each gap of t's answer its namespaces, since an axis that
+// applies is always present. A gap built without namespaces reached whatever
+// of the scope nothing else accounts for: all of it when it is the only part,
+// the rest of a listed scope, or an unknown part when the rest can't be told.
+// A cluster-scoped answer's gaps have no namespace axis. read is the
+// namespaces read; nil when none were.
+func (t listTarget) placeGaps(gaps []resourceapi.Gap, read []string) []resourceapi.Gap {
+	out := make([]resourceapi.Gap, 0, len(gaps))
+	if t.clusterScoped {
+		for _, gap := range gaps {
+			gap.Namespaces = nil
+			out = append(out, gap)
+		}
+		return out
+	}
+	unplaced := func(gap resourceapi.Gap) bool { return gap.Namespaces == nil && gap.Objects == nil }
+	claimed := map[string]bool{}
+	for _, ns := range read {
+		claimed[ns] = true
+	}
+	// The rest of the scope is known only when one gap is unplaced and every
+	// other gap lists all its namespaces.
+	unplacedCount, unlisted := 0, false
+	for _, gap := range gaps {
+		switch {
+		case unplaced(gap):
+			unplacedCount++
+		case gap.Namespaces != nil:
+			unlisted = unlisted || gap.Namespaces.Extent != "" || len(gap.Namespaces.Names) != gap.Namespaces.Count
+			for _, ns := range gap.Namespaces.Names {
+				claimed[ns] = true
+			}
+		}
+	}
+	remainderKnown := unplacedCount == 1 && !unlisted
+	scope := t.namespaces
+	if t.explicit {
+		scope = t.named
+	}
+	for _, gap := range gaps {
+		if !unplaced(gap) {
+			out = append(out, gap)
+			continue
+		}
+		switch {
+		case len(gaps) == 1 && len(read) == 0:
+			gap.Namespaces = resourceapi.AllNames()
+		case scope != nil && remainderKnown:
+			rest := slices.DeleteFunc(slices.Clone(scope), func(ns string) bool { return claimed[ns] })
+			if len(rest) == 0 {
+				continue
+			}
+			gap.Namespaces = resourceapi.Names(rest, resourceapi.RESTSetLimit)
+		default:
+			gap.Namespaces = resourceapi.UnknownNames()
+		}
+		out = append(out, gap)
+	}
+	return out
 }
 
 func gapOf(code readreason.Code, namespaces []string) resourceapi.Gap {
