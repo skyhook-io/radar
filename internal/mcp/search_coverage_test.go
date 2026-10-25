@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"reflect"
 	"slices"
 	"strings"
@@ -30,21 +31,22 @@ func TestSearchNamespacedKindRBAC(t *testing.T) {
 			perms.SetCanI("list", kind.Group, kind.Resource, "", false)
 			perms.SetCanI("list", kind.Group, kind.Resource, "a", true)
 			perms.SetCanI("list", kind.Group, kind.Resource, "b", false)
-			decision, ns := mcpSearchKindRBAC(ctx, nil, kind.Group, kind.Resource)
-			if decision != "skip" {
-				t.Fatalf("cluster-scope bypass: %s %v", decision, ns)
+			gate := mcpSearchKindRBAC(ctx)
+			allowed, denied, unchecked := gate(nil, kind.Group, kind.Resource)
+			if len(allowed) != 0 || !slices.Equal(denied, []string{""}) || len(unchecked) != 0 {
+				t.Fatalf("cluster-scope bypass: %v %v %v", allowed, denied, unchecked)
 			}
-			decision, ns = mcpSearchKindRBAC(ctx, []string{"a", "b"}, kind.Group, kind.Resource)
-			if decision != "override" || len(ns) != 1 || ns[0] != "a" {
-				t.Fatalf("kind override: %s %v", decision, ns)
+			allowed, denied, unchecked = gate([]string{"a", "b"}, kind.Group, kind.Resource)
+			if !slices.Equal(allowed, []string{"a"}) || !slices.Equal(denied, []string{"b"}) || len(unchecked) != 0 {
+				t.Fatalf("kind override: %v %v %v", allowed, denied, unchecked)
 			}
-			decision, _ = mcpSearchKindRBAC(ctx, []string{"b"}, kind.Group, kind.Resource)
-			if decision != "skip" {
-				t.Fatalf("denied namespace bypass: %s", decision)
+			allowed, denied, unchecked = gate([]string{"b"}, kind.Group, kind.Resource)
+			if len(allowed) != 0 || !slices.Equal(denied, []string{"b"}) || len(unchecked) != 0 {
+				t.Fatalf("denied namespace bypass: %v %v %v", allowed, denied, unchecked)
 			}
-			decision, _ = mcpSearchKindRBAC(context.Background(), nil, kind.Group, kind.Resource)
-			if decision != "" {
-				t.Fatalf("no-auth gate: %s", decision)
+			allowed, denied, unchecked = mcpSearchKindRBAC(context.Background())(nil, kind.Group, kind.Resource)
+			if allowed != nil || len(denied) != 0 || len(unchecked) != 0 {
+				t.Fatalf("no-auth gate: %v %v %v", allowed, denied, unchecked)
 			}
 		})
 	}
@@ -88,10 +90,11 @@ func TestSearchKindRBACClusterFirstBoundsSARs(t *testing.T) {
 		return true, nil
 	})
 	namespaces := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	gate := mcpSearchKindRBAC(ctx)
 	for _, kind := range search.NamespacedSearchKinds {
-		decision, scoped := mcpSearchKindRBAC(ctx, namespaces, kind.Group, kind.Resource)
-		if decision != "" || scoped != nil {
-			t.Fatalf("allowed kind: %s %v", decision, scoped)
+		allowed, denied, unchecked := gate(namespaces, kind.Group, kind.Resource)
+		if !slices.Equal(allowed, namespaces) || len(denied) != 0 || len(unchecked) != 0 {
+			t.Fatalf("allowed kind: %v %v %v", allowed, denied, unchecked)
 		}
 	}
 	if checks != len(search.NamespacedSearchKinds) {
@@ -113,13 +116,14 @@ func TestSearchKindRBACNamespaceCheckFailureRetainsAllowedScope(t *testing.T) {
 		}
 		return namespace == "a", nil
 	})
-	decision, scoped := mcpSearchKindRBAC(ctx, []string{"a", "b"}, "", "secrets")
-	if decision != "permission_check_failed" || len(scoped) != 1 || scoped[0] != "a" {
-		t.Fatalf("SAR failure: %s %v", decision, scoped)
+	gate := mcpSearchKindRBAC(ctx)
+	allowed, denied, unchecked := gate([]string{"a", "b"}, "", "secrets")
+	if !slices.Equal(allowed, []string{"a"}) || len(denied) != 0 || !slices.Equal(unchecked, []string{"b"}) {
+		t.Fatalf("SAR failure: %v %v %v", allowed, denied, unchecked)
 	}
-	decision, _ = mcpSearchKindRBAC(ctx, []string{"a"}, "", "unavailable")
-	if decision != "" {
-		t.Fatalf("fully allowed narrower scope: %s", decision)
+	allowed, denied, unchecked = gate([]string{"a"}, "", "unavailable")
+	if !slices.Equal(allowed, []string{"a"}) || len(denied) != 0 || len(unchecked) != 0 {
+		t.Fatalf("fully allowed narrower scope: %v %v %v", allowed, denied, unchecked)
 	}
 }
 
@@ -138,10 +142,11 @@ func TestSearchKindRBACDeniedClusterCountsAndCachesNamespaceChecks(t *testing.T)
 		return namespace != "" && namespace != "denied", nil
 	})
 	for range 2 {
+		gate := mcpSearchKindRBAC(ctx)
 		for _, kind := range search.NamespacedSearchKinds {
-			decision, scoped := mcpSearchKindRBAC(ctx, namespaces, kind.Group, kind.Resource)
-			if decision != "override" || len(scoped) != 3 {
-				t.Fatalf("%s denied-cluster scope: %s %v", kind.Kind, decision, scoped)
+			allowed, denied, unchecked := gate(namespaces, kind.Group, kind.Resource)
+			if !slices.Equal(allowed, []string{"a", "b", "c"}) || !slices.Equal(denied, []string{"denied"}) || len(unchecked) != 0 {
+				t.Fatalf("%s denied-cluster scope: %v %v %v", kind.Kind, allowed, denied, unchecked)
 			}
 		}
 		if got, want := checks.Load(), int32(len(search.NamespacedSearchKinds)*(len(namespaces)+1)); got != want {
@@ -529,5 +534,94 @@ func TestSearchHintReportsFindingsCutShort(t *testing.T) {
 	hint := entriesHint(hintEntries(cov), 0, "", false)
 	if !strings.Contains(hint, "ran out of time searching the findings of VulnerabilityReports") || !strings.Contains(hint, "narrow with kind:") {
 		t.Fatalf("hint = %q", hint)
+	}
+}
+
+func TestSearchKindRBACBudgetAndCancellation(t *testing.T) {
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: "https://example.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous); getPermCache().Invalidate() })
+	ctx := withTestUserPerms(t, "search-budget", nil, nil)
+	perms := getPermCache().Get("search-budget", nil)
+	namespaces := make([]string, 70)
+	for i := range namespaces {
+		namespaces[i] = fmt.Sprintf("ns-%03d", i)
+	}
+	namespaces = append(namespaces, "cached")
+	slices.Sort(namespaces)
+	for _, kind := range search.NamespacedSearchKinds {
+		if kind.Kind != "LimitRange" {
+			perms.SetCanI("list", kind.Group, kind.Resource, "", false)
+		}
+		perms.SetCanI("list", kind.Group, kind.Resource, "cached", true)
+	}
+	var checks atomic.Int32
+	stubSubjectCanI(t, func(context.Context, kubernetes.Interface, string, []string, string, string, string, string) (bool, error) {
+		checks.Add(1)
+		return true, nil
+	})
+	gate := mcpSearchKindRBAC(ctx)
+	totalAllowed, totalUnchecked := 0, 0
+	for _, kind := range search.NamespacedSearchKinds {
+		allowed, denied, unchecked := gate(namespaces, kind.Group, kind.Resource)
+		if len(denied) != 0 || !slices.Contains(allowed, "cached") || len(allowed)+len(unchecked) != len(namespaces) {
+			t.Fatalf("%s: %v %v %v", kind.Kind, allowed, denied, unchecked)
+		}
+		totalAllowed += len(allowed)
+		totalUnchecked += len(unchecked)
+	}
+	if checks.Load() != readscope.MaxAccessChecks || totalAllowed != readscope.MaxAccessChecks+len(search.NamespacedSearchKinds) || totalUnchecked != 70*len(search.NamespacedSearchKinds)-readscope.MaxAccessChecks {
+		t.Fatalf("checks=%d allowed=%d unchecked=%d", checks.Load(), totalAllowed, totalUnchecked)
+	}
+	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "", false)
+	perms.SetCanI("list", "aquasecurity.github.io", "vulnerabilityreports", "cached", true)
+	trivy := mcpSearchKindAccess(ctx, gate)
+	if trivy.ClusterWide("aquasecurity.github.io", "vulnerabilityreports") {
+		t.Fatal("denied Trivy cluster grant")
+	}
+	trivyAllowed, trivyUnchecked := trivy.InNamespaces("aquasecurity.github.io", "vulnerabilityreports", namespaces)
+	if !slices.Equal(trivyAllowed, []string{"cached"}) || len(trivyUnchecked) != 70 || checks.Load() != readscope.MaxAccessChecks {
+		t.Fatalf("budget not shared with Trivy: %v %v checks=%d", trivyAllowed, trivyUnchecked, checks.Load())
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	allowed, denied, unchecked := mcpSearchKindRBAC(cancelled)(namespaces, "", "uncached")
+	if len(allowed) != 0 || len(denied) != 0 || !slices.Equal(unchecked, namespaces) || checks.Load() != readscope.MaxAccessChecks {
+		t.Fatalf("cancelled: %v %v %v checks=%d", allowed, denied, unchecked, checks.Load())
+	}
+}
+
+func TestSearchKindRBACMixedPartitionsReachCoverage(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: "https://example.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	ctx := withRestrictedUser(t, "search-mixed", []string{"alpha", "beta", "gamma"})
+	stubSubjectCanI(t, func(_ context.Context, _ kubernetes.Interface, _ string, _ []string, namespace, group, resource, verb string) (bool, error) {
+		if namespace == "gamma" {
+			return false, fmt.Errorf("SAR unavailable")
+		}
+		return namespace == "alpha", nil
+	})
+	allowed, denied, unchecked := mcpSearchKindRBAC(ctx)([]string{"alpha", "beta", "gamma"}, "", "secrets")
+	if !slices.Equal(allowed, []string{"alpha"}) || !slices.Equal(denied, []string{"beta"}) || !slices.Equal(unchecked, []string{"gamma"}) {
+		t.Fatalf("partitions: %v %v %v", allowed, denied, unchecked)
+	}
+	body := mcpSearch(t, ctx, searchInput{Query: "kind:Secret secret"})
+	if len(body.Hits) != 1 || body.Hits[0].Namespace != "alpha" {
+		t.Fatalf("hits: %+v", body.Hits)
+	}
+	for _, code := range []readreason.Code{readreason.UserForbidden, readreason.UserPermissionCheckFailed} {
+		if !slices.ContainsFunc(body.Coverage.Gaps, func(gap resourceapi.Gap) bool {
+			return gap.Code == code && gap.Kinds != nil && slices.Contains(gap.Kinds.Names, resourceapi.KindRef{Kind: "Secret"}) && reflect.DeepEqual(gap.Namespaces, resourceapi.UnknownNames())
+		}) {
+			t.Fatalf("missing %s partial gap: %+v", code, body.Coverage)
+		}
 	}
 }

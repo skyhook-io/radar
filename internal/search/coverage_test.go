@@ -351,11 +351,11 @@ func TestLoadingCatalogIsPendingNotUnknown(t *testing.T) {
 
 // When some API groups failed discovery, an unmatched kind: term is still
 // reported as unknown, but with the failure beside it: the kind may live in a
-// group Radar couldn't discover. A broad search says nothing about it.
+// group Radar couldn't discover. A broad search records kind-collection narrowing.
 func TestIncompleteDiscoveryQualifiesUnknownKinds(t *testing.T) {
 	p := &fakeProvider{catalogErr: errIncompleteDiscovery}
-	if res, _ := Search(context.Background(), p, Parse("robusta"), Options{}); partial(res) || len(unsearched(res)) != 0 {
-		t.Fatalf("broad search reported incomplete discovery: %+v", unsearched(res))
+	if res, _ := Search(context.Background(), p, Parse("robusta"), Options{}); partial(res) || len(unsearched(res)) != 0 || !slices.Contains(res.Coverage.NarrowedBy, resourceapi.NarrowedByKindCollection) {
+		t.Fatalf("broad search did not qualify incomplete discovery: %+v", res.Coverage)
 	}
 	res, _ := Search(context.Background(), p, Parse("kind:Certificate kind:Pod"), Options{})
 	want := []UnsearchedKind{{Kind: "*", Reason: readreason.ReadError}, {Kind: "Certificate", Reason: readreason.KindUnknown}}

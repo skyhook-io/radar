@@ -474,7 +474,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
 			"summaryContext. Covers what you can list; big CRDs need kind:. Trivy reports match by " +
-			"CVE ID, package or SBOM component. partial=true: absence unproven, see coverageHint.",
+			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -3320,60 +3320,41 @@ func splitCSVStr(v string) []string {
 }
 
 // mcpSearchKindRBAC mirrors the REST exact-kind gate for namespaced searches.
-func mcpSearchKindRBAC(ctx context.Context, scanNamespaces []string, group, resource string) (decision string, scopedNamespaces []string) {
-	if user, _ := resolveUserPerms(ctx); user == nil {
-		return "", nil
+func mcpSearchKindRBAC(ctx context.Context) func([]string, string, string) ([]string, []string, []string) {
+	budget := new(atomic.Int32)
+	budget.Store(readscope.MaxAccessChecks)
+	return func(namespaces []string, group, resource string) (allowed, denied, unchecked []string) {
+		user, perms := resolveUserPerms(ctx)
+		if user == nil {
+			return namespaces, nil, nil
+		}
+		return readscope.CheckNamespacedAccess(ctx, namespaces, budget,
+			func(ns string) (bool, bool) {
+				if perms == nil {
+					return false, false
+				}
+				return perms.CanI("list", group, resource, ns)
+			},
+			func(ns string) (bool, bool) {
+				return canReadInNamespaceDecision(ctx, group, resource, ns, "list")
+			})
 	}
-	// scanNamespaces is already intersected with caller visibility. A denied
-	// cluster-wide check may narrow that scope, never expand it; failed checks
-	// fail closed without describing a transient error as an RBAC verdict.
-	allowed, authoritative := canReadInNamespaceDecision(ctx, group, resource, "", "list")
-	if allowed {
-		return "", nil
-	}
-	if !authoritative {
-		return "permission_check_failed", nil
-	}
-	if len(scanNamespaces) == 0 {
-		return "skip", nil
-	}
-	scoped, authoritative := filterNamespacesByCanReadDecision(ctx, group, resource, "list", scanNamespaces)
-	if !authoritative {
-		return "permission_check_failed", scoped
-	}
-	if len(scoped) == 0 {
-		return "skip", nil
-	}
-	if len(scoped) == len(scanNamespaces) {
-		return "", nil
-	}
-	return "override", scoped
 }
 
 // mcpSearchKindAccess mirrors Server.searchKindAccess for MCP. nil when auth
 // is off.
-func mcpSearchKindAccess(ctx context.Context) *search.KindAccess {
-	user, perms := resolveUserPerms(ctx)
-	if user == nil {
+func mcpSearchKindAccess(ctx context.Context, gate func([]string, string, string) ([]string, []string, []string)) *search.KindAccess {
+	if user, _ := resolveUserPerms(ctx); user == nil {
 		return nil
 	}
-	budget := new(atomic.Int32)
-	budget.Store(readscope.MaxAccessChecks)
 	return &search.KindAccess{
 		ClusterWide: func(group, resource string) bool {
-			return canReadInNamespace(ctx, group, resource, "", "list")
+			_, denied, unchecked := gate(nil, group, resource)
+			return len(denied) == 0 && len(unchecked) == 0
 		},
 		InNamespaces: func(group, resource string, namespaces []string) ([]string, []string) {
-			return readscope.BudgetedNamespaceAccess(namespaces, budget,
-				func(ns string) (bool, bool) {
-					if perms == nil {
-						return false, false
-					}
-					return perms.CanI("list", group, resource, ns)
-				},
-				func(ns string) (bool, bool) {
-					return canReadInNamespaceDecision(ctx, group, resource, ns, "list")
-				})
+			allowed, _, unchecked := gate(namespaces, group, resource)
+			return allowed, unchecked
 		},
 	}
 }
@@ -3409,16 +3390,15 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		return nil, nil, fmt.Errorf("unknown include=%q (want: summary, raw, none)", input.Include)
 	}
 
+	kindRBAC := mcpSearchKindRBAC(ctx)
 	opts := search.Options{
-		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
-			return mcpSearchKindRBAC(ctx, namespaces, group, resource)
-		},
-		Limit:   input.Limit,
-		Include: include,
+		NamespacedRBAC: kindRBAC,
+		Limit:          input.Limit,
+		Include:        include,
 		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			return canReadInNamespaceDecision(ctx, group, resource, "", "list")
 		},
-		KindAccess: mcpSearchKindAccess(ctx),
+		KindAccess: mcpSearchKindAccess(ctx, kindRBAC),
 	}
 	opts.Pinned = k8s.ForceNamespaceScope
 	opts.ScopeNamespaces(parsed, visible, ceiling)

@@ -919,7 +919,8 @@ What gets reported follows from that:
   term that matched nothing may simply not be discovered yet. When API discovery
   failed for some groups, an unmatched `kind:` term is still `kind_unknown`, beside
   a `read_error` gap whose kinds are unknown: the kind may live in a group Radar couldn't
-  discover. Broad searches don't report failed groups.
+  discover. For broad searches, incomplete discovery adds `kind_collection`
+  to `narrowedBy`.
 - **A kind Radar doesn't watch yet narrows a broad search** (`kind_collection`),
   for example one too large to watch eagerly; a `kind:` term warms it and reports
   what happens. An access check Radar is still retrying is `kind_sync_pending`;
@@ -930,10 +931,11 @@ What gets reported follows from that:
   namespace Radar's own credentials can't list stays outside its collection: on a
   broad search it adds `namespace_collection` to `narrowedBy`, and it is
   `radar_namespace_not_collected` when an `ns:` term names it.
-- **Search never waits on warm-up.** Kinds still loading are reported as
-  `kind_sync_pending`, and the per-hit `summaryContext` (health, issue count,
-  managedBy) is left out when it can't be built within about three seconds, as
-  right after a restart while custom-resource discovery runs.
+- **Named kinds may warm within one shared two-second deadline.** Broad searches
+  do not wait for warm-up. Kinds still loading are reported as `kind_sync_pending`.
+  The per-hit `summaryContext` (health, issue count, managedBy) is left out when it
+  can't be built within about three seconds, as right after a restart while
+  custom-resource discovery runs.
 - **A kind Radar watches namespace by namespace is searched where it has
   loaded.** A namespace whose informer is still loading is a `kind_sync_pending`
   gap for the kind, and the namespaces that are ready still contribute hits.

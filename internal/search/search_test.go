@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/readplan"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	appsv1 "k8s.io/api/apps/v1"
@@ -135,7 +134,7 @@ func (f *fakeProvider) PlanTyped(kind string, namespaces []string) readplan.Plan
 	return plan
 }
 func (f *fakeProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces []string, clusterScoped bool) readplan.Plan {
-	plan := readplan.Dynamic(f, gvr, readscope.Target{Namespaces: namespaces}, clusterScoped)
+	plan := readplan.Dynamic(f, gvr, namespaces, clusterScoped)
 	for i := range plan.Partitions {
 		if plan.Partitions[i].Verdict.Code == readreason.KindNotWatchable && f.NamespaceObservation(gvr, "").ReasonCode == "direct_read_only" {
 			plan.Partitions[i].Verdict.Code = readreason.KindNotSearchable

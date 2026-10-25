@@ -43,7 +43,7 @@ func (a *trivyCountAccess) scope(gvr schema.GroupVersionResource, namespaces []s
 	// A denied canRead means auth is on, so there is a user and a cache.
 	user := auth.UserFromContext(a.r.Context())
 	perms := a.s.permCache.Get(user.Username, user.Groups)
-	allowed, unchecked := readscope.BudgetedNamespaceAccess(namespaces, a.budget,
+	allowed, unchecked := readscope.BudgetedNamespaceAccess(a.r.Context(), namespaces, a.budget,
 		func(ns string) (bool, bool) {
 			if perms == nil {
 				return false, false
