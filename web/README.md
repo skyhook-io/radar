@@ -69,6 +69,6 @@ Call these before mounting `<RadarApp>`.
 
 ## Resource list responses
 
-New Radar instances advertise `features.resourceReadCoverage` and return `{items, coverage, kind, group}` for resource lists, with `columns`/`cells` when table mode is requested. `coverage` describes the scope the answer covers, what Radar read of it, and coded gaps; namespace sets are bounded `{count, sample}`. A failed read answers `{error, error_code, coverage?}`.
+New Radar instances advertise `features.resourceReadCoverage` and return `{items, coverage, kind, group}` for resource lists, with `columns`/`cells` when table mode is requested. `coverage` describes the scope the answer covers, what Radar read of it, and coded gaps; namespace sets are `{count, names?}`, listing every member or none, and a gap's set may instead be `{"extent": "all"}` or `{"extent": "unknown"}`. A failed read answers `{error, error_code, coverage?}`.
 
 Hosts making their own requests can call `normalizeResourceList(body)` from this package. It reads the body by its shape, so it needs no capabilities: a bare array or a table envelope without `coverage` (an older instance) produces `coverage.status: 'unknown'`, which cannot establish absence. The adapter returns `{items, coverage, printerTable}`. `fetchResourceList(kind, options)` uses Radar's configured API base/authentication and applies a server list budget, which older instances ignore.

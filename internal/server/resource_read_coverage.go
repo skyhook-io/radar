@@ -315,7 +315,28 @@ func noAccessFailure(failure *resourceReadFailure, target listTarget, accessChec
 // kind authorization (Secrets, LimitRanges) denying the kind there, or a
 // check that couldn't complete. Naming them leaks nothing.
 func (t listTarget) withGaps(gaps []resourceapi.Gap) listTarget {
-	t.gaps = append(slices.Clone(t.gaps), gaps...)
+	// A namespace already a gap of the target (one that doesn't exist, is
+	// hidden or is outside the pin) stays in that one gap.
+	claimed := map[string]bool{}
+	for _, gap := range t.gaps {
+		if gap.Namespaces != nil {
+			for _, ns := range gap.Namespaces.Names {
+				claimed[ns] = true
+			}
+		}
+	}
+	out := slices.Clone(t.gaps)
+	for _, gap := range gaps {
+		if gap.Namespaces == nil || gap.Namespaces.Extent != "" || len(gap.Namespaces.Names) != gap.Namespaces.Count {
+			out = append(out, gap)
+			continue
+		}
+		rest := slices.DeleteFunc(slices.Clone(gap.Namespaces.Names), func(ns string) bool { return claimed[ns] })
+		if len(rest) > 0 {
+			out = append(out, gapOf(gap.Code, rest))
+		}
+	}
+	t.gaps = out
 	return t
 }
 
@@ -707,6 +728,11 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 			observation := dynamicCache.Observation(gvr)
 			if observation.Scope != k8score.DynamicObservationScopeExplicitNamespaces {
 				failure := namespaceReadFailure(dynamicCache, gvr, "")
+				if failure == nil {
+					// The store finished loading after the read: a retry
+					// reads it.
+					failure = dynamicPlanFailure(gvr.Resource, readreason.KindSyncPending)
+				}
 				failure.gaps = []resourceapi.Gap{{Code: failure.code}}
 				return dynamicList{}, failure
 			}
@@ -804,6 +830,11 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 	}
 	narrowed := collected != nil || len(uncovered) > 0
 	if len(unanswered) > 0 {
+		if unansweredCode == "" {
+			// Their checks answered between the two observations: a retry
+			// reads them.
+			unansweredCode = readreason.KindSyncPending
+		}
 		failures[unansweredCode] = append(failures[unansweredCode], unanswered...)
 		if failureByCode[unansweredCode] == nil {
 			failureByCode[unansweredCode] = readFailuref(unansweredCode, "Radar has not established whether it can collect %s in some namespaces", gvr.Resource)
@@ -822,7 +853,10 @@ func readDynamicResourceList(r *http.Request, cache *k8s.ResourceCache, kind, gr
 		}
 		return dynamicList{}, &resourceReadFailure{code: failure.code, message: failure.message, gaps: gaps}
 	}
-	if !narrowed && len(failures) == 0 {
+	// nil means every namespace, which only an unbounded request read. A
+	// finite request keeps the namespaces it read: exact kind authorization
+	// may have left some of its target out.
+	if !narrowed && len(failures) == 0 && namespaces == nil {
 		read = nil
 	}
 	slices.Sort(read)

@@ -444,3 +444,25 @@ func TestProxyAuth_MissingNamespaceIsNotFound(t *testing.T) {
 		t.Errorf("get in a missing namespace outside the pin = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
 	}
 }
+
+// A missing namespace is one gap even when exact kind authorization would
+// also deny it: it doesn't exist, so the denial says nothing.
+func TestProxyAuth_MissingNamespaceIsOneGapForExactKinds(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	env := newAuthTestServer(t)
+	perms := &pkgauth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "secrets", "", false)
+	perms.SetCanI("list", "", "secrets", "default", true)
+	perms.SetCanI("list", "", "secrets", "ghost", false)
+	env.srv.permCache.Set("root", nil, perms)
+	resp := env.authGet(t, "/api/resources/secrets?namespaces=default,ghost", "root", "")
+	defer func() { _ = resp.Body.Close() }()
+	var list testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Coverage.Gaps) != 1 || list.Coverage.Gaps[0].Code != "namespace_not_found" {
+		t.Fatalf("gaps %+v", list.Coverage.Gaps)
+	}
+}

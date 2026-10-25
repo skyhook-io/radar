@@ -2946,15 +2946,15 @@ func hpaDiagnosisFor(resource any) *hpadiag.Diagnosis {
 //
 // Inputs are the already-normalized (kind, namespace, name, group); callers
 // must collapse the cluster-scoped "_" placeholder before calling. Returns
-// (status, message, ok=true) when the request passes the gates, or
-// (status, message, ok=false) with the HTTP status + body the caller should
-// emit on deny.
+// nil when the request passes the gates, or the coded failure the caller
+// writes.
 //
 // Three gates, run in this order:
 //  1. kind == "namespaces"        → full Namespace object requires get-namespaces SAR
 //  2. cluster-scoped (Node/CRD/…) → per-kind get SAR (ClassifyKindScope)
 //  3. namespaced                   → namespace access via getUserNamespaces,
-//     plus per-namespace get SAR for Secrets, LimitRanges and Trivy reports
+//     namespace_not_found for a caller who can see every namespace, then
+//     per-namespace get SAR for Secrets, LimitRanges and Trivy reports
 func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) *resourceReadFailure {
 	isNamespacesKind := kind == "namespaces" || kind == "namespace"
 	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)

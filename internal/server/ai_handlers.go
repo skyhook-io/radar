@@ -41,6 +41,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -194,6 +195,8 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 		s.writeReadFailure(w, kind, errReadHandlesChanged, &target)
 		return
 	}
+	var partial []runtime.Object
+	fromStores := false
 	if key := informerKeyForKind(kind); key != "" && (group == "" || k8s.TypedKindOwnsGroup(kind, group)) {
 		plan, err := typedReadCoverage(cache, key, namespaces, clusterScoped, target.explicit)
 		if err != nil {
@@ -207,9 +210,25 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 			s.writeIncompleteAIList(w, target, []resourceapi.Gap{{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()}})
 			return
 		}
-		if len(plan.gaps) > 0 || !plan.whole {
+		if len(plan.gaps) > 0 {
 			s.writeIncompleteAIList(w, target, plan.gaps)
 			return
+		}
+		// A kind still loading elsewhere is listed from the stores of the
+		// requested namespaces, which have all loaded.
+		if !plan.whole {
+			objs, ok := cache.ReadableObjects(key, plan.read)
+			if !ok {
+				s.writeIncompleteAIList(w, target, []resourceapi.Gap{{Code: readreason.KindSyncPending}})
+				return
+			}
+			for i, obj := range objs {
+				if secret, ok := obj.(*corev1.Secret); ok {
+					objs[i] = k8score.WithoutHelmReleaseValues(secret)
+				}
+			}
+			partial = objs
+			fromStores = true
 		}
 	}
 
@@ -227,7 +246,10 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try typed cache first (group=="" → core/built-in lookup).
-	objs, err := k8s.FetchResourceList(cache, kind, namespaces)
+	objs, err := partial, error(nil)
+	if !fromStores {
+		objs, err = k8s.FetchResourceList(cache, kind, namespaces)
+	}
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs
 		s.aiListDynamic(w, r, cache, kind, target, namespaces, group, level, skipContext)

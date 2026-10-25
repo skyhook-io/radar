@@ -254,6 +254,12 @@ func TestAIGetReadsSyncedNamespaceWhileNeighborLoads(t *testing.T) {
 	list := get(t, "/api/ai/resources/configmaps?namespaces=alpha,gamma")
 	defer list.Body.Close()
 	assertResourceReadError(t, list, http.StatusServiceUnavailable, "kind_sync_pending")
+	// A list of the loaded namespace alone is answered from its store.
+	var rows []map[string]any
+	assertOK(t, get(t, "/api/ai/resources/configmaps?namespaces=alpha&context=none"), &rows)
+	if len(rows) != 1 {
+		t.Fatalf("list of the loaded namespace = %+v", rows)
+	}
 }
 
 func TestTypedFailureRetainsNarrowedCollection(t *testing.T) {

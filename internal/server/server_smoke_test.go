@@ -80,7 +80,9 @@ func addPackageNamespaces(t *testing.T, names ...string) {
 		if _, err := testFakeClient.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = testFakeClient.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{}) })
+		t.Cleanup(func() {
+			_ = testFakeClient.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{})
+		})
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for _, name := range names {

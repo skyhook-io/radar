@@ -271,3 +271,27 @@ func TestProxyAuth_TrivyReportCountsUnansweredCheckIsUnavailable(t *testing.T) {
 		t.Fatalf("unavailable=%v forbidden=%v, want %s unavailable only", counts.Unavailable, counts.Forbidden, key)
 	}
 }
+
+// A list over a namespace where the caller may read reports and one where
+// they may not reads the first and reports the second as a gap, without
+// claiming to have read it.
+func TestProxyAuth_TrivyReportsMixedAccessListCoverage(t *testing.T) {
+	setupExposedSecretReports(t)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"legacy", "other"}}
+	perms.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "", false)
+	perms.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "legacy", true)
+	perms.SetCanI("list", exposedSecretReportGVR.Group, exposedSecretReportGVR.Resource, "other", false)
+	env.srv.permCache.Set("mixed", nil, perms)
+	resp := env.authGet(t, "/api/resources/exposedsecretreports?group=aquasecurity.github.io&namespaces=legacy,other", "mixed", "")
+	var list testResourceListEnvelope
+	if err := json.Unmarshal([]byte(readBody(t, resp)), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Coverage.Read == nil || !slices.Equal(list.Coverage.Read.Namespaces.Names, []string{"legacy"}) {
+		t.Fatalf("items %d, read %+v", len(list.Items), list.Coverage.Read)
+	}
+	if len(list.Coverage.Gaps) != 1 || list.Coverage.Gaps[0].Code != "user_forbidden" || !slices.Equal(list.Coverage.Gaps[0].Namespaces.Names, []string{"other"}) {
+		t.Fatalf("gaps %+v", list.Coverage.Gaps)
+	}
+}
