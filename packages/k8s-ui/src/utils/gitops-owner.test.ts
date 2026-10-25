@@ -99,28 +99,38 @@ describe('managerListing', () => {
   const app = (name: string) => ({ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name })
 
   it('confirms an owner that is the only manager listing the resource', () => {
-    expect(managerListing(owner, [app('billing')])).toEqual({ state: 'confirmed' })
+    expect(managerListing(owner, [app('billing')], true, true)).toEqual({ state: 'confirmed' })
   })
 
   it('confirms an instance-label owner whose namespace is not known yet', () => {
-    expect(managerListing({ ...owner, namespace: '' }, [app('billing')])).toEqual({ state: 'confirmed' })
+    expect(managerListing({ ...owner, namespace: '' }, [app('billing')], true, true)).toEqual({ state: 'confirmed' })
   })
 
   it('reports a conflict when other managers list the resource and the owner does not', () => {
-    expect(managerListing(owner, [app('hub')])).toEqual({
+    expect(managerListing(owner, [app('hub')], true, true)).toEqual({
       state: 'conflict',
       listedBy: [{ tool: 'argocd', kind: 'applications', namespace: 'argocd', name: 'hub' }],
     })
   })
 
   it('says nothing when the owner is one of several managers', () => {
-    expect(managerListing(owner, [app('billing'), app('hub')])).toBeUndefined()
+    expect(managerListing(owner, [app('billing'), app('hub')], true, true)).toBeUndefined()
   })
 
   it('says nothing without managers to compare', () => {
-    expect(managerListing(owner, undefined)).toBeUndefined()
-    expect(managerListing(owner, [])).toBeUndefined()
-    expect(managerListing(null, [app('billing')])).toBeUndefined()
-    expect(managerListing(owner, [{ kind: 'Deployment', group: 'apps', namespace: 'x', name: 'y' }])).toBeUndefined()
+    expect(managerListing(owner, undefined, true, true)).toBeUndefined()
+    expect(managerListing(owner, [], true, true)).toBeUndefined()
+    expect(managerListing(null, [app('billing')], true, true)).toBeUndefined()
+    expect(managerListing(owner, [{ kind: 'Deployment', group: 'apps', namespace: 'x', name: 'y' }], true, true)).toBeUndefined()
+  })
+
+  it('claims nothing for an owner not verified in this cluster', () => {
+    expect(managerListing(owner, [app('billing')], false, true)).toBeUndefined()
+    expect(managerListing(owner, [app('hub')], false, true)).toBeUndefined()
+  })
+
+  it('claims nothing when the search left managers unsettled, since a listed one may be a topology link', () => {
+    expect(managerListing(owner, [app('billing')], true, false)).toBeUndefined()
+    expect(managerListing(owner, [app('hub')], true, false)).toBeUndefined()
   })
 })

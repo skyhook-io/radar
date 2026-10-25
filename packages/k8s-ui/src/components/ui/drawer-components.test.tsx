@@ -220,7 +220,7 @@ describe('RelatedResourcesSection ownership', () => {
 
   it('says which direction Managed By comes from', () => {
     const html = renderToString(<RelatedResourcesSection relationships={{ managers: [app] }} onNavigate={() => {}} />)
-    expect(html).toContain('Argo CD Applications or Flux objects whose status lists this resource.')
+    expect(html).toContain('Argo CD Applications or Flux objects whose status lists this resource, and other controllers that manage it without an owner reference.')
   })
 
   it("says outright what it couldn't check about this resource when it lists none", () => {
@@ -237,6 +237,14 @@ describe('RelatedResourcesSection ownership', () => {
     )
     expect(html).toMatch(/aria-label="[^"]*1 manager lists it for a cluster Radar can&#x27;t confirm is this one/)
     expect(html).not.toMatch(/>1 Manager lists it/)
+  })
+
+  it("keeps a manager kind discovery couldn't read to the hint, as it would show on every resource", () => {
+    const gaps = [{ group: 'argoproj.io', kind: 'Application', reason: 'read_error' }, { group: 'kustomize.toolkit.fluxcd.io', kind: 'Kustomization', reason: 'read_error' }]
+    const html = renderToString(<RelatedResourcesSection relationships={{ children: [rs], ownership: { children: { complete: true }, managedBy: { notChecked: gaps } } }} onNavigate={() => {}} />)
+    expect(html).not.toContain('Managed By')
+    const listed = renderToString(<RelatedResourcesSection relationships={{ managers: [app], ownership: { children: { complete: true }, managedBy: { notChecked: gaps } } }} onNavigate={() => {}} />)
+    expect(listed.match(/API discovery missed some API groups, so managers/g)).toHaveLength(1)
   })
 
   it('keeps an unreadable list to the hint, since it may name any resource', () => {

@@ -110,7 +110,7 @@ func viewAnswers(v *ownership.View, ref resourceid.Ref) []any {
 	for _, m := range managers.Managers {
 		out = append(out, ident(m))
 	}
-	out = append(out, managers.Unreadable, managers.Gaps)
+	out = append(out, managers.Unreadable, managers.Remote, managers.Gaps)
 	return out
 }
 

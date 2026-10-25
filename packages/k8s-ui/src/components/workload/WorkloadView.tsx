@@ -726,14 +726,16 @@ export function WorkloadView({
   const metadata = useMemo(() => extractMetadata(kind, resource), [kind, resource])
   const relationshipGitOpsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
   const gitopsOwner = resolvedGitOpsOwner ?? relationshipGitOpsOwner
-  const listing = useMemo(() => managerListing(gitopsOwner, relationships?.managers), [gitopsOwner, relationships?.managers])
+  const listing = useMemo(
+    () => managerListing(gitopsOwner, relationships?.managers, gitOpsOwnerVerified, !relationships?.ownership?.managedBy),
+    [gitopsOwner, relationships?.managers, relationships?.ownership?.managedBy, gitOpsOwnerVerified],
+  )
   // When the chip's manager is the only one whose status lists the resource,
   // the chip says it all: Related Resources would repeat it.
-  const rendererRelationships = useMemo(() => {
-    if (!relationships || listing?.state !== 'confirmed' || !gitOpsOwnerVerified) return relationships
-    const ownership = relationships.ownership && { ...relationships.ownership, managedBy: undefined }
-    return { ...relationships, managers: undefined, ownership }
-  }, [relationships, listing, gitOpsOwnerVerified])
+  const rendererRelationships = useMemo(
+    () => (relationships && listing?.state === 'confirmed' ? { ...relationships, managers: undefined } : relationships),
+    [relationships, listing],
+  )
   // When the resource itself is a portal GitOps CR (Application, Kustomization,
   // HelmRelease, etc.), surface a link to its dedicated GitOps detail page —
   // the drawer's renderer is thorough but the tab has the tree + insights +

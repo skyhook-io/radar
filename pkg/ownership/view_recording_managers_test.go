@@ -145,7 +145,7 @@ func TestRecordingManagersIgnoreManagersTheCallerCantRead(t *testing.T) {
 						}
 					})
 				}
-				if got := v.RecordingManagers(second.Ref); len(got.Managers)+len(got.Unreadable) != 0 {
+				if got := v.RecordingManagers(second.Ref); len(got.Managers)+len(got.Unreadable)+len(got.Remote) != 0 {
 					t.Fatalf("RecordingManagers = %+v; want the manager hidden", got)
 				}
 			})

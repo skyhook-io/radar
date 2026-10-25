@@ -1170,7 +1170,7 @@ const RELATIONSHIP_TRUNCATE_LIMIT = 10
 // Managed By sits next to Owner and reads like it, so it says how they differ
 // and which direction its answer comes from.
 const MANAGED_BY_HINT = [
-  'Argo CD Applications or Flux objects whose status lists this resource.',
+  'Argo CD Applications or Flux objects whose status lists this resource, and other controllers that manage it without an owner reference.',
   "Kubernetes' garbage collector follows owner references, not these links.",
 ]
 
@@ -1196,12 +1196,13 @@ function managersNote(coverage: OwnershipCoverage | undefined, listed: number): 
   }
   const pressing = new Map<string, string>()
   for (const g of managedBy?.notChecked ?? []) {
-    if (!g.kind) hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
+    // An unserved manager kind under incomplete discovery reads as read_error
+    // on every resource, like discovery's own gap.
+    if (!g.kind || g.reason === 'read_error') hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
     else if (g.reason === 'radar_kind_not_collected') hint.push(`Radar doesn't collect ${g.kind} objects, so those managers aren't checked.`)
     else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
   }
   if (pressing.size > 0) open.push(`couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}`)
-  const note: RelationshipNote = { hint }
   const text: string[] = []
   if (open.length > 0) {
     const sentence = `${capitalize(open.join('; '))}.`
@@ -1209,6 +1210,7 @@ function managersNote(coverage: OwnershipCoverage | undefined, listed: number): 
     else hint.push(sentence)
   }
   if (listed > 1) text.push('More than one manager lists or links to it.')
+  const note: RelationshipNote = { hint: [...new Set(hint)] }
   if (text.length > 0) note.text = text.join(' ')
   return note
 }

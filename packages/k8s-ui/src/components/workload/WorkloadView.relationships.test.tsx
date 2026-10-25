@@ -35,3 +35,29 @@ describe('workload staged-policy projection', () => {
     expect(html).not.toContain('Network policies')
   })
 })
+
+
+describe('workload GitOps manager', () => {
+  const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'shop' }
+  const render = (relationships: Parameters<typeof WorkloadView>[0]['relationships']) =>
+    renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload} relationships={relationships} expanded={false} />)
+
+  it('shows the header chip alone when its manager is the only one whose status lists the workload', () => {
+    const html = render({ managedBy: [app], managers: [app], ownership: { children: { complete: true } } })
+    expect(html).toContain('Managed by')
+    expect(html).not.toContain('Managed By')
+  })
+
+  it('keeps Managed By when the search left managers it could not settle', () => {
+    const html = render({ managedBy: [app], managers: [app], ownership: { children: { complete: true }, managedBy: { remote: 1 } } })
+    expect(html).toContain('Managed By')
+    expect(html).toContain('Managed by')
+  })
+
+  it('keeps Managed By beside a chip whose manager its status does not list', () => {
+    const hub = { ...app, name: 'hub' }
+    const html = render({ managedBy: [app], managers: [hub], ownership: { children: { complete: true } } })
+    expect(html).toContain('Managed By')
+    expect(html).toContain('Tracked by')
+  })
+})

@@ -17,5 +17,6 @@ describe('ManagedByChip', () => {
     )
     expect(html).toContain('Tracked by')
     expect(html).not.toContain('Managed by')
+    expect(html).toMatch(/rounded-full[^"]*bg-amber/)
   })
 })
