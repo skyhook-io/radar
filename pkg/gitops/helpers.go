@@ -83,6 +83,15 @@ func argoDestination(app *unstructured.Unstructured) (name, server string) {
 	return strings.TrimSpace(name), strings.TrimSpace(server)
 }
 
+// ArgoAppliesElsewhere reports whether an Application's list, whether Radar
+// can read it or not, describes a destination Argo CD names and that isn't
+// this cluster. An Application naming no destination isn't known to apply
+// anywhere.
+func ArgoAppliesElsewhere(app *unstructured.Unstructured) bool {
+	name, server, _ := ArgoComparedDestination(app)
+	return (name != "" || server != "") && !IsInClusterArgoDestination(name, server)
+}
+
 // FluxTargetsLocalCluster reports whether a Flux Kustomization or HelmRelease
 // applies to the cluster it runs in. spec.kubeConfig points it at a cluster
 // Radar can't confirm is this one, whose objects its inventory then names.

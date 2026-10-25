@@ -27,7 +27,10 @@ func membersOf(gk resourceid.GroupKind, u *unstructured.Unstructured) recordedMe
 	case ownership.FluxHelmRelease, ownership.FluxKustomization:
 		list, ok = gitops.FluxMembers(u)
 	}
-	if !ok {
+	switch {
+	case !ok && appliesElsewhere(gk, u):
+		return recordedMembers{state: ownership.MembersRemote}
+	case !ok:
 		return recordedMembers{}
 	}
 	return recordedMembers{state: located(gk, u), MemberList: list}
@@ -44,10 +47,23 @@ func memberState(gk resourceid.GroupKind, u *unstructured.Unstructured) ownershi
 	case ownership.FluxHelmRelease, ownership.FluxKustomization:
 		ok = gitops.FluxMembersReadable(u)
 	}
-	if !ok {
+	switch {
+	case !ok && appliesElsewhere(gk, u):
+		return ownership.MembersRemote
+	case !ok:
 		return ownership.MembersUnreadable
 	}
 	return located(gk, u)
+}
+
+// appliesElsewhere reports whether a manager is known to apply to another
+// cluster, whose objects alone its list can name, whether Radar can read the
+// list or not.
+func appliesElsewhere(gk resourceid.GroupKind, u *unstructured.Unstructured) bool {
+	if gk == ownership.ArgoApplication {
+		return gitops.ArgoAppliesElsewhere(u)
+	}
+	return !gitops.FluxTargetsLocalCluster(u)
 }
 
 // located is whether a manager whose list Radar reads applies it here.

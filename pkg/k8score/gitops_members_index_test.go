@@ -33,10 +33,11 @@ func argoApplication(name string, entries []any) *unstructured.Unstructured {
 }
 
 // An entry of a built-in kind is filed by the object it means; one of any
-// other kind under each placement its scope could call for; and a manager whose
-// list can't be read, under UnreadableMembersKey alone.
+// other kind under each placement its scope could call for; a manager whose
+// list can't be read, under UnreadableMembersKey alone, unless it applies to
+// another cluster.
 func TestMemberKeys(t *testing.T) {
-	keys := memberKeys(gitops.ArgoMembers)
+	keys := memberKeys(gitops.ArgoMembers, gitops.ArgoAppliesElsewhere)
 	got, _ := keys(argoApplication("web", []any{
 		map[string]any{"kind": "Service", "name": "ui"},
 		map[string]any{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "namespace": "shop", "name": "reader"},
@@ -73,6 +74,14 @@ func TestMemberKeys(t *testing.T) {
 		if got, _ := keys(app); !slices.Equal(got, []string{UnreadableMembersKey}) {
 			t.Fatalf("%s: keys = %q, want only the unreadable key", name, got)
 		}
+	}
+	// An Application applying to another cluster names nothing here when its
+	// comparison fails, so it isn't filed as one any object may belong to.
+	remote := argoApplication("web", []any{})
+	remote.Object["status"].(map[string]any)["sync"] = map[string]any{"comparedTo": map[string]any{"destination": map[string]any{"server": "https://prod.example.com:6443", "namespace": "shop"}}}
+	remote.Object["status"].(map[string]any)["conditions"] = []any{map[string]any{"type": "ComparisonError"}}
+	if got, _ := keys(remote); len(got) != 0 {
+		t.Fatalf("a remote Application with a failed comparison: keys = %q, want none", got)
 	}
 }
 
@@ -181,7 +190,7 @@ func BenchmarkMembersIndexRetainedBytes(b *testing.B) {
 		return after.HeapAlloc - before.HeapAlloc
 	}
 	namespaceOnly := cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}
-	withMembers := cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc, GitOpsMembersIndex: memberKeys(gitops.ArgoMembers)}
+	withMembers := cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc, GitOpsMembersIndex: memberKeys(gitops.ArgoMembers, gitops.ArgoAppliesElsewhere)}
 	var extra float64
 	for range b.N {
 		extra += float64(retained(withMembers)) - float64(retained(namespaceOnly))
@@ -195,7 +204,7 @@ func BenchmarkMembersIndexUpdate(b *testing.B) {
 	for _, entries := range []int{40, 400} {
 		for name, indexers := range map[string]cache.Indexers{
 			"without": {cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
-			"with":    {cache.NamespaceIndex: cache.MetaNamespaceIndexFunc, GitOpsMembersIndex: memberKeys(gitops.ArgoMembers)},
+			"with":    {cache.NamespaceIndex: cache.MetaNamespaceIndexFunc, GitOpsMembersIndex: memberKeys(gitops.ArgoMembers, gitops.ArgoAppliesElsewhere)},
 		} {
 			b.Run(fmt.Sprintf("%d-entries-%s", entries, name), func(b *testing.B) {
 				store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, indexers)
@@ -251,7 +260,7 @@ func (i syncedInformer) GetIndexer() cache.Indexer { return i.indexer }
 // next is still found under one of them.
 func TestReadableIndexedReadsItsKeysTogether(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{GitOpsMembersIndex: memberKeys(gitops.ArgoMembers)})
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{GitOpsMembersIndex: memberKeys(gitops.ArgoMembers, gitops.ArgoAppliesElsewhere)})
 	if err := indexer.Add(argoApplication("web", []any{map[string]any{"kind": "Service", "name": "ui"}})); err != nil {
 		t.Fatal(err)
 	}

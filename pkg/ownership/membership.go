@@ -41,7 +41,8 @@ const (
 	MembersRecorded
 	// MembersRemote: the manager applies to a destination Radar can't tell
 	// is this cluster: another cluster, or this one under another name or
-	// address. Its list names objects there.
+	// address. Its list names objects there, if Radar can read it at all; a
+	// remote manager is never unreadable, since it names nothing here.
 	MembersRemote
 )
 

@@ -77,6 +77,16 @@ func inClusterServer(server string) bool {
 	return strings.HasPrefix(host, "kubernetes.default.svc.")
 }
 
+// unreadable is what a manager whose list can't be read says: nothing Radar
+// can read, unless it applies to another cluster, whose objects alone its
+// list can name, so it names none here.
+func unreadable(state ownership.MembershipState, namespace string) (ownership.MembershipState, []resourceid.Ref, string) {
+	if state == ownership.MembersRemote {
+		return state, []resourceid.Ref{}, namespace
+	}
+	return ownership.MembersUnreadable, nil, namespace
+}
+
 func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.MembershipState, []resourceid.Ref, string) {
 	// status.resources describes the destination Argo CD last compared, which
 	// lags a changed spec until it compares again.
@@ -102,7 +112,7 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 	raw := status["resources"]
 	list, ok := raw.([]any)
 	if raw != nil && !ok {
-		return ownership.MembersUnreadable, nil, namespace
+		return unreadable(state, namespace)
 	}
 	if len(list) == 0 {
 		// A failed comparison can leave an empty list and still sets
@@ -116,7 +126,7 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 			}
 		}
 		if reconciled, _ := status["reconciledAt"].(string); failed || raw == nil && reconciled == "" {
-			return ownership.MembersUnreadable, nil, namespace
+			return unreadable(state, namespace)
 		}
 		if raw == nil {
 			return state, []resourceid.Ref{}, namespace
@@ -132,7 +142,7 @@ func argoMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 		group, groupOK := e["group"].(string)
 		ns, nsOK := e["namespace"].(string)
 		if !kindOK || !nameOK || ref.Kind == "" || ref.Name == "" || e["group"] != nil && !groupOK || e["namespace"] != nil && !nsOK {
-			return ownership.MembersUnreadable, nil, namespace
+			return unreadable(state, namespace)
 		}
 		ref.Group, ref.Namespace = group, ns
 		if namespaced, known := scope(ref.GroupKind()); known && namespaced && ref.Namespace == "" {
@@ -150,7 +160,7 @@ func fluxMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 	}
 	inventory, ok := status["inventory"].(map[string]any)
 	if !ok {
-		return ownership.MembersUnreadable, nil, ""
+		return unreadable(state, "")
 	}
 	members := []resourceid.Ref{}
 	if inventory["entries"] == nil {
@@ -158,7 +168,7 @@ func fluxMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 	}
 	list, ok := inventory["entries"].([]any)
 	if !ok {
-		return ownership.MembersUnreadable, nil, ""
+		return unreadable(state, "")
 	}
 	for _, item := range list {
 		e, _ := item.(map[string]any)
@@ -168,7 +178,7 @@ func fluxMembership(spec, status map[string]any, scope scopeOf) (ownership.Membe
 		parts := strings.Split(id, "_")
 		n := len(parts)
 		if n < 4 || parts[n-1] == "" || strings.Join(parts[1:n-2], "_") == "" {
-			return ownership.MembersUnreadable, nil, ""
+			return unreadable(state, "")
 		}
 		group := parts[n-2]
 		if group == "core" {

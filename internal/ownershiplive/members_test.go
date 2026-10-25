@@ -111,7 +111,7 @@ func TestLiveMembershipReadsControllerShapes(t *testing.T) {
 		{"Argo CD, elsewhere", ownership.ArgoApplication, map[string]any{"destination": map[string]any{"name": "prod"}}, map[string]any{"resources": []any{
 			map[string]any{"kind": "Service", "name": "ui", "namespace": "shop"},
 		}}, ownership.MembersRemote, []resourceid.Ref{{Kind: "Service", Namespace: "shop", Name: "ui"}}},
-		{"Argo CD, elsewhere, not reconciled", ownership.ArgoApplication, map[string]any{"destination": map[string]any{"name": "prod"}}, nil, ownership.MembersUnreadable, nil},
+		{"Argo CD, elsewhere, not reconciled", ownership.ArgoApplication, map[string]any{"destination": map[string]any{"name": "prod"}}, nil, ownership.MembersRemote, []resourceid.Ref{}},
 		{"Argo CD, moved here but compared elsewhere", ownership.ArgoApplication, local, map[string]any{
 			"sync":      map[string]any{"comparedTo": map[string]any{"destination": map[string]any{"name": "prod", "namespace": "shop"}}},
 			"resources": []any{map[string]any{"kind": "Service", "name": "ui", "namespace": "shop"}},
@@ -132,7 +132,7 @@ func TestLiveMembershipReadsControllerShapes(t *testing.T) {
 		{"Flux, elsewhere", ownership.FluxKustomization, map[string]any{"kubeConfig": map[string]any{}}, map[string]any{"inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "shop_ui__Service"},
 		}}}, ownership.MembersRemote, []resourceid.Ref{{Kind: "Service", Namespace: "shop", Name: "ui"}}},
-		{"Flux, elsewhere, no inventory", ownership.FluxKustomization, map[string]any{"kubeConfig": map[string]any{}}, nil, ownership.MembersUnreadable, nil},
+		{"Flux, elsewhere, no inventory", ownership.FluxKustomization, map[string]any{"kubeConfig": map[string]any{}}, nil, ownership.MembersRemote, []resourceid.Ref{}},
 		{"Flux, the core group spelled out", ownership.FluxKustomization, nil, map[string]any{"inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "shop_ui_core_Service"},
 		}}}, ownership.MembersRecorded, []resourceid.Ref{{Kind: "Service", Namespace: "shop", Name: "ui"}}},

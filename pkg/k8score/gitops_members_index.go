@@ -19,6 +19,8 @@ const GitOpsMembersIndex = "gitopsMembers"
 
 // UnreadableMembersKey is the GitOpsMembersIndex key of the managers whose
 // status lists no members Radar can trust, any of which may name any object.
+// A manager that applies to another cluster is filed under no key when its
+// list can't be read: it can name no object here.
 const UnreadableMembersKey = "\x00unreadable"
 
 // MemberPlacement is one way to place a status entry: the namespace its object
@@ -53,14 +55,18 @@ func MemberKey(r MemberPlacement, group, kind, namespace, name string) string {
 // gitopsMembersIndexers are the GitOps managers' members indexes, by resource,
 // whatever version it is watched at.
 var gitopsMembersIndexers = map[schema.GroupResource]cache.Indexers{
-	{Group: "argoproj.io", Resource: "applications"}:                   {GitOpsMembersIndex: memberKeys(gitops.ArgoMembers)},
-	{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"}:        {GitOpsMembersIndex: memberKeys(gitops.FluxMembers)},
-	{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}: {GitOpsMembersIndex: memberKeys(gitops.FluxMembers)},
+	{Group: "argoproj.io", Resource: "applications"}:                   {GitOpsMembersIndex: memberKeys(gitops.ArgoMembers, gitops.ArgoAppliesElsewhere)},
+	{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"}:        {GitOpsMembersIndex: memberKeys(gitops.FluxMembers, fluxAppliesElsewhere)},
+	{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}: {GitOpsMembersIndex: memberKeys(gitops.FluxMembers, fluxAppliesElsewhere)},
+}
+
+func fluxAppliesElsewhere(obj *unstructured.Unstructured) bool {
+	return !gitops.FluxTargetsLocalCluster(obj)
 }
 
 // memberKeys files a manager under each entry of its list, in every placement
 // the entry's kind's scope could call for.
-func memberKeys(members func(*unstructured.Unstructured) (gitops.MemberList, bool)) cache.IndexFunc {
+func memberKeys(members func(*unstructured.Unstructured) (gitops.MemberList, bool), elsewhere func(*unstructured.Unstructured) bool) cache.IndexFunc {
 	return func(obj any) ([]string, error) {
 		if q, isQuery := obj.(indexQuery); isQuery {
 			return q, nil
@@ -70,7 +76,10 @@ func memberKeys(members func(*unstructured.Unstructured) (gitops.MemberList, boo
 			return nil, nil
 		}
 		list, readable := members(u)
-		if !readable {
+		switch {
+		case !readable && elsewhere(u):
+			return nil, nil
+		case !readable:
 			return []string{UnreadableMembersKey}, nil
 		}
 		keys := make([]string, 0, len(list.Entries))

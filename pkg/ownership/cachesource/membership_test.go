@@ -62,7 +62,10 @@ func TestMembersReadTheShapesControllersWrite(t *testing.T) {
 		{"Argo CD, resources not a list", manager(app, localDestination, map[string]any{"reconciledAt": "x", "resources": "ui"}), ownership.MembersUnreadable, nil},
 		{"Argo CD, the in-cluster destination by name", manager(app, map[string]any{"destination": map[string]any{"name": "in-cluster", "namespace": "shop"}}, map[string]any{"resources": []any{}}), ownership.MembersRecorded, nil},
 		{"Argo CD, another cluster", manager(app, map[string]any{"destination": map[string]any{"server": "https://prod.example.com:6443"}}, map[string]any{"resources": []any{map[string]any{"kind": "Service", "name": "ui"}}}), ownership.MembersRemote, []gitops.Member{{Kind: "Service", Name: "ui"}}},
-		{"Argo CD, another cluster, never reconciled", manager(app, map[string]any{"destination": map[string]any{"name": "prod"}}, nil), ownership.MembersUnreadable, nil},
+		// A manager applying to another cluster names nothing here, whether or
+		// not its list can be read.
+		{"Argo CD, another cluster, never reconciled", manager(app, map[string]any{"destination": map[string]any{"name": "prod"}}, nil), ownership.MembersRemote, nil},
+		{"Argo CD, another cluster, a failed comparison", manager(app, map[string]any{"destination": map[string]any{"server": "https://prod.example.com:6443"}}, map[string]any{"reconciledAt": "x", "conditions": []any{map[string]any{"type": "ComparisonError"}}}), ownership.MembersRemote, nil},
 		{"Argo CD, no destination", manager(app, map[string]any{"destination": map[string]any{}}, map[string]any{"resources": []any{}}), ownership.MembersUnreadable, nil},
 		{"a Kustomization's inventory", manager(ks, map[string]any{"prune": true, "targetNamespace": "shop"}, map[string]any{"inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "shop_podinfo__Service", "v": "v1"},
@@ -85,7 +88,7 @@ func TestMembersReadTheShapesControllersWrite(t *testing.T) {
 		{"a HelmRelease applying elsewhere", manager(hr, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, map[string]any{"inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "shop_web-podinfo__Service", "v": "v1"},
 		}}}), ownership.MembersRemote, []gitops.Member{{Kind: "Service", Namespace: "shop", Name: "web-podinfo"}}},
-		{"a HelmRelease applying elsewhere, without an inventory", manager(hr, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, nil), ownership.MembersUnreadable, nil},
+		{"a HelmRelease applying elsewhere, without an inventory", manager(hr, map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, nil), ownership.MembersRemote, nil},
 		{"a Kustomization whose spec changed since its inventory", atGeneration(manager(ks, nil, map[string]any{"observedGeneration": int64(1), "inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "shop_ui__Service", "v": "v1"},
 		}}}), 2), ownership.MembersRecorded, []gitops.Member{{Kind: "Service", Namespace: "shop", Name: "ui"}}},
