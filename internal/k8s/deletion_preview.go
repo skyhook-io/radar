@@ -58,8 +58,14 @@ func DeletionClientSnapshot(ctx context.Context) (dynamic.Interface, string, con
 		if config == nil {
 			return nil, name, operation, fmt.Errorf("K8s config not initialized")
 		}
-		scoped, err := dynamic.NewForConfig(UserRESTConfig(config, user))
-		return scoped, name, operation, err
+		var err error
+		client, err = dynamic.NewForConfig(UserRESTConfig(config, user))
+		if err != nil {
+			return nil, name, operation, err
+		}
+	}
+	if err := operation.Err(); err != nil {
+		return nil, name, operation, fmt.Errorf("cluster connection changed while preparing deletion: %w", err)
 	}
 	return client, name, operation, nil
 }

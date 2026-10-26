@@ -235,7 +235,7 @@ func (v *View) Children(ref resourceid.Ref) ChildrenAnswer {
 
 // mayResolveTo reports whether a reference naming ref's UID, whose resolution
 // is unknown, may still resolve to ref: it names ref's name, and a kind Radar
-// resolved to ref's or couldn't resolve within ref's group. UIDs are unique,
+// resolved to ref's or couldn't resolve with ref's group and kind. UIDs are unique,
 // so a reference to other coordinates never resolves to the object holding
 // its UID, however the read of those coordinates goes.
 func mayResolveTo(res OwnerResolution, name string, ref resourceid.Ref) bool {
@@ -245,7 +245,7 @@ func mayResolveTo(res OwnerResolution, name string, ref resourceid.Ref) bool {
 	case res.Ref != (resourceid.Ref{}):
 		return res.Ref.GroupKind() == ref.GroupKind()
 	}
-	return res.Gap.Kind.Group == ref.Group
+	return res.Gap.Kind == ref.GroupKind()
 }
 
 // candidates are the objects the search found that the caller may read, each

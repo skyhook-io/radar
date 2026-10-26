@@ -58,6 +58,9 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 			if len(p.Dependents) != 0 {
 				t.Fatalf("inventory became garbage collection: %+v", p)
 			}
+			if p.MayReclaimStorage != tc.teardown {
+				t.Fatalf("controller storage risk = %v, teardown = %v", p.MayReclaimStorage, tc.teardown)
+			}
 		})
 	}
 }

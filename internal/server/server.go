@@ -4424,16 +4424,6 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
-	discovery := k8s.GetResourceDiscovery()
-	if discovery == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "resource discovery unavailable")
-		return
-	}
-	gvr, found := discovery.GetGVRWithGroup(kind, group)
-	if !found {
-		s.writeError(w, http.StatusBadRequest, "unknown resource kind")
-		return
-	}
 	client, _, operation, captureErr := k8s.DeletionClientSnapshot(r.Context())
 	if captureErr != nil {
 		s.writeError(w, http.StatusServiceUnavailable, captureErr.Error())
@@ -4448,6 +4438,20 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 	stop := context.AfterFunc(operation, cancel)
 	defer stop()
 	r = r.WithContext(ctx)
+	discovery := k8s.GetResourceDiscovery()
+	if discovery == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "resource discovery unavailable")
+		return
+	}
+	gvr, found := discovery.GetGVRWithGroup(kind, group)
+	if operation.Err() != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster connection changed during deletion preview")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusBadRequest, "unknown resource kind")
+		return
+	}
 	obj, err := client.Resource(gvr).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
 	if err != nil {
 		switch {
