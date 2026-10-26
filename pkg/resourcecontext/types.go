@@ -34,6 +34,8 @@ import (
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
+	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
+
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`
 	Owner      *ContextRef        `json:"owner,omitempty"`
@@ -199,9 +201,12 @@ type ManagedByRef struct {
 // ResourceSummaryContext is the per-row enrichment attached to
 // list_resources and search hits. The row-tier companion to
 // ResourceContext (the detail-tier enrichment on GET responses) —
-// optimised for bulk triage on lists at ≤ ~60 bytes per row. Always-on
-// when the caller didn't opt out via context=none.
+// bounded to triage facts (typically ~60 bytes, plus at most 33 bytes for
+// annotation pause intent). Always-on when the caller did not opt out via
+// context=none.
 type ResourceSummaryContext struct {
+	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
+
 	ManagedBy  *ManagedByRef `json:"managedBy,omitempty"`
 	Health     string        `json:"health,omitempty"`
 	IssueCount int           `json:"issueCount,omitempty"`

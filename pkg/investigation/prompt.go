@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // ReadOnlyTools is the explicit allowlist of Radar MCP read tools an
@@ -75,6 +76,8 @@ func (t Target) Label() string {
 // Issues/AuditFindings carry the top actual rows (capped) — aggregates alone
 // read as vague and starve the prompt of detail Radar already has.
 type HealthSignal struct {
+	CrossplanePause resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
+
 	AuditMissingInputs []string     `json:"auditMissingInputs,omitempty"`
 	Health             string       `json:"health,omitempty"`
 	IssueCount         int          `json:"issueCount,omitempty"`
@@ -365,12 +368,20 @@ func healthFrame(target string, health *HealthSignal) string {
 			}
 			b.WriteString(".")
 		}
+	case health.CrossplanePause != "" && health.Health != "":
+		fmt.Fprintf(&b, "Radar records %s availability as %s, with 0 active issue rows.", target, health.Health)
 	case health.Health == "healthy":
 		fmt.Fprintf(&b, "Radar currently reports %s as healthy and flags 0 active issues.", target)
 	case health.Health != "":
 		fmt.Fprintf(&b, "Radar's resource summary currently marks %s as %s, with 0 active issue rows.", target, health.Health)
 	default:
 		fmt.Fprintf(&b, "Radar currently flags 0 active issues on %s.", target)
+	}
+	switch health.CrossplanePause {
+	case resourcecontext.CrossplanePauseRequested:
+		b.WriteString(" This resource carries the crossplane.io/paused annotation set to true; no Synced=False/ReconcilePaused acknowledgement is recorded.")
+	case resourcecontext.CrossplanePauseAcknowledged:
+		b.WriteString(" The crossplane.io/paused annotation requests a pause for this resource, corroborated by its recorded Synced=False/ReconcilePaused condition. Recorded availability is not a fresh external check while reconciliation is paused.")
 	}
 	if health.AuditCount > 0 {
 		fmt.Fprintf(&b, " Radar audit also reports %d static posture finding%s", health.AuditCount, pluralS(health.AuditCount))

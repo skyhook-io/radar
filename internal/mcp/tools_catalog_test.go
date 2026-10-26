@@ -252,8 +252,11 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// get_resource's result shapes, with "only object_not_found means it is
 	// absent", a third, and get_resource's "manager: none is not unmanaged" a
 	// fourth.
+	// Annotation pause intent and stored acknowledgement need distinct source
+	// semantics in the catalog so agents do not infer fresh external health
+	// or treat absence as ruling out another pause mechanism.
 	const (
-		maxCatalogBytes         = 63250
+		maxCatalogBytes         = 63800
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -269,6 +272,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		}
 		total += len(tool.Description) + len(schema)
 	}
+	t.Logf("MCP catalog: %d bytes (budget %d)", total, maxCatalogBytes)
 	if total > maxCatalogBytes {
 		t.Fatalf("MCP tool descriptions and schemas use %d bytes, budget is %d; raise deliberately for new tools or load-bearing contracts, and trim response-field manuals rather than routing or uncertainty boundaries",
 			total, maxCatalogBytes)

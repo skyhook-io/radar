@@ -52,14 +52,16 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryConte
 	if health == "" {
 		health = deriveHealth(obj)
 	}
-	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil {
+	pause := CrossplanePauseFor(obj)
+	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil && pause == "" {
 		return nil
 	}
 	return &ResourceSummaryContext{
-		ManagedBy:  opts.ManagedBy,
-		Health:     health,
-		IssueCount: opts.IssueCount,
-		Scanned:    opts.Scanned,
+		CrossplanePause: pause,
+		ManagedBy:       opts.ManagedBy,
+		Health:          health,
+		IssueCount:      opts.IssueCount,
+		Scanned:         opts.Scanned,
 	}
 }
 

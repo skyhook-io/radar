@@ -6,13 +6,26 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // summarizeUnstructured produces a Summary for CRDs and dynamic resources.
 // Uses known CRD extractors where available, falls back to generic extraction.
 func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
+	if obj == nil {
+		return &ResourceSummary{Kind: "Unknown"}
+	}
+	pause := resourcecontext.CrossplanePauseFor(obj)
+	s := summarizeUnstructuredKind(obj, pause)
+	applyLifecycleFields(s, obj)
+	s.CrossplanePause = pause
+	return s
+}
+
+func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecontext.CrossplanePauseState) *ResourceSummary {
 	kind := obj.GetKind()
 	group := obj.GroupVersionKind().Group
 
@@ -83,7 +96,7 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 	}
 
 	// Generic fallback
-	return summarizeGenericCRD(obj)
+	return summarizeGenericCRD(obj, pause)
 }
 
 // draRequestDeviceClasses collects deviceClassName values across all API
@@ -454,7 +467,7 @@ func summarizeGateway(obj *unstructured.Unstructured) *ResourceSummary {
 	return s
 }
 
-func summarizeGenericCRD(obj *unstructured.Unstructured) *ResourceSummary {
+func summarizeGenericCRD(obj *unstructured.Unstructured, pause resourcecontext.CrossplanePauseState) *ResourceSummary {
 	s := &ResourceSummary{
 		Kind:      obj.GetKind(),
 		Name:      obj.GetName(),
@@ -479,6 +492,20 @@ func summarizeGenericCRD(obj *unstructured.Unstructured) *ResourceSummary {
 	if s.Status == "" {
 		phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
 		s.Status = phase
+	}
+
+	if pause != "" {
+		if ready, found := conditions.Find(obj, "Ready"); found {
+			s.Ready = ready.Status
+		} else if available, found := conditions.Find(obj, "Available"); found {
+			s.Ready = available.Status
+		}
+		if synced, found := conditions.Find(obj, "Synced"); found && synced.Status == "False" && synced.Reason != "ReconcilePaused" {
+			s.Issue = synced.Reason
+			if s.Issue == "" {
+				s.Issue = "NotSynced"
+			}
+		}
 	}
 
 	return s

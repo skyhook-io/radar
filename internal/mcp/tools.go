@@ -130,7 +130,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"Returns {summary, next?, coverage, items}: summary says in words what the rows cover and what was not read; " +
 			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
-			"get_dashboard or issues first.",
+			"get_dashboard or issues first. " +
+			"crossplanePause: requested=exact annotation true; acknowledged=stored Synced=False/ReconcilePaused. Independent of readiness; absence does not exclude other pauses.",
 		Annotations: readOnly,
 	}, logToolCall("list_resources", handleListResources))
 
@@ -154,7 +155,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"kinds such as Knative Service vs core Service. When recentChanges entries " +
 			"carry `application_configuration_change: true`, it is a factual edit " +
 			"classification and narrow ranking hint, not a causal or universal relevance verdict. " +
-			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent.",
+			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent. " +
+			"crossplanePause: requested=exact annotation true; acknowledged=stored Synced=False/ReconcilePaused. Independent of readiness; absence does not exclude other pauses.",
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
@@ -474,7 +476,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
 			"summaryContext. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
-			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint.",
+			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint. " +
+			"crossplanePause: requested=exact annotation true; acknowledged=stored Synced=False/ReconcilePaused. Independent of readiness; absence does not exclude other pauses.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -692,7 +695,7 @@ type listResourcesInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind to list for a broad sweep, e.g. pods/po, deployments/deploy, services/svc, configmaps/cm. Prefer this before get_resource when comparing many same-kind objects."`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for app-scoped triage"`
-	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare rows"`
+	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches summaryContext (managedBy + health + issueCount + crossplanePause) for suspect ranking; 'none' returns bare rows"`
 }
 
 type getResourceInput struct {
@@ -742,7 +745,7 @@ type searchInput struct {
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations, report (Trivy findings; the binding matches one finding). Guard fields with has(spec.sources); check map keys with '\"app\" in labels'. Example, Deployments with zero or unreported ready replicas: 'kind == \"Deployment\" && (!has(status.readyReplicas) || status.readyReplicas == 0)'"`
-	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare hits"`
+	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount + crossplanePause) for suspect ranking; 'none' returns bare hits"`
 }
 
 type issuesInput struct {

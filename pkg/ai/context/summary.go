@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -52,6 +53,8 @@ type ResourceSummary struct {
 	// during cleanup; if it doesn't, the resource lingers as a zombie.
 	// Pruned when empty.
 	Finalizers []string `json:"finalizers,omitempty"`
+
+	CrossplanePause resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
 
 	// Type-specific fields (only populated when relevant)
 	Image     string   `json:"image,omitempty"`
@@ -117,6 +120,8 @@ func summarize(obj runtime.Object) (*ResourceSummary, error) {
 	}
 	var s *ResourceSummary
 	switch o := obj.(type) {
+	case *unstructured.Unstructured:
+		return summarizeUnstructured(o), nil
 	case *corev1.Pod:
 		s = summarizePod(o)
 	case *appsv1.Deployment:

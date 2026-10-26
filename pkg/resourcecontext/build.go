@@ -179,7 +179,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		return &ResourceContext{Tier: opts.Tier}
 	}
 
-	rc := &ResourceContext{Tier: opts.Tier}
+	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj)}
 	omitted := newOmittedTracker()
 
 	// Topology-derived relationships drive ManagedBy / Exposes / SelectedBy /

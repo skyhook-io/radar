@@ -118,6 +118,7 @@ func (s *Server) detectDiagnoseHealth(r *http.Request, kind, group, namespace, n
 	}
 	if summary := resourcecontext.BuildSummary(obj, resourcecontext.SummaryOptions{IssueCount: issueCount}); summary != nil {
 		signal.Health = summary.Health
+		signal.CrossplanePause = summary.CrossplanePause
 	}
 	if auditSum != nil {
 		signal.AuditMissingInputs = auditSum.MissingInputs

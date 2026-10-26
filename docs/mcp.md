@@ -400,6 +400,12 @@ docker run -p 127.0.0.1:9280:9280 \
 
 The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
 
+## Crossplane pause context
+
+`list_resources` summaries, list/search `summaryContext`, and `get_resource`'s `resourceContext` carry optional `crossplanePause` for CRDs (native Kubernetes resources are excluded, including typed objects converted for generic reads): `requested` for the exact `crossplane.io/paused: "true"` annotation, or `acknowledged` when the stored `Synced=False/ReconcilePaused` condition corroborates it. A request alone does not establish that a controller has stopped. Acknowledgement is a recorded observation, not a fresh external check or a claim about child controllers. No timestamp is inferred. An omitted field does not rule out other pause mechanisms.
+
+Pause is separate from recorded readiness, operational issues and audit findings. On generic CRD summary rows carrying `crossplanePause`, `ready` preserves the recorded condition status, and an independent Synced error remains in `issue` even if Ready is True. `context=none` omits enrichment but retains the summary row's `crossplanePause`. Detail keeps raw annotations/conditions; Compact keeps the exact pause annotation key. Radar's own Diagnose kickoff carries the same fact without treating pause alone as a problem. The MCP `diagnose` tool's supported kinds are unchanged; use `get_resource` for Crossplane resources. Summary rows for all terminating CRDs also retain `terminating` and `finalizers`, matching typed-resource summaries.
+
 ## `diagnose` evidence limits
 
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
