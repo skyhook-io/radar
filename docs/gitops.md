@@ -292,6 +292,7 @@ The GitOps tab isn't the only place Argo/Flux ownership matters. Surfaces across
 - **Related Resources in the resource drawer**:
   - **Owner** and **Children** come from owner references, the links Kubernetes' garbage collector follows. A Deployment's or Rollout's old ReplicaSets (no Pods, not the current revision) sit behind *Show N older ReplicaSets*.
   - **Managed By** names the managers whose recorded lists (`status.resources`, `status.inventory`) name the object, plus other controllers that manage it without an owner reference (a cert-manager Certificate for its Secret). **Manages** on a manager lists its members, capped at 500 (`500+`). A recorded list is what the controller compared or applied, so it can include objects it doesn't sync ([ownership](ownership.md#the-model)).
+  - The group is titled **Listed By** when every entry is a manager whose list names the object while its metadata doesn't confirm it (`listed`, `shared`, `disagree`, no via), as the chip words it.
   - Managed By is hidden only when the chip already says the same: a direct `agree`/`listed` answer whose single manager equals the group's single entry, with no manager coverage note.
   - When Radar couldn't check everything a group needs (a kind it doesn't collect, a namespace outside its scope, a manager kind loading or refused, a list for a cluster it can't confirm is this one), the group says so rather than showing a short list as complete. An unreadable list and a manager kind discovery missed appear only in the hint, since either could name any object; a manager whose list can't be read still appears where the graph links it.
   - Flux records no destination with its inventory, so after a `spec.kubeConfig` change the list names the previous destination's objects until the next reconcile.
@@ -312,14 +313,14 @@ Radar's caches strip `managedFields` and the last-applied annotation, so the bro
 - a wildcard path (`containers[*].image`) is judged per entry of the live object: the source must declare every container, or a rule cover every container, before the verdict is certain. When the source declares only some, the field is `partial` and the verdict is **may revert**; a wildcard that matches nothing (no init containers) is `empty` and adds no verdict. Set image uses the wildcard only until the dialog lists the containers; then it asks about each container by name (so the evidence can't predate the list) and judges the ones you change;
 - and the owner's sync policy (auto, self-heal, prune, suspended).
 
-The response also includes `manager`, the server's answer from the live target ([states](ownership.md#what-manages-an-object)); it replaces whatever the browser cached or sent as a hint, and its lead picks the policy read. `ownerTracksTarget` says whether that Application's status lists the target. The dialog asks every time it opens. If the server couldn't finish (`managerUnavailable`), or the request fails while the cached answer names a manager, the dialog asks for an acknowledgment instead of trusting the old answer.
+The response also includes `manager`, the server's answer from the live target ([states](ownership.md#what-manages-an-object)); it replaces whatever the browser cached or sent as a hint, and its lead picks the policy read. `ownerTracksTarget` says whether that Application's status lists the target. The dialog asks every time it opens. If the server couldn't finish (`managerUnavailable`), or the request fails while the cached answer names a manager, the dialog asks for an acknowledgment instead of trusting the old answer, says why in words, and, when the cause is passing (still loading, a read that failed), to reopen it. A failed request while the cached answer names no manager stays quiet: an object adopted since the cache last saw it goes unwarned, accepted so a flaky request doesn't warn on every edit.
 
 | Answer | Field write | Delete |
 |---|---|---|
 | `agree` | from the field evidence and policy; can be **will revert** | **will revert** with self-heal, else **may revert** |
 | `listed` | **may revert**: Radar can't confirm the manager applies the object | same |
 | `claimed` | **may revert** | same |
-| `disagree`, `shared`, several claims | **may revert**, naming every candidate; no one candidate's exemption applies | same |
+| `disagree`, `shared`, several claims | **may revert**, naming every candidate and linking each one Radar found; no one candidate's exemption applies | same |
 | via an ancestor, no claim on the object | note: generated from the parent | note: its controller recreates it (a CronJob's Job isn't recreated) |
 | chain Radar couldn't read | **may revert** | same |
 | `unknown` from coverage gaps, `none` | nothing | nothing |

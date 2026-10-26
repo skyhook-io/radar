@@ -8,7 +8,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
-import { GitOpsWriteWarning } from "@skyhook-io/k8s-ui";
+import { GitOpsWriteWarning, type GitOpsOwnerRef } from "@skyhook-io/k8s-ui";
 import {
   canConfirmGitOpsWrite,
   gitOpsWriteGuardKey,
@@ -33,6 +33,7 @@ export function ApplyDialog({
   precondition,
   gitOpsGuard,
   onOpenGitOpsOwner,
+  onOpenGitOpsManager,
   confidence,
   resourceData,
 }: {
@@ -50,6 +51,7 @@ export function ApplyDialog({
   /** GitOps/Helm write guard for the target; undefined blocks Apply. */
   gitOpsGuard?: GitOpsWriteGuard;
   onOpenGitOpsOwner?: () => void;
+  onOpenGitOpsManager?: (owner: GitOpsOwnerRef) => void;
   confidence?: number;
   resourceData?: unknown;
 }) {
@@ -154,6 +156,7 @@ export function ApplyDialog({
             acknowledged={acked}
             onAcknowledgedChange={(value) => setAckedKey(value ? guardKey : "")}
             onOpenOwner={onOpenGitOpsOwner}
+            onOpenManager={onOpenGitOpsManager}
           />
         )}
         {lowConfidence && (

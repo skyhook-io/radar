@@ -60,7 +60,7 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Badge, gitOpsRouteForOwner, type GitOpsWrite } from "@skyhook-io/k8s-ui";
+import { Badge, gitOpsRouteForOwner, type GitOpsOwnerRef, type GitOpsWrite } from "@skyhook-io/k8s-ui";
 import { useResource } from "../../api/client";
 import { getApiBase } from "../../api/config";
 import { kindToPluralWithGroup } from "../../utils/navigation";
@@ -996,6 +996,10 @@ export function InvestigationView({
     }
     return undefined;
   }, [applyOwner, applyOwnerVerified, applyHelmOwner, navigateRouter, onOpenResource]);
+  const openApplyManager = useMemo(
+    () => (onOpenResource ? (owner: GitOpsOwnerRef) => navigateRouter(gitOpsRouteForOwner(owner)) : undefined),
+    [navigateRouter, onOpenResource],
+  );
   const [pendingFix, setPendingFix] = useState("");
   const requestApply = (fix: string) => {
     if (interactionsBlocked) return;
@@ -2596,6 +2600,7 @@ export function InvestigationView({
         resourceData={applyTarget.data}
         gitOpsGuard={applyGitOpsGuard}
         onOpenGitOpsOwner={openApplyOwner}
+        onOpenGitOpsManager={openApplyManager}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
     </div>

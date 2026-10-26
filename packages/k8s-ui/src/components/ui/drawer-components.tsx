@@ -1,4 +1,5 @@
-import { dedupeResourceRefs, omitResourceRefs } from '../../utils/resource-refs'
+import { dedupeResourceRefs, omitResourceRefs, resourceRefKey } from '../../utils/resource-refs'
+import { gapReasonText } from '../../utils/read-actions'
 import { customResourceDefinitionRef, getCRDDefinitionsSnapshot, subscribeCRDDefinitions } from '../../utils/navigation'
 import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState, useSyncExternalStore } from 'react'
@@ -819,7 +820,7 @@ export type CopyHandler = (text: string, key: string) => void
 // RELATED RESOURCES SECTION
 // ============================================================================
 
-import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage } from '../../types'
+import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, ManagerAnswer } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { Info, Link } from 'lucide-react'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -914,7 +915,7 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
           />
         )}
         {(managers.length > 0 || managedByNote.text) && (
-          <RelationshipGroup label="Managed By" refs={managers} onNavigate={onNavigate} note={managedByNote} />
+          <RelationshipGroup label={managersListOnly(relationships.ownership?.manager, managers) ? 'Listed By' : 'Managed By'} refs={managers} onNavigate={onNavigate} note={managedByNote} />
         )}
         {relationships.deployment && (
           <RelationshipGroup label="Deployment" refs={[relationships.deployment]} onNavigate={onNavigate} />
@@ -1077,39 +1078,6 @@ function joinOr(items: string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`
 }
 
-function gapReasonText(reason: string): string {
-  switch (reason) {
-    case 'radar_kind_not_collected':
-    case 'radar_namespace_not_collected':
-      return "Radar doesn't collect it"
-    case 'kind_sync_pending':
-      return 'still loading'
-    case 'kind_sync_timed_out':
-      return 'loading is overdue'
-    case 'radar_forbidden':
-    case 'radar_credentials_rejected':
-      return 'Radar may not list it'
-    case 'kind_not_watchable':
-      return "its API can't be watched"
-    case 'user_permission_check_failed':
-      return "your access couldn't be checked"
-    case 'user_forbidden':
-      return 'you may not list it'
-    case 'kind_unknown':
-      return "Radar's API discovery doesn't list its kind or version"
-    case 'object_not_found':
-      return "Radar doesn't have it yet"
-    case 'cluster_connecting':
-      return 'Radar is still connecting'
-    case 'cluster_disconnected':
-      return 'Radar lost its connection'
-    case 'connection_changed':
-      return "Radar's connection changed meanwhile"
-    default:
-      return 'the read failed'
-  }
-}
-
 // membersNote says what a GitOps manager's status records beyond the members
 // Manages lists; listed says whether it lists any.
 function membersNote(manages: OwnershipCoverage['manages'] | undefined, listed: boolean): RelationshipNote | undefined {
@@ -1183,6 +1151,14 @@ const MANAGED_BY_HINT = [
   'Argo CD Applications or Flux objects whose status lists this resource, and other controllers that manage it without an owner reference.',
   "Kubernetes' garbage collector follows owner references, not these links.",
 ]
+
+// managersListOnly: every manager shown is one whose list names the resource
+// while its metadata doesn't confirm it, which the chip calls Listed by.
+function managersListOnly(answer: ManagerAnswer | undefined, managers: ResourceRef[]): boolean {
+  if (!answer || answer.via || !['listed', 'shared', 'disagree'].includes(answer.state) || !managers.length) return false
+  const recorders = new Set((answer.direct.recorders ?? []).map(resourceRefKey))
+  return managers.every(m => recorders.has(resourceRefKey(m)))
+}
 
 // managersNote explains Managed By: where it comes from, more than one
 // manager, and the managers the search couldn't settle. With none listed, a

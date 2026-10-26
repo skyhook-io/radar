@@ -46,7 +46,7 @@ it('names an unresolved candidate without linking it', async () => {
   expect(items).toHaveLength(2)
   const a0 = items.find(i => i.textContent!.startsWith('Application a'))!
   expect(a0.disabled).toBe(true)
-  expect(a0.textContent).toContain("its label doesn't name its namespace")
+  expect(a0.textContent).toContain('Radar found no Application by this name that you can view listing it; it may be managed from another cluster')
   await act(async () => root.unmount())
   element.remove()
 })

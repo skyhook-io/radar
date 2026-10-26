@@ -218,6 +218,33 @@ describe('RelatedResourcesSection ownership', () => {
     expect(html).toContain("Its destination isn&#x27;t this cluster as far as Radar can tell, so its members aren&#x27;t listed.")
   })
 
+  describe('titles managers the way the chip does', () => {
+    const other = { ...app, name: 'other' }
+    const title = (relationships: Relationships) => {
+      const html = renderToString(<RelatedResourcesSection relationships={relationships} onNavigate={() => {}} />)
+      return html.includes('Listed By') ? 'Listed By' : html.includes('Managed By') ? 'Managed By' : 'none'
+    }
+    const answer = (state: 'listed' | 'shared' | 'disagree' | 'agree', recorders = [app]) => ({ state, direct: { object: rs, recorders } })
+    it.each(['listed', 'shared', 'disagree'] as const)('a %s answer lists its recorders', state => {
+      expect(title({ managers: [app], ownership: { manager: answer(state) } })).toBe('Listed By')
+    })
+    it('an agree answer manages', () => {
+      expect(title({ managers: [app], ownership: { manager: answer('agree') } })).toBe('Managed By')
+    })
+    it('a manager that is not a direct recorder keeps Managed By', () => {
+      expect(title({ managers: [app, other], ownership: { manager: answer('listed') } })).toBe('Managed By')
+    })
+    it('an inherited answer keeps Managed By', () => {
+      expect(title({ managers: [app], ownership: { manager: { ...answer('listed'), via: { object: cm, recorders: [app] } } } })).toBe('Managed By')
+    })
+    it('a note without managers keeps Managed By', () => {
+      expect(title({ ownership: { manager: answer('listed', []), managers: { remote: 1 } } })).toBe('Managed By')
+    })
+    it('an older Radar without an answer keeps Managed By', () => {
+      expect(title({ managers: [app] })).toBe('Managed By')
+    })
+  })
+
   it('says which direction Managed By comes from', () => {
     const html = renderToString(<RelatedResourcesSection relationships={{ managers: [app] }} onNavigate={() => {}} />)
     expect(html).toContain('Argo CD Applications or Flux objects whose status lists this resource, and other controllers that manage it without an owner reference.')

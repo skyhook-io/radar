@@ -125,7 +125,7 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     remote: "Radar can't confirm it deploys to this cluster",
     missing: 'no such manager here',
     'not-recording': 'Helm records an installation, rather than continuously reconciling it',
-    unresolved: "the label doesn't name its namespace",
+    unresolved: 'Radar found no manager by that name it can read that lists this resource; it may be managed from another cluster',
     withheld: "you can't view it",
     unchecked: "Radar couldn't check its status",
   }
@@ -139,7 +139,7 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     if (c.check === 'recorded') continue
     // A newer Radar may send a check this UI doesn't know.
     const reason = reasons[c.check] ?? "Radar couldn't confirm its status lists this resource"
-    details.push(`${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reason.replace('this resource', subject)}.`)
+    details.push(`${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reason.replace('manager by', `${c.manager.kind} by`).replace('this resource', subject)}.`)
   }
   if (recorders.length) {
     // A claim its list confirms adds nothing but the agreement.

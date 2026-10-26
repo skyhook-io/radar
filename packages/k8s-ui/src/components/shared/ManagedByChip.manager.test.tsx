@@ -29,7 +29,7 @@ describe('manager answer chip', () => {
     ['remote', "Radar can't confirm it deploys to this cluster"],
     ['missing', 'no such Application here'],
     ['withheld', "you can't view it"],
-    ['unresolved', "the label doesn't name its namespace"],
+    ['unresolved', 'Radar found no Application by that name it can read that lists this resource; it may be managed from another cluster'],
     ['unchecked', "Radar couldn't check its status"],
   ] as const)('claimed explains %s', (check, reason) => {
     const html = render({ state: 'claimed', lead: a, direct: { object, claims: [{ ...claim, check }] } })

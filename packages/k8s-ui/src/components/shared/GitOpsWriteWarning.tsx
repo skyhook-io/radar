@@ -9,6 +9,7 @@ import {
   type GitOpsWriteAssessment,
   type GitOpsWriteGuard,
 } from '../../utils/gitops-write-guard'
+import { gitOpsOwnerFromRef, managerChoices, managerRefLabel, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 
 export { canConfirmGitOpsWrite }
 
@@ -18,6 +19,9 @@ export interface GitOpsWriteWarningProps {
   onAcknowledgedChange: (acknowledged: boolean) => void
   /** Opens the GitOps owner (or Helm release) the guard names. */
   onOpenOwner?: () => void
+  /** Opens one of several managers the guard names, so a reader can inspect
+   *  each before deciding. Without it, they are named but not linked. */
+  onOpenManager?: (owner: GitOpsOwnerRef) => void
   disabled?: boolean
   className?: string
 }
@@ -27,6 +31,19 @@ const OWNER_LINK_LABEL = {
   kustomizations: 'View Flux Kustomization',
   helmreleases: 'View Flux HelmRelease',
 } as const
+
+// managerLinks: the managers a guard naming more than one can open, the lead
+// among them, since a lead isn't a winner. One Radar didn't find (missing,
+// withheld, a label naming no namespace) isn't linked.
+function managerLinks(guard: GitOpsWriteGuard, onOpenManager: GitOpsWriteWarningProps['onOpenManager']): { label: string; owner: GitOpsOwnerRef }[] {
+  if (!onOpenManager || !guard.manager) return []
+  const choices = managerChoices(guard.manager)
+  if (choices.length < 2) return []
+  return choices.flatMap((c) => {
+    const owner = c.found ? gitOpsOwnerFromRef(c.ref) : null
+    return owner ? [{ label: managerRefLabel(c.ref), owner }] : []
+  })
+}
 
 function reasonLines(perWrite: GitOpsWriteAssessment[], levels: GitOpsWriteGuard['level'][]): string[] {
   const relevant = perWrite.filter((entry) => levels.includes(entry.level) && entry.reason)
@@ -42,6 +59,7 @@ export function GitOpsWriteWarning({
   acknowledged,
   onAcknowledgedChange,
   onOpenOwner,
+  onOpenManager,
   disabled = false,
   // Not undefined: AlertBanner would add its own mb-4, and a margin utility
   // overrides the parent's space-y gap.
@@ -63,7 +81,22 @@ export function GitOpsWriteWarning({
   if (guard.level === 'none') return null
 
   const headline = gitOpsWriteHeadline(guard)
-  const ownerLink = onOpenOwner ? (
+  const managers = managerLinks(guard, onOpenManager)
+  const ownerLink = managers.length ? (
+    <div className="flex flex-wrap gap-x-3 gap-y-1">
+      {managers.map(({ label, owner }) => (
+        <button
+          key={label}
+          type="button"
+          onClick={() => onOpenManager!(owner)}
+          className="inline-flex items-center gap-1 text-xs font-medium text-skyhook-600 hover:underline dark:text-skyhook-400"
+        >
+          View {label}
+          <ExternalLink className="h-3 w-3" />
+        </button>
+      ))}
+    </div>
+  ) : onOpenOwner ? (
     <button
       type="button"
       onClick={onOpenOwner}

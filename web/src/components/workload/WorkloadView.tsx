@@ -1030,6 +1030,7 @@ export function WorkloadView({
       guard: imageGuard,
       onSelectionChange: setImageSelection,
       selectionKey: setImageSelectionKey(imageSelection),
+      onOpenManager: handleOpenGitOpsResource,
       onOpenOwner: owner
         ? imageOwnerVerified
           ? () => handleOpenGitOpsResource(owner)

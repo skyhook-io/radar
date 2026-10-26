@@ -76,14 +76,19 @@ describe('manager answer group projection', () => {
   const render = (manager: typeof answer, extra: Partial<import('../../types/core').Relationships> = {}) =>
     renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload} expanded={false}
       relationships={{ managers: [app], ownership: { children: { complete: true }, manager }, ...extra }} />)
+  // The group is titled the way the chip words the answer.
+  const group = (html: string) => html.includes('Listed By') ? 'Listed By' : html.includes('Managed By') ? 'Managed By' : null
 
   it.each(['agree', 'listed'] as const)('hides only the exact single %s recorder', state => {
     const html = render({ ...answer, state })
     expect(html).toContain(state === 'agree' ? 'Managed by' : 'Listed by')
-    expect(html).not.toContain('Managed By')
+    expect(group(html)).toBeNull()
   })
-  it.each(['claimed', 'disagree', 'shared', 'unknown', 'none'] as const)('keeps Managed By for %s', state => {
-    expect(render({ ...answer, state })).toContain('Managed By')
+  it.each(['claimed', 'unknown', 'none'] as const)('keeps Managed By for %s', state => {
+    expect(group(render({ ...answer, state }))).toBe('Managed By')
+  })
+  it.each(['disagree', 'shared'] as const)('keeps the group for %s, titled Listed By', state => {
+    expect(group(render({ ...answer, state }))).toBe('Listed By')
   })
   it('keeps Managed By with via', () => {
     expect(render({ ...answer, via: { object, recorders: [app] } })).toContain('Managed By')
@@ -95,7 +100,7 @@ describe('manager answer group projection', () => {
     expect(render(answer, { managers: [{ ...app, name: 'other' }] })).toContain('Managed By')
   })
   it('keeps the coverage note', () => {
-    expect(render(answer, { ownership: { children: { complete: true }, manager: answer, managers: { unreadable: 1 } } })).toContain('Managed By')
+    expect(group(render(answer, { ownership: { children: { complete: true }, manager: answer, managers: { unreadable: 1 } } }))).toBe('Listed By')
   })
   it('uses native Helm’s existing chip', () => {
     const helm = { kind: 'HelmRelease', group: '', namespace: 'demo', name: 'chart' }

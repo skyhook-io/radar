@@ -12,6 +12,7 @@
 import { activeManagerClaims, gitOpsOwnerFromRef, managerCandidates, managerRefLabel, type GitOpsOwnerRef, type GitOpsOwnerTool } from './gitops-owner'
 import type { ManagerAnswer, ResourceRef } from '../types/core'
 import { dedupeResourceRefs } from './resource-refs'
+import { gapReasonText, readActionFor } from './read-actions'
 
 export type GitOpsWriteScope = 'status' | 'metadata' | 'spec' | 'create-child' | 'delete'
 
@@ -608,7 +609,9 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
   // cached answer names a manager, leaves that answer unconfirmed: an exemption
   // read from it could belong to the object as it was.
   const cachedNamesManager = Boolean(input.manager && (input.manager.via || !['none', 'unknown'].includes(input.manager.state)))
-  const unconfirmed = input.evidence?.managerUnavailable || (!input.evidence && input.evidenceError && cachedNamesManager ? input.evidenceError : null)
+  const unavailable = input.evidence?.managerUnavailable
+  const failed = !input.evidence && input.evidenceError && cachedNamesManager ? input.evidenceError : null
+  const unconfirmed = unavailable || failed
   const answered = unconfirmed ? undefined : input.evidence?.manager ?? input.manager
   const manager = answered && !MANAGER_STATES.includes(answered.state) ? { ...answered, state: 'claimed' as const } : answered
   const owner = unconfirmed ? null : manager ? manager.lead ? gitOpsOwnerFromRef(manager.lead) : null : input.owner ?? null
@@ -616,7 +619,7 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
     ? manager.lead?.kind === 'HelmRelease' && !manager.lead.group ? { namespace: manager.lead.namespace, name: manager.lead.name } : null
     : owner ? null : (input.helmRelease ?? null)
   const ownershipError = unconfirmed
-    ? `Radar couldn't check what manages this resource now (${unconfirmed}), so it can't tell whether a GitOps tool or Helm reverts this change.`
+    ? `Radar couldn't check what manages this resource right now (${unavailable ? gapReasonText(unavailable) : failed}), so it can't tell whether a GitOps tool or Helm reverts this change.${unavailable && ['retry', 'wait'].includes(readActionFor(unavailable) ?? '') ? ' Close and reopen this dialog to check again.' : ''}`
     : manager && chainUnread(manager)
       ? "Radar couldn't follow this resource's controller chain, so it can't tell whether a GitOps tool or Helm manages it."
       : owner || helmRelease ? null : (input.ownershipError ?? null)
