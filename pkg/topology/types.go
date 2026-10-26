@@ -674,9 +674,10 @@ type ManagerAnswer struct {
 	// does and the resource makes no claim that isn't copied, on the nearest
 	// ancestor that makes one; State and Lead then come from it.
 	Via *ManagerEvidence `json:"via,omitempty"`
-	// Between is the evidence of objects the walk passed, after the resource
-	// and before Via (or up the whole walk, without Via), that make claims,
-	// or that Radar couldn't search fully where it could the resource's.
+	// Between is the evidence of other objects the walk passed, in chain
+	// order, that make claims, or that Radar couldn't search fully where it
+	// could the resource's. When Via is a fallback to the nearest claim,
+	// claims farther up the chain stay here.
 	Between []ManagerEvidence `json:"between,omitempty"`
 	// ChainEnd is why a walk that found no settling evidence stopped short:
 	// "unfollowed", "cycle" or "truncated". Absent when evidence settled it
@@ -731,7 +732,9 @@ type ManagerClaim struct {
 	// doesn't say.
 	Manager ResourceRef `json:"manager"`
 	// Source is the metadata: "flux-helm-labels", "flux-kustomize-labels",
-	// "argo-tracking-id", "argo-instance-label" or "helm-release".
+	// "argo-tracking-id", "argo-instance-label" or "helm-release". Source,
+	// Check and the answer's State and ChainEnd may gain values: a reader
+	// shows an unfamiliar one generically and never treats it as confirming.
 	Source string `json:"source"`
 	// Check is what checking the claim found: "recorded" (its list names
 	// the object), "omitted" (its list, read, doesn't), "unreadable" (its list

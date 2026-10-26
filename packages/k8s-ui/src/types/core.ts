@@ -752,7 +752,7 @@ export interface ManagerAnswer {
   direct: ManagerEvidence
   /** The nearest controller ancestor's evidence that settles it when the resource's own doesn't, or, when nothing does and the resource makes no claim that isn't copied, the nearest ancestor that makes one; state and lead then come from it. */
   via?: ManagerEvidence
-  /** Objects the walk passed before via (or up the whole walk, without via) that make claims, or that Radar couldn't search fully where it could this resource's. */
+  /** Other objects the walk passed, in chain order, that make claims, or that Radar couldn't search fully where it could this resource's. When via is a fallback to the nearest claim, claims farther up stay here. */
   between?: ManagerEvidence[]
   /** Why a walk that found no settling evidence stopped short. Absent when evidence settled it first, or the walk reached the chain's top. */
   chainEnd?: 'unfollowed' | 'cycle' | 'truncated'
@@ -786,6 +786,7 @@ export interface ManagerEvidence {
   undecided?: boolean
 }
 
+/** source, check, and the answer's state and chainEnd may gain values in newer Radars: show an unfamiliar one generically and never treat it as confirming. */
 export interface ManagerClaim {
   /** Its namespace is "" when the metadata doesn't say. */
   manager: ResourceRef
