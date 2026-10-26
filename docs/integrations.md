@@ -181,6 +181,8 @@ ClusterClass links use the namespace declared by the Cluster, defaulting to the 
 
 **Resource Browser:** Smart columns for all CAPI kinds — phase badges, replica counts, cluster names, roles, versions.
 
+**Machine conditions:** A modern `status.v1beta2.conditions` True resolves the same-named deprecated failure in a v1beta1 Machine response. Expected progress stays selected so this cleanup cannot reveal a new warning behind it. Unknown, including aggregate Ready, does not establish recovery, so it does not suppress the deprecated failure; this preserves diagnostics for provisioned Machines whose nodes never join. Failed/stuck phase detections retain priority; their condition detail uses this selection rule, including the expected-progress exception. Legacy-only and direct v1beta2 responses keep their existing interpretation. Other CAPI kinds, renamed condition types, progress rules and timers are unchanged.
+
 **Topology-controlled badge:** Resources managed by ClusterClass (label `topology.cluster.x-k8s.io/owned`) show a warning banner.
 
 **Fleet topology mode:** Dedicated "Fleet" view filters to CAPI and infrastructure provider resources only, giving a clean cluster-management view without application workload noise. Groups start expanded by default.
