@@ -1,6 +1,7 @@
 package summarycontext
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -104,7 +105,7 @@ func TestTrivyScanTarget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			managedBy, scanned := trivyScanTarget(cache, tc.report)
+			managedBy, scanned := trivyScanTarget(cache, tc.report, nil)
 			got := ""
 			if managedBy != nil {
 				got = managedBy.Kind + "/" + managedBy.Name
@@ -121,7 +122,7 @@ func TestTrivyScanTarget(t *testing.T) {
 		})
 	}
 
-	if m, s := trivyScanTarget(cache, &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "r", "namespace": "shop"}}}); m != nil || s != nil {
+	if m, s := trivyScanTarget(cache, &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"name": "r", "namespace": "shop"}}}, nil); m != nil || s != nil {
 		t.Fatalf("a report with no owner names nothing: %+v %+v", m, s)
 	}
 }
@@ -144,11 +145,32 @@ func TestTrivyScanTarget_UnsyncedInformerIsNotADeletion(t *testing.T) {
 	t.Cleanup(func() { close(release); core.Stop() })
 	cache := &k8s.ResourceCache{ResourceCache: core}
 
-	managedBy, scanned := trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true))
+	managedBy, scanned := trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true), nil)
 	if scanned == nil || scanned.Missing || scanned.Replicas != nil {
 		t.Fatalf("a ReplicaSet the cache hasn't loaded yet must not read as missing: %+v", scanned)
 	}
 	if managedBy == nil || managedBy.Kind != "ReplicaSet" {
 		t.Fatalf("managedBy = %+v", managedBy)
+	}
+}
+
+// A row adds nothing the caller couldn't read: a scanned object they can't
+// read is described only by the report's own coordinates, and a workload
+// above a readable ReplicaSet is named only when they may read it too.
+func TestTrivyScanTargetReadsOnlyWhatTheCallerMay(t *testing.T) {
+	cache := scanTargetCache(t)
+	deny := func(kinds ...string) func(string, string, string) bool {
+		return func(_, kind, _ string) bool { return !slices.Contains(kinds, kind) }
+	}
+	managedBy, scanned := trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true), deny("ReplicaSet"))
+	if managedBy == nil || managedBy.Kind != "ReplicaSet" || scanned.Replicas != nil || scanned.Missing {
+		t.Fatalf("hidden ReplicaSet: managedBy %+v scanned %+v; want only the report's own coordinates", managedBy, scanned)
+	}
+	if _, gone := trivyScanTarget(cache, scanReport("ReplicaSet", "web-gone", true), deny("ReplicaSet")); gone.Missing {
+		t.Fatalf("hidden ReplicaSet's existence leaked: %+v", gone)
+	}
+	managedBy, scanned = trivyScanTarget(cache, scanReport("ReplicaSet", "web-new", true), deny("Deployment"))
+	if managedBy == nil || managedBy.Kind != "ReplicaSet" || scanned.Replicas == nil {
+		t.Fatalf("hidden Deployment: managedBy %+v; want the readable ReplicaSet, not its hidden parent", managedBy)
 	}
 }

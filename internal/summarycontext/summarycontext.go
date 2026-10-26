@@ -126,7 +126,7 @@ func BuilderFromIndexes(topo *topology.Topology, namespacedIdx, clusterIdx Issue
 		var managedBy *resourcecontext.ManagedByRef
 		var scanned *resourcecontext.ScannedRef
 		if u != nil && group == aicontext.TrivyGroup {
-			managedBy, scanned = trivyScanTarget(k8s.GetResourceCache(), u)
+			managedBy, scanned = trivyScanTarget(k8s.GetResourceCache(), u, canRead)
 		} else if topo != nil {
 			// Pass the fetched object when available so synthesis is
 			// group-aware (avoids kind/plural collisions like Knative

@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // trivyScanTarget resolves the object a Trivy Operator report scanned and,
@@ -18,7 +19,12 @@ import (
 // its workload through the cache. Reports about non-workloads (a Service, a
 // Role) get only the scanned object: managedBy names workloads and GitOps
 // owners, not whatever a report happens to describe.
-func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured) (*resourcecontext.ManagedByRef, *resourcecontext.ScannedRef) {
+//
+// canRead is the caller's access (nil allows everything). The report's own
+// coordinates are on an object the caller reads; the cache is consulted for
+// the scanned object and its workload only when the caller may read them, so
+// a row never adds a hidden object's replicas, existence or parent.
+func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured, canRead func(group, kind, namespace string) bool) (*resourcecontext.ManagedByRef, *resourcecontext.ScannedRef) {
 	labels := u.GetLabels()
 	ns := u.GetNamespace()
 	var group, kind, name string
@@ -37,7 +43,15 @@ func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured) (*r
 	if workloadKinds[kind] {
 		self = resourcecontext.ManagedByFromOwner(kind, group, ns, name)
 	}
-	if cache == nil {
+	may := func(group, kind string) bool {
+		if group == "" {
+			if b, ok := resourceid.BuiltinForKind(kind); ok {
+				group = b.Group
+			}
+		}
+		return canRead == nil || canRead(group, kind, ns)
+	}
+	if cache == nil || !may(group, kind) {
 		return self, scanned
 	}
 
@@ -58,7 +72,9 @@ func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured) (*r
 		}
 		scanned.Replicas = &replicas
 		if parent := controllerRef(rs.OwnerReferences); parent != nil {
-			return resourcecontext.ManagedByFromOwner(parent.Kind, schema.FromAPIVersionAndKind(parent.APIVersion, parent.Kind).Group, ns, parent.Name), scanned
+			if g := schema.FromAPIVersionAndKind(parent.APIVersion, parent.Kind).Group; may(g, parent.Kind) {
+				return resourcecontext.ManagedByFromOwner(parent.Kind, g, ns, parent.Name), scanned
+			}
 		}
 		return self, scanned
 	case "Pod":
@@ -70,7 +86,7 @@ func trivyScanTarget(cache *k8s.ResourceCache, u *unstructured.Unstructured) (*r
 			scanned.Missing = true
 			return nil, scanned
 		}
-		if w, ok := k8s.PodWorkload(cache, pod); ok {
+		if w, ok := k8s.PodWorkload(cache, pod); ok && may(w.Group, w.Kind) {
 			return resourcecontext.ManagedByFromOwner(w.Kind, w.Group, ns, w.Name), scanned
 		}
 		return nil, scanned
