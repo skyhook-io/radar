@@ -14,7 +14,7 @@ Three kinds of evidence, kept apart:
 | **Recorded membership** | A GitOps manager's status: an Argo CD Application's `status.resources`, a Flux Kustomization's or HelmRelease's `status.inventory` | That the manager recorded the object: for Argo CD, the objects its last comparison covered (desired objects not yet created, live ones awaiting pruning, objects another Application also tracks); for Flux, its last apply. Not that it applied the object or alone manages it. |
 | **Claims** | Labels and annotations on the object (Argo CD's tracking annotation or label, Flux's `*.toolkit.fluxcd.io/name` labels, Helm's release annotations) | What the object says manages it: a candidate, not a verdict. Argo CD decides membership by its configured tracking method and installation ID, which Radar may not be able to read. Parsed by `pkg/gitops/claims.go`, every candidate kept. |
 
-Every answer says what it couldn't read. An empty answer means "none" only when it is complete.
+Every answer in this package says what it couldn't read. An empty answer means "none" only when it is complete.
 
 ## Layers
 
@@ -64,6 +64,12 @@ what Radar collects and the caller may read — never "unmanaged"). A native Hel
 no GitOps evidence exists, since Flux's helm-controller writes them too. With Argo CD's annotation+label tracking, an
 instance label cut to 63 characters names the tracking ID's Application, not another one. The answer reaches the wire as
 `relationships.ownership.manager`; `relationships.managedBy` keeps its own meaning, the topmost owner the graph links.
+
+On the wire the answer carries the state and the evidence that answered: each object's recorders and claims. Which
+manager lists Radar couldn't read or search stays internal: `unknown` says that left no answer, `none` that nothing was
+found within what Radar collects and the caller may read. A positive state doesn't say every list was read, and doesn't
+establish exclusive management. On a full relationship response, `ownership.managers` separately says what the
+resource's own recorder search missed; it is not coverage of an answer that came through a controller ancestor.
 
 ## Coverage
 
