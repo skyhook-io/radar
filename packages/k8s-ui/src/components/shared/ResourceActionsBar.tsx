@@ -21,7 +21,7 @@ import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
 import { classifyDiffLine } from './UnifiedDiff'
 import { Tooltip } from '../ui/Tooltip'
-import { ForceDeleteConfirmDialog, type CascadeDependent } from '../ui/ForceDeleteConfirmDialog'
+import { ForceDeleteConfirmDialog, type CascadeDependent, type CascadeDetail } from '../ui/ForceDeleteConfirmDialog'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { AlertBanner } from '../ui/drawer-components'
 import { DialogPortal } from '../ui/DialogPortal'
@@ -85,6 +85,8 @@ interface ResourceActionsBarProps {
   isDeleting?: boolean
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
+  onDeletePreviewOpenChange?: (open: boolean) => void
+  cascadeDetail?: CascadeDetail
   cascadeRootResolved?: boolean
   cascadePreviewFailed?: boolean
 
@@ -168,7 +170,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
+  onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
@@ -205,6 +207,7 @@ export function ResourceActionsBar({
 
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  useEffect(() => { onDeletePreviewOpenChange?.(showDeleteConfirm) }, [showDeleteConfirm, onDeletePreviewOpenChange])
 
   // Node operation confirmation state
   const [showCordonConfirm, setShowCordonConfirm] = useState(false)
@@ -693,6 +696,7 @@ export function ResourceActionsBar({
         resourceKind={displayKindName(resource.kind, data?.kind)}
         namespaceName={resource.namespace}
         isLoading={isDeleting ?? false}
+        cascadeDetail={cascadeDetail}
         cascadeDependents={cascadeDependents}
         cascadeLoading={cascadeLoading}
         cascadeRootResolved={cascadeRootResolved}

@@ -40,3 +40,31 @@ it('opens a matching View with Enter when search finds no kind', () => {
   act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(view).toHaveBeenCalledTimes(1)
 })
+it('in a drawer, Escape in a non-empty kind filter clears it without reaching the dialog', () => {
+  const outside = vi.fn()
+  document.addEventListener('keydown', outside)
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} containEscape />))
+  const input = host.querySelector('input')!
+  const type = (v: string) => act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const escape = () => act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  type('pod'); escape()
+  expect(input.value).toBe('')
+  expect(outside).not.toHaveBeenCalled()
+  // An empty filter lets Escape through, so the drawer still closes on it.
+  escape()
+  expect(outside).toHaveBeenCalledTimes(1)
+  document.removeEventListener('keydown', outside)
+})
+it('reads and reports display settings through the parent when it holds them', () => {
+  const onChange = vi.fn()
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} pinned={[{ name: 'pods', kind: 'Pod', group: '' }]} displayState={{ showEmptyKinds: false, favoritesExpanded: false }} onDisplayStateChange={onChange} />))
+  const favorites = [...host.querySelectorAll('button')].find((b) => b.textContent?.toLowerCase().includes('favorites'))!
+  expect(favorites.getAttribute('aria-expanded')).toBe('false')
+  act(() => favorites.click())
+  expect(onChange).toHaveBeenCalledWith({ showEmptyKinds: false, favoritesExpanded: true })
+})

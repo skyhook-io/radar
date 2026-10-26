@@ -561,12 +561,24 @@ type SecretCertificateInfo struct {
 	Certificates []CertificateInfo `json:"certificates"`
 }
 
-// CascadeDeletePreview reports graph management relationships that deletion may affect.
-// It does not predict garbage collection or controller-specific pruning.
+// CascadeDeletePreview reports deletion evidence. Basis ownerReferences marks
+// the cache-backed projection; without it Dependents are legacy graph links.
+// Coverage is absent when no ownership projection was possible. NotEnumerated
+// names deletion mechanisms outside the projection, never empty sets of objects.
 type CascadeDeletePreview struct {
-	Root         ResourceRef   `json:"root"`
-	RootResolved bool          `json:"rootResolved"`
-	Dependents   []ResourceRef `json:"dependents"`
+	MayReclaimStorage bool `json:"-"`
+	// Propagation is the normal-delete policy. Dependents project cascading
+	// collection; Orphan preserves them unless force removes the orphan finalizer.
+	Propagation        string              `json:"propagation,omitempty"`
+	Root               ResourceRef         `json:"root"`
+	RootResolved       bool                `json:"rootResolved"`
+	Dependents         []ResourceRef       `json:"dependents"`
+	Basis              string              `json:"basis,omitempty"`
+	PossibleDependents []ResourceRef       `json:"possibleDependents,omitempty"`
+	Coverage           *ChildrenCoverage   `json:"coverage,omitempty"`
+	UnavailableReason  string              `json:"unavailableReason,omitempty"`
+	ControllerTeardown *ControllerTeardown `json:"controllerTeardown,omitempty"`
+	NotEnumerated      []string            `json:"notEnumerated,omitempty"`
 }
 
 // OwnershipCoverage says how complete a resource's owner-reference and

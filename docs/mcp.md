@@ -1318,3 +1318,33 @@ An empty list is a complete negative only without `error`, `incomplete` or
 `truncated`.
 Webhooks unchanged in the window are not listed; the Pod/template candidates
 above cover them. List order does not indicate likelihood.
+
+### Shared deletion preview
+
+`GET /api/resources/{kind}/{namespace}/{name}/cascade-preview` reads the root
+and ownership data as the caller. `basis: ownerReferences` identifies the
+ownership projection: `dependents` are observed objects expected to be garbage
+collected; `possibleDependents` have unresolved owners or ownership chains.
+A live owner outside the deletion closure preserves its dependents.
+
+`coverage` is limited to readable, collected kinds: `narrowed` means restricted
+visibility, `notChecked` means cache or discovery gaps, and `truncated` means the
+1,000-object cap or deadline was reached. If the root cannot be verified, the
+preview returns `rootResolved: false` with an `unavailableReason`.
+
+The dependent lists describe cascading collection. Pending foreground/orphan
+propagation is preserved; orphan deletion keeps dependents, so the dialog hides
+those lists until force is selected. Force strips finalizers and requests
+Background propagation. It can skip remaining cleanup, but cannot undo cleanup
+already started.
+
+`controllerTeardown` separately describes recognized Argo CD pruning or Flux
+pruning/Helm uninstall on the root. Recorded local members are caller-filtered
+and include membership coverage; remote or unknown destinations list no local
+inventory. Controller opt-outs and Helm manifests may change the actual cleanup.
+Namespace contents, CRD instances and other controller effects are not enumerated;
+storage/data removal also depends on reclaim policy and controllers.
+
+The REST preview is advisory: it does not bind a later DELETE to the object
+shown in the dialog. Finalizers, admission and reconciliation can change or delay
+the result, so the preview does not guarantee completion.

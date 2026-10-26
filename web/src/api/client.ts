@@ -1,4 +1,5 @@
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
+import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
@@ -4487,8 +4488,8 @@ export function useUpdateResource() {
   });
 }
 
-// Cascade delete preview — visible related resources deletion may affect.
-export interface CascadeDeletePreview {
+// Cached owner-reference projection and root controller cleanup.
+export interface CascadeDeletePreview extends CascadeDetail {
   root: { kind: string; namespace: string; name: string; group?: string };
   rootResolved: boolean;
   dependents: {
@@ -4513,7 +4514,7 @@ export function useCascadeDeletePreview(
         `/resources/${kind}/${namespace}/${name}/cascade-preview${group ? `?group=${encodeURIComponent(group)}` : ""}`,
       ),
     enabled,
-    staleTime: 30_000,
+    staleTime: 0,
   });
 }
 

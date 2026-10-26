@@ -295,6 +295,7 @@ function useActionsBarProps(
   cascadeEnabled: boolean,
   nodeUID: string,
 ) {
+  const [deletePreviewOpen, setDeletePreviewOpen] = useState(false)
   const { showCopied } = useToast()
   const { features } = useCapabilitiesContext()
   const openTerminal = useOpenTerminal()
@@ -359,14 +360,14 @@ function useActionsBarProps(
 
   const {
     data: cascadePreview,
-    isLoading: cascadeLoading,
+    isFetching: cascadeLoading,
     isError: cascadeError,
   } = useCascadeDeletePreview(
     kind,
     namespace,
     name,
     group,
-    cascadeEnabled,
+    cascadeEnabled && deletePreviewOpen,
   )
 
   const canNodeWrite = useCanNodeWrite()
@@ -405,6 +406,8 @@ function useActionsBarProps(
       callbacks?: { onSuccess?: () => void },
     ) => deleteMutation.mutate(params, { onSuccess: callbacks?.onSuccess }),
     isDeleting: deleteMutation.isPending,
+    onDeletePreviewOpenChange: setDeletePreviewOpen,
+    cascadeDetail: cascadePreview,
     cascadeDependents: cascadePreview?.dependents,
     cascadeLoading,
     cascadeRootResolved: cascadePreview?.rootResolved,

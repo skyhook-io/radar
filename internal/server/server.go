@@ -68,6 +68,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rbac"
@@ -4404,8 +4405,8 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCascadeDeletePreview returns related resources that deletion may affect.
-// Management edges include controller attribution, not only garbage collection.
+// handleCascadeDeletePreview reads the root as the caller, then projects
+// observed garbage collection and root GitOps cleanup from caller-scoped caches.
 func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -4423,17 +4424,50 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
-	cachedTopo := s.broadcaster.GetCachedTopology()
-	if cachedTopo != nil && auth.UserFromContext(r.Context()) != nil {
-		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
+	client, _, operation, captureErr := k8s.DeletionClientSnapshot(r.Context())
+	if captureErr != nil {
+		s.writeError(w, http.StatusServiceUnavailable, captureErr.Error())
+		return
 	}
-	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	preview := topology.GetCascadeDeletePreview(topology.ResourceRef{
-		Kind:      kind,
-		Namespace: namespace,
-		Name:      name,
-		Group:     group,
-	}, cachedTopo, dp)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client unavailable")
+		return
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	stop := context.AfterFunc(operation, cancel)
+	defer stop()
+	r = r.WithContext(ctx)
+	discovery := k8s.GetResourceDiscovery()
+	if discovery == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "resource discovery unavailable")
+		return
+	}
+	gvr, found := discovery.GetGVRWithGroup(kind, group)
+	if operation.Err() != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster connection changed during deletion preview")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusBadRequest, "unknown resource kind")
+		return
+	}
+	obj, err := client.Resource(gvr).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		switch {
+		case operation.Err() != nil:
+			s.writeError(w, http.StatusServiceUnavailable, "cluster connection changed during deletion preview")
+		case apierrors.IsForbidden(err):
+			s.writeError(w, http.StatusForbidden, err.Error())
+		case apierrors.IsNotFound(err):
+			s.writeError(w, http.StatusNotFound, err.Error())
+		default:
+			log.Printf("[delete-preview] Failed to read %s %s/%s: %v", sanitizeForLog(kind), sanitizeForLog(namespace), sanitizeForLog(name), err)
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	preview := k8s.DeletionPreview(r.Context(), obj, operation, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 
 	s.writeJSON(w, preview)
 }
