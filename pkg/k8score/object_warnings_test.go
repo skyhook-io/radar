@@ -161,3 +161,28 @@ func TestWorkloadHealthWarning(t *testing.T) {
 		}
 	})
 }
+
+// A tracking ID copied from another object names that object's manager, not
+// this one's: no warning. A controller the manager answer doesn't model keeps
+// its warning beside one.
+func TestManagerWarningSkipsCopiesAndKeepsUnmodeledControllers(t *testing.T) {
+	secret := func(labels, annotations map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Secret",
+			"metadata": map[string]any{"namespace": "backup", "name": "copy", "labels": labels, "annotations": annotations}}}
+	}
+	copied := secret(nil, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:shop/original"})
+	if got := EnrichObjectWarnings(copied); len(got) != 0 {
+		t.Errorf("copied tracking ID warned: %q", got)
+	}
+	own := secret(nil, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:backup/copy"})
+	if got := EnrichObjectWarnings(own); len(got) != 1 {
+		t.Errorf("own tracking ID: %q; want one warning", got)
+	}
+	if got := EnrichRuntimeObjectAnsweredWarnings(own); len(got) != 0 {
+		t.Errorf("answered Argo CD warning kept: %q", got)
+	}
+	certManager := secret(map[string]any{"app.kubernetes.io/managed-by": "cert-manager"}, nil)
+	if got := EnrichRuntimeObjectAnsweredWarnings(certManager); len(got) != 1 {
+		t.Errorf("cert-manager warning beside an answer: %q; want it kept", got)
+	}
+}
