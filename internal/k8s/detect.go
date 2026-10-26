@@ -587,6 +587,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					cause, action = loop.diagnosis()
 				} else if reason == crashLoopReason {
 					cause, action = health.PodCrashLoopDiagnosis(pod, now)
+				} else if reason == readinessGatesNotReadyReason {
+					cause = "Pod readiness is blocked by a declared gate."
+					action = "Check the controller that reports the declared readiness gate condition and its related resource events."
 				} else {
 					cause, action = imagePullDiagnosis(reason, message)
 				}

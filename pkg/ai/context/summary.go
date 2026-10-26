@@ -897,6 +897,10 @@ func getPodIssue(pod *corev1.Pod) string {
 			return cs.State.Terminated.Reason
 		}
 	}
+	if _, blocked := health.PodReadinessGateFailure(pod, time.Now()); blocked {
+		return "ReadinessGatesNotReady"
+	}
+
 	return ""
 }
 

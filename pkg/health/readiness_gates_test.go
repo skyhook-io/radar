@@ -1,8 +1,10 @@
 package health
 
 import (
+	"encoding/json"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"os"
 	"testing"
 	"time"
 )
@@ -14,12 +16,12 @@ func TestPodReadinessGateFailure(t *testing.T) {
 		readyAge, containersAge, creationAge                          time.Duration
 		unknownTimes, noGates, notContainersReady, want, unknownOnset bool
 	}{
-		{name: "missing gate", want: true}, {name: "false gate", gate: "False", want: true}, {name: "passed gate", gate: "True"}, {name: "unknown gate", gate: "Unknown"},
+		{name: "missing gate", want: true}, {name: "false gate", gate: "False", want: true}, {name: "passed gate", gate: "True"}, {name: "unknown gate", gate: "Unknown", want: true},
 		{name: "no declaration", noGates: true}, {name: "other ready failure", reason: "NodeNotReady"}, {name: "containers unready", notContainersReady: true},
-		{name: "recent ready", readyAge: time.Minute}, {name: "long startup recently container ready", containersAge: time.Minute}, {name: "future containers ready", containersAge: -time.Minute, want: true, unknownOnset: true},
-		{name: "future ready", readyAge: -time.Minute, want: true, unknownOnset: true},
-		{name: "future vetoes fresh transition", readyAge: -time.Minute, containersAge: time.Minute, want: true, unknownOnset: true},
-		{name: "unknown transitions future creation", unknownTimes: true, creationAge: -time.Minute, want: true, unknownOnset: true},
+		{name: "recent ready", readyAge: time.Minute}, {name: "long startup recently container ready", containersAge: time.Minute}, {name: "future containers ready", containersAge: -10 * time.Minute, want: true, unknownOnset: true},
+		{name: "future ready", readyAge: -10 * time.Minute, want: true, unknownOnset: true},
+		{name: "future vetoes fresh transition", readyAge: -10 * time.Minute, containersAge: time.Minute, want: true, unknownOnset: true},
+		{name: "unknown transitions future creation", unknownTimes: true, creationAge: -10 * time.Minute, want: true, unknownOnset: true},
 		{name: "unknown transitions old creation", unknownTimes: true, want: true, unknownOnset: true},
 		{name: "unknown transitions young creation", unknownTimes: true, creationAge: time.Minute},
 		{name: "succeeded", phase: "Succeeded"}, {name: "pending", phase: "Pending"},
@@ -98,6 +100,32 @@ func TestPodReadinessGateFailure(t *testing.T) {
 				if v := Pod(p, now); v.Level != LevelUnhealthy || v.Reason != "ImagePullBackOff" {
 					t.Errorf("masked fatal failure %+v", v)
 				}
+			}
+		})
+	}
+}
+
+func TestReadinessGateClockVectors(t *testing.T) {
+	raw, err := os.ReadFile("testdata/readiness_gate_clock.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Now     time.Time `json:"now"`
+		Vectors []struct {
+			Name    string     `json:"name"`
+			Blocked bool       `json:"blocked"`
+			Object  corev1.Pod `json:"object"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range file.Vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			since, got := PodReadinessGateFailure(&v.Object, file.Now)
+			if got != v.Blocked || !since.IsZero() {
+				t.Fatalf("blocked=%v onset=%v; want blocked=%v without known onset", got, since, v.Blocked)
 			}
 		})
 	}

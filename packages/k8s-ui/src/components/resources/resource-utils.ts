@@ -159,7 +159,7 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
     case 'Unschedulable':
       return msgs.includes('Unschedulable')
     case 'Not Ready':
-      return msgs.includes('Not Ready') || msgs.some(m => m.includes('Probe'))
+      return msgs.includes('Not Ready') || msgs.some(m => m.includes('Probe') || m.includes('Readiness Gate'))
     case 'High Restarts':
       return restarts > 5
     case 'Init Failed':
@@ -169,7 +169,7 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
     case 'Failed':
       return msgs.includes('Failed') || msgs.includes('Unknown')
     case 'Other': {
-      const knownPatterns = ['CrashLoopBackOff', 'ImagePull', 'ErrImagePull', 'OOMKilled', 'Unschedulable', 'Not Ready', 'Probe', 'Init:', 'Exit Code', 'Failed', 'Unknown']
+      const knownPatterns = ['CrashLoopBackOff', 'ImagePull', 'ErrImagePull', 'OOMKilled', 'Unschedulable', 'Not Ready', 'Probe', 'Readiness Gate', 'Init:', 'Exit Code', 'Failed', 'Unknown']
       return problems.some(p => !knownPatterns.some(pat => p.message.includes(pat)) && p.message !== `${restarts} restarts`)
     }
     default:
@@ -302,17 +302,17 @@ function podReadinessGateBlocked(pod: any): boolean {
   if (ready?.status !== 'False' || ready.reason !== 'ReadinessGatesNotReady' || containersReady?.status !== 'True') return false
   const now = Date.now()
   let recent = false
-  let future = false
+  let invalid = false
   for (const c of [ready, containersReady]) {
     const since = Date.parse(c.lastTransitionTime || pod.metadata?.creationTimestamp)
     if (!Number.isFinite(since)) continue
-    future ||= since > now
-    recent ||= since <= now && now - since < PENDING_STUCK_MINUTES * 60000
+    invalid ||= since > now + PENDING_STUCK_MINUTES * 60000
+    recent ||= since <= now + PENDING_STUCK_MINUTES * 60000 && now - since < PENDING_STUCK_MINUTES * 60000
   }
-  if (recent && !future) return false
+  if (recent && !invalid) return false
   return gates.some(g => {
     const condition = conditions.find(c => c.type === g.conditionType)
-    return !condition || condition.status === 'False'
+    return !condition || condition.status !== 'True'
   })
 }
 
@@ -677,6 +677,10 @@ export function getPodProblems(pod: any): PodProblem[] {
     if (lastMsg.includes('failed to mount') || lastMsg.includes('failedattachvolume')) {
       problems.push({ severity: 'high', message: 'Volume Mount Failed', detail: lastMsgRaw || undefined })
     }
+  }
+
+  if (podReadinessGateBlocked(pod)) {
+    problems.push({ severity: 'medium', message: 'Readiness Gate Blocked', detail: conditions.find((c: any) => c.type === 'Ready')?.message })
   }
 
   // Check conditions

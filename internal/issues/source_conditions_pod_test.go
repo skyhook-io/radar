@@ -154,7 +154,6 @@ func TestGenericConditionsRespectCorePodCompletion(t *testing.T) {
 
 func TestReadinessGateFailureDoesNotRequireADynamicWatch(t *testing.T) {
 	defer k8s.ResetTestState()
-	defer k8s.ResetTestDynamicState()
 	now := time.Now().UTC().Truncate(time.Second)
 	since := now.Add(-7 * time.Minute)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "gate-blocked", Namespace: "test", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))}, Spec: corev1.PodSpec{ReadinessGates: []corev1.PodReadinessGate{{ConditionType: "example.com/ready"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{
@@ -164,32 +163,17 @@ func TestReadinessGateFailureDoesNotRequireADynamicWatch(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
 		t.Fatal(err)
 	}
-	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(scheme, pod), []k8s.APIResource{{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
-		t.Fatal(err)
-	}
 	provider := NewCacheProvider()
-	check := func() {
-		t.Helper()
-		found := false
-		for _, i := range Compose(provider, Filters{Namespaces: []string{"test"}}) {
-			if i.Source == SourceProblem && i.Name == pod.Name {
-				found = true
-				if i.Category != issuesapi.CategoryReadinessFailed || i.Severity != SeverityWarning || i.Message != "gate controller has not reported ready" || !i.FirstSeen.Equal(since) {
-					t.Fatalf("wrong gate finding %+v", i)
-				}
+	found := false
+	for _, i := range Compose(provider, Filters{Namespaces: []string{"test"}}) {
+		if i.Source == SourceProblem && i.Name == pod.Name {
+			found = true
+			if i.Category != issuesapi.CategoryReadinessFailed || i.Severity != SeverityWarning || i.Message != "gate controller has not reported ready" || i.Cause != "Pod readiness is blocked by a declared gate." || i.Action == "" || !i.FirstSeen.Equal(since) {
+				t.Fatalf("wrong gate finding %+v", i)
 			}
 		}
-		if !found {
-			t.Fatal("native gate issue absent")
-		}
 	}
-	check()
-	if _, err := k8s.GetDynamicResourceCache().ListBlocking(schema.GroupVersionResource{Version: "v1", Resource: "pods"}, "test", 2*time.Second); err != nil {
-		t.Fatal(err)
+	if !found {
+		t.Fatal("native gate issue absent")
 	}
-	check()
 }

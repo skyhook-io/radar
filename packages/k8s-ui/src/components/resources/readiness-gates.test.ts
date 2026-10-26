@@ -1,5 +1,6 @@
+import clockVectors from '../../../../../pkg/health/testdata/readiness_gate_clock.json'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getPodPhaseDisplay, getPodStatus } from './resource-utils'
+import { getPodPhaseDisplay, getPodStatus, getPodProblems, podMatchesProblemCategory } from './resource-utils'
 afterEach(() => vi.useRealTimers())
 const makePod = (): any => ({ metadata: { creationTimestamp: '2026-10-25T10:00:00Z' }, spec: { readinessGates: [{ conditionType: 'example.com/ready' }] }, status: { phase: 'Running', conditions: [
  { type: 'Ready', status: 'False', reason: 'ReadinessGatesNotReady', message: 'gate has not reported ready', lastTransitionTime: '2026-10-25T11:50:00Z' },
@@ -9,9 +10,12 @@ describe('declared readiness gates', () => {
  it.each(['missing', 'False', 'True', 'Unknown'])('handles %s gate', status => {
   vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
   const p=makePod();if(status!=='missing')p.status.conditions.push({ type:'example.com/ready',status })
-  const blocked=status==='missing'||status==='False'
+  const blocked=status!=='True'
   expect(getPodStatus(p).level).toBe(blocked?'degraded':'healthy')
   expect(getPodPhaseDisplay(p).level).toBe(blocked?'degraded':'healthy')
+  const problems=getPodProblems(p)
+  expect(podMatchesProblemCategory(problems,0,'Not Ready')).toBe(blocked)
+  expect(podMatchesProblemCategory(problems,0,'Other')).toBe(false)
   if(blocked)expect(getPodPhaseDisplay(p)).toMatchObject({text:'Running — Readiness gate blocked',hint:'gate has not reported ready'})
  })
  it.each([0,1])('keeps grace for transition %s', index => {
@@ -71,4 +75,13 @@ describe('declared readiness gates', () => {
   expect(getPodStatus(p).level).toBe('degraded')
  })
 
+})
+
+describe('readiness-gate clock contract',()=>{
+ it.each(clockVectors.vectors)('$name',v=>{
+  vi.useFakeTimers().setSystemTime(new Date(clockVectors.now))
+  expect(getPodStatus(v.object).level).toBe(v.blocked?'degraded':'healthy')
+  expect(getPodPhaseDisplay(v.object).level).toBe(v.blocked?'degraded':'healthy')
+  expect(podMatchesProblemCategory(getPodProblems(v.object),0,'Not Ready')).toBe(v.blocked)
+ })
 })

@@ -412,13 +412,14 @@ func IsPodUnschedulable(pod *corev1.Pod) bool {
 	return false
 }
 
-// PodReadinessGateFailure reports a declared False or missing gate that still
+// PodReadinessGateFailure reports a declared gate that has not passed and still
 // blocks a running Pod after its containers became ready. A nil Pod has no failure.
 // Both readiness transitions get the probe path's five-minute grace. Missing transition times
 // use creation only for grace, never as evidence of failure onset. Onset is
 // known only when both transitions are dated. With no transition or creation
-// time, no grace is assumed. Future timestamps establish neither grace nor onset.
-// An Unknown gate alone does not qualify.
+// time, no grace is assumed. Up to five minutes of clock skew gets grace;
+// farther-future timestamps establish neither grace nor onset.
+// Unknown gate health still blocks readiness when the kubelet reports that explicitly.
 func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, failing bool) {
 	if pod == nil || pod.Status.Phase != corev1.PodRunning || len(pod.Spec.ReadinessGates) == 0 {
 		return time.Time{}, false
@@ -436,7 +437,7 @@ func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, f
 	if ready == nil || ready.Status != corev1.ConditionFalse || ready.Reason != reasonReadinessGateFail || containersReady == nil || containersReady.Status != corev1.ConditionTrue {
 		return time.Time{}, false
 	}
-	recent, future := false, false
+	recent, future, invalid := false, false, false
 	for _, c := range []*corev1.PodCondition{ready, containersReady} {
 		transition := c.LastTransitionTime.Time
 		if transition.IsZero() {
@@ -444,10 +445,11 @@ func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, f
 		}
 		if !transition.IsZero() {
 			future = future || transition.After(now)
-			recent = recent || (!transition.After(now) && now.Sub(transition) < 5*time.Minute)
+			invalid = invalid || transition.After(now.Add(5*time.Minute))
+			recent = recent || (!transition.After(now.Add(5*time.Minute)) && now.Sub(transition) < 5*time.Minute)
 		}
 	}
-	if recent && !future {
+	if recent && !invalid {
 		return time.Time{}, false
 	}
 	for _, gate := range pod.Spec.ReadinessGates {
@@ -455,7 +457,7 @@ func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, f
 		for _, c := range pod.Status.Conditions {
 			if c.Type == gate.ConditionType {
 				found = true
-				if c.Status == corev1.ConditionFalse {
+				if c.Status != corev1.ConditionTrue {
 					failing = true
 				}
 				break
