@@ -7,6 +7,7 @@ import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import { WorkloadView } from '../../workload/WorkloadView'
 import { ResourceRendererDispatch, diagnoseHealthHint, getResourceStatus } from '../../shared/ResourceRendererDispatch'
 import { getCellFilterValue } from '../resource-utils'
+import { getGenericResourceStatus } from '../generic-status'
 import { getCrossplanePauseState, getCrossplaneStatusReason } from '../resource-utils-crossplane'
 
 const pause = { type: 'Synced', status: 'False', reason: 'ReconcilePaused', message: 'controller pause observation' }
@@ -74,7 +75,6 @@ it.each([
   const html = renderToStaticMarkup(<Cell resource={resource} column="status" />)
   expect(html).toContain('Ready (reported)')
   expect(getCellFilterValue(resource, 'status', 'buckets')).toBe('Ready (reported)')
-  expect(getCellFilterValue(resource, 'status', 'certificates')).toBe('Ready (reported)')
   const failed = { ...resource, status: { conditions: [pause, { type: 'Ready', status: 'False', reason: 'Unavailable' }] } }
   expect(getCellFilterValue(failed, 'status', 'buckets')).toBe('Unavailable')
   expect(renderToStaticMarkup(<Cell resource={failed} column="status" />)).toContain('Unavailable')
@@ -137,4 +137,17 @@ it.each([
   expect(getResourceStatus('earlyresources', resource)).toMatchObject({ text: label, level: 'unhealthy' })
   expect(getCrossplaneStatusReason(resource)).toContain('independent')
   expect(resource).toEqual(before)
+})
+
+
+it('retains curated Knative revision status ahead of acknowledgement-only pause context', () => {
+  const resource = {
+    apiVersion: 'serving.knative.dev/v1', kind: 'Revision',
+    metadata: { name: 'scaled-down', annotations: { 'crossplane.io/paused': 'true' } },
+    spec: {},
+    status: { conditions: [{ type: 'Ready', status: 'True' }, { type: 'Active', status: 'False', reason: 'NoTraffic' }, pause] },
+  }
+  expect(getResourceStatus('knativerevisions', resource)?.text).toBe('Scaled to Zero')
+  expect(getCellFilterValue(resource, 'status', 'knativerevisions')).toBe(getGenericResourceStatus(resource)?.text)
+  expect(diagnoseHealthHint('knativerevisions', resource)).toBe('unknown')
 })

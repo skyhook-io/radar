@@ -208,7 +208,7 @@ import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell, CNPGObjectStoreCell, CNPGDeclarativeCell, CNPGImageCatalogCell } from './renderers/cnpg-cells'
 import { isApiGroup, CNPG_GROUP } from './resource-utils-cnpg'
 import { CrossplaneStatusCell, ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
-import { isManagedResource, isComposite, getCrossplanePauseState } from './resource-utils-crossplane'
+import { getCrossplaneStatus, isManagedResource, isComposite, getCrossplanePauseState } from './resource-utils-crossplane'
 import { CrossplanePauseChip } from './renderers/CrossplanePauseContext'
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
 import { KnativeServiceCell, ConfigurationCell as KnativeConfigurationCell, RevisionCell as KnativeRevisionCell, RouteCell as KnativeRouteCell, BrokerCell, TriggerCell, EventTypeCell, PingSourceCell, ApiServerSourceCell, ContainerSourceCell, SinkBindingCell, ChannelCell, InMemoryChannelCell, SubscriptionCell, SequenceCell, ParallelCell, DomainMappingCell, ServerlessServiceCell, KnativeIngressCell, KnativeCertificateCell } from './renderers/knative-cells'
@@ -5362,8 +5362,16 @@ export function ResourcesView({
       if (issue) return issueTitle(issue)
       if (operationalIssuesIncomplete) return 'Unknown'
     }
+    if (column === 'status') {
+      const managedColumns = isLikelyCrossplaneMRGroup(selectedKind.name, selectedKind.group ?? '')
+      if ((managedColumns && isManagedResource(resource))
+        || ((!hasCuratedColumns(selectedKind.name, selectedKind.group) || managedColumns)
+          && getCrossplanePauseState(resource) === 'acknowledged')) {
+        return getCrossplaneStatus(resource).text
+      }
+    }
     return getCellFilterValue(resource, column, kind)
-  }, [operationalIssues, operationalIssuesIncomplete, selectedKind.group])
+  }, [operationalIssues, operationalIssuesIncomplete, selectedKind.name, selectedKind.group])
 
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {
@@ -7450,6 +7458,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
+  if (column === 'status' && isLikelyCrossplaneMRGroup(kind, group ?? '') && isManagedResource(resource)) {
+    return <ManagedResourceCell resource={resource} column={column} />
+  }
   if (group && !hasCuratedColumns(kind, group)) {
     return <GenericCell resource={resource} column={column} />
   }
