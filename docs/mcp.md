@@ -798,14 +798,15 @@ API group is part of a resource's identity. Radar infers the canonical group for
 
 This selects the Argo Rollout workload path; it does not imply that `diagnose` supports arbitrary custom resource shapes.
 
-Running Pods blocked by a declared readiness gate appear as `readiness_failed`
+Running, non-terminating Pods blocked by a declared readiness gate appear as `readiness_failed`
 after five minutes with `Ready=False/ReadinessGatesNotReady` and
 `ContainersReady=True`. Each transition gets that grace, so a long startup does
 not immediately become a gate failure. False, Unknown or absent declared gate conditions
 qualify because the kubelet explicitly reports blocked readiness. Onset uses the later transition only when both
 are known. A missing transition uses creation time only for grace; with neither
 time available, no grace is assumed. Up to five minutes of future clock skew
-gets grace; farther-future times establish neither grace nor onset. The same state appears in Pod health and
+gets grace; farther-future times establish neither grace nor onset. A separate sane recent
+transition still receives its grace. The same state appears in Pod health and
 summary rows.
 
 Watched, synchronized custom resources that remain deleting appear in `issues`

@@ -23,6 +23,14 @@ describe('declared readiness gates', () => {
   const p=makePod();p.status.conditions[index].lastTransitionTime='2026-10-25T11:59:00Z'
   expect(getPodStatus(p).level).toBe('healthy');expect(getPodPhaseDisplay(p).level).toBe('healthy')
  })
+ it('leaves graceful termination to the lifecycle overlay',()=>{
+  vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
+  const p=makePod();p.metadata.deletionTimestamp='2026-10-25T11:59:00Z'
+  expect(getPodStatus(p).level).toBe('neutral');expect(getPodPhaseDisplay(p).text).toContain('Terminating')
+  expect(podMatchesProblemCategory(getPodProblems(p),0,'Not Ready')).toBe(false)
+  p.status.containerStatuses[0].state={waiting:{reason:'ImagePullBackOff'}}
+  expect(getPodStatus(p).level).toBe('unhealthy');expect(getPodPhaseDisplay(p).level).toBe('unhealthy')
+ })
  it('requires a declaration even with an older summary payload',()=>{
   vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
   const p=makePod();delete p.spec.readinessGates;expect(getPodStatus(p).level).toBe('healthy')
@@ -61,7 +69,7 @@ describe('declared readiness gates', () => {
   vi.useFakeTimers().setSystemTime(new Date('2026-10-25T12:00:00Z'))
   const p = makePod()
   p.status.conditions[index].lastTransitionTime='2026-10-25T13:00:00Z'
-  p.status.conditions[1-index].lastTransitionTime='2026-10-25T11:59:00Z'
+  p.status.conditions[1-index].lastTransitionTime='2026-10-25T11:53:00Z'
   expect(getPodStatus(p).level).toBe('degraded')
   expect(getPodPhaseDisplay(p).level).toBe('degraded')
  })

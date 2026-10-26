@@ -1021,6 +1021,18 @@ func TestPodSummaryReadinessGateIssue(t *testing.T) {
 			if got := summarizePod(p).Issue; got != want {
 				t.Fatalf("issue=%q want%q", got, want)
 			}
+			p.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, FinishedAt: metav1.NewTime(now.Add(-time.Hour))}}
+			if status != "True" {
+				if got := summarizePod(p).Issue; got != "ReadinessGatesNotReady" {
+					t.Fatalf("old history masked current gate: %q", got)
+				}
+			}
+			p.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137, FinishedAt: metav1.NewTime(now.Add(-time.Minute))}}
+			p.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-30 * time.Second))}}
+			if got := summarizePod(p).Issue; got != "OOMKilled" {
+				t.Fatalf("gate masked active OOM: %q", got)
+			}
+			p.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{}
 			p.Status.Conditions[1].LastTransitionTime = metav1.NewTime(now.Add(-time.Minute))
 			if got := summarizePod(p).Issue; got != "" {
 				t.Fatalf("fresh gate issue=%q", got)

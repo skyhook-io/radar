@@ -295,21 +295,19 @@ function podCrashRestartTotal(pod: any): number {
 
 function podReadinessGateBlocked(pod: any): boolean {
   const gates: { conditionType: string }[] = pod.spec?.readinessGates || []
-  if (pod.status?.phase !== 'Running' || gates.length === 0) return false
+  if (pod.metadata?.deletionTimestamp || pod.status?.phase !== 'Running' || gates.length === 0) return false
   const conditions: any[] = pod.status?.conditions || []
   const ready = conditions.find(c => c.type === 'Ready')
   const containersReady = conditions.find(c => c.type === 'ContainersReady')
   if (ready?.status !== 'False' || ready.reason !== 'ReadinessGatesNotReady' || containersReady?.status !== 'True') return false
   const now = Date.now()
   let recent = false
-  let invalid = false
   for (const c of [ready, containersReady]) {
     const since = Date.parse(c.lastTransitionTime || pod.metadata?.creationTimestamp)
     if (!Number.isFinite(since)) continue
-    invalid ||= since > now + PENDING_STUCK_MINUTES * 60000
     recent ||= since <= now + PENDING_STUCK_MINUTES * 60000 && now - since < PENDING_STUCK_MINUTES * 60000
   }
-  if (recent && !invalid) return false
+  if (recent) return false
   return gates.some(g => {
     const condition = conditions.find(c => c.type === g.conditionType)
     return !condition || condition.status !== 'True'

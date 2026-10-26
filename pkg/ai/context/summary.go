@@ -876,6 +876,9 @@ func isPodInitialized(pod *corev1.Pod) bool {
 
 // getPodIssue extracts the primary issue from a pod's status.
 func getPodIssue(pod *corev1.Pod) string {
+	if verdict := health.Pod(pod, time.Now()); verdict.Reason == "ReadinessGatesNotReady" {
+		return verdict.Reason
+	}
 	// Check container statuses for waiting reasons
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
@@ -897,10 +900,6 @@ func getPodIssue(pod *corev1.Pod) string {
 			return cs.State.Terminated.Reason
 		}
 	}
-	if _, blocked := health.PodReadinessGateFailure(pod, time.Now()); blocked {
-		return "ReadinessGatesNotReady"
-	}
-
 	return ""
 }
 

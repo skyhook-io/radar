@@ -162,6 +162,47 @@
           ]
         }
       }
+    },
+    {
+      "name": "far-future date with sane fresh other transition",
+      "blocked": false,
+      "object": {
+        "metadata": {
+          "creationTimestamp": "2026-10-25T10:00:00Z"
+        },
+        "spec": {
+          "readinessGates": [
+            {
+              "conditionType": "example.com/ready"
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "ReadinessGatesNotReady",
+              "lastTransitionTime": "2026-10-25T12:10:02Z"
+            },
+            {
+              "type": "ContainersReady",
+              "status": "True",
+              "lastTransitionTime": "2026-10-25T11:59:00Z"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "app",
+              "ready": true,
+              "state": {
+                "running": {}
+              }
+            }
+          ]
+        }
+      }
     }
   ]
 }

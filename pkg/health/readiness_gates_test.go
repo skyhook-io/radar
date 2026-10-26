@@ -12,15 +12,15 @@ import (
 func TestPodReadinessGateFailure(t *testing.T) {
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		name, gate, reason, phase                                     string
-		readyAge, containersAge, creationAge                          time.Duration
-		unknownTimes, noGates, notContainersReady, want, unknownOnset bool
+		name, gate, reason, phase                                               string
+		readyAge, containersAge, creationAge                                    time.Duration
+		unknownTimes, noGates, notContainersReady, want, unknownOnset, deleting bool
 	}{
 		{name: "missing gate", want: true}, {name: "false gate", gate: "False", want: true}, {name: "passed gate", gate: "True"}, {name: "unknown gate", gate: "Unknown", want: true},
-		{name: "no declaration", noGates: true}, {name: "other ready failure", reason: "NodeNotReady"}, {name: "containers unready", notContainersReady: true},
+		{name: "terminating", deleting: true}, {name: "no declaration", noGates: true}, {name: "other ready failure", reason: "NodeNotReady"}, {name: "containers unready", notContainersReady: true},
 		{name: "recent ready", readyAge: time.Minute}, {name: "long startup recently container ready", containersAge: time.Minute}, {name: "future containers ready", containersAge: -10 * time.Minute, want: true, unknownOnset: true},
 		{name: "future ready", readyAge: -10 * time.Minute, want: true, unknownOnset: true},
-		{name: "future vetoes fresh transition", readyAge: -10 * time.Minute, containersAge: time.Minute, want: true, unknownOnset: true},
+		{name: "fresh transition with invalid other", readyAge: -10 * time.Minute, containersAge: time.Minute},
 		{name: "unknown transitions future creation", unknownTimes: true, creationAge: -10 * time.Minute, want: true, unknownOnset: true},
 		{name: "unknown transitions old creation", unknownTimes: true, want: true, unknownOnset: true},
 		{name: "unknown transitions young creation", unknownTimes: true, creationAge: time.Minute},
@@ -52,6 +52,11 @@ func TestPodReadinessGateFailure(t *testing.T) {
 			if tc.gate != "" {
 				p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{Type: "example.com/ready", Status: corev1.ConditionStatus(tc.gate)})
 			}
+			if tc.deleting {
+				t := metav1.NewTime(now.Add(-time.Minute))
+				p.DeletionTimestamp = &t
+			}
+
 			if tc.noGates {
 				p.Spec.ReadinessGates = nil
 			}
@@ -66,6 +71,12 @@ func TestPodReadinessGateFailure(t *testing.T) {
 			since, got := PodReadinessGateFailure(p, now)
 			if got != tc.want {
 				t.Fatalf("failure=%v want%v", got, tc.want)
+			}
+			if tc.deleting {
+				p.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}}
+				if v := Pod(p, now); v.Level != LevelUnhealthy || v.Reason != "ImagePullBackOff" {
+					t.Fatalf("deletion masked hard failure: %+v", v)
+				}
 			}
 			if tc.want {
 				wantSince := now.Add(-7 * time.Minute)

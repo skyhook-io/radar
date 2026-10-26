@@ -582,6 +582,10 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		}
 		sort.Strings(reasonParts)
 
+		duration := ""
+		if !g.onsetUnknown {
+			duration = timeutil.FormatAgeShort(g.newestDur)
+		}
 		problems = append(problems, DashboardProblem{
 			Kind:      key.kind,
 			Namespace: key.namespace,
@@ -596,8 +600,9 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 			Message:         k8s.Truncate(strings.Join(reasonParts, ", "), 200),
 			Age:             timeutil.FormatAgeShort(g.newestAge),
 			AgeSeconds:      int64(g.newestAge.Seconds()),
-			Duration:        timeutil.FormatAgeShort(g.newestDur),
+			Duration:        duration,
 			DurationSeconds: int64(g.newestDur.Seconds()),
+			OnsetUnknown:    g.onsetUnknown,
 			PodCount:        g.podCount,
 		})
 	}
@@ -740,8 +745,15 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		}
 	}
 
+	if verdict := health.Pod(pod, now); verdict.Reason == "ReadinessGatesNotReady" {
+		reason, message = verdict.Reason, verdict.Message
+	}
 	ageDur := now.Sub(pod.CreationTimestamp.Time)
-	durDur := podProblemDuration(pod, now)
+	durDur, onsetUnknown := podProblemDuration(pod, now)
+	duration := ""
+	if !onsetUnknown {
+		duration = timeutil.FormatAgeShort(durDur)
+	}
 
 	return DashboardProblem{
 		Kind:            "Pod",
@@ -752,45 +764,54 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		Message:         k8s.Truncate(message, 200),
 		Age:             timeutil.FormatAgeShort(ageDur),
 		AgeSeconds:      int64(ageDur.Seconds()),
-		Duration:        timeutil.FormatAgeShort(durDur),
+		Duration:        duration,
 		DurationSeconds: int64(durDur.Seconds()),
+		OnsetUnknown:    onsetUnknown,
 	}
 }
 
 // podProblemDuration estimates how long a pod has been in a problematic state.
 // Uses condition lastTransitionTime when available, falls back to creation time.
-func podProblemDuration(pod *corev1.Pod, now time.Time) time.Duration {
+func podProblemDuration(pod *corev1.Pod, now time.Time) (time.Duration, bool) {
+	if verdict := health.Pod(pod, now); verdict.Reason == "ReadinessGatesNotReady" {
+		since, _ := health.PodReadinessGateFailure(pod, now)
+		if since.IsZero() {
+			return 0, true
+		}
+		return now.Sub(since), false
+	}
 	// For pending pods: use the PodScheduled or Ready condition transition
 	// For running-but-unhealthy: use ContainersReady condition transition
 	// For failed: use the Ready condition transition
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.ContainersReady && cond.Status == corev1.ConditionFalse {
 			if !cond.LastTransitionTime.IsZero() {
-				return now.Sub(cond.LastTransitionTime.Time)
+				return now.Sub(cond.LastTransitionTime.Time), false
 			}
 		}
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionFalse {
 			if !cond.LastTransitionTime.IsZero() {
-				return now.Sub(cond.LastTransitionTime.Time)
+				return now.Sub(cond.LastTransitionTime.Time), false
 			}
 		}
 		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
 			if !cond.LastTransitionTime.IsZero() {
-				return now.Sub(cond.LastTransitionTime.Time)
+				return now.Sub(cond.LastTransitionTime.Time), false
 			}
 		}
 	}
 	// Fallback: use pod creation time
-	return now.Sub(pod.CreationTimestamp.Time)
+	return now.Sub(pod.CreationTimestamp.Time), false
 }
 
 type ownerKey struct{ kind, namespace, name string }
 type ownerGroup struct {
-	podCount  int
-	severity  string
-	reasons   map[string]int
-	newestDur time.Duration
-	newestAge time.Duration
+	podCount     int
+	severity     string
+	reasons      map[string]int
+	newestDur    time.Duration
+	onsetUnknown bool
+	newestAge    time.Duration
 }
 
 // collectPodForRollup groups a problematic pod under its owner workload, or adds it as an orphan.
@@ -843,7 +864,8 @@ func collectPodForRollup(pod *corev1.Pod, severity string, now time.Time, groups
 	}
 
 	ageDur := now.Sub(pod.CreationTimestamp.Time)
-	durDur := podProblemDuration(pod, now)
+	durDur, onsetUnknown := podProblemDuration(pod, now)
+	g.onsetUnknown = g.onsetUnknown || onsetUnknown
 	if durDur < g.newestDur {
 		g.newestDur = durDur
 	}
