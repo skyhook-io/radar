@@ -19,13 +19,12 @@ describe('searchCoverageNote', () => {
     expect(noteFor({ status: 'complete', narrowedBy: [narrowing], gaps: [] }, { hits: [] })).toBeUndefined()
   })
 
-  it('explains empty namespace collection narrowing, including combined narrowing', () => {
-    for (const narrowedBy of [['namespace_collection'], ['kind_collection', 'namespace_collection']] as const) {
+  it('explains namespace collection narrowing with or without hits, including combined narrowing', () => {
+    for (const narrowedBy of [['namespace_collection'], ['kind_collection', 'namespace_collection'], ['user_access', 'namespace_collection']] as const) {
       const coverage: Parameters<typeof noteFor>[0] = { status: 'complete', narrowedBy: [...narrowedBy], gaps: [] }
-      expect(noteFor(coverage, { hits: [] })).toEqual({
-        text: 'Radar here watches only some namespaces; name one with ns:<name> to check it.',
-      })
-      expect(noteFor(coverage, { hits: [{ kind: 'Pod' }] })).toBeUndefined()
+      const note = { text: "Radar collects some kinds only in some namespaces; matches for them elsewhere won't show." }
+      expect(noteFor(coverage, { hits: [] })).toEqual(note)
+      expect(noteFor(coverage, { hits: [{ kind: 'Pod' }] })).toEqual(note)
     }
   })
 

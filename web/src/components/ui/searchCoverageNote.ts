@@ -112,16 +112,19 @@ function failedKinds(entries: SearchCoverageEntry[], label: (e: SearchCoverageEn
 
 // Radar's ⌘K note for one search: what happened to the kinds and namespaces
 // the query named, whether results are still loading, and which kinds failed
-// to read. Broad searches keep access and setup exclusions quiet; an empty
-// result can explain collection narrowing. Missing coverage gets no note.
+// to read. Broad searches keep access exclusions quiet; namespace collection
+// is always explained, kind collection only for an empty result. Missing
+// coverage gets no note.
 export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: SearchCoverageNoteOptions): OmnibarNote | undefined {
   const unsearched = searchCoverageEntries(coverage)
   if (!unsearched.length) {
-    if (coverage?.gaps.length === 0 && !opts.hits?.length) {
+    if (coverage?.gaps.length === 0) {
+      // Collection limits come from how Radar is installed, and nothing else
+      // in the omnibar shows them, so they are said with hits too.
       if (coverage.narrowedBy?.includes('namespace_collection')) {
-        return { text: 'Radar here watches only some namespaces; name one with ns:<name> to check it.' }
+        return { text: "Radar collects some kinds only in some namespaces; matches for them elsewhere won't show." }
       }
-      if (coverage.narrowedBy?.includes('kind_collection')) {
+      if (coverage.narrowedBy?.includes('kind_collection') && !opts.hits?.length) {
         return { text: "Radar doesn't watch every kind; search kind:<name> to include one." }
       }
     }

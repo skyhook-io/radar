@@ -120,7 +120,9 @@ export interface OmnibarProps {
   isError?: boolean
   /** True while React Query serves a previous query's data — gates Enter/clicks. */
   isPlaceholderData?: boolean
-  /** Optional note about the current search's coverage, from the host. */
+  /** Optional note about the current search's coverage, from the host. A
+   *  note says part of the scope wasn't searched, so an empty result is then
+   *  qualified rather than reported as no match. */
   note?: OmnibarNote
   /** Bounded modifier value sets to autocomplete (e.g. { ns: [...], kind: [...] }). */
   modifierOptions?: Record<string, string[]>
@@ -522,10 +524,10 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
                   </div>
                 ) : resourceRows.length === 0 && (!isFetching || currentData) ? (
                   <div className="px-3 py-2 text-xs text-theme-text-tertiary">
-                    No resources match{freeText ? <> “{freeText}”</> : ''}.
+                    {shownNote ? 'No matches in what Radar searched.' : <>No resources match{freeText ? <> “{freeText}”</> : ''}.</>}
                     {hasNsPill && (
                       <button onMouseDown={(e) => { e.preventDefault(); clearNsPills() }} className="ml-1.5 text-[var(--color-brand)] hover:underline">
-                        Search all namespaces
+                        Remove namespace filter
                       </button>
                     )}
                   </div>
