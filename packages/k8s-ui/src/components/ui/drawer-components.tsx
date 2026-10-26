@@ -420,7 +420,7 @@ interface AlertBannerProps {
   icon?: React.ComponentType<{ className?: string }>
   title: string
   message?: React.ReactNode
-  items?: string[]
+  items?: React.ReactNode[]
   children?: React.ReactNode
   /** A control at the end of the title line, e.g. a link to where the problem is handled. */
   action?: React.ReactNode

@@ -125,21 +125,28 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     remote: "Radar can't confirm it deploys to this cluster",
     missing: 'no such manager here',
     'not-recording': 'Helm records an installation, rather than continuously reconciling it',
-    unresolved: 'Radar found no manager by that name it can read that lists this resource; it may be managed from another cluster',
+    unresolved: 'no manager of that name here lists this resource; it may be managed from another cluster',
     withheld: "you can't view it",
     unchecked: "Radar couldn't check its status",
   }
   const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
   const details: string[] = []
-  // Tracked by names what metadata says, which Radar hasn't confirmed.
-  if (answer.state === 'claimed') {
-    details.push(`${answer.via ? `${managerRefLabel(evidence.object)}'s` : "This resource's"} labels or annotations name ${names(claimed)}; Radar hasn't confirmed ${claimed.length === 1 ? 'it manages' : 'they manage'} it.`)
+  const whose = answer.via ? `${managerRefLabel(evidence.object)}'s` : "This resource's"
+  // A newer Radar may send a check this UI doesn't know.
+  const why = (c: ManagerClaim, object: string) => c.check === 'missing'
+    ? `there's no such ${c.manager.kind} here`
+    : (reasons[c.check] ?? "Radar couldn't confirm its status lists this resource").replace('manager of', `${c.manager.kind} of`).replace('this resource', object)
+  // Tracked by names what metadata says, which Radar hasn't confirmed: one
+  // claim says why in the same sentence.
+  const single = answer.state === 'claimed' && claims.length === 1 && claims[0].check !== 'recorded' ? claims[0] : null
+  if (single) {
+    details.push(`${whose} ${single.source.includes('label') ? 'label' : 'annotation'} names ${managerRefLabel(single.manager)}, but ${why(single, answer.via ? subject : 'it')}.`)
+  } else if (answer.state === 'claimed') {
+    details.push(`${whose} labels or annotations name ${names(claimed)}; Radar hasn't confirmed ${claimed.length === 1 ? 'it manages' : 'they manage'} it.`)
   }
   for (const c of claims) {
-    if (c.check === 'recorded') continue
-    // A newer Radar may send a check this UI doesn't know.
-    const reason = reasons[c.check] ?? "Radar couldn't confirm its status lists this resource"
-    details.push(`${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reason.replace('manager by', `${c.manager.kind} by`).replace('this resource', subject)}.`)
+    if (c.check === 'recorded' || c === single) continue
+    details.push(`${managerRefLabel(c.manager)}: ${why(c, subject)}.`)
   }
   if (recorders.length) {
     // A claim its list confirms adds nothing but the agreement.

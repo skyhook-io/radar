@@ -46,7 +46,7 @@ it('names an unresolved candidate without linking it', async () => {
   expect(items).toHaveLength(2)
   const a0 = items.find(i => i.textContent!.startsWith('Application a'))!
   expect(a0.disabled).toBe(true)
-  expect(a0.textContent).toContain('Radar found no Application by this name that you can view listing it; it may be managed from another cluster')
+  expect(a0.textContent).toContain('no Application of this name here lists it; it may be managed from another cluster')
   await act(async () => root.unmount())
   element.remove()
 })
@@ -97,7 +97,7 @@ it.each<[string, ManagerAnswer]>([
   await act(async () => { element.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!.click() })
   const text = element.textContent!
   expect(text).toContain("its label doesn't say which Application of this name")
-  expect(text).not.toContain('Radar found no Application')
+  expect(text).not.toContain('no Application of this name here')
   await act(async () => root.unmount())
   element.remove()
 })

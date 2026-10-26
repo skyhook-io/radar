@@ -24,13 +24,13 @@ describe('manager answer chip', () => {
     expect(html.match(/Application/g)?.length).toBe(1)
   })
   it.each([
-    ['omitted', "its status doesn't list this resource"],
-    ['unreadable', "Radar can't read its status"],
-    ['remote', "Radar can't confirm it deploys to this cluster"],
-    ['missing', 'no such Application here'],
-    ['withheld', "you can't view it"],
-    ['unresolved', 'Radar found no Application by that name it can read that lists this resource; it may be managed from another cluster'],
-    ['unchecked', "Radar couldn't check its status"],
+    ['omitted', "This resource's label names Application argocd/a, but its status doesn't list it."],
+    ['unreadable', "This resource's label names Application argocd/a, but Radar can't read its status."],
+    ['remote', "This resource's label names Application argocd/a, but Radar can't confirm it deploys to this cluster."],
+    ['missing', "This resource's label names Application argocd/a, but there's no such Application here."],
+    ['withheld', "This resource's label names Application argocd/a, but you can't view it."],
+    ['unresolved', "This resource's label names Application argocd/a, but no Application of that name here lists it; it may be managed from another cluster."],
+    ['unchecked', "This resource's label names Application argocd/a, but Radar couldn't check its status."],
   ] as const)('claimed explains %s', (check, reason) => {
     const html = render({ state: 'claimed', lead: a, direct: { object, claims: [{ ...claim, check }] } })
     expect(html).toContain('Tracked by')
@@ -91,8 +91,15 @@ it('says on the chip itself that the answer comes through an ancestor', () => {
 })
 
 describe('manager answer chip wording', () => {
-  it("says up front that a claim isn't confirmed", () => {
-    expect(render({ state: 'claimed', lead: a, direct: { object, claims: [claim] } })).toContain("labels or annotations name Application argocd/a; Radar hasn't confirmed it manages it")
+  it("says up front, in one sentence, why one claim isn't confirmed", () => {
+    const html = render({ state: 'claimed', lead: a, direct: { object, claims: [claim] } })
+    expect(html).toContain("This resource's label names Application argocd/a, but its status doesn't list it.")
+    expect(html.match(/argocd\/a/g)).toHaveLength(2)
+  })
+  it("says up front that several claims aren't confirmed, then why each", () => {
+    const html = render({ state: 'claimed', direct: { object, claims: [claim, { ...claim, manager: b, source: 'argo-tracking-id' }] } })
+    expect(html).toContain("labels or annotations name Application argocd/a and Application argocd/b; Radar hasn't confirmed they manage it")
+    expect(html).toContain("Application argocd/b: its status doesn't list this resource.")
   })
   // A claim the walk passed shows even when no ancestor answered.
   it('names claims on the way without via', () => {
