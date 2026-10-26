@@ -648,7 +648,10 @@ func (c *CarettaSource) acceptBackendLocked(ctx context.Context, info *metricsSe
 // the cluster's Prometheus scrapes Caretta itself and is the correct backend.
 // Caller must hold lock.
 func (c *CarettaSource) carettaMetricsPresentLocked(ctx context.Context, addr string) bool {
-	for _, query := range []string{`count(caretta_links_observed)`, `count(up{job=~".*caretta.*"})`} {
+	for _, query := range []string{
+		"count(caretta_links_observed{" + withClusterMatchers("") + "})",
+		"count(up{" + withClusterMatchers(`job=~".*caretta.*"`) + "})",
+	} {
 		if c.hasSeriesLocked(ctx, addr, query) {
 			return true
 		}
@@ -778,12 +781,13 @@ func noBackendWarning(noData, unreachable []string) string {
 func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr string, basePath string, opts FlowOptions) ([]Flow, error) {
 	// Build PromQL query for Caretta's link metric
 	// caretta_links_observed{client_name, client_namespace, server_name, server_namespace, server_port, ...}
-	query := "caretta_links_observed"
+	query := "caretta_links_observed{" + withClusterMatchers("") + "}"
 	if opts.Namespace != "" {
 		// Filter by namespace (either client or server)
 		safeNS := prom.SanitizeLabelValue(opts.Namespace)
-		query = fmt.Sprintf(`caretta_links_observed{client_namespace="%s"} or caretta_links_observed{server_namespace="%s"}`,
-			safeNS, safeNS)
+		query = fmt.Sprintf(`caretta_links_observed{%s} or caretta_links_observed{%s}`,
+			withClusterMatchers(fmt.Sprintf(`client_namespace="%s"`, safeNS)),
+			withClusterMatchers(fmt.Sprintf(`server_namespace="%s"`, safeNS)))
 	}
 
 	queryURL := fmt.Sprintf("%s%s/api/v1/query?query=%s", promAddr, basePath, url.QueryEscape(query))

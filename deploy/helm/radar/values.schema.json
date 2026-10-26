@@ -403,7 +403,7 @@
         "prometheusSingleCluster": { "type": "boolean", "description": "Optional workload/PVC metrics scope override for a dedicated backend. Replaces automatic matching; does not scope rightsizing, node/HPA or legacy network/storage metrics. Leave false with empty prometheusClusterLabels for automatic matching." },
         "prometheusClusterLabels": {
           "type": "object",
-          "description": "Optional exact cluster label/value pairs for workload metrics and PVC usage, combined with AND. Labels must exist on each affected metric source. Alternative to prometheusSingleCluster; does not scope rightsizing, node/HPA or legacy network/storage metrics.",
+          "description": "Optional exact cluster label/value pairs for workload metrics, PVC usage and the Caretta/Beyla traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to prometheusSingleCluster; does not scope rightsizing, node/HPA or legacy network/storage metrics.",
           "propertyNames": {"pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$", "not": {"pattern": "^__"}},
           "additionalProperties": {"type": "string", "minLength": 1}
         },

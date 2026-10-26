@@ -332,6 +332,15 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			log.Fatalf("Invalid workload metrics scope: %v", err)
 		}
 	}
+	// Traffic sources honor the same exact cluster labels. Single-cluster trust
+	// needs no matchers: every series in the backend already belongs here.
+	if len(cfg.WorkloadMetricsScope.ClusterLabels) > 0 {
+		matchers, err := cfg.WorkloadMetricsScope.Matchers()
+		if err != nil {
+			log.Fatalf("Invalid workload metrics scope: %v", err)
+		}
+		traffic.SetClusterMatchers(matchers)
+	}
 	if cfg.LocalConnections != nil {
 		if _, err := resolveLocalPrometheus(cfg.LocalConnections); err != nil {
 			prometheuspkg.Retire()
