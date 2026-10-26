@@ -19,6 +19,7 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -129,5 +130,31 @@ func TestOwnershipAccessKeepsAGapOnAnAmbiguousKind(t *testing.T) {
 	got := ownership.NewView(s, a).Children(owner.Ref)
 	if got.Complete() || !slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == foo }) {
 		t.Fatalf("children = %+v; want the ambiguous kind left unread", got)
+	}
+}
+
+// A recorded member of a kind no served resource names, as when its CRD was
+// removed, is one Radar can't check, not one the user may not see.
+func TestOwnershipAccessCountsAnUnservedMemberAsUnknown(t *testing.T) {
+	t.Cleanup(func() { getPermCache().Invalidate() })
+	perms := &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
+	perms.SetCanI("get", "argoproj.io", "applications", "alpha", true)
+	perms.SetCanI("get", "", "configmaps", "alpha", true)
+	getPermCache().Set("ivo", nil, perms)
+	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "ivo"})
+	b := ownershiptest.NewBuilder()
+	cm := b.Add("", "ConfigMap", "alpha", "settings")
+	gone := resourceid.Ref{Group: "gone.example.io", Kind: "Widget", Namespace: "alpha", Name: "w"}
+	app := b.Manager(ownership.ArgoApplication, "alpha", "shop", ownership.MembersRecorded, "alpha", cm.Ref, gone)
+	s, err := ownershiptest.Scan(b.World()).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ownership.NewView(s, ownershipAccess(ctx, s.Catalog())).Members(app.Ref)
+	if got.Withheld != 0 || got.Unknown != 1 || len(got.Members) != 1 {
+		t.Fatalf("members = %d listed, %d withheld, %d unknown; want 1, 0, 1", len(got.Members), got.Withheld, got.Unknown)
+	}
+	if !slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == gone.GroupKind() && g.Reason == readreason.KindUnknown }) {
+		t.Fatalf("gaps = %+v; want the unserved kind named as unknown", got.Gaps)
 	}
 }

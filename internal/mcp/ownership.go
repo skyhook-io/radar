@@ -41,8 +41,9 @@ func (a *mcpAccess) CanRead(kind resourceid.GroupKind, namespace string) ownersh
 		// would drop a gap on it, and an answer would claim to be complete.
 		return ownership.Undecided
 	case resource == "":
-		// Without its resource there is nothing to check, so nothing to allow.
-		return ownership.Denied
+		// No served resource names it, so there is nothing to read: the read
+		// says why. Denied would count its objects as hidden from the user.
+		return ownership.Allowed
 	case namespace == "" && namespaced:
 		// In at least one of the user's namespaces: a cluster-wide grant
 		// allows it; anything else would take a check per namespace.

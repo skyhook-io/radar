@@ -14,6 +14,8 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -224,7 +226,8 @@ func TestRelationshipAccessFollowsTheGraphFilter(t *testing.T) {
 		{resourceid.GroupKind{Kind: "ConfigMap"}, "beta", ownership.Denied},
 		{resourceid.GroupKind{Kind: "Node"}, "", ownership.Denied},
 		{resourceid.GroupKind{Kind: "PersistentVolume"}, "", ownership.Allowed},
-		{resourceid.GroupKind{Group: "example.io", Kind: "Unknown"}, "alpha", ownership.Denied},
+		// No served resource names it, so the read says why, not access.
+		{resourceid.GroupKind{Group: "example.io", Kind: "Unknown"}, "alpha", ownership.Allowed},
 		// No one grant decides a kind two resources serve.
 		{resourceid.GroupKind{Group: "aggregated.io", Kind: "Foo"}, "alpha", ownership.Undecided},
 		{resourceid.GroupKind{Group: "aggregated.io", Kind: "Foo"}, "", ownership.Undecided},
@@ -312,5 +315,29 @@ func TestDirectLookupsWithholdWhatTheUserMayNotList(t *testing.T) {
 		if got := ownershipRefNames(rel.Consumers); !slices.Equal(got, tc.volumes) {
 			t.Errorf("%s: consumers = %v, want %v", tc.user, got, tc.volumes)
 		}
+	}
+}
+
+// A recorded member of a kind no served resource names, as when its CRD was
+// removed, is one Radar can't check, not one the user may not see.
+func TestRelationshipAccessCountsAnUnservedMemberAsUnknown(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("ivo", nil, &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
+	b := ownershiptest.NewBuilder()
+	cm := b.Add("", "ConfigMap", "alpha", "settings")
+	gone := resourceid.Ref{Group: "gone.example.io", Kind: "Widget", Namespace: "alpha", Name: "w"}
+	app := b.Manager(ownership.ArgoApplication, "alpha", "shop", ownership.MembersRecorded, "alpha", cm.Ref, gone)
+	s, err := ownershiptest.Scan(b.World()).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "ivo"}))
+	got := ownership.NewView(s, env.srv.ownershipAccess(r, s.Catalog())).Members(app.Ref)
+	if got.Withheld != 0 || got.Unknown != 1 || len(got.Members) != 1 {
+		t.Fatalf("members = %d listed, %d withheld, %d unknown; want 1, 0, 1", len(got.Members), got.Withheld, got.Unknown)
+	}
+	if !slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == gone.GroupKind() && g.Reason == readreason.KindUnknown }) {
+		t.Fatalf("gaps = %+v; want the unserved kind named as unknown", got.Gaps)
 	}
 }

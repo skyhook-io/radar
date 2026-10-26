@@ -34,7 +34,9 @@ type Access interface {
 	// With namespace "" it decides objects of a cluster-scoped kind, or
 	// whether the caller may read a namespaced kind in at least one of the
 	// namespaces Namespaces reports; Undecided when that would take a check
-	// per namespace.
+	// per namespace. A kind no served resource names holds nothing to read,
+	// so allow it and let the read say why: Denied would count its objects
+	// as hidden from the caller.
 	CanRead(kind resourceid.GroupKind, namespace string) Decision
 	// Namespaces are the namespaces in which the caller may read some
 	// namespaced kinds, or every namespace when all is set. CanRead decides each

@@ -51,8 +51,9 @@ func (a *requestAccess) CanRead(kind resourceid.GroupKind, namespace string) own
 		// would drop a gap on it, and an answer would claim to be complete.
 		return ownership.Undecided
 	case !known:
-		// Without its resource there is nothing to check, so nothing to allow.
-		return ownership.Denied
+		// No served resource names it, so there is nothing to read: the read
+		// says why. Denied would count its objects as hidden from the user.
+		return ownership.Allowed
 	case namespace == "" && namespaced:
 		return a.anyNamespace(kind, resource)
 	case namespace == "":
