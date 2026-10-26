@@ -78,22 +78,22 @@ func PreviewDeletion(ctx context.Context, v *ownership.View, obj *unstructured.U
 			}
 		}
 	}
-	for _, o := range append(a.Dependents, a.Possible...) {
-		if ownership.IsRecordingManager(o.Ref.GroupKind()) {
-			p.NotEnumerated = append(p.NotEnumerated, "controller cleanup triggered by dependent GitOps managers")
-			break
-		}
-	}
 	storage := ref.Group == "" && (ref.Kind == "PersistentVolumeClaim" || ref.Kind == "PersistentVolume" || ref.Kind == "Namespace")
 	if teardown := p.ControllerTeardown; teardown != nil {
 		coverage := teardown.Coverage
 		storage = storage || teardown.Destination != "local" || coverage.Membership != ownership.MembersRecorded.String() ||
 			coverage.Missing > 0 || coverage.Withheld > 0 || coverage.Unknown > 0 || coverage.UnavailableReason != ""
 	}
+	managedCleanup := false
 	for _, objects := range [][]ownership.Observation{a.Dependents, a.Possible, members} {
 		for _, o := range objects {
-			storage = storage || o.Ref.Group == "" && (o.Ref.Kind == "PersistentVolumeClaim" || o.Ref.Kind == "PersistentVolume" || o.Ref.Kind == "Namespace")
+			manager := ownership.IsRecordingManager(o.Ref.GroupKind())
+			managedCleanup = managedCleanup || manager
+			storage = storage || manager || o.Ref.Group == "apps" && o.Ref.Kind == "StatefulSet" || o.Ref.Group == "" && (o.Ref.Kind == "PersistentVolumeClaim" || o.Ref.Kind == "PersistentVolume" || o.Ref.Kind == "Namespace")
 		}
+	}
+	if managedCleanup {
+		p.NotEnumerated = append(p.NotEnumerated, "controller cleanup triggered by dependent GitOps managers")
 	}
 	if storage {
 		p.MayReclaimStorage = true

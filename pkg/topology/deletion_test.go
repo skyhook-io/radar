@@ -24,6 +24,8 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 	}{
 		{"Argo local", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, ownership.MembersRecorded, true, true, "local"},
 		{"Argo local uncached volume", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, ownership.MembersRecorded, true, false, "local"},
+		{"Argo app of apps", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, ownership.MembersRecorded, true, true, "local"},
+		{"Argo StatefulSet member", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, ownership.MembersRecorded, true, true, "local"},
 		{"Argo remote", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io/background", map[string]any{"destination": map[string]any{"name": "prod"}}, ownership.MembersRemote, true, false, "remote"},
 		{"Argo unknown", "argoproj.io", "Application", "resources-finalizer.argocd.argoproj.io", nil, ownership.MembersUnreadable, true, false, "unknown"},
 		{"Argo no finalizer", "argoproj.io", "Application", "", nil, ownership.MembersRecorded, false, false, ""},
@@ -37,8 +39,17 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ref := resourceid.Ref{Group: tc.group, Kind: tc.kind, Namespace: "demo", Name: "root"}
 			member := resourceid.Ref{Kind: "ConfigMap", Namespace: "demo", Name: "member"}
-			if tc.name == "Argo local uncached volume" {
+			switch tc.name {
+			case "Argo local uncached volume":
 				member.Kind = "PersistentVolumeClaim"
+			case "Argo app of apps":
+				member.Group, member.Kind = "argoproj.io", "Application"
+			case "Argo StatefulSet member":
+				member.Group, member.Kind = "apps", "StatefulSet"
+			}
+			memberVersion := "v1"
+			if member.Group != "" {
+				memberVersion = member.Group + "/v1"
 			}
 			obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": tc.group + "/v1", "kind": tc.kind, "metadata": map[string]any{"name": "root", "namespace": "demo", "uid": "root", "resourceVersion": "1"}}}
 			if tc.spec != nil {
@@ -49,8 +60,10 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 			}
 			w := ownershiptest.World{Resources: []ownership.ServedResource{
 				{Group: tc.group, Version: "v1", Kind: tc.kind, Resource: "roots", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
-				{Version: "v1", Kind: member.Kind, Resource: strings.ToLower(member.Kind) + "s", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
-			}, Objects: []ownershiptest.Object{{Ref: ref, APIVersion: tc.group + "/v1", UID: types.UID("root"), ResourceVersion: "1", Membership: tc.membership, Members: []resourceid.Ref{member}}, {Ref: member, APIVersion: "v1", UID: "member"}}}
+			}, Objects: []ownershiptest.Object{{Ref: ref, APIVersion: tc.group + "/v1", UID: types.UID("root"), ResourceVersion: "1", Membership: tc.membership, Members: []resourceid.Ref{member}}, {Ref: member, APIVersion: memberVersion, UID: "member"}}}
+			if member.GroupKind() != ref.GroupKind() {
+				w.Resources = append(w.Resources, ownership.ServedResource{Group: member.Group, Version: "v1", Kind: member.Kind, Resource: strings.ToLower(member.Kind) + "s", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}})
+			}
 			if tc.name == "Argo local uncached volume" {
 				w.Objects = w.Objects[:1]
 			}
@@ -65,7 +78,10 @@ func TestPreviewDeletionControllerPolicy(t *testing.T) {
 			if len(p.Dependents) != 0 {
 				t.Fatalf("inventory became garbage collection: %+v", p)
 			}
-			wantStorageRisk := tc.teardown && (!tc.resources || tc.destination != "local")
+			wantStorageRisk := tc.teardown && (!tc.resources || tc.destination != "local" || member.Kind == "Application" || member.Kind == "StatefulSet")
+			if tc.name == "Argo app of apps" && !strings.Contains(strings.Join(p.NotEnumerated, " "), "dependent GitOps managers") {
+				t.Fatalf("nested controller cleanup hidden: %+v", p)
+			}
 			if p.MayReclaimStorage != wantStorageRisk {
 				t.Fatalf("controller storage risk = %v, want %v", p.MayReclaimStorage, wantStorageRisk)
 			}
