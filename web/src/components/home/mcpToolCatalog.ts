@@ -20,12 +20,12 @@ export interface MCPToolParam {
 export interface MCPToolInfo {
   name: string
   write?: boolean
+  localOnly?: boolean
   desc: string
   params: MCPToolParam[]
 }
 
 export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
-
   {
     name: 'get_dashboard',
     desc: 'Cluster or namespace health overview: resource counts, failing pods, unhealthy workloads, recent warning events, and Helm status. Start here before drilling into specific resources.',
@@ -323,6 +323,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'collect_application_evidence',
+    localOnly: true,
     desc: 'Explicit local-only collection of selected Pod evidence: RabbitMQ alarms, NATS consumer counts, or Vault seal/init status. Requires existing port-forward permission. Missing evidence never means healthy; no hosted or automatic investigation access.',
     params: [
       { arg: 'application', required: true, desc: 'rabbitmq, nats, or vault' },

@@ -504,7 +504,9 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if applicationActionsAllowed(ctx) {
 		deps := trace.Deps{Cache: cache, Client: k8s.ClientFromContext(ctx), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: filterNamespacesForUser(ctx, nil)}
 		candidates := collector.ResolveCandidates(ctx, deps, collector.Subject{Kind: canonicalKind, Group: canonicalGroup, Namespace: input.Namespace, Name: input.Name})
-		resp.ApplicationEvidenceActions = applicationActions(ctx, deps, candidates)
+		if candidates.SubjectUID != "" && candidates.SubjectUID == string(objectMeta.GetUID()) {
+			resp.ApplicationEvidenceActions = applicationActions(ctx, deps, candidates)
+		}
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = objectWarnings(obj, resCtx)
