@@ -23,3 +23,12 @@ describe('isTouchIntent', () => {
     expect(isTouchIntent(now + 2000)).toBe(false)
   })
 })
+
+describe('isTouchIntent and the keyboard', () => {
+  it('ends the tap window on a key press', () => {
+    press('touch')
+    expect(isTouchIntent()).toBe(true)
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    expect(isTouchIntent()).toBe(false)
+  })
+})

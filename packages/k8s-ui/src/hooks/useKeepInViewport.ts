@@ -6,8 +6,8 @@ import { useLayoutEffect, useEffect, type RefObject } from 'react'
  *  open at their trigger's edge with a fixed minimum width, so on a narrow
  *  screen a trigger near the edge pushes the menu out of view. After each
  *  layout, and on resize while open, this shifts the element back with the
- *  `translate` property (which moves it whichever side it's anchored to) and
- *  caps its width to the visible area. Don't use it on an element whose own
+ *  `translate` property (which moves it whichever side it's anchored to), and
+ *  narrows it only if it can't fit. Don't use it on an element whose own
  *  motion animates `translate`: the inline value would override it.
  *
  *  Runs after every render while `active`, so a menu whose content changes
@@ -24,15 +24,29 @@ export function useKeepInViewport(ref: RefObject<HTMLElement | null>, active: bo
   }, [ref, active, margin])
 }
 
+// Width overrides this hook applied, keyed by element, with the inline values
+// they replaced, so a later measurement can put back exactly what the caller set
+// (React won't re-apply an inline style whose value it thinks is unchanged).
+const sizedBy = new WeakMap<HTMLElement, { minWidth: string; maxWidth: string }>()
+
 function keepInView(el: HTMLElement | null, margin: number): void {
   if (!el) return
   el.style.translate = ''
-  el.style.minWidth = ''
-  el.style.maxWidth = ''
+  const saved = sizedBy.get(el)
+  if (saved) {
+    el.style.minWidth = saved.minWidth
+    el.style.maxWidth = saved.maxWidth
+    sizedBy.delete(el)
+  }
   const [boundLeft, boundRight] = visibleBounds(el, margin)
   const room = boundRight - boundLeft
-  el.style.maxWidth = `${room}px`
-  if (el.offsetWidth > room) el.style.minWidth = '0'
+  // Only a menu that can't fit gets resized; otherwise the caller's own
+  // minimum and maximum widths stand.
+  if (el.offsetWidth > room) {
+    sizedBy.set(el, { minWidth: el.style.minWidth, maxWidth: el.style.maxWidth })
+    el.style.minWidth = '0'
+    el.style.maxWidth = `${room}px`
+  }
   const { left, right } = el.getBoundingClientRect()
   const shift = keepInViewportShift(left, right, boundLeft, boundRight)
   if (shift !== 0) el.style.translate = `${shift}px 0`

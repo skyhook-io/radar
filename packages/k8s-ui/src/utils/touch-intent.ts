@@ -17,6 +17,15 @@ if (typeof document !== 'undefined') {
     },
     { capture: true, passive: true },
   )
+  // Keyboard use ends the tap's window: a Tab right after a tap (a touchscreen
+  // laptop) is real keyboard focus.
+  document.addEventListener(
+    'keydown',
+    () => {
+      lastTouchAt = Number.NEGATIVE_INFINITY
+    },
+    { capture: true, passive: true },
+  )
 }
 
 /** True right after a touch or pen press: a mouseenter or focus now is the
