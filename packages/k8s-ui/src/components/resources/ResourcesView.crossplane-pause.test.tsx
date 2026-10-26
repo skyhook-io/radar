@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client'
 import { VirtuosoMockContext } from 'react-virtuoso'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ResourcesView } from './ResourcesView'
+import { getCellFilterValue } from './resource-utils'
+import { getResourceStatus } from '../shared/ResourceRendererDispatch'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
 import type { APIResource } from '../../types'
 import type { PrinterTable } from './printer-columns'
@@ -68,4 +70,32 @@ it.each([
     expect(row.textContent).toContain('Unavailable')
     expect(row.textContent).not.toContain('Out of sync')
   }
+})
+
+
+it('preserves curated package install failure ahead of a recorded pause in the table and filter', async () => {
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  const group = 'pkg.crossplane.io'
+  const kind: APIResource = { group, version: 'v1', kind: 'Provider', name: 'providers', namespaced: false, isCrd: true, verbs: ['get', 'list'] }
+  const resource = {
+    apiVersion: `${group}/v1`, kind: 'Provider',
+    metadata: { name: 'install-failure', uid: 'package-fixture', annotations: { 'crossplane.io/paused': 'true' } },
+    spec: { package: 'example.invalid/provider:v1' },
+    status: { conditions: [pause, { type: 'Installed', status: 'False', reason: 'UnpackFailed' }, { type: 'Healthy', status: 'True' }] },
+  }
+  await act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 48 }}><KeyboardShortcutProvider><ResourcesView
+    namespaces={[]}
+    apiResources={[kind]}
+    resourceCounts={{ Provider: 1 }}
+    selectedKindQuery={{ isLoading: false, data: [resource], resourceName: kind.name, group }}
+    locationPathname="/resources/providers"
+    locationSearch={`?apiGroup=${group}`}
+    onNavigate={() => {}}
+  /></KeyboardShortcutProvider></VirtuosoMockContext.Provider>))
+  const row = host.querySelector('tbody tr')!
+  expect(row.textContent).toContain('UnpackFailed')
+  expect(row.querySelector('.status-unhealthy')).not.toBeNull()
+  expect(row.textContent).not.toContain('Readiness unknown')
+  expect(getCellFilterValue(resource, 'status', 'providers')).toBe('UnpackFailed')
+  expect(getCellFilterValue(resource, 'status', 'providers')).toBe(getResourceStatus('providers', resource)?.text)
 })

@@ -7450,11 +7450,6 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
-  if (column === 'status') {
-    if (isManagedResource(resource)) return <ManagedResourceCell resource={resource} column={column} />
-    if (isComposite(resource)) return <CompositeResourceCell resource={resource} column={column} />
-    if (getCrossplanePauseState(resource) === 'acknowledged') return <CrossplaneStatusCell resource={resource} />
-  }
   if (group && !hasCuratedColumns(kind, group)) {
     return <GenericCell resource={resource} column={column} />
   }
@@ -8040,6 +8035,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 function GenericCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
+      if (isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged') {
+        return <CrossplaneStatusCell resource={resource} />
+      }
       const derived = getGenericResourceStatus(resource)
       if (!derived) return <span className="text-sm text-theme-text-tertiary">-</span>
       return (
