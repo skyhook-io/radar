@@ -493,7 +493,14 @@ describe('manager answer composition', () => {
     const manager = { state: 'listed' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: b, source: 'argo-tracking-id' as const, check: 'missing' as const, copied: true }] } }
     const g = run(manager, [write], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
     expect(g.level).toBe('may-revert')
-    expect(g.summary).toContain("can't confirm it syncs this object")
+    expect(g.summary).toContain("can't confirm a sync applies it")
+    expect(g.summary).not.toMatch(/will (recreate|be overwritten)/)
+  })
+
+  it('a parent the managers disagree on says which names it and which lists it', () => {
+    const g = run({ state: 'disagree', direct: { object: subject }, via: { object: parent, recorders: [b], claims: [{ manager: a, source: 'argo-tracking-id', check: 'omitted' }] } })
+    expect(g.level).toBe('info')
+    expect(g.summary).toContain('whose metadata names Application argocd/a, while Application argocd/b lists it in its status')
   })
 
   it('a parent the metadata alone names is not said to be managed', () => {

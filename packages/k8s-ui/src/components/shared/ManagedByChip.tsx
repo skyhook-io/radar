@@ -157,13 +157,16 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
   if (!presentation) return null
   // Several candidates open a menu naming each, so none is reached only
   // through the one shown first; one opens directly.
-  const choices = managerChoices(manager)
-    .map(c => ({ ...c, owner: gitOpsOwnerFromRef(c.ref) }))
-    .filter((c): c is ManagerChoice & { owner: GitOpsOwnerRef } => Boolean(c.owner?.namespace))
+  // Every candidate is named; only one Radar can locate links. A label that
+  // names no namespace stays unlinked: Radar doesn't guess it.
+  const choices = managerChoices(manager).map(c => {
+    const owner = gitOpsOwnerFromRef(c.ref)
+    return { ...c, owner: owner?.namespace ? owner : null }
+  })
   const several = managerCandidates(manager).length > 1
   const lead = manager.lead ? gitOpsOwnerFromRef(manager.lead) : null
   const direct = !several && lead?.namespace ? lead : null
-  const menu = Boolean(onOpen) && several && choices.length > 0
+  const menu = Boolean(onOpen) && several && choices.some(c => c.owner)
   const statusLabel = lead && status && !several ? gitOpsStatusLabel(status) : null
   const chipClass = clsx(
     'inline-flex min-w-0 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] text-theme-text-secondary',
@@ -208,14 +211,19 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
               key={`${c.ref.group}/${c.ref.kind}/${c.ref.namespace}/${c.ref.name}`}
               type="button"
               role="menuitem"
+              disabled={!c.owner}
               onClick={() => {
+                if (!c.owner) return
                 setOpen(false)
                 onOpen?.(c.owner)
               }}
-              className="flex w-full flex-col items-start px-3 py-1.5 text-left text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+              className={clsx(
+                'flex w-full flex-col items-start px-3 py-1.5 text-left text-xs transition-colors',
+                c.owner ? 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary' : 'cursor-default text-theme-text-tertiary',
+              )}
             >
               <span className="truncate">{managerRefLabel(c.ref)}</span>
-              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}</span>
+              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}{c.owner ? '' : c.ref.namespace ? '' : " · its label doesn't name its namespace"}</span>
             </button>
           ))}
         </div>
@@ -224,7 +232,7 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
   )
 }
 
-function choiceRole(c: ManagerChoice): string {
+function choiceRole(c: Pick<ManagerChoice, 'listed' | 'claimed'>): string {
   if (c.listed && c.claimed) return 'Its status lists this, and the metadata names it'
   if (c.listed) return 'Its status lists this'
   return 'This metadata names it'

@@ -10,7 +10,7 @@
 // is "unknown" (may be overwritten), never "safe".
 
 import { activeManagerClaims, gitOpsOwnerFromRef, managerCandidates, managerRefLabel, type GitOpsOwnerRef, type GitOpsOwnerTool } from './gitops-owner'
-import type { ManagerAnswer } from '../types/core'
+import type { ManagerAnswer, ResourceRef } from '../types/core'
 import { dedupeResourceRefs } from './resource-refs'
 
 export type GitOpsWriteScope = 'status' | 'metadata' | 'spec' | 'create-child' | 'delete'
@@ -530,7 +530,12 @@ export function gitOpsWriteHeadline(guard: GitOpsWriteGuard): string {
 // parentManagedBy says what the evidence says of a parent, in the words its
 // state allows: only a list and metadata agreeing say a manager manages it.
 function parentManagedBy(manager: ManagerAnswer, names: string): string {
+  const evidence = manager.via ?? manager.direct
+  const label = (refs: ResourceRef[]) => dedupeResourceRefs(refs).map(managerRefLabel).join(' and ')
+  const listing = (refs: ResourceRef[]) => `${label(refs)} ${refs.length > 1 ? 'list it in their statuses' : 'lists it in its status'}`
   switch (manager.state) {
+    case 'disagree':
+      return `whose metadata names ${label(activeManagerClaims(evidence).map(c => c.manager))}, while ${listing(evidence.recorders ?? [])}`
     case 'agree':
       return `which ${names} manages`
     case 'listed':
@@ -589,12 +594,14 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
   const perWrite = input.writes.map((write) => {
     const verdict = classifyWrite(normalized, owner, write)
     // A list alone doesn't show its manager syncs the object (a copy carrying
-    // another object's tracking ID, a CRD a HelmRelease skips): no promise.
-    if (manager?.state === 'listed' && verdict.level === 'will-revert') {
+    // another object's tracking ID, a CRD a HelmRelease skips): no promise,
+    // in the verdict or in its reason.
+    if (manager?.state === 'listed' && !manager.via && (verdict.level === 'will-revert' || verdict.level === 'may-revert')) {
+      const lead = managerRefLabel(manager.lead!)
       return {
         write,
         level: 'may-revert' as const,
-        reason: `${verdict.reason} Its metadata doesn't name ${managerRefLabel(manager.lead!)}, so Radar can't confirm it syncs this object.`,
+        reason: `${lead} lists this object in its status, but its metadata doesn't name ${lead}, so Radar can't confirm a sync applies it. If one does, it may ${write.scope === 'delete' ? 'recreate it' : 'overwrite this change'}.`,
       }
     }
     if (adopted && verdict.level === 'info' && (write.scope === 'metadata' || write.scope === 'spec' || write.scope === 'delete')) {

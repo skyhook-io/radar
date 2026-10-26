@@ -32,3 +32,20 @@ it('opens a menu naming every candidate and what names each', async () => {
 it('a chip without a link is still reachable by keyboard', () => {
   expect(renderToStaticMarkup(<ManagedByChip manager={disagree} />)).toContain('tabindex="0"')
 })
+
+// A claim whose label names no namespace is still a candidate: named, unlinked.
+it('names an unresolved candidate without linking it', async () => {
+  const element = document.createElement('div')
+  document.body.append(element)
+  const root = createRoot(element)
+  const unresolved: ManagerAnswer = { state: 'disagree', direct: { object, recorders: [b], claims: [{ manager: { ...a, namespace: '' }, source: 'argo-instance-label', check: 'unresolved' }] } }
+  await act(async () => root.render(<ManagedByChip manager={unresolved} onOpen={() => {}} />))
+  await act(async () => { element.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!.click() })
+  const items = [...element.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+  expect(items).toHaveLength(2)
+  const a0 = items.find(i => i.textContent!.startsWith('Application a'))!
+  expect(a0.disabled).toBe(true)
+  expect(a0.textContent).toContain("its label doesn't name its namespace")
+  await act(async () => root.unmount())
+  element.remove()
+})
