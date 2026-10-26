@@ -674,9 +674,8 @@ type ManagerAnswer struct {
 	// does and the resource makes no claim that isn't copied, on the nearest
 	// ancestor that makes one; State and Lead then come from it.
 	Via *ManagerEvidence `json:"via,omitempty"`
-	// Between is the evidence of other objects the walk passed, in chain
-	// order, that make claims, or that Radar couldn't search fully where it
-	// could the resource's. When Via is a fallback to the nearest claim,
+	// Between is the evidence of other objects the walk passed that make
+	// claims, in chain order. When Via is a fallback to the nearest claim,
 	// claims farther up the chain stay here.
 	Between []ManagerEvidence `json:"between,omitempty"`
 	// ChainEnd is why a walk that found no settling evidence stopped short:
@@ -707,22 +706,16 @@ type ManagerChainStop struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// ManagerEvidence is what names the managers of one object.
+// ManagerEvidence is what names the managers of one object. Which managers
+// Radar couldn't search is not part of it: State says whether that left the
+// answer unknown, and for the resource itself OwnershipCoverage.Managers says
+// what its own search missed.
 type ManagerEvidence struct {
 	Object ResourceRef `json:"object"`
 	// Recorders are the local managers whose status lists name it.
 	Recorders []ResourceRef `json:"recorders,omitempty"`
 	// Claims are the managers its own metadata names.
 	Claims []ManagerClaim `json:"claims,omitempty"`
-	// Unreadable and Remote count the managers that may list it without
-	// Radar being able to tell; NotChecked are the manager kinds and
-	// namespaces Radar couldn't search.
-	Unreadable int            `json:"unreadable,omitempty"`
-	Remote     int            `json:"remote,omitempty"`
-	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
-	// Undecided: Radar couldn't check whether the caller may read some of
-	// what the search found.
-	Undecided bool `json:"undecided,omitempty"`
 }
 
 // ManagerClaim is a manager an object's metadata names, and what checking it
