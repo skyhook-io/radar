@@ -1620,9 +1620,9 @@ func managerContext(m *topology.ManagerAnswer) *ManagerContext {
 	out.Claims = claimContexts(evidence, false)
 	if m.Via != nil {
 		out.AlsoClaimed = claimContexts(m.Direct, true)
-		for _, e := range m.Between {
-			out.AlsoClaimed = append(out.AlsoClaimed, claimContexts(e, true)...)
-		}
+	}
+	for _, e := range m.Between {
+		out.AlsoClaimed = append(out.AlsoClaimed, claimContexts(e, true)...)
 	}
 	return out
 }

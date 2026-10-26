@@ -163,10 +163,10 @@ type ManagerContext struct {
 	// Claims are the managers the metadata of the resource, or Via, names,
 	// with what checking each found.
 	Claims []ManagerClaimContext `json:"claims,omitempty"`
-	// AlsoClaimed, with Via, are the managers the metadata of the resource
-	// and of the objects between it and Via names: metadata commonly inherited
-	// from a template or a parent, which didn't settle the question but isn't
-	// disproven either.
+	// AlsoClaimed are the managers named by the metadata of the objects the
+	// walk passed and, with Via, of the resource itself: metadata commonly
+	// inherited from a template or a parent, which didn't settle the question
+	// but isn't disproven either.
 	AlsoClaimed []ManagerClaimContext `json:"alsoClaimed,omitempty"`
 	// Narrowed: the caller may read only part of what could name a manager.
 	Narrowed bool `json:"narrowed,omitempty"`

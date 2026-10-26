@@ -1347,7 +1347,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		// below, because silent truncation would read as a complete value, and
 		// a Pod/template divergence note, because a bare Pod whose spec
 		// admission rewrote reads as the template's intent.
-		warnings = k8score.EnrichRuntimeObjectWarnings(rawObj)
+		warnings = objectWarnings(rawObj, resourceCtx)
 	} else if note := issues.TemplateDivergenceNote(mcpTemplateDivergence(ctx, rawObj)); note != "" {
 		warnings = append(warnings, note)
 	}
@@ -3765,4 +3765,15 @@ func toJSONResult(data any) (*mcp.CallToolResult, any, error) {
 			&mcp.TextContent{Text: string(b)},
 		},
 	}, nil, nil
+}
+
+// objectWarnings are the object's advisory warnings. The one naming the
+// manager its metadata claims is left out when the context carries a manager
+// answer: that weighs the claims against the managers' lists, and a second,
+// metadata-only sentence would contradict it when they disagree.
+func objectWarnings(obj runtime.Object, rc *resourcecontext.ResourceContext) []string {
+	if rc != nil && rc.Manager != nil {
+		return k8score.EnrichRuntimeObjectStateWarnings(obj)
+	}
+	return k8score.EnrichRuntimeObjectWarnings(obj)
 }
