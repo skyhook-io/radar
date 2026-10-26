@@ -527,6 +527,12 @@ describe('manager answer composition', () => {
     }
   })
 
+  it('a chain end this UI does not know keeps the conservative warning', () => {
+    const g = run({ state: 'unknown', direct: { object: subject }, chainEnd: 'future-stop' as never }, [hibernate])
+    expect(g.level).toBe('may-revert')
+    expect(g.requiresAck).toBe(true)
+  })
+
   it('a state this UI does not know is read as claimed', () => {
     const g = run({ state: 'future-state' as never, lead: a, direct: { object: subject, recorders: [a] } }, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
     expect(g.level).toBe('may-revert')

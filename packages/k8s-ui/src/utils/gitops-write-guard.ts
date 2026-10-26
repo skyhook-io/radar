@@ -577,7 +577,8 @@ function targetOptedOut(input: GitOpsWriteGuardInput): boolean {
 // couldn't read or decide, so a manager above it may be missed. An owner that is
 // gone or was replaced ends the chain with an answer.
 function chainUnread(manager: ManagerAnswer): boolean {
-  if (manager.chainEnd === 'cycle' || manager.chainEnd === 'truncated') return true
+  // A chain end this UI doesn't know (from a newer Radar) stopped short too.
+  if (manager.chainEnd && manager.chainEnd !== 'unfollowed') return true
   return Boolean(manager.stop && !['gone', 'replaced', 'excluded'].includes(manager.stop.state))
 }
 
