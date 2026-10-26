@@ -31,6 +31,19 @@ const sizedBy = new WeakMap<HTMLElement, { minWidth: string; maxWidth: string }>
 
 function keepInView(el: HTMLElement | null, margin: number): void {
   if (!el) return
+  // Measure and move with transitions off. Under reduced motion every
+  // element gets a near-zero transition on all properties, and a transitioned
+  // element reports its pre-change box in the same frame: a menu just moved
+  // from left 0 to its trigger still measured at 0, and was pushed off its
+  // trigger by the margin.
+  const transition = el.style.transition
+  el.style.transition = 'none'
+  place(el, margin)
+  el.getBoundingClientRect() // apply the move before transitions return
+  el.style.transition = transition
+}
+
+function place(el: HTMLElement, margin: number): void {
   el.style.translate = ''
   const saved = sizedBy.get(el)
   if (saved) {

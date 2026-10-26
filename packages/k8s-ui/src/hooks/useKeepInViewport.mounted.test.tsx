@@ -51,3 +51,22 @@ it('keeps the caller min-width when the menu fits, and restores it after a squee
   expect(el.style.minWidth).toBe('240px')
   expect(el.style.maxWidth).toBe('')
 })
+
+it('measures with transitions off and restores the caller transition', () => {
+  Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 1024 })
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  root = createRoot(host)
+  let el = render(1)
+  el.style.transition = 'opacity 100ms'
+  const seen: string[] = []
+  el.getBoundingClientRect = () => {
+    seen.push(el.style.transition)
+    return { left: 410, right: 650, top: 0, bottom: 0, width: 240, height: 0, x: 410, y: 0, toJSON: () => ({}) }
+  }
+  el = render(2)
+  expect(seen.length).toBeGreaterThan(0)
+  expect(seen.every((t) => t === 'none')).toBe(true)
+  expect(el.style.transition).toBe('opacity 100ms')
+  expect(el.style.translate).toBe('')
+})
