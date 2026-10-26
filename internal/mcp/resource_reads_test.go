@@ -375,7 +375,7 @@ func TestResourceReadsDynamicPendingAndCollectorDenial(t *testing.T) {
 						want := "kind_sync_pending"
 						if denied {
 							want = "radar_forbidden"
-						} else if b.Kind == "CustomResourceDefinition" && verb == "get" {
+						} else if (b.Kind == "CustomResourceDefinition" || b.Kind == "APIService") && verb == "get" {
 							want = "object_not_found"
 						}
 						if err == nil || !strings.HasPrefix(err.Error(), want+":") || (want != "object_not_found" && strings.Contains(err.Error(), "object_not_found")) {
