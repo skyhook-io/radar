@@ -285,6 +285,36 @@ it("keeps the SSA omission caveat in a direct editor save with a known paused ba
   expect(text()).toContain("Omitting the annotation from server-side apply YAML does not guarantee its removal");
 });
 
+it("does not carry a paused baseline to a different API group in a direct editor save", async () => {
+  const target = { kind: "TaskBucket", namespace: "shop", name: "archive" };
+  const baseline = { apiVersion: "example.test/v1", kind: "TaskBucket", metadata: { name: "archive", namespace: "shop", annotations: { "crossplane.io/paused": "true" } }, spec: { providerConfigRef: { name: "default" } } };
+  const yaml = "apiVersion: another.example.test/v1\nkind: TaskBucket\nmetadata:\n  name: archive\n  namespace: shop\nspec: {}\n";
+  const onSave = vi.fn(async () => {});
+  sessionStorage.setItem("radar_yaml_draft:TaskBucket/shop/archive", yaml);
+  act(() => root.render(<EditableYamlView resource={target as never} data={baseline} onCopy={() => {}} copied={false} onSave={onSave} />));
+  expect(text()).not.toContain("Pause affects reconciliation");
+  expect(text()).not.toContain("Existing pause state is unknown");
+  await click(/^Save$/);
+  expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ kind: "TaskBucket", namespace: "shop", name: "archive", yaml }));
+});
+
+it("does not infer annotation omission before the first direct-edit debounce settles", () => {
+  vi.useFakeTimers();
+  try {
+    const target = { kind: "TaskBucket", namespace: "shop", name: "archive" };
+    const baseline = { apiVersion: "example.test/v1", kind: "TaskBucket", metadata: { name: "archive", namespace: "shop", annotations: { "crossplane.io/paused": "true" } }, spec: { providerConfigRef: { name: "default" } } };
+    act(() => root.render(<EditableYamlView resource={target as never} data={baseline} onCopy={() => {}} copied={false} onSave={async () => {}} />));
+    const edit = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Edit")!;
+    act(() => edit.click());
+    expect(text()).not.toContain("Omitting the annotation");
+    act(() => vi.advanceTimersByTime(200));
+    expect(text()).toContain("Pause affects reconciliation");
+    expect(text()).not.toContain("Omitting the annotation");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 
 it("retains raw acknowledged ref-less pause evidence through editor and status-free review", async () => {
   const target = { kind: "TaskClaim", namespace: "shop", name: "ref-less" };

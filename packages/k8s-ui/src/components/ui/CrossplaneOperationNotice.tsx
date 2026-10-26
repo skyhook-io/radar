@@ -3,6 +3,7 @@ import type { YamlPreviewResult } from './YamlReview'
 import { parseAllDocuments } from 'yaml'
 import { splitYamlDocuments } from '../../utils/yaml'
 import { apiVersionToGroup } from '../../utils/navigation'
+import { resourceKey } from '../../utils/resource-refs'
 import { getCrossplanePauseState, isComposite, isCrossplanePaused, isManagedResource } from '../resources/resource-utils-crossplane'
 import { AlertBanner } from './drawer-components'
 
@@ -98,7 +99,11 @@ export function CrossplaneYamlApplyNotice({ yaml, baselineYaml = '', baselineUna
   const context = useMemo(() => {
     const submitted = splitYamlDocuments(yaml).map(document => document.content)
     const original = splitYamlDocuments(baselineYaml).map(document => document.content)
-    const pairs = previewDocuments
+    const matchesTarget = (data: any, target: any) => Boolean(data && target
+      && typeof data.apiVersion === 'string' && typeof target.apiVersion === 'string'
+      && resourceKey(apiVersionToGroup(data.apiVersion), data.kind, data.metadata?.namespace ?? '', data.metadata?.name)
+        === resourceKey(apiVersionToGroup(target.apiVersion), target.kind, target.metadata?.namespace ?? '', target.metadata?.name))
+    const pairs = (previewDocuments
       ? previewDocuments.map(preview => ({
           after: yamlObjects(preview.predictedYaml || preview.submittedYaml || submitted[preview.index] || '')[0],
           before: yamlObjects(preview.baselineYaml || original[preview.index] || '')[0],
@@ -108,13 +113,9 @@ export function CrossplaneYamlApplyNotice({ yaml, baselineYaml = '', baselineUna
           after: yamlObjects(submitted[index] || '')[0],
           before: yamlObjects(original[index] || '')[0],
           preview: undefined,
-        }))
+        }))).map(pair => matchesTarget(pair.before, pair.after) ? pair : { ...pair, before: undefined })
     const rawSource = pairs.length === 1 && isAnnotatedCrossplanePause(resourceData) ? resourceData as any : undefined
-    const matchesRaw = (data: any) => Boolean(rawSource && typeof data?.apiVersion === 'string'
-      && rawSource.kind === data.kind
-      && apiVersionToGroup(rawSource.apiVersion) === apiVersionToGroup(data.apiVersion)
-      && rawSource.metadata?.name === data.metadata?.name
-      && (rawSource.metadata?.namespace ?? '') === (data.metadata?.namespace ?? ''))
+    const matchesRaw = (data: any) => matchesTarget(data, rawSource)
     const rawPause = matchesRaw(pairs[0]?.after) ? rawSource : undefined
     const hasPause = (data: any) => isCrossplanePaused(data) && (isCrossplaneOperationResource(data) || Boolean(rawPause && matchesRaw(data)))
     const resources = pairs.flatMap(pair => {

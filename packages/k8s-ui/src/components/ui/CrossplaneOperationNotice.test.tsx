@@ -125,6 +125,19 @@ describe('Crossplane operation context', () => {
     const result = html(<CrossplaneYamlApplyNotice yaml={predictedYaml} baselineYaml={baselineYaml} resourceData={raw} previewDocuments={[{ index: 0, status: 'accepted', action: 'update', baselineYaml, predictedYaml }]} />)
     expect(result).toBe('')
   })
+  it.each(['direct', 'unavailable'] as const)('does not borrow a paused shape from another group through the original baseline in %s review', mode => {
+    const baselineYaml = stringify(mr)
+    const submittedYaml = stringify({ apiVersion: 'another.example.test/v1', kind: mr.kind, metadata: { name: mr.metadata.name }, spec: {} })
+    const result = html(<CrossplaneYamlApplyNotice yaml={submittedYaml} baselineYaml={baselineYaml} resourceData={mr} previewDocuments={mode === 'unavailable' ? [{ index: 0, status: 'unavailable', action: 'unknown', submittedYaml }] : undefined} />)
+    expect(result).toBe('')
+  })
+  it('retains same-target pause clearing across served versions when the submitted shape changes', () => {
+    const baselineYaml = stringify(mr)
+    const predictedYaml = stringify({ ...mr, apiVersion: 's3.example.test/v2', metadata: { ...mr.metadata, annotations: { 'crossplane.io/paused': 'false' } }, spec: {} })
+    const result = html(<CrossplaneYamlApplyNotice yaml={predictedYaml} baselineYaml={baselineYaml} previewDocuments={[{ index: 0, status: 'accepted', action: 'update', baselineYaml, predictedYaml }]} />)
+    expect(result).toContain('Server preview clears the pause request on Bucket archive')
+    expect(result).toContain('requests resumption')
+  })
   it('does not use one raw target to classify unrelated documents in a batch', () => {
     const raw = { ...mr, kind: 'Claim', spec: {}, status: { conditions: [{ type: 'Synced', status: 'False', reason: 'ReconcilePaused' }] } }
     const clean = { ...raw, status: undefined }
