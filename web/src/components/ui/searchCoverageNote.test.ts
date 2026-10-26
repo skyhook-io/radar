@@ -144,9 +144,15 @@ describe('searchCoverageNote', () => {
   })
 
   it('says when the findings search ran out of time', () => {
-    const text = searchCoverageNote([{ kind: 'VulnerabilityReport', group: 'aquasecurity.github.io', reason: 'filter_eval_failed' }], {})?.text
+    const text = searchCoverageNote([{ kind: 'VulnerabilityReport', group: 'aquasecurity.github.io', reason: 'findings_scan_incomplete' }], {})?.text
     expect(text).toContain('ran out of time searching the findings of')
     expect(text).toContain('may be in a report it left out')
+  })
+
+  it('keeps CEL object failures out of the findings-scan note', () => {
+    expect(noteFor({ status: 'partial', gaps: [{
+      code: 'filter_eval_failed', objects: { count: 1, names: [{ kind: 'Pod', namespace: 'shop', name: 'worker' }] },
+    }] }, {})).toBeUndefined()
   })
 
   it('says why a namespace the query named was not searched', () => {

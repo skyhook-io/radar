@@ -98,7 +98,7 @@ var coverageTemplates = []coverageTemplate{
 	}},
 	filterErrors,
 	// A findings gap names report kinds; CEL failures name objects instead.
-	{[]readreason.Code{readreason.FilterEvalFailed}, func(e, _ []hintEntry) string {
+	{[]readreason.Code{readreason.FindingsScanIncomplete}, func(e, _ []hintEntry) string {
 		return fmt.Sprintf("Radar ran out of time searching the findings of %s, so a CVE or package missing from the hits may be in a report it left out; narrow with kind:, ns: or image: to search them all.", joinKinds(e, "and", kindPlural))
 	}},
 	{[]readreason.Code{readreason.KindSyncPending}, func(e, _ []hintEntry) string {

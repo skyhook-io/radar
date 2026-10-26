@@ -42,6 +42,7 @@ var readStatus = map[readreason.Code]int{
 	readreason.ObjectNotFound:             http.StatusNotFound,
 	readreason.ListTooLarge:               http.StatusBadRequest,
 	readreason.FilterEvalFailed:           http.StatusBadRequest,
+	readreason.FindingsScanIncomplete:     http.StatusBadRequest,
 	readreason.ClusterConnecting:          http.StatusServiceUnavailable,
 	readreason.ClusterDisconnected:        http.StatusServiceUnavailable,
 	readreason.ConnectionChanged:          http.StatusConflict,

@@ -14,6 +14,7 @@ export const READ_ACTIONS: Record<string, ReadAction> = {
   cluster_disconnected: 'radar_config',
   connection_changed: 'check_target',
   filter_eval_failed: 'change_request',
+  findings_scan_incomplete: 'change_request',
   kind_not_watchable: 'change_request',
   kind_not_searchable: 'change_request',
   kind_sync_pending: 'retry',

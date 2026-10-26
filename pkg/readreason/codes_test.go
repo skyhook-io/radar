@@ -30,6 +30,7 @@ func TestCodeWireValues(t *testing.T) {
 		ObjectNotFound:             "object_not_found",
 		ListTooLarge:               "list_too_large",
 		FilterEvalFailed:           "filter_eval_failed",
+		FindingsScanIncomplete:     "findings_scan_incomplete",
 		ClusterConnecting:          "cluster_connecting",
 		ClusterDisconnected:        "cluster_disconnected",
 		ConnectionChanged:          "connection_changed",

@@ -233,8 +233,9 @@ type Scope struct {
 // absent axis doesn't apply to the gap. Which axes apply depends on the
 // surface: a list of a namespaced kind gives every gap its namespaces, a list
 // of a cluster-scoped kind none, and a search kinds or namespaces. For
-// filter_eval_failed, CEL evaluation failures name objects; a findings-scan
-// time limit names report kinds with unknown namespaces. Within one Coverage
+// filter_eval_failed, CEL evaluation failures name objects;
+// findings_scan_incomplete names report kinds with unknown namespaces when
+// the findings scan runs out of time. Within one Coverage
 // a namespace is in at most one gap.
 //
 // Action is what the code calls for, from the same table as readreason, so a

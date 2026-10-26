@@ -254,7 +254,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			continue
 		}
 		plan := p.PlanTyped(tk.Kind, opts.Selection.Namespaces)
-		sensitive := opts.TypedKindAccess != nil && (k8s.RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: tk.Group, Resource: tk.Plural}) || requiresSearchRoleAccess(tk.Group, tk.Plural))
+		sensitive := opts.TypedKindAccess != nil && k8s.RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: tk.Group, Resource: tk.Plural})
 		if !sensitive && len(plan.Partitions) == 1 && plan.Partitions[0].Verdict.State == readplan.Gap && cov.quiet(plan.Partitions[0].Verdict.Code) {
 			continue
 		}
@@ -721,7 +721,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	}
 	gaps := cov.result()
 	if len(findingsIncomplete) > 0 {
-		gaps = append(gaps, resourceapi.Gap{Code: readreason.FilterEvalFailed, Kinds: resourceapi.Kinds(findingsIncomplete, len(findingsIncomplete)), Namespaces: resourceapi.UnknownNames()})
+		gaps = append(gaps, resourceapi.Gap{Code: readreason.FindingsScanIncomplete, Kinds: resourceapi.Kinds(findingsIncomplete, len(findingsIncomplete)), Namespaces: resourceapi.UnknownNames()})
 		sortGaps(gaps)
 	}
 	if res.FilterErrors > 0 {
