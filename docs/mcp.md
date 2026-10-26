@@ -118,6 +118,8 @@ ReplicaSet, or Rollout to select a Running, Ready, non-terminating pod from
 that workload's current revision. Job and ReplicaSet targets use their
 current controller incarnation. The result names the selected pod. No Ready
 pod or no known current revision is an error, not a fallback to an old pod.
+This also applies when OnDelete or a StatefulSet partition holds updates back;
+name a specific pod to inspect a serving older revision.
 `container` is optional: a valid `kubectl.kubernetes.io/default-container`
 annotation wins, then the first non-mesh app container. Mesh proxies require
 an explicit container name; a proxy-only pod has no default.
@@ -144,7 +146,9 @@ duration. Radar does not log raw argv or command output. The hash is not encrypt
 the pod Radar read; Kubernetes exec has no UID precondition, so it does not prove
 which incarnation ultimately ran the command. Canceled requests and broken
 streams report an unconfirmed outcome: the command may have started and may
-still be running. Inspect its effects before retrying.
+still be running. Inspect its effects before retrying. A broken-stream error
+includes at most a 500-character output excerpt; timeout results retain the capped
+streams. Output is text; invalid UTF-8 bytes are omitted.
 
 **Security:** Command output is not redacted and can contain secrets from
 environment variables or files, including mounted ServiceAccount credentials;
