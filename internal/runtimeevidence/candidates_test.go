@@ -135,6 +135,38 @@ func TestNamedAdvisoryPermissions(t *testing.T) {
 		t.Fatal("unknown allowed")
 	}
 }
+
+func TestTraceCandidateCoverageForSkippedServices(t *testing.T) {
+	p := testPod()
+	p.Labels = map[string]string{"app": "rabbit"}
+	selected := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "lab", Name: "selected"}, Spec: corev1.ServiceSpec{Selector: p.Labels}}
+	selectorless := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "lab", Name: "selectorless"}}
+	external := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "lab", Name: "external"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: "example.com"}}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(p, selected, selectorless, external), ResourceTypes: map[string]bool{"pods": true, "services": true}, DeferredTypes: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	deps := trace.Deps{Cache: &k8s.ResourceCache{ResourceCache: core}, AllowedNamespaces: []string{"lab"}}
+	for _, tc := range []struct {
+		name, namespace string
+		limited         bool
+	}{
+		{"selectorless", "lab", true},
+		{"hidden", "other", true},
+		{"external", "lab", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CandidatesFromTrace(deps, &trace.Trace{Downstream: []trace.Hop{
+				{Resource: Subject{Kind: "Service", Namespace: "lab", Name: "selected"}},
+				{Resource: Subject{Kind: "Service", Namespace: tc.namespace, Name: tc.name}},
+			}})
+			if len(got.Candidates) != 1 || got.CoverageLimited != tc.limited {
+				t.Fatalf("%+v", got)
+			}
+		})
+	}
+}
 func TestExplicitStaleTargetNeverOpensTunnel(t *testing.T) {
 	c := NewCollector()
 	c.start = func(context.Context, kubernetes.Interface, *rest.Config, string, string, int) (tunnel, error) {

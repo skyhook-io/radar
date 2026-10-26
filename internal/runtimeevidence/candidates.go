@@ -208,7 +208,11 @@ func CandidatesFromTrace(deps trace.Deps, tr *trace.Trace) CandidateSet {
 	partial := tr.Truncated
 	for _, hop := range tr.Downstream {
 		ref := hop.Resource
-		if ref.Kind != "Service" || ref.Group != "" || !deps.NamespaceAllowed(ref.Namespace) {
+		if ref.Kind != "Service" || ref.Group != "" {
+			continue
+		}
+		if !deps.NamespaceAllowed(ref.Namespace) {
+			partial = true
 			continue
 		}
 		key := ref.Namespace + "/" + ref.Name
@@ -225,7 +229,11 @@ func CandidatesFromTrace(deps trace.Deps, tr *trace.Trace) CandidateSet {
 			partial = true
 			continue
 		}
-		if svc.Spec.Type == corev1.ServiceTypeExternalName || len(svc.Spec.Selector) == 0 {
+		if svc.Spec.Type == corev1.ServiceTypeExternalName {
+			continue
+		}
+		if len(svc.Spec.Selector) == 0 {
+			partial = true
 			continue
 		}
 		selected, err := deps.Cache.Pods().Pods(ref.Namespace).List(labels.SelectorFromSet(labels.Set(svc.Spec.Selector)))

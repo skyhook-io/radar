@@ -16,6 +16,7 @@ import (
 	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
@@ -105,6 +106,9 @@ func (c *Collector) CollectTarget(ctx context.Context, client kubernetes.Interfa
 	defer cancel()
 	before, err := client.CoreV1().Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
 	if err != nil {
+		if target.UID != "" && apierrors.IsNotFound(err) {
+			return fail("target_changed")
+		}
 		return fail("pod_read_unavailable")
 	}
 	if target.UID != "" && target.UID != string(before.UID) {
@@ -168,6 +172,7 @@ func (c *Collector) CollectTarget(ctx context.Context, client kubernetes.Interfa
 		}
 		return fail("unexpected_shape")
 	}
+	result.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	after, err := client.CoreV1().Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
 	if err != nil {
 		return fail("pod_recheck_unavailable")

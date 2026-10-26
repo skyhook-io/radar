@@ -2,6 +2,7 @@ package runtimeevidence
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,8 +12,10 @@ import (
 
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
@@ -33,6 +36,34 @@ func testCollector(url string, closed *atomic.Bool) *Collector {
 	}
 	return c
 }
+func TestMissingBoundTargetRequiresReselection(t *testing.T) {
+	for _, tc := range []struct {
+		name, uid, reason string
+		err               error
+	}{
+		{name: "selected Pod gone", uid: "expected", reason: "target_changed"},
+		{name: "unbound name missing", reason: "pod_read_unavailable"},
+		{name: "selected Pod forbidden", uid: "expected", reason: "pod_read_unavailable", err: apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "rabbit", errors.New("denied"))},
+		{name: "read failed", uid: "expected", reason: "pod_read_unavailable", err: errors.New("connection closed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewClientset()
+			if tc.err != nil {
+				client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) { return true, nil, tc.err })
+			}
+			c := NewCollector()
+			c.start = func(context.Context, kubernetes.Interface, *rest.Config, string, string, int) (tunnel, error) {
+				t.Fatal("unreadable target opened a tunnel")
+				return tunnel{}, nil
+			}
+			result := c.CollectTarget(t.Context(), client, &rest.Config{}, evidence.RabbitMQ, Target{Namespace: "lab", Pod: "rabbit", UID: tc.uid})
+			if result.Outcome != "unavailable" || result.Reason != tc.reason || result.Facts != nil {
+				t.Fatalf("unexpected unavailable result: %+v", result)
+			}
+		})
+	}
+}
+
 func TestHTTPBoundaries(t *testing.T) {
 	cases := []struct {
 		name         string

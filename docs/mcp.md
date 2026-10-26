@@ -233,7 +233,7 @@ overrides a saved `"mcp": false`. `radar diagnose --standalone`
 honors the saved and environment MCP mode; a disabled mode rejects startup.
 
 This exposes the same tool and resource catalog over stdio without starting the HTTP UI server.
-The stdio mode is intended only for catalog introspection; normal Radar sessions use the HTTP endpoint above.
+The stdio mode is intended only for catalog introspection; normal Radar sessions use the HTTP endpoint above. Catalog-only entrypoints have no established Kubernetes connection and omit active application evidence collection; use the connected local HTTP server for that tool.
 
 ## Setup Instructions
 
@@ -1550,4 +1550,4 @@ The tool is available only through full local MCP, outside built-in investigatio
 
 RabbitMQ metrics and NATS monitoring must be enabled and accessible without application credentials. Collection does not support TLS endpoints.
 
-Local `diagnose` may return `applicationEvidenceActions` for Vault readiness failures or RabbitMQ alarm-check readiness failures. These suggestions identify a Pod and expected evidence; they do not authorize or perform collection. At most three candidates are returned, with incomplete coverage indicated. A missing suggestion does not establish endpoint health or availability. NATS collection must be requested explicitly.
+Local `diagnose` may return `applicationEvidenceActions` for Vault readiness failures or RabbitMQ alarm-check readiness failures. These suggestions identify a Pod and expected evidence; they do not authorize or perform collection. At most three candidates are returned; returned suggestions indicate limited or truncated discovery. When none are returned, discovery coverage is not reported. A missing suggestion does not establish endpoint health or availability. NATS collection must be requested explicitly.
