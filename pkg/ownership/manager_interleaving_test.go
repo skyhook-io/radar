@@ -81,8 +81,8 @@ func TestManagerRejectsARecordersDifferentIncarnation(t *testing.T) {
 		t.Fatalf("scenario: Members must refuse the new incarnation: %+v", members)
 	}
 	got := v.Manager(cm.Ref)
-	if got.State == ownership.ManagerAgree || checkOf(got.Direct, app("app")) == ownership.ClaimRecorded {
-		t.Fatalf("state %s, claims %+v; want no confirmed membership", got.State, got.Direct.Claims)
+	if got.State == ownership.ManagerAgree || checkOf(got.Direct, app("app")) != ownership.ClaimUnchecked {
+		t.Fatalf("state %s, claims %+v; want the claim unchecked, membership unconfirmed", got.State, got.Direct.Claims)
 	}
 }
 
@@ -99,5 +99,17 @@ func TestManagerFallbackKeepsClaimsFartherUp(t *testing.T) {
 	}
 	if len(got.Between) != 1 || got.Between[0].Object != d.Ref {
 		t.Fatalf("between %+v; want the Deployment's claim kept", got.Between)
+	}
+}
+
+// A claim naming no namespace, with no listing manager of its name, is
+// unresolved: Radar says nothing of whether such a manager exists.
+func TestManagerUnqualifiedClaimWithoutAMatchIsUnresolved(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	cm := b.Meta(b.Add("", "ConfigMap", "shop", "settings"), map[string]string{instanceLabel: "elsewhere"}, nil)
+	got := view(t, b.World(), ownership.Unrestricted()).Manager(cm.Ref)
+	unqualified := resourceid.Ref{Group: "argoproj.io", Kind: "Application", Name: "elsewhere"}
+	if got.State != ownership.ManagerClaimed || checkOf(got.Direct, unqualified) != ownership.ClaimUnresolved {
+		t.Fatalf("answer %+v; want claimed with the claim unresolved", got)
 	}
 }
