@@ -52,6 +52,12 @@ type SSEBroadcaster struct {
 	// the topology is replaced. Nil whenever cachedTopology changes (set under
 	// cachedTopologyMu alongside it). Guarded by cachedTopologyMu.
 	cachedTopologyIndex *topology.RelationshipsIndex
+	// cachedTopologyRebuilt is closed when the on-demand rebuild in flight
+	// ends, and nil while none is. Guarded by cachedTopologyMu.
+	cachedTopologyRebuilt chan struct{}
+	// rebuildTopology rebuilds the relationship cache on demand, reporting
+	// whether it stored a graph; a seam for tests.
+	rebuildTopology func() bool
 
 	// warmupDone is closed when deferred informers finish syncing. During warmup,
 	// topology broadcasts use longer debounce and skip the expensive full-topology
@@ -193,6 +199,7 @@ func NewSSEBroadcaster() *SSEBroadcaster {
 	}
 	b.topoEpochAtCycleStart = b.topoEpoch.Load
 	b.topoBuild = b.broadcastTopologyUpdate
+	b.rebuildTopology = b.rebuildCachedTopology
 	return b
 }
 
@@ -235,6 +242,12 @@ func (b *SSEBroadcaster) requestTopologyBroadcast() {
 // fires — but the token it consumed stood for every request that coalesced into
 // it, so dropping it silently strands the graph until the next cluster change.
 const topologyRetryDelay = 2 * time.Second
+
+// relationshipGraphWait bounds how long a reader waits for the relationship
+// graph another reader is building: long enough for a large cluster's build,
+// short of the request timeout. Past it the reader answers from what is
+// cached, possibly nothing.
+const relationshipGraphWait = 20 * time.Second
 
 // topologyWorker owns every broadcast build, so concurrent triggers (debounce
 // fire, context switch, CRD discovery) coalesce into a single build instead of
@@ -1131,38 +1144,59 @@ func (b *SSEBroadcaster) ClientCount() int {
 	return len(b.clients)
 }
 
-// GetCachedTopology returns the most recently built full topology.
-// This is used for relationship lookups without rebuilding the topology.
-// If the cache is dirty (changes occurred with no SSE clients), it rebuilds on demand.
+// GetCachedTopology returns the most recently built full topology, for
+// relationship lookups. A cache that is dirty (changes occurred with no SSE
+// clients) or holds nothing yet is rebuilt on demand by one reader; readers
+// that arrive meanwhile wait for that build, for up to relationshipGraphWait,
+// rather than answer from the graph it replaces or from none.
 func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {
 	b.cachedTopologyMu.RLock()
-	dirty := b.cachedTopologyDirty
 	topo := b.cachedTopology
+	settled := !b.cachedTopologyDirty && topo != nil && b.cachedTopologyRebuilt == nil
 	b.cachedTopologyMu.RUnlock()
-
-	if dirty && k8s.GetResourceCache() != nil {
-		// Gate: only one goroutine proceeds to rebuild
-		b.cachedTopologyMu.Lock()
-		if !b.cachedTopologyDirty {
-			topo = b.cachedTopology
-			b.cachedTopologyMu.Unlock()
-			return topo
-		}
-		b.cachedTopologyDirty = false
-		b.cachedTopologyMu.Unlock()
-
-		if !b.rebuildCachedTopology() {
-			// Rebuild failed — mark dirty again so next call retries
-			b.cachedTopologyMu.Lock()
-			b.cachedTopologyDirty = true
-			b.cachedTopologyMu.Unlock()
-		}
-		b.cachedTopologyMu.RLock()
-		topo = b.cachedTopology
-		b.cachedTopologyMu.RUnlock()
+	if settled {
+		return topo
 	}
 
-	return topo
+	b.cachedTopologyMu.Lock()
+	if wait := b.cachedTopologyRebuilt; wait != nil {
+		b.cachedTopologyMu.Unlock()
+		timer := time.NewTimer(relationshipGraphWait)
+		defer timer.Stop()
+		select {
+		case <-wait:
+		case <-timer.C:
+		}
+		b.cachedTopologyMu.RLock()
+		defer b.cachedTopologyMu.RUnlock()
+		return b.cachedTopology
+	}
+	if (!b.cachedTopologyDirty && b.cachedTopology != nil) || k8s.GetResourceCache() == nil {
+		topo = b.cachedTopology
+		b.cachedTopologyMu.Unlock()
+		return topo
+	}
+	done := make(chan struct{})
+	b.cachedTopologyRebuilt = done
+	b.cachedTopologyDirty = false
+	b.cachedTopologyMu.Unlock()
+
+	built := false
+	defer func() {
+		b.cachedTopologyMu.Lock()
+		if !built {
+			// Mark dirty again so the next read retries.
+			b.cachedTopologyDirty = true
+		}
+		b.cachedTopologyRebuilt = nil
+		b.cachedTopologyMu.Unlock()
+		close(done)
+	}()
+	built = b.rebuildTopology()
+
+	b.cachedTopologyMu.RLock()
+	defer b.cachedTopologyMu.RUnlock()
+	return b.cachedTopology
 }
 
 // GetCachedTopologyWithIndex returns the cached topology together with its
