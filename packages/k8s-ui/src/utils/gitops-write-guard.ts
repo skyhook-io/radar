@@ -615,11 +615,10 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
     // another object's tracking ID, a CRD a HelmRelease skips): no promise,
     // in the verdict or in its reason.
     if (manager?.state === 'listed' && !manager.via && (verdict.level === 'will-revert' || verdict.level === 'may-revert')) {
-      const lead = managerRefLabel(manager.lead!)
       return {
         write,
         level: 'may-revert' as const,
-        reason: `${lead} lists this object in its status, but its metadata doesn't name ${lead}, so Radar can't confirm a sync applies it. If one does, it may ${write.scope === 'delete' ? 'recreate it' : 'overwrite this change'}.`,
+        reason: `${managerRefLabel(manager.lead!)} lists this object in its status, but the object's metadata doesn't name it, so Radar can't confirm a sync applies it. If one does: ${verdict.reason}`,
       }
     }
     if (adopted && verdict.level === 'info' && (write.scope === 'metadata' || write.scope === 'spec' || write.scope === 'delete')) {

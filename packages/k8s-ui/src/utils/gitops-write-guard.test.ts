@@ -493,8 +493,9 @@ describe('manager answer composition', () => {
     const manager = { state: 'listed' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: b, source: 'argo-tracking-id' as const, check: 'missing' as const, copied: true }] } }
     const g = run(manager, [write], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
     expect(g.level).toBe('may-revert')
-    expect(g.summary).toContain("can't confirm a sync applies it")
-    expect(g.summary).not.toMatch(/will (recreate|be overwritten)/)
+    expect(g.summary).toContain("can't confirm a sync applies it. If one does:")
+    // The field evidence stays, behind the condition.
+    expect(g.summary).toMatch(/If one does: .+/)
   })
 
   it('a parent the managers disagree on says which names it and which lists it', () => {
