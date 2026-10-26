@@ -578,7 +578,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r)),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
 		Reflections:                k8s.ReflectionLookup{Cache: cache},
 		Tier:                       resourcecontext.TierBasic,
 		AccessChecker:              s.newRequestScopedChecker(r),
@@ -783,4 +783,3 @@ func (s *Server) writeIncompleteAIList(w http.ResponseWriter, target listTarget,
 		Coverage:  &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: target.placeGaps(gaps, nil)},
 	})
 }
-

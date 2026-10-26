@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/topology"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,6 +27,30 @@ func contextConnector(ns, name, cluster string) *unstructured.Unstructured {
 	u.Object["status"] = map[string]any{"observedGeneration": int64(1), "connectorStatus": map[string]any{"connector": map[string]any{"state": "RUNNING"}, "tasks": []any{map[string]any{"id": int64(0), "state": "FAILED", "trace": "secret-do-not-emit"}}}}
 	return u
 }
+func contextOwnerResolver(t *testing.T, objects ...runtime.Object) func(runtime.Object) *topology.ResourceRef {
+	t.Helper()
+	return func(subject runtime.Object) *topology.ResourceRef {
+		world := ownershiptest.World{}
+		for _, obj := range objects {
+			observed, ok := k8s.OwnershipObservation(obj)
+			if !ok {
+				t.Fatal("invalid ownership fixture")
+			}
+			gvk := obj.GetObjectKind().GroupVersionKind()
+			world.Resources = append(world.Resources, ownership.ServedResource{Group: gvk.Group, Version: gvk.Version, Kind: gvk.Kind, Resource: strings.ToLower(gvk.Kind) + "s", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}})
+			world.Objects = append(world.Objects, ownershiptest.Object{Ref: observed.Ref, APIVersion: gvk.GroupVersion().String(), UID: observed.UID, OwnerReferences: observed.OwnerReferences})
+		}
+		session, err := ownershiptest.Scan(world).Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		observed, _ := k8s.OwnershipObservation(subject)
+		rel := &topology.Relationships{}
+		topology.ApplyOwner(rel, ownership.NewView(session, ownership.Unrestricted()), observed)
+		return rel.Owner
+	}
+}
+
 func TestStrimziContextExactAuthorizedAndImmutable(t *testing.T) {
 	connect := contextStrimzi("KafkaConnect", "app", "connect")
 	rows := []*unstructured.Unstructured{contextConnector("app", "yes", "connect"), contextConnector("other", "foreign", "connect"), contextConnector("app", "wrong", "broker"), contextConnector("app", "denied", "connect")}
@@ -72,7 +100,7 @@ func TestStrimziContextOwnerUIDAndMissing(t *testing.T) {
 	pod.SetAPIVersion("v1")
 	yes := false
 	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "kafka.strimzi.io/v1", Kind: "KafkaConnect", Name: "connect", UID: types.UID("connect-uid"), Controller: &yes}})
-	reader := strimziContextReader{get: func(Ref) (runtime.Object, error) { return connect, nil }, list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, connect), get: func(Ref) (runtime.Object, error) { return connect, nil }, list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
 		return nil, schema.GroupVersionResource{}, false, fmt.Errorf("not watched")
 	}}
 	if out := strimziEvidence(pod, nil, reader); out == nil || out.Coverage == "" {
@@ -101,7 +129,7 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
 	}}
 	out := strimziEvidence(connect, nil, reader)
-	if len(out.Findings) != 5 || !out.Truncated {
+	if len(out.Findings) != 5 || !out.Truncated || out.Checked != len(rows) {
 		t.Fatalf("unbounded findings %+v", out)
 	}
 	rows = rows[:1]
@@ -176,7 +204,7 @@ func TestStrimziContextModernOwnerChain(t *testing.T) {
 		{Group: "core.strimzi.io", Kind: "StrimziPodSet", Namespace: "app", Name: "workers"}: podset,
 		{Group: strimziGroup, Kind: "KafkaConnect", Namespace: "app", Name: "connect"}:       connect,
 	}
-	reader := strimziContextReader{get: func(ref Ref) (runtime.Object, error) {
+	reader := strimziContextReader{owner: contextOwnerResolver(t, pod, podset, connect), get: func(ref Ref) (runtime.Object, error) {
 		if obj, ok := refs[ref]; ok {
 			return obj, nil
 		}
@@ -206,7 +234,7 @@ func TestStrimziContextModernOwnerChain(t *testing.T) {
 		t.Fatal("ambiguous non-controller ownership accepted")
 	}
 	connector := contextConnector("app", "sink", "connect")
-	if got := strimziEvidence(connector, nil, reader); got == nil || got.Source.Name != "connect" || len(got.Findings) != 0 {
-		t.Fatalf("direct connector association duplicated findings: %+v", got)
+	if got := strimziEvidence(connector, nil, reader); got != nil {
+		t.Fatalf("direct connector invented unavailable related evidence: %+v", got)
 	}
 }

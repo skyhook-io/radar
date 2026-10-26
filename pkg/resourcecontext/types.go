@@ -34,7 +34,7 @@ import (
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
 	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
-	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
+	CrossplanePause            CrossplanePauseState                  `json:"crossplanePause,omitempty"`
 
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
 	Tier       ContextTier        `json:"tier"`

@@ -788,11 +788,11 @@ type MembersCoverage struct {
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships
 type ResourceWithRelationships struct {
-	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
 	Resource                   any                                   `json:"resource"`
 	Relationships              *Relationships                        `json:"relationships,omitempty"`
 	CertificateInfo            *SecretCertificateInfo                `json:"certificateInfo,omitempty"`
 	HPADiagnosis               *hpadiag.Diagnosis                    `json:"hpaDiagnosis,omitempty"`
+	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.

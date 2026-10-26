@@ -2109,8 +2109,8 @@ func (d *DynamicResourceCache) ListWatchedNamespaceReadOnly(gvr schema.GroupVers
 	if namespace == "" || limit <= 0 {
 		return nil, false, fmt.Errorf("namespace and positive candidate limit are required")
 	}
-	entries := d.readEntries(gvr, namespace)
-	if len(entries) == 0 || !entriesSynced(entries) {
+	entries, readable := d.servedEntries(gvr, namespace)
+	if !readable {
 		return nil, false, fmt.Errorf("namespace cache is not synchronized")
 	}
 	items, err := indexerItems(entries, namespace)

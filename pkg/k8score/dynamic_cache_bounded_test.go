@@ -94,3 +94,12 @@ func TestListWatchedNamespaceReadOnlyDoesNotStartOrUseUnsyncedWatch(t *testing.T
 		t.Fatal("unsynced watch accepted")
 	}
 }
+
+func TestListWatchedNamespaceReadOnlyRejectsStoppedCache(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	idx := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	d := &DynamicResourceCache{stopped: true, informers: map[informerKey]*informerEntry{{gvr: gvr}: {informer: namespaceReadInformer{indexer: idx, synced: true}}}}
+	if rows, truncated, err := d.ListWatchedNamespaceReadOnly(gvr, "target", 500); err == nil || rows != nil || truncated {
+		t.Fatalf("stopped cache returned evidence: rows=%v truncated=%v err=%v", rows, truncated, err)
+	}
+}

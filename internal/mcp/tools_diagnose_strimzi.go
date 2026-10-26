@@ -8,6 +8,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -35,14 +37,14 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 	}
 	gvr, ok := discovery.GetGVRWithGroup(kind, group)
 	if !ok {
-		return nil, nil, fmt.Errorf("%s is not discovered; cached evidence is unavailable", kind)
+		return nil, nil, errKindUnknown(kind, group, nil)
 	}
-	if !cache.IsNamespaceSynced(gvr, input.Namespace) {
-		return nil, nil, fmt.Errorf("%s cached evidence is not yet synchronized; use get_resource for an explicit resource read, then retry diagnose", kind)
+	obj, found, readable := cache.ReadableObject(gvr, input.Namespace, input.Name)
+	if !readable {
+		return nil, nil, readErrorf(readreason.ReadError, "%s cached evidence is unavailable; use get_resource for an explicit resource read, then retry diagnose", kind)
 	}
-	obj, err := cache.GetWatched(gvr, input.Namespace, input.Name)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s %s/%s is not available in the watched cache; this does not establish that it is absent. Use get_resource for an explicit resource read, then retry diagnose", kind, input.Namespace, input.Name)
+	if !found {
+		return nil, nil, readErrorf(readreason.ObjectNotFound, "%s %s/%s is absent from the synchronized namespace cache", kind, input.Namespace, input.Name)
 	}
 	// Connector configuration and raw exception traces can contain credentials.
 	// Diagnosis needs only identity and the existing curated issue projection.
@@ -56,7 +58,7 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 		OperatorSnapshot: issues.AssessStrimziSnapshot(gvr, obj),
 		Coverage:         "Cached operator evidence only; Pods, logs and live application endpoints were not collected.",
 		Resource:         map[string]any{"apiVersion": obj.GetAPIVersion(), "kind": kind, "metadata": map[string]any{"name": obj.GetName(), "namespace": obj.GetNamespace(), "generation": obj.GetGeneration()}},
-		ResourceContext:  &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx))},
+		ResourceContext:  &resourcecontext.ResourceContext{Tier: resourcecontext.TierBasic, RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })},
 	}
 	if kind == "KafkaConnector" {
 		rows := issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{Namespaces: issueNamespacesForResource(input.Namespace), CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)}, group, kind, input.Namespace, input.Name)
@@ -80,6 +82,9 @@ func handleStrimziDiagnose(ctx context.Context, input diagnoseInput, kind string
 			}
 			resp.ResourceContext.StatusSummary.Conditions = []resourcecontext.ConditionSummary{{Type: "Ready", Status: status}}
 		}
+	}
+	if cache != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() || cache.IsStopped() {
+		return nil, nil, errConnectionChanged()
 	}
 	return toJSONResult(resp)
 }

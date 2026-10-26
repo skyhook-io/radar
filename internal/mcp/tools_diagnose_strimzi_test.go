@@ -3,12 +3,14 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -97,4 +99,37 @@ func TestStrimziDiagnoseOmitsParentConditionMessages(t *testing.T) {
 	if body.OperatorSnapshot.Readiness != "not_ready" || body.Resource["spec"] != nil || body.Resource["status"] != nil || len(body.RelatedIssues) != 0 {
 		t.Fatalf("minimal parent evidence: %s", raw)
 	}
+}
+
+func TestStrimziDiagnoseCacheMissDoesNotInventAbsence(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	gvr := schema.GroupVersionResource{Group: "kafka.strimzi.io", Version: "v1", Resource: "kafkaconnects"}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "KafkaConnectList"})
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "KafkaConnect", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	cache := k8s.GetDynamicResourceCache()
+	input := diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Group: gvr.Group, Kind: "KafkaConnect", Namespace: "alpha", Name: "missing"}}
+	check := func(want readreason.Code) {
+		t.Helper()
+		_, _, err := handleDiagnose(context.Background(), nil, input)
+		var coded *readError
+		if !errors.As(err, &coded) || coded.code != want {
+			t.Fatalf("got %v, want %s", err, want)
+		}
+	}
+	check(readreason.ReadError)
+	if len(cache.GetWatchedResources()) != 0 {
+		t.Fatal("passive diagnosis started a watch")
+	}
+	if err := cache.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.WaitForSync(gvr, 5*time.Second) {
+		t.Fatal("fixture cache not synchronized")
+	}
+	check(readreason.ObjectNotFound)
+	cache.Stop()
+	check(readreason.ReadError)
 }

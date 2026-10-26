@@ -7,8 +7,9 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/topology"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -19,12 +20,13 @@ const maxStrimziContextFindings = 5
 const maxStrimziContextScan = 500
 
 type strimziContextReader struct {
-	get  func(Ref) (runtime.Object, error)
-	list func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error)
+	get   func(Ref) (runtime.Object, error)
+	owner func(runtime.Object) *topology.ResourceRef
+	list  func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error)
 }
 
-func CachedStrimziEvidence(obj any, canRead func(Ref) bool) *issuesapi.RelatedApplicationFindings {
-	dynamic, discovery := k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()
+func CachedStrimziEvidence(obj any, canRead func(Ref) bool, ownerAccess func(*ownership.Catalog) ownership.Access) *issuesapi.RelatedApplicationFindings {
+	typed, dynamic, discovery := k8s.GetResourceCache(), k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()
 	if dynamic == nil || discovery == nil || obj == nil {
 		return nil
 	}
@@ -32,18 +34,38 @@ func CachedStrimziEvidence(obj any, canRead func(Ref) bool) *issuesapi.RelatedAp
 		return nil
 	}
 	reader := strimziContextReader{
+		owner: func(obj runtime.Object) *topology.ResourceRef {
+			fetched, ok := k8s.OwnershipObservation(obj)
+			if !ok {
+				return nil
+			}
+			rel := &topology.Relationships{}
+			k8s.AnswerOwner(rel, fetched, ownerAccess)
+			return rel.Owner
+		},
 		get: func(ref Ref) (runtime.Object, error) {
 			if k8s.TypedKindOwnsGroup(ref.Kind, ref.Group) {
-				return k8s.FetchResource(k8s.GetResourceCache(), ref.Kind, ref.Namespace, ref.Name)
+				if typed == nil {
+					return nil, fmt.Errorf("typed cache is unavailable")
+				}
+				gvr, _ := k8s.BuiltinGVR(ref.Kind, ref.Group)
+				obj, found, readable := typed.ReadableObject(gvr.Resource, ref.Namespace, ref.Name)
+				if !readable || !found {
+					return nil, fmt.Errorf("owner is unavailable in the cache")
+				}
+				copy := obj.DeepCopyObject()
+				k8s.SetTypeMeta(copy)
+				return copy, nil
 			}
 			gvr, ok := discovery.GetGVRWithGroup(ref.Kind, ref.Group)
 			if !ok {
 				return nil, k8s.ErrUnknownDynamicKind
 			}
-			if !dynamic.IsNamespaceSynced(gvr, ref.Namespace) {
-				return nil, fmt.Errorf("cache not synced")
+			obj, found, readable := dynamic.ReadableObject(gvr, ref.Namespace, ref.Name)
+			if !readable || !found {
+				return nil, fmt.Errorf("owner is unavailable in the cache")
 			}
-			return dynamic.GetWatched(gvr, ref.Namespace, ref.Name)
+			return obj, nil
 		},
 		list: func(namespace string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
 			gvr, ok := discovery.GetGVRWithGroup("KafkaConnector", strimziGroup)
@@ -61,7 +83,24 @@ func CachedStrimziEvidence(obj any, canRead func(Ref) bool) *issuesapi.RelatedAp
 	if !ok {
 		return nil
 	}
-	return strimziEvidence(runtimeObj, canRead, reader)
+	m, err := meta.Accessor(runtimeObj)
+	if err != nil || m.GetUID() == "" {
+		return nil
+	}
+	gvk := runtimeObj.GetObjectKind().GroupVersionKind()
+	current, err := reader.get(Ref{Group: gvk.Group, Kind: gvk.Kind, Namespace: m.GetNamespace(), Name: m.GetName()})
+	if err != nil {
+		return nil
+	}
+	currentMeta, err := meta.Accessor(current)
+	if err != nil || currentMeta.GetUID() != m.GetUID() {
+		return nil
+	}
+	out := strimziEvidence(runtimeObj, canRead, reader)
+	if typed != k8s.GetResourceCache() || dynamic != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() || dynamic.IsStopped() {
+		return nil
+	}
+	return out
 }
 
 func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziContextReader) *issuesapi.RelatedApplicationFindings {
@@ -78,44 +117,31 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 			break
 		}
 		if gvk.Group == strimziGroup && gvk.Kind == "KafkaConnector" {
-			name := m.GetLabels()["strimzi.io/cluster"]
-			if name == "" {
-				return nil
-			}
-			ref := Ref{Group: strimziGroup, Kind: "KafkaConnect", Namespace: m.GetNamespace(), Name: name}
-			if canRead != nil && !canRead(ref) {
-				return nil
-			}
-			parent, err := reader.get(ref)
-			if err != nil || parent == nil {
-				return nil
-			}
-			connect = ref
-			break
-		}
-		owner := metav1.GetControllerOf(m)
-		// Strimzi's PodSet references KafkaConnect without controller=true.
-		if owner == nil && len(m.GetOwnerReferences()) == 1 {
-			sole := m.GetOwnerReferences()[0]
-			owner = &sole
-		}
-		if owner == nil || owner.UID == "" {
 			return nil
 		}
-		gv, err := schema.ParseGroupVersion(owner.APIVersion)
-		if err != nil {
+		owner := reader.owner(current)
+		if owner == nil {
 			return nil
 		}
-		ref := Ref{Group: gv.Group, Kind: owner.Kind, Namespace: m.GetNamespace(), Name: owner.Name}
-		if canRead != nil && !canRead(ref) {
-			return nil
-		}
+		ref := Ref{Group: owner.Group, Kind: owner.Kind, Namespace: owner.Namespace, Name: owner.Name}
+
 		parent, err := reader.get(ref)
 		if err != nil || parent == nil {
 			return nil
 		}
 		pm, err := meta.Accessor(parent)
-		if err != nil || pm.GetUID() != owner.UID {
+		if err != nil || pm.GetUID() == "" {
+			return nil
+		}
+		matched := false
+		for _, declared := range m.GetOwnerReferences() {
+			gv, err := schema.ParseGroupVersion(declared.APIVersion)
+			if err == nil && gv.Group == ref.Group && declared.Kind == ref.Kind && declared.Name == ref.Name && declared.UID == pm.GetUID() {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return nil
 		}
 		current = parent
@@ -124,9 +150,6 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		return nil
 	}
 	out := &issuesapi.RelatedApplicationFindings{CoverageState: "unavailable", Source: connect, Coverage: "Only authorized, currently cached connector status is included; missing findings do not establish application health."}
-	if obj.GetObjectKind().GroupVersionKind().Kind == "KafkaConnector" {
-		return out
-	}
 	rows, gvr, truncated, err := reader.list(connect.Namespace)
 	if err != nil {
 		return out
@@ -162,7 +185,7 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		}
 		if len(out.Findings) == maxStrimziContextFindings {
 			out.Truncated = true
-			break
+			continue
 		}
 		out.Findings = append(out.Findings, findings...)
 	}
