@@ -185,4 +185,11 @@ func TestManagerWarningSkipsCopiesAndKeepsUnmodeledControllers(t *testing.T) {
 	if got := EnrichRuntimeObjectAnsweredWarnings(certManager); len(got) != 1 {
 		t.Errorf("cert-manager warning beside an answer: %q; want it kept", got)
 	}
+	// A copied tracking ID doesn't hide the controller the object's own label names.
+	both := secret(map[string]any{"app.kubernetes.io/managed-by": "cert-manager"}, map[string]any{"argocd.argoproj.io/tracking-id": "source:/Secret:shop/original"})
+	for name, got := range map[string][]string{"plain": EnrichObjectWarnings(both), "answered": EnrichRuntimeObjectAnsweredWarnings(both)} {
+		if len(got) != 1 || !strings.Contains(got[0], "cert-manager") {
+			t.Errorf("%s: copied tracking ID beside a cert-manager label: %q; want the cert-manager warning", name, got)
+		}
+	}
 }

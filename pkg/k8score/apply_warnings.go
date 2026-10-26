@@ -27,7 +27,9 @@ func detectExternalManager(obj *unstructured.Unstructured) (string, string) {
 	if v := labels["argocd.argoproj.io/instance"]; v != "" {
 		return "Argo CD", v
 	}
-	if v := annotations["argocd.argoproj.io/tracking-id"]; v != "" {
+	// A tracking ID copied from another object names that object's manager:
+	// look on for this one's.
+	if v := annotations["argocd.argoproj.io/tracking-id"]; v != "" && !copiedTrackingID(obj, v) {
 		return "Argo CD", v
 	}
 

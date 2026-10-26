@@ -66,9 +66,10 @@ func splitHistory(subject resourceid.Ref, owner metav1.Object) func(*topology.Re
 	}
 }
 
-// AnswerOwner is AnswerOwnership for rel's Owner alone, which is all a
-// resource context reads: it searches for no children and reads no member
-// list, so it costs a few reads however much the object owns.
+// AnswerOwner is AnswerOwnership for rel's Owner and Manager, which is all a
+// resource context reads. It searches for no children and builds no member
+// list: the manager answer reads the recorder index along the controller
+// chain and, for a claim its lists don't confirm, that manager's list state.
 func AnswerOwner(rel *topology.Relationships, fetched ownership.Observation, access func(*ownership.Catalog) ownership.Access) {
 	answerOwnership(ownershipSource, topology.ApplyOwner, nil, rel, fetched, access)
 }
