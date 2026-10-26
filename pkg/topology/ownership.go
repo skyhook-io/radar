@@ -328,11 +328,25 @@ func managerAnswer(a ownership.ManagerAnswer) *ManagerAnswer {
 		via := managerEvidence(*a.Via)
 		out.Via = &via
 	}
+	for _, e := range a.Between {
+		out.Between = append(out.Between, managerEvidence(e))
+	}
+	if a.Stop != nil {
+		out.Stop = &ManagerChainStop{At: refOf(a.Stop.At), State: a.Stop.Owner.State.String()}
+		switch a.Stop.Owner.State {
+		case ownership.OwnerGone, ownership.OwnerReplaced, ownership.OwnerUnknown:
+			if a.Stop.Owner.Ref.Name != "" {
+				owner := refOf(a.Stop.Owner.Ref)
+				out.Stop.Owner = &owner
+			}
+			out.Stop.Reason = string(a.Stop.Owner.Gap.Reason)
+		}
+	}
 	return out
 }
 
 func managerEvidence(e ownership.ManagerEvidence) ManagerEvidence {
-	out := ManagerEvidence{Object: refOf(e.Object), Unreadable: e.Unreadable, Remote: e.Remote, NotChecked: notChecked(e.Gaps)}
+	out := ManagerEvidence{Object: refOf(e.Object), Unreadable: e.Unreadable, Remote: e.Remote, NotChecked: notChecked(e.Gaps), Undecided: e.Undecided}
 	for _, r := range e.Recorders {
 		out.Recorders = append(out.Recorders, refOf(r))
 	}

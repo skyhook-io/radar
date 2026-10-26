@@ -667,12 +667,35 @@ type ManagerAnswer struct {
 	// question when the resource's own doesn't; State and Lead then come from
 	// it.
 	Via *ManagerEvidence `json:"via,omitempty"`
+	// Between is the evidence of objects the walk passed, after the resource
+	// and before Via, that make claims, or that Radar couldn't search fully
+	// where it could the resource's.
+	Between []ManagerEvidence `json:"between,omitempty"`
 	// ChainEnd is why the walk up the controller chain stopped before an
 	// ancestor could answer: "unfollowed", "cycle" or "truncated".
 	ChainEnd string `json:"chainEnd,omitempty"`
+	// Stop is the controller reference the walk couldn't follow, when
+	// ChainEnd is "unfollowed".
+	Stop *ManagerChainStop `json:"stop,omitempty"`
 	// Narrowed: the caller's access is restricted, so the evidence is the part
 	// it may read.
 	Narrowed bool `json:"narrowed,omitempty"`
+}
+
+// ManagerChainStop is a controller reference a walk up the chain couldn't
+// follow.
+type ManagerChainStop struct {
+	// At is the last object the walk reached, whose reference it is.
+	At ResourceRef `json:"at"`
+	// State is the reference's: "gone", "replaced", "withheld", "unknown",
+	// "unresolvable" or "excluded", as for primaryOwnerState.
+	State string `json:"state"`
+	// Owner is the owner the reference names when it is gone, replaced or
+	// unknown.
+	Owner *ResourceRef `json:"owner,omitempty"`
+	// Reason is a readreason code saying why an "unknown" owner couldn't be
+	// checked.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ManagerEvidence is what names the managers of one object.
@@ -688,6 +711,9 @@ type ManagerEvidence struct {
 	Unreadable int            `json:"unreadable,omitempty"`
 	Remote     int            `json:"remote,omitempty"`
 	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
+	// Undecided: Radar couldn't check whether the caller may read some of
+	// what the search found.
+	Undecided bool `json:"undecided,omitempty"`
 }
 
 // ManagerClaim is a manager an object's metadata names, and what checking it
@@ -706,7 +732,8 @@ type ManagerClaim struct {
 	// Copied: an Argo CD tracking ID naming another object.
 	Copied bool `json:"copied,omitempty"`
 	// Weak: the claim doesn't settle the question for its object, being
-	// copied or an instance label on an object a controller owns.
+	// copied, or an instance label or Helm release annotation on an object a
+	// controller owns.
 	Weak bool `json:"weak,omitempty"`
 }
 

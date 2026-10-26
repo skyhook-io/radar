@@ -68,8 +68,9 @@ type CheckedClaim struct {
 	gitops.Claim
 	Check ClaimCheck
 	// Weak: the claim doesn't settle the question for its object: it was
-	// copied from another object, or it is an Argo CD instance label on an
-	// object a controller owns, which commonly inherits it from a template.
+	// copied from another object, or it is metadata an object a controller
+	// owns commonly inherits, an Argo CD instance label from its template or
+	// a Helm release's annotations from its Deployment.
 	Weak bool
 }
 
@@ -85,10 +86,13 @@ type ManagerEvidence struct {
 	// and places the search couldn't read.
 	Unreadable, Remote int
 	Gaps               []Gap
+	// Undecided: Radar couldn't check whether the caller may read some of
+	// what the search found.
+	Undecided bool
 }
 
 func (e ManagerEvidence) complete() bool {
-	return e.Unreadable == 0 && e.Remote == 0 && len(e.Gaps) == 0
+	return e.Unreadable == 0 && e.Remote == 0 && len(e.Gaps) == 0 && !e.Undecided
 }
 
 // strong reports whether e settles which managers the object has: a list
@@ -119,11 +123,26 @@ type ManagerAnswer struct {
 	// Via is the evidence of the nearest controller ancestor that settles
 	// the question, when the object's own doesn't; State and Lead are then
 	// derived from it.
-	Via      *ManagerEvidence
+	Via *ManagerEvidence
+	// Between is the evidence of objects the walk passed, after the object
+	// and before Via, that make claims, or that Radar couldn't search fully
+	// where it could the object's: evidence that didn't settle the question,
+	// kept so an answer can say why.
+	Between  []ManagerEvidence
 	ChainEnd ChainEnd
+	// Stop is the controller reference the walk couldn't follow, when
+	// ChainEnd is unfollowed.
+	Stop *ChainStop
 	// Narrowed: the caller's access is restricted, so the evidence is the
 	// part the caller may read.
 	Narrowed bool
+}
+
+// ChainStop is a controller reference a walk up the chain couldn't follow.
+type ChainStop struct {
+	// At is the last object the walk reached, whose reference it is.
+	At    resourceid.Ref
+	Owner OwnerResolution
 }
 
 // Manager says what manages ref: the local managers whose lists name it and
@@ -142,7 +161,6 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 		if i == 0 {
 			a.Direct = e
 		}
-		complete = complete && e.complete()
 		if e.strong() {
 			if i > 0 {
 				a.Via = &e
@@ -150,10 +168,15 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 			a.State, a.Lead = derive(e, e.complete())
 			return a
 		}
+		complete = complete && e.complete()
+		if i > 0 && (len(e.Claims) > 0 || !e.complete() && a.Direct.complete()) {
+			a.Between = append(a.Between, e)
+		}
 	}
 	switch {
 	case chain.UnfollowedReference != nil:
 		a.ChainEnd = ChainEndUnfollowed
+		a.Stop = &ChainStop{At: chain.Chain[len(chain.Chain)-1], Owner: *chain.UnfollowedReference}
 	case chain.Cycle:
 		a.ChainEnd = ChainEndCycle
 	case chain.Truncated:
@@ -167,17 +190,23 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 func (v *View) managerEvidence(ref resourceid.Ref) ManagerEvidence {
 	read, _ := v.read(ref)
 	found := v.RecordingManagers(ref)
-	e := ManagerEvidence{Object: ref, Unreadable: len(found.Unreadable), Remote: len(found.Remote), Gaps: found.Gaps}
+	e := ManagerEvidence{Object: ref, Unreadable: len(found.Unreadable), Remote: len(found.Remote), Gaps: found.Gaps, Undecided: found.Undecided}
 	for _, m := range found.Managers {
 		e.Recorders = append(e.Recorders, m.Ref)
 	}
 	controlled := slices.ContainsFunc(read.Object.OwnerReferences, isController)
 	for _, c := range read.Object.Claims {
-		cc := CheckedClaim{Claim: c, Weak: c.Copied || c.Source == gitops.ClaimArgoInstanceLabel && controlled}
+		cc := CheckedClaim{Claim: c, Weak: c.Copied || controlled && inherited(c.Source)}
 		cc.Check = v.checkClaim(c.Manager, e.Recorders, found)
 		e.Claims = append(e.Claims, cc)
 	}
 	return e
+}
+
+// inherited reports whether a claim from source is metadata a controller
+// copies onto the objects it creates.
+func inherited(source gitops.ClaimSource) bool {
+	return source == gitops.ClaimArgoInstanceLabel || source == gitops.ClaimHelmRelease
 }
 
 func (v *View) checkClaim(claimed resourceid.Ref, recorders []resourceid.Ref, found RecordingManagersAnswer) ClaimCheck {

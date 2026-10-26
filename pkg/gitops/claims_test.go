@@ -72,10 +72,16 @@ func TestClaims(t *testing.T) {
 	}
 }
 
+// Argo CD writes its destination namespace into a cluster-scoped object's
+// tracking ID, or none, and ignores it when comparing.
 func TestTrackingIDOfAClusterScopedObject(t *testing.T) {
 	role := resourceid.Ref{Group: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "reader"}
-	got := Claims(role, nil, map[string]string{argoTrackingIDAnnotation: "shop:rbac.authorization.k8s.io/ClusterRole:/reader"})
-	if len(got) != 1 || got[0].Copied {
-		t.Fatalf("Claims = %+v; want one claim on its own object", got)
+	for _, id := range []string{"shop:rbac.authorization.k8s.io/ClusterRole:/reader", "shop:rbac.authorization.k8s.io/ClusterRole:shop/reader"} {
+		if got := Claims(role, nil, map[string]string{argoTrackingIDAnnotation: id}); len(got) != 1 || got[0].Copied {
+			t.Errorf("Claims(%s) = %+v; want one claim on its own object", id, got)
+		}
+	}
+	if got := Claims(role, nil, map[string]string{argoTrackingIDAnnotation: "shop:rbac.authorization.k8s.io/ClusterRole:/writer"}); len(got) != 1 || !got[0].Copied {
+		t.Errorf("Claims naming another ClusterRole = %+v; want copied", got)
 	}
 }

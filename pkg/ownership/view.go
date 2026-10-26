@@ -453,6 +453,9 @@ type RecordingManagersAnswer struct {
 	Remote []resourceid.Ref
 	// Gaps are the search's gaps the caller may read; see RecordingManagersRead.Gaps.
 	Gaps []Gap
+	// Undecided: Radar couldn't check whether the caller may read some of the
+	// managers or gaps the search found, so the answer may lack some it may.
+	Undecided bool
 	// searchGaps are all the search's gaps, for Searched.
 	searchGaps []Gap
 }
@@ -496,10 +499,15 @@ func (v *View) RecordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 func (v *View) recordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 	found := v.session.RecordingManagers(ref)
 	a := RecordingManagersAnswer{searchGaps: found.Gaps}
+	may := func(gk resourceid.GroupKind, namespace string) bool {
+		d := v.access.CanRead(gk, namespace)
+		a.Undecided = a.Undecided || d == Undecided
+		return d == Allowed
+	}
 	for _, g := range found.Gaps {
 		// A gap the caller may not read would say what Radar collects where
 		// the caller can't look.
-		if v.access.CanRead(g.Kind, g.Namespace) == Allowed {
+		if may(g.Kind, g.Namespace) {
 			a.Gaps = append(a.Gaps, g)
 		}
 	}
@@ -512,17 +520,18 @@ func (v *View) recordingManagers(ref resourceid.Ref) RecordingManagersAnswer {
 			}
 			v.reads[m.Ref] = r
 		}
+		a.Undecided = a.Undecided || r.may == Undecided
 		if r.may == Allowed && r.read.State == Present {
 			a.Managers = append(a.Managers, r.read.Object)
 		}
 	}
 	for _, m := range found.Unreadable {
-		if v.access.CanRead(m.GroupKind(), m.Namespace) == Allowed {
+		if may(m.GroupKind(), m.Namespace) {
 			a.Unreadable = append(a.Unreadable, m)
 		}
 	}
 	for _, m := range found.Remote {
-		if v.access.CanRead(m.GroupKind(), m.Namespace) == Allowed {
+		if may(m.GroupKind(), m.Namespace) {
 			a.Remote = append(a.Remote, m)
 		}
 	}

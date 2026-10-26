@@ -246,6 +246,19 @@ func TestManagerStates(t *testing.T) {
 			},
 		},
 		{
+			// A Deployment copies its annotations, a Helm release's among them,
+			// onto its ReplicaSets; the list naming the Deployment answers.
+			name: "via: a ReplicaSet with its Deployment's Helm annotations",
+			build: func(b *ownershiptest.Builder) resourceid.Ref {
+				helm := map[string]string{helmRelease: "web", helmNamespace: "shop"}
+				d := b.Meta(b.Add("apps", "Deployment", "shop", "web"), nil, helm)
+				rs := b.Meta(b.Add("apps", "ReplicaSet", "shop", "web-1", d.OwnerRef(true)), nil, helm)
+				b.Manager(ownership.ArgoApplication, "argocd", "shop", recorded, "shop", d.Ref)
+				return rs.Ref
+			},
+			state: ownership.ManagerListed, lead: ref(app("shop")),
+		},
+		{
 			// A self-referencing tracking ID on the object is its own answer,
 			// whatever manages its controller.
 			name: "direct: an object's own tracking ID stops the walk",
@@ -324,3 +337,61 @@ func TestManagerForACallerWhoMayNotReadManagers(t *testing.T) {
 }
 
 func ref(r resourceid.Ref) *resourceid.Ref { return &r }
+
+// Every claim must name the one recorder for agreement: one that names
+// another manager makes a disagreement, whichever source it comes from.
+func TestManagerAgreementNeedsEveryClaim(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	cm := b.Meta(b.Add("", "ConfigMap", "shop", "settings"),
+		map[string]string{"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"},
+		map[string]string{trackingID: "argocd_shop:/ConfigMap:shop/settings"})
+	b.Manager(ownership.ArgoApplication, "argocd", "shop", ownership.MembersRecorded, "shop", cm.Ref)
+	if got := view(t, b.World(), ownership.Unrestricted()).Manager(cm.Ref); got.State != ownership.ManagerDisagree || got.Lead != nil {
+		t.Fatalf("answer %+v; want a disagreement with no lead", got)
+	}
+}
+
+// Weak claims at each hop let the walk go on, and are kept on the way.
+func TestManagerKeepsWeakEvidenceAlongTheWalk(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	d := b.Add("apps", "Deployment", "shop", "web")
+	rs := b.Meta(b.Add("apps", "ReplicaSet", "shop", "web-1", d.OwnerRef(true)), map[string]string{instanceLabel: "other"}, nil)
+	pod := b.Add("", "Pod", "shop", "web-1-a", rs.OwnerRef(true))
+	b.Manager(ownership.ArgoApplication, "argocd", "shop", ownership.MembersRecorded, "shop", d.Ref)
+	got := view(t, b.World(), ownership.Unrestricted()).Manager(pod.Ref)
+	if got.State != ownership.ManagerListed || got.Via == nil || got.Via.Object != d.Ref {
+		t.Fatalf("answer %+v; want listed via the Deployment", got)
+	}
+	if len(got.Between) != 1 || got.Between[0].Object != rs.Ref || !got.Between[0].Claims[0].Weak {
+		t.Fatalf("between %+v; want the ReplicaSet's weak claim", got.Between)
+	}
+}
+
+// A controller the caller may not read stops the walk: the answer says so,
+// and nothing of the controller.
+func TestManagerStopsAtAWithheldController(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	d := b.Add("apps", "Deployment", "shop", "web")
+	rs := b.Add("apps", "ReplicaSet", "shop", "web-1", d.OwnerRef(true))
+	pod := b.Add("", "Pod", "shop", "web-1-a", rs.OwnerRef(true))
+	b.Manager(ownership.ArgoApplication, "argocd", "shop", ownership.MembersRecorded, "shop", d.Ref)
+	got := view(t, b.World(), access{denied: []resourceid.GroupKind{{Group: "apps", Kind: "ReplicaSet"}}}).Manager(pod.Ref)
+	if got.State != ownership.ManagerUnknown || got.ChainEnd != ownership.ChainEndUnfollowed || got.Stop == nil || got.Stop.Owner.State != ownership.OwnerWithheld || got.Via != nil {
+		t.Fatalf("answer %+v; want unknown, stopped at a withheld controller", got)
+	}
+}
+
+// Radar couldn't tell whether the caller may read Applications everywhere
+// they are loading: no evidence is unknown, not none.
+func TestManagerWithUndecidedAccessIsUnknown(t *testing.T) {
+	b := ownershiptest.NewBuilder()
+	cm := b.Add("", "ConfigMap", "shop", "settings")
+	w := b.World()
+	c := w.Collection[ownership.ArgoApplication]
+	c.State = ownershiptest.Loading
+	w.Collection[ownership.ArgoApplication] = c
+	got := view(t, w, wholeKindUndecided{ownership.Unrestricted()}).Manager(cm.Ref)
+	if got.State != ownership.ManagerUnknown || !got.Direct.Undecided {
+		t.Fatalf("answer %+v; want unknown with undecided access", got)
+	}
+}

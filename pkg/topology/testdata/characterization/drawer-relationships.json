@@ -699,7 +699,12 @@
             "object": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
             "unreadable": 1
           },
-          "chainEnd": "unfollowed"
+          "chainEnd": "unfollowed",
+          "stop": {
+            "at": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
+            "state": "replaced",
+            "owner": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+          }
         }
       },
       "managedBy": [
@@ -4602,7 +4607,12 @@
             "object": {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"},
             "unreadable": 1
           },
-          "chainEnd": "unfollowed"
+          "chainEnd": "unfollowed",
+          "stop": {
+            "at": {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"},
+            "state": "replaced",
+            "owner": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+          }
         }
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},

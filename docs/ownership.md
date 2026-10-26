@@ -49,8 +49,9 @@ claims its metadata makes, each checked against its manager (recorded, omitted b
 remote, missing, not a recording kind as for a native Helm release, unresolved for a claim with no namespace, or
 withheld from the caller). When that evidence doesn't settle the question it walks the controller chain, Pod →
 ReplicaSet → Deployment, to the nearest ancestor whose evidence does, and reports it as **via**. A claim is **weak** —
-it doesn't stop the walk — when it was copied from another object or is an Argo CD instance label on an object a
-controller owns, which commonly inherits it from a template. A walk stops at an owner it can't follow and says so.
+it doesn't stop the walk — when it was copied from another object, or is metadata an object a controller owns commonly
+inherits: an Argo CD instance label from its template, or a Helm release's annotations, which a Deployment copies onto
+its ReplicaSets. A walk stops at an owner it can't follow and says so.
 
 The state, first match wins: **shared** (several lists name it), **disagree** (a list names it and a claim names
 another manager), **agree** (one list names it and every claim names that manager), **listed** (one list, no claim),

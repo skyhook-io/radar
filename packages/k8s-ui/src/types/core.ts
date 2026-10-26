@@ -752,8 +752,20 @@ export interface ManagerAnswer {
   direct: ManagerEvidence
   /** The nearest controller ancestor's evidence, when the resource's own doesn't settle it; state and lead then come from it. */
   via?: ManagerEvidence
+  /** Objects the walk passed before via that make claims, or that Radar couldn't search fully where it could this resource's. */
+  between?: ManagerEvidence[]
   /** Why the walk up the controller chain stopped before an ancestor could answer. */
   chainEnd?: 'unfollowed' | 'cycle' | 'truncated'
+  /** The controller reference the walk couldn't follow, when chainEnd is unfollowed. */
+  stop?: {
+    at: ResourceRef
+    /** As primaryOwnerState: gone, replaced, withheld, unknown, unresolvable or excluded. */
+    state: string
+    /** The owner the reference names when it is gone, replaced or unknown. */
+    owner?: ResourceRef
+    /** A readreason code when the owner is unknown. */
+    reason?: string
+  }
   /** The viewer's access is restricted, so the evidence is the part it may read. */
   narrowed?: boolean
 }
@@ -768,6 +780,8 @@ export interface ManagerEvidence {
   unreadable?: number
   remote?: number
   notChecked?: OwnershipGap[]
+  /** Radar couldn't check whether the viewer may read some of what the search found. */
+  undecided?: boolean
 }
 
 export interface ManagerClaim {
@@ -777,7 +791,7 @@ export interface ManagerClaim {
   check: 'recorded' | 'omitted' | 'unreadable' | 'remote' | 'missing' | 'not-recording' | 'unresolved' | 'withheld' | 'unchecked'
   /** An Argo CD tracking ID naming another object. */
   copied?: boolean
-  /** Copied, or an instance label on an object a controller owns: it doesn't settle the question for its object. */
+  /** Copied, or an instance label or Helm release annotation on an object a controller owns: it doesn't settle the question for its object. */
   weak?: boolean
 }
 

@@ -66,6 +66,11 @@ func Claims(object resourceid.Ref, labels, annotations map[string]string) []Clai
 	}
 	if id := annotations[argoTrackingIDAnnotation]; id != "" {
 		if app, tracked, ok := parseTrackingID(id); ok {
+			if object.Namespace == "" {
+				// Argo CD writes its destination namespace into a
+				// cluster-scoped object's ID and ignores it when comparing.
+				tracked.Namespace = ""
+			}
 			out = append(out, Claim{Manager: app, Source: ClaimArgoTrackingID, Copied: tracked != object})
 		}
 	}
