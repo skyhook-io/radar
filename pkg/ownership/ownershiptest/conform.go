@@ -177,6 +177,10 @@ func Differences(want, got ownership.ReadSession, q Queries) []Difference {
 			diffs = append(diffs, Difference{Question: fmt.Sprintf("Members(%v)", m), Want: describeMembers(w), Got: describeMembers(g), Objects: []resourceid.Ref{m},
 				Coverage: unread(w) || unread(g), Asked: AskedMembers, Ref: m})
 		}
+		// Membership must say what Members does about the list, without it.
+		if w, g := got.Members(m), got.Membership(m); g.Members != nil || w.Manager.State != g.Manager.State || w.Membership != g.Membership {
+			diffs = append(diffs, Difference{Question: fmt.Sprintf("Membership(%v)", m), Want: describeMembers(w), Got: describeMembers(g), Objects: []resourceid.Ref{m}, Asked: AskedMembers, Ref: m})
+		}
 	}
 	for _, uid := range q.UIDs {
 		for _, d := range q.Scopes {

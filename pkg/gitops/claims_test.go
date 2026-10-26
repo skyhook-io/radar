@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -75,6 +76,17 @@ func TestClaims(t *testing.T) {
 				t.Fatalf("Claims = %+v\nwant %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// With annotation+label tracking, Argo CD writes the label cut to 63
+// characters: it names the tracking ID's Application, not another one.
+func TestTruncatedInstanceLabelNamesTheTrackedApplication(t *testing.T) {
+	cm := resourceid.Ref{Kind: "ConfigMap", Namespace: "shop", Name: "settings"}
+	full := strings.Repeat("n", 40) + "_" + strings.Repeat("a", 40)
+	got := Claims(cm, map[string]string{argoInstanceLabel: full[:63]}, map[string]string{argoTrackingIDAnnotation: full + ":/ConfigMap:shop/settings"})
+	if len(got) != 2 || got[0].Manager != got[1].Manager {
+		t.Fatalf("Claims = %+v; want both to name the tracked Application", got)
 	}
 }
 

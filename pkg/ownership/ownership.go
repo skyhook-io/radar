@@ -45,6 +45,9 @@ type ReadSession interface {
 	// Members reads the member list in a manager's status; a manager must
 	// be of a RecordingManagers kind. It does no I/O and waits for nothing.
 	Members(manager resourceid.Ref) MembersRead
+	// Membership is Members without the members: the manager's read and its
+	// list's state, at a cost that doesn't grow with how much it lists.
+	Membership(manager resourceid.Ref) MembersRead
 	// RecordingManagers finds the local managers, in every namespace, whose
 	// member lists name ref, whatever namespaces the caller may read. It does no
 	// I/O and waits for nothing.

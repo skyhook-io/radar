@@ -53,6 +53,9 @@ func (c *countingSession) DependentCandidates(uid types.UID, d ownership.SearchS
 func (c *countingSession) Members(ref resourceid.Ref) ownership.MembersRead {
 	return c.now.Members(ref)
 }
+func (c *countingSession) Membership(ref resourceid.Ref) ownership.MembersRead {
+	return c.now.Membership(ref)
+}
 func (c *countingSession) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
 	return c.now.RecordingManagers(ref)
 }

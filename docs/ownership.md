@@ -51,13 +51,16 @@ withheld from the caller). When that evidence doesn't settle the question it wal
 ReplicaSet → Deployment, to the nearest ancestor whose evidence does, and reports it as **via**. A claim is **weak** —
 it doesn't stop the walk — when it was copied from another object, or is metadata an object a controller owns commonly
 inherits: an Argo CD instance label from its template, or a Helm release's annotations, which a Deployment copies onto
-its ReplicaSets. A walk stops at an owner it can't follow and says so.
+its ReplicaSets. When no object on the chain settles it and the object's own metadata claims nothing, the nearest
+ancestor whose metadata claims a manager answers, as **via**, with the state **claimed**. A walk stops at an owner it
+can't follow and says so.
 
 The state, first match wins: **shared** (several lists name it), **disagree** (a list names it and a claim names
 another manager), **agree** (one list names it and every claim names that manager), **listed** (one list, no claim),
 **claimed** (claims only), **unknown** (no evidence, and Radar couldn't look everywhere) and **none** (no evidence in
 what Radar collects and the caller may read — never "unmanaged"). A native Helm release's annotations count only when
-no GitOps evidence exists, since Flux's helm-controller writes them too. The answer reaches the wire as
+no GitOps evidence exists, since Flux's helm-controller writes them too. With Argo CD's annotation+label tracking, an
+instance label cut to 63 characters names the tracking ID's Application, not another one. The answer reaches the wire as
 `relationships.ownership.manager`; `relationships.managedBy` keeps its own meaning, the topmost owner the graph links.
 
 ## Coverage

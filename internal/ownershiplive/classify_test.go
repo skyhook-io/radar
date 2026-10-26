@@ -522,6 +522,12 @@ func (c claimsRecorded) Members(m resourceid.Ref) ownership.MembersRead {
 	return r
 }
 
+func (c claimsRecorded) Membership(m resourceid.Ref) ownership.MembersRead {
+	r := c.Members(m)
+	r.Members = nil
+	return r
+}
+
 // managerDropsLater answers the first search for recording managers right, and
 // leaves one manager out of every later one.
 type managerDropsLater struct {
@@ -591,6 +597,10 @@ func (l laggingMembership) RecordingManagers(ref resourceid.Ref) ownership.Recor
 
 func (l laggingMembership) Members(m resourceid.Ref) ownership.MembersRead {
 	return l.view("Members").Members(m)
+}
+
+func (l laggingMembership) Membership(m resourceid.Ref) ownership.MembersRead {
+	return l.view("Members").Membership(m)
 }
 
 func TestRecheckJudgesMembershipAgainstTheAPIServer(t *testing.T) {
