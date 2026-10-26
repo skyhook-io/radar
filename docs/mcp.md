@@ -1184,9 +1184,14 @@ kinds of evidence and names no winner they don't support:
   `omitted` when that manager's list was read and doesn't name it, `unreadable`, `remote`, `missing`, `not-recording`
   for a native Helm release, `unresolved` for a claim with no namespace, `withheld` when you may not read the manager,
   `unchecked` when Radar couldn't establish what its list says). A native Helm release's claim counts only without GitOps evidence, since
-  Flux's helm-controller writes the same annotations.
+  Flux's helm-controller writes the same annotations. That decides the state, not the risk: Helm annotations beside an
+  Argo CD or Kustomization manager mean an adopted Helm install whose next upgrade or rollback can still overwrite a
+  change.
 
-`state` sums them up: `agree` or `listed` (one manager, `lead`), `disagree` (a list names it and its metadata names
+`state` sums them up: `agree` (one manager's list names it and the resource's metadata names that manager: the
+strongest answer), `listed` (one list names it but the metadata names no manager: the list records what the manager
+compared, which can include an object it doesn't apply, so don't treat it as proof the manager reconciles it),
+`disagree` (a list names it and its metadata names
 another manager: look at both), `shared` (several lists name it), `claimed` (only metadata names a manager), `unknown`
 (no evidence, and Radar couldn't look everywhere) or `none` (no evidence in what Radar reads — **not** "unmanaged":
 Terraform, `kubectl apply` or a manager in another cluster leave nothing Radar sees). When the resource's own evidence
