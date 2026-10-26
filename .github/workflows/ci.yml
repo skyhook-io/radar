@@ -127,6 +127,9 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Run tests
         run: go test ./...
 
@@ -179,6 +182,11 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
+
+      # go test runs only a subset of vet's checks; composites and copylocks
+      # are not in it.
+      - name: Vet
+        run: go vet ./...
 
       # internal/server runs in its own job; it is the slowest package by far.
       # The assignment fails the step if go list does; an argument would not.
