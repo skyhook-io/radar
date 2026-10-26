@@ -499,7 +499,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		resp.RecentChanges = filterRecentChangesRBAC(ctx, changesResult.Changes)
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
-	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)
+	resp.Warnings = objectWarnings(obj, resCtx)
 	if podsNotListable {
 		// Say it plainly: everything pod-derived is empty because the pods
 		// could not be listed, not because the workload has none.

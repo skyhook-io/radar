@@ -970,7 +970,9 @@ Terraform, `kubectl apply` or a manager in another cluster leave nothing Radar s
 doesn't settle it, `via` names the controller ancestor whose evidence answers, as for a Pod whose Deployment an
 Application lists; `listedBy` and `claims` are then that ancestor's, and `alsoClaimed` lists what the resource's own
 metadata (and that of objects in between) names, each `on` its object: commonly inherited from a template, not disproven.
-`lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of
+When nothing settles it, the nearest ancestor whose metadata names a manager answers as `via`, with `claimed`. Claims of
+objects the walk passed appear in `alsoClaimed` with or without `via`. `get_resource` and `diagnose` then leave out the
+metadata-only "tracking metadata names …" warning, which this answer weighs. `lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of
 what could name a manager. `managedBy` keeps its own meaning: the topmost owner the relationship graph links.
 
 ### Node placement context

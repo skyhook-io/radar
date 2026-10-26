@@ -134,3 +134,23 @@ func TestBuildCompactsTheManagerAnswer(t *testing.T) {
 		t.Fatalf("alsoClaimed %+v; want the Pod's own weak claim, on the Pod", m.AlsoClaimed)
 	}
 }
+
+// A claim the walk passed is kept even when no ancestor answers.
+func TestBuildKeepsClaimsOnTheWayWithoutVia(t *testing.T) {
+	pod := &corev1.Pod{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-1-a", UID: "uid-pod"},
+	}
+	rs := topology.ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "shop", Name: "web-1"}
+	rc := Build(context.Background(), pod, Options{AccessChecker: allowAllChecker{}, Ownership: func(rel *topology.Relationships, _ ownership.Observation) {
+		rel.Ownership = &topology.OwnershipCoverage{Manager: &topology.ManagerAnswer{
+			State:   "claimed",
+			Direct:  topology.ManagerEvidence{Object: topology.ResourceRef{Kind: "Pod", Namespace: "shop", Name: "web-1-a"}, Claims: []topology.ManagerClaim{{Manager: topology.ResourceRef{Group: "argoproj.io", Kind: "Application", Name: "pod-app"}, Source: "argo-instance-label", Check: "unresolved", Weak: true}}},
+			Between: []topology.ManagerEvidence{{Object: rs, Claims: []topology.ManagerClaim{{Manager: topology.ResourceRef{Group: "argoproj.io", Kind: "Application", Name: "rs-app"}, Source: "argo-instance-label", Check: "unresolved", Weak: true}}}},
+		}}
+	}})
+	m := rc.Manager
+	if m == nil || m.Via != nil || len(m.AlsoClaimed) != 1 || m.AlsoClaimed[0].Manager.Name != "rs-app" || m.AlsoClaimed[0].On == nil || m.AlsoClaimed[0].On.Kind != "ReplicaSet" {
+		t.Fatalf("manager %+v; want the ReplicaSet's claim in alsoClaimed", m)
+	}
+}

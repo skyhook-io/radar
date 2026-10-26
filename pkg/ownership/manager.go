@@ -123,8 +123,9 @@ type ManagerAnswer struct {
 	// Direct is the evidence on the object itself.
 	Direct ManagerEvidence
 	// Via is the evidence of the nearest controller ancestor that settles
-	// the question, when the object's own doesn't; State and Lead are then
-	// derived from it.
+	// the question, when the object's own doesn't, or, when no object does
+	// and the object's metadata claims nothing, of the nearest that claims a
+	// manager; State and Lead are then derived from it.
 	Via *ManagerEvidence
 	// Between is the evidence of objects the walk passed, after the object
 	// and before Via, that make claims, or that Radar couldn't search fully
@@ -192,9 +193,23 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 	case chain.Truncated:
 		a.ChainEnd = ChainEndTruncated
 	}
+	// No object settled it. A claim the walk passed is still the best lead
+	// it found, unless the object's own metadata makes one.
+	if !slices.ContainsFunc(a.Direct.Claims, active) {
+		if i := slices.IndexFunc(a.Between, func(e ManagerEvidence) bool { return slices.ContainsFunc(e.Claims, active) }); i >= 0 {
+			e := a.Between[i]
+			a.Via, a.Between = &e, a.Between[:i]
+			a.State, a.Lead = derive(e, chainSettled(a) && complete)
+			return a
+		}
+	}
 	a.State, a.Lead = derive(a.Direct, chainSettled(a) && complete)
 	return a
 }
+
+// active reports whether c counts as a claim: one copied from another object
+// names that object's manager.
+func active(c CheckedClaim) bool { return !c.Copied }
 
 // chainSettled reports whether the walk read the whole chain: it reached the
 // top, or an owner that is gone, was replaced or is an Event, which ends the
@@ -258,9 +273,9 @@ func (v *View) checkClaim(claimed resourceid.Ref, recorders []resourceid.Ref, fo
 	case !subject.Present():
 		return ClaimUnchecked
 	}
-	// Only the list's state matters here: reading its members would read and
-	// authorize every object a large Application lists.
-	members := v.session.Members(claimed)
+	// Only the list's state matters here: its members would cost as much as
+	// a large Application lists.
+	members := v.session.Membership(claimed)
 	if members.Manager.State != Present || members.Manager.Object.UID != subject.Read.Object.UID {
 		return ClaimUnchecked
 	}

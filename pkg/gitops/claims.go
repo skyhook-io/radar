@@ -27,6 +27,9 @@ var (
 // keeps no object of that kind, so the claim can't be checked against a list.
 var HelmReleaseKind = resourceid.GroupKind{Kind: "HelmRelease"}
 
+// maxLabelValue is the longest a Kubernetes label value may be.
+const maxLabelValue = 63
+
 const (
 	argoTrackingIDAnnotation = "argocd.argoproj.io/tracking-id"
 	argoInstanceLabel        = "argocd.argoproj.io/instance"
@@ -64,8 +67,10 @@ func Claims(object resourceid.Ref, labels, annotations map[string]string) []Clai
 	if name, ns := labels[fluxKustomizeNameLabel], labels[fluxKustomizeNSLabel]; name != "" && ns != "" {
 		out = append(out, Claim{Manager: resourceid.Ref{Group: fluxKustomizationKind.Group, Kind: fluxKustomizationKind.Kind, Namespace: ns, Name: name}, Source: ClaimFluxKustomization})
 	}
+	var trackedBy string
 	if id := annotations[argoTrackingIDAnnotation]; id != "" {
 		if app, tracked, ok := parseTrackingID(id); ok {
+			trackedBy, _, _ = strings.Cut(id, ":")
 			if object.Namespace == "" {
 				// Argo CD writes its destination namespace into a
 				// cluster-scoped object's ID and ignores it when comparing.
@@ -75,6 +80,11 @@ func Claims(object resourceid.Ref, labels, annotations map[string]string) []Clai
 		}
 	}
 	if v := labels[argoInstanceLabel]; v != "" {
+		// With annotation+label tracking Argo CD cuts the label to a label
+		// value's 63 characters; the annotation names the Application in full.
+		if len(trackedBy) > maxLabelValue && v == trackedBy[:maxLabelValue] {
+			v = trackedBy
+		}
 		if app, ok := argoApplication(v); ok {
 			out = append(out, Claim{Manager: app, Source: ClaimArgoInstanceLabel})
 		}

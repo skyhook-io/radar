@@ -13,17 +13,28 @@ import (
 // *unstructured.Unstructured (if needed) and runs EnrichObjectWarnings.
 // Returns nil on conversion error — best-effort, never blocks the caller.
 func EnrichRuntimeObjectWarnings(obj runtime.Object) []string {
+	return enrichRuntime(obj, true)
+}
+
+// EnrichRuntimeObjectStateWarnings is EnrichRuntimeObjectWarnings without the
+// warning naming the manager the object's metadata claims, for a caller that
+// reports a manager answer weighed from more evidence beside it.
+func EnrichRuntimeObjectStateWarnings(obj runtime.Object) []string {
+	return enrichRuntime(obj, false)
+}
+
+func enrichRuntime(obj runtime.Object, withManager bool) []string {
 	if obj == nil {
 		return nil
 	}
 	if u, ok := obj.(*unstructured.Unstructured); ok {
-		return EnrichObjectWarnings(u)
+		return enrich(u, withManager)
 	}
 	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
 		return nil
 	}
-	return EnrichObjectWarnings(&unstructured.Unstructured{Object: raw})
+	return enrich(&unstructured.Unstructured{Object: raw}, withManager)
 }
 
 // EnrichObjectWarnings derives advisory warnings purely from an object's own
@@ -34,12 +45,16 @@ func EnrichRuntimeObjectWarnings(obj runtime.Object) []string {
 // All entries are self-contained factual sentences. Empty result means
 // "nothing notable about this object's state."
 func EnrichObjectWarnings(obj *unstructured.Unstructured) []string {
+	return enrich(obj, true)
+}
+
+func enrich(obj *unstructured.Unstructured, withManager bool) []string {
 	if obj == nil {
 		return nil
 	}
 	var out []string
 
-	if mgr, instance := detectExternalManager(obj); mgr != "" {
+	if mgr, instance := detectExternalManager(obj); withManager && mgr != "" {
 		out = append(out, formatExternalManagerWarning(mgr, instance))
 	}
 
