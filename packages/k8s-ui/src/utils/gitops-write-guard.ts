@@ -448,7 +448,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
         (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1 || manager.via && directClaims.length > 0)) {
       return { level: 'may-revert', reason: `${names} may overwrite these fields. A single manager's ignore rules or sync policy cannot exempt this change.${manager.via ? ` The controller also generates it from ${managerRefLabel(manager.via.object)}.` : ''}` }
     }
-    if (owner && manager.state === 'claimed' && (write.scope === 'metadata' || write.scope === 'spec')) {
+    if (owner && manager.state === 'claimed' && !targetOptedOut(input) && (write.scope === 'metadata' || write.scope === 'spec')) {
       return { level: 'may-revert', reason: `This resource's metadata names ${names}, but its recorded membership isn't confirmed. A sync may overwrite this change.` }
     }
   }
@@ -461,7 +461,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   if (manager && write.scope === 'delete') {
     const candidates = managerCandidates(manager)
     if (chainUnread(manager)) return { level: 'may-revert', reason: input.ownershipError! }
-    if (owner && manager.state === 'claimed') {
+    if (owner && manager.state === 'claimed' && !targetOptedOut(input)) {
       return { level: 'may-revert', reason: `This resource's metadata names ${candidates.map(managerRefLabel).join(' and ')}, but its recorded membership isn't confirmed. A sync may recreate it.` }
     }
     if (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1) {
@@ -522,6 +522,12 @@ function headline(guard: Pick<GitOpsWriteGuard, 'owner' | 'helmRelease' | 'manag
 
 export function gitOpsWriteHeadline(guard: GitOpsWriteGuard): string {
   return headline(guard, guard.level)
+}
+
+// targetOptedOut: the target's own annotations opt it out of its manager's
+// reconciliation, which holds whether or not that manager's list names it.
+function targetOptedOut(input: GitOpsWriteGuardInput): boolean {
+  return input.evidence?.policy?.objectReconcile === 'ignore'
 }
 
 // chainUnread: the walk up the controller chain stopped at an owner Radar

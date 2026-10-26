@@ -85,9 +85,14 @@ export function activeManagerClaims(evidence: ManagerEvidence): ManagerClaim[] {
 export function managerCandidates(answer: ManagerAnswer): ResourceRef[] {
   const evidence = answer.via ?? answer.direct
   const recorders = evidence.recorders ?? []
+  const qualified = [...recorders, ...(answer.lead ? [answer.lead] : []), ...activeManagerClaims(evidence).map(c => c.manager).filter(r => r.namespace)]
+  // A claim without a namespace names the qualified manager of its kind and
+  // name the answer already holds, when there is exactly one.
   const claims = activeManagerClaims(evidence).map(c => {
     const ref = c.manager
-    return !ref.namespace ? recorders.find(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name) ?? ref : ref
+    if (ref.namespace) return ref
+    const matches = dedupeResourceRefs(qualified.filter(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name))
+    return matches.length === 1 ? matches[0] : ref
   })
   return dedupeResourceRefs([...(answer.lead ? [answer.lead] : []), ...claims, ...recorders])
 }
@@ -96,7 +101,7 @@ export function managerRefLabel(ref: ResourceRef): string {
   return `${ref.kind} ${ref.namespace ? `${ref.namespace}/` : ''}${ref.name}`
 }
 
-export function managerChipPresentation(answer: ManagerAnswer): { prefix: string; label: string; tooltip: string; warning: boolean } | null {
+export function managerChipPresentation(answer: ManagerAnswer): { prefix: string; label: string; via?: string; tooltip: string; warning: boolean } | null {
   if (answer.state === 'unknown' || answer.state === 'none') return null
   const evidence = answer.via ?? answer.direct
   const candidates = managerCandidates(answer)
@@ -141,7 +146,7 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     }
   }
   if (answer.narrowed) details.push('This answer covers what you can view.')
-  return { prefix, label, tooltip: details.join(' '), warning: answer.state === 'disagree' }
+  return { prefix, label, via: answer.via?.object.kind, tooltip: details.join(' '), warning: answer.state === 'disagree' }
 }
 
 export function managerChipCoversGroup(relationships: Relationships): boolean {

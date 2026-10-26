@@ -542,6 +542,23 @@ describe('unconfirmed manager boundaries', () => {
       expect(g.syncPolicy).toBeNull()
     }
   })
+  // An opt-out on the target's own annotations holds whether or not the
+  // claimed manager's list names it.
+  it('an unconfirmed claim keeps an opt-out on the target itself', () => {
+    const g = guard({ manager: claimed, writes: [hibernate, { scope: 'delete' }], evidence: evidence({ ...selfHeal, objectReconcile: 'ignore' }, [pathEvidence({ lastApplied: 'present' })]) })
+    expect(g.perWrite.map(w => w.level)).toEqual(['info', 'info'])
+    expect(g.requiresAck).toBe(false)
+  })
+  // A tracking ID and an instance label on one Application are one manager.
+  it('a namespaced and an unqualified claim on one Application are one candidate', () => {
+    const manager = { ...claimed, direct: { object: target, claims: [
+      { manager: app, source: 'argo-tracking-id' as const, check: 'omitted' as const },
+      { manager: { ...app, namespace: '' }, source: 'argo-instance-label' as const, check: 'unresolved' as const },
+    ] } }
+    const g = guard({ manager, writes: [hibernate], evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
+    expect(g.summary).not.toContain(' and ')
+    expect(g.summary).not.toContain("A single manager's ignore rules")
+  })
   it.each(['cycle', 'truncated'] as const)('%s ancestry remains conservative without a stop object', chainEnd => {
     const g = guard({ manager: { state: 'unknown', direct: { object: target }, chainEnd }, writes: [hibernate, { scope: 'delete' }] })
     expect(g.perWrite.map(w => w.level)).toEqual(['may-revert', 'may-revert'])

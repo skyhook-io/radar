@@ -80,3 +80,10 @@ it('Listed by names only recorders and explains an outside claim in the tooltip'
   expect(html).not.toContain('argocd/b and argocd/a and argocd/outside')
   expect(html).toContain("Application argocd/outside: its status doesn't list this resource")
 })
+
+it('says on the chip itself that the answer comes through an ancestor', () => {
+  const object = { kind: 'Pod', namespace: 'demo', name: 'web-1' }
+  const lead = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'a' }
+  const html = renderToStaticMarkup(<ManagedByChip manager={{ state: 'listed', lead, direct: { object }, via: { object: { kind: 'Deployment', group: 'apps', namespace: 'demo', name: 'web' }, recorders: [lead] } }} />)
+  expect(html).toMatch(/<span class="shrink-0 text-theme-text-tertiary">via Deployment<\/span>/)
+})

@@ -146,6 +146,7 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
         {presentation.warning && <StatusDot tone="degraded" size="xs" />}
         <span className="shrink-0 text-theme-text-tertiary">{presentation.prefix}</span>
         <span className="truncate max-w-[180px]">{presentation.label}</span>
+        {presentation.via && <span className="shrink-0 text-theme-text-tertiary">via {presentation.via}</span>}
         {statusLabel && <><span className="mx-0.5 text-theme-text-disabled">·</span><StatusDot tone={gitOpsStatusTone(status!)} size="xs" /><span>{statusLabel}</span></>}
       </Wrapper>
     </Tooltip>
