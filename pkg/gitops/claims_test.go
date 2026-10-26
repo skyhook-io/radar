@@ -40,6 +40,12 @@ func TestClaims(t *testing.T) {
 			annotations: map[string]string{argoTrackingIDAnnotation: "shop:garbage"},
 		},
 		{
+			// Kubernetes names can't contain "_", so a second one is malformed.
+			name:        "an Application name with an underscore makes no claim",
+			labels:      map[string]string{argoInstanceLabel: "team_shop_x"},
+			annotations: map[string]string{argoTrackingIDAnnotation: "team_shop_x:/ConfigMap:shop/settings"},
+		},
+		{
 			name:   "instance label, with and without a namespace",
 			labels: map[string]string{argoInstanceLabel: "team_shop"},
 			want:   []Claim{{Manager: app("team", "shop"), Source: ClaimArgoInstanceLabel}},

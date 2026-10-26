@@ -194,6 +194,17 @@ func TestManagerStates(t *testing.T) {
 			state: ownership.ManagerListed, lead: ref(app("shop")),
 		},
 		{
+			// A tracking ID and an instance label name one Application, the
+			// ID saying its namespace.
+			name: "claimed: a tracking ID and an instance label naming one Application",
+			build: func(b *ownershiptest.Builder) resourceid.Ref {
+				return b.Meta(b.Add("", "ConfigMap", "shop", "settings"),
+					map[string]string{instanceLabel: "shop"},
+					map[string]string{trackingID: "argocd_shop:/ConfigMap:shop/settings"}).Ref
+			},
+			state: ownership.ManagerClaimed, lead: ref(app("shop")),
+		},
+		{
 			name: "claimed: two claims naming different managers, no list",
 			build: func(b *ownershiptest.Builder) resourceid.Ref {
 				return b.Meta(b.Add("", "ConfigMap", "shop", "settings"),

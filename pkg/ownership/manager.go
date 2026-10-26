@@ -305,8 +305,17 @@ func derive(e ManagerEvidence, settled bool) (ManagerState, *resourceid.Ref) {
 		}
 		return ManagerListed, &r
 	case len(active) > 0:
+		// Claims name one manager when each names the lead, a claim without a
+		// namespace naming any of its kind and name; the lead is the one that
+		// says its namespace.
 		lead := active[0].Manager
-		if slices.ContainsFunc(active, func(c gitops.Claim) bool { return c.Manager != lead }) {
+		for _, c := range active {
+			if c.Manager.Namespace != "" {
+				lead = c.Manager
+				break
+			}
+		}
+		if slices.ContainsFunc(active, func(c gitops.Claim) bool { return !names(c.Manager, lead) }) {
 			return ManagerClaimed, nil
 		}
 		return ManagerClaimed, &lead
