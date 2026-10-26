@@ -3767,13 +3767,13 @@ func toJSONResult(data any) (*mcp.CallToolResult, any, error) {
 	}, nil, nil
 }
 
-// objectWarnings are the object's advisory warnings. The one naming the
-// manager its metadata claims is left out when the context carries a manager
-// answer: that weighs the claims against the managers' lists, and a second,
-// metadata-only sentence would contradict it when they disagree.
+// objectWarnings are the object's advisory warnings. When the context carries
+// a manager answer, the warning naming an Argo CD, Flux or Helm manager from
+// metadata is left out: the answer weighs those claims against the managers'
+// lists, and a metadata-only sentence would contradict it when they disagree.
 func objectWarnings(obj runtime.Object, rc *resourcecontext.ResourceContext) []string {
 	if rc != nil && rc.Manager != nil {
-		return k8score.EnrichRuntimeObjectStateWarnings(obj)
+		return k8score.EnrichRuntimeObjectAnsweredWarnings(obj)
 	}
 	return k8score.EnrichRuntimeObjectWarnings(obj)
 }

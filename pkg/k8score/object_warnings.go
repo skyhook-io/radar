@@ -7,6 +7,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // EnrichRuntimeObjectWarnings converts a typed K8s runtime.Object to
@@ -16,10 +19,12 @@ func EnrichRuntimeObjectWarnings(obj runtime.Object) []string {
 	return enrichRuntime(obj, true)
 }
 
-// EnrichRuntimeObjectStateWarnings is EnrichRuntimeObjectWarnings without the
-// warning naming the manager the object's metadata claims, for a caller that
-// reports a manager answer weighed from more evidence beside it.
-func EnrichRuntimeObjectStateWarnings(obj runtime.Object) []string {
+// EnrichRuntimeObjectAnsweredWarnings is EnrichRuntimeObjectWarnings for a
+// caller that reports a GitOps manager answer beside the warnings: the answer
+// weighs Argo CD, Flux and Helm metadata against the managers' lists, so the
+// warning naming one of those is left out. Any other controller its
+// app.kubernetes.io/managed-by label names keeps its warning.
+func EnrichRuntimeObjectAnsweredWarnings(obj runtime.Object) []string {
 	return enrichRuntime(obj, false)
 }
 
@@ -48,13 +53,15 @@ func EnrichObjectWarnings(obj *unstructured.Unstructured) []string {
 	return enrich(obj, true)
 }
 
+// enrich derives the warnings; without withManager, the caller reports a
+// manager answer that covers the GitOps and Helm metadata.
 func enrich(obj *unstructured.Unstructured, withManager bool) []string {
 	if obj == nil {
 		return nil
 	}
 	var out []string
 
-	if mgr, instance := detectExternalManager(obj); withManager && mgr != "" {
+	if mgr, instance := detectExternalManager(obj); mgr != "" && !(mgr == "Argo CD" && copiedTrackingID(obj, instance)) && (withManager || !answeredManager(mgr)) {
 		out = append(out, formatExternalManagerWarning(mgr, instance))
 	}
 
@@ -211,3 +218,27 @@ func durationShort(d time.Duration) string {
 	days := int(d.Hours()) / 24
 	return fmt.Sprintf("%dd", days)
 }
+
+// answeredManager reports whether a manager answer weighs the metadata that
+// named mgr.
+func answeredManager(mgr string) bool {
+	return mgr == "Argo CD" || mgr == "Helm" || strings.HasPrefix(mgr, "Flux ")
+}
+
+// copiedTrackingID reports whether instance is an Argo CD tracking ID naming
+// another object, as on a Secret copied with its source's annotations: Argo CD
+// doesn't count such an object as its own.
+func copiedTrackingID(obj *unstructured.Unstructured, instance string) bool {
+	if instance == "" || instance != obj.GetAnnotations()[argoTrackingIDAnnotationKey] {
+		return false
+	}
+	ref := resourceid.Ref{Group: resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName()}
+	for _, c := range gitops.Claims(ref, nil, obj.GetAnnotations()) {
+		if c.Source == gitops.ClaimArgoTrackingID {
+			return c.Copied
+		}
+	}
+	return false
+}
+
+const argoTrackingIDAnnotationKey = "argocd.argoproj.io/tracking-id"
