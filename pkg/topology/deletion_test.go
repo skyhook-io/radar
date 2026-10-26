@@ -123,7 +123,7 @@ func TestPreviewDeletionStorageLimitIsExplicit(t *testing.T) {
 		obj.SetUID("data")
 		session, _ := ownershiptest.Scan(w).Begin()
 		p := PreviewDeletion(context.Background(), ownership.NewView(session, ownership.Unrestricted()), obj)
-		if !strings.Contains(strings.Join(p.NotEnumerated, " "), "storage/data") {
+		if !p.MayReclaimStorage || !strings.Contains(strings.Join(p.NotEnumerated, " "), "storage/data") {
 			t.Fatalf("storage consequence hidden: %+v", p)
 		}
 	}
@@ -144,7 +144,7 @@ func TestPreviewDeletionWarnsForDependentStorage(t *testing.T) {
 		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": "root", "namespace": "demo", "uid": "root"}}}
 		s, _ := ownershiptest.Scan(w).Begin()
 		p := PreviewDeletion(context.Background(), ownership.NewView(s, ownership.Unrestricted()), obj)
-		if len(p.Dependents) != 1 || !strings.Contains(strings.Join(p.NotEnumerated, " "), "storage/data") {
+		if len(p.Dependents) != 1 || !p.MayReclaimStorage || !strings.Contains(strings.Join(p.NotEnumerated, " "), "storage/data") {
 			t.Fatalf("%s storage consequence hidden: %+v", kind, p)
 		}
 	}

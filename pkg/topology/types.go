@@ -566,6 +566,7 @@ type SecretCertificateInfo struct {
 // Coverage is absent when no ownership projection was possible. NotEnumerated
 // names deletion mechanisms outside the projection, never empty sets of objects.
 type CascadeDeletePreview struct {
+	MayReclaimStorage bool `json:"-"`
 	// Propagation is the normal-delete policy. Dependents project cascading
 	// collection; Orphan preserves them unless force removes the orphan finalizer.
 	Propagation        string              `json:"propagation,omitempty"`

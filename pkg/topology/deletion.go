@@ -91,6 +91,7 @@ func PreviewDeletion(ctx context.Context, v *ownership.View, obj *unstructured.U
 		}
 	}
 	if storage {
+		p.MayReclaimStorage = true
 		p.NotEnumerated = append(p.NotEnumerated, "backing storage/data removal governed by the PV reclaim policy")
 	}
 	return p
