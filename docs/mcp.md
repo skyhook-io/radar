@@ -1290,33 +1290,30 @@ above cover them. List order does not indicate likelihood.
 
 ### Shared deletion preview
 
-`GET /api/resources/{kind}/{namespace}/{name}/cascade-preview` fetches the root
-as the caller and reads a caller-scoped ownership session. It does not build or
-walk display topology. `basis: ownerReferences` distinguishes it from the older
-related-resource list. `dependents` lists observed objects expected to be garbage
-collected once their owners are removed; `possibleDependents` has an unresolved
-owner or chain. A live owner outside that closure preserves its dependents.
-Neither list promises completion: finalizers, admission and reconciliation can
-change or delay the result.
+`GET /api/resources/{kind}/{namespace}/{name}/cascade-preview` reads the root
+and ownership data as the caller. `basis: ownerReferences` identifies the
+ownership projection: `dependents` are observed objects expected to be garbage
+collected; `possibleDependents` have unresolved owners or ownership chains.
+A live owner outside the deletion closure preserves its dependents.
 
-`coverage` reuses the ownership coverage contract: complete among readable,
-collectable kinds, `narrowed` for restricted visibility, `notChecked` for cache
-or discovery gaps, `truncated` at the 1,000-object traversal cap or deadline.
-`rootResolved: false` and `unavailableReason` refuse a stale root or cache swap.
-The root UID must match the session before projection; ordinary resourceVersion lag does not hide the preview.
+`coverage` is limited to readable, collected kinds: `narrowed` means restricted
+visibility, `notChecked` means cache or discovery gaps, and `truncated` means the
+1,000-object cap or deadline was reached. If the root cannot be verified, the
+preview returns `rootResolved: false` with an `unavailableReason`.
 
-The preview preserves pending foreground/orphan propagation; the dependent lists always describe cascading collection. An orphan delete preserves them; the dialog hides those lists until force is selected. Force strips the orphan finalizer and explicitly requests Background. Namespace contents and CRD instances are
-not enumerated and are removed independently of owner references. Other
-controller cleanup is also not enumerated. `controllerTeardown`, when recognized
-on the root, describes Argo CD pruning or Flux pruning/Helm uninstall through a
-finalizer. Recorded local members are caller-filtered and carry membership
-coverage. Remote/unknown destinations list no local inventory. Controller
-opt-outs and Helm release manifests can differ from the recorded member list.
-Force deletion strips finalizers and can skip remaining cleanup; it cannot undo
-cleanup that already started.
+The dependent lists describe cascading collection. Pending foreground/orphan
+propagation is preserved; orphan deletion keeps dependents, so the dialog hides
+those lists until force is selected. Force strips finalizers and requests
+Background propagation. It can skip remaining cleanup, but cannot undo cleanup
+already started.
 
-The preview describes collection caused by deleting the root in the observed
-state. A live outside owner prevents that collection; its independent deletion
-may subsequently collect the same object. Opening the REST dialog is advisory
-and does not transactionally bind a later HTTP delete. MCP confirmation adds
-root preconditions and a confirmation bound to the reviewed target. The dependent lists remain advisory observations.
+`controllerTeardown` separately describes recognized Argo CD pruning or Flux
+pruning/Helm uninstall on the root. Recorded local members are caller-filtered
+and include membership coverage; remote or unknown destinations list no local
+inventory. Controller opt-outs and Helm manifests may change the actual cleanup.
+Namespace contents, CRD instances and other controller effects are not enumerated;
+storage/data removal also depends on reclaim policy and controllers.
+
+The REST preview is advisory: it does not bind a later DELETE to the object
+shown in the dialog. Finalizers, admission and reconciliation can change or delay
+the result, so the preview does not guarantee completion.
