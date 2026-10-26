@@ -192,8 +192,24 @@ func (v *View) Manager(ref resourceid.Ref) ManagerAnswer {
 	case chain.Truncated:
 		a.ChainEnd = ChainEndTruncated
 	}
-	a.State, a.Lead = derive(a.Direct, a.ChainEnd == "" && complete)
+	a.State, a.Lead = derive(a.Direct, chainSettled(a) && complete)
 	return a
+}
+
+// chainSettled reports whether the walk read the whole chain: it reached the
+// top, or an owner that is gone, was replaced or is an Event, which ends the
+// chain with an answer rather than leaving a manager above it unread.
+func chainSettled(a ManagerAnswer) bool {
+	switch a.ChainEnd {
+	case "":
+		return true
+	case ChainEndUnfollowed:
+		switch a.Stop.Owner.State {
+		case OwnerGone, OwnerReplaced, OwnerExcluded:
+			return true
+		}
+	}
+	return false
 }
 
 // managerEvidence reads the evidence on ref, an object the view holds.
@@ -305,8 +321,17 @@ func derive(e ManagerEvidence, settled bool) (ManagerState, *resourceid.Ref) {
 		}
 		return ManagerListed, &r
 	case len(active) > 0:
+		// Claims name one manager when each names the lead, a claim without a
+		// namespace naming any of its kind and name; the lead is the one that
+		// says its namespace.
 		lead := active[0].Manager
-		if slices.ContainsFunc(active, func(c gitops.Claim) bool { return c.Manager != lead }) {
+		for _, c := range active {
+			if c.Manager.Namespace != "" {
+				lead = c.Manager
+				break
+			}
+		}
+		if slices.ContainsFunc(active, func(c gitops.Claim) bool { return !names(c.Manager, lead) }) {
 			return ManagerClaimed, nil
 		}
 		return ManagerClaimed, &lead

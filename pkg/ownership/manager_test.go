@@ -194,6 +194,17 @@ func TestManagerStates(t *testing.T) {
 			state: ownership.ManagerListed, lead: ref(app("shop")),
 		},
 		{
+			// A tracking ID and an instance label name one Application, the
+			// ID saying its namespace.
+			name: "claimed: a tracking ID and an instance label naming one Application",
+			build: func(b *ownershiptest.Builder) resourceid.Ref {
+				return b.Meta(b.Add("", "ConfigMap", "shop", "settings"),
+					map[string]string{instanceLabel: "shop"},
+					map[string]string{trackingID: "argocd_shop:/ConfigMap:shop/settings"}).Ref
+			},
+			state: ownership.ManagerClaimed, lead: ref(app("shop")),
+		},
+		{
 			name: "claimed: two claims naming different managers, no list",
 			build: func(b *ownershiptest.Builder) resourceid.Ref {
 				return b.Meta(b.Add("", "ConfigMap", "shop", "settings"),
@@ -278,12 +289,14 @@ func TestManagerStates(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown: the walk stops at a controller that's gone",
+			// A gone controller ends the chain with an answer: nothing above
+			// it was missed.
+			name: "none: the walk stops at a controller that's gone",
 			build: func(b *ownershiptest.Builder) resourceid.Ref {
 				gone := ownershiptest.Object{Ref: resourceid.Ref{Group: "apps", Kind: "ReplicaSet", Namespace: "shop", Name: "web-1"}, APIVersion: "apps/v1", UID: "uid-gone"}
 				return b.Add("", "Pod", "shop", "web-1-a", gone.OwnerRef(true)).Ref
 			},
-			state: ownership.ManagerUnknown,
+			state: ownership.ManagerNone,
 			check: func(t *testing.T, a ownership.ManagerAnswer) {
 				if a.ChainEnd != ownership.ChainEndUnfollowed {
 					t.Errorf("chain end %q, want unfollowed", a.ChainEnd)
