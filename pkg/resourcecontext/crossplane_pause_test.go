@@ -98,6 +98,10 @@ func TestCrossplanePauseExcludesExactBuiltinIdentity(t *testing.T) {
 	}{
 		{"apps/v1", "Deployment", ""},
 		{"v1", "Service", ""},
+		{"apiregistration.k8s.io/v1", "APIService", ""},
+		{"apiextensions.k8s.io/v1", "CustomResourceDefinition", ""},
+		{"example.org/v1", "APIService", CrossplanePauseRequested},
+		{"example.org/v1", "CustomResourceDefinition", CrossplanePauseRequested},
 		{"example.org/v1", "Deployment", CrossplanePauseRequested},
 		{"serving.knative.dev/v1", "Service", CrossplanePauseRequested},
 	} {

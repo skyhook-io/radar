@@ -163,3 +163,29 @@ func TestCrossplanePauseDoesNotRewriteCuratedSummary(t *testing.T) {
 		t.Fatalf("curated facts rewritten: before=%+v after=%+v", baseline, got)
 	}
 }
+
+func TestCrossplanePausePreservesTopLevelFactsWithAncestorStatus(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "example.org/v1", "kind": "Policy",
+		"metadata": map[string]any{"name": "mixed-status"},
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Ready", "status": "True"},
+				map[string]any{"type": "Synced", "status": "False", "reason": "ReconcileError"},
+			},
+			"ancestors": []any{map[string]any{
+				"ancestorRef": map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "edge"},
+				"conditions":  []any{map[string]any{"type": "Accepted", "status": "True"}},
+			}},
+		},
+	}}
+	baseline := MinifyUnstructured(u, LevelSummary).(*ResourceSummary)
+	if baseline.Status != "Accepted" {
+		t.Fatalf("ancestor fixture missing status: %+v", baseline)
+	}
+	u.SetAnnotations(map[string]string{"crossplane.io/paused": "true"})
+	got := MinifyUnstructured(u, LevelSummary).(*ResourceSummary)
+	if got.Status != baseline.Status || got.Ready != "True" || got.Issue != "ReconcileError" || got.CrossplanePause != resourcecontext.CrossplanePauseRequested {
+		t.Fatalf("top-level facts lost beside ancestor status: %+v", got)
+	}
+}

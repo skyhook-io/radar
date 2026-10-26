@@ -62,6 +62,8 @@ var Builtins = []Builtin{
 	{Group: "coordination.k8s.io", Version: "v1", Kind: "Lease", Resource: "leases", Namespaced: true},
 	{Group: "scheduling.k8s.io", Version: "v1", Kind: "PriorityClass", Resource: "priorityclasses", Aliases: []string{"pc"}},
 	{Group: "node.k8s.io", Version: "v1", Kind: "RuntimeClass", Resource: "runtimeclasses"},
+	{Group: "apiregistration.k8s.io", Version: "v1", Kind: "APIService", Resource: "apiservices"},
+	{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition", Resource: "customresourcedefinitions"},
 	{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "MutatingWebhookConfiguration", Resource: "mutatingwebhookconfigurations"},
 	{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "ValidatingWebhookConfiguration", Resource: "validatingwebhookconfigurations"},
 	{Group: "storage.k8s.io", Version: "v1", Kind: "StorageClass", Resource: "storageclasses", Aliases: []string{"sc"}},

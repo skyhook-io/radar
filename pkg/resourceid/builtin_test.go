@@ -73,3 +73,20 @@ func TestBuiltinAPIVersionOmitsVaryingVersions(t *testing.T) {
 		t.Fatalf("BuiltinGroup(ResourceClaim) = %q, %v", group, ok)
 	}
 }
+
+func TestDynamicallyReadNativeIdentities(t *testing.T) {
+	for _, want := range []Builtin{
+		{Group: "apiregistration.k8s.io", Version: "v1", Kind: "APIService", Resource: "apiservices"},
+		{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition", Resource: "customresourcedefinitions"},
+	} {
+		got, ok := BuiltinForKind(want.Kind)
+		if !ok || got.GroupKind() != want.GroupKind() || got.APIVersion() != want.APIVersion() || got.Resource != want.Resource || got.Namespaced {
+			t.Fatalf("native identity: got %+v, %v; want %+v", got, ok, want)
+		}
+		for _, name := range want.Names() {
+			if byName, ok := BuiltinForName(name); !ok || byName.GroupKind() != want.GroupKind() {
+				t.Fatalf("native name %q: got %+v, %v", name, byName, ok)
+			}
+		}
+	}
+}

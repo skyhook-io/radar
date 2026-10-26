@@ -475,6 +475,20 @@ func summarizeGenericCRD(obj *unstructured.Unstructured, pause resourcecontext.C
 		Age:       age(obj.GetCreationTimestamp().Time),
 	}
 
+	if pause != "" {
+		if ready, found := conditions.Find(obj, "Ready"); found {
+			s.Ready = ready.Status
+		} else if available, found := conditions.Find(obj, "Available"); found {
+			s.Ready = available.Status
+		}
+		if synced, found := conditions.Find(obj, "Synced"); found && synced.Status == "False" && synced.Reason != "ReconcilePaused" {
+			s.Issue = synced.Reason
+			if s.Issue == "" {
+				s.Issue = "NotSynced"
+			}
+		}
+	}
+
 	// Gateway API policies (GEP-713) report per-ancestor, at
 	// status.ancestors[].conditions, so the top-level lookups below find
 	// nothing and the status comes back empty. Matched on the shape rather
@@ -492,20 +506,6 @@ func summarizeGenericCRD(obj *unstructured.Unstructured, pause resourcecontext.C
 	if s.Status == "" {
 		phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
 		s.Status = phase
-	}
-
-	if pause != "" {
-		if ready, found := conditions.Find(obj, "Ready"); found {
-			s.Ready = ready.Status
-		} else if available, found := conditions.Find(obj, "Available"); found {
-			s.Ready = available.Status
-		}
-		if synced, found := conditions.Find(obj, "Synced"); found && synced.Status == "False" && synced.Reason != "ReconcilePaused" {
-			s.Issue = synced.Reason
-			if s.Issue == "" {
-				s.Issue = "NotSynced"
-			}
-		}
 	}
 
 	return s

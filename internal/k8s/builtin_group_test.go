@@ -49,6 +49,8 @@ func TestTypedKindOwnsGroup(t *testing.T) {
 		{"mutatingwebhookconfigurations", "admissionregistration.k8s.io", false},
 		{"validatingwebhookconfigurations", "admissionregistration.k8s.io", false},
 		{"volumeattachments", "storage.k8s.io", false},
+		{"apiservices", "apiregistration.k8s.io", false},
+		{"customresourcedefinitions", "apiextensions.k8s.io", false},
 
 		// Core kinds: own group is "" — typed, with or without an explicit "".
 		{"pods", "", true},
@@ -111,6 +113,8 @@ func TestBuiltinGVR(t *testing.T) {
 		{"mutatingwebhookconfigurations", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}, true},
 		{"validatingwebhookconfiguration", "admissionregistration.k8s.io", schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}, true},
 		{"volumeattachments", "storage.k8s.io", schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "volumeattachments"}, true},
+		{"apiservices", "apiregistration.k8s.io", schema.GroupVersionResource{}, false},
+		{"customresourcedefinitions", "apiextensions.k8s.io", schema.GroupVersionResource{}, false},
 		{"services", "serving.knative.dev", schema.GroupVersionResource{}, false}, // CRD collision
 		{"widgets", "example.com", schema.GroupVersionResource{}, false},          // genuine CRD
 	}
