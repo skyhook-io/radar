@@ -151,6 +151,7 @@ it.each(['pod-uid', 'replacement-uid'])('allows deliberate reselection of %s ins
   state.fetch.mockResolvedValueOnce({ adapter: 'vault', target: candidates.candidates[0].target, observedAt: '2026-10-13T00:00:00Z', source: 'selected_pod_endpoint', outcome: 'unavailable', reason: 'target_changed', limitations: [] }).mockResolvedValueOnce(nextUID === 'replacement-uid' ? { ...candidates, candidates: [], permissionCheckFailed: true } : refreshed).mockResolvedValue(refreshed)
   await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Collect evidence')!.click())
   if (nextUID === 'replacement-uid') {
+    await vi.waitFor(() => expect(host.textContent).toContain('Application evidence permissions could not be verified'))
     await vi.waitFor(() => expect(document.body.textContent).toContain('A current Pod endpoint has not been verified'))
     await act(async () => [...document.querySelectorAll('button')].find(item => item.textContent === 'Refresh Pod choices')!.click())
     expect(state.fetch.mock.calls.at(-1)![0]).toContain('retryPermissions=true')
