@@ -34,14 +34,14 @@ import (
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
-	Reflection      *ReflectionContext `json:"reflection,omitempty"`
-	Tier            ContextTier        `json:"tier"`
-	Owner           *ContextRef        `json:"owner,omitempty"`
-	ManagedBy       []ContextRef       `json:"managedBy,omitempty"`
+	Reflection *ReflectionContext `json:"reflection,omitempty"`
+	Tier       ContextTier        `json:"tier"`
+	Owner      *ContextRef        `json:"owner,omitempty"`
+	ManagedBy  []ContextRef       `json:"managedBy,omitempty"`
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
 	// controller's when its own doesn't settle it.
-	Manager *ManagerContext `json:"manager,omitempty"`
+	Manager         *ManagerContext    `json:"manager,omitempty"`
 	Exposes         []ContextRef       `json:"exposes,omitempty"`        // Union of upstream routing resources and backends; retained for compatibility.
 	ExposedBy       []ContextRef       `json:"exposedBy,omitempty"`      // Upstream resources routing to this resource.
 	Backends        []ContextRef       `json:"backends,omitempty"`       // Resources this routes to.
