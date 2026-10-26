@@ -169,3 +169,15 @@ it.each(['pod-uid', 'replacement-uid'])('allows deliberate reselection of %s ins
   expect(JSON.parse(state.fetch.mock.calls.at(-1)![1].body).uid).toBe(nextUID)
   expect(document.body.textContent).toContain('Endpoint observations')
 })
+
+
+it('keeps background refresh errors quiet for a resource with no eligible endpoints', async () => {
+  state.fetch.mockResolvedValueOnce({ ...candidates, candidates: [] })
+  await act(async () => root.render(<QueryClientProvider client={client}><ApplicationEvidenceAction kind="Deployment" group="apps" namespace="demo" name="vault" uid="subject-uid" /></QueryClientProvider>))
+  await vi.waitFor(() => expect(client.getQueryCache().getAll()[0]?.state.status).toBe('success'))
+  expect(host.textContent).toBe('')
+  state.fetch.mockRejectedValue(new ApiError('temporary refresh failure', 500))
+  await act(async () => { await client.invalidateQueries({ queryKey: ['application-evidence-candidates'] }) })
+  expect(state.fetch).toHaveBeenCalledTimes(2)
+  expect(host.textContent).toBe('')
+})
