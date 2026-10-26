@@ -186,3 +186,32 @@ func TestASwitchMidBuildLetsTheNewClusterBuild(t *testing.T) {
 		t.Fatal("the old build's end disturbed the new cluster's cache")
 	}
 }
+
+// A build that ends just after a switch abandoned it is no answer for the
+// new cluster, whichever its waiter sees first.
+func TestAReaderOfAnAbandonedBuildThatEndedLooksAgain(t *testing.T) {
+	b := NewSSEBroadcaster()
+	fresh := topoWithEdge("deployment/y/web", "replicaset/y/web-1")
+	f := &topologyFlight{done: make(chan struct{}), abandoned: make(chan struct{})}
+	b.cachedTopologyFlight = f
+	b.resetCachedTopology()
+	close(f.done)
+	b.rebuildTopology = func() bool { return b.updateCachedTopology(fresh, b.topoEpoch.Load()) }
+	for range 50 {
+		b.cachedTopologyMu.Lock()
+		b.cachedTopology, b.cachedTopologyFlight = nil, f
+		b.cachedTopologyMu.Unlock()
+		// The flight is still installed, both its channels ready.
+		got := make(chan *topology.Topology, 1)
+		go func() { got <- b.GetCachedTopology() }()
+		time.Sleep(time.Millisecond)
+		b.cachedTopologyMu.Lock()
+		if b.cachedTopologyFlight == f {
+			b.cachedTopologyFlight = nil
+		}
+		b.cachedTopologyMu.Unlock()
+		if topo := <-got; topo != fresh {
+			t.Fatalf("reader got %v, want a build for the new cluster", topo)
+		}
+	}
+}

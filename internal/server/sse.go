@@ -1189,6 +1189,12 @@ func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {
 			}
 			select {
 			case <-f.done:
+				select {
+				case <-f.abandoned:
+					// Reset as the build ended: it was for the previous cluster.
+					continue
+				default:
+				}
 			case <-f.abandoned:
 				continue
 			case <-deadline:
