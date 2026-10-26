@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CompareResourcePicker, refToParam, resourceCoverageNotice, type CompareResourceRef } from '@skyhook-io/k8s-ui'
+import { CompareResourcePicker, refToParam, resourceCoverageNotice, resourceNarrowedNotice, type CompareResourceRef } from '@skyhook-io/k8s-ui'
 import { useCompareCandidates } from './useCompareCandidates'
 import { useNavCustomization } from '../../context/NavCustomization'
 
@@ -65,7 +65,7 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
       onClose={() => setOpen(false)}
       source={source}
       candidates={candidates}
-      coverageNote={resourceCoverageNotice(coverage)}
+      coverageNote={resourceCoverageNotice(coverage) ?? resourceNarrowedNotice(coverage)}
       loading={open && isPending}
       error={open ? error : null}
       onPick={handlePick}

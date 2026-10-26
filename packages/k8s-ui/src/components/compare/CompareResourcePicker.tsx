@@ -150,9 +150,13 @@ export function CompareResourcePicker({
         )}
         {!loading && error == null && filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12 text-theme-text-tertiary text-sm gap-1">
-            {candidates.length <= 1
-              ? `No other ${source.kind} available to compare against.`
-              : 'No matches.'}
+            {candidates.length > 1
+              ? 'No matches.'
+              : coverageNote
+                // The list is partial or limited to the namespaces Radar
+                // collects, so others may exist outside it.
+                ? `No other ${source.kind} found in what Radar could read.`
+                : `No other ${source.kind} available to compare against.`}
           </div>
         )}
         {!loading && error == null && filtered.length > 0 && (

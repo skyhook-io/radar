@@ -370,7 +370,7 @@ mcp_call() {
 
 expect_mcp_denied() {
   local desc=$1 user=$2 tool=$3 args=$4
-  if mcp_response "$user" "$tool" "$args" | jq -e '.result.isError == true and .result.structuredContent.error_code == "rbac_denied" and (.result.content[0].text | fromjson | .error_code == "rbac_denied")' >/dev/null; then
+  if mcp_response "$user" "$tool" "$args" | jq -e '.result.isError == true and .result.structuredContent.error_code == "user_forbidden" and (.result.content[0].text | fromjson | .error_code == "user_forbidden")' >/dev/null; then
     ok "$desc"
   else
     fail "$desc — expected explicit RBAC error"
@@ -487,7 +487,7 @@ fi
 echo
 echo -e "${B}=== MCP: cluster-only kinds hidden ===${N}"
 
-expect_mcp_code "MCP alice list_resources kind=nodes is her own denial (cluster-only)" "$(mcp_call alice list_resources '{"kind":"nodes"}')" rbac_denied
+expect_mcp_code "MCP alice list_resources kind=nodes is her own denial (cluster-only)" "$(mcp_call alice list_resources '{"kind":"nodes"}')" user_forbidden
 
 echo
 echo -e "${B}=== MCP: list_namespaces filters ===${N}"
@@ -575,7 +575,7 @@ expect_rest_forbidden "carol cannot list Nodes" carol /api/resources/nodes
 
 expect_rest_forbidden "carol cannot list ClusterRoles" carol /api/resources/clusterroles
 
-expect_mcp_code "MCP carol list_resources kind=nodes is her own denial" "$(mcp_call carol list_resources '{"kind":"nodes"}')" rbac_denied
+expect_mcp_code "MCP carol list_resources kind=nodes is her own denial" "$(mcp_call carol list_resources '{"kind":"nodes"}')" user_forbidden
 
 echo
 echo -e "${B}=== Multi-namespace user dashboard aggregates only allowed namespaces (dave) ===${N}"
