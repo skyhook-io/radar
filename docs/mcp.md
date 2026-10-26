@@ -1176,34 +1176,21 @@ See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors)
 
 ### `resourceContext.manager` — which GitOps manager to look at
 
-`get_resource` and `diagnose` add `resourceContext.manager` when Radar answered the resource's ownership. It weighs two
-kinds of evidence and names no winner they don't support:
+`get_resource` and `diagnose` add `resourceContext.manager`: which Argo CD or Flux manager to look at, without picking
+a winner the evidence doesn't support ([full rules](ownership.md#what-manages-an-object)).
 
-- `listedBy`: the Argo CD Applications and Flux Kustomizations/HelmReleases whose status lists name the resource;
-- `claims`: the managers its own tracking labels and annotations name, each with what checking it found (`recorded`,
-  `omitted` when that manager's list was read and doesn't name it, `unreadable`, `remote`, `missing`, `not-recording`
-  for a native Helm release, `unresolved` for a claim with no namespace, `withheld` when you may not read the manager,
-  `unchecked` when Radar couldn't establish what its list says). A native Helm release's claim counts only without GitOps evidence, since
-  Flux's helm-controller writes the same annotations. That decides the state, not the risk: Helm annotations beside an
-  Argo CD or Kustomization manager mean an adopted Helm install whose next upgrade or rollback can still overwrite a
-  change.
+- `listedBy`: managers whose status lists name the resource. `claims`: managers its labels and annotations name, each
+  with a `check` (`recorded`, `omitted`, `missing`, `withheld`, …).
+- `state`: `agree` (a list and the metadata name the same manager — the strongest answer), `listed` (a list alone,
+  which isn't proof the manager applies it), `disagree` (look at both), `shared` (several lists), `claimed` (metadata
+  only), `unknown` (Radar couldn't look everywhere) or `none` (nothing Radar can see — **not** "unmanaged").
+- `via`: the controller ancestor whose evidence answers (a Pod's Deployment); `listedBy`/`claims` are then its.
+  `alsoClaimed` lists other claims on the way, each `on` its object.
+- `lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of the evidence.
 
-`state` sums them up: `agree` (one manager's list names it and the resource's metadata names that manager: the
-strongest answer), `listed` (one list names it but the metadata names no manager: the list records what the manager
-compared, which can include an object it doesn't apply, so don't treat it as proof the manager reconciles it),
-`disagree` (a list names it and its metadata names
-another manager: look at both), `shared` (several lists name it), `claimed` (only metadata names a manager), `unknown`
-(no evidence, and Radar couldn't look everywhere) or `none` (no evidence in what Radar reads — **not** "unmanaged":
-Terraform, `kubectl apply` or a manager in another cluster leave nothing Radar sees). When the resource's own evidence
-doesn't settle it, `via` names the controller ancestor whose evidence answers, as for a Pod whose Deployment an
-Application lists; `listedBy` and `claims` are then that ancestor's, and `alsoClaimed` lists what the resource's own
-metadata (and that of objects in between) names, each `on` its object: commonly inherited from a template, not disproven.
-When nothing settles it and the resource makes no claim that isn't copied, the nearest ancestor whose metadata names a manager answers as `via`, with `claimed`. Claims of
-objects the walk passed appear in `alsoClaimed` with or without `via`. `get_resource` and `diagnose` then leave out the
-metadata-only warning naming an Argo CD, Flux or Helm manager, which this answer weighs; metadata the answer doesn't
-weigh keeps its warning: another controller's `app.kubernetes.io/managed-by` label, or Helm named by labels without
-its release annotation. A tracking ID copied from another object raises no warning anywhere. `lead` is where to look first, not a verdict. `narrowed: true` means you may read only part of
-what could name a manager. `managedBy` keeps its own meaning: the topmost owner the relationship graph links.
+Helm annotations beside an Argo CD or Kustomization manager mean an adopted Helm install: its next upgrade can still
+overwrite a change. With this answer present, the metadata-only manager warning is left out for the claims it weighs.
+`managedBy` keeps its own meaning: the topmost owner the relationship graph links.
 
 ### Node placement context
 

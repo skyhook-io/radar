@@ -43,33 +43,38 @@ Every answer in this package says what it couldn't read. An empty answer means "
 
 ## What manages an object
 
-`View.Manager(ref)` (`pkg/ownership/manager.go`) weighs the two GitOps kinds of evidence for one object and names no
-winner they don't support. It gathers, for the object, the local managers whose lists name it (**recorders**) and the
-claims its metadata makes, each checked against its manager (recorded, omitted by a list that was read, unreadable,
-remote, missing, not a recording kind as for a native Helm release, unresolved for a claim with no namespace,
-withheld from the caller, or unchecked when Radar couldn't establish what the list says). When that evidence doesn't settle the question it walks the controller chain, Pod →
-ReplicaSet → Deployment, to the nearest ancestor whose evidence does, and reports it as **via**. A claim is **weak** —
-it doesn't stop the walk — when it was copied from another object, or is metadata an object a controller owns commonly
-inherits: an Argo CD instance label from its template, or a Helm release's annotations, which a Deployment copies onto
-its ReplicaSets. When no object on the chain settles it and the object makes no claim that isn't copied, the
-nearest ancestor that makes one answers, as **via**, with the state **claimed**; claims farther up stay in
-**between**. A walk stops at an owner it
-can't follow and says so. A manager the request read before its recorder search found it, unavailable then or
-another incarnation, leaves the answer incomplete rather than confirming membership.
+`View.Manager(ref)` (`pkg/ownership/manager.go`) weighs two kinds of evidence and names no winner they don't support:
+**recorders** (local managers whose status lists name the object) and **claims** (what the object's metadata names,
+each checked against its manager: recorded, omitted, unreadable, remote, missing, not-recording for native Helm,
+unresolved without a namespace, withheld, or unchecked).
 
-The state, first match wins: **shared** (several lists name it), **disagree** (a list names it and a claim names
-another manager), **agree** (one list names it and every claim names that manager), **listed** (one list, no claim),
-**claimed** (claims only), **unknown** (no evidence, and Radar couldn't look everywhere) and **none** (no evidence in
-what Radar collects and the caller may read — never "unmanaged"). A native Helm release's annotations count only when
-no GitOps evidence exists, since Flux's helm-controller writes them too. With Argo CD's annotation+label tracking, an
-instance label cut to 63 characters names the tracking ID's Application, not another one. The answer reaches the wire as
-`relationships.ownership.manager`; `relationships.managedBy` keeps its own meaning, the topmost owner the graph links.
+The state, first match wins:
 
-On the wire the answer carries the state and the evidence that answered: each object's recorders and claims. Which
-manager lists Radar couldn't read or search stays internal: `unknown` says that left no answer, `none` that nothing was
-found within what Radar collects and the caller may read. A positive state doesn't say every list was read, and doesn't
-establish exclusive management. On a full relationship response, `ownership.managers` separately says what the
-resource's own recorder search missed; it is not coverage of an answer that came through a controller ancestor.
+| state | evidence |
+|---|---|
+| **shared** | several lists name it |
+| **disagree** | a list names it and a claim names another manager |
+| **agree** | one list names it and every claim names that manager |
+| **listed** | one list names it, no claim |
+| **claimed** | claims only |
+| **unknown** | no evidence, and Radar couldn't look everywhere |
+| **none** | no evidence in what Radar collects and the caller may read — never "unmanaged" |
+
+Copied claims (an Argo CD tracking ID naming another object) never count. A native Helm release's claim counts only
+without other evidence, since Flux's helm-controller writes the same annotations. An instance label Argo CD cut to 63
+characters names the tracking ID's Application.
+
+When the object's evidence doesn't settle it, the walk follows the controller chain (Pod → ReplicaSet → Deployment) to
+the nearest ancestor whose evidence does: **via**. Weak claims don't stop the walk: copied ones, and metadata a
+controller-owned object inherits (an instance label from its template, Helm annotations from its Deployment). If nothing
+settles it and the object makes no claim of its own, the nearest ancestor claim answers as **via**, **claimed**; other
+claims on the way stay in **between**. A walk that can't follow an owner says so (**stop**), and a manager the request
+read differently earlier (still loading, or another incarnation) leaves the answer incomplete.
+
+On the wire (`relationships.ownership.manager`) the answer carries the state and the evidence that answered. Which
+lists Radar couldn't read stays internal: `unknown` reports it left no answer. A positive state doesn't mean every list
+was read or that management is exclusive. `ownership.managers` separately covers the object's own recorder search, and
+`relationships.managedBy` keeps its meaning, the topmost owner the graph links.
 
 ## Coverage
 
