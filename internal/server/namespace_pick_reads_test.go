@@ -99,6 +99,11 @@ func TestProxyAuth_PlainReadsIgnoreSavedPick(t *testing.T) {
 		return out
 	}
 	list := func(body []byte) []string { return itemNamespaces(decodeInto[[]nsItem](t, body)) }
+	resources := func(body []byte) []string {
+		return itemNamespaces(decodeInto[struct {
+			Items []nsItem `json:"items"`
+		}](t, body).Items)
+	}
 	topology := func(body []byte) []string {
 		return itemNamespaces(decodeInto[struct {
 			Nodes []nsItem `json:"nodes"`
@@ -128,20 +133,20 @@ func TestProxyAuth_PlainReadsIgnoreSavedPick(t *testing.T) {
 		pick       func([]byte) []string
 		want       []string
 	}{
-		{"alice", "/api/resources/deployments", list, both},
+		{"alice", "/api/resources/deployments", resources, both},
 		{"alice", "/api/topology", topology, both},
 		{"alice", "/api/issues", issues, both},
 		{"alice", "/api/changes", list, both},
 		{"alice", "/api/search?q=kind:Deployment", search, both},
 		{"alice", "/api/dashboard", dashboard, both},
 		// An explicit filter still narrows.
-		{"alice", "/api/resources/deployments?namespaces=default", list, onlyDefault},
+		{"alice", "/api/resources/deployments?namespaces=default", resources, onlyDefault},
 		{"alice", "/api/topology?namespaces=default", topology, onlyDefault},
 		{"alice", "/api/issues?namespaces=default", issues, onlyDefault},
 		{"alice", "/api/changes?namespaces=default", list, onlyDefault},
 		{"alice", "/api/search?q=kind:Deployment&namespaces=default", search, onlyDefault},
 		// RBAC still bounds a plain read.
-		{"carol", "/api/resources/deployments", list, onlyBroken},
+		{"carol", "/api/resources/deployments", resources, onlyBroken},
 		{"carol", "/api/issues", issues, onlyBroken},
 		{"carol", "/api/search?q=kind:Deployment", search, onlyBroken},
 	}
@@ -294,14 +299,18 @@ func TestProxyAuth_PlainReadsKeepForcedCacheScope(t *testing.T) {
 		t.Errorf("global search for Namespaces under --namespace-scope = %v, want [broken default]", got)
 	}
 
+	// A namespace outside the pin is never read, so the list says so rather
+	// than answering an empty list.
 	resp := env.authGet(t, "/api/resources/deployments?namespaces=broken", "root", "")
 	defer func() { _ = resp.Body.Close() }()
-	var items []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+	var failure struct {
+		ErrorCode string `json:"error_code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&failure); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK || len(items) != 0 {
-		t.Errorf("list outside the pinned namespace = status %d, %d items, want 200 with none", resp.StatusCode, len(items))
+	if resp.StatusCode != http.StatusConflict || failure.ErrorCode != "outside_namespace_pin" {
+		t.Errorf("list outside the pinned namespace = status %d, code %q, want 409 outside_namespace_pin", resp.StatusCode, failure.ErrorCode)
 	}
 }
 
@@ -329,5 +338,132 @@ func seedTimelineAcrossNamespaces(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("Append %s: %v", ref[1], err)
 		}
+	}
+}
+
+// A caller who can't see a namespace gets the same answer for it whether or
+// not it is outside the --namespace-scope pin, so guessing names doesn't
+// reveal which namespace Radar is pinned to. "Outside the pin" is said only
+// about a namespace the caller can see.
+func TestProxyAuth_PinIsNotRevealedToGuesses(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("default")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+	env := newAuthTestServer(t)
+	for user, namespaces := range map[string][]string{"bob": {"broken"}, "carol": {"broken", "default"}} {
+		perms := &pkgauth.UserPermissions{AllowedNamespaces: namespaces}
+		for _, ns := range namespaces {
+			perms.SetCanI("list", "apps", "deployments", ns, true)
+		}
+		env.srv.permCache.Set(user, nil, perms)
+	}
+	code := func(user, ns string) (int, string) {
+		t.Helper()
+		resp := env.authGet(t, "/api/resources/deployments?namespaces="+ns, user, "")
+		defer func() { _ = resp.Body.Close() }()
+		var failure struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&failure); err != nil {
+			t.Fatalf("decode %s as %s: %v", ns, user, err)
+		}
+		return resp.StatusCode, failure.ErrorCode
+	}
+	// bob can see neither default (inside the pin) nor elsewhere (outside it).
+	insideStatus, inside := code("bob", "default")
+	outsideStatus, outside := code("bob", "elsewhere")
+	if inside != "user_namespace_not_visible" || outside != inside || outsideStatus != insideStatus {
+		t.Errorf("hidden namespaces answered differently: inside the pin %d %q, outside %d %q", insideStatus, inside, outsideStatus, outside)
+	}
+	// carol can see broken, which the pin leaves out.
+	if status, got := code("carol", "broken"); status != http.StatusConflict || got != "outside_namespace_pin" {
+		t.Errorf("visible namespace outside the pin = %d %q, want 409 outside_namespace_pin", status, got)
+	}
+}
+
+// A caller who can see every namespace is told a named namespace doesn't
+// exist rather than shown an empty list, and before the --namespace-scope pin:
+// a mistyped name is the likelier cause. A real namespace beside it is still
+// read, and one outside the pin is still outside_namespace_pin.
+func TestProxyAuth_MissingNamespaceIsNotFound(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("root", nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
+	type body struct {
+		Error     string `json:"error"`
+		ErrorCode string `json:"error_code"`
+		Coverage  struct {
+			Gaps []struct {
+				Code       string `json:"code"`
+				Namespaces struct {
+					Names []string `json:"names"`
+				} `json:"namespaces"`
+			} `json:"gaps"`
+		} `json:"coverage"`
+		Items []json.RawMessage `json:"items"`
+	}
+	fetch := func(path string) (int, body) {
+		t.Helper()
+		resp := env.authGet(t, path, "root", "")
+		defer func() { _ = resp.Body.Close() }()
+		var b body
+		if err := json.NewDecoder(resp.Body).Decode(&b); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		return resp.StatusCode, b
+	}
+	if status, b := fetch("/api/resources/deployments?namespaces=typo"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" || b.Error != `namespace "typo" doesn't exist in this cluster` {
+		t.Errorf("only a missing namespace = %d %q %q, want 404 namespace_not_found naming typo", status, b.ErrorCode, b.Error)
+	}
+	status, b := fetch("/api/resources/deployments?namespaces=default,typo")
+	if status != http.StatusOK || len(b.Items) != 1 || len(b.Coverage.Gaps) != 1 || b.Coverage.Gaps[0].Code != "namespace_not_found" || !slices.Equal(b.Coverage.Gaps[0].Namespaces.Names, []string{"typo"}) {
+		t.Errorf("missing beside existing = %d %+v, want default's row and a namespace_not_found gap for typo", status, b)
+	}
+	if status, b := fetch("/api/resources/deployments/typo/nginx"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
+		t.Errorf("get in a missing namespace = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	}
+
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("default")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+	if status, b := fetch("/api/resources/deployments?namespaces=typo"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
+		t.Errorf("missing namespace outside the pin = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	}
+	if status, b := fetch("/api/resources/deployments?namespaces=broken"); status != http.StatusConflict || b.ErrorCode != "outside_namespace_pin" || b.Error != `namespace "broken" is outside Radar's --namespace-scope pin` {
+		t.Errorf("existing namespace outside the pin = %d %q %q, want 409 outside_namespace_pin naming broken", status, b.ErrorCode, b.Error)
+	}
+	if status, b := fetch("/api/resources/deployments/typo/nginx"); status != http.StatusNotFound || b.ErrorCode != "namespace_not_found" {
+		t.Errorf("get in a missing namespace outside the pin = %d %q, want 404 namespace_not_found", status, b.ErrorCode)
+	}
+}
+
+// A missing namespace is one gap even when exact kind authorization would
+// also deny it: it doesn't exist, so the denial says nothing.
+func TestProxyAuth_MissingNamespaceIsOneGapForExactKinds(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	env := newAuthTestServer(t)
+	perms := &pkgauth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "secrets", "", false)
+	perms.SetCanI("list", "", "secrets", "default", true)
+	perms.SetCanI("list", "", "secrets", "ghost", false)
+	env.srv.permCache.Set("root", nil, perms)
+	resp := env.authGet(t, "/api/resources/secrets?namespaces=default,ghost", "root", "")
+	defer func() { _ = resp.Body.Close() }()
+	var list testResourceListEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Coverage.Gaps) != 1 || list.Coverage.Gaps[0].Code != "namespace_not_found" {
+		t.Fatalf("gaps %+v", list.Coverage.Gaps)
 	}
 }

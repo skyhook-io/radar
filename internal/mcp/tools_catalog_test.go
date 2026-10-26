@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
@@ -694,4 +695,20 @@ func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
 	if len(stale) > 0 {
 		t.Errorf("investigation.ReadOnlyTools names tools that are not registered: %v", stale)
 	}
+}
+
+func TestSearchDescriptionNamesCoverageStatus(t *testing.T) {
+	var body search.Result
+	if err := json.Unmarshal([]byte(`{"coverage":{"status":"partial","gaps":[]}}`), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range listRegisteredTools(t) {
+		if tool.Name == "search" {
+			if !strings.Contains(tool.Description, "coverage.status="+string(body.Coverage.Status)) || strings.Contains(tool.Description, "partial=true") {
+				t.Fatalf("search coverage routing: %s", tool.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("search tool missing")
 }

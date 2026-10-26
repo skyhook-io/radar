@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useId } from 'react'
+import { useEffect, useMemo, useRef, useState, useId, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { GitCompare, Search, X } from 'lucide-react'
 import { DialogPortal } from '../ui/DialogPortal'
@@ -18,6 +18,11 @@ export interface CompareResourcePickerProps {
   sourceSide?: CompareSide
   /** Candidate resources — same kind as source. Source is filtered out automatically. */
   candidates: CompareResourceRef[]
+  /** Says the candidate list may be incomplete; shown as a warning above it. */
+  coverageNote?: ReactNode
+  /** Says the list covers only the namespaces Radar collects; shown neutrally.
+   *  Ignored when coverageNote is set. */
+  scopeNote?: ReactNode
   loading?: boolean
   error?: unknown
   onPick: (r: CompareResourceRef) => void
@@ -30,6 +35,8 @@ export function CompareResourcePicker({
   sourceSide = 'a',
   candidates,
   loading,
+  coverageNote,
+  scopeNote,
   error,
   onPick,
 }: CompareResourcePickerProps) {
@@ -133,6 +140,9 @@ export function CompareResourcePicker({
         </div>
       </div>
 
+      {coverageNote
+        ? <div role="status" className="px-4 py-2 text-xs text-warning-text border-b border-theme-border">{coverageNote}</div>
+        : scopeNote && <div role="status" className="px-4 py-2 text-xs text-theme-text-tertiary border-b border-theme-border">{scopeNote}</div>}
       <div className="flex-1 min-h-0 overflow-y-auto">
         {loading && (
           <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
@@ -146,9 +156,13 @@ export function CompareResourcePicker({
         )}
         {!loading && error == null && filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12 text-theme-text-tertiary text-sm gap-1">
-            {candidates.length <= 1
-              ? `No other ${source.kind} available to compare against.`
-              : 'No matches.'}
+            {candidates.length > 1
+              ? 'No matches.'
+              : coverageNote
+                ? `No other ${source.kind} found in what Radar could read.`
+                : scopeNote
+                  ? `No other ${source.kind} found in the collected namespaces.`
+                  : `No other ${source.kind} available to compare against.`}
           </div>
         )}
         {!loading && error == null && filtered.length > 0 && (

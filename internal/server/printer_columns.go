@@ -15,6 +15,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 // printerColumn is one vendor-declared column from a CRD's
@@ -36,7 +37,8 @@ type printerColumn struct {
 // top-level type. Outcomes that answer 4xx/5xx are unchanged — they return
 // {"error": ...} as every other handler does.
 type resourceTableResponse struct {
-	Items any `json:"items"`
+	Items    any                  `json:"items"`
+	Coverage resourceapi.Coverage `json:"coverage"`
 	// The resource these columns describe — the lowercased plural from the
 	// request path, not a Kubernetes Kind. The client changes its selection
 	// before the new list resolves, so without this it could pair the previous
@@ -330,33 +332,16 @@ func coerceUnstructured(result any) []*unstructured.Unstructured {
 	}
 }
 
-// writeEmptyResourceTable answers a request that resolved to nothing for a
-// reason that must not leak schema — today, an RBAC denial. Same envelope, no
-// table, so the shape still doesn't vary with the caller's permissions.
-func (s *Server) writeEmptyResourceTable(w http.ResponseWriter, tableMode bool, kind, group string) {
-	if !tableMode {
-		s.writeJSON(w, []any{})
-		return
+// writeResourceList keeps coverage beside its rows in every successful list.
+func (s *Server) writeResourceList(w http.ResponseWriter, r *http.Request, listCache *k8s.ResourceCache, tableMode bool, kind, group string, result any, coverage resourceapi.Coverage) {
+	resp := resourceTableResponse{Items: normalizeNilSlice(result), Coverage: coverage, Kind: kind, Group: group}
+	if tableMode {
+		resp.Columns, resp.Cells = buildResourceTable(r.Context(), listCache, kind, group, coerceUnstructured(result))
+		// Resolving the columns can outlast the connection the rows came from.
+		if listCache != readCache() {
+			s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+			return
+		}
 	}
-	s.writeJSON(w, resourceTableResponse{Items: []any{}, Kind: kind, Group: group})
-}
-
-// writeResourceList writes a list response in whichever representation the
-// caller asked for. In table mode the envelope is written for every outcome —
-// including the ones that produce no columns — so the response shape never
-// depends on the caller's permissions or on whether the kind is a CRD.
-func (s *Server) writeResourceList(w http.ResponseWriter, r *http.Request, listCache *k8s.ResourceCache, tableMode bool, kind, group string, result any) {
-	if !tableMode {
-		s.writeJSON(w, result)
-		return
-	}
-	// Items sits a level down from writeJSON's own nil-slice check, so it has to
-	// be normalized here or an empty list serializes as `null` in table mode
-	// while the bare-array path returns `[]` for the same request.
-	resp := resourceTableResponse{Items: normalizeNilSlice(result), Kind: kind, Group: group}
-	// Resolved even for an empty list: the columns belong to the CRD, not to
-	// the rows, so an eligible kind keeps its headers when it holds nothing —
-	// and the set doesn't flip as the last object comes and goes.
-	resp.Columns, resp.Cells = buildResourceTable(r.Context(), listCache, kind, group, coerceUnstructured(result))
 	s.writeJSON(w, resp)
 }

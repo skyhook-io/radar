@@ -162,6 +162,8 @@ export interface CloudConnectCapability {
 
 export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
+  resourceReadCoverage?: boolean
+  searchCoverage?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean

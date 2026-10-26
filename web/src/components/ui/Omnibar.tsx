@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, CornerDownLeft, Loader2, AlertTriangle } from 'lucide-react'
+import { Search, CornerDownLeft, Loader2, AlertTriangle, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_MENU, TW_EASE_UI, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
@@ -33,6 +33,19 @@ export interface OmnibarSearchResult {
   incomplete_findings?: string
   /** Some namespaces' scan reports were left out, access not confirmed yet. */
   access_incomplete?: boolean
+}
+
+// A host-provided line about the current search (what was or wasn't searched),
+// shown muted above the results or the empty state. The host interprets its
+// own search response; the omnibar only renders the text and optional action.
+export interface OmnibarNotePart {
+  text: string
+  action?: { label: string; suffix?: string; onSelect: () => void; keepOpen?: boolean }
+}
+
+export interface OmnibarNote extends OmnibarNotePart {
+  /** When supplied, renders these parts in order instead of the top-level text/action. */
+  parts?: OmnibarNotePart[]
 }
 
 // Health → dot color (summaryContext.health is the same vocabulary as the rest
@@ -88,6 +101,7 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 export interface OmnibarHandle {
+  addModifier: (modifier: SearchModifier) => void
   focus: () => void
 }
 
@@ -106,6 +120,10 @@ export interface OmnibarProps {
   isError?: boolean
   /** True while React Query serves a previous query's data — gates Enter/clicks. */
   isPlaceholderData?: boolean
+  /** Optional note about the current search's coverage, from the host. A
+   *  note says part of the scope wasn't searched, so an empty result is then
+   *  qualified rather than reported as no match. */
+  note?: OmnibarNote
   /** Bounded modifier value sets to autocomplete (e.g. { ns: [...], kind: [...] }). */
   modifierOptions?: Record<string, string[]>
   /** Namespaces to seed as removable `ns:` pills when the launcher opens empty
@@ -160,6 +178,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     isFetching = false,
     isError = false,
     isPlaceholderData = false,
+    note,
     modifierOptions,
     seedNamespaces,
     loadRecents,
@@ -186,7 +205,13 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   // whole top bar.
   const [anchor, setAnchor] = useState<{ centerX: number; top: number; width: number } | null>(null)
 
-  useImperativeHandle(ref, () => ({ focus: () => { inputRef.current?.focus(); inputRef.current?.select() } }), [])
+  useImperativeHandle(ref, () => ({
+    focus: () => { inputRef.current?.focus(); inputRef.current?.select() },
+    addModifier: (modifier) => {
+      setPills((prev) => prev.some((p) => p.key === modifier.key && p.value === modifier.value) ? prev : [...prev, modifier])
+      inputRef.current?.focus()
+    },
+  }), [])
 
   // Usage data: one count per opening, one per opening that searched. Never
   // the query itself.
@@ -348,6 +373,13 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     return Math.max(1, Math.floor(list.clientHeight / rowH) - 1)
   }
 
+  const close = useCallback(() => {
+    setOpen(false)
+    setText('')
+    setPills([])
+    inputRef.current?.blur()
+  }, [])
+
   const execute = useCallback((row: Row) => {
     if (row.kind === 'command') {
       row.command.action()
@@ -358,15 +390,16 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
       recordRecent?.({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name, cluster: h.cluster, clusterName: h.clusterName })
       onOpenResource(h)
     }
-    setOpen(false)
-    setText('')
-    setPills([])
-    inputRef.current?.blur()
-  }, [onOpenResource, recordRecent, onViewAllResults])
+    close()
+  }, [onOpenResource, recordRecent, onViewAllResults, close])
 
   // The resources shown don't (yet) belong to the current query: the debounce
   // hasn't fired, the data is React Query placeholder, or results haven't landed.
   const resourcesStale = searchActive && (debounced !== queryString || isPlaceholderData || (resourceRows.length === 0 && isFetching))
+  // A note describes the response it came from: hide it while the shown data
+  // belongs to another query, but not during a background refetch of this one.
+  const currentData = searchData !== undefined && debounced === queryString && !isPlaceholderData
+  const shownNote = searchActive && !isError && currentData ? note : undefined
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); setOpen(false); inputRef.current?.blur(); return }
@@ -387,11 +420,11 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
       // are in; fall back to the raw query while they're still loading.
       if (submitToSearch && searchActive) {
         if (viewAllRow) execute(viewAllRow)
-        else { onViewAllResults?.(queryString); setOpen(false); setText(''); setPills([]); inputRef.current?.blur() }
+        else { onViewAllResults?.(queryString); close() }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, selectedIndex, execute, resourcesStale, submitToSearch, searchActive, viewAllRow, onViewAllResults, queryString])
+  }, [rows, selectedIndex, execute, close, resourcesStale, submitToSearch, searchActive, viewAllRow, onViewAllResults, queryString])
 
   useEffect(() => {
     listRef.current?.querySelector('[data-selected="true"]')?.scrollIntoView({ block: 'nearest' })
@@ -479,16 +512,22 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
                   {isFetching && <Loader2 className="w-3 h-3 animate-spin" />}
                   {!isFetching && !isError && totalMatched > total && <span className="normal-case font-normal">showing {total} of {totalMatched}</span>}
                 </div>
+                {/* Above the rows: with a full page of hits a note below them
+                    would sit under the fold. */}
+                {shownNote && <OmnibarNoteRow note={shownNote} onAction={(action) => {
+                  action.onSelect()
+                  if (!action.keepOpen) close()
+                }} />}
                 {isError ? (
                   <div className="flex items-center gap-2 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Search is unavailable right now.
                   </div>
-                ) : resourceRows.length === 0 && !isFetching ? (
+                ) : resourceRows.length === 0 && (!isFetching || currentData) ? (
                   <div className="px-3 py-2 text-xs text-theme-text-tertiary">
-                    No resources match{freeText ? <> “{freeText}”</> : ''}.
+                    {shownNote ? 'No matches in what Radar searched.' : <>No resources match{freeText ? <> “{freeText}”</> : ''}.</>}
                     {hasNsPill && (
                       <button onMouseDown={(e) => { e.preventDefault(); clearNsPills() }} className="ml-1.5 text-[var(--color-brand)] hover:underline">
-                        Search all namespaces
+                        Remove namespace filter
                       </button>
                     )}
                   </div>
@@ -620,6 +659,31 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     </div>
   )
 })
+
+function OmnibarNoteRow({ note, onAction }: { note: OmnibarNote; onAction: (action: NonNullable<OmnibarNote['action']>) => void }) {
+  return (
+    <div className="flex items-start gap-1.5 px-3 py-1.5 text-xs text-theme-text-tertiary">
+      <Info className="w-3.5 h-3.5 shrink-0 mt-px" />
+      <span>
+        {(note.parts ?? [note]).map(({ text, action }, index) => (
+          <span key={index}>
+            {index > 0 && ' '}
+            {text}
+            {action && (
+              <>
+                {' '}
+                <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => onAction(action)} className="text-[var(--color-brand)] hover:underline">
+                  {action.label}
+                </button>
+                {action.suffix}
+              </>
+            )}
+          </span>
+        ))}
+      </span>
+    </div>
+  )
+}
 
 function ResourceRow({ hit, selected, stale, onSelect, onActivate }: { hit: SearchHit; selected: boolean; stale?: boolean; onSelect: () => void; onActivate: () => void }) {
   const Icon = getResourceIcon(hit.kind)
