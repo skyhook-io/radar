@@ -237,3 +237,78 @@ func TestSplitHistoryReadsTheSessionsCache(t *testing.T) {
 		t.Errorf("a session over other caches moved %v; only the typed cache it reads can say", rel.OlderRevisions)
 	}
 }
+
+func TestAnswerLiveManagerUsesLiveMetadataAndValidatesCaches(t *testing.T) {
+	_, _, source, deployment := historyFixture(t)
+	live := deployment.DeepCopy()
+	live.Labels = map[string]string{"kustomize.toolkit.fluxcd.io/name": "live", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}
+	subject := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
+	fetched := ownership.Observe(subject, live)
+	for _, tc := range []struct {
+		name string
+		uid  types.UID
+		lead bool
+	}{
+		{"same object", deployment.UID, true},
+		{"replaced object", "different-uid", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fetched.UID = tc.uid
+			rel := &topology.Relationships{}
+			answerOwnership(liveOwnershipSource{Source: source, fetched: fetched}, topology.ApplyOwner, nil, rel, fetched, func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
+			if !tc.lead {
+				if rel.Ownership.Manager != nil || rel.Ownership.UnavailableReason == "" {
+					t.Fatalf("replaced object answered %+v", rel.Ownership)
+				}
+				return
+			}
+			answer := rel.Ownership.Manager
+			if answer == nil || answer.Lead == nil || answer.Lead.Name != "live" || len(answer.Direct.Claims) != 1 {
+				t.Fatalf("manager = %+v; want the live metadata, not the cached object without labels", answer)
+			}
+		})
+	}
+
+	scripted := &scriptedSource{t: t, validate: []error{ownership.ErrCachesReplaced}}
+	rel := &topology.Relationships{}
+	answerOwnership(liveOwnershipSource{Source: scripted, fetched: fetched}, topology.ApplyOwner, nil, rel, fetched, func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
+	if rel.Ownership.Manager != nil || rel.Ownership.UnavailableReason != string(readreason.ConnectionChanged) {
+		t.Fatalf("cache switch kept manager %+v", rel.Ownership)
+	}
+}
+
+type liveManagerAccess struct {
+	ownership.Access
+	denied resourceid.GroupKind
+}
+
+func (a liveManagerAccess) CanRead(kind resourceid.GroupKind, namespace string) ownership.Decision {
+	if kind == a.denied {
+		return ownership.Denied
+	}
+	return a.Access.CanRead(kind, namespace)
+}
+
+func TestAnswerLiveManagerPreservesCallerAccess(t *testing.T) {
+	_, _, source, deployment := historyFixture(t)
+	live := deployment.DeepCopy()
+	live.Labels = map[string]string{"kustomize.toolkit.fluxcd.io/name": "live", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}
+	subject := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
+	fetched := ownership.Observe(subject, live)
+	for _, denied := range []resourceid.GroupKind{subject.GroupKind(), ownership.FluxKustomization} {
+		rel := &topology.Relationships{}
+		answerOwnership(liveOwnershipSource{Source: source, fetched: fetched}, topology.ApplyOwner, nil, rel, fetched, func(*ownership.Catalog) ownership.Access {
+			return liveManagerAccess{Access: ownership.Unrestricted(), denied: denied}
+		})
+		if denied == subject.GroupKind() {
+			if rel.Ownership.Manager != nil || rel.Ownership.UnavailableReason != string(readreason.UserForbidden) {
+				t.Fatalf("live subject bypassed access: %+v", rel.Ownership)
+			}
+		} else {
+			answer := rel.Ownership.Manager
+			if answer == nil || !answer.Narrowed || len(answer.Direct.Claims) != 1 || answer.Direct.Claims[0].Check != "withheld" || len(answer.Direct.Recorders) != 0 {
+				t.Fatalf("manager access = %+v", answer)
+			}
+		}
+	}
+}

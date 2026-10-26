@@ -1,6 +1,7 @@
 import { GitBranch, Package } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { GitOpsOwnerRef, ManagerListing } from '../../utils/gitops-owner'
+import { gitOpsOwnerFromRef, managerCandidates, managerChipPresentation, type GitOpsOwnerRef, type ManagerListing } from '../../utils/gitops-owner'
+import type { ManagerAnswer } from '../../types/core'
 import type { GitOpsStatus } from '../../types/gitops'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
@@ -24,6 +25,7 @@ export type HelmOwnerRef = {
 //   - block: starts a new line with mt-1 spacing, used in WorkloadView title strip
 export function ManagedByChip({
   owner,
+  manager,
   status,
   onOpen,
   verified = true,
@@ -32,7 +34,8 @@ export function ManagedByChip({
   listing,
   variant = 'inline',
 }: {
-  owner: GitOpsOwnerRef
+  owner?: GitOpsOwnerRef | null
+  manager?: ManagerAnswer
   status?: GitOpsStatus | null
   onOpen?: (ref: GitOpsOwnerRef) => void
   verified?: boolean
@@ -41,6 +44,8 @@ export function ManagedByChip({
   listing?: ManagerListing
   variant?: 'inline' | 'block'
 }) {
+  if (manager) return <ManagerAnswerChip manager={manager} status={status} onOpen={onOpen} variant={variant} />
+  if (!owner) return null
   const toolLabel = owner.tool === 'argocd' ? 'ArgoCD' : 'FluxCD'
   const ownerKindLabel = gitOpsOwnerKindLabel(owner)
   const label = owner.namespace ? `${owner.namespace}/${owner.name}` : owner.name
@@ -116,13 +121,46 @@ export function ManagedByChip({
   )
 }
 
+function ManagerAnswerChip({ manager, status, onOpen, variant }: {
+  manager: ManagerAnswer
+  status?: GitOpsStatus | null
+  onOpen?: (ref: GitOpsOwnerRef) => void
+  variant: 'inline' | 'block'
+}) {
+  const presentation = managerChipPresentation(manager)
+  if (!presentation) return null
+  const owner = manager.lead ? gitOpsOwnerFromRef(manager.lead) : null
+  const interactive = Boolean(owner && onOpen && owner.namespace)
+  const Wrapper = interactive ? 'button' : 'span'
+  const statusLabel = owner && status && managerCandidates(manager).length === 1 ? gitOpsStatusLabel(status) : null
+  return (
+    <Tooltip content={`${presentation.tooltip}${statusLabel ? ` ${statusLabel}${status?.message ? `: ${status.message}` : ''}.` : ''}`} delay={500} position="bottom" wrapperClassName={variant === 'block' ? 'mt-1' : undefined}>
+      <Wrapper
+        {...(interactive ? { type: 'button' as const, onClick: () => owner && onOpen?.(owner) } : {})}
+        className={clsx(
+          'inline-flex min-w-0 items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] text-theme-text-secondary',
+          interactive && 'hover:border-accent hover:text-accent transition-colors',
+        )}
+      >
+        <GitBranch className="h-3 w-3 shrink-0" />
+        {presentation.warning && <StatusDot tone="degraded" size="xs" />}
+        <span className="shrink-0 text-theme-text-tertiary">{presentation.prefix}</span>
+        <span className="truncate max-w-[180px]">{presentation.label}</span>
+        {statusLabel && <><span className="mx-0.5 text-theme-text-disabled">·</span><StatusDot tone={gitOpsStatusTone(status!)} size="xs" /><span>{statusLabel}</span></>}
+      </Wrapper>
+    </Tooltip>
+  )
+}
+
 export function HelmManagedByChip({
   owner,
+  manager,
   onOpen,
   source,
   variant = 'inline',
 }: {
   owner: HelmOwnerRef
+  manager?: ManagerAnswer
   onOpen?: (ref: HelmOwnerRef) => void
   source?: string | null
   variant?: 'inline' | 'block'
@@ -133,6 +171,7 @@ export function HelmManagedByChip({
       <span>
         Managed by Helm release <TooltipCode>{label}</TooltipCode>.
       </span>
+      {manager && <span>{managerChipPresentation(manager)?.tooltip}</span>}
       {source && (
         <span>
           Inferred from <TooltipCode>{source}</TooltipCode>.

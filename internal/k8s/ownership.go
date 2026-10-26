@@ -73,6 +73,44 @@ func AnswerOwner(rel *topology.Relationships, fetched ownership.Observation, acc
 	answerOwnership(ownershipSource, topology.ApplyOwner, nil, rel, fetched, access)
 }
 
+// AnswerLiveManager reads the live target's metadata while ancestors and
+// recorded membership retain their cache provenance. The view still checks
+// access and refuses an object replaced since the live read.
+func AnswerLiveManager(fetched ownership.Observation, access func(*ownership.Catalog) ownership.Access) *topology.ManagerAnswer {
+	rel := &topology.Relationships{}
+	answerOwnership(liveOwnershipSource{Source: ownershipSource, fetched: fetched}, topology.ApplyOwner, nil, rel, fetched, access)
+	if rel.Ownership == nil {
+		return nil
+	}
+	return rel.Ownership.Manager
+}
+
+type liveOwnershipSource struct {
+	ownership.Source
+	fetched ownership.Observation
+}
+
+func (s liveOwnershipSource) Begin() (ownership.ReadSession, error) {
+	session, err := s.Source.Begin()
+	if err != nil {
+		return nil, err
+	}
+	return liveOwnershipSession{ReadSession: session, fetched: s.fetched}, nil
+}
+
+type liveOwnershipSession struct {
+	ownership.ReadSession
+	fetched ownership.Observation
+}
+
+func (s liveOwnershipSession) Object(ref resourceid.Ref) ownership.ObjectRead {
+	read := s.ReadSession.Object(ref)
+	if ref == s.fetched.Ref && (read.State == ownership.Present && read.Object.UID == s.fetched.UID || read.State == ownership.Absent || read.State == ownership.Unavailable) {
+		return ownership.ObjectRead{State: ownership.Present, Object: s.fetched}
+	}
+	return read
+}
+
 // answerOwnership applies the view's answer to rel, then present (when set)
 // with the view and its session, before validating: a refused answer takes
 // what present read with it.

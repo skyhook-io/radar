@@ -9,7 +9,9 @@
 // field missing from both can still be in the source. So absence of evidence
 // is "unknown" (may be overwritten), never "safe".
 
-import type { GitOpsOwnerRef, GitOpsOwnerTool } from './gitops-owner'
+import { activeManagerClaims, gitOpsOwnerFromRef, managerCandidates, managerRefLabel, type GitOpsOwnerRef, type GitOpsOwnerTool } from './gitops-owner'
+import type { ManagerAnswer } from '../types/core'
+import { dedupeResourceRefs } from './resource-refs'
 
 export type GitOpsWriteScope = 'status' | 'metadata' | 'spec' | 'create-child' | 'delete'
 
@@ -100,6 +102,7 @@ export interface GitOpsWritePolicyEvidence {
 }
 
 export interface GitOpsWriteEvidence {
+  manager?: ManagerAnswer
   uid: string
   resourceVersion: string
   owner: { kind: string; group?: string; namespace: string; name: string } | null
@@ -114,6 +117,7 @@ export interface GitOpsWriteEvidence {
 // ---------------------------------------------------------------------------
 
 export interface GitOpsWriteGuardInput {
+  manager?: ManagerAnswer
   target: GitOpsWriteTarget
   owner: GitOpsOwnerRef | null
   /** Native Helm release that manages the object when no GitOps tool does. */
@@ -141,6 +145,7 @@ export interface GitOpsWriteAssessment {
 }
 
 export interface GitOpsWriteGuard {
+  manager?: ManagerAnswer
   owner: GitOpsOwnerRef | null
   helmRelease: GitOpsWriteHelmRelease | null
   pending: boolean
@@ -413,10 +418,47 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   if (write.scope === 'status') {
     return { level: 'none', reason: 'This writes controller status; ordinary GitOps sync does not manage these fields.' }
   }
+  const manager = input.manager
+  if (manager) {
+    const candidates = managerCandidates(manager)
+    const viaGitOps = manager.via && managerCandidates(manager).some(ref => gitOpsOwnerFromRef(ref) !== null)
+    const directClaims = activeManagerClaims(manager.direct).filter(c => !viaGitOps || c.source !== 'helm-release')
+    const names = dedupeResourceRefs([...candidates, ...(manager.via ? directClaims.map(c => c.manager) : [])]).map(managerRefLabel).join(' and ')
+    if (write.scope === 'create-child' && candidates.length) {
+      return { level: 'info', reason: `A new object isn't in the GitOps source, so ${names} is not expected to revert it.` }
+    }
+    if (write.scope === 'metadata' || write.scope === 'spec') {
+      if (write.paths?.length && write.paths.every(path => input.evidence?.paths.find(p => p.path === path)?.empty)) {
+        return { level: 'none', reason: '' }
+      }
+      if (manager.stop) {
+        return { level: 'may-revert', reason: input.ownershipError! }
+      }
+    }
+    if (manager.via && !directClaims.length) {
+      const parent = managerRefLabel(manager.via.object)
+      return {
+        level: 'info',
+        reason: write.scope === 'delete'
+          ? `Its controller recreates it from ${parent}, which ${names} manages.`
+          : `This resource is generated from ${parent}, which ${names} manages; changes to the parent may replace it.`,
+      }
+    }
+    if ((write.scope === 'metadata' || write.scope === 'spec') &&
+        (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1 || manager.via && directClaims.length > 0)) {
+      return { level: 'may-revert', reason: `${names} may overwrite these fields. A single manager's ignore rules or sync policy cannot exempt this change.${manager.via ? ` The controller also generates it from ${managerRefLabel(manager.via.object)}.` : ''}` }
+    }
+  }
   if (write.scope === 'delete') {
     const operator = operatorOwnerOf(input)
     if (operator) {
       return { level: 'info', reason: `${operator.kind} ${operator.name} will recreate this ${input.target.kind}.` }
+    }
+  }
+  if (manager && write.scope === 'delete') {
+    const candidates = managerCandidates(manager)
+    if (manager.state === 'disagree' || manager.state === 'shared' || candidates.length > 1) {
+      return { level: 'may-revert', reason: `${candidates.map(managerRefLabel).join(' and ')} may recreate this resource on sync.` }
     }
   }
   if (owner) {
@@ -458,7 +500,8 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   return { level: 'none', reason: '' }
 }
 
-function headline(guard: Pick<GitOpsWriteGuard, 'owner' | 'helmRelease'>, level: GitOpsWriteLevel): string {
+function headline(guard: Pick<GitOpsWriteGuard, 'owner' | 'helmRelease' | 'manager'>, level: GitOpsWriteLevel): string {
+  if (guard.manager?.via && level === 'info') return `Generated from ${managerRefLabel(guard.manager.via.object)}.`
   const who = guard.owner
     ? describeGitOpsOwner(guard.owner)
     : guard.helmRelease
@@ -475,14 +518,19 @@ export function gitOpsWriteHeadline(guard: GitOpsWriteGuard): string {
 }
 
 export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWriteGuard {
-  const owner = input.owner ?? null
-  const helmRelease = owner ? null : (input.helmRelease ?? null)
-  const ownershipError = owner || helmRelease ? null : (input.ownershipError ?? null)
-  const normalized: GitOpsWriteGuardInput = { ...input, owner, helmRelease, ownershipError }
+  const manager = input.evidence?.manager ?? input.manager
+  const owner = manager ? manager.lead ? gitOpsOwnerFromRef(manager.lead) : null : input.owner ?? null
+  const helmRelease = manager
+    ? manager.lead?.kind === 'HelmRelease' && !manager.lead.group ? { namespace: manager.lead.namespace, name: manager.lead.name } : null
+    : owner ? null : (input.helmRelease ?? null)
+  const ownershipError = manager?.stop
+    ? "Radar couldn't follow this resource's controller chain, so it can't tell whether a GitOps tool or Helm manages it."
+    : owner || helmRelease ? null : (input.ownershipError ?? null)
+  const normalized: GitOpsWriteGuardInput = { ...input, manager, owner, helmRelease, ownershipError, ownerMatchedByName: manager ? false : input.ownerMatchedByName }
 
   const perWrite = input.writes.map((write) => {
     const verdict = classifyWrite(normalized, owner, write)
-    if (owner && input.ownerMatchedByName && verdict.level === 'info' && write.scope !== 'create-child') {
+    if (owner && normalized.ownerMatchedByName && verdict.level === 'info' && write.scope !== 'create-child') {
       return {
         write,
         level: 'may-revert' as const,
@@ -493,16 +541,17 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
   })
   const level = perWrite.reduce<GitOpsWriteLevel>((max, entry) => maxLevel(max, entry.level), 'none')
   const top = perWrite.find((entry) => entry.level === level)
-  const summary = level === 'none' ? '' : [headline({ owner, helmRelease }, level), top?.reason ?? ''].filter(Boolean).join(' ')
+  const summary = level === 'none' ? '' : [headline({ owner, helmRelease, manager }, level), top?.reason ?? ''].filter(Boolean).join(' ')
 
   return {
+    ...(manager ? { manager } : {}),
     owner,
     helmRelease,
     pending: Boolean(input.ownerPending),
     level,
     perWrite,
     summary,
-    syncPolicy: owner ? gitOpsSyncPolicy(input.evidence?.policy) : null,
+    syncPolicy: owner && (!manager || managerCandidates(manager).length === 1) ? gitOpsSyncPolicy(input.evidence?.policy) : null,
     requiresAck: level === 'will-revert' || level === 'may-revert',
     ownershipError,
   }

@@ -399,3 +399,124 @@ describe('copy', () => {
     }
   })
 })
+
+describe('manager answer composition', () => {
+  const a = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'a' }
+  const b = { ...a, name: 'b' }
+  const subject = { kind: 'Pod', namespace: 'db', name: 'pg-1' }
+  const parent = { kind: 'Deployment', group: 'apps', namespace: 'db', name: 'pg' }
+  const claim = { manager: a, source: 'argo-instance-label' as const, check: 'omitted' as const, weak: true }
+  const shared: import('../types/core').ManagerAnswer = { state: 'shared', lead: a, direct: { object: subject, recorders: [a, b] } }
+  const via: import('../types/core').ManagerAnswer = { state: 'listed', lead: b, direct: { object: subject }, via: { object: parent, recorders: [b] } }
+  const run = (manager: import('../types/core').ManagerAnswer, writes = [hibernate], extra: Partial<GitOpsWriteGuardInput> = {}) =>
+    guard({ manager, writes, evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present', ignored: 'effective' })]), ...extra })
+
+  it('disagree field writes warn with both names despite a self-heal policy', () => {
+    const g = run({ state: 'disagree', direct: { object: subject, recorders: [b], claims: [claim] } })
+    expect(g.level).toBe('may-revert')
+    expect(g.summary).toContain('Application argocd/a and Application argocd/b')
+    expect(g.owner).toBeNull()
+  })
+
+  it('shared field writes cannot use one candidate’s ignore rule or policy exemption', () => {
+    const g = run(shared)
+    expect(g.level).toBe('may-revert')
+    expect(g.requiresAck).toBe(true)
+    expect(g.summary).toContain('argocd/a')
+    expect(g.summary).toContain('argocd/b')
+    expect(g.syncPolicy).toBeNull()
+  })
+
+  it('several claims without a lead warn in the plural', () => {
+    const g = run({ state: 'claimed', direct: { object: subject, claims: [claim, { ...claim, manager: b }] } })
+    expect(g.level).toBe('may-revert')
+    expect(g.summary).toContain('argocd/a and Application argocd/b')
+  })
+
+  it.each(['metadata', 'spec', 'delete'] as const)('via without an active direct claim makes %s informational without acknowledgment', scope => {
+    const g = run({ ...via, direct: { object: subject, claims: [{ ...claim, copied: true }] } }, [{ scope, paths: [HIBERNATE] }])
+    expect(g.level).toBe('info')
+    expect(g.requiresAck).toBe(false)
+    expect(g.summary).toContain('Deployment db/pg')
+    expect(g.summary).toContain('Application argocd/b')
+    if (scope === 'delete') expect(g.summary).toContain('controller recreates it from')
+  })
+
+  it('native Helm annotations do not compete with a GitOps ancestor', () => {
+    const helm = { kind: 'HelmRelease', group: '', namespace: 'db', name: 'chart' }
+    const g = run({ ...via, direct: { object: subject, claims: [{ manager: helm, source: 'helm-release', check: 'not-recording', weak: true }] } })
+    expect(g.level).toBe('info')
+    expect(g.requiresAck).toBe(false)
+    expect(g.summary).not.toContain('HelmRelease')
+  })
+
+  it.each(['disagree', 'shared', 'claimed'] as const)('%s deletes without a lead warn with every candidate', state => {
+    const direct = state === 'claimed' ? { object: subject, claims: [claim, { ...claim, manager: b }] } : { object: subject, recorders: state === 'shared' ? [a, b] : [b], claims: [claim] }
+    const g = run({ state, direct }, [{ scope: 'delete' }])
+    expect(g.level).toBe('may-revert')
+    expect(g.summary).toContain('Application argocd/a')
+    expect(g.summary).toContain('Application argocd/b')
+  })
+
+  it('via with a weak non-copied direct claim keeps the field warning', () => {
+    const g = run({ ...via, direct: { object: subject, claims: [claim] } })
+    expect(g.level).toBe('may-revert')
+    expect(g.requiresAck).toBe(true)
+    expect(g.summary).toContain('argocd/a')
+    expect(g.summary).toContain('Deployment db/pg')
+  })
+
+  it.each([shared, via])('status writes remain none', manager => {
+    expect(run(manager, [{ scope: 'status' }]).level).toBe('none')
+  })
+
+  it('shared create-child stays informational', () => {
+    expect(run(shared, [{ scope: 'create-child' }]).level).toBe('info')
+  })
+
+  it('operator-owned delete stays informational', () => {
+    expect(run(shared, [{ scope: 'delete' }], { operatorOwner: { kind: 'Cluster', name: 'pg' } }).level).toBe('info')
+  })
+
+  it.each([shared, via])('empty wildcard stays none', manager => {
+    expect(run(manager, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ empty: true })]) }).level).toBe('none')
+  })
+
+  it('a single candidate with declared field evidence can still prove will-revert', () => {
+    const manager = { state: 'listed' as const, lead: a, direct: { object: subject, recorders: [a] } }
+    expect(run(manager, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) }).level).toBe('will-revert')
+  })
+
+  it.each(['unknown', 'none'] as const)('server %s replaces client owner, Helm and manager inputs', state => {
+    const negative = { state, direct: { object: subject, unreadable: 1 } }
+    const g = run(shared, [hibernate], { helmRelease: { namespace: 'db', name: 'old' }, evidence: evidence(selfHeal, [], { manager: negative }) })
+    expect(g.level).toBe('none')
+    expect(g.owner).toBeNull()
+    expect(g.helmRelease).toBeNull()
+  })
+
+  it('a stopped ancestor read retains conservative ownershipError behavior', () => {
+    const g = run({ state: 'unknown', direct: { object: subject }, stop: { at: subject, state: 'unknown', owner: parent } })
+    expect(g.level).toBe('may-revert')
+    expect(g.ownershipError).toContain("couldn't follow")
+  })
+
+  it('a stopped walk with a weak claim cannot use that candidate’s exemption', () => {
+    const g = run({ state: 'claimed', lead: a, direct: { object: subject, claims: [claim] }, stop: { at: subject, state: 'unknown', owner: parent } })
+    expect(g.level).toBe('may-revert')
+    expect(g.ownershipError).toContain("couldn't follow")
+  })
+
+  it('a failed target read retains conservative ownershipError behavior', () => {
+    const g = run({ state: 'unknown', direct: { object: subject } }, [hibernate], { ownershipError: 'Target read failed' })
+    expect(g.level).toBe('may-revert')
+    expect(g.ownershipError).toBe('Target read failed')
+  })
+
+  it('absent manager preserves legacy evidence verdicts', () => {
+    for (const policy of [selfHeal, manual, null]) {
+      const input = { writes: [hibernate], evidence: evidence(policy, [pathEvidence({ lastApplied: 'present' })]) }
+      expect(guard({ ...input, manager: undefined })).toEqual(guard(input))
+    }
+  })
+})

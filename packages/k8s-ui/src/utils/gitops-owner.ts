@@ -1,12 +1,8 @@
-// Map a resource's server-side `Relationships.managedBy` to a navigable
-// GitOps owner ref, used by the drawer to render the "Managed by <app>" chip.
-//
-// The detection (label/annotation parsing, Argo tracking-id decoding, Flux
-// label inspection, Helm release annotation, owner-chain walk) lives server-
-// side in pkg/topology.SynthesizeManagedBy. This file is now a thin mapper
-// from the structured ref into the discriminated union the chip + router need.
+// Maps server manager evidence to drawer copy and navigation. Older Radars
+// without the answer retain their managedBy projection.
 
-import type { Relationships, ResourceRef } from '../types/core'
+import type { ManagerAnswer, ManagerClaim, ManagerEvidence, Relationships, ResourceRef } from '../types/core'
+import { dedupeResourceRefs, resourceRefKey } from './resource-refs'
 
 // GitOpsOwnerRef is a discriminated union — the tool determines which kind is
 // valid. Modeling it this way prevents callers (and consumers of the returned
@@ -36,6 +32,8 @@ const FLUX_HELM_GROUP = 'helm.toolkit.fluxcd.io'
 export function gitOpsOwnerFromRelationships(
   rel: Relationships | undefined | null,
 ): GitOpsOwnerRef | null {
+  const answer = rel?.ownership?.manager
+  if (answer) return answer.lead ? gitOpsOwnerFromRef(answer.lead) : null
   const refs = rel?.managedBy
   if (!refs || refs.length === 0) return null
   return gitOpsOwnerFromRef(refs[0])
@@ -75,4 +73,70 @@ export function managerListing(owner: GitOpsOwnerRef | null | undefined, manager
   const isOwner = (m: GitOpsOwnerRef) => m.tool === owner.tool && m.kind === owner.kind && m.name === owner.name && (!owner.namespace || m.namespace === owner.namespace)
   if (!listed.some(isOwner)) return { state: 'conflict', listedBy: listed }
   return listed.length === 1 && managers.length === 1 ? { state: 'confirmed' } : undefined
+}
+
+
+export function activeManagerClaims(evidence: ManagerEvidence): ManagerClaim[] {
+  const claims = (evidence.claims ?? []).filter(c => !c.copied)
+  const hasGitOps = Boolean(evidence.recorders?.length) || claims.some(c => c.source !== 'helm-release')
+  return hasGitOps ? claims.filter(c => c.source !== 'helm-release') : claims
+}
+
+export function managerCandidates(answer: ManagerAnswer): ResourceRef[] {
+  const evidence = answer.via ?? answer.direct
+  const recorders = evidence.recorders ?? []
+  const claims = activeManagerClaims(evidence).map(c => {
+    const ref = c.manager
+    return !ref.namespace ? recorders.find(r => r.kind === ref.kind && r.group === ref.group && r.name === ref.name) ?? ref : ref
+  })
+  return dedupeResourceRefs([...(answer.lead ? [answer.lead] : []), ...claims, ...recorders])
+}
+
+export function managerRefLabel(ref: ResourceRef): string {
+  return `${ref.kind} ${ref.namespace ? `${ref.namespace}/` : ''}${ref.name}`
+}
+
+export function managerChipPresentation(answer: ManagerAnswer): { prefix: string; label: string; tooltip: string; warning: boolean } | null {
+  if (answer.state === 'unknown' || answer.state === 'none') return null
+  const evidence = answer.via ?? answer.direct
+  const candidates = managerCandidates(answer)
+  const names = (refs: ResourceRef[]) => refs.map(managerRefLabel).join(' and ')
+  const claims = activeManagerClaims(evidence)
+  const claimed = dedupeResourceRefs(claims.map(c => c.manager))
+  const recorders = evidence.recorders ?? []
+  const prefix = answer.state === 'agree' || answer.state === 'listed' ? 'Managed by' : answer.state === 'shared' ? 'Listed by' : 'Tracked by'
+  const displayed = answer.state === 'disagree' ? claimed : candidates
+  const label = displayed.map(r => r.namespace ? `${r.namespace}/${r.name}` : r.name).join(' and ')
+  const reasons: Record<ManagerClaim['check'], string> = {
+    recorded: 'its status lists this resource',
+    omitted: "its status doesn't list this resource",
+    unreadable: "Radar can't read its status",
+    remote: 'it deploys to another cluster',
+    missing: 'no such manager here',
+    'not-recording': 'Helm records an installation, rather than continuously reconciling it',
+    unresolved: "the label doesn't name its namespace",
+    withheld: "you can't view it",
+    unchecked: "Radar couldn't check its status",
+  }
+  const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
+  const details = claims.map(c => `${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reasons[c.check].replace('this resource', subject)}.`)
+  if (recorders.length) details.push(`${names(recorders)}: ${recorders.length === 1 ? 'its status lists' : 'their statuses list'} ${subject}.`)
+  if (answer.via) {
+    details.push(`Through ${managerRefLabel(answer.via.object)}.`)
+    for (const e of [answer.direct, ...(answer.between ?? [])]) {
+      for (const c of e.claims ?? []) {
+        details.push(`${managerRefLabel(e.object)}: its own ${c.source.includes('label') ? 'label' : 'annotation'} names ${managerRefLabel(c.manager)}${c.copied ? ' (copied from another resource)' : ''}.`)
+      }
+    }
+  }
+  if (answer.narrowed) details.push('This answer covers what you can view.')
+  return { prefix, label, tooltip: details.join(' '), warning: answer.state === 'disagree' }
+}
+
+export function managerChipCoversGroup(relationships: Relationships): boolean {
+  const answer = relationships.ownership?.manager
+  if (!answer || !['agree', 'listed'].includes(answer.state) || answer.via || relationships.ownership?.managers) return false
+  const recorders = answer.direct.recorders ?? []
+  const managers = relationships.managers ?? []
+  return recorders.length === 1 && managers.length === 1 && resourceRefKey(recorders[0]) === resourceRefKey(managers[0])
 }

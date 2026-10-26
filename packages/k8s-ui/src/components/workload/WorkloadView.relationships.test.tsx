@@ -68,3 +68,38 @@ describe('workload GitOps manager', () => {
     expect(html).toContain("Its tracking label names Application shop, whose status doesn&#x27;t list it.")
   })
 })
+
+describe('manager answer group projection', () => {
+  const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'shop' }
+  const object = { kind: 'Deployment', group: 'apps', namespace: 'demo', name: 'web' }
+  const answer: import('../../types/core').ManagerAnswer = { state: 'listed', lead: app, direct: { object, recorders: [app] } }
+  const render = (manager: typeof answer, extra: Partial<import('../../types/core').Relationships> = {}) =>
+    renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload} expanded={false}
+      relationships={{ managers: [app], ownership: { children: { complete: true }, manager }, ...extra }} />)
+
+  it.each(['agree', 'listed'] as const)('hides only the exact single %s recorder', state => {
+    const html = render({ ...answer, state })
+    expect(html).toContain('Managed by')
+    expect(html).not.toContain('Managed By')
+  })
+  it.each(['claimed', 'disagree', 'shared', 'unknown', 'none'] as const)('keeps Managed By for %s', state => {
+    expect(render({ ...answer, state })).toContain('Managed By')
+  })
+  it('keeps Managed By with via', () => {
+    expect(render({ ...answer, via: { object, recorders: [app] } })).toContain('Managed By')
+  })
+  it('keeps extra non-recorded managers', () => {
+    expect(render(answer, { managers: [app, { kind: 'Certificate', group: 'cert-manager.io', namespace: 'demo', name: 'tls' }] })).toContain('Managed By')
+  })
+  it('keeps a different single manager', () => {
+    expect(render(answer, { managers: [{ ...app, name: 'other' }] })).toContain('Managed By')
+  })
+  it('keeps the coverage note', () => {
+    expect(render(answer, { ownership: { children: { complete: true }, manager: answer, managers: { unreadable: 1 } } })).toContain('Managed By')
+  })
+  it('uses native Helm’s existing chip', () => {
+    const helm = { kind: 'HelmRelease', group: '', namespace: 'demo', name: 'chart' }
+    const html = render({ state: 'claimed', lead: helm, direct: { object, claims: [{ manager: helm, source: 'helm-release', check: 'not-recording' }] } })
+    expect(html).toContain('Managed by Helm')
+  })
+})

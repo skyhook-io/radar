@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   evaluateGitOpsWriteGuard,
   gitOpsWriteEvidencePaths,
+  gitOpsOwnerFromRef,
   type GitOpsWrite,
   type GitOpsWriteEvidence,
   type GitOpsWriteGuard,
@@ -81,6 +82,8 @@ export function useGitOpsWriteGuard({
   const targetLookupFailed = needsTarget && targetQuery.isError
   const lookupPending = targetLookupPending || ownership.lookupPending
   const managed = Boolean(ownership.owner || ownership.helmOwner)
+  const manager = ownership.manager
+  const needsManagerEvidence = Boolean(manager && (manager.via || !['none', 'unknown'].includes(manager.state) || manager.stop))
 
   const writesKey = JSON.stringify(writes)
   const requestedPathsKey = requestedPaths ? JSON.stringify(requestedPaths) : ''
@@ -99,12 +102,12 @@ export function useGitOpsWriteGuard({
   }, [ownership.owner, ownership.helmOwner])
   // An Argo owner without a namespace is still asked about: the server finds
   // the Application whose status lists the object.
-  const canFetchEvidence = managed && !lookupPending && !targetLookupFailed && !ownership.lookupError
+  const canFetchEvidence = (managed || needsManagerEvidence) && !lookupPending && !targetLookupFailed && !ownership.lookupError
 
   const evidenceFeature = useRadarFeature('gitopsWriteEvidence')
   const evidenceQuery = useQuery({
     // The API base identifies the cluster when a host switches it (Radar Hub).
-    queryKey: ['gitops-write-evidence', getApiBase(), target.kind, target.group, target.namespace, target.name, paths, ownerRef, ...evidenceFeature.gatedKey],
+    queryKey: ['gitops-write-evidence', getApiBase(), target.kind, target.group, target.namespace, target.name, paths, ownerRef, manager, ...evidenceFeature.gatedKey],
     queryFn: () =>
       evidenceFeature.guard(() =>
         fetchGitOpsWriteEvidence({
@@ -122,7 +125,7 @@ export function useGitOpsWriteGuard({
   })
 
   const targetRelationshipsMissing = needsTarget && targetQuery.data != null && targetQuery.relationships == null
-  const unresolvedDeclaredManager = Boolean(declaredManager) && !managed && !lookupPending
+  const unresolvedDeclaredManager = !manager && Boolean(declaredManager) && !managed && !lookupPending
   const unknownOwner = "so it can't tell whether a GitOps tool or Helm manages it."
   const ownershipError = targetLookupFailed
     ? `Radar couldn't read this resource, ${unknownOwner}`
@@ -143,6 +146,12 @@ export function useGitOpsWriteGuard({
   // namespace, and the browser's namespace view may hide them; take the
   // Application the server confirmed.
   const confirmedOwnership = useMemo<ResolvedGitOpsOwner>(() => {
+    if (evidence?.manager) {
+      const answer = evidence.manager
+      const owner = answer.lead ? gitOpsOwnerFromRef(answer.lead) : null
+      const helmOwner = answer.lead?.kind === 'HelmRelease' && !answer.lead.group ? { namespace: answer.lead.namespace, name: answer.lead.name } : null
+      return { ...ownership, manager: answer, owner, rawOwner: owner, helmOwner, ownerMatchedByName: false }
+    }
     const owner = ownership.owner
     const namespace = evidence?.ownerTracksTarget ? evidence.owner?.namespace : undefined
     if (!owner || owner.namespace || !namespace) return ownership
@@ -154,6 +163,7 @@ export function useGitOpsWriteGuard({
       enabled
         ? evaluateGitOpsWriteGuard({
             target,
+            manager,
             owner: confirmedOwnership.owner,
             helmRelease: ownership.helmOwner,
             // A refetch counts as pending: an earlier verdict may no longer hold.
@@ -177,6 +187,7 @@ export function useGitOpsWriteGuard({
       target.name,
       confirmedOwnership.owner,
       ownership.helmOwner,
+      manager,
       lookupPending,
       canFetchEvidence,
       evidenceQuery.isPending,

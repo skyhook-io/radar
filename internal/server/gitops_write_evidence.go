@@ -20,6 +20,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -55,9 +56,7 @@ type writeEvidenceRef struct {
 type gitOpsWriteEvidenceRequest struct {
 	writeEvidenceRef
 	Paths []string `json:"paths"`
-	// Owner is the GitOps owner the client resolved (it may be inherited from
-	// a parent workload). When absent, the object's own tracking metadata is
-	// used.
+	// Owner is a hint used only when the server cannot answer management.
 	Owner *writeEvidenceRef `json:"owner,omitempty"`
 }
 
@@ -126,6 +125,7 @@ type controllerOwnerEvidence struct {
 }
 
 type gitOpsWriteEvidenceResponse struct {
+	Manager         *topology.ManagerAnswer  `json:"manager,omitempty"`
 	UID             string                   `json:"uid"`
 	ResourceVersion string                   `json:"resourceVersion"`
 	Owner           *topology.ResourceRef    `json:"owner"`
@@ -192,8 +192,17 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 	}
 
 	req.writeEvidenceRef = canonicalWriteEvidenceRef(req.writeEvidenceRef, target)
-	owner := resolveWriteEvidenceOwner(req, target)
-	if owner != nil && owner.Namespace == "" && owner.Group == "argoproj.io" && strings.EqualFold(owner.Kind, "Application") {
+	var manager *topology.ManagerAnswer
+	if fetched, ok := k8s.OwnershipObservation(target); ok {
+		manager = k8s.AnswerLiveManager(fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+	}
+	var owner *topology.ResourceRef
+	if manager != nil {
+		owner = manager.Lead
+	} else {
+		owner = resolveWriteEvidenceOwner(req, target)
+	}
+	if manager == nil && owner != nil && owner.Namespace == "" && owner.Group == "argoproj.io" && strings.EqualFold(owner.Kind, "Application") {
 		owner.Namespace = findTrackingArgoApplication(r.Context(), dyn, owner.Name, req.writeEvidenceRef)
 	}
 	var ownerObj *unstructured.Unstructured
@@ -210,7 +219,9 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	s.writeJSON(w, buildGitOpsWriteEvidence(target, req.writeEvidenceRef, req.Paths, owner, ownerObj, ownerErr))
+	resp := buildGitOpsWriteEvidence(target, req.writeEvidenceRef, req.Paths, owner, ownerObj, ownerErr)
+	resp.Manager = manager
+	s.writeJSON(w, resp)
 }
 
 // canonicalWriteEvidenceRef takes the kind and group from the object itself:

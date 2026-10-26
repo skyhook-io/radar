@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import {
   getGitOpsResourceStatus,
   gitOpsOwnerFromRelationships,
+  type ManagerAnswer,
   type GitOpsOwnerRef,
   type GitOpsStatus,
   type HelmOwnerRef,
@@ -11,6 +12,7 @@ import { kindToPluralWithGroup } from '../utils/navigation'
 import { useResource, useResourceWithRelationships, useResources } from '../api/client'
 
 export interface ResolvedGitOpsOwner {
+  manager?: ManagerAnswer
   /** GitOps owner, with an Argo Application's namespace filled in when the
    *  tracking label omitted it and exactly one Application matches. */
   owner: GitOpsOwnerRef | null
@@ -60,6 +62,7 @@ export function useResolvedGitOpsOwner({
   /** Keeps these reads apart from the shared resource cache (see useResource). */
   cacheScope?: string
 }): ResolvedGitOpsOwner {
+  const manager = enabled ? relationships?.ownership?.manager : undefined
   const active = enabled && Boolean(relationships)
   const relationshipGitopsOwner = useMemo(
     () => (active ? gitOpsOwnerFromRelationships(relationships) : null),
@@ -67,10 +70,10 @@ export function useResolvedGitOpsOwner({
   )
   const inheritedLookupRef = useMemo(
     () =>
-      active
+      active && !manager
         ? findInheritedGitOpsLookupRef(relationships, relationshipGitopsOwner, { kind, namespace, name, group })
         : null,
-    [active, relationships, relationshipGitopsOwner, kind, namespace, name, group],
+    [active, manager, relationships, relationshipGitopsOwner, kind, namespace, name, group],
   )
   const inherited = useResourceWithRelationships<any>(
     inheritedLookupRef ? kindToPluralWithGroup(inheritedLookupRef.kind, inheritedLookupRef.group ?? '') : '',
@@ -103,13 +106,13 @@ export function useResolvedGitOpsOwner({
   const helmOwner = relationshipHelmOwner ?? inheritedHelmOwner
   const helmSourceResource = relationshipHelmOwner ? resource : inherited.data?.resource
 
-  const shouldResolveArgoNamespace = rawOwner?.tool === 'argocd' && !rawOwner.namespace
+  const shouldResolveArgoNamespace = !manager && rawOwner?.tool === 'argocd' && !rawOwner.namespace
   const argoQuery = useResources<any>('applications', undefined, 'argoproj.io', {
     enabled: shouldResolveArgoNamespace,
     cacheScope,
   })
   const argoApplications = argoQuery.data
-  const owner = useMemo(() => resolveGitOpsOwner(rawOwner, argoApplications), [rawOwner, argoApplications])
+  const owner = useMemo(() => manager ? rawOwner : resolveGitOpsOwner(rawOwner, argoApplications), [manager, rawOwner, argoApplications])
 
   const ownerGroup = owner ? gitOpsOwnerGroup(owner) : ''
   const shouldFetchOwner = Boolean(owner?.namespace)
@@ -124,12 +127,13 @@ export function useResolvedGitOpsOwner({
 
   const ownerStatus = useMemo(() => deriveGitOpsOwnerStatus(owner, ownerObject), [owner, ownerObject])
   const ownerSource = useMemo(
-    () => describeGitOpsOwnerSource(rawOwner, gitOpsSourceResource),
-    [rawOwner, gitOpsSourceResource],
+    () => manager ? null : describeGitOpsOwnerSource(rawOwner, gitOpsSourceResource),
+    [manager, rawOwner, gitOpsSourceResource],
   )
-  const helmSource = useMemo(() => describeHelmOwnerSource(helmOwner, helmSourceResource), [helmOwner, helmSourceResource])
+  const helmSource = useMemo(() => manager ? null : describeHelmOwnerSource(helmOwner, helmSourceResource), [manager, helmOwner, helmSourceResource])
 
   return {
+    manager,
     owner,
     rawOwner,
     ownerObject,
@@ -173,7 +177,7 @@ export function findInheritedGitOpsLookupRef(
   directOwner: GitOpsOwnerRef | null,
   current: ResourceRef,
 ): ResourceRef | null {
-  if (directOwner) return null
+  if (relationships?.ownership?.manager || directOwner) return null
   const inheritedManagerRefs = (relationships?.managedBy ?? []).filter(
     (ref) => !gitOpsOwnerFromRelationships({ managedBy: [ref] }) && !isNativeHelmManager(ref),
   )
@@ -188,7 +192,8 @@ export function nativeHelmOwnerFromRelationships(
   relationships: Relationships | undefined,
   fallbackNamespace: string,
 ): HelmOwnerRef | null {
-  const ref = relationships?.managedBy?.[0]
+  const answer = relationships?.ownership?.manager
+  const ref = answer ? answer.lead : relationships?.managedBy?.[0]
   if (!ref || !isNativeHelmManager(ref)) return null
   return {
     namespace: ref.namespace || fallbackNamespace,
